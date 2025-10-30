@@ -112,9 +112,7 @@ class Module(ABC, Generic[SchemaT]):
     """
 
     @abstractmethod
-    def forward(
-        self, candidates: Iterator[ERCandidate[SchemaT]]
-    ) -> Iterator[PairwiseJudgement]:
+    def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs and yield match judgements.
 
         This is the core method that all Module implementations must define.
