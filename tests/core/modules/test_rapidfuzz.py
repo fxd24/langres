@@ -12,6 +12,8 @@ This test suite validates:
 8. Library design: parameters exposed for optimization
 """
 
+import pytest
+
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 
@@ -536,3 +538,53 @@ class TestRapidfuzzModuleWithRealData:
 
         # Non-duplicates should have low score
         assert judgement.score < 0.5
+
+
+class TestRapidfuzzModuleEdgeCases:
+    """Test edge cases and error conditions for 100% coverage."""
+
+    def test_invalid_threshold_below_zero_raises_error(self):
+        """Test that threshold < 0.0 raises ValueError."""
+        with pytest.raises(ValueError, match="threshold must be between"):
+            RapidfuzzModule(threshold=-0.1)
+
+    def test_invalid_threshold_above_one_raises_error(self):
+        """Test that threshold > 1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="threshold must be between"):
+            RapidfuzzModule(threshold=1.1)
+
+    def test_all_fields_none_returns_zero_score(self):
+        """Test that when all fields are None, score is 0.0."""
+        # Both entities have only required fields (all optional fields are None)
+        left = CompanySchema(id="c1", name="Test")
+        right = CompanySchema(id="c2", name="Test")
+
+        # Use field_weights that exclude name to test the all-None case
+        # (All other fields are None by default)
+        module_no_name = RapidfuzzModule(
+            field_weights={"address": 0.5, "phone": 0.3, "website": 0.2}
+        )
+
+        candidate = ERCandidate(left=left, right=right, blocker_name="test")
+        judgements = list(module_no_name.forward([candidate]))
+        judgement = judgements[0]
+
+        # All weighted fields are None, so score should be 0.0
+        assert judgement.score == 0.0
+
+    def test_zero_weight_for_all_fields_returns_zero_score(self):
+        """Test that when all fields have zero weight, score is 0.0."""
+        # This tests the second edge case in _compute_weighted_score
+        module = RapidfuzzModule(
+            field_weights={"name": 0.0, "address": 0.0, "phone": 0.0, "website": 0.0}
+        )
+
+        left = CompanySchema(id="c1", name="Test", address="123 Main St")
+        right = CompanySchema(id="c2", name="Test", address="123 Main St")
+        candidate = ERCandidate(left=left, right=right, blocker_name="test")
+
+        judgements = list(module.forward([candidate]))
+        judgement = judgements[0]
+
+        # All weights are zero, so score should be 0.0
+        assert judgement.score == 0.0
