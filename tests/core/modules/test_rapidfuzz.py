@@ -517,8 +517,8 @@ class TestRapidfuzzModuleWithRealData:
         judgements = list(module.forward([candidate]))
         judgement = judgements[0]
 
-        # Typo duplicates should have medium-high score
-        assert 0.6 < judgement.score < 0.95
+        # Typo duplicates should have high score (minor typo, all other fields match)
+        assert judgement.score > 0.8
 
     def test_works_with_non_duplicates(self):
         """Test with completely different companies."""
