@@ -364,15 +364,11 @@ def test_rapidfuzz_module_invalid_threshold_raises_error():
 
     # Threshold too low
     with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
-        RapidfuzzModule(
-            field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=-0.1
-        )
+        RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=-0.1)
 
     # Threshold too high
     with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
-        RapidfuzzModule(
-            field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=1.5
-        )
+        RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=1.5)
 
 
 def test_rapidfuzz_module_invalid_algorithm_raises_error():
@@ -388,3 +384,43 @@ def test_rapidfuzz_module_invalid_algorithm_raises_error():
             threshold=0.5,
             algorithm="invalid_algorithm",  # type: ignore[arg-type]
         )
+
+
+def test_rapidfuzz_module_auto_normalizes_weights():
+    """Test RapidfuzzModule auto-normalizes weights to sum to 1.0."""
+    # Provide weights that don't sum to 1.0
+    module = RapidfuzzModule(
+        field_extractors={
+            "name": (lambda x: x.name, 2.0),
+            "address": (lambda x: x.address or "", 1.0),
+        },
+        threshold=0.5,
+    )
+
+    # Weights should be normalized to sum to 1.0
+    total_weight = sum(weight for _, weight in module.field_extractors.values())
+    assert abs(total_weight - 1.0) < 0.001
+
+
+def test_rapidfuzz_module_normalized_weights_produce_valid_scores():
+    """Test that normalized weights produce scores in [0, 1] range."""
+    # Provide weights that sum to 3.0
+    module = RapidfuzzModule(
+        field_extractors={
+            "name": (lambda x: x.name, 1.0),
+            "address": (lambda x: x.address or "", 1.0),
+            "phone": (lambda x: x.phone or "", 1.0),
+        },
+        threshold=0.0,
+    )
+
+    left = CompanySchema(id="c1", name="Acme Corp", address="123 Main St", phone="555-1234")
+    right = CompanySchema(id="c2", name="Acme Corp", address="123 Main St", phone="555-1234")
+
+    candidates = [ERCandidate(left=left, right=right, blocker_name="test_blocker")]
+    judgements = list(module.forward(iter(candidates)))
+
+    # Score should be in valid range [0, 1]
+    assert 0.0 <= judgements[0].score <= 1.0
+    # Perfect match should score 1.0
+    assert abs(judgements[0].score - 1.0) < 0.001

@@ -11,10 +11,13 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "faiss-cpu>=1.12.0",
     "networkx>=3.5",
+    "openai>=2.6.1",
     "pydantic>=2.12.3",
     "rapidfuzz>=3.14.1",
     "scikit-learn>=1.7.2",
+    "sentence-transformers>=5.1.2",
 ]
 keywords = [
     "entity-resolution",
@@ -52,6 +55,7 @@ dev = [
     "pre-commit>=4.3.0",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
+    "pytest-mock>=3.15.1",
     "ruff>=0.14.2",
     "types-networkx>=3.5.0.20251001",
 ]
@@ -82,6 +86,20 @@ exclude_lines = [
 ]
 show_missing = true
 skip_covered = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+# Enable flake8-print rules to ban print statements (except in examples/)
+select = ["T201", "T203"]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow print statements in examples and notebooks
+"examples/**/*.py" = ["T201", "T203"]
+"*.ipynb" = ["T201", "T203"]
 
 [tool.mypy]
 python_version = "3.12"

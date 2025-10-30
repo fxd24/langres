@@ -47,9 +47,7 @@ class TestModuleConcreteImplementation:
         class ValidModule(Module):
             """Minimal valid Module implementation."""
 
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 """Yields a judgement for each candidate."""
                 for candidate in candidates:
                     yield PairwiseJudgement(
@@ -69,9 +67,7 @@ class TestModuleConcreteImplementation:
         """forward() accepts Iterator[ERCandidate] as input."""
 
         class DummyModule(Module):
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
                         left_id=candidate.left.id,
@@ -103,9 +99,7 @@ class TestModuleConcreteImplementation:
         """forward() returns an Iterator[PairwiseJudgement]."""
 
         class DummyModule(Module):
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
                         left_id=candidate.left.id,
@@ -144,9 +138,7 @@ class TestModuleWithRealData:
         class AlwaysMatchModule(Module):
             """Test module that always returns score=1.0."""
 
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
                         left_id=candidate.left.id,
@@ -186,9 +178,7 @@ class TestModuleWithRealData:
         class SequentialScoreModule(Module):
             """Test module that assigns sequential scores."""
 
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 score = 0.0
                 for candidate in candidates:
                     yield PairwiseJudgement(
@@ -227,9 +217,7 @@ class TestModuleWithRealData:
         """Module gracefully handles an empty iterator of candidates."""
 
         class DummyModule(Module):
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
                         left_id=candidate.left.id,
@@ -253,9 +241,7 @@ class TestModuleWithRealData:
         class IdExtractorModule(Module):
             """Module that just extracts and validates ID pairs."""
 
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     # Verify we can access nested schema attributes
                     assert isinstance(candidate.left, CompanySchema)
@@ -315,9 +301,7 @@ class TestModuleStreamingBehavior:
             def __init__(self):
                 self.processed_count = 0
 
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     self.processed_count += 1
                     yield PairwiseJudgement(
@@ -360,9 +344,7 @@ class TestModuleStreamingBehavior:
         """Can partially consume the judgement stream without processing all candidates."""
 
         class DummyModule(Module):
-            def forward(
-                self, candidates: Iterator[ERCandidate]
-            ) -> Iterator[PairwiseJudgement]:
+            def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
                         left_id=candidate.left.id,

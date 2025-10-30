@@ -133,9 +133,7 @@ class TestERCandidate:
         from langres.core.models import CompanySchema, ERCandidate
 
         left = CompanySchema(id="c1", name="Acme Corp", address="123 Main St")
-        right = CompanySchema(
-            id="c2", name="Acme Corporation", address="123 Main Street"
-        )
+        right = CompanySchema(id="c2", name="Acme Corporation", address="123 Main Street")
 
         candidate = ERCandidate[CompanySchema](
             left=left, right=right, blocker_name="rapidfuzz_blocker"
@@ -196,9 +194,7 @@ class TestERCandidate:
 
         left = CompanySchema(id="c1", name="Test Left")
         right = CompanySchema(id="c2", name="Test Right")
-        candidate = ERCandidate[CompanySchema](
-            left=left, right=right, blocker_name="test_blocker"
-        )
+        candidate = ERCandidate[CompanySchema](left=left, right=right, blocker_name="test_blocker")
 
         data = candidate.model_dump()
         assert data["left"]["id"] == "c1"

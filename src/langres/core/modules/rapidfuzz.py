@@ -50,7 +50,7 @@ class RapidfuzzModule(Module[SchemaT]):
         - Keys are field names (used in provenance)
         - Values are tuples of (extractor_function, weight)
         - Extractors can be simple lambdas or complex functions
-        - Weights should sum to 1.0 (but this is not enforced)
+        - Weights are auto-normalized to sum to 1.0
 
     Note:
         Available algorithms:
@@ -89,13 +89,25 @@ class RapidfuzzModule(Module[SchemaT]):
                 f"algorithm must be one of: ratio, token_sort_ratio, token_set_ratio. Got: {algorithm}"
             )
 
-        self.field_extractors = field_extractors
+        # Normalize weights to sum to 1.0 for interpretable scores
+        total_weight = sum(weight for _, weight in field_extractors.values())
+        if total_weight > 0:
+            self.field_extractors = {
+                name: (extractor, weight / total_weight)
+                for name, (extractor, weight) in field_extractors.items()
+            }
+        else:
+            # If all weights are zero, distribute evenly
+            num_fields = len(field_extractors)
+            self.field_extractors = {
+                name: (extractor, 1.0 / num_fields if num_fields > 0 else 0.0)
+                for name, (extractor, _) in field_extractors.items()
+            }
+
         self.threshold = threshold
         self.algorithm = algorithm
 
-    def forward(
-        self, candidates: Iterator[ERCandidate[SchemaT]]
-    ) -> Iterator[PairwiseJudgement]:
+    def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using weighted string similarity.
 
         Args:

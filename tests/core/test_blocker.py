@@ -11,9 +11,7 @@ from langres.core.models import CompanySchema, ERCandidate
 class DummyBlocker(Blocker[CompanySchema]):
     """Test blocker that generates all pairs from a list."""
 
-    def stream(
-        self, data: list[dict[str, str]]
-    ) -> Iterator[ERCandidate[CompanySchema]]:
+    def stream(self, data: list[dict[str, str]]) -> Iterator[ERCandidate[CompanySchema]]:
         """Generate all pairs from the data."""
         # Convert raw dicts to CompanySchema
         companies = [
@@ -146,19 +144,13 @@ def test_blocker_is_lazy_generator() -> None:
         def __init__(self):
             self.pair_count = 0
 
-        def stream(
-            self, data: list[dict[str, str]]
-        ) -> Iterator[ERCandidate[CompanySchema]]:
-            companies = [
-                CompanySchema(id=item["id"], name=item["name"]) for item in data
-            ]
+        def stream(self, data: list[dict[str, str]]) -> Iterator[ERCandidate[CompanySchema]]:
+            companies = [CompanySchema(id=item["id"], name=item["name"]) for item in data]
 
             for i, left in enumerate(companies):
                 for right in companies[i + 1 :]:
                     self.pair_count += 1
-                    yield ERCandidate(
-                        left=left, right=right, blocker_name="counting_blocker"
-                    )
+                    yield ERCandidate(left=left, right=right, blocker_name="counting_blocker")
 
     blocker = CountingBlocker()
 

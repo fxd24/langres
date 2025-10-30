@@ -4,16 +4,35 @@ Data contracts for langres entity resolution framework.
 This module defines the core Pydantic models that serve as type-safe
 interfaces between all components:
 
+- EntityProtocol: Protocol defining required `id` attribute for all entities
 - CompanySchema: Test domain model for POC
 - ERCandidate[SchemaT]: Generic normalized pair passed to Modules
 - PairwiseJudgement: Rich decision output with full provenance
 """
 
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
+
+class EntityProtocol(Protocol):
+    """Protocol defining minimum requirements for entity schemas.
+
+    All entity schemas used in langres must have an `id` attribute
+    for identification and tracking. This enables type-safe generic
+    programming while allowing any Pydantic schema that has an `id` field.
+
+    Note:
+        This Protocol is used in blocker.py and module.py with TYPE_CHECKING
+        to provide type safety while maintaining Pydantic compatibility.
+    """
+
+    id: str
+
+
 # Generic type variable for ERCandidate
+# Note: Bound to BaseModel (not EntityProtocol) for Pydantic compatibility.
+# Blocker and Module use TYPE_CHECKING to bind to EntityProtocol for type safety.
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 

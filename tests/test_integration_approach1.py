@@ -1,4 +1,4 @@
-"""End-to-end integration test for Approach 1: Classical String Matching.
+r"""End-to-end integration test for Approach 1: Classical String Matching.
 
 This test validates the complete pipeline:
 1. AllPairsBlocker generates candidates
@@ -7,121 +7,16 @@ This test validates the complete pipeline:
 4. BCubed F1 >= 0.70 (POC success criterion)
 """
 
+import logging
+
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.metrics import calculate_bcubed_metrics
 from langres.core.models import CompanySchema
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
-
-def calculate_bcubed_precision(
-    predicted_clusters: list[set[str]], gold_clusters: list[set[str]]
-) -> float:
-    """Calculate BCubed Precision.
-
-    BCubed Precision measures how many items in each predicted cluster
-    belong to the same gold cluster.
-
-    Args:
-        predicted_clusters: List of predicted entity clusters
-        gold_clusters: List of gold-standard entity clusters
-
-    Returns:
-        BCubed Precision score in range [0.0, 1.0]
-    """
-    # Build gold cluster lookup: entity_id -> cluster_id
-    gold_lookup: dict[str, int] = {}
-    for cluster_id, cluster in enumerate(gold_clusters):
-        for entity_id in cluster:
-            gold_lookup[entity_id] = cluster_id
-
-    # Calculate precision for each entity
-    total_precision = 0.0
-    entity_count = 0
-
-    for pred_cluster in predicted_clusters:
-        for entity in pred_cluster:
-            # Count how many entities in this predicted cluster share
-            # the same gold cluster as this entity
-            same_cluster_count = sum(
-                1
-                for other in pred_cluster
-                if gold_lookup.get(entity) == gold_lookup.get(other)
-            )
-
-            # Precision for this entity = same_cluster / cluster_size
-            precision = same_cluster_count / len(pred_cluster)
-            total_precision += precision
-            entity_count += 1
-
-    return total_precision / entity_count if entity_count > 0 else 0.0
-
-
-def calculate_bcubed_recall(
-    predicted_clusters: list[set[str]], gold_clusters: list[set[str]]
-) -> float:
-    """Calculate BCubed Recall.
-
-    BCubed Recall measures how many items from the same gold cluster
-    are placed in the same predicted cluster.
-
-    Args:
-        predicted_clusters: List of predicted entity clusters
-        gold_clusters: List of gold-standard entity clusters
-
-    Returns:
-        BCubed Recall score in range [0.0, 1.0]
-    """
-    # Build predicted cluster lookup: entity_id -> cluster_id
-    pred_lookup: dict[str, int] = {}
-    for cluster_id, cluster in enumerate(predicted_clusters):
-        for entity_id in cluster:
-            pred_lookup[entity_id] = cluster_id
-
-    # Calculate recall for each entity
-    total_recall = 0.0
-    entity_count = 0
-
-    for gold_cluster in gold_clusters:
-        for entity in gold_cluster:
-            # Count how many entities in this gold cluster are also
-            # in the same predicted cluster as this entity
-            same_cluster_count = sum(
-                1
-                for other in gold_cluster
-                if pred_lookup.get(entity) == pred_lookup.get(other)
-            )
-
-            # Recall for this entity = same_cluster / gold_cluster_size
-            recall = same_cluster_count / len(gold_cluster)
-            total_recall += recall
-            entity_count += 1
-
-    return total_recall / entity_count if entity_count > 0 else 0.0
-
-
-def calculate_bcubed_f1(
-    predicted_clusters: list[set[str]], gold_clusters: list[set[str]]
-) -> dict[str, float]:
-    """Calculate BCubed Precision, Recall, and F1.
-
-    Args:
-        predicted_clusters: List of predicted entity clusters
-        gold_clusters: List of gold-standard entity clusters
-
-    Returns:
-        Dictionary with precision, recall, and f1 scores
-    """
-    precision = calculate_bcubed_precision(predicted_clusters, gold_clusters)
-    recall = calculate_bcubed_recall(predicted_clusters, gold_clusters)
-
-    f1 = (
-        2 * (precision * recall) / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
-    )
-
-    return {"precision": precision, "recall": recall, "f1": f1}
+logger = logging.getLogger(__name__)
 
 
 def test_approach1_end_to_end_pipeline():
@@ -159,15 +54,15 @@ def test_approach1_end_to_end_pipeline():
     clusterer = Clusterer(threshold=0.7)
     predicted_clusters = clusterer.cluster(judgements)
 
-    # 5. Calculate BCubed F1
-    metrics = calculate_bcubed_f1(predicted_clusters, EXPECTED_DUPLICATE_GROUPS)
+    # 5. Calculate BCubed metrics
+    metrics = calculate_bcubed_metrics(predicted_clusters, EXPECTED_DUPLICATE_GROUPS)
 
-    print("\nApproach 1 Results:")
-    print(f"  BCubed Precision: {metrics['precision']:.3f}")
-    print(f"  BCubed Recall:    {metrics['recall']:.3f}")
-    print(f"  BCubed F1:        {metrics['f1']:.3f}")
-    print(f"\nPredicted clusters: {len(predicted_clusters)}")
-    print(f"Gold clusters:      {len(EXPECTED_DUPLICATE_GROUPS)}")
+    logger.info("\nApproach 1 Results:")
+    logger.info("  BCubed Precision: %.3f", metrics["precision"])
+    logger.info("  BCubed Recall:    %.3f", metrics["recall"])
+    logger.info("  BCubed F1:        %.3f", metrics["f1"])
+    logger.info("\nPredicted clusters: %d", len(predicted_clusters))
+    logger.info("Gold clusters:      %d", len(EXPECTED_DUPLICATE_GROUPS))
 
     # Verify BCubed F1 >= 0.70 (POC success criterion)
     assert metrics["f1"] >= 0.70, (
@@ -233,9 +128,7 @@ def test_approach1_perfect_matches():
     ]
 
     blocker = AllPairsBlocker(schema_factory=company_factory)
-    module = RapidfuzzModule(
-        field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5
-    )
+    module = RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
     clusterer = Clusterer(threshold=0.9)
 
     candidates = blocker.stream(data)
@@ -261,9 +154,7 @@ def test_approach1_no_matches():
     ]
 
     blocker = AllPairsBlocker(schema_factory=company_factory)
-    module = RapidfuzzModule(
-        field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5
-    )
+    module = RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
     clusterer = Clusterer(threshold=0.7)
 
     candidates = blocker.stream(data)

@@ -91,6 +91,4 @@ class AllPairsBlocker(Blocker[SchemaT]):
         # 2. Generate all pairs with i < j (no duplicates)
         for i, left in enumerate(entities):
             for right in entities[i + 1 :]:
-                yield ERCandidate(
-                    left=left, right=right, blocker_name="all_pairs_blocker"
-                )
+                yield ERCandidate(left=left, right=right, blocker_name="all_pairs_blocker")

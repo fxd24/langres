@@ -27,6 +27,7 @@
 - **Type Hints**: Use comprehensive type hints throughout. Use built-in types (`list`, `dict`, `str`, etc.) instead of `typing.List`, `typing.Dict`, etc. (Python 3.12+ feature)
 - **Type Checking**: Use `mypy` in strict mode - all code must pass type checking
 - **Validation**: Pydantic-first approach - all data models should use Pydantic
+- **Logging**: ALWAYS use the `logging` module instead of `print()` statements in source code and tests. Print statements are ONLY acceptable in `examples/` directory for demonstration purposes. Ruff's T201 rule enforces this.
 - **Package Manager**: Use `uv add` for dependencies (runtime), `uv add --dev` for dev dependencies. Never manually edit `pyproject.toml`. See [uv docs](https://docs.astral.sh/uv/) for details.
 - **Test Coverage**: 100% coverage required (POC requirement). See `[tool.coverage.*]` in pyproject.toml for configuration.
 
@@ -200,6 +201,11 @@ The `.agent/` folder contains external expert analyses of the langres project:
 ## Reference Documentation
 
 When working on langres, consult these comprehensive docs for detailed context:
+
+### `docs/CHANGELOG.md` - Project Progress
+**When to use**: Understanding what's been built so far
+- To see the progression from architecture to implementation
+- Quick overview of completed POC milestones
 
 ### `docs/POC.md` - Proof of Concept Plan ⭐ **START HERE**
 **When to use**: Understanding the current development stage and priorities
