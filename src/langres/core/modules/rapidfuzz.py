@@ -163,6 +163,6 @@ class RapidfuzzModule(Module[SchemaT]):
             return fuzz.token_sort_ratio
         elif self.algorithm == "token_set_ratio":
             return fuzz.token_set_ratio
-        else:
+        else:  # pragma: no cover
             # This should never happen due to validation in __init__
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")

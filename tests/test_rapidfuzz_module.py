@@ -356,3 +356,35 @@ def test_rapidfuzz_module_field_extractors_are_configurable():
 
     assert len(judgements) == 1
     assert "full_name" in judgements[0].provenance["field_scores"]
+
+
+def test_rapidfuzz_module_invalid_threshold_raises_error():
+    """Test RapidfuzzModule raises ValueError for invalid threshold."""
+    import pytest
+
+    # Threshold too low
+    with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
+        RapidfuzzModule(
+            field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=-0.1
+        )
+
+    # Threshold too high
+    with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
+        RapidfuzzModule(
+            field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=1.5
+        )
+
+
+def test_rapidfuzz_module_invalid_algorithm_raises_error():
+    """Test RapidfuzzModule raises ValueError for unsupported algorithm."""
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match="algorithm must be one of: ratio, token_sort_ratio, token_set_ratio",
+    ):
+        RapidfuzzModule(
+            field_extractors={"name": (lambda x: x.name, 1.0)},
+            threshold=0.5,
+            algorithm="invalid_algorithm",  # type: ignore[arg-type]
+        )
