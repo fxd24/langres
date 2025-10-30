@@ -7,7 +7,7 @@ implementations in the langres framework.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -17,7 +17,7 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-class Module(ABC):
+class Module(ABC, Generic[SchemaT]):
     """Abstract base class for entity comparison logic.
 
     The Module (also called "Flow") is the "brain" of the pipeline.
