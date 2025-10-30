@@ -6,6 +6,9 @@ judgements into entity clusters using graph algorithms (connected components).
 """
 
 from collections.abc import Iterator
+from typing import Any
+
+import networkx as nx
 
 from langres.core.models import PairwiseJudgement
 
@@ -54,5 +57,14 @@ class Clusterer:
             Uses connected components algorithm from networkx.
             All IDs connected by edges >= threshold are grouped together.
         """
-        # Stub implementation - will be replaced with actual logic
-        raise NotImplementedError("cluster() not yet implemented")
+        # Build an undirected graph from judgements that meet the threshold
+        G: Any = nx.Graph()
+
+        for judgement in judgements:
+            if judgement.score >= self.threshold:
+                G.add_edge(judgement.left_id, judgement.right_id)
+
+        # Get connected components (transitive closure)
+        clusters = [set(component) for component in nx.connected_components(G)]
+
+        return clusters
