@@ -223,10 +223,10 @@ class RapidfuzzModule(Module[CompanySchema]):
         for field in available_fields:
             score = field_scores[field]
             weight = self.field_weights.get(field, 0.0)
-
-            if score is not None:  # Type guard (already filtered, but be explicit)
-                weighted_sum += score * weight
-                total_weight += weight
+            # Note: score is guaranteed non-None here (filtered in available_fields)
+            assert score is not None
+            weighted_sum += score * weight
+            total_weight += weight
 
         # Renormalize weights to sum to 1.0 over available fields
         if total_weight > 0:

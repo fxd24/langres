@@ -588,3 +588,35 @@ class TestRapidfuzzModuleEdgeCases:
 
         # All weights are zero, so score should be 0.0
         assert judgement.score == 0.0
+
+    def test_invalid_algorithm_raises_error(self):
+        """Test that an invalid algorithm name raises ValueError."""
+        # Create module with valid algorithm first
+        module = RapidfuzzModule(algorithm="ratio")
+
+        # Manually set an invalid algorithm to test error handling
+        # (This shouldn't happen in normal use due to type hints, but test defensive code)
+        module.algorithm = "invalid_algorithm"  # type: ignore
+
+        left = CompanySchema(id="c1", name="Test")
+        right = CompanySchema(id="c2", name="Test")
+        candidate = ERCandidate(left=left, right=right, blocker_name="test")
+
+        with pytest.raises(ValueError, match="Unknown algorithm"):
+            list(module.forward([candidate]))
+
+    def test_compute_weighted_score_with_all_none_fields(self):
+        """Test _compute_weighted_score when all field scores are None."""
+        # This tests defensive code for future schemas where all fields could be optional
+        module = RapidfuzzModule()
+
+        # Directly test the method with all-None scores
+        field_scores = {
+            "name": None,
+            "address": None,
+            "phone": None,
+            "website": None,
+        }
+
+        score = module._compute_weighted_score(field_scores)
+        assert score == 0.0
