@@ -1,7 +1,9 @@
 # Custom
 .agent/
+tmp/
 uv.lock
 .claude/*.bak
+
 
 # Claude Code
 # Keep .claude/settings.json (shared project settings) but ignore local settings
