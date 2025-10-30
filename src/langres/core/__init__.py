@@ -6,5 +6,6 @@ entity resolution pipelines.
 """
 
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
+from langres.core.module import Module
 
-__all__ = ["CompanySchema", "ERCandidate", "PairwiseJudgement"]
+__all__ = ["CompanySchema", "ERCandidate", "Module", "PairwiseJudgement"]
