@@ -424,3 +424,35 @@ def test_rapidfuzz_module_normalized_weights_produce_valid_scores():
     assert 0.0 <= judgements[0].score <= 1.0
     # Perfect match should score 1.0
     assert abs(judgements[0].score - 1.0) < 0.001
+
+
+def test_rapidfuzz_module_handles_all_zero_weights():
+    """Test RapidfuzzModule handles all zero weights by distributing evenly."""
+    # Provide all zero weights
+    module = RapidfuzzModule(
+        field_extractors={
+            "name": (lambda x: x.name, 0.0),
+            "address": (lambda x: x.address or "", 0.0),
+        },
+        threshold=0.5,
+    )
+
+    # Weights should be distributed evenly (each field gets 1/num_fields)
+    total_weight = sum(weight for _, weight in module.field_extractors.values())
+    assert abs(total_weight - 1.0) < 0.001
+
+    # Each field should have weight 0.5 (1/2)
+    for _, weight in module.field_extractors.values():
+        assert abs(weight - 0.5) < 0.001
+
+    # Verify it can still process candidates correctly
+    left = CompanySchema(id="c1", name="Acme Corp", address="123 Main St")
+    right = CompanySchema(id="c2", name="Acme Corp", address="123 Main St")
+    candidates = [ERCandidate(left=left, right=right, blocker_name="test_blocker")]
+    judgements = list(module.forward(iter(candidates)))
+
+    # Should produce valid judgement with score in [0, 1]
+    assert len(judgements) == 1
+    assert 0.0 <= judgements[0].score <= 1.0
+    # Perfect match should score 1.0
+    assert abs(judgements[0].score - 1.0) < 0.001
