@@ -1,39 +1,47 @@
 """VectorBlocker implementation for embedding-based candidate generation.
 
-This blocker uses sentence-transformers for embeddings and FAISS for ANN search
-to efficiently generate candidate pairs without N² complexity. It is
+This blocker uses injected embedding and vector index providers for
+efficient candidate pair generation without N² complexity. It is
 schema-agnostic, accepting a schema_factory and text_field_extractor to work
 with any Pydantic schema type.
+
+The separation of embedding and indexing concerns enables:
+- Swapping embedding models during optimization
+- Caching embeddings between train and inference
+- Testing with fake implementations (no model loading)
 """
 
 import logging
 from collections.abc import Callable, Iterator
 from typing import Any
 
-import faiss  # type: ignore[import-untyped]
-import numpy as np
-from sentence_transformers import SentenceTransformer
-
 from langres.core.blocker import Blocker, SchemaT
+from langres.core.embeddings import EmbeddingProvider
 from langres.core.models import ERCandidate
+from langres.core.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 
 
 class VectorBlocker(Blocker[SchemaT]):
-    """Schema-agnostic blocker using embeddings and ANN search.
+    """Schema-agnostic blocker using embeddings and ANN search with dependency injection.
 
-    This blocker uses sentence-transformers to encode entities into vector
-    embeddings, then uses FAISS (Facebook AI Similarity Search) to perform
-    approximate nearest neighbor (ANN) search to efficiently find similar
-    entities without O(N²) complexity.
+    This blocker separates embedding computation from vector indexing by
+    accepting injected EmbeddingProvider and VectorIndex implementations.
+    This enables:
+    - Swapping embedding models during optimization
+    - Caching embeddings between train and inference phases
+    - Testing with fake implementations (no expensive model loading)
+    - Using different vector backends (FAISS, Annoy, cloud services)
 
     The blocker is schema-agnostic: it works with ANY Pydantic schema by
     accepting a schema_factory (to transform raw dicts) and a
     text_field_extractor (to extract text for embedding).
 
-    Example:
-        # For companies
+    Example (production with real implementations):
+        from langres.core.embeddings import SentenceTransformerEmbedder
+        from langres.core.vector_index import FAISSIndex
+
         def company_factory(record: dict) -> CompanySchema:
             return CompanySchema(
                 id=record["id"],
@@ -41,39 +49,41 @@ class VectorBlocker(Blocker[SchemaT]):
                 address=record.get("address")
             )
 
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        index = FAISSIndex(metric="L2")
+
         blocker = VectorBlocker(
             schema_factory=company_factory,
             text_field_extractor=lambda x: x.name,
-            k_neighbors=10,
-            model_name="all-MiniLM-L6-v2"
+            embedding_provider=embedder,
+            vector_index=index,
+            k_neighbors=10
         )
 
         candidates = blocker.stream(company_records)
 
-        # For products (different schema, same blocker!)
-        def product_factory(record: dict) -> ProductSchema:
-            return ProductSchema(
-                id=record["product_id"],
-                title=record["product_name"]
-            )
+    Example (testing with fakes):
+        from langres.core.embeddings import FakeEmbedder
+        from langres.core.vector_index import FakeVectorIndex
+
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FakeVectorIndex()
 
         blocker = VectorBlocker(
-            schema_factory=product_factory,
-            text_field_extractor=lambda x: x.title,
+            schema_factory=company_factory,
+            text_field_extractor=lambda x: x.name,
+            embedding_provider=embedder,
+            vector_index=index,
             k_neighbors=10
         )
 
-        candidates = blocker.stream(product_records)
+        # Instant, deterministic testing!
+        candidates = blocker.stream(test_data)
 
     Note:
         This blocker has O(N log N) complexity for building the index and
         O(k log N) for searching, where k is the number of neighbors. This
         is much more scalable than all-pairs O(N²) blocking.
-
-    Note:
-        The default model "all-MiniLM-L6-v2" is a good balance of speed and
-        quality. It produces 384-dimensional embeddings and is fast to encode.
-        For better quality (but slower), consider "all-mpnet-base-v2".
 
     Note:
         Blocking recall is critical - we must not miss true matches. The
@@ -85,10 +95,11 @@ class VectorBlocker(Blocker[SchemaT]):
         self,
         schema_factory: Callable[[dict[str, Any]], SchemaT],
         text_field_extractor: Callable[[SchemaT], str],
+        embedding_provider: EmbeddingProvider,
+        vector_index: VectorIndex,
         k_neighbors: int = 10,
-        model_name: str = "all-MiniLM-L6-v2",
     ):
-        """Initialize VectorBlocker.
+        """Initialize VectorBlocker with injected dependencies.
 
         Args:
             schema_factory: Callable that transforms a raw dict into a
@@ -96,11 +107,14 @@ class VectorBlocker(Blocker[SchemaT]):
                 to work with any schema type.
             text_field_extractor: Callable that extracts the text to embed
                 from a SchemaT object. For example, lambda x: x.name.
+            embedding_provider: Provider for encoding text into embeddings.
+                Use SentenceTransformerEmbedder for production,
+                FakeEmbedder for testing.
+            vector_index: Index for ANN search on embeddings.
+                Use FAISSIndex for production, FakeVectorIndex for testing.
             k_neighbors: Number of nearest neighbors to retrieve for each
                 entity. Higher values improve recall but generate more
                 candidates. Default: 10.
-            model_name: Name of the sentence-transformers model to use for
-                embeddings. Default: "all-MiniLM-L6-v2" (fast, good quality).
 
         Raises:
             ValueError: If k_neighbors is not positive.
@@ -110,26 +124,9 @@ class VectorBlocker(Blocker[SchemaT]):
 
         self.schema_factory = schema_factory
         self.text_field_extractor = text_field_extractor
+        self.embedding_provider = embedding_provider
+        self.vector_index = vector_index
         self.k_neighbors = k_neighbors
-        self.model_name = model_name
-
-        # Lazy-load the model (only when stream() is called)
-        self._model: SentenceTransformer | None = None
-
-    def _get_model(self) -> SentenceTransformer:
-        """Get or load the sentence-transformers model.
-
-        Returns:
-            Loaded SentenceTransformer model.
-
-        Note:
-            This lazy-loads the model to avoid loading at initialization time.
-            The model is cached after the first call.
-        """
-        if self._model is None:
-            logger.info("Loading sentence-transformers model: %s", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
 
     def stream(self, data: list[Any]) -> Iterator[ERCandidate[SchemaT]]:
         """Generate candidate pairs using embedding similarity and ANN search.
@@ -148,8 +145,8 @@ class VectorBlocker(Blocker[SchemaT]):
             This implementation:
             1. Normalizes raw data to SchemaT using schema_factory
             2. Extracts text for each entity using text_field_extractor
-            3. Encodes text into embeddings using sentence-transformers
-            4. Builds a FAISS index for efficient ANN search
+            3. Encodes text into embeddings using embedding_provider
+            4. Builds a vector index for efficient ANN search
             5. For each entity, finds k nearest neighbors
             6. Yields deduplicated pairs (no both (a,b) and (b,a))
 
@@ -170,24 +167,17 @@ class VectorBlocker(Blocker[SchemaT]):
         # 2. Extract text for embedding
         texts = [self.text_field_extractor(entity) for entity in entities]
 
-        # 3. Encode texts into embeddings
-        model = self._get_model()
+        # 3. Encode texts into embeddings using injected provider
         logger.info("Encoding %d entities into embeddings", len(texts))
-        embeddings = model.encode(texts, convert_to_numpy=True)
+        embeddings = self.embedding_provider.encode(texts)
 
-        # Ensure embeddings is a numpy array
-        if not isinstance(embeddings, np.ndarray):
-            embeddings = np.array(embeddings)
-
-        # 4. Build FAISS index
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)  # L2 distance (Euclidean)
-        index.add(embeddings.astype(np.float32))
+        # 4. Build vector index using injected index
+        self.vector_index.build(embeddings)
 
         # 5. Search for k nearest neighbors for each entity
         # k+1 because the nearest neighbor will be the entity itself
         k = min(self.k_neighbors + 1, len(entities))
-        distances, indices = index.search(embeddings.astype(np.float32), k)
+        _, indices = self.vector_index.search(embeddings, k)
 
         # 6. Generate pairs from nearest neighbors
         # Use a set to track seen pairs and avoid duplicates

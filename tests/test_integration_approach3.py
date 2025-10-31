@@ -15,9 +15,11 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.metrics import calculate_bcubed_metrics
 from langres.core.models import CompanySchema
 from langres.core.modules.cascade import CascadeModule
+from langres.core.vector_index import FAISSIndex
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 logger = logging.getLogger(__name__)
@@ -82,8 +84,9 @@ def test_approach3_end_to_end_pipeline(mocker):
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
+        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
+        vector_index=FAISSIndex(metric="L2"),
         k_neighbors=5,  # Low for test dataset (15 companies)
-        model_name="all-MiniLM-L6-v2",  # Fast model for testing
     )
 
     logger.info("Step 1: Generating candidates with VectorBlocker...")
@@ -215,8 +218,9 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
+        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
+        vector_index=FAISSIndex(metric="L2"),
         k_neighbors=5,
-        model_name="all-MiniLM-L6-v2",
     )
 
     candidates = list(blocker.stream(COMPANY_RECORDS))
@@ -255,6 +259,8 @@ def test_approach3_pipeline_components():
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
+        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
+        vector_index=FAISSIndex(metric="L2"),
         k_neighbors=3,  # Small for test
     )
 

@@ -1,8 +1,12 @@
 """Tests for VectorBlocker (embedding-based candidate generation).
 
 This test module validates the VectorBlocker implementation, which uses
-sentence-transformers for embeddings and FAISS for ANN search to efficiently
-generate candidate pairs without N² complexity.
+injected embedding and vector index providers to efficiently generate
+candidate pairs without N² complexity.
+
+Most tests use FakeEmbedder and FakeVectorIndex for fast, deterministic
+unit testing. Integration tests (marked @pytest.mark.slow) use real
+SentenceTransformerEmbedder and FAISSIndex implementations.
 """
 
 import logging
@@ -10,64 +14,66 @@ import logging
 import pytest
 
 from langres.core.blockers.vector import VectorBlocker
+from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
 from langres.core.models import CompanySchema
+from langres.core.vector_index import FAISSIndex, FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 
 
-def test_vector_blocker_initialization():
-    """Test VectorBlocker can be initialized with valid parameters."""
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(
-            id=record["id"],
-            name=record["name"],
-            address=record.get("address"),
-        )
-
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=5,
-        model_name="all-MiniLM-L6-v2",
+# Helper functions for test construction
+def company_factory(record: dict) -> CompanySchema:
+    """Standard company factory for tests."""
+    return CompanySchema(
+        id=record["id"],
+        name=record["name"],
+        address=record.get("address"),
+        phone=record.get("phone"),
     )
 
+
+def create_fake_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
+    """Create a VectorBlocker with fake implementations for fast unit testing."""
+    return VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        embedding_provider=FakeEmbedder(embedding_dim=128),
+        vector_index=FakeVectorIndex(),
+        k_neighbors=k_neighbors,
+    )
+
+
+def create_real_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
+    """Create a VectorBlocker with real implementations for integration testing."""
+    return VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
+        vector_index=FAISSIndex(metric="L2"),
+        k_neighbors=k_neighbors,
+    )
+
+
+def test_vector_blocker_initialization():
+    """Test VectorBlocker can be initialized with valid parameters."""
+    blocker = create_fake_blocker(k_neighbors=5)
+
     assert blocker.k_neighbors == 5
-    assert blocker.model_name == "all-MiniLM-L6-v2"
+    assert isinstance(blocker.embedding_provider, FakeEmbedder)
+    assert isinstance(blocker.vector_index, FakeVectorIndex)
 
 
 def test_vector_blocker_requires_positive_k():
     """Test VectorBlocker validates k_neighbors is positive."""
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
+    with pytest.raises(ValueError, match="k_neighbors must be positive"):
+        create_fake_blocker(k_neighbors=0)
 
     with pytest.raises(ValueError, match="k_neighbors must be positive"):
-        VectorBlocker(
-            schema_factory=company_factory,
-            text_field_extractor=lambda x: x.name,
-            k_neighbors=0,
-        )
-
-    with pytest.raises(ValueError, match="k_neighbors must be positive"):
-        VectorBlocker(
-            schema_factory=company_factory,
-            text_field_extractor=lambda x: x.name,
-            k_neighbors=-1,
-        )
+        create_fake_blocker(k_neighbors=-1)
 
 
-@pytest.mark.slow
 def test_vector_blocker_generates_candidates_from_small_dataset():
-    """Test VectorBlocker generates candidate pairs from a small dataset."""
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(
-            id=record["id"],
-            name=record["name"],
-            address=record.get("address"),
-        )
-
+    """Test VectorBlocker generates candidate pairs from a small dataset (unit test with fakes)."""
     data = [
         {"id": "c1", "name": "Acme Corporation", "address": "123 Main St"},
         {"id": "c2", "name": "Acme Corp", "address": "123 Main Street"},
@@ -75,12 +81,7 @@ def test_vector_blocker_generates_candidates_from_small_dataset():
         {"id": "c4", "name": "DataFlow Solutions", "address": "789 Park Blvd"},
     ]
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=2,  # Only get 2 nearest neighbors
-    )
-
+    blocker = create_fake_blocker(k_neighbors=2)
     candidates = list(blocker.stream(data))
 
     # Should generate candidates for each entity with its k nearest neighbors
@@ -101,20 +102,13 @@ def test_vector_blocker_generates_candidates_from_small_dataset():
 def test_vector_blocker_finds_similar_entities():
     """Test VectorBlocker correctly pairs semantically similar entities."""
 
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
     data = [
         {"id": "c1", "name": "Acme Corporation"},
         {"id": "c2", "name": "Acme Corp"},  # Very similar to c1
         {"id": "c3", "name": "Completely Different Company LLC"},
     ]
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=1,  # Only find the single nearest neighbor
-    )
+    blocker = create_fake_blocker(k_neighbors=1)
 
     candidates = list(blocker.stream(data))
 
@@ -132,20 +126,13 @@ def test_vector_blocker_finds_similar_entities():
 def test_vector_blocker_no_duplicate_pairs():
     """Test VectorBlocker doesn't generate duplicate pairs (both (a,b) and (b,a))."""
 
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
     data = [
         {"id": "c1", "name": "Acme Corporation"},
         {"id": "c2", "name": "Acme Corp"},
         {"id": "c3", "name": "Acme Company"},
     ]
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=2,
-    )
+    blocker = create_fake_blocker(k_neighbors=2)
 
     candidates = list(blocker.stream(data))
 
@@ -162,16 +149,9 @@ def test_vector_blocker_no_duplicate_pairs():
 def test_vector_blocker_handles_single_entity():
     """Test VectorBlocker handles a dataset with a single entity."""
 
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
     data = [{"id": "c1", "name": "Acme Corporation"}]
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=5,
-    )
+    blocker = create_fake_blocker(k_neighbors=5)
 
     candidates = list(blocker.stream(data))
 
@@ -182,16 +162,9 @@ def test_vector_blocker_handles_single_entity():
 def test_vector_blocker_handles_empty_dataset():
     """Test VectorBlocker handles an empty dataset gracefully."""
 
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
     data: list[dict] = []
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=5,
-    )
+    blocker = create_fake_blocker(k_neighbors=5)
 
     candidates = list(blocker.stream(data))
 
@@ -203,25 +176,13 @@ def test_vector_blocker_handles_empty_dataset():
 def test_vector_blocker_with_missing_fields():
     """Test VectorBlocker handles entities with missing optional fields."""
 
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(
-            id=record["id"],
-            name=record["name"],
-            address=record.get("address"),
-            phone=record.get("phone"),
-        )
-
     data = [
         {"id": "c1", "name": "Acme Corporation", "address": "123 Main St"},
         {"id": "c2", "name": "Acme Corp"},  # Missing address and phone
         {"id": "c3", "name": "TechStart"},
     ]
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=2,
-    )
+    blocker = create_fake_blocker(k_neighbors=2)
 
     candidates = list(blocker.stream(data))
 
@@ -241,9 +202,6 @@ def test_vector_blocker_achieves_high_recall():
     This test uses a dataset with known duplicate pairs and verifies that
     the VectorBlocker doesn't miss too many true matches (recall >= 0.95).
     """
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
 
     # Dataset with known duplicate groups
     data = [
@@ -269,11 +227,7 @@ def test_vector_blocker_achieves_high_recall():
         frozenset(["c3", "c3_abbrev"]),
     }
 
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=3,  # Should be enough to find similar pairs
-    )
+    blocker = create_fake_blocker(k_neighbors=3)
 
     candidates = list(blocker.stream(data))
     generated_pairs = {frozenset([c.left.id, c.right.id]) for c in candidates}
@@ -293,99 +247,6 @@ def test_vector_blocker_achieves_high_recall():
     )
 
 
-@pytest.mark.slow
-def test_vector_blocker_different_model():
-    """Test VectorBlocker can be initialized with a different embedding model."""
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=5,
-        model_name="paraphrase-MiniLM-L3-v2",  # Different model
-    )
-
-    assert blocker.model_name == "paraphrase-MiniLM-L3-v2"
-
-    # Should still work with a different model
-    data = [
-        {"id": "c1", "name": "Acme Corporation"},
-        {"id": "c2", "name": "TechStart Industries"},
-    ]
-
-    candidates = list(blocker.stream(data))
-    assert len(candidates) >= 0  # Should not crash
-
-
-@pytest.mark.slow
-def test_vector_blocker_model_lazy_loading():
-    """Test that the embedding model is lazy-loaded on first use."""
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=2,
-    )
-
-    # Model should not be loaded yet
-    assert blocker._model is None
-
-    # First call should trigger model loading
-    data = [
-        {"id": "c1", "name": "Test Company 1"},
-        {"id": "c2", "name": "Test Company 2"},
-    ]
-
-    list(blocker.stream(data))
-
-    # Model should now be loaded
-    assert blocker._model is not None
-
-    # Second call should reuse loaded model (tests branch 129->132)
-    model_ref = blocker._model
-    list(blocker.stream(data))
-    assert blocker._model is model_ref  # Same model instance
-
-
-@pytest.mark.slow
-def test_vector_blocker_handles_non_numpy_embeddings(mocker):
-    """Test that VectorBlocker handles embeddings that aren't numpy arrays.
-
-    This tests the defensive conversion at line 180 where embeddings
-    are converted to numpy array if model.encode() returns a list.
-    """
-
-    def company_factory(record: dict) -> CompanySchema:
-        return CompanySchema(id=record["id"], name=record["name"])
-
-    blocker = VectorBlocker(
-        schema_factory=company_factory,
-        text_field_extractor=lambda x: x.name,
-        k_neighbors=2,
-    )
-
-    data = [
-        {"id": "c1", "name": "Test Company 1"},
-        {"id": "c2", "name": "Test Company 2"},
-        {"id": "c3", "name": "Test Company 3"},
-    ]
-
-    # Mock the model's encode method to return a list instead of numpy array
-    # This triggers the conversion at line 180
-    mock_encode = mocker.patch.object(
-        blocker._get_model(),
-        "encode",
-        return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]],  # List, not np.ndarray
-    )
-
-    # Should handle the list and convert to numpy array
-    candidates = list(blocker.stream(data))
-
-    # Should generate candidates despite receiving a list
-    assert len(candidates) > 0
-    mock_encode.assert_called_once()
+# Note: Tests for different embedding models, lazy loading, and type conversion
+# are now in tests/core/test_embeddings.py since these concerns have been
+# separated from VectorBlocker into the EmbeddingProvider abstraction.
