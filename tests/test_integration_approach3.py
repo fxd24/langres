@@ -47,15 +47,36 @@ def text_extractor(company: CompanySchema) -> str:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_approach3_end_to_end_pipeline():
+def test_approach3_end_to_end_pipeline(mocker):
     """Test the complete Approach 3 pipeline achieves BCubed F1 >= 0.85.
 
     This test uses real embedding models (sentence-transformers) but mocks
     the LLM API to avoid actual API costs during testing.
     """
-    # Skip if no OpenAI API key (can't test even with mocking)
-    # We need the key to initialize the module even though we'll mock the calls
-    api_key = os.getenv("OPENAI_API_KEY", "test_key_for_mocking")
+
+    # Mock the LLM API to avoid real API calls
+    def mock_llm_response(messages, **kwargs):  # type: ignore[no-untyped-def]
+        """Mock LLM API to return reasonable judgments."""
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[
+            0
+        ].message.content = "MATCH\nScore: 0.85\nReasoning: These entities appear to match"
+        mock_response.usage = Mock()
+        mock_response.usage.prompt_tokens = 100
+        mock_response.usage.completion_tokens = 20
+        return mock_response
+
+    mock_client = Mock()
+    mock_client.chat.completions.create.side_effect = lambda **kwargs: mock_llm_response(
+        kwargs["messages"]
+    )
+    mocker.patch(
+        "langres.core.modules.cascade.OpenAI",
+        return_value=mock_client,
+    )
+
+    api_key = "test_key_for_mocking"
 
     # Step 1: Generate candidates using VectorBlocker
     blocker = VectorBlocker(
@@ -72,9 +93,7 @@ def test_approach3_end_to_end_pipeline():
     assert len(candidates) > 0
     logger.info(f"Generated {len(candidates)} candidate pairs")
 
-    # Step 2: Score candidates using CascadeModule
-    # Note: In a real test, we would mock the LLM API calls
-    # For now, we'll test with a module that has early exits for most cases
+    # Step 2: Score candidates using CascadeModule (with mocked LLM)
     module = CascadeModule(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
@@ -83,8 +102,7 @@ def test_approach3_end_to_end_pipeline():
         high_threshold=0.95,  # Very high = accept most matches without LLM
     )
 
-    logger.info("Step 2: Scoring candidates with CascadeModule...")
-    # TODO: Add mocking of LLM API here when we have real API calls
+    logger.info("Step 2: Scoring candidates with CascadeModule (mocked LLM)...")
     judgements = list(module.forward(iter(candidates)))
 
     # Should get judgements for all candidates
@@ -136,6 +154,7 @@ def test_approach3_end_to_end_pipeline():
     # assert f1 >= 0.70, "Should beat classical baseline (0.70)"
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_approach3_pipeline_with_mocked_llm(mocker):
     """Test Approach 3 pipeline with fully mocked LLM for deterministic results.
@@ -228,6 +247,7 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
     assert found_acme_cluster, "Should cluster exact duplicates (Acme)"
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_approach3_pipeline_components():
     """Test that Approach 3 pipeline components work together correctly."""

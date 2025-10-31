@@ -254,3 +254,115 @@ def test_llm_judge_uses_custom_prompt():
     module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", prompt_template=custom_prompt)
 
     assert module.prompt_template == custom_prompt
+
+
+def test_llm_judge_score_extraction_fallback(mocker):
+    """Test that LLMJudgeModule falls back to 0.5 when score extraction fails."""
+    # Mock OpenAI client to return response without score
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[
+        0
+    ].message.content = "These entities might be the same, I'm not sure."  # No score
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client.chat.completions.create.return_value = mock_response
+    mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
+
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Beta"),
+        blocker_name="test",
+    )
+
+    # Should log warning and use 0.5 as default
+    judgements = list(module.forward([candidate]))
+    assert len(judgements) == 1
+    assert judgements[0].score == 0.5  # Default fallback
+
+
+def test_llm_judge_reasoning_extraction_fallback(mocker):
+    """Test that LLMJudgeModule falls back to full content when reasoning extraction fails."""
+    # Mock response without "Reasoning:" prefix
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    # No explicit "Reasoning:" - should return full content
+    mock_response.choices[0].message.content = "Score: 0.8\nThese are similar companies."
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client.chat.completions.create.return_value = mock_response
+    mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
+
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Acme"),
+        blocker_name="test",
+    )
+
+    judgements = list(module.forward([candidate]))
+    # Should use full content as reasoning
+    assert len(judgements) == 1
+    assert judgements[0].reasoning is not None
+    assert "similar companies" in judgements[0].reasoning.lower()
+
+
+def test_llm_judge_gpt4_pricing(mocker):
+    """Test that GPT-4 pricing is calculated correctly."""
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "MATCH\nScore: 0.9\nReasoning: Same company"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 1000
+    mock_response.usage.completion_tokens = 100
+    mock_client.chat.completions.create.return_value = mock_response
+    mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
+
+    module = LLMJudgeModule(model="gpt-4", api_key="test-key")  # Standard GPT-4
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Acme Corp"),
+        blocker_name="test",
+    )
+
+    judgements = list(module.forward([candidate]))
+
+    # GPT-4: $30/1M input, $60/1M output
+    expected_cost = (1000 * 30.0 + 100 * 60.0) / 1_000_000
+    assert abs(judgements[0].provenance["cost_usd"] - expected_cost) < 0.001
+
+
+def test_llm_judge_unknown_model_pricing(mocker):
+    """Test that unknown models default to gpt-4o-mini pricing."""
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "Score: 0.5\nReasoning: Test"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client.chat.completions.create.return_value = mock_response
+    mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
+
+    module = LLMJudgeModule(model="gpt-future-5", api_key="test-key")  # Unknown model
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Beta"),
+        blocker_name="test",
+    )
+
+    judgements = list(module.forward([candidate]))
+
+    # Should use default (gpt-4o-mini) pricing
+    expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
+    assert abs(judgements[0].provenance["cost_usd"] - expected_cost) < 0.001

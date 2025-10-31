@@ -422,3 +422,141 @@ def test_cascade_module_uses_custom_prompt_template(mocker):
     # Should use custom prompt
     call_args = mock_client.chat.completions.create.call_args
     assert "Compare:" in call_args.kwargs["messages"][0]["content"]
+
+
+def test_cascade_module_requires_api_key():
+    """Test that CascadeModule raises ValueError if API key is missing."""
+    with pytest.raises(ValueError, match="LLM API key is required"):
+        CascadeModule(
+            embedding_model_name="all-MiniLM-L6-v2",
+            llm_model="gpt-4o-mini",
+            llm_api_key="",  # Empty API key
+            low_threshold=0.3,
+            high_threshold=0.9,
+        )
+
+
+@pytest.mark.slow
+def test_cascade_module_lazy_loads_embedding_model(mocker):
+    """Test that embedding model is lazy-loaded on first use."""
+    mock_client = Mock()
+    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4o-mini",
+        llm_api_key="test_key",
+        low_threshold=0.3,
+        high_threshold=0.9,
+    )
+
+    # Model should not be loaded yet
+    assert module._embedding_model is None
+
+    # Create a candidate (this will trigger model loading)
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Test"),
+        right=CompanySchema(id="c2", name="Test"),
+        blocker_name="test",
+    )
+
+    # Mock LLM response to avoid real API call
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "MATCH\nScore: 0.5\nReasoning: Test"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client.chat.completions.create.return_value = mock_response
+
+    # Process candidate (will load model on first call)
+    list(module.forward([candidate]))
+
+    # Model should now be loaded
+    assert module._embedding_model is not None
+
+    # Second call should reuse the loaded model
+    list(module.forward([candidate]))
+
+
+@pytest.mark.slow
+def test_cascade_module_gpt4_pricing(mocker):
+    """Test that GPT-4 pricing is calculated correctly."""
+    mock_client = Mock()
+    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+
+    # Use gpt-4 model (different pricing than gpt-4o-mini)
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4",  # Standard GPT-4
+        llm_api_key="test_key",
+        low_threshold=0.3,
+        high_threshold=0.9,
+    )
+
+    # Create a candidate that will trigger LLM (mid-range similarity)
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme Corporation"),
+        right=CompanySchema(id="c2", name="Beta Industries"),  # Different enough for LLM
+        blocker_name="test",
+    )
+
+    # Mock LLM response with usage info
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[
+        0
+    ].message.content = "NO_MATCH\nScore: 0.4\nReasoning: Different companies"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 1000
+    mock_response.usage.completion_tokens = 100
+    mock_client.chat.completions.create.return_value = mock_response
+
+    # Process candidate
+    judgements = list(module.forward([candidate]))
+
+    # Should have cost calculated (GPT-4 pricing is higher than gpt-4o-mini)
+    assert len(judgements) == 1
+    assert "llm_cost_usd" in judgements[0].provenance
+    # GPT-4: $30/1M input, $60/1M output
+    # Cost = (1000 * 30 + 100 * 60) / 1_000_000 = 0.036
+    expected_cost = (1000 * 30.0 + 100 * 60.0) / 1_000_000
+    assert abs(judgements[0].provenance["llm_cost_usd"] - expected_cost) < 0.001
+
+
+@pytest.mark.slow
+def test_cascade_module_unknown_model_pricing(mocker):
+    """Test that unknown models default to gpt-4o-mini pricing."""
+    mock_client = Mock()
+    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+
+    # Use an unknown model name
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-5-future",  # Unknown model
+        llm_api_key="test_key",
+        low_threshold=0.3,
+        high_threshold=0.9,
+    )
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme Corporation"),
+        right=CompanySchema(id="c2", name="Beta Industries"),  # Different enough for LLM
+        blocker_name="test",
+    )
+
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "NO_MATCH\nScore: 0.5\nReasoning: Test"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client.chat.completions.create.return_value = mock_response
+
+    judgements = list(module.forward([candidate]))
+
+    # Should use default (gpt-4o-mini) pricing
+    assert "llm_cost_usd" in judgements[0].provenance
+    # Default: $0.150/1M input, $0.600/1M output
+    expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
+    assert abs(judgements[0].provenance["llm_cost_usd"] - expected_cost) < 0.001

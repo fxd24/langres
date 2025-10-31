@@ -57,6 +57,7 @@ def test_vector_blocker_requires_positive_k():
         )
 
 
+@pytest.mark.slow
 def test_vector_blocker_generates_candidates_from_small_dataset():
     """Test VectorBlocker generates candidate pairs from a small dataset."""
 
@@ -96,6 +97,7 @@ def test_vector_blocker_generates_candidates_from_small_dataset():
         assert candidate.blocker_name == "vector_blocker"
 
 
+@pytest.mark.slow
 def test_vector_blocker_finds_similar_entities():
     """Test VectorBlocker correctly pairs semantically similar entities."""
 
@@ -126,6 +128,7 @@ def test_vector_blocker_finds_similar_entities():
     assert ("c1", "c2") in candidate_pairs or ("c2", "c1") in candidate_pairs
 
 
+@pytest.mark.slow
 def test_vector_blocker_no_duplicate_pairs():
     """Test VectorBlocker doesn't generate duplicate pairs (both (a,b) and (b,a))."""
 
@@ -196,6 +199,7 @@ def test_vector_blocker_handles_empty_dataset():
     assert len(candidates) == 0
 
 
+@pytest.mark.slow
 def test_vector_blocker_with_missing_fields():
     """Test VectorBlocker handles entities with missing optional fields."""
 
@@ -230,6 +234,7 @@ def test_vector_blocker_with_missing_fields():
         assert isinstance(candidate.right, CompanySchema)
 
 
+@pytest.mark.slow
 def test_vector_blocker_achieves_high_recall():
     """Test VectorBlocker achieves >= 95% recall on known duplicates.
 
@@ -288,6 +293,7 @@ def test_vector_blocker_achieves_high_recall():
     )
 
 
+@pytest.mark.slow
 def test_vector_blocker_different_model():
     """Test VectorBlocker can be initialized with a different embedding model."""
 
@@ -311,3 +317,75 @@ def test_vector_blocker_different_model():
 
     candidates = list(blocker.stream(data))
     assert len(candidates) >= 0  # Should not crash
+
+
+@pytest.mark.slow
+def test_vector_blocker_model_lazy_loading():
+    """Test that the embedding model is lazy-loaded on first use."""
+
+    def company_factory(record: dict) -> CompanySchema:
+        return CompanySchema(id=record["id"], name=record["name"])
+
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        k_neighbors=2,
+    )
+
+    # Model should not be loaded yet
+    assert blocker._model is None
+
+    # First call should trigger model loading
+    data = [
+        {"id": "c1", "name": "Test Company 1"},
+        {"id": "c2", "name": "Test Company 2"},
+    ]
+
+    list(blocker.stream(data))
+
+    # Model should now be loaded
+    assert blocker._model is not None
+
+    # Second call should reuse loaded model (tests branch 129->132)
+    model_ref = blocker._model
+    list(blocker.stream(data))
+    assert blocker._model is model_ref  # Same model instance
+
+
+@pytest.mark.slow
+def test_vector_blocker_handles_non_numpy_embeddings(mocker):
+    """Test that VectorBlocker handles embeddings that aren't numpy arrays.
+
+    This tests the defensive conversion at line 180 where embeddings
+    are converted to numpy array if model.encode() returns a list.
+    """
+
+    def company_factory(record: dict) -> CompanySchema:
+        return CompanySchema(id=record["id"], name=record["name"])
+
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        k_neighbors=2,
+    )
+
+    data = [
+        {"id": "c1", "name": "Test Company 1"},
+        {"id": "c2", "name": "Test Company 2"},
+        {"id": "c3", "name": "Test Company 3"},
+    ]
+
+    # Mock the model's encode method to return a list instead of numpy array
+    # This triggers the conversion at line 180
+    mock_encode = mocker.patch.object(
+        blocker._get_model(),
+        "encode",
+        return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]],  # List, not np.ndarray
+    )
+
+    # Should handle the list and convert to numpy array
+    candidates = list(blocker.stream(data))
+
+    # Should generate candidates despite receiving a list
+    assert len(candidates) > 0
+    mock_encode.assert_called_once()
