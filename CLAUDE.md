@@ -36,6 +36,7 @@
 - **Python Execution**: ALWAYS use `uv run python` (not system `python` or `python3`) to ensure code runs in the project's virtual environment with correct dependencies
 - **Temporary Scripts**: When creating temporary test scripts or scratch files, place them in the repo's `tmp/` directory (which is gitignored), NOT in the system `/tmp` directory. This keeps temporary work organized and prevents polluting the system temp folder.
   - Example: Create scripts in `/Users/davidgraf/work/langres/tmp/test_script.py` instead of `/tmp/test_script.py`
+- **Environment Variables**: The `.env` file contains environment configuration (including OpenMP settings for macOS). Use `uv run --env-file .env` for commands that need these settings. See `docs/FRICTION_LOG.md` for known issues and remedies.
 
 ### Naming Conventions
 
