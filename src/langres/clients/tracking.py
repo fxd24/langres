@@ -24,6 +24,14 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
     Returns:
         wandb run object that can be used to log metrics and artifacts.
 
+    Raises:
+        ValueError: If WANDB_API_KEY environment variable is not set.
+
+    Environment variables required:
+        WANDB_API_KEY: Weights & Biases API key (required)
+        WANDB_PROJECT: W&B project name (optional, defaults to "langres")
+        WANDB_ENTITY: W&B entity/team name (optional)
+
     Example:
         # With explicit settings
         settings = Settings()
@@ -37,8 +45,7 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
         wandb.finish()
 
     Note:
-        The wandb API key should be set in environment via Settings.
-        wandb will use WANDB_API_KEY from environment automatically.
+        The wandb API key is read from WANDB_API_KEY environment variable.
 
     Note:
         To log metrics during optimization, use:
@@ -46,7 +53,11 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
         - wandb.log({"trial": trial_num, "f1": f1_score, "cost": cost_usd})
     """
     if settings is None:
-        settings = Settings()  # type: ignore[call-arg]
+        settings = Settings()
+
+    # Validate wandb API key is present
+    if not settings.wandb_api_key:
+        raise ValueError("WANDB_API_KEY environment variable is required")
 
     run = wandb.init(
         project=settings.wandb_project, entity=settings.wandb_entity, job_type=job_type
