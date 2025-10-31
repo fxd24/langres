@@ -70,8 +70,8 @@ def test_llm_judge_scores_single_pair(mock_openai_client):
     )
     mock_openai_client.chat.completions.create.return_value = mock_response
 
-    # Create module
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    # Create module (explicitly use OpenAI client for this test)
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     # Create candidate pair
     candidate = ERCandidate(
@@ -114,7 +114,7 @@ def test_llm_judge_extracts_score_from_response(mock_openai_client):
     )
     mock_openai_client.chat.completions.create.return_value = mock_response
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -149,7 +149,7 @@ def test_llm_judge_tracks_cost_in_provenance(mock_openai_client):
     )
     mock_openai_client.chat.completions.create.return_value = mock_response
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -209,7 +209,7 @@ def test_llm_judge_handles_multiple_pairs(mock_openai_client):
     ]
     mock_openai_client.chat.completions.create.side_effect = responses
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidates = [
         ERCandidate(
@@ -235,7 +235,7 @@ def test_llm_judge_handles_api_error(mock_openai_client):
     """Test LLMJudgeModule handles API errors gracefully."""
     mock_openai_client.chat.completions.create.side_effect = Exception("API Error")
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -271,7 +271,7 @@ def test_llm_judge_score_extraction_fallback(mocker):
     mock_client.chat.completions.create.return_value = mock_response
     mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -299,7 +299,7 @@ def test_llm_judge_reasoning_extraction_fallback(mocker):
     mock_client.chat.completions.create.return_value = mock_response
     mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
 
-    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key", use_litellm=False)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -326,7 +326,7 @@ def test_llm_judge_gpt4_pricing(mocker):
     mock_client.chat.completions.create.return_value = mock_response
     mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
 
-    module = LLMJudgeModule(model="gpt-4", api_key="test-key")  # Standard GPT-4
+    module = LLMJudgeModule(model="gpt-4", api_key="test-key", use_litellm=False)  # Standard GPT-4
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -353,7 +353,9 @@ def test_llm_judge_unknown_model_pricing(mocker):
     mock_client.chat.completions.create.return_value = mock_response
     mocker.patch("langres.core.modules.llm_judge.OpenAI", return_value=mock_client)
 
-    module = LLMJudgeModule(model="gpt-future-5", api_key="test-key")  # Unknown model
+    module = LLMJudgeModule(
+        model="gpt-future-5", api_key="test-key", use_litellm=False
+    )  # Unknown model
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -366,3 +368,140 @@ def test_llm_judge_unknown_model_pricing(mocker):
     # Should use default (gpt-4o-mini) pricing
     expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
     assert abs(judgements[0].provenance["cost_usd"] - expected_cost) < 0.001
+
+
+# LiteLLM Integration Tests
+
+
+def test_llm_judge_litellm_initialization(mocker):
+    """Test LLMJudgeModule can be initialized with LiteLLM."""
+    mock_litellm = mocker.patch("langres.core.modules.llm_judge.litellm")
+
+    module = LLMJudgeModule(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        use_litellm=True,
+    )
+
+    assert module.use_litellm is True
+    assert module._litellm is mock_litellm
+
+
+def test_llm_judge_litellm_with_injected_client(mocker):
+    """Test LLMJudgeModule accepts pre-configured LiteLLM client."""
+    mock_client = Mock()
+
+    module = LLMJudgeModule(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        use_litellm=True,
+        litellm_client=mock_client,
+    )
+
+    assert module._litellm is mock_client
+
+
+def test_llm_judge_litellm_scores_pair(mocker):
+    """Test LLMJudgeModule uses LiteLLM completion API."""
+    mock_litellm = Mock()
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "MATCH\nScore: 0.90\nReasoning: Same company"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 30
+    mock_litellm.completion.return_value = mock_response
+
+    module = LLMJudgeModule(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        use_litellm=True,
+        litellm_client=mock_litellm,
+    )
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Acme Corp"),
+        blocker_name="test",
+    )
+
+    judgements = list(module.forward([candidate]))
+
+    # Verify litellm.completion was called
+    mock_litellm.completion.assert_called_once()
+    call_kwargs = mock_litellm.completion.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["temperature"] == 0.0
+
+    # Verify judgement
+    assert len(judgements) == 1
+    assert judgements[0].score == 0.90
+
+
+def test_llm_judge_backward_compatibility_default_openai(mocker):
+    """Test that use_litellm defaults to True but OpenAI still works."""
+    # This test ensures we don't break existing code that uses OpenAI directly
+    mock_litellm = mocker.patch("langres.core.modules.llm_judge.litellm")
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "Score: 0.8\nReasoning: Test"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 50
+    mock_response.usage.completion_tokens = 20
+    mock_litellm.completion.return_value = mock_response
+
+    # Default should use LiteLLM now
+    module = LLMJudgeModule(model="gpt-4o-mini", api_key="test-key")
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Test"),
+        right=CompanySchema(id="c2", name="Test2"),
+        blocker_name="test",
+    )
+
+    list(module.forward([candidate]))
+
+    # Should call litellm by default
+    mock_litellm.completion.assert_called_once()
+
+
+def test_llm_judge_can_disable_litellm(mock_openai_client):
+    """Test that use_litellm=False uses OpenAI client directly."""
+    mock_response = ChatCompletion(
+        id="test",
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=0,
+        choices=[
+            Choice(
+                index=0,
+                message=ChatCompletionMessage(
+                    role="assistant",
+                    content="Score: 0.75\nReasoning: Similar",
+                ),
+                finish_reason="stop",
+            )
+        ],
+        usage={"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70},
+    )
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    # Explicitly disable LiteLLM
+    module = LLMJudgeModule(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        use_litellm=False,
+    )
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Test"),
+        right=CompanySchema(id="c2", name="Test2"),
+        blocker_name="test",
+    )
+
+    judgements = list(module.forward([candidate]))
+
+    # Should use OpenAI client
+    mock_openai_client.chat.completions.create.assert_called_once()
+    assert len(judgements) == 1
+    assert judgements[0].score == 0.75

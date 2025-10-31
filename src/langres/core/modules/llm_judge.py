@@ -2,12 +2,16 @@
 
 This module uses OpenAI API (or compatible) for match judgments with natural
 language reasoning and calibrated probability scores.
+
+Supports both direct OpenAI client and LiteLLM for enhanced observability.
 """
 
 import logging
 import re
 from collections.abc import Iterator
+from typing import Any
 
+import litellm
 from openai import OpenAI
 
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -67,6 +71,8 @@ class LLMJudgeModule(Module[SchemaT]):
         api_key: str = "",
         temperature: float = 0.0,
         prompt_template: str | None = None,
+        use_litellm: bool = True,
+        litellm_client: Any | None = None,
     ):
         """Initialize LLMJudgeModule.
 
@@ -75,9 +81,33 @@ class LLMJudgeModule(Module[SchemaT]):
             api_key: OpenAI API key
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random)
             prompt_template: Custom prompt template (uses DEFAULT_PROMPT if None)
+            use_litellm: If True, use LiteLLM for enhanced observability (Langfuse tracing).
+                        If False, use OpenAI client directly. Default: True.
+            litellm_client: Optional pre-configured LiteLLM client. If None and
+                           use_litellm=True, uses default litellm module.
 
         Raises:
             ValueError: If api_key is empty or temperature out of range
+
+        Example:
+            # With LiteLLM (recommended for Langfuse tracing)
+            module = LLMJudgeModule(
+                model="gpt-4o-mini",
+                api_key=os.getenv("OPENAI_API_KEY"),
+                use_litellm=True
+            )
+
+            # With direct OpenAI client (legacy)
+            module = LLMJudgeModule(
+                model="gpt-4o-mini",
+                api_key=os.getenv("OPENAI_API_KEY"),
+                use_litellm=False
+            )
+
+        Note:
+            When use_litellm=True, LLM calls will be automatically traced in
+            Langfuse if you've configured LiteLLM callbacks via
+            langres.clients.create_llm_client().
         """
         if not api_key:
             raise ValueError("API key is required")
@@ -89,8 +119,12 @@ class LLMJudgeModule(Module[SchemaT]):
         self.api_key = api_key
         self.temperature = temperature
         self.prompt_template = prompt_template if prompt_template else DEFAULT_PROMPT
+        self.use_litellm = use_litellm
 
-        self._client = OpenAI(api_key=api_key)
+        if use_litellm:
+            self._litellm = litellm_client if litellm_client is not None else litellm
+        else:
+            self._client = OpenAI(api_key=api_key)
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
@@ -119,11 +153,21 @@ class LLMJudgeModule(Module[SchemaT]):
                 candidate.left.id,  # type: ignore[attr-defined]
                 candidate.right.id,  # type: ignore[attr-defined]
             )
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=self.temperature,
-            )
+
+            if self.use_litellm:
+                # Use LiteLLM (supports Langfuse tracing)
+                response = self._litellm.completion(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.temperature,
+                )
+            else:
+                # Use OpenAI client directly
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.temperature,
+                )
 
             # Extract score and reasoning from response
             content = response.choices[0].message.content or ""
