@@ -70,7 +70,7 @@ class EmbeddingProvider(Protocol):
             Implementations should return consistent dtypes (typically float32)
             for compatibility with vector index backends like FAISS.
         """
-        ...
+        ...  # pragma: no cover
 
     @property
     def embedding_dim(self) -> int:
@@ -83,7 +83,7 @@ class EmbeddingProvider(Protocol):
             This property allows VectorIndex implementations to validate
             embedding dimensions and configure index parameters correctly.
         """
-        ...
+        ...  # pragma: no cover
 
 
 class SentenceTransformerEmbedder:
@@ -115,18 +115,36 @@ class SentenceTransformerEmbedder:
         of available models and their performance benchmarks.
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        batch_size: int = 32,
+        show_progress_bar: bool = False,
+        normalize_embeddings: bool = True,
+    ):
         """Initialize SentenceTransformerEmbedder.
 
         Args:
             model_name: Name of the sentence-transformers model to use.
                 Default: "all-MiniLM-L6-v2" (fast, good quality baseline).
+            batch_size: Number of texts to encode per batch.
+                Default: 32. Use 128+ for GPU with sufficient memory.
+            show_progress_bar: Display encoding progress for large datasets.
+                Default: False.
+            normalize_embeddings: L2-normalize embeddings to unit vectors.
+                Default: True. Required for Qdrant Distance.COSINE and
+                cosine similarity metrics.
 
         Note:
             The model is NOT loaded during __init__. It will be loaded
             lazily on the first call to encode() or embedding_dim.
+            Device selection (CPU/CUDA/MPS) is automatic. sentence-transformers
+            will use GPU if available.
         """
         self.model_name = model_name
+        self.batch_size = batch_size
+        self.show_progress_bar = show_progress_bar
+        self.normalize_embeddings = normalize_embeddings
         self._model: SentenceTransformer | None = None
 
     def _get_model(self) -> SentenceTransformer:
@@ -163,7 +181,13 @@ class SentenceTransformerEmbedder:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
 
         model = self._get_model()
-        embeddings = model.encode(texts, convert_to_numpy=True)
+        embeddings = model.encode(
+            texts,
+            batch_size=self.batch_size,
+            show_progress_bar=self.show_progress_bar,
+            normalize_embeddings=self.normalize_embeddings,
+            convert_to_numpy=True,
+        )
 
         # Ensure numpy array (sentence-transformers should return this, but be explicit)
         if not isinstance(embeddings, np.ndarray):
@@ -194,7 +218,7 @@ class FakeEmbedder:
     This implementation creates fake embeddings that are:
     1. Deterministic: same text always produces same embedding
     2. Different: different texts produce different embeddings
-    3. Normalized: all embeddings are L2-normalized (unit vectors)
+    3. Optionally normalized: L2-normalized to unit vectors (default: True)
     4. Fast: no model loading, instant computation
 
     This is crucial for testing VectorBlocker logic without expensive
@@ -203,21 +227,24 @@ class FakeEmbedder:
     Example:
         embedder = FakeEmbedder(embedding_dim=128)
         embeddings = embedder.encode(["text1", "text2"])
-        # Returns deterministic (2, 128) array instantly
+        # Returns deterministic (2, 128) normalized array instantly
 
     Note:
         The fake embeddings are based on a hash of the text, ensuring
         deterministic but pseudo-random vectors.
     """
 
-    def __init__(self, embedding_dim: int = 384):
+    def __init__(self, embedding_dim: int = 384, normalize_embeddings: bool = True):
         """Initialize FakeEmbedder.
 
         Args:
             embedding_dim: Dimensionality of fake embeddings to produce.
                 Default: 384 (matches all-MiniLM-L6-v2).
+            normalize_embeddings: L2-normalize embeddings to unit vectors.
+                Default: True (matches SentenceTransformerEmbedder behavior).
         """
         self._embedding_dim = embedding_dim
+        self.normalize_embeddings = normalize_embeddings
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Generate fake deterministic embeddings from texts.
@@ -251,9 +278,10 @@ class FakeEmbedder:
             # Generate random values in [-1, 1]
             embedding = rng.uniform(-1.0, 1.0, size=self._embedding_dim).astype(np.float32)
 
-            # Normalize to unit vector (L2 norm = 1.0)
-            norm = np.linalg.norm(embedding)
-            embedding = embedding / norm
+            # Normalize to unit vector (L2 norm = 1.0) if requested
+            if self.normalize_embeddings:
+                norm = np.linalg.norm(embedding)
+                embedding = embedding / norm
 
             embeddings.append(embedding)
 

@@ -125,6 +125,14 @@ class TestFAISSIndex:
         distances, indices = index.search(embeddings2, k=5)
         assert distances.shape == (20, 5)
 
+    def test_invalid_metric_raises_error(self):
+        """Test that FAISSIndex raises ValueError for invalid metric."""
+        index = FAISSIndex(metric="invalid_metric")
+        embeddings = np.random.rand(10, 32).astype(np.float32)
+
+        with pytest.raises(ValueError, match="Unknown metric"):
+            index.build(embeddings)
+
 
 class TestFakeVectorIndex:
     """Tests for FakeVectorIndex test double."""

@@ -74,7 +74,7 @@ class VectorIndex(Protocol):
             normalization for cosine similarity). Callers should not
             rely on embeddings being unchanged after build().
         """
-        ...
+        ...  # pragma: no cover
 
     def search(self, query_embeddings: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         """Search for k nearest neighbors for each query embedding.
@@ -102,7 +102,7 @@ class VectorIndex(Protocol):
             - L2: smaller = more similar (0 = identical)
             - Cosine: larger = more similar (inner product after normalization)
         """
-        ...
+        ...  # pragma: no cover
 
 
 class FAISSIndex:
