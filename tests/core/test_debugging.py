@@ -1019,3 +1019,342 @@ def test_save_report_invalid_format(
 
     with pytest.raises(ValueError, match="Invalid format"):
         debugger.save_report(output_file, format="invalid")
+
+
+# =============================
+# Wandb Integration Tests
+# =============================
+
+
+def test_log_to_wandb_with_all_stats(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    perfect_judgements: list[PairwiseJudgement],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb logs all stats when all analyses have been run."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+
+    # Run all analyses
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+    debugger.analyze_scores(perfect_judgements)
+    debugger.analyze_clusters([{"e1", "e2", "e3"}, {"e4", "e5"}, {"e6"}])
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+        mock_wandb.Histogram = MagicMock(return_value="mock_histogram")
+
+        # Call log_to_wandb
+        debugger.log_to_wandb()
+
+        # Verify wandb.log was called with candidate metrics
+        assert mock_wandb.log.called
+        logged_metrics = mock_wandb.log.call_args_list
+
+        # Check that candidate stats were logged
+        all_logged_data = {}
+        for call in logged_metrics:
+            all_logged_data.update(call[0][0])
+
+        assert "debug/candidate_recall" in all_logged_data
+        assert "debug/candidate_precision" in all_logged_data
+        assert "debug/total_candidates" in all_logged_data
+
+        # Check that score stats were logged
+        assert "debug/mean_score" in all_logged_data
+        assert "debug/score_separation" in all_logged_data
+
+        # Check that cluster stats were logged
+        assert "debug/num_false_merges" in all_logged_data
+        assert "debug/num_false_splits" in all_logged_data
+
+        # Check that recommendations were logged to summary
+        assert "debug/recommendations" in mock_run.summary
+
+
+def test_log_to_wandb_with_partial_stats(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb logs only available stats when only some analyses run."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+
+    # Run only candidate analysis
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+
+        # Call log_to_wandb
+        debugger.log_to_wandb()
+
+        # Verify wandb.log was called
+        assert mock_wandb.log.called
+        logged_metrics = mock_wandb.log.call_args_list
+
+        # Collect all logged data
+        all_logged_data = {}
+        for call in logged_metrics:
+            all_logged_data.update(call[0][0])
+
+        # Should have candidate stats
+        assert "debug/candidate_recall" in all_logged_data
+
+        # Should NOT have score or cluster stats (not analyzed)
+        assert "debug/mean_score" not in all_logged_data
+        assert "debug/num_false_merges" not in all_logged_data
+
+
+def test_log_to_wandb_raises_error_if_no_active_run(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb raises ValueError when no wandb run is active."""
+    from unittest.mock import patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Mock wandb.run as None
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_wandb.run = None
+
+        with pytest.raises(ValueError, match="No active wandb run"):
+            debugger.log_to_wandb()
+
+
+def test_log_to_wandb_raises_error_if_no_analysis_performed(
+    ground_truth_clusters: list[set[str]],
+) -> None:
+    """Test log_to_wandb raises ValueError when no analysis has been performed."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_wandb.run = mock_run
+
+        with pytest.raises(ValueError, match="No analysis performed"):
+            debugger.log_to_wandb()
+
+
+def test_log_to_wandb_skips_artifacts_when_log_artifacts_false(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb skips saving artifacts when log_artifacts=False."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+
+        # Call with log_artifacts=False
+        debugger.log_to_wandb(log_artifacts=False)
+
+        # Verify wandb.save was NOT called
+        assert not mock_wandb.save.called
+
+
+def test_log_to_wandb_skips_histogram_when_log_histograms_false(
+    ground_truth_clusters: list[set[str]],
+    perfect_judgements: list[PairwiseJudgement],
+) -> None:
+    """Test log_to_wandb skips histogram when log_histograms=False."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_scores(perfect_judgements)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Histogram = MagicMock(return_value="mock_histogram")
+
+        # Call with log_histograms=False
+        debugger.log_to_wandb(log_histograms=False)
+
+        # Verify wandb.Histogram was NOT called
+        assert not mock_wandb.Histogram.called
+
+
+def test_log_to_wandb_with_custom_run_object(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb uses custom run object when provided."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Create custom mock run
+    custom_run = MagicMock()
+    custom_run.summary = {}
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_wandb.log = MagicMock()
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+
+        # Call with custom run
+        debugger.log_to_wandb(run=custom_run)
+
+        # Verify wandb.log was called (not custom_run.log)
+        assert mock_wandb.log.called
+
+        # Verify recommendations were set on custom run's summary
+        assert "debug/recommendations" in custom_run.summary
+
+
+def test_log_to_wandb_creates_error_examples_table(
+    ground_truth_clusters: list[set[str]],
+    imperfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb creates wandb.Table for error examples."""
+    from unittest.mock import MagicMock, call, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(imperfect_candidates, test_entities)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+
+        # Call log_to_wandb
+        debugger.log_to_wandb()
+
+        # Verify wandb.Table was called with correct structure
+        assert mock_wandb.Table.called
+        table_call = mock_wandb.Table.call_args
+
+        # Check columns
+        assert "columns" in table_call[1] or len(table_call[0]) > 0
+        if "columns" in table_call[1]:
+            columns = table_call[1]["columns"]
+        else:
+            columns = table_call[0][0]
+
+        assert "error_type" in columns
+        assert "entity_ids" in columns
+        assert "entity_texts" in columns
+        assert "explanation" in columns
+        assert "metadata" in columns
+
+        # Verify table was logged
+        logged_metrics = mock_wandb.log.call_args_list
+        all_logged_data = {}
+        for call_item in logged_metrics:
+            all_logged_data.update(call_item[0][0])
+
+        assert "debug/error_examples" in all_logged_data
+
+
+def test_log_to_wandb_logs_histogram_with_scores(
+    ground_truth_clusters: list[set[str]],
+    perfect_judgements: list[PairwiseJudgement],
+) -> None:
+    """Test log_to_wandb creates histogram when scores are available."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_scores(perfect_judgements)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Histogram = MagicMock(return_value="mock_histogram")
+
+        # Call with log_histograms=True (default)
+        debugger.log_to_wandb(log_histograms=True)
+
+        # Verify wandb.Histogram was called
+        assert mock_wandb.Histogram.called
+
+        # Verify histogram was logged
+        logged_metrics = mock_wandb.log.call_args_list
+        all_logged_data = {}
+        for call_item in logged_metrics:
+            all_logged_data.update(call_item[0][0])
+
+        assert "debug/score_distribution" in all_logged_data
+
+
+def test_log_to_wandb_saves_artifacts_when_enabled(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb saves markdown and JSON artifacts when log_artifacts=True."""
+    from unittest.mock import MagicMock, patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Mock wandb
+    with patch("langres.core.debugging.wandb") as mock_wandb:
+        mock_run = MagicMock()
+        mock_run.summary = {}
+        mock_wandb.run = mock_run
+        mock_wandb.Table = MagicMock(return_value="mock_table")
+        mock_wandb.save = MagicMock()
+
+        # Call with log_artifacts=True (default)
+        debugger.log_to_wandb(log_artifacts=True)
+
+        # Verify wandb.save was called twice (markdown + json)
+        assert mock_wandb.save.call_count == 2
+
+        # Verify saved files have correct extensions
+        saved_paths = [call[0][0] for call in mock_wandb.save.call_args_list]
+        assert any(path.endswith("debug_report.md") for path in saved_paths)
+        assert any(path.endswith("debug_report.json") for path in saved_paths)
+
+
+def test_log_to_wandb_raises_import_error_if_wandb_not_available(
+    ground_truth_clusters: list[set[str]],
+    perfect_candidates: list[ERCandidate[TestEntity]],
+    test_entities: list[TestEntity],
+) -> None:
+    """Test log_to_wandb raises ImportError if wandb is not installed."""
+    from unittest.mock import patch
+
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+    debugger.analyze_candidates(perfect_candidates, test_entities)
+
+    # Mock WANDB_AVAILABLE as False
+    with patch("langres.core.debugging.WANDB_AVAILABLE", False):
+        with pytest.raises(ImportError, match="wandb is required"):
+            debugger.log_to_wandb()
