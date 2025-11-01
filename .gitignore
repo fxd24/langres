@@ -3,6 +3,7 @@
 tmp/
 uv.lock
 .claude/*.bak
+wandb/
 
 
 # Claude Code
