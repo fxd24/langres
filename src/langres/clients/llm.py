@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 import litellm
+from langfuse import Langfuse  # type: ignore[import-untyped]
 
 from langres.clients.settings import Settings
 
@@ -32,6 +33,7 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
         LANGFUSE_PUBLIC_KEY: Langfuse public API key (required)
         LANGFUSE_SECRET_KEY: Langfuse secret API key (required)
         LANGFUSE_HOST: Langfuse host URL (default: https://cloud.langfuse.com)
+        LANGFUSE_PROJECT: Langfuse project name (default: langres)
 
     Environment variables (when using Azure OpenAI):
         AZURE_API_BASE: Azure OpenAI endpoint URL
@@ -75,10 +77,34 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
                 "LANGFUSE_SECRET_KEY environment variable is required when enable_langfuse=True"
             )
 
-        # Langfuse reads LANGFUSE_* env vars directly
+        # Log configuration (masked for security)
+        logger.info(
+            "Initializing Langfuse: project=%s, host=%s, public_key=%s...",
+            settings.langfuse_project,
+            settings.langfuse_host,
+            settings.langfuse_public_key[:10] if settings.langfuse_public_key else "None",
+        )
+
+        # Explicitly initialize Langfuse client
+        # This ensures proper SDK setup before LiteLLM uses it
+        try:
+            langfuse_client = Langfuse(
+                public_key=settings.langfuse_public_key,
+                secret_key=settings.langfuse_secret_key,
+                host=settings.langfuse_host,
+            )
+            # Verify connection by flushing any pending events
+            langfuse_client.flush()
+            logger.info("Langfuse client initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize Langfuse client: %s", e)
+            raise ValueError(f"Langfuse initialization failed: {e}") from e
+
+        # Configure LiteLLM to use Langfuse callbacks
+        # LiteLLM will read LANGFUSE_* env vars for its own Langfuse client
         litellm.success_callback = ["langfuse"]
         litellm.failure_callback = ["langfuse"]
-        logger.info("LiteLLM client configured with Langfuse tracing")
+        logger.info("LiteLLM configured with Langfuse callbacks")
     else:
         logger.info("LiteLLM client configured without tracing")
 

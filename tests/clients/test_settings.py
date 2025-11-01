@@ -55,6 +55,7 @@ class TestSettings:
             assert settings.wandb_project == "langres"
             assert settings.wandb_entity is None
             assert settings.langfuse_host == "https://cloud.langfuse.com"
+            assert settings.langfuse_project == "langres"
 
     def test_settings_custom_optional_values(self):
         """Test Settings with custom optional values."""
@@ -70,6 +71,7 @@ class TestSettings:
                 "WANDB_PROJECT": "custom-project",
                 "WANDB_ENTITY": "my-team",
                 "LANGFUSE_HOST": "https://custom.langfuse.com",
+                "LANGFUSE_PROJECT": "custom-langfuse-project",
             },
             clear=True,
         ):
@@ -77,6 +79,7 @@ class TestSettings:
             assert settings.wandb_project == "custom-project"
             assert settings.wandb_entity == "my-team"
             assert settings.langfuse_host == "https://custom.langfuse.com"
+            assert settings.langfuse_project == "custom-langfuse-project"
 
     def test_settings_with_no_env_vars(self):
         """Test that Settings can be initialized with explicit None values (all optional)."""
