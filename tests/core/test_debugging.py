@@ -246,9 +246,10 @@ def test_analyze_candidates_perfect_recall_precision(
     assert stats.candidate_precision == 1.0
     assert stats.missed_matches_count == 0
     assert stats.false_positive_candidates_count == 0
-    # Average candidates per entity: 4 pairs / 6 entities (counting each entity once per pair)
-    # Actually: (e1:3, e2:2, e3:2, e4:1, e5:1, e6:0) / 6 = 9/6 = 1.5
-    assert stats.avg_candidates_per_entity == pytest.approx(1.5, abs=0.01)
+    # Average candidates per entity: count unique partners per entity, then average
+    # e1: {e2, e3} = 2, e2: {e1, e3} = 2, e3: {e1, e2} = 2, e4: {e5} = 1, e5: {e4} = 1, e6: {} = 0
+    # Total = 8, Avg = 8/6 = 1.333
+    assert stats.avg_candidates_per_entity == pytest.approx(1.333, abs=0.01)
 
 
 def test_analyze_candidates_imperfect_blocker(
@@ -934,3 +935,87 @@ def test_stats_dataclasses_creation() -> None:
         num_false_splits=2,
     )
     assert cluster_stats.num_false_merges == 1
+
+
+def test_analyze_candidates_with_empty_entities_list() -> None:
+    """Test candidate analysis with empty entities list."""
+    debugger = PipelineDebugger(ground_truth_clusters=[{"e1", "e2"}])
+    stats = debugger.analyze_candidates([], [])
+
+    assert stats.avg_candidates_per_entity == 0.0
+
+
+def test_analyze_scores_limits_error_examples_to_sample_size() -> None:
+    """Test that analyze_scores respects sample_size for error examples (both types)."""
+    debugger = PipelineDebugger(ground_truth_clusters=[{"e1", "e2"}, {"e3"}, {"e4"}], sample_size=1)
+
+    # Create multiple low-scoring matches and high-scoring non-matches
+    judgements = [
+        # Multiple low-scoring matches (should only sample 1)
+        PairwiseJudgement(
+            left_id="e1",
+            right_id="e2",
+            score=0.1,
+            score_type="prob_llm",
+            decision_step="llm",
+            reasoning="Wrong",
+            provenance={},
+        ),
+        # Another low-scoring match (should be skipped due to sample_size=1)
+        PairwiseJudgement(
+            left_id="e1",
+            right_id="e2",
+            score=0.15,
+            score_type="prob_llm",
+            decision_step="llm",
+            reasoning="Also wrong",
+            provenance={},
+        ),
+        # Multiple high-scoring non-matches (should only sample 1)
+        PairwiseJudgement(
+            left_id="e1",
+            right_id="e3",
+            score=0.9,
+            score_type="prob_llm",
+            decision_step="llm",
+            reasoning="High but wrong",
+            provenance={},
+        ),
+        # Another high-scoring non-match (should be skipped due to sample_size=1)
+        PairwiseJudgement(
+            left_id="e1",
+            right_id="e4",
+            score=0.95,
+            score_type="prob_llm",
+            decision_step="llm",
+            reasoning="Also high but wrong",
+            provenance={},
+        ),
+    ]
+
+    debugger.analyze_scores(judgements)
+
+    # Should have exactly 1 low_scoring_match error (not 2)
+    low_match_errors = [e for e in debugger.error_examples if e.error_type == "low_scoring_match"]
+    assert len(low_match_errors) == 1
+
+    # Should have exactly 1 high_scoring_nonmatch error (not 2)
+    high_nonmatch_errors = [
+        e for e in debugger.error_examples if e.error_type == "high_scoring_nonmatch"
+    ]
+    assert len(high_nonmatch_errors) == 1
+
+
+def test_save_report_invalid_format(
+    ground_truth_clusters: list[set[str]],
+    tmp_path: Path,
+) -> None:
+    """Test that save_report raises ValueError for invalid format."""
+    debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters)
+
+    output_file = tmp_path / "report.txt"
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Invalid format"):
+        debugger.save_report(output_file, format="invalid")
