@@ -5,7 +5,7 @@ This module provides the foundational primitives for building custom
 entity resolution pipelines.
 """
 
-from langres.core import metrics
+from langres.core import metrics, optimizers
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.embeddings import (
@@ -34,6 +34,7 @@ __all__ = [
     "FakeVectorIndex",
     "metrics",
     "Module",
+    "optimizers",
     "PairwiseJudgement",
     "SentenceTransformerEmbedder",
     "VectorIndex",

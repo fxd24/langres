@@ -21,7 +21,7 @@ class TestSettings:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key",
-                "AZURE_API_ENDPOINT": "https://test.openai.azure.com",
+                "AZURE_API_BASE": "https://test.openai.azure.com",
             },
             clear=True,
         ):
@@ -31,7 +31,7 @@ class TestSettings:
             assert settings.langfuse_public_key == "pk-lf-test123"
             assert settings.langfuse_secret_key == "sk-lf-test123"
             assert settings.azure_api_key == "azure-key"
-            assert settings.azure_api_endpoint == "https://test.openai.azure.com"
+            assert settings.azure_api_base == "https://test.openai.azure.com"
 
     def test_settings_default_values(self):
         """Test Settings default values for optional fields."""
@@ -43,7 +43,7 @@ class TestSettings:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key",
-                "AZURE_API_ENDPOINT": "https://test.openai.azure.com",
+                "AZURE_API_BASE": "https://test.openai.azure.com",
             },
             clear=True,
         ):
@@ -62,7 +62,7 @@ class TestSettings:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key",
-                "AZURE_API_ENDPOINT": "https://test.openai.azure.com",
+                "AZURE_API_BASE": "https://test.openai.azure.com",
                 "WANDB_PROJECT": "custom-project",
                 "WANDB_ENTITY": "my-team",
                 "LANGFUSE_HOST": "https://custom.langfuse.com",
@@ -82,14 +82,14 @@ class TestSettings:
             langfuse_public_key=None,
             langfuse_secret_key=None,
             azure_api_key=None,
-            azure_api_endpoint=None,
+            azure_api_base=None,
         )
         assert settings.openai_api_key is None
         assert settings.wandb_api_key is None
         assert settings.langfuse_public_key is None
         assert settings.langfuse_secret_key is None
         assert settings.azure_api_key is None
-        assert settings.azure_api_endpoint is None
+        assert settings.azure_api_base is None
 
     def test_settings_with_partial_fields(self):
         """Test that Settings works with only some fields set."""
@@ -112,14 +112,14 @@ class TestSettings:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key-test",
-                "AZURE_API_ENDPOINT": "https://my-resource.openai.azure.com",
+                "AZURE_API_BASE": "https://my-resource.openai.azure.com",
                 "AZURE_API_VERSION": "2024-02-15-preview",
             },
             clear=True,
         ):
             settings = Settings()
             assert settings.azure_api_key == "azure-key-test"
-            assert settings.azure_api_endpoint == "https://my-resource.openai.azure.com"
+            assert settings.azure_api_base == "https://my-resource.openai.azure.com"
             assert settings.azure_api_version == "2024-02-15-preview"
 
     def test_settings_azure_default_version(self):
@@ -132,7 +132,7 @@ class TestSettings:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key-test",
-                "AZURE_API_ENDPOINT": "https://my-resource.openai.azure.com",
+                "AZURE_API_BASE": "https://my-resource.openai.azure.com",
             },
             clear=True,
         ):

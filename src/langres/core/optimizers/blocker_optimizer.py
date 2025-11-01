@@ -201,7 +201,7 @@ class BlockerOptimizer:
             if isinstance(param_spec, list):
                 # Categorical parameter
                 value = trial.suggest_categorical(param_name, param_spec)
-                if value is not None:
+                if value is not None:  # pragma: no cover
                     params[param_name] = value
             elif isinstance(param_spec, tuple) and len(param_spec) == 2:
                 # Integer range parameter

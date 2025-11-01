@@ -30,7 +30,7 @@ class TestCreateLLMClient:
             langfuse_secret_key="sk-lf-test",
             langfuse_host="https://custom.langfuse.com",
             azure_api_key="azure-key",
-            azure_api_endpoint="https://test.openai.azure.com",
+            azure_api_base="https://test.openai.azure.com",
         )
 
         with patch("langres.clients.llm.litellm") as mock_litellm:
@@ -53,7 +53,7 @@ class TestCreateLLMClient:
                 "LANGFUSE_PUBLIC_KEY": "pk-lf-env",
                 "LANGFUSE_SECRET_KEY": "sk-lf-env",
                 "AZURE_API_KEY": "azure-env",
-                "AZURE_API_ENDPOINT": "https://env.openai.azure.com",
+                "AZURE_API_BASE": "https://env.openai.azure.com",
             },
             clear=True,
         ):
@@ -72,7 +72,7 @@ class TestCreateLLMClient:
             langfuse_public_key="pk-lf-test",
             langfuse_secret_key="sk-lf-test",
             azure_api_key="azure-key",
-            azure_api_endpoint="https://test.openai.azure.com",
+            azure_api_base="https://test.openai.azure.com",
             # langfuse_host not provided, should use default
         )
 
@@ -97,7 +97,7 @@ class TestCreateLLMClient:
             langfuse_public_key="pk-lf-test",
             langfuse_secret_key="sk-lf-test",
             azure_api_key="azure-key-123",
-            azure_api_endpoint="https://my-resource.openai.azure.com",
+            azure_api_base="https://my-resource.openai.azure.com",
             azure_api_version="2024-02-15-preview",
         )
 
@@ -110,7 +110,7 @@ class TestCreateLLMClient:
 
             # Verify Settings has Azure configuration
             assert settings.azure_api_key == "azure-key-123"
-            assert settings.azure_api_endpoint == "https://my-resource.openai.azure.com"
+            assert settings.azure_api_base == "https://my-resource.openai.azure.com"
             assert settings.azure_api_version == "2024-02-15-preview"
 
             # Verify litellm module is returned
@@ -149,3 +149,22 @@ class TestCreateLLMClient:
             ValueError, match="LANGFUSE_SECRET_KEY environment variable is required"
         ):
             create_llm_client(settings, enable_langfuse=True)
+
+    def test_create_llm_client_without_azure_endpoint(self):
+        """Test create_llm_client without Azure endpoint (standard OpenAI)."""
+        settings = Settings(
+            openai_api_key="sk-test",
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret_key="sk-lf-test",
+            azure_api_base=None,  # No Azure endpoint
+        )
+
+        with patch("langres.clients.llm.litellm") as mock_litellm:
+            client = create_llm_client(settings)
+
+            # Verify callbacks configured
+            assert "langfuse" in mock_litellm.success_callback
+            assert "langfuse" in mock_litellm.failure_callback
+
+            # Verify litellm module is returned
+            assert client is mock_litellm
