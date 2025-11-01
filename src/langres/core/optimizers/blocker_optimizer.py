@@ -66,8 +66,9 @@ class BlockerOptimizer:
 
     def __init__(
         self,
-        objective_fn: Callable[[dict[str, Any]], float],
+        objective_fn: Callable[[dict[str, Any]], float | dict[str, float]],
         search_space: dict[str, Any],
+        primary_metric: str = "value",
         direction: str = "maximize",
         n_trials: int = 50,
         wandb_kwargs: dict[str, Any] | None = None,
@@ -76,11 +77,18 @@ class BlockerOptimizer:
 
         Args:
             objective_fn: Function that takes hyperparameters dict and
-                returns metric value (float). Should run the full pipeline
-                and return the evaluation metric.
+                returns either:
+                - float: Single metric value (legacy, backwards compatible)
+                - dict[str, float]: Dict of all metrics, where primary_metric
+                  key specifies which to optimize. Other metrics are logged
+                  as Optuna user attributes for wandb tracking.
             search_space: Dict defining parameter ranges:
                 - For categorical: {"param_name": ["value1", "value2", ...]}
                 - For integer: {"param_name": (min, max)}
+            primary_metric: Key in the dict returned by objective_fn that
+                specifies which metric to optimize. Only used when objective_fn
+                returns dict. Default: "value". This enables clean separation:
+                objective computes all metrics, config specifies which to optimize.
             direction: Optimization direction - "maximize" or "minimize".
                 Use "maximize" for metrics like F1 score, "minimize" for
                 metrics like error rate. Default: "maximize".
@@ -112,6 +120,7 @@ class BlockerOptimizer:
 
         self.objective_fn = objective_fn
         self.search_space = search_space
+        self.primary_metric = primary_metric
         self.direction = direction
         self.n_trials = n_trials
         self.wandb_kwargs = wandb_kwargs
@@ -215,8 +224,30 @@ class BlockerOptimizer:
         logger.debug("Trial parameters: %s", params)
 
         # Call objective function
-        value = self.objective_fn(params)
+        result = self.objective_fn(params)
 
-        logger.debug("Trial value: %.4f", value)
+        # Handle dict return (log all metrics, return primary)
+        if isinstance(result, dict):
+            # Validate primary metric exists
+            if self.primary_metric not in result:
+                raise ValueError(
+                    f"Primary metric '{self.primary_metric}' not found in result. "
+                    f"Available: {list(result.keys())}"
+                )
 
-        return value
+            # Extract primary metric value
+            primary_value = result[self.primary_metric]
+
+            # Log all other metrics as user attributes (for wandb)
+            for key, value in result.items():
+                if key != self.primary_metric:
+                    trial.set_user_attr(key, value)
+
+            logger.debug(
+                "Trial value (primary_metric=%s): %.4f", self.primary_metric, primary_value
+            )
+            return primary_value
+
+        # Handle float return (backwards compatibility)
+        logger.debug("Trial value: %.4f", result)
+        return result

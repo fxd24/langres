@@ -34,6 +34,7 @@ Environment variables required by this example:
     LANGFUSE_PUBLIC_KEY: Langfuse public API key (required for LLM tracing)
     LANGFUSE_SECRET_KEY: Langfuse secret API key (required for LLM tracing)
     LANGFUSE_HOST: Langfuse host URL (optional, defaults to https://cloud.langfuse.com)
+    LANGFUSE_PROJECT: Langfuse project name (optional, defaults to langres)
 
 Note:
     Environment variables are only validated when the corresponding service is used.
@@ -291,14 +292,16 @@ def main() -> None:
     test_clusters_sets = [set(cluster) for cluster in test_clusters]
 
     # Define objective function for optimization
-    def objective_fn(params: dict[str, Any]) -> float:
+    def objective_fn(params: dict[str, Any]) -> dict[str, float]:
         """Objective function for blocker optimization.
 
         Args:
             params: Dictionary with 'embedding_model', 'k_neighbors', and 'cluster_threshold'
 
         Returns:
-            BCubed F1 score on training set
+            Dict of all computed metrics. BlockerOptimizer will optimize the
+            primary_metric specified in its constructor, and log all others
+            to wandb as user attributes.
         """
         embedding_model = params["embedding_model"]
         k_neighbors = params["k_neighbors"]
@@ -339,42 +342,81 @@ def main() -> None:
                 avg_cost_per_pair,
             )
 
-            return bcubed_metrics["f1"]
+            # Return all metrics as dict
+            return {
+                "bcubed_f1": bcubed_metrics["f1"],
+                "bcubed_precision": bcubed_metrics["precision"],
+                "bcubed_recall": bcubed_metrics["recall"],
+                "pairwise_f1": pairwise_metrics["f1"],
+                "pairwise_precision": pairwise_metrics["precision"],
+                "pairwise_recall": pairwise_metrics["recall"],
+                "pairwise_tp": float(pairwise_metrics["tp"]),
+                "pairwise_fp": float(pairwise_metrics["fp"]),
+                "pairwise_fn": float(pairwise_metrics["fn"]),
+                "cost_usd": total_cost,
+                "avg_cost_per_pair": avg_cost_per_pair,
+                "num_clusters": float(len(predicted_clusters)),
+                "num_pairs": float(len(judgements)),
+            }
 
         except Exception as e:
             logger.error("Error in objective function: %s", e)
-            return 0.0
+            return {
+                "bcubed_f1": 0.0,
+                "bcubed_precision": 0.0,
+                "bcubed_recall": 0.0,
+                "pairwise_f1": 0.0,
+                "pairwise_precision": 0.0,
+                "pairwise_recall": 0.0,
+                "pairwise_tp": 0.0,
+                "pairwise_fp": 0.0,
+                "pairwise_fn": 0.0,
+                "cost_usd": 0.0,
+                "avg_cost_per_pair": 0.0,
+                "num_clusters": 0.0,
+                "num_pairs": 0.0,
+            }
 
     # Define search space
+    # Original search space (commented out for single-run verification)
+    # search_space = {
+    #     "embedding_model": [
+    #         "all-MiniLM-L6-v2",  # Fast, 384 dim
+    #         "all-mpnet-base-v2",  # Better quality, 768 dim
+    #         "paraphrase-MiniLM-L3-v2",  # Fastest, 384 dim
+    #     ],
+    #     "k_neighbors": (1, 10),  # Range of k values
+    #     "cluster_threshold": (0.3, 0.9),  # Clustering threshold for precision/recall tradeoff
+    # }
+
+    # Simple search space for single-run verification
     search_space = {
-        "embedding_model": [
-            "all-MiniLM-L6-v2",  # Fast, 384 dim
-            "all-mpnet-base-v2",  # Better quality, 768 dim
-            "paraphrase-MiniLM-L3-v2",  # Fastest, 384 dim
-        ],
-        "k_neighbors": (1, 10),  # Range of k values
-        "cluster_threshold": (0.3, 0.9),  # Clustering threshold for precision/recall tradeoff
+        "embedding_model": ["all-MiniLM-L6-v2"],  # Single model only
+        "k_neighbors": (5, 5),  # Fixed value (same min/max)
+        "cluster_threshold": (0.5, 0.5),  # Fixed value (same min/max)
     }
 
     # Initialize wandb for experiment tracking
     logger.info("Initializing wandb tracking...")
     wandb_kwargs = {
-        "wandb_init_params": {
+        "metric_name": "bcubed_f1",  # Name for primary metric column in wandb
+        "wandb_kwargs": {  # This gets passed to wandb.init()
             "project": settings.wandb_project,
             "entity": settings.wandb_entity,
             "name": "company-dedup-blocker-opt",
             "tags": ["blocker-optimization", "company-dedup", "azure-openai"],
         },
-        "as_multirun": False,
+        "as_multirun": False,  # Creates new runs for each trial
     }
 
     # Run optimization
-    logger.info("Starting optimization with %d trials...", 10)
+    logger.info("Starting optimization with %d trials...", 1)
     optimizer = BlockerOptimizer(
         objective_fn=objective_fn,
         search_space=search_space,
+        primary_metric="bcubed_f1",  # Which metric to optimize
         direction="maximize",
-        n_trials=10,
+        n_trials=1,  # Single trial for verification
         wandb_kwargs=wandb_kwargs,
     )
 

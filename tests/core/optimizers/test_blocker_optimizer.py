@@ -304,3 +304,136 @@ class TestBlockerOptimizer:
 
             with pytest.raises(ValueError, match="Invalid parameter specification"):
                 optimizer._objective_wrapper(mock_trial)
+
+    def test_blocker_optimizer_dict_return_with_valid_primary_metric(self):
+        """Test objective function returning dict with valid primary_metric."""
+
+        def objective(params: dict) -> dict:
+            return {
+                "bcubed_f1": 0.85,
+                "bcubed_precision": 0.90,
+                "pairwise_f1": 0.80,
+                "cost_usd": 0.05,
+            }
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+            optimizer = BlockerOptimizer(
+                objective_fn=objective,
+                search_space=search_space,
+                primary_metric="bcubed_f1",
+                n_trials=1,
+            )
+
+            mock_trial = MagicMock()
+            mock_trial.suggest_int.return_value = 10
+
+            result = optimizer._objective_wrapper(mock_trial)
+
+            # Verify primary metric returned
+            assert result == 0.85
+
+            # Verify other metrics logged as user_attrs
+            expected_calls = [
+                call("bcubed_precision", 0.90),
+                call("pairwise_f1", 0.80),
+                call("cost_usd", 0.05),
+            ]
+            mock_trial.set_user_attr.assert_has_calls(expected_calls, any_order=True)
+
+            # Verify primary metric NOT logged as user_attr
+            for c in mock_trial.set_user_attr.call_args_list:
+                assert c[0][0] != "bcubed_f1"
+
+    def test_blocker_optimizer_dict_return_missing_primary_metric(self):
+        """Test error when objective returns dict without primary_metric."""
+
+        def objective(params: dict) -> dict:
+            return {
+                "bcubed_precision": 0.90,
+                "pairwise_f1": 0.80,
+            }
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+            optimizer = BlockerOptimizer(
+                objective_fn=objective,
+                search_space=search_space,
+                primary_metric="bcubed_f1",  # Missing from result!
+                n_trials=1,
+            )
+
+            mock_trial = MagicMock()
+            mock_trial.suggest_int.return_value = 10
+
+            with pytest.raises(
+                ValueError,
+                match="Primary metric 'bcubed_f1' not found in result",
+            ):
+                optimizer._objective_wrapper(mock_trial)
+
+    def test_blocker_optimizer_backwards_compatibility_float_return(self):
+        """Test backwards compatibility with objective returning float."""
+
+        def objective(params: dict) -> float:
+            return 0.85
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+            optimizer = BlockerOptimizer(
+                objective_fn=objective,
+                search_space=search_space,
+                primary_metric="value",  # Default, but irrelevant for float return
+                n_trials=1,
+            )
+
+            mock_trial = MagicMock()
+            mock_trial.suggest_int.return_value = 10
+
+            result = optimizer._objective_wrapper(mock_trial)
+
+            # Verify float returned as-is
+            assert result == 0.85
+
+            # Verify set_user_attr NOT called for float return
+            mock_trial.set_user_attr.assert_not_called()
+
+    def test_blocker_optimizer_default_primary_metric(self):
+        """Test default primary_metric value is 'value'."""
+
+        def objective(params: dict) -> dict:
+            return {
+                "value": 0.85,  # Default key
+                "precision": 0.90,
+                "cost": 0.05,
+            }
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+            # Don't specify primary_metric - should default to "value"
+            optimizer = BlockerOptimizer(
+                objective_fn=objective,
+                search_space=search_space,
+                n_trials=1,
+            )
+
+            assert optimizer.primary_metric == "value"
+
+            mock_trial = MagicMock()
+            mock_trial.suggest_int.return_value = 10
+
+            result = optimizer._objective_wrapper(mock_trial)
+
+            # Verify primary metric ("value") returned
+            assert result == 0.85
+
+            # Verify other metrics logged
+            expected_calls = [
+                call("precision", 0.90),
+                call("cost", 0.05),
+            ]
+            mock_trial.set_user_attr.assert_has_calls(expected_calls, any_order=True)
