@@ -137,3 +137,81 @@ def calculate_bcubed_metrics(
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {"precision": precision, "recall": recall, "f1": f1}
+
+
+def calculate_pairwise_metrics(
+    predicted_clusters: list[set[str]], gold_clusters: list[set[str]]
+) -> dict[str, float]:
+    """Calculate pairwise Precision, Recall, and F1.
+
+    Pairwise metrics treat entity resolution as binary classification on pairs:
+    each pair of entities is either a "match" (same cluster) or "non-match".
+    This provides a complementary perspective to BCubed metrics.
+
+    Args:
+        predicted_clusters: List of predicted entity clusters (sets of entity IDs)
+        gold_clusters: List of gold-standard entity clusters (sets of entity IDs)
+
+    Returns:
+        Dictionary with keys:
+        - precision: Pairwise precision (TP / (TP + FP))
+        - recall: Pairwise recall (TP / (TP + FN))
+        - f1: Pairwise F1 score (harmonic mean of precision and recall)
+        - tp: Number of true positive pairs
+        - fp: Number of false positive pairs
+        - fn: Number of false negative pairs
+
+    Example:
+        predicted = [{"e1", "e2"}, {"e3"}]
+        gold = [{"e1", "e2"}, {"e3"}]
+        metrics = calculate_pairwise_metrics(predicted, gold)
+        # {'precision': 1.0, 'recall': 1.0, 'f1': 1.0, 'tp': 1, 'fp': 0, 'fn': 0}
+    """
+    # Convert clusters to sets of pairs
+    predicted_pairs = _clusters_to_pairs(predicted_clusters)
+    gold_pairs = _clusters_to_pairs(gold_clusters)
+
+    # Calculate TP, FP, FN
+    tp = len(predicted_pairs & gold_pairs)  # True positives: pairs in both
+    fp = len(predicted_pairs - gold_pairs)  # False positives: predicted but not gold
+    fn = len(gold_pairs - predicted_pairs)  # False negatives: gold but not predicted
+
+    # Calculate precision, recall, F1
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+    }
+
+
+def _clusters_to_pairs(clusters: list[set[str]]) -> set[tuple[str, str]]:
+    """Convert clusters to set of entity pairs.
+
+    Args:
+        clusters: List of clusters (sets of entity IDs)
+
+    Returns:
+        Set of entity pairs (tuples with lexicographic ordering)
+
+    Example:
+        clusters = [{"e1", "e2", "e3"}, {"e4", "e5"}]
+        pairs = _clusters_to_pairs(clusters)
+        # {("e1", "e2"), ("e1", "e3"), ("e2", "e3"), ("e4", "e5")}
+    """
+    pairs: set[tuple[str, str]] = set()
+    for cluster in clusters:
+        # Generate all pairs within the cluster
+        cluster_list = sorted(cluster)  # Sort for consistent ordering
+        for i in range(len(cluster_list)):
+            for j in range(i + 1, len(cluster_list)):
+                # Store pairs in lexicographic order (smaller ID first)
+                pair = (cluster_list[i], cluster_list[j])
+                pairs.add(pair)
+    return pairs

@@ -93,7 +93,9 @@ class VectorBlocker(Blocker[SchemaT]):
 
     def __init__(
         self,
-        schema_factory: Callable[[dict[str, Any]], SchemaT],
+        schema_factory: Callable[
+            [dict[str, Any]], SchemaT
+        ],  # TODO this seems a tight coupling to the schema.
         text_field_extractor: Callable[[SchemaT], str],
         embedding_provider: EmbeddingProvider,
         vector_index: VectorIndex,

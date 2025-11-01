@@ -1,19 +1,30 @@
 """Entity Resolution Example: Company Deduplication with Blocker Optimization.
 
-This example demonstrates:
-1. VectorBlocker for candidate generation using sentence transformers
-2. LLMJudgeModule with Azure OpenAI for pairwise matching
-3. Clusterer for forming entity clusters
-4. BlockerOptimizer with Optuna + wandb for hyperparameter tuning
+This example demonstrates the CORRECT usage patterns for langres.core components:
 
-The optimization process finds the best:
-- Embedding model (from sentence-transformers library)
-- k_neighbors (number of nearest neighbors to consider)
+1. **VectorBlocker with Dependency Injection**:
+   - Uses `schema_factory` to transform raw data to Pydantic models
+   - Uses `text_field_extractor` to combine multiple fields for embedding
+   - Injects `SentenceTransformerEmbedder` and `FAISSIndex` for composability
 
-All components use langres.clients for centralized configuration:
-- Settings loads environment variables (all optional)
-- create_llm_client configures LiteLLM with optional Langfuse tracing
-- create_wandb_tracker sets up experiment tracking
+2. **LLMJudgeModule with Azure OpenAI**:
+   - Accepts iterator of candidates (use `iter()` to convert list)
+   - Uses LiteLLM for enhanced observability (Langfuse tracing)
+
+3. **Clusterer for Entity Formation**:
+   - Returns `list[set[str]]` (clusters as sets)
+   - Threshold-based clustering using graph connected components
+
+4. **BlockerOptimizer with Optuna + wandb**:
+   - Optimizes embedding model and k_neighbors hyperparameters
+   - Uses BCubed F1 metric for evaluation
+   - Integrates with wandb for experiment tracking
+
+**KEY PATTERNS DEMONSTRATED**:
+- Separation of concerns: Blocker normalizes schema, Module compares
+- Dependency injection: Embedding and vector index are injectable
+- Type safety: All components use Pydantic for validation
+- Observability: Full provenance tracking via PairwiseJudgement
 
 Environment variables required by this example:
     AZURE_API_ENDPOINT: Azure OpenAI endpoint URL (required for Azure OpenAI)
@@ -40,11 +51,11 @@ from langres.clients import create_llm_client, create_wandb_tracker
 from langres.clients.settings import Settings
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.embeddings import SentenceTransformerEmbedding
-from langres.core.metrics import bcubed_f1
+from langres.core.embeddings import SentenceTransformerEmbedder
+from langres.core.metrics import calculate_bcubed_metrics, calculate_pairwise_metrics
 from langres.core.modules.llm_judge import LLMJudgeModule
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
-from langres.core.vector_index import FAISSVectorIndex
+from langres.core.vector_index import FAISSIndex
 
 # Configure logging
 logging.basicConfig(
@@ -72,10 +83,11 @@ def load_companies(data_path: Path) -> list[CompanySchema]:
 def load_labels(labels_path: Path) -> dict[str, Any]:
     """Load ground truth labels from JSON file."""
     with open(labels_path) as f:
-        return json.load(f)
+        data: dict[str, Any] = json.load(f)
+        return data
 
 
-def train_test_split(
+def train_test_split(  # TODO: are we going to split in a smart way or will all the train dataset with groupings larger the oneself's entity be in train and the single/unique entities all in test?
     entities: list[CompanySchema], labels: dict[str, Any], test_size: float = 0.2
 ) -> tuple[list[CompanySchema], list[CompanySchema], list[list[str]], list[list[str]]]:
     """Split entities and labels into train and test sets.
@@ -120,7 +132,8 @@ def run_deduplication_pipeline(
     k_neighbors: int,
     llm_client: Any,
     azure_model: str,
-) -> list[list[str]]:
+    cluster_threshold: float = 0.5,
+) -> tuple[list[set[str]], list[Any]]:
     """Run the full deduplication pipeline.
 
     Args:
@@ -129,46 +142,116 @@ def run_deduplication_pipeline(
         k_neighbors: Number of nearest neighbors
         llm_client: LiteLLM client for LLM judge
         azure_model: Azure OpenAI model name (e.g., "azure/gpt-5-mini")
+        cluster_threshold: Threshold for clustering (default: 0.5)
 
     Returns:
-        Predicted clusters (list of lists of entity IDs)
+        Tuple of (predicted_clusters, judgements) where:
+        - predicted_clusters: list of sets of entity IDs
+        - judgements: list of PairwiseJudgement objects (for cost tracking)
     """
-    # Step 1: Generate candidates using VectorBlocker
+    # ==================================================================================
+    # STEP 1: Generate Candidates using VectorBlocker
+    # ==================================================================================
+    # This demonstrates the CORRECT VectorBlocker API with dependency injection.
+    #
+    # KEY PATTERN: Dependency Injection
+    # Instead of VectorBlocker internally creating SentenceTransformer and FAISS,
+    # we inject them as interfaces (EmbeddingProvider, VectorIndex). This enables:
+    # - Testing with FakeEmbedder/FakeVectorIndex (no model loading)
+    # - Swapping embedding models during optimization
+    # - Using different vector backends (FAISS, Annoy, Qdrant, etc.)
     logger.info("Generating candidates with VectorBlocker...")
-    embedding_provider = SentenceTransformerEmbedding(model_name=embedding_model)
-    vector_index = FAISSVectorIndex(dimension=embedding_provider.dimension)
 
+    # Initialize embedding provider (injected dependency)
+    # This is an EmbeddingProvider implementation using sentence-transformers
+    embedding_provider = SentenceTransformerEmbedder(model_name=embedding_model)
+
+    # Initialize vector index (injected dependency)
+    # FAISSIndex doesn't need dimension - it's inferred during build()
+    vector_index = FAISSIndex(metric="L2")
+
+    # KEY PATTERN: Schema Factory
+    # VectorBlocker is schema-agnostic. The schema_factory transforms raw data
+    # (typically dicts from JSON/DB) into the Pydantic schema (CompanySchema).
+    # This separates data loading from candidate generation logic.
+    def company_factory(record: dict[str, Any]) -> CompanySchema:
+        """Transform raw dict to CompanySchema (already normalized in this example)."""
+        if isinstance(record, CompanySchema):
+            # Handle case where data is already normalized
+            return record
+        return CompanySchema(**record)
+
+    # KEY PATTERN: Text Field Extractor
+    # Instead of accepting text_fields=["name", "address"], VectorBlocker accepts
+    # a function that extracts text from the schema. This is more flexible:
+    # - Can combine fields with custom logic (e.g., " | " separator)
+    # - Can apply transformations (e.g., lowercase, strip)
+    # - Works with any schema type (not just dict-like)
+    def company_text_extractor(company: CompanySchema) -> str:
+        """Extract and combine text fields for embedding."""
+        parts = [company.name]
+        if company.address:
+            parts.append(company.address)
+        if company.website:
+            parts.append(company.website)
+        return " | ".join(parts)
+
+    # Create VectorBlocker with dependency injection
+    # All dependencies are passed as constructor arguments
     blocker = VectorBlocker(
-        schema=CompanySchema,
+        schema_factory=company_factory,
+        text_field_extractor=company_text_extractor,
         embedding_provider=embedding_provider,
         vector_index=vector_index,
         k_neighbors=k_neighbors,
-        text_fields=["name", "address", "website"],
     )
 
-    candidates = list(blocker.generate_candidates(entities))
+    # Convert CompanySchema objects to dicts for blocker.stream()
+    # Note: VectorBlocker.stream() expects list[Any] (typically raw dicts)
+    # The schema_factory will transform them back to CompanySchema internally
+    entity_dicts = [entity.model_dump() for entity in entities]
+
+    # Call blocker.stream() (NOT generate_candidates())
+    # This returns an iterator of ERCandidate[CompanySchema]
+    candidates = list(blocker.stream(entity_dicts))
     logger.info("Generated %d candidate pairs", len(candidates))
 
-    # Step 2: Score pairs using LLMJudgeModule
+    # ==================================================================================
+    # STEP 2: Score Pairs using LLMJudgeModule
+    # ==================================================================================
+    # KEY PATTERN: Module.forward() accepts Iterator
+    # All Module implementations accept Iterator[ERCandidate[SchemaT]], not lists.
+    # This enables streaming/lazy evaluation for large datasets.
     logger.info("Scoring pairs with LLMJudgeModule...")
-    llm_judge = LLMJudgeModule(
+
+    # Type annotation helps mypy verify schema consistency
+    llm_judge: LLMJudgeModule[CompanySchema] = LLMJudgeModule(
+        client=llm_client,  # Pre-configured LiteLLM client with Langfuse tracing
         model=azure_model,
-        api_key="dummy",  # API key read from environment by LiteLLM
-        temperature=0.0,
-        use_litellm=True,
-        litellm_client=llm_client,
+        temperature=1.0,  # GPT-5 models only support temperature=1.0
     )
 
-    judgements = list(llm_judge.forward(candidates))
+    # IMPORTANT: Module.forward() expects Iterator, not list
+    # Convert list to iterator using iter()
+    # forward() yields PairwiseJudgement with full provenance
+    judgements = list(llm_judge.forward(iter(candidates)))
     logger.info("Scored %d pairs", len(judgements))
 
-    # Step 3: Form clusters using Clusterer
+    # ==================================================================================
+    # STEP 3: Form Clusters using Clusterer
+    # ==================================================================================
+    # KEY PATTERN: Clusterer returns list[set[str]]
+    # The Clusterer uses graph connected components to form entity clusters.
+    # It returns list[set[str]], NOT list[list[str]].
     logger.info("Forming clusters...")
-    clusterer = Clusterer(threshold=0.5)
+    clusterer = Clusterer(threshold=cluster_threshold)
+
+    # cluster() accepts Iterator[PairwiseJudgement] or list[PairwiseJudgement]
+    # Returns list[set[str]] - each set is a cluster of entity IDs
     predicted_clusters = clusterer.cluster(judgements)
     logger.info("Formed %d clusters", len(predicted_clusters))
 
-    return predicted_clusters
+    return predicted_clusters, judgements
 
 
 def main() -> None:
@@ -198,36 +281,65 @@ def main() -> None:
         entities, labels, test_size=0.2
     )
 
+    # ==================================================================================
+    # KEY PATTERN: Metrics Expect list[set[str]], but JSON Stores list[list[str]]
+    # ==================================================================================
+    # Ground truth clusters loaded from JSON are list[list[str]] (JSON doesn't have sets).
+    # The Clusterer returns list[set[str]], and metrics functions expect list[set[str]].
+    # Therefore, we convert ground truth: list[list[str]] → list[set[str]]
+    train_clusters_sets = [set(cluster) for cluster in train_clusters]
+    test_clusters_sets = [set(cluster) for cluster in test_clusters]
+
     # Define objective function for optimization
     def objective_fn(params: dict[str, Any]) -> float:
         """Objective function for blocker optimization.
 
         Args:
-            params: Dictionary with 'embedding_model' and 'k_neighbors'
+            params: Dictionary with 'embedding_model', 'k_neighbors', and 'cluster_threshold'
 
         Returns:
             BCubed F1 score on training set
         """
         embedding_model = params["embedding_model"]
         k_neighbors = params["k_neighbors"]
+        cluster_threshold = params["cluster_threshold"]
 
         logger.info(
-            "Evaluating params: embedding_model=%s, k_neighbors=%d",
+            "Evaluating params: embedding_model=%s, k_neighbors=%d, cluster_threshold=%.2f",
             embedding_model,
             k_neighbors,
+            cluster_threshold,
         )
 
         try:
             # Run pipeline on training data
-            predicted_clusters = run_deduplication_pipeline(
-                train_entities, embedding_model, k_neighbors, llm_client, azure_model
+            predicted_clusters, judgements = run_deduplication_pipeline(
+                train_entities,
+                embedding_model,
+                k_neighbors,
+                llm_client,
+                azure_model,
+                cluster_threshold,
             )
 
-            # Evaluate against ground truth
-            f1_score = bcubed_f1(predicted_clusters, train_clusters)
+            # Calculate cost from judgements
+            total_cost = sum(j.provenance.get("cost_usd", 0.0) for j in judgements)
+            avg_cost_per_pair = total_cost / len(judgements) if len(judgements) > 0 else 0.0
 
-            logger.info("BCubed F1: %.4f", f1_score)
-            return f1_score
+            # Evaluate against ground truth (both are now list[set[str]])
+            bcubed_metrics = calculate_bcubed_metrics(predicted_clusters, train_clusters_sets)
+            pairwise_metrics = calculate_pairwise_metrics(predicted_clusters, train_clusters_sets)
+
+            logger.info(
+                "BCubed F1: %.4f | Pairwise F1: %.4f | Clusters: %d | Cost: $%.4f (avg $%.6f/pair)",
+                bcubed_metrics["f1"],
+                pairwise_metrics["f1"],
+                len(predicted_clusters),
+                total_cost,
+                avg_cost_per_pair,
+            )
+
+            return bcubed_metrics["f1"]
 
         except Exception as e:
             logger.error("Error in objective function: %s", e)
@@ -241,6 +353,7 @@ def main() -> None:
             "paraphrase-MiniLM-L3-v2",  # Fastest, 384 dim
         ],
         "k_neighbors": (1, 10),  # Range of k values
+        "cluster_threshold": (0.3, 0.9),  # Clustering threshold for precision/recall tradeoff
     }
 
     # Initialize wandb for experiment tracking
@@ -271,21 +384,48 @@ def main() -> None:
 
     # Evaluate on test set with best parameters
     logger.info("Evaluating on test set with best parameters...")
-    predicted_test_clusters = run_deduplication_pipeline(
+    predicted_test_clusters, test_judgements = run_deduplication_pipeline(
         test_entities,
         best_params["embedding_model"],
         best_params["k_neighbors"],
         llm_client,
         azure_model,
+        best_params["cluster_threshold"],
     )
 
-    test_f1 = bcubed_f1(predicted_test_clusters, test_clusters)
+    # Calculate final metrics
+    test_bcubed = calculate_bcubed_metrics(predicted_test_clusters, test_clusters_sets)
+    test_pairwise = calculate_pairwise_metrics(predicted_test_clusters, test_clusters_sets)
+    test_total_cost = sum(j.provenance.get("cost_usd", 0.0) for j in test_judgements)
+    test_avg_cost = test_total_cost / len(test_judgements) if len(test_judgements) > 0 else 0.0
+
     logger.info("=" * 80)
     logger.info("FINAL RESULTS")
     logger.info("=" * 80)
     logger.info("Best embedding model: %s", best_params["embedding_model"])
     logger.info("Best k_neighbors: %d", best_params["k_neighbors"])
-    logger.info("Test set BCubed F1: %.4f", test_f1)
+    logger.info("Best cluster_threshold: %.2f", best_params["cluster_threshold"])
+    logger.info("-" * 80)
+    logger.info("BCubed Metrics:")
+    logger.info("  Precision: %.4f", test_bcubed["precision"])
+    logger.info("  Recall: %.4f", test_bcubed["recall"])
+    logger.info("  F1: %.4f", test_bcubed["f1"])
+    logger.info("-" * 80)
+    logger.info("Pairwise Metrics:")
+    logger.info("  Precision: %.4f", test_pairwise["precision"])
+    logger.info("  Recall: %.4f", test_pairwise["recall"])
+    logger.info("  F1: %.4f", test_pairwise["f1"])
+    logger.info(
+        "  TP: %d, FP: %d, FN: %d", test_pairwise["tp"], test_pairwise["fp"], test_pairwise["fn"]
+    )
+    logger.info("-" * 80)
+    logger.info("Operational Metrics:")
+    logger.info(
+        "  Predicted clusters: %d (gold: %d)", len(predicted_test_clusters), len(test_clusters_sets)
+    )
+    logger.info("  Total LLM calls: %d", len(test_judgements))
+    logger.info("  Total cost: $%.4f", test_total_cost)
+    logger.info("  Avg cost per pair: $%.6f", test_avg_cost)
     logger.info("=" * 80)
 
 

@@ -37,16 +37,27 @@ The score should be your confidence that these are the same company (1.0 = defin
 
 
 class LLMJudgeModule(Module[SchemaT]):
-    """Schema-agnostic LLM-based matching module using OpenAI API.
+    """Schema-agnostic LLM-based matching module using LiteLLM.
 
     This module uses an LLM (like GPT-4) to make match judgments with
     natural language reasoning. It provides calibrated probability scores
     and tracks API costs for observability.
 
+    The module accepts a pre-configured LiteLLM client, enabling:
+    - Automatic Langfuse tracing for observability
+    - Support for multiple LLM providers (OpenAI, Azure, etc.)
+    - Proper separation of concerns (client configuration vs. matching logic)
+
     Example:
+        from langres.clients import create_llm_client
+        from langres.clients.settings import Settings
+
+        settings = Settings()
+        llm_client = create_llm_client(settings)
+
         module = LLMJudgeModule(
+            client=llm_client,
             model="gpt-4o-mini",
-            api_key=os.getenv("OPENAI_API_KEY"),
             temperature=0.0,
         )
 
@@ -67,64 +78,51 @@ class LLMJudgeModule(Module[SchemaT]):
 
     def __init__(
         self,
+        client: Any,
         model: str = "gpt-4o-mini",
-        api_key: str = "",
         temperature: float = 0.0,
         prompt_template: str | None = None,
-        use_litellm: bool = True,
-        litellm_client: Any | None = None,
     ):
         """Initialize LLMJudgeModule.
 
         Args:
-            model: OpenAI model name (e.g., "gpt-4o-mini", "gpt-4")
-            api_key: OpenAI API key
+            client: Pre-configured LLM client (LiteLLM or OpenAI client).
+                   Use langres.clients.create_llm_client() to create a client
+                   with Langfuse tracing enabled.
+            model: Model name (e.g., "gpt-4o-mini", "azure/gpt-5-mini")
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random)
             prompt_template: Custom prompt template (uses DEFAULT_PROMPT if None)
-            use_litellm: If True, use LiteLLM for enhanced observability (Langfuse tracing).
-                        If False, use OpenAI client directly. Default: True.
-            litellm_client: Optional pre-configured LiteLLM client. If None and
-                           use_litellm=True, uses default litellm module.
 
         Raises:
-            ValueError: If api_key is empty or temperature out of range
+            ValueError: If temperature out of range
 
         Example:
-            # With LiteLLM (recommended for Langfuse tracing)
-            module = LLMJudgeModule(
-                model="gpt-4o-mini",
-                api_key=os.getenv("OPENAI_API_KEY"),
-                use_litellm=True
-            )
+            # Create LiteLLM client with tracing
+            from langres.clients import create_llm_client
+            from langres.clients.settings import Settings
 
-            # With direct OpenAI client (legacy)
+            settings = Settings()
+            llm_client = create_llm_client(settings)
+
+            # Initialize module with client
             module = LLMJudgeModule(
-                model="gpt-4o-mini",
-                api_key=os.getenv("OPENAI_API_KEY"),
-                use_litellm=False
+                client=llm_client,
+                model="azure/gpt-5-mini",
+                temperature=0.0
             )
 
         Note:
-            When use_litellm=True, LLM calls will be automatically traced in
-            Langfuse if you've configured LiteLLM callbacks via
-            langres.clients.create_llm_client().
+            The client handles all authentication and tracing configuration.
+            Use langres.clients.create_llm_client() to create a properly
+            configured client with Langfuse observability.
         """
-        if not api_key:
-            raise ValueError("API key is required")
-
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
 
+        self.client = client
         self.model = model
-        self.api_key = api_key
         self.temperature = temperature
         self.prompt_template = prompt_template if prompt_template else DEFAULT_PROMPT
-        self.use_litellm = use_litellm
-
-        if use_litellm:
-            self._litellm = litellm_client if litellm_client is not None else litellm
-        else:
-            self._client = OpenAI(api_key=api_key)
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
@@ -154,20 +152,12 @@ class LLMJudgeModule(Module[SchemaT]):
                 candidate.right.id,  # type: ignore[attr-defined]
             )
 
-            if self.use_litellm:
-                # Use LiteLLM (supports Langfuse tracing)
-                response = self._litellm.completion(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.temperature,
-                )
-            else:
-                # Use OpenAI client directly
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.temperature,
-                )
+            # Call client (works for both LiteLLM and OpenAI)
+            response = self.client.completion(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+            )
 
             # Extract score and reasoning from response
             content = response.choices[0].message.content or ""
