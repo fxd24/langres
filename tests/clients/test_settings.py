@@ -35,17 +35,21 @@ class TestSettings:
 
     def test_settings_default_values(self):
         """Test Settings default values for optional fields."""
-        with patch.dict(
-            os.environ,
-            {
-                "OPENAI_API_KEY": "sk-test123",
-                "WANDB_API_KEY": "wandb-test123",
-                "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
-                "LANGFUSE_SECRET_KEY": "sk-lf-test123",
-                "AZURE_API_KEY": "azure-key",
-                "AZURE_API_BASE": "https://test.openai.azure.com",
-            },
-            clear=True,
+        # Patch both os.environ AND the .env file to prevent leakage
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "sk-test123",
+                    "WANDB_API_KEY": "wandb-test123",
+                    "LANGFUSE_PUBLIC_KEY": "pk-lf-test123",
+                    "LANGFUSE_SECRET_KEY": "sk-lf-test123",
+                    "AZURE_API_KEY": "azure-key",
+                    "AZURE_API_BASE": "https://test.openai.azure.com",
+                },
+                clear=True,
+            ),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
         ):
             settings = Settings()
             assert settings.wandb_project == "langres"

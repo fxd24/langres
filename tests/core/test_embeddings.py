@@ -145,6 +145,21 @@ class TestSentenceTransformerEmbedder:
         assert embeddings.shape == (2, 384)
         assert embeddings.dtype == np.float32
 
+    @pytest.mark.slow
+    def test_embedding_dim_accessed_before_encode(self):
+        """Test that accessing embedding_dim before encode triggers lazy loading."""
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+
+        # Model should not be loaded yet
+        assert embedder._model is None
+
+        # Access embedding_dim property (should trigger lazy loading)
+        dim = embedder.embedding_dim
+
+        # Model should now be loaded
+        assert embedder._model is not None
+        assert dim == 384  # all-MiniLM-L6-v2 dimension
+
 
 class TestFakeEmbedder:
     """Tests for FakeEmbedder test double."""
@@ -232,6 +247,28 @@ class TestFakeEmbedder:
         assert hasattr(embedder, "encode")
         assert hasattr(embedder, "embedding_dim")
         assert callable(embedder.encode)
+
+    def test_fake_embedder_consistency_across_instances(self):
+        """Test that FakeEmbedder produces same embeddings across different instances."""
+        # Create two separate embedder instances with same config
+        embedder1 = FakeEmbedder(embedding_dim=128, normalize_embeddings=True)
+        embedder2 = FakeEmbedder(embedding_dim=128, normalize_embeddings=True)
+
+        # Same text should produce identical embeddings in both instances
+        text = "consistency test"
+
+        embeddings1 = embedder1.encode([text])
+        embeddings2 = embedder2.encode([text])
+
+        # Should be identical (deterministic hashing)
+        np.testing.assert_array_equal(embeddings1, embeddings2)
+
+        # Also test with multiple texts
+        texts = ["text1", "text2", "text3"]
+        batch1 = embedder1.encode(texts)
+        batch2 = embedder2.encode(texts)
+
+        np.testing.assert_array_equal(batch1, batch2)
 
 
 class TestEmbeddingProviderProtocol:

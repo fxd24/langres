@@ -348,3 +348,32 @@ def test_llm_judge_client_integration(mock_llm_client):
     # Verify judgement
     assert len(judgements) == 1
     assert judgements[0].score == 0.90
+
+
+def test_llm_judge_handles_missing_usage_info_in_response(mock_llm_client):
+    """Test LLMJudgeModule handles response with no usage information."""
+    # Setup mock response without usage info
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "MATCH\nScore: 0.85\nReasoning: Same entity"
+    mock_response.usage = None  # No usage information
+    mock_llm_client.completion.return_value = mock_response
+
+    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Test Company"),
+        right=CompanySchema(id="c2", name="Test Co"),
+        blocker_name="test",
+    )
+
+    # Should not raise an error
+    judgements = list(module.forward([candidate]))
+
+    # Verify judgement is created successfully
+    assert len(judgements) == 1
+    assert judgements[0].score == 0.85
+    # Cost should be 0.0 when usage is None
+    assert judgements[0].provenance["cost_usd"] == 0.0
+    assert judgements[0].provenance["prompt_tokens"] == 0
+    assert judgements[0].provenance["completion_tokens"] == 0

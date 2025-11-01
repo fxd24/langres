@@ -58,6 +58,99 @@ def test_cascade_module_requires_valid_thresholds():
         )
 
 
+def test_cascade_module_equal_thresholds_validation():
+    """Test that equal thresholds are rejected."""
+    with pytest.raises(ValueError, match="low_threshold must be < high_threshold"):
+        CascadeModule(
+            embedding_model_name="all-MiniLM-L6-v2",
+            llm_model="gpt-4o-mini",
+            llm_api_key="test_key",
+            low_threshold=0.5,
+            high_threshold=0.5,  # Same as low
+        )
+
+
+def test_cascade_module_cosine_similarity_zero_norm_vectors():
+    """Test that cosine similarity handles zero-norm vectors without error."""
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4o-mini",
+        llm_api_key="test_key",
+    )
+
+    # Test with zero vector
+    import numpy as np
+
+    zero_vec = np.array([0.0, 0.0, 0.0])
+    normal_vec = np.array([1.0, 2.0, 3.0])
+
+    # Should return 0.0, not raise division by zero
+    similarity = module._cosine_similarity(zero_vec, normal_vec)
+    assert similarity == 0.0
+
+    # Both zero
+    similarity = module._cosine_similarity(zero_vec, zero_vec)
+    assert similarity == 0.0
+
+
+def test_cascade_module_threshold_boundary_conditions(mocker):
+    """Test behavior at exact threshold boundaries."""
+    import numpy as np
+
+    # Test the _cosine_similarity method directly to understand boundaries
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4o-mini",
+        llm_api_key="test_key",
+        low_threshold=0.3,
+        high_threshold=0.9,
+    )
+
+    # Create vectors that produce exact similarities for testing boundaries
+    # For testing: score just above low_threshold should go to next check or LLM
+    # score just below low_threshold should early exit low
+
+    # Mock embedding model to return specific similarities
+    mock_model = Mock(spec=SentenceTransformer)
+
+    # Test case: Score just below low_threshold (0.29) - should early exit
+    mock_model.encode.side_effect = [
+        # First call: cosine similarity ~0.29 (below 0.3)
+        np.array([[1.0, 0.0], [0.29, 0.957]], dtype=np.float32),
+        # Second call: cosine similarity = 1.0 (above 0.9)
+        np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+    ]
+
+    mocker.patch(
+        "langres.core.modules.cascade.SentenceTransformer",
+        return_value=mock_model,
+    )
+
+    # Create candidates
+    candidates = [
+        ERCandidate(
+            left=CompanySchema(id="c1", name="Low"),
+            right=CompanySchema(id="c2", name="Sim"),
+            blocker_name="test",
+        ),
+        ERCandidate(
+            left=CompanySchema(id="c3", name="High"),
+            right=CompanySchema(id="c4", name="Sim"),
+            blocker_name="test",
+        ),
+    ]
+
+    judgements = list(module.forward(candidates))
+
+    # First should early exit (below low_threshold)
+    assert judgements[0].decision_step == "early_exit_low_similarity"
+    assert judgements[0].score < 0.3
+
+    # Second should early exit (above high_threshold)
+    assert judgements[1].decision_step == "early_exit_high_similarity"
+    assert judgements[1].score > 0.9
+
+
 def test_cascade_module_early_exit_low_similarity(mocker):
     """Test early exit when embedding similarity is below low_threshold."""
     # Mock the embedding model to return low similarity
@@ -477,6 +570,71 @@ def test_cascade_module_lazy_loads_embedding_model(mocker):
 
     # Second call should reuse the loaded model
     list(module.forward([candidate]))
+
+
+@pytest.mark.slow
+def test_cascade_module_llm_client_reused_across_calls(mocker):
+    """Test that LLM client is created once and reused across multiple calls."""
+    # Mock embedding model for medium similarity (will trigger LLM)
+    mock_model = Mock(spec=SentenceTransformer)
+    mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]  # ~0.5 similarity
+
+    mocker.patch(
+        "langres.core.modules.cascade.SentenceTransformer",
+        return_value=mock_model,
+    )
+
+    # Track OpenAI instantiation
+    mock_openai_class = Mock()
+    mock_client_instance = Mock()
+    mock_openai_class.return_value = mock_client_instance
+
+    # Mock LLM response
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "MATCH\nScore: 0.6\nReasoning: Similar"
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 20
+    mock_client_instance.chat.completions.create.return_value = mock_response
+
+    mocker.patch("langres.core.modules.cascade.OpenAI", mock_openai_class)
+
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4o-mini",
+        llm_api_key="test_key",
+        low_threshold=0.3,
+        high_threshold=0.9,
+    )
+
+    # Create two candidates that both trigger LLM judgment
+    candidates = [
+        ERCandidate(
+            left=CompanySchema(id="c1", name="Company A"),
+            right=CompanySchema(id="c2", name="Company B"),
+            blocker_name="test",
+        ),
+        ERCandidate(
+            left=CompanySchema(id="c3", name="Firm X"),
+            right=CompanySchema(id="c4", name="Firm Y"),
+            blocker_name="test",
+        ),
+    ]
+
+    # Process both candidates (both will trigger LLM)
+    judgements = list(module.forward(candidates))
+
+    # Should get 2 judgements
+    assert len(judgements) == 2
+    assert judgements[0].decision_step == "llm_judgment"
+    assert judgements[1].decision_step == "llm_judgment"
+
+    # OpenAI should be instantiated ONCE (client reused)
+    assert mock_openai_class.call_count == 1
+
+    # The same client instance should be used for both calls
+    assert module._llm_client is mock_client_instance
 
 
 @pytest.mark.slow

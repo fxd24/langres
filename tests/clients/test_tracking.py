@@ -41,18 +41,22 @@ class TestCreateWandbTracker:
 
     def test_create_wandb_tracker_without_settings_loads_from_env(self):
         """Test create_wandb_tracker loads settings from environment."""
-        with patch.dict(
-            os.environ,
-            {
-                "OPENAI_API_KEY": "sk-env",
-                "WANDB_API_KEY": "wb-env",
-                "WANDB_PROJECT": "env-project",
-                "LANGFUSE_PUBLIC_KEY": "pk-lf-env",
-                "LANGFUSE_SECRET_KEY": "sk-lf-env",
-                "AZURE_API_KEY": "azure-key",
-                "AZURE_API_ENDPOINT": "https://test.openai.azure.com",
-            },
-            clear=True,
+        # Patch both os.environ AND the .env file to prevent leakage
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "sk-env",
+                    "WANDB_API_KEY": "wb-env",
+                    "WANDB_PROJECT": "env-project",
+                    "LANGFUSE_PUBLIC_KEY": "pk-lf-env",
+                    "LANGFUSE_SECRET_KEY": "sk-lf-env",
+                    "AZURE_API_KEY": "azure-key",
+                    "AZURE_API_ENDPOINT": "https://test.openai.azure.com",
+                },
+                clear=True,
+            ),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
         ):
             with patch("langres.clients.tracking.wandb") as mock_wandb:
                 mock_run = MagicMock()
