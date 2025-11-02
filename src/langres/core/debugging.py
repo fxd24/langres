@@ -19,7 +19,7 @@ import logging
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 import numpy as np
 from pydantic import BaseModel
@@ -163,13 +163,17 @@ class PipelineDebugger(Generic[SchemaT]):
             CandidateStats with quality metrics
         """
         # Build entity map for later use
-        self._entities_map = {e.id: e for e in entities}  # type: ignore
+        self._entities_map = {str(e.id): e for e in entities}  # type: ignore[attr-defined]
 
-        # Extract candidate pairs as sorted tuples
-        candidate_pairs = {
-            tuple(sorted([c.left.id, c.right.id]))  # type: ignore
-            for c in candidates
-        }
+        # Extract candidate pairs as sorted tuples (explicitly typed as strings)
+        candidate_pairs: set[tuple[str, str]] = set()
+        for c in candidates:
+            left_id = str(c.left.id)  # type: ignore[attr-defined]
+            right_id = str(c.right.id)  # type: ignore[attr-defined]
+            pair_tuple = tuple(sorted([left_id, right_id]))
+            # Ensure it's a 2-tuple for type safety
+            assert len(pair_tuple) == 2
+            candidate_pairs.add((pair_tuple[0], pair_tuple[1]))
 
         # Calculate recall: % of true matches found
         found_matches = candidate_pairs & self.true_matches
@@ -191,10 +195,10 @@ class PipelineDebugger(Generic[SchemaT]):
         # Calculate average candidates per entity
         # Count the number of candidate pairs each entity participates in
         entity_candidate_counts: dict[str, set[str]] = defaultdict(set)
-        for pair in candidate_pairs:
+        for left_id, right_id in candidate_pairs:
             # For each entity, track which OTHER entities it's paired with
-            entity_candidate_counts[pair[0]].add(pair[1])
-            entity_candidate_counts[pair[1]].add(pair[0])
+            entity_candidate_counts[left_id].add(right_id)
+            entity_candidate_counts[right_id].add(left_id)
 
         if len(entities) > 0:
             # Average number of partner entities per entity
@@ -204,7 +208,7 @@ class PipelineDebugger(Generic[SchemaT]):
             avg_candidates_per_entity = 0.0
 
         # Generate error examples for missed matches (sample)
-        for i, (e1, e2) in enumerate(list(missed_matches)[: self.sample_size]):
+        for e1, e2 in list(missed_matches)[: self.sample_size]:
             entity1 = self._entities_map.get(e1)
             entity2 = self._entities_map.get(e2)
 
@@ -254,11 +258,15 @@ class PipelineDebugger(Generic[SchemaT]):
             for j in judgements:
                 if j.left_id not in self._entities_map:
                     # Create a minimal entity representation for error reporting
-                    # Cast to SchemaT since we're creating a duck-typed entity
-                    entity = type("Entity", (), {"id": j.left_id, "name": j.left_id})()
+                    # Use cast since we're creating a duck-typed entity with id/name attrs
+                    entity = cast(
+                        SchemaT, type("Entity", (), {"id": j.left_id, "name": j.left_id})()
+                    )
                     self._entities_map[j.left_id] = entity
                 if j.right_id not in self._entities_map:
-                    entity = type("Entity", (), {"id": j.right_id, "name": j.right_id})()
+                    entity = cast(
+                        SchemaT, type("Entity", (), {"id": j.right_id, "name": j.right_id})()
+                    )
                     self._entities_map[j.right_id] = entity
 
         if not judgements:
@@ -449,9 +457,9 @@ class PipelineDebugger(Generic[SchemaT]):
 
         # Detect false splits: gold cluster split across multiple predicted clusters
         num_false_splits = 0
-        for gold_cluster_id, gold_cluster in enumerate(self._ground_truth_clusters):
+        for gold_cluster in self._ground_truth_clusters:
             # Find which predicted clusters contain entities from this gold cluster
-            pred_clusters_with_gold = set()
+            pred_clusters_with_gold: set[int] = set()
             for pred_idx, pred_cluster in enumerate(predicted_clusters):
                 if any(eid in pred_cluster for eid in gold_cluster):
                     pred_clusters_with_gold.add(pred_idx)

@@ -139,9 +139,9 @@ def main() -> None:
     print()
 
     # Step 5: Export reports
-    debugger.save_report("/tmp/debug_report.json", format="json")
-    debugger.save_report("/tmp/debug_report.md", format="markdown")
-    print("Reports saved to /tmp/debug_report.{json,md}")
+    debugger.save_report("tmp/debug_report.json", format="json")
+    debugger.save_report("tmp/debug_report.md", format="markdown")
+    print("Reports saved to tmp/debug_report.{json,md}")
     print()
 
     # Display markdown report
