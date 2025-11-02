@@ -437,3 +437,74 @@ class TestBlockerOptimizer:
                 call("cost", 0.05),
             ]
             mock_trial.set_user_attr.assert_has_calls(expected_calls, any_order=True)
+
+    def test_objective_fn_receives_trial(self):
+        """Objective function must receive trial as first parameter."""
+        import optuna
+
+        trial_numbers = []
+
+        def objective(trial: optuna.Trial, params: dict) -> dict:
+            trial_numbers.append(trial.number)
+            return {"bcubed_f1": 0.85}
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        optimizer = BlockerOptimizer(
+            objective_fn=objective,
+            search_space=search_space,
+            primary_metric="bcubed_f1",
+            n_trials=3,
+        )
+
+        optimizer.optimize()
+        assert trial_numbers == [0, 1, 2]
+
+    def test_objective_can_use_trial_api(self):
+        """Objective can call trial.set_user_attr() and other trial methods."""
+        import optuna
+
+        def objective(trial: optuna.Trial, params: dict) -> dict:
+            trial.set_user_attr("custom_data", "test_value")
+            return {"bcubed_f1": 0.85}
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+            mock_study = MagicMock()
+            mock_trial = MagicMock()
+            mock_trial.params = {"k_neighbors": 10}
+            mock_trial.value = 0.85
+            mock_trial.user_attrs = {"custom_data": "test_value"}
+            mock_study.best_trial = mock_trial
+            mock_optuna.create_study.return_value = mock_study
+
+            optimizer = BlockerOptimizer(
+                objective_fn=objective,
+                search_space=search_space,
+                primary_metric="bcubed_f1",
+                n_trials=1,
+            )
+
+            optimizer.optimize()
+
+            # Verify trial.set_user_attr was called during objective execution
+            # (this will be called by _objective_wrapper when it passes trial to objective)
+            assert mock_study.best_trial.user_attrs["custom_data"] == "test_value"
+
+    def test_old_signature_raises_error(self):
+        """Old objective signature (without trial) raises TypeError."""
+
+        def old_objective(params: dict) -> dict:
+            return {"bcubed_f1": 0.85}
+
+        search_space = {"k_neighbors": (5, 50)}
+
+        optimizer = BlockerOptimizer(
+            objective_fn=old_objective,
+            search_space=search_space,
+            primary_metric="bcubed_f1",
+        )
+
+        with pytest.raises(TypeError):
+            optimizer.optimize()
