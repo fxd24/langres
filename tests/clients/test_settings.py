@@ -120,14 +120,14 @@ class TestSettings:
                 "LANGFUSE_SECRET_KEY": "sk-lf-test123",
                 "AZURE_API_KEY": "azure-key-test",
                 "AZURE_API_BASE": "https://my-resource.openai.azure.com",
-                "AZURE_API_VERSION": "2024-02-15-preview",
+                "AZURE_API_VERSION": "2025-01-01-preview",
             },
             clear=True,
         ):
             settings = Settings()
             assert settings.azure_api_key == "azure-key-test"
             assert settings.azure_api_base == "https://my-resource.openai.azure.com"
-            assert settings.azure_api_version == "2024-02-15-preview"
+            assert settings.azure_api_version == "2025-01-01-preview"
 
     def test_settings_azure_default_version(self):
         """Test that Azure API version has sensible default."""
@@ -144,4 +144,4 @@ class TestSettings:
             clear=True,
         ):
             settings = Settings()
-            assert settings.azure_api_version == "2024-02-15-preview"
+            assert settings.azure_api_version == "2025-01-01-preview"
