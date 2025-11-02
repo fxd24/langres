@@ -12,7 +12,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_initialization(self):
         """Test BlockerOptimizer initializes with correct parameters."""
-        objective = lambda params: params["k_neighbors"] * 0.1
+        objective = lambda trial, params: {"value": params["k_neighbors"] * 0.1}
         search_space = {
             "embedding_model": ["model-a", "model-b"],
             "k_neighbors": (5, 50),
@@ -34,11 +34,11 @@ class TestBlockerOptimizer:
         """Test optimize() returns best parameters after trials."""
 
         # Simple objective: prefer model-a and higher k_neighbors
-        def objective(params: dict) -> float:
+        def objective(trial, params: dict) -> dict:
             score = params["k_neighbors"] * 0.01
             if params["embedding_model"] == "model-a":
                 score += 0.5
-            return score
+            return {"value": score}
 
         search_space = {
             "embedding_model": ["model-a", "model-b"],
@@ -68,7 +68,7 @@ class TestBlockerOptimizer:
     def test_blocker_optimizer_categorical_parameter(self):
         """Test optimizer suggests categorical parameters correctly."""
 
-        objective = lambda params: 1.0
+        objective = lambda trial, params: {"value": 1.0}
         search_space = {"embedding_model": ["model-a", "model-b", "model-c"]}
 
         with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
@@ -90,7 +90,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_integer_parameter(self):
         """Test optimizer suggests integer parameters correctly."""
-        objective = lambda params: 1.0
+        objective = lambda trial, params: {"value": 1.0}
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.core.optimizers.blocker_optimizer.optuna"):
@@ -110,7 +110,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_mixed_parameters(self):
         """Test optimizer with both categorical and integer parameters."""
-        objective = lambda params: params["k_neighbors"] * 0.1
+        objective = lambda trial, params: {"value": params["k_neighbors"] * 0.1}
         search_space = {
             "embedding_model": ["model-a", "model-b"],
             "k_neighbors": (5, 50),
@@ -137,7 +137,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_direction_maximize(self):
         """Test optimizer with direction='maximize'."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
@@ -158,7 +158,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_direction_minimize(self):
         """Test optimizer with direction='minimize'."""
-        objective = lambda params: 0.15
+        objective = lambda trial, params: {"value": 0.15}
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
@@ -179,7 +179,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_wandb_integration(self):
         """Test optimizer integrates with wandb callback."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
         wandb_kwargs = {"project": "test-project", "entity": "test-team"}
@@ -212,7 +212,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_without_wandb_kwargs(self):
         """Test optimizer without wandb integration."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
@@ -237,9 +237,9 @@ class TestBlockerOptimizer:
         """Test that objective function receives correct parameters."""
         received_params = []
 
-        def objective(params: dict) -> float:
+        def objective(trial, params: dict) -> dict:
             received_params.append(params.copy())
-            return 0.85
+            return {"value": 0.85}
 
         search_space = {
             "embedding_model": ["model-a"],
@@ -263,7 +263,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_invalid_direction(self):
         """Test that BlockerOptimizer raises ValueError for invalid direction."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
         with pytest.raises(ValueError, match="direction must be 'maximize' or 'minimize'"):
@@ -276,7 +276,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_empty_search_space(self):
         """Test that BlockerOptimizer raises ValueError for empty search_space."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
 
         with pytest.raises(ValueError, match="search_space cannot be empty"):
             BlockerOptimizer(
@@ -288,7 +288,7 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_invalid_parameter_spec(self):
         """Test that BlockerOptimizer raises ValueError for invalid parameter specification."""
-        objective = lambda params: 0.85
+        objective = lambda trial, params: {"value": 0.85}
         # Invalid parameter spec: neither list nor tuple
         search_space = {"k_neighbors": "invalid"}
 
@@ -308,7 +308,7 @@ class TestBlockerOptimizer:
     def test_blocker_optimizer_dict_return_with_valid_primary_metric(self):
         """Test objective function returning dict with valid primary_metric."""
 
-        def objective(params: dict) -> dict:
+        def objective(trial, params: dict) -> dict:
             return {
                 "bcubed_f1": 0.85,
                 "bcubed_precision": 0.90,
@@ -349,7 +349,7 @@ class TestBlockerOptimizer:
     def test_blocker_optimizer_dict_return_missing_primary_metric(self):
         """Test error when objective returns dict without primary_metric."""
 
-        def objective(params: dict) -> dict:
+        def objective(trial, params: dict) -> dict:
             return {
                 "bcubed_precision": 0.90,
                 "pairwise_f1": 0.80,
@@ -374,10 +374,10 @@ class TestBlockerOptimizer:
             ):
                 optimizer._objective_wrapper(mock_trial)
 
-    def test_blocker_optimizer_backwards_compatibility_float_return(self):
-        """Test backwards compatibility with objective returning float."""
+    def test_blocker_optimizer_float_return_raises_error(self):
+        """Test that objective returning float raises TypeError."""
 
-        def objective(params: dict) -> float:
+        def objective(trial, params: dict) -> float:
             return 0.85
 
         search_space = {"k_neighbors": (5, 50)}
@@ -386,25 +386,20 @@ class TestBlockerOptimizer:
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
-                primary_metric="value",  # Default, but irrelevant for float return
+                primary_metric="value",
                 n_trials=1,
             )
 
             mock_trial = MagicMock()
             mock_trial.suggest_int.return_value = 10
 
-            result = optimizer._objective_wrapper(mock_trial)
-
-            # Verify float returned as-is
-            assert result == 0.85
-
-            # Verify set_user_attr NOT called for float return
-            mock_trial.set_user_attr.assert_not_called()
+            with pytest.raises(TypeError, match="objective_fn must return dict"):
+                optimizer._objective_wrapper(mock_trial)
 
     def test_blocker_optimizer_default_primary_metric(self):
         """Test default primary_metric value is 'value'."""
 
-        def objective(params: dict) -> dict:
+        def objective(trial, params: dict) -> dict:
             return {
                 "value": 0.85,  # Default key
                 "precision": 0.90,

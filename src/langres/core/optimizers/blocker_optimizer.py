@@ -24,15 +24,19 @@ class BlockerOptimizer:
 
     Example:
         # Define objective function
-        def objective(params: dict) -> float:
+        def objective(trial: optuna.Trial, params: dict) -> dict:
             blocker = VectorBlocker(
                 embedding_model=params["embedding_model"],
                 k_neighbors=params["k_neighbors"],
                 ...
             )
-            # Run pipeline and return metric
-            f1_score = evaluate_pipeline(blocker, train_data, gold_labels)
-            return f1_score
+            # Run pipeline and compute metrics
+            metrics = evaluate_pipeline(blocker, train_data, gold_labels)
+
+            # Optionally use trial API
+            trial.set_user_attr("model_info", params["embedding_model"])
+
+            return metrics  # {"bcubed_f1": 0.85, "precision": 0.90, ...}
 
         # Define search space
         search_space = {
@@ -44,6 +48,7 @@ class BlockerOptimizer:
         optimizer = BlockerOptimizer(
             objective_fn=objective,
             search_space=search_space,
+            primary_metric="bcubed_f1",
             direction="maximize",
             n_trials=20,
             wandb_kwargs={"project": "langres", "entity": "myteam"}
@@ -54,9 +59,8 @@ class BlockerOptimizer:
         # Output: {"embedding_model": "all-mpnet-base-v2", "k_neighbors": 35}
 
     Note:
-        The objective function should take a dict of hyperparameters and
-        return a single float metric value. Higher values are better for
-        direction="maximize", lower for direction="minimize".
+        The objective function must take (trial, params) and return a dict
+        of metrics. The trial parameter allows using Optuna trial API methods.
 
     Note:
         Search space supports:
@@ -66,7 +70,7 @@ class BlockerOptimizer:
 
     def __init__(
         self,
-        objective_fn: Callable[[dict[str, Any]], float | dict[str, float]],
+        objective_fn: Callable[[optuna.Trial, dict[str, Any]], dict[str, float]],
         search_space: dict[str, Any],
         primary_metric: str = "value",
         direction: str = "maximize",
@@ -76,12 +80,12 @@ class BlockerOptimizer:
         """Initialize BlockerOptimizer.
 
         Args:
-            objective_fn: Function that takes hyperparameters dict and
-                returns either:
-                - float: Single metric value (legacy, backwards compatible)
-                - dict[str, float]: Dict of all metrics, where primary_metric
-                  key specifies which to optimize. Other metrics are logged
-                  as Optuna user attributes for wandb tracking.
+            objective_fn: Function that takes (trial, params) and returns
+                dict[str, float] of all metrics. The trial parameter allows
+                the objective to use Optuna trial API methods like
+                trial.set_user_attr(). The primary_metric key specifies which
+                metric to optimize. Other metrics are logged as Optuna user
+                attributes for wandb tracking.
             search_space: Dict defining parameter ranges:
                 - For categorical: {"param_name": ["value1", "value2", ...]}
                 - For integer: {"param_name": (min, max)}
@@ -223,31 +227,30 @@ class BlockerOptimizer:
 
         logger.debug("Trial parameters: %s", params)
 
-        # Call objective function
-        result = self.objective_fn(params)
+        # Call objective function with trial and params
+        result = self.objective_fn(trial, params)
 
-        # Handle dict return (log all metrics, return primary)
-        if isinstance(result, dict):
-            # Validate primary metric exists
-            if self.primary_metric not in result:
-                raise ValueError(
-                    f"Primary metric '{self.primary_metric}' not found in result. "
-                    f"Available: {list(result.keys())}"
-                )
-
-            # Extract primary metric value
-            primary_value = result[self.primary_metric]
-
-            # Log all other metrics as user attributes (for wandb)
-            for key, value in result.items():
-                if key != self.primary_metric:
-                    trial.set_user_attr(key, value)
-
-            logger.debug(
-                "Trial value (primary_metric=%s): %.4f", self.primary_metric, primary_value
+        # Validate result is a dict
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"objective_fn must return dict[str, float], got {type(result).__name__}. "
+                "Example: return {'bcubed_f1': 0.85, 'precision': 0.90}"
             )
-            return primary_value
 
-        # Handle float return (backwards compatibility)
-        logger.debug("Trial value: %.4f", result)
-        return result
+        # Validate primary metric exists
+        if self.primary_metric not in result:
+            raise ValueError(
+                f"Primary metric '{self.primary_metric}' not found in result. "
+                f"Available: {list(result.keys())}"
+            )
+
+        # Extract primary metric value
+        primary_value = result[self.primary_metric]
+
+        # Log all other metrics as user attributes (for wandb)
+        for key, value in result.items():
+            if key != self.primary_metric:
+                trial.set_user_attr(key, value)
+
+        logger.debug("Trial value (primary_metric=%s): %.4f", self.primary_metric, primary_value)
+        return primary_value

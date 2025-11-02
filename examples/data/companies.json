@@ -1,0 +1,566 @@
+[
+  {
+    "id": "c001",
+    "name": "Acme Corporation",
+    "address": "123 Main St, San Francisco, CA 94105",
+    "website": "https://acme.com"
+  },
+  {
+    "id": "c002",
+    "name": "ACME Corp",
+    "address": "123 Main Street, San Francisco, CA",
+    "website": "https://www.acme.com"
+  },
+  {
+    "id": "c003",
+    "name": "Acme Corp.",
+    "website": "https://acme.com"
+  },
+  {
+    "id": "c004",
+    "name": "TechFlow Solutions Inc",
+    "address": "456 Market St, Austin, TX 78701",
+    "website": "https://techflow.io"
+  },
+  {
+    "id": "c005",
+    "name": "TechFlow Solutions",
+    "address": "456 Market Street, Austin, Texas 78701"
+  },
+  {
+    "id": "c006",
+    "name": "GlobalTrade Partners LLC",
+    "address": "789 Broadway, New York, NY 10003",
+    "website": "https://globaltrade.com"
+  },
+  {
+    "id": "c007",
+    "name": "Global Trade Partners",
+    "address": "789 Broadway Ave, NYC, NY 10003",
+    "website": "https://www.globaltrade.com"
+  },
+  {
+    "id": "c008",
+    "name": "DataStream Analytics",
+    "address": "321 Tech Blvd, Seattle, WA 98101",
+    "website": "https://datastream.ai"
+  },
+  {
+    "id": "c009",
+    "name": "DataStreem Analytics Inc.",
+    "address": "321 Tech Boulevard, Seattle, WA",
+    "website": "https://datastream.ai"
+  },
+  {
+    "id": "c010",
+    "name": "CloudServe Technologies",
+    "address": "555 Cloud Dr, Denver, CO 80202",
+    "website": "https://cloudserve.tech"
+  },
+  {
+    "id": "c011",
+    "name": "Cloud Serve Tech",
+    "address": "555 Cloud Drive, Denver, Colorado"
+  },
+  {
+    "id": "c012",
+    "name": "NextGen Robotics Inc",
+    "address": "888 Innovation Way, Boston, MA 02101",
+    "website": "https://nextgenrobotics.com"
+  },
+  {
+    "id": "c013",
+    "name": "NextGen Robotics",
+    "address": "888 Innovation Way, Boston, Massachusetts 02101",
+    "website": "https://www.nextgenrobotics.com"
+  },
+  {
+    "id": "c014",
+    "name": "EcoGreen Energy Corp",
+    "address": "222 Solar St, Portland, OR 97201",
+    "website": "https://ecogreen.energy"
+  },
+  {
+    "id": "c015",
+    "name": "Eco-Green Energy Corporation",
+    "address": "222 Solar Street, Portland, Oregon",
+    "website": "https://ecogreen.energy"
+  },
+  {
+    "id": "c016",
+    "name": "FinTech Innovations LLC",
+    "address": "777 Wall St, New York, NY 10005",
+    "website": "https://fintechinnovations.com"
+  },
+  {
+    "id": "c017",
+    "name": "FinTech Innovations",
+    "address": "777 Wall Street, Manhattan, NY 10005"
+  },
+  {
+    "id": "c018",
+    "name": "HealthFirst Medical",
+    "address": "999 Hospital Rd, Chicago, IL 60601",
+    "website": "https://healthfirst.med"
+  },
+  {
+    "id": "c019",
+    "name": "Health First Medical Inc",
+    "address": "999 Hospital Road, Chicago, Illinois",
+    "website": "https://www.healthfirst.med"
+  },
+  {
+    "id": "c020",
+    "name": "SmartHome Systems",
+    "address": "444 Tech Park, San Jose, CA 95101",
+    "website": "https://smarthomesys.com"
+  },
+  {
+    "id": "c021",
+    "name": "Smart Home Systems Inc.",
+    "address": "444 Tech Park Dr, San Jose, California",
+    "website": "https://smarthomesys.com"
+  },
+  {
+    "id": "c022",
+    "name": "BioPharm Research Corp",
+    "address": "333 Science Ave, Cambridge, MA 02139",
+    "website": "https://biopharm.research"
+  },
+  {
+    "id": "c023",
+    "name": "Bio-Pharm Research",
+    "address": "333 Science Avenue, Cambridge, Massachusetts 02139"
+  },
+  {
+    "id": "c024",
+    "name": "RetailPro Solutions",
+    "address": "666 Commerce Blvd, Atlanta, GA 30301",
+    "website": "https://retailpro.biz"
+  },
+  {
+    "id": "c025",
+    "name": "Retail Pro Solutions Inc",
+    "address": "666 Commerce Boulevard, Atlanta, Georgia",
+    "website": "https://www.retailpro.biz"
+  },
+  {
+    "id": "c026",
+    "name": "SecureNet Cybersecurity",
+    "address": "111 Defense Dr, Arlington, VA 22201",
+    "website": "https://securenet.cyber"
+  },
+  {
+    "id": "c027",
+    "name": "SecureNet Cyber Security Inc.",
+    "address": "111 Defense Drive, Arlington, Virginia"
+  },
+  {
+    "id": "c028",
+    "name": "AgriTech Farming Solutions",
+    "address": "888 Farm Rd, Des Moines, IA 50301",
+    "website": "https://agritech.farm"
+  },
+  {
+    "id": "c029",
+    "name": "Agri-Tech Farming Solutions LLC",
+    "address": "888 Farm Road, Des Moines, Iowa 50301",
+    "website": "https://agritech.farm"
+  },
+  {
+    "id": "c030",
+    "name": "MediaStream Studios",
+    "address": "555 Hollywood Blvd, Los Angeles, CA 90028",
+    "website": "https://mediastream.tv"
+  },
+  {
+    "id": "c031",
+    "name": "Media Stream Studios Inc",
+    "address": "555 Hollywood Boulevard, LA, California",
+    "website": "https://www.mediastream.tv"
+  },
+  {
+    "id": "c032",
+    "name": "AutoDrive Technologies",
+    "address": "777 Motor Way, Detroit, MI 48201",
+    "website": "https://autodrive.tech"
+  },
+  {
+    "id": "c033",
+    "name": "Auto-Drive Tech Inc.",
+    "address": "777 Motor Way, Detroit, Michigan"
+  },
+  {
+    "id": "c034",
+    "name": "SpaceVenture Aerospace",
+    "address": "999 Launch Pad Rd, Houston, TX 77001",
+    "website": "https://spaceventure.aero"
+  },
+  {
+    "id": "c035",
+    "name": "Space Venture Aerospace Corp",
+    "address": "999 Launch Pad Road, Houston, Texas 77001",
+    "website": "https://spaceventure.aero"
+  },
+  {
+    "id": "c036",
+    "name": "FoodTech Innovations",
+    "address": "222 Culinary Ave, San Diego, CA 92101",
+    "website": "https://foodtech.io"
+  },
+  {
+    "id": "c037",
+    "name": "Food Tech Innovations LLC",
+    "address": "222 Culinary Avenue, San Diego, California",
+    "website": "https://www.foodtech.io"
+  },
+  {
+    "id": "c038",
+    "name": "EdTech Learning Platform",
+    "address": "444 Education Dr, Philadelphia, PA 19101",
+    "website": "https://edtech.edu"
+  },
+  {
+    "id": "c039",
+    "name": "Ed-Tech Learning Platform Inc",
+    "address": "444 Education Drive, Philadelphia, Pennsylvania"
+  },
+  {
+    "id": "c040",
+    "name": "QuantumCompute Systems",
+    "address": "111 Quantum Way, Palo Alto, CA 94301",
+    "website": "https://quantumcompute.ai"
+  },
+  {
+    "id": "c041",
+    "name": "Quantum Compute Systems Inc.",
+    "address": "111 Quantum Way, Palo Alto, California 94301",
+    "website": "https://quantumcompute.ai"
+  },
+  {
+    "id": "c042",
+    "name": "RenewableEnergy Group",
+    "address": "333 Wind Farm Rd, Phoenix, AZ 85001",
+    "website": "https://renewableenergy.com"
+  },
+  {
+    "id": "c043",
+    "name": "Renewable Energy Group LLC",
+    "address": "333 Wind Farm Road, Phoenix, Arizona",
+    "website": "https://www.renewableenergy.com"
+  },
+  {
+    "id": "c044",
+    "name": "PetCare Veterinary",
+    "address": "555 Animal Hospital Ln, Miami, FL 33101",
+    "website": "https://petcare.vet"
+  },
+  {
+    "id": "c045",
+    "name": "Pet Care Veterinary Services Inc",
+    "address": "555 Animal Hospital Lane, Miami, Florida"
+  },
+  {
+    "id": "c046",
+    "name": "TravelTech Bookings",
+    "address": "777 Airport Rd, Las Vegas, NV 89101",
+    "website": "https://traveltech.travel"
+  },
+  {
+    "id": "c047",
+    "name": "Travel Tech Booking Services",
+    "address": "777 Airport Road, Las Vegas, Nevada 89101",
+    "website": "https://www.traveltech.travel"
+  },
+  {
+    "id": "c048",
+    "name": "LegalTech Solutions",
+    "address": "888 Law Plaza, Washington, DC 20001",
+    "website": "https://legaltech.law"
+  },
+  {
+    "id": "c049",
+    "name": "Legal Tech Solutions Inc.",
+    "address": "888 Law Plaza, Washington D.C. 20001"
+  },
+  {
+    "id": "c050",
+    "name": "ConstructionPro Services",
+    "address": "222 Builder Blvd, Dallas, TX 75201",
+    "website": "https://constructionpro.com"
+  },
+  {
+    "id": "c051",
+    "name": "Construction Pro Services LLC",
+    "address": "222 Builder Boulevard, Dallas, Texas 75201",
+    "website": "https://constructionpro.com"
+  },
+  {
+    "id": "c052",
+    "name": "FashionForward Design",
+    "address": "999 Style St, New York, NY 10013",
+    "website": "https://fashionforward.fashion"
+  },
+  {
+    "id": "c053",
+    "name": "Fashion Forward Design Studio",
+    "address": "999 Style Street, NYC, NY 10013"
+  },
+  {
+    "id": "c054",
+    "name": "InsureTech Group",
+    "address": "444 Policy Dr, Hartford, CT 06101",
+    "website": "https://insuretech.insurance"
+  },
+  {
+    "id": "c055",
+    "name": "Insure-Tech Group Inc",
+    "address": "444 Policy Drive, Hartford, Connecticut",
+    "website": "https://www.insuretech.insurance"
+  },
+  {
+    "id": "c056",
+    "name": "SportsTech Analytics",
+    "address": "666 Stadium Way, Minneapolis, MN 55401",
+    "website": "https://sportstech.sport"
+  },
+  {
+    "id": "c057",
+    "name": "Sports Tech Analytics LLC",
+    "address": "666 Stadium Way, Minneapolis, Minnesota 55401"
+  },
+  {
+    "id": "c058",
+    "name": "GreenBuilding Materials",
+    "address": "111 Eco Blvd, Seattle, WA 98109",
+    "website": "https://greenbuilding.eco"
+  },
+  {
+    "id": "c059",
+    "name": "Green Building Materials Corp",
+    "address": "111 Eco Boulevard, Seattle, Washington",
+    "website": "https://greenbuilding.eco"
+  },
+  {
+    "id": "c060",
+    "name": "WaterTech Purification",
+    "address": "333 Clean Water Dr, Milwaukee, WI 53201",
+    "website": "https://watertech.water"
+  },
+  {
+    "id": "c061",
+    "name": "Water Tech Purification Systems",
+    "address": "333 Clean Water Drive, Milwaukee, Wisconsin 53201"
+  },
+  {
+    "id": "c062",
+    "name": "Innovate Consulting Group",
+    "address": "500 Business Park, Nashville, TN 37201"
+  },
+  {
+    "id": "c063",
+    "name": "ProHealth Pharmaceuticals",
+    "website": "https://prohealth-pharma.com"
+  },
+  {
+    "id": "c064",
+    "name": "BlueSky Airlines",
+    "address": "600 Aviation Blvd, Charlotte, NC 28201",
+    "website": "https://blueskyair.com"
+  },
+  {
+    "id": "c065",
+    "name": "SilverSpoon Restaurants",
+    "address": "700 Gourmet St, Charleston, SC 29401"
+  },
+  {
+    "id": "c066",
+    "name": "MountainView Resorts",
+    "address": "800 Summit Dr, Aspen, CO 81611",
+    "website": "https://mountainviewresorts.com"
+  },
+  {
+    "id": "c067",
+    "name": "OceanBreeze Shipping",
+    "address": "900 Harbor Rd, Savannah, GA 31401",
+    "website": "https://oceanbreezeshiping.com"
+  },
+  {
+    "id": "c068",
+    "name": "SunriseTech Manufacturing",
+    "address": "100 Factory Lane, Cleveland, OH 44101"
+  },
+  {
+    "id": "c069",
+    "name": "RiverView Property Management",
+    "website": "https://riverviewpm.com"
+  },
+  {
+    "id": "c070",
+    "name": "StormGuard Insurance",
+    "address": "200 Protection Ave, Tampa, FL 33601",
+    "website": "https://stormguardins.com"
+  },
+  {
+    "id": "c071",
+    "name": "PineTree Investments",
+    "address": "300 Finance St, Charlotte, NC 28202"
+  },
+  {
+    "id": "c072",
+    "name": "GoldenGate Logistics",
+    "address": "400 Transport Way, Oakland, CA 94601",
+    "website": "https://goldengatelogistics.com"
+  },
+  {
+    "id": "c073",
+    "name": "Starlight Entertainment",
+    "address": "500 Show Blvd, Orlando, FL 32801"
+  },
+  {
+    "id": "c074",
+    "name": "CrystalClear Optics",
+    "address": "600 Vision Dr, Rochester, NY 14601",
+    "website": "https://crystalclearoptics.com"
+  },
+  {
+    "id": "c075",
+    "name": "ThunderBolt Electric",
+    "website": "https://thunderboltelectric.com"
+  },
+  {
+    "id": "c076",
+    "name": "HarvestGold Farms",
+    "address": "700 Agriculture Rd, Omaha, NE 68101"
+  },
+  {
+    "id": "c077",
+    "name": "IronForge Steel",
+    "address": "800 Industry Blvd, Pittsburgh, PA 15201",
+    "website": "https://ironforgesteel.com"
+  },
+  {
+    "id": "c078",
+    "name": "VelvetVine Wineries",
+    "address": "900 Vineyard Lane, Napa, CA 94559"
+  },
+  {
+    "id": "c079",
+    "name": "CoralReef Tourism",
+    "address": "1000 Beach Ave, Key West, FL 33040",
+    "website": "https://coralreeftourism.com"
+  },
+  {
+    "id": "c080",
+    "name": "AuroraLights Design",
+    "website": "https://auroralights.design"
+  },
+  {
+    "id": "c081",
+    "name": "EagleEye Security",
+    "address": "1100 Watch Tower Dr, Phoenix, AZ 85003"
+  },
+  {
+    "id": "c082",
+    "name": "DreamWeaver Software",
+    "address": "1200 Code St, Austin, TX 78702",
+    "website": "https://dreamweaversoft.com"
+  },
+  {
+    "id": "c083",
+    "name": "WinterStar Apparel",
+    "address": "1300 Fashion Ave, Portland, ME 04101"
+  },
+  {
+    "id": "c084",
+    "name": "BrightPath Education",
+    "address": "1400 Learning Blvd, Madison, WI 53701",
+    "website": "https://brightpathedu.org"
+  },
+  {
+    "id": "c085",
+    "name": "TitanForce Robotics",
+    "website": "https://titanforcerobotics.com"
+  },
+  {
+    "id": "c086",
+    "name": "SerenitySpas Wellness",
+    "address": "1500 Relax Dr, Sedona, AZ 86336"
+  },
+  {
+    "id": "c087",
+    "name": "PhoenixRising Ventures",
+    "address": "1600 Startup Lane, Boulder, CO 80301",
+    "website": "https://phoenixrisingvc.com"
+  },
+  {
+    "id": "c088",
+    "name": "MidnightBlue Cosmetics",
+    "address": "1700 Beauty St, Los Angeles, CA 90001"
+  },
+  {
+    "id": "c089",
+    "name": "GraniteRock Quarries",
+    "address": "1800 Stone Ave, Barre, VT 05641",
+    "website": "https://graniterockquarry.com"
+  },
+  {
+    "id": "c090",
+    "name": "SilkRoad Textiles",
+    "website": "https://silkroadtextiles.com"
+  },
+  {
+    "id": "c091",
+    "name": "WhisperingPines Lodge",
+    "address": "1900 Forest Rd, Lake Tahoe, CA 96150"
+  },
+  {
+    "id": "c092",
+    "name": "CosmicDreams Publishing",
+    "address": "2000 Book Blvd, New York, NY 10001",
+    "website": "https://cosmicdreamspub.com"
+  },
+  {
+    "id": "c093",
+    "name": "SapphireSeas Cruises",
+    "address": "2100 Port Way, Miami, FL 33132"
+  },
+  {
+    "id": "c094",
+    "name": "VoltWave Energy Storage",
+    "address": "2200 Battery Dr, Reno, NV 89501",
+    "website": "https://voltwaveenergy.com"
+  },
+  {
+    "id": "c095",
+    "name": "AmberLeaf Herbals",
+    "website": "https://amberleafherbals.com"
+  },
+  {
+    "id": "c096",
+    "name": "CrimsonTide Marketing",
+    "address": "2300 Brand St, Birmingham, AL 35201"
+  },
+  {
+    "id": "c097",
+    "name": "PearlHarbor Aquatics",
+    "address": "2400 Marine Blvd, Honolulu, HI 96801",
+    "website": "https://pearlharboraquatics.com"
+  },
+  {
+    "id": "c098",
+    "name": "OnyxTower Real Estate",
+    "address": "2500 Property Ave, San Francisco, CA 94102"
+  },
+  {
+    "id": "c099",
+    "name": "VerdantValley Organics",
+    "address": "2600 Farm Lane, Burlington, VT 05401",
+    "website": "https://verdantvalleyorganics.com"
+  },
+  {
+    "id": "c100",
+    "name": "CelestialSound Studios",
+    "website": "https://celestialsoundstudios.com"
+  }
+]
