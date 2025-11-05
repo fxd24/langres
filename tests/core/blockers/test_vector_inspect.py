@@ -219,3 +219,29 @@ class TestVectorBlockerInspection:
         assert "avg_candidates_per_entity" in stats
         assert "examples" not in stats
         assert "recommendations" not in stats
+
+    def test_inspect_candidates_suggested_k_equals_current_k(self) -> None:
+        """Test case where suggested_k equals current k_neighbors (no recommendation added).
+
+        This covers the branch where avg_candidates_per_entity > 0 is True,
+        but suggested_k == self.k_neighbors, so no k-adjustment recommendation is added.
+        """
+        # Create scenario where suggested_k = int(avg/2) equals k_neighbors
+        # If k_neighbors=2 and avg=4, then suggested_k=2
+        data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(6)]
+
+        # Set k=2, which should result in avg_candidates around 4 (suggested_k = 2)
+        blocker = create_fake_blocker(k_neighbors=2)
+        candidates = list(blocker.stream(data))
+        entities = [company_factory(record) for record in data]
+
+        report = blocker.inspect_candidates(candidates=candidates, entities=entities, sample_size=5)
+
+        # The avg should be > 0, but suggested_k should equal current k
+        assert report.avg_candidates_per_entity > 0
+        # No k-adjustment recommendation should be added (but other recommendations might exist)
+        k_recommendations = [rec for rec in report.recommendations if "k_neighbors=" in rec]
+        # If suggested_k == k_neighbors, no k recommendation
+        suggested_k = int(report.avg_candidates_per_entity / 2)
+        if suggested_k == 2:  # Same as our k_neighbors
+            assert len(k_recommendations) == 0

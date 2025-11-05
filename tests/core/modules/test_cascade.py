@@ -718,3 +718,40 @@ def test_cascade_module_unknown_model_pricing(mocker):
     # Default: $0.150/1M input, $0.600/1M output
     expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
     assert abs(judgements[0].provenance["llm_cost_usd"] - expected_cost) < 0.001
+
+
+def test_cascade_module_inspect_scores():
+    """Test CascadeModule.inspect_scores() delegates to shared implementation."""
+    module = CascadeModule(
+        embedding_model_name="all-MiniLM-L6-v2",
+        llm_model="gpt-4o-mini",
+        llm_api_key="test_key",
+    )
+
+    # Create test judgements
+    judgements = [
+        PairwiseJudgement(
+            left_id="1",
+            right_id="2",
+            score=0.8,
+            score_type="calibrated_prob",
+            decision_step="test_step",
+            provenance={"reasoning": "test"},
+        ),
+        PairwiseJudgement(
+            left_id="3",
+            right_id="4",
+            score=0.2,
+            score_type="calibrated_prob",
+            decision_step="test_step",
+            provenance={"reasoning": "test2"},
+        ),
+    ]
+
+    # Call inspect_scores
+    report = module.inspect_scores(judgements, sample_size=5)
+
+    # Verify report is valid
+    assert report.total_judgements == 2
+    assert "mean" in report.score_distribution
+    assert len(report.recommendations) > 0

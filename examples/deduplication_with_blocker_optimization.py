@@ -46,6 +46,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import optuna
 from pydantic import BaseModel, Field
 
 from langres.clients import create_llm_client, create_wandb_tracker
@@ -134,7 +135,7 @@ def run_deduplication_pipeline(
     llm_client: Any,
     azure_model: str,
     cluster_threshold: float = 0.5,
-) -> tuple[list[set[str]], list[Any]]:
+) -> tuple[list[set[str]], list[Any], list[Any]]:
     """Run the full deduplication pipeline.
 
     Args:
@@ -146,9 +147,10 @@ def run_deduplication_pipeline(
         cluster_threshold: Threshold for clustering (default: 0.5)
 
     Returns:
-        Tuple of (predicted_clusters, judgements) where:
+        Tuple of (predicted_clusters, judgements, candidates) where:
         - predicted_clusters: list of sets of entity IDs
         - judgements: list of PairwiseJudgement objects (for cost tracking)
+        - candidates: list of ERCandidate objects (for debug analysis)
     """
     # ==================================================================================
     # STEP 1: Generate Candidates using VectorBlocker
@@ -252,7 +254,7 @@ def run_deduplication_pipeline(
     predicted_clusters = clusterer.cluster(judgements)
     logger.info("Formed %d clusters", len(predicted_clusters))
 
-    return predicted_clusters, judgements
+    return predicted_clusters, judgements, candidates
 
 
 def main() -> None:
@@ -260,6 +262,13 @@ def main() -> None:
     # Load configuration from environment
     logger.info("Loading configuration...")
     settings = Settings()
+
+    # Generate timestamp for this optimization run (groups all artifacts)
+    from datetime import datetime
+    import os
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info(f"Starting optimization run: {timestamp}")
 
     # Initialize LiteLLM client with Langfuse tracing
     logger.info("Initializing LiteLLM client with Langfuse tracing...")
@@ -292,10 +301,11 @@ def main() -> None:
     test_clusters_sets = [set(cluster) for cluster in test_clusters]
 
     # Define objective function for optimization
-    def objective_fn(params: dict[str, Any]) -> dict[str, float]:
+    def objective_fn(trial: optuna.Trial, params: dict[str, Any]) -> dict[str, float]:
         """Objective function for blocker optimization.
 
         Args:
+            trial: Optuna trial object (provides trial.number, trial.set_user_attr())
             params: Dictionary with 'embedding_model', 'k_neighbors', and 'cluster_threshold'
 
         Returns:
@@ -316,7 +326,7 @@ def main() -> None:
 
         try:
             # Run pipeline on training data
-            predicted_clusters, judgements = run_deduplication_pipeline(
+            predicted_clusters, judgements, candidates = run_deduplication_pipeline(
                 train_entities,
                 embedding_model,
                 k_neighbors,
@@ -341,6 +351,64 @@ def main() -> None:
                 total_cost,
                 avg_cost_per_pair,
             )
+
+            # =================================================================
+            # DEBUG ARTIFACTS: Inline for POC experimentation
+            # =================================================================
+            # Create debug reports for pipeline analysis (candidates, scores, clusters)
+            # Can disable via DEBUG_ARTIFACTS=false for production runs
+            DEBUG_ARTIFACTS = os.getenv("DEBUG_ARTIFACTS", "true").lower() == "true"
+
+            if DEBUG_ARTIFACTS:
+                try:
+                    from langres.core import PipelineDebugger
+                    import wandb
+
+                    logger.info(f"Generating debug artifacts for trial {trial.number}...")
+
+                    # Create debugger
+                    debugger: PipelineDebugger[CompanySchema] = PipelineDebugger(
+                        ground_truth_clusters=train_clusters_sets,
+                        sample_size=5,  # Smaller sample for training trials
+                    )
+
+                    # Analyze all three pipeline stages
+                    debugger.analyze_candidates(candidates, train_entities)
+                    debugger.analyze_scores(judgements)
+                    debugger.analyze_clusters(predicted_clusters)
+
+                    # Save locally with unique naming
+                    output_dir = Path(f"tmp/debug_reports/{timestamp}")
+                    output_dir.mkdir(parents=True, exist_ok=True)
+
+                    base_name = f"{timestamp}_trial_{trial.number:03d}_debug_report"
+                    json_path = output_dir / f"{base_name}.json"
+                    md_path = output_dir / f"{base_name}.md"
+
+                    debugger.save_report(json_path, format="json")
+                    debugger.save_report(md_path, format="markdown")
+
+                    logger.info(f"Saved local debug reports: {json_path}")
+
+                    # Log to wandb (same run as metrics due to as_multirun=True)
+                    if wandb.run is not None:
+                        artifact = wandb.Artifact(
+                            name=f"trial-{trial.number:03d}-debug",
+                            type="debug-report",
+                            description=f"Pipeline debug analysis for trial {trial.number}",
+                        )
+                        artifact.add_file(str(json_path))
+                        artifact.add_file(str(md_path))
+                        wandb.log_artifact(artifact)
+                        logger.info(f"Logged debug artifact to wandb run: {wandb.run.name}")
+                    else:
+                        logger.warning("No active wandb run - skipping artifact upload")
+
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to create debug artifacts for trial {trial.number}: {e}"
+                    )
+                    # Don't fail the trial if debug fails - optimization continues
 
             # Return all metrics as dict
             return {
@@ -406,7 +474,7 @@ def main() -> None:
             "name": "company-dedup-blocker-opt",
             "tags": ["blocker-optimization", "company-dedup", "azure-openai"],
         },
-        "as_multirun": False,  # Creates new runs for each trial
+        "as_multirun": True,  # Create separate wandb run per trial (enables artifact logging in same run as metrics)
     }
 
     # Run optimization
@@ -426,7 +494,7 @@ def main() -> None:
 
     # Evaluate on test set with best parameters
     logger.info("Evaluating on test set with best parameters...")
-    predicted_test_clusters, test_judgements = run_deduplication_pipeline(
+    predicted_test_clusters, test_judgements, test_candidates = run_deduplication_pipeline(
         test_entities,
         best_params["embedding_model"],
         best_params["k_neighbors"],
@@ -440,6 +508,75 @@ def main() -> None:
     test_pairwise = calculate_pairwise_metrics(predicted_test_clusters, test_clusters_sets)
     test_total_cost = sum(j.provenance.get("cost_usd", 0.0) for j in test_judgements)
     test_avg_cost = test_total_cost / len(test_judgements) if len(test_judgements) > 0 else 0.0
+
+    # =====================================================================
+    # TEST EVALUATION DEBUG: Always generated (critical final analysis)
+    # =====================================================================
+    logger.info("Generating test evaluation debug report...")
+
+    from langres.core import PipelineDebugger
+    import wandb
+
+    test_debugger: PipelineDebugger[CompanySchema] = PipelineDebugger(
+        ground_truth_clusters=test_clusters_sets,
+        sample_size=10,  # Full sample size for final evaluation
+    )
+
+    # Analyze test results
+    test_debugger.analyze_candidates(test_candidates, test_entities)
+    test_debugger.analyze_scores(test_judgements)
+    test_debugger.analyze_clusters(predicted_test_clusters)
+
+    # Save locally
+    output_dir = Path(f"tmp/debug_reports/{timestamp}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = f"{timestamp}_test_evaluation_debug_report"
+    json_path = output_dir / f"{base_name}.json"
+    md_path = output_dir / f"{base_name}.md"
+
+    test_debugger.save_report(json_path, format="json")
+    test_debugger.save_report(md_path, format="markdown")
+
+    logger.info(f"Test debug reports saved: {json_path}")
+
+    # Log to wandb in separate run for test evaluation
+    if settings.wandb_api_key:
+        with wandb.init(
+            project=settings.wandb_project,
+            entity=settings.wandb_entity,
+            name=f"{timestamp}-test-eval",
+            tags=["test-evaluation", "final-results"],
+            reinit=True,  # Allow new run after optimization completes
+        ) as test_run:
+            # Log test metrics to wandb
+            test_run.log(
+                {
+                    "bcubed_f1": test_bcubed["f1"],
+                    "bcubed_precision": test_bcubed["precision"],
+                    "bcubed_recall": test_bcubed["recall"],
+                    "pairwise_f1": test_pairwise["f1"],
+                    "pairwise_precision": test_pairwise["precision"],
+                    "pairwise_recall": test_pairwise["recall"],
+                    "cost_usd": test_total_cost,
+                    "avg_cost_per_pair": test_avg_cost,
+                }
+            )
+
+            # Log debug artifact (same run as test metrics)
+            artifact = wandb.Artifact(
+                name="test-evaluation-debug",
+                type="debug-report",
+                description="Final test evaluation pipeline analysis",
+            )
+            artifact.add_file(str(json_path))
+            artifact.add_file(str(md_path))
+            test_run.log_artifact(artifact)
+
+            logger.info(f"Test evaluation artifact logged to wandb run: {test_run.name}")
+
+    logger.info(f"=== All debug artifacts grouped by timestamp: {timestamp} ===")
+    logger.info(f"=== Local reports: tmp/debug_reports/{timestamp}/ ===")
 
     logger.info("=" * 80)
     logger.info("FINAL RESULTS")

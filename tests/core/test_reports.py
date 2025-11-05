@@ -115,6 +115,25 @@ class TestCandidateInspectionReport:
         assert "5.0" in markdown  # avg_candidates_per_entity
         assert "Increase k_neighbors" in markdown  # recommendation
 
+    def test_to_markdown_with_empty_fields(self) -> None:
+        """Test to_markdown handles empty distribution, examples, and recommendations."""
+        report = CandidateInspectionReport(
+            total_candidates=0,
+            avg_candidates_per_entity=0.0,
+            candidate_distribution={},  # Empty dict
+            examples=[],  # Empty list
+            recommendations=[],  # Empty list
+        )
+
+        markdown = report.to_markdown()
+        assert isinstance(markdown, str)
+        assert "# Candidate Inspection Report" in markdown
+        assert "0" in markdown  # total_candidates
+        # Should not include sections for empty fields
+        assert "## Candidate Distribution" not in markdown
+        assert "## Sample Candidates" not in markdown
+        assert "## Recommendations" not in markdown
+
 
 class TestScoreInspectionReport:
     """Tests for ScoreInspectionReport model."""
@@ -258,6 +277,26 @@ class TestScoreInspectionReport:
         assert "100" in markdown  # total_judgements
         assert "0.5" in markdown  # mean
 
+    def test_to_markdown_with_empty_fields(self) -> None:
+        """Test to_markdown handles empty distribution, examples, and recommendations."""
+        report = ScoreInspectionReport(
+            total_judgements=0,
+            score_distribution={},  # Empty dict
+            high_scoring_examples=[],  # Empty list
+            low_scoring_examples=[],  # Empty list
+            recommendations=[],  # Empty list
+        )
+
+        markdown = report.to_markdown()
+        assert isinstance(markdown, str)
+        assert "# Score Inspection Report" in markdown
+        assert "0" in markdown  # total_judgements
+        # Should not include sections for empty fields
+        assert "## Score Distribution" not in markdown
+        assert "## High Scoring Examples" not in markdown
+        assert "## Low Scoring Examples" not in markdown
+        assert "## Recommendations" not in markdown
+
 
 class TestClusterInspectionReport:
     """Tests for ClusterInspectionReport model."""
@@ -356,3 +395,22 @@ class TestClusterInspectionReport:
         assert "# Cluster Inspection Report" in markdown
         assert "50" in markdown  # total_clusters
         assert "0.6" in markdown or "60" in markdown  # singleton_rate
+
+    def test_to_markdown_with_empty_fields(self) -> None:
+        """Test to_markdown handles empty distribution, clusters, and recommendations."""
+        report = ClusterInspectionReport(
+            total_clusters=0,
+            singleton_rate=0.0,
+            cluster_size_distribution={},  # Empty dict
+            largest_clusters=[],  # Empty list
+            recommendations=[],  # Empty list
+        )
+
+        markdown = report.to_markdown()
+        assert isinstance(markdown, str)
+        assert "# Cluster Inspection Report" in markdown
+        assert "0" in markdown  # total_clusters
+        # Should not include sections for empty fields
+        assert "## Cluster Size Distribution" not in markdown
+        assert "## Largest Clusters" not in markdown
+        assert "## Recommendations" not in markdown

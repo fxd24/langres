@@ -456,3 +456,43 @@ def test_rapidfuzz_module_handles_all_zero_weights():
     assert 0.0 <= judgements[0].score <= 1.0
     # Perfect match should score 1.0
     assert abs(judgements[0].score - 1.0) < 0.001
+
+
+def test_rapidfuzz_module_inspect_scores():
+    """Test RapidfuzzModule.inspect_scores() delegates to shared implementation."""
+    from langres.core.models import PairwiseJudgement
+
+    module = RapidfuzzModule(
+        field_extractors={
+            "name": (lambda x: x.name, 1.0),
+        },
+        threshold=0.5,
+    )
+
+    # Create test judgements
+    judgements = [
+        PairwiseJudgement(
+            left_id="1",
+            right_id="2",
+            score=0.9,
+            score_type="heuristic",
+            decision_step="rapidfuzz_weighted",
+            provenance={"method": "token_sort_ratio"},
+        ),
+        PairwiseJudgement(
+            left_id="3",
+            right_id="4",
+            score=0.3,
+            score_type="heuristic",
+            decision_step="rapidfuzz_weighted",
+            provenance={"method": "token_sort_ratio"},
+        ),
+    ]
+
+    # Call inspect_scores
+    report = module.inspect_scores(judgements, sample_size=5)
+
+    # Verify report is valid
+    assert report.total_judgements == 2
+    assert report.score_distribution["mean"] > 0
+    assert len(report.recommendations) > 0
