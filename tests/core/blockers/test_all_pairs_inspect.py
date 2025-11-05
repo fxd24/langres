@@ -19,14 +19,22 @@ class SimpleEntity(BaseModel):
     name: str
 
 
+def simple_factory(d: dict) -> SimpleEntity:
+    """Factory function for SimpleEntity."""
+    return SimpleEntity(**d)
+
+
 def test_inspect_small_dataset():
     """Test inspection with small dataset (n=5) shows AllPairs is appropriate."""
-    # Given: 5 entities
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(5)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    # Given: 5 entities as dicts
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(5)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+
+    # Get normalized entities for inspection
+    entities = [simple_factory(d) for d in data]
 
     # Then: Inspect should show appropriate usage
     report = blocker.inspect_candidates(candidates, entities, sample_size=5)
@@ -46,12 +54,15 @@ def test_inspect_small_dataset():
 
 def test_inspect_medium_dataset():
     """Test inspection with medium dataset (n=50) suggests considering VectorBlocker."""
-    # Given: 50 entities
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(50)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    # Given: 50 entities as dicts
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(50)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+
+    # Get normalized entities for inspection
+    entities = [simple_factory(d) for d in data]
 
     # Then: Inspect should suggest VectorBlocker
     report = blocker.inspect_candidates(candidates, entities, sample_size=10)
@@ -68,12 +79,15 @@ def test_inspect_medium_dataset():
 
 def test_inspect_large_dataset():
     """Test inspection with large dataset (n=150) warns about scalability."""
-    # Given: 150 entities
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(150)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    # Given: 150 entities as dicts
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(150)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+
+    # Get normalized entities for inspection
+    entities = [simple_factory(d) for d in data]
 
     # Then: Inspect should warn about scalability
     report = blocker.inspect_candidates(candidates, entities, sample_size=10)
@@ -91,11 +105,12 @@ def test_inspect_large_dataset():
 def test_inspect_sample_extraction():
     """Test that sample_size is respected and readable text is extracted."""
     # Given: 10 entities with names
-    entities = [SimpleEntity(id=str(i), name=f"Company {chr(65 + i)}") for i in range(10)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    data = [{"id": str(i), "name": f"Company {chr(65 + i)}"} for i in range(10)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates and inspect with sample_size=5
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities, sample_size=5)
 
     # Then: Should have exactly 5 examples
@@ -115,11 +130,12 @@ def test_inspect_sample_extraction():
 def test_inspect_distribution_uniformity():
     """Test that distribution shows uniformity (all entities have n-1 candidates)."""
     # Given: 8 entities
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(8)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(8)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # Then: Distribution should show all 8 entities have exactly 7 candidates
@@ -131,11 +147,12 @@ def test_inspect_distribution_uniformity():
 def test_inspect_empty_entity_list():
     """Test inspection with empty entity list."""
     # Given: Empty entity list
-    entities = []
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    data = []
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates (none)
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = []
     report = blocker.inspect_candidates(candidates, entities)
 
     # Then: Should handle gracefully
@@ -148,11 +165,12 @@ def test_inspect_empty_entity_list():
 def test_inspect_single_entity():
     """Test inspection with single entity (0 pairs)."""
     # Given: Single entity
-    entities = [SimpleEntity(id="1", name="Only Entity")]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    data = [{"id": "1", "name": "Only Entity"}]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates (none, can't pair with self)
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # Then: Should show 0 pairs
@@ -166,14 +184,15 @@ def test_inspect_single_entity():
 def test_inspect_two_entities():
     """Test inspection with two entities (1 pair)."""
     # Given: Two entities
-    entities = [
-        SimpleEntity(id="1", name="Entity A"),
-        SimpleEntity(id="2", name="Entity B"),
+    data = [
+        {"id": "1", "name": "Entity A"},
+        {"id": "2", "name": "Entity B"},
     ]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
 
     # When: Generate candidates (1 pair)
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # Then: Should show 1 pair
@@ -187,9 +206,10 @@ def test_inspect_two_entities():
 def test_inspect_to_markdown():
     """Test to_markdown() returns formatted string."""
     # Given: Entities and candidates
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(5)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
-    candidates = list(blocker.generate_candidates(entities))
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(5)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # When: Convert to markdown
@@ -198,8 +218,10 @@ def test_inspect_to_markdown():
     # Then: Should contain key information
     assert isinstance(markdown, str)
     assert "Candidate Inspection Report" in markdown
-    assert "Total candidates: 10" in markdown
-    assert "Average candidates per entity: 4.0" in markdown
+    assert "Total Candidates" in markdown
+    assert "10" in markdown
+    assert "Average Candidates per Entity" in markdown
+    assert "4.00" in markdown
     assert "Distribution" in markdown
     assert "Recommendations" in markdown
 
@@ -207,29 +229,31 @@ def test_inspect_to_markdown():
 def test_inspect_to_dict():
     """Test to_dict() returns valid JSON-serializable dict."""
     # Given: Entities and candidates
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(5)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
-    candidates = list(blocker.generate_candidates(entities))
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(5)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # When: Convert to dict
-    data = report.to_dict()
+    data_dict = report.to_dict()
 
     # Then: Should contain all fields
-    assert isinstance(data, dict)
-    assert data["total_candidates"] == 10
-    assert data["avg_candidates_per_entity"] == 4.0
-    assert "candidate_distribution" in data
-    assert "examples" in data
-    assert "recommendations" in data
+    assert isinstance(data_dict, dict)
+    assert data_dict["total_candidates"] == 10
+    assert data_dict["avg_candidates_per_entity"] == 4.0
+    assert "candidate_distribution" in data_dict
+    assert "examples" in data_dict
+    assert "recommendations" in data_dict
 
 
 def test_inspect_stats_property():
     """Test stats property contains only numerical data."""
     # Given: Entities and candidates
-    entities = [SimpleEntity(id=str(i), name=f"Entity {i}") for i in range(5)]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
-    candidates = list(blocker.generate_candidates(entities))
+    data = [{"id": str(i), "name": f"Entity {i}"} for i in range(5)]
+    blocker = AllPairsBlocker(schema_factory=simple_factory)
+    candidates = list(blocker.stream(data))
+    entities = [simple_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities)
 
     # When: Access stats
@@ -247,13 +271,16 @@ def test_inspect_stats_property():
 def test_inspect_with_company_schema():
     """Test inspection with CompanySchema entities (real-world schema)."""
     # Given: CompanySchema entities
-    entities = [
-        CompanySchema(id=str(i), name=f"Company {chr(65 + i)}", country="US") for i in range(5)
-    ]
-    blocker = AllPairsBlocker(schema_factory=lambda e: e)
+    data = [{"id": str(i), "name": f"Company {chr(65 + i)}", "country": "US"} for i in range(5)]
+
+    def company_factory(d: dict) -> CompanySchema:
+        return CompanySchema(**d)
+
+    blocker = AllPairsBlocker(schema_factory=company_factory)
 
     # When: Generate candidates
-    candidates = list(blocker.generate_candidates(entities))
+    candidates = list(blocker.stream(data))
+    entities = [company_factory(d) for d in data]
     report = blocker.inspect_candidates(candidates, entities, sample_size=3)
 
     # Then: Should extract company names
@@ -266,3 +293,52 @@ def test_inspect_with_company_schema():
     # Verify statistics
     assert report.total_candidates == 10
     assert report.avg_candidates_per_entity == 4.0
+
+
+def test_extract_text_fallback_to_str():
+    """Test _extract_text falls back to __str__ when no name attribute."""
+
+    class EntityWithoutName(BaseModel):
+        id: str
+
+        def __str__(self) -> str:
+            return f"Entity-{self.id}"
+
+    data = [{"id": "1"}, {"id": "2"}]
+
+    def factory(d: dict) -> EntityWithoutName:
+        return EntityWithoutName(**d)
+
+    blocker = AllPairsBlocker(schema_factory=factory)
+    candidates = list(blocker.stream(data))
+    entities = [factory(d) for d in data]
+    report = blocker.inspect_candidates(candidates, entities, sample_size=1)
+
+    # Should use __str__ representation
+    assert len(report.examples) == 1
+    assert "Entity-1" in report.examples[0]["left_text"]
+    assert "Entity-2" in report.examples[0]["right_text"]
+
+
+def test_extract_text_fallback_to_id():
+    """Test _extract_text falls back to id() when no name or __str__."""
+
+    class MinimalEntity(BaseModel):
+        id: str
+        # No name, no custom __str__
+
+    data = [{"id": "1"}, {"id": "2"}]
+
+    def factory(d: dict) -> MinimalEntity:
+        return MinimalEntity(**d)
+
+    blocker = AllPairsBlocker(schema_factory=factory)
+    candidates = list(blocker.stream(data))
+    entities = [factory(d) for d in data]
+    report = blocker.inspect_candidates(candidates, entities, sample_size=1)
+
+    # Should still work (even if text is memory address)
+    assert len(report.examples) == 1
+    # Just verify it has some text
+    assert report.examples[0]["left_text"] != ""
+    assert report.examples[0]["right_text"] != ""

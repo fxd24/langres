@@ -11,6 +11,7 @@ from typing import Any
 
 from langres.core.blocker import Blocker, SchemaT
 from langres.core.models import ERCandidate
+from langres.core.reports import CandidateInspectionReport
 
 
 class AllPairsBlocker(Blocker[SchemaT]):
@@ -92,3 +93,98 @@ class AllPairsBlocker(Blocker[SchemaT]):
         for i, left in enumerate(entities):
             for right in entities[i + 1 :]:
                 yield ERCandidate(left=left, right=right, blocker_name="all_pairs_blocker")
+
+    def inspect_candidates(
+        self,
+        candidates: list[ERCandidate[SchemaT]],
+        entities: list[SchemaT],
+        sample_size: int = 10,
+    ) -> CandidateInspectionReport:
+        """Explore AllPairs candidates without ground truth.
+
+        AllPairsBlocker generates all possible pairs (n*(n-1)/2 candidates).
+        This method helps users understand scalability implications.
+
+        Args:
+            candidates: List of generated candidate pairs
+            entities: Original list of entities
+            sample_size: Number of example pairs to include in report
+
+        Returns:
+            CandidateInspectionReport with:
+            - Total candidates and avg per entity
+            - Uniform distribution (all entities have n-1 candidates)
+            - Sample pairs with readable text
+            - Scalability recommendations based on dataset size
+        """
+        n = len(entities)
+
+        # Statistics
+        total_candidates = len(candidates)
+        avg_candidates_per_entity = float(n - 1) if n > 0 else 0.0
+
+        # Distribution (all-pairs is uniform: every entity has exactly n-1 candidates)
+        distribution: dict[str, int] = {}
+        if n > 0:
+            key = str(n - 1)  # All entities have same count
+            distribution[key] = n
+
+        # Sample candidates with readable text
+        examples: list[dict[str, str]] = []
+        for cand in candidates[:sample_size]:
+            # Extract IDs and text from candidate entities
+            left_id = str(getattr(cand.left, "id", id(cand.left)))
+            right_id = str(getattr(cand.right, "id", id(cand.right)))
+
+            left_text = self._extract_text(cand.left)
+            right_text = self._extract_text(cand.right)
+
+            examples.append(
+                {
+                    "left_id": left_id,
+                    "right_id": right_id,
+                    "left_text": left_text,
+                    "right_text": right_text,
+                }
+            )
+
+        # Recommendations based on dataset size
+        recommendations: list[str] = []
+        if n > 100:
+            recommendations.append(
+                f"⚠️ AllPairsBlocker not scalable for large datasets (n={n}, {total_candidates:,} pairs). "
+                f"Use VectorBlocker for O(n*k) complexity instead of O(n²)."
+            )
+        elif n >= 50:
+            recommendations.append(
+                f"AllPairsBlocker feasible but consider VectorBlocker (n={n}, {total_candidates:,} pairs). "
+                f"VectorBlocker reduces candidates while maintaining recall."
+            )
+        else:
+            recommendations.append(
+                f"✅ AllPairsBlocker appropriate for small dataset (n={n}, {total_candidates} pairs). "
+                f"Guarantees 100% recall with exhaustive pairwise comparison."
+            )
+
+        return CandidateInspectionReport(
+            total_candidates=total_candidates,
+            avg_candidates_per_entity=avg_candidates_per_entity,
+            candidate_distribution=distribution,
+            examples=examples,
+            recommendations=recommendations,
+        )
+
+    def _extract_text(self, entity: SchemaT) -> str:
+        """Extract human-readable text from entity.
+
+        Args:
+            entity: Entity to extract text from
+
+        Returns:
+            Readable text representation of entity
+        """
+        if hasattr(entity, "name"):
+            return str(entity.name)
+        else:
+            # Fall back to string representation
+            return str(entity)
