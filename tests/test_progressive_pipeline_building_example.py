@@ -25,24 +25,27 @@ def test_progressive_pipeline_building_runs() -> None:
 
     assert result.returncode == 0, f"Example failed: {result.stderr}"
 
-    # Verify key output appears in stdout
-    assert "STEP 1: EXPLORE BLOCKING" in result.stdout
-    assert "STEP 2: TUNE BLOCKING" in result.stdout
-    assert "STEP 3: EXPLORE SCORING" in result.stdout
-    assert "STEP 4: EXPLORE CLUSTERING" in result.stdout
-    assert "STEP 5: TUNE CLUSTERING" in result.stdout
-    assert "SUMMARY: Calibrated Parameters" in result.stdout
+    # Note: logging output goes to stderr, not stdout
+    output = result.stderr
+
+    # Verify key output appears
+    assert "STEP 1: EXPLORE BLOCKING" in output
+    assert "STEP 2: TUNE BLOCKING" in output
+    assert "STEP 3: EXPLORE SCORING" in output
+    assert "STEP 4: EXPLORE CLUSTERING" in output
+    assert "STEP 5: TUNE CLUSTERING" in output
+    assert "SUMMARY: Calibrated Parameters" in output
 
     # Verify that inspection methods were called
-    assert "Candidate Inspection Report" in result.stdout
-    assert "Score Distribution Report" in result.stdout
-    assert "Cluster Inspection Report" in result.stdout
+    assert "Candidate Inspection Report" in output
+    assert "Score Inspection Report" in output
+    assert "Cluster Inspection Report" in output
 
     # Verify that parameter tuning is demonstrated
-    assert "COMPARISON:" in result.stdout
-    assert "k=" in result.stdout  # Blocking parameter comparison
-    assert "threshold=" in result.stdout  # Clustering parameter comparison
+    assert "COMPARISON:" in output
+    assert "k=" in output  # Blocking parameter comparison
+    assert "threshold=" in output  # Clustering parameter comparison
 
     # Verify recommendations are present
-    assert "Next steps:" in result.stdout
-    assert "WITHOUT ground truth labels" in result.stdout
+    assert "Next steps:" in output
+    assert "WITHOUT ground truth labels" in output
