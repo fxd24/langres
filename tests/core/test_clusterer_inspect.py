@@ -457,3 +457,33 @@ class TestClustererInspection:
             assert "cluster_id" in cluster_info
             assert isinstance(cluster_info["cluster_id"], int)
             assert 0 <= cluster_info["cluster_id"] < 3
+
+    def test_inspect_clusters_entity_with_pk_attribute(self) -> None:
+        """Test entity ID mapping for entities with pk attribute instead of id."""
+
+        class EntityWithPK:
+            """Entity that uses pk instead of id for primary key."""
+
+            def __init__(self, pk: str, label: str):
+                # NOTE: Explicitly NO 'id' attribute - only 'pk'
+                self.pk = pk
+                self.label = label
+                self.name = label  # For text extraction
+
+        clusters = [{"e1", "e2"}]
+        entities = [
+            EntityWithPK("e1", "Entity One"),
+            EntityWithPK("e2", "Entity Two"),
+        ]
+
+        clusterer = Clusterer(threshold=0.5)
+        report = clusterer.inspect_clusters(clusters=clusters, entities=entities, sample_size=5)
+
+        # Verify the cluster was properly formed (entities were found via pk)
+        cluster_example = report.largest_clusters[0]
+        entity_texts = cluster_example["entity_texts"]
+        # Should use name attribute for text
+        assert "Entity One" in entity_texts
+        assert "Entity Two" in entity_texts
+        # Verify both entities are present
+        assert len(entity_texts) == 2
