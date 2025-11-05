@@ -2,10 +2,12 @@
 
 from collections.abc import Iterator
 
+import numpy as np
 import pytest
 
 from langres.core.blocker import Blocker
 from langres.core.models import CompanySchema, ERCandidate
+from langres.core.reports import CandidateInspectionReport
 
 
 class DummyBlocker(Blocker[CompanySchema]):
@@ -23,6 +25,21 @@ class DummyBlocker(Blocker[CompanySchema]):
         for i, left in enumerate(companies):
             for right in companies[i + 1 :]:
                 yield ERCandidate(left=left, right=right, blocker_name="dummy_blocker")
+
+    def inspect_candidates(
+        self,
+        candidates: list[ERCandidate[CompanySchema]],
+        entities: list[CompanySchema],
+        sample_size: int = 10,
+    ) -> CandidateInspectionReport:
+        """Minimal test fixture implementation."""
+        return CandidateInspectionReport(
+            total_candidates=len(candidates),
+            avg_candidates_per_entity=len(candidates) / len(entities) if entities else 0.0,
+            candidate_distribution={},
+            examples=[],
+            recommendations=["Test fixture - no recommendations"],
+        )
 
 
 def test_cannot_instantiate_abstract_blocker() -> None:
@@ -151,6 +168,21 @@ def test_blocker_is_lazy_generator() -> None:
                 for right in companies[i + 1 :]:
                     self.pair_count += 1
                     yield ERCandidate(left=left, right=right, blocker_name="counting_blocker")
+
+        def inspect_candidates(
+            self,
+            candidates: list[ERCandidate[CompanySchema]],
+            entities: list[CompanySchema],
+            sample_size: int = 10,
+        ) -> CandidateInspectionReport:
+            """Minimal test fixture implementation."""
+            return CandidateInspectionReport(
+                total_candidates=len(candidates),
+                avg_candidates_per_entity=len(candidates) / len(entities) if entities else 0.0,
+                candidate_distribution={},
+                examples=[],
+                recommendations=["Test fixture - no recommendations"],
+            )
 
     blocker = CountingBlocker()
 

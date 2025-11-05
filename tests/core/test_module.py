@@ -12,10 +12,12 @@ These tests validate:
 
 from collections.abc import Iterator
 
+import numpy as np
 import pytest
 
 from langres.core import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.module import Module
+from langres.core.reports import ScoreInspectionReport
 
 
 class TestModuleAbstractBehavior:
@@ -59,6 +61,36 @@ class TestModuleConcreteImplementation:
                         provenance={"method": "test"},
                     )
 
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
+
         # Should not raise
         module = ValidModule()
         assert module is not None
@@ -77,6 +109,36 @@ class TestModuleConcreteImplementation:
                         decision_step="dummy",
                         provenance={},
                     )
+
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
 
         module = DummyModule()
 
@@ -109,6 +171,36 @@ class TestModuleConcreteImplementation:
                         decision_step="dummy",
                         provenance={},
                     )
+
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
 
         module = DummyModule()
 
@@ -148,6 +240,36 @@ class TestModuleWithRealData:
                         decision_step="always_match",
                         provenance={"method": "always_match"},
                     )
+
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
 
         module = AlwaysMatchModule()
 
@@ -191,6 +313,36 @@ class TestModuleWithRealData:
                     )
                     score += 0.1
 
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
+
         module = SequentialScoreModule()
 
         # Create multiple test candidates
@@ -228,6 +380,36 @@ class TestModuleWithRealData:
                         provenance={},
                     )
 
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
+
         module = DummyModule()
 
         # Empty iterator
@@ -260,6 +442,36 @@ class TestModuleWithRealData:
                             "right_name": candidate.right.name,
                         },
                     )
+
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
 
         module = IdExtractorModule()
 
@@ -313,6 +525,36 @@ class TestModuleStreamingBehavior:
                         provenance={"count": self.processed_count},
                     )
 
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
+
         module = CountingModule()
 
         candidates = [
@@ -354,6 +596,36 @@ class TestModuleStreamingBehavior:
                         decision_step="dummy",
                         provenance={},
                     )
+
+            def inspect_scores(
+                self,
+                judgements: list[PairwiseJudgement],
+                sample_size: int = 10,
+            ) -> ScoreInspectionReport:
+                """Minimal test fixture implementation."""
+                if not judgements:
+                    scores = [0.0]
+                else:
+                    scores = [j.score for j in judgements]
+
+                return ScoreInspectionReport(
+                    total_judgements=len(judgements),
+                    score_distribution={
+                        "mean": float(np.mean(scores)),
+                        "median": float(np.median(scores)),
+                        "std": float(np.std(scores)),
+                        "min": float(np.min(scores)),
+                        "max": float(np.max(scores)),
+                        "p25": 0.0,
+                        "p50": 0.0,
+                        "p75": 0.0,
+                        "p90": 0.0,
+                        "p95": 0.0,
+                    },
+                    high_scoring_examples=[],
+                    low_scoring_examples=[],
+                    recommendations=["Test fixture - no recommendations"],
+                )
 
         module = DummyModule()
 
