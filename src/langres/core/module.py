@@ -12,6 +12,7 @@ from typing import Generic, TypeVar
 from pydantic import BaseModel
 
 from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.reports import ScoreInspectionReport
 
 # Generic type variable for schema types (must be a Pydantic model)
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -152,5 +153,28 @@ class Module(ABC, Generic[SchemaT]):
             The SchemaT type variable ensures type safety when working with
             specific domain models (e.g., CompanySchema, ProductSchema).
             Subclasses can specialize this type for their specific use case.
+        """
+        pass  # pragma: no cover
+
+    @abstractmethod
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        """Explore scores without ground truth labels.
+
+        Use this method to understand scoring output before labeling:
+        - Score distribution statistics
+        - High and low scoring examples with reasoning
+        - Threshold recommendations based on distribution
+
+        For quality evaluation with ground truth labels, use
+        PipelineDebugger.analyze_scores() instead.
+
+        Args:
+            judgements: List of PairwiseJudgement objects to analyze
+            sample_size: Number of examples to include (default: 10)
+
+        Returns:
+            ScoreInspectionReport with statistics, examples, and recommendations
         """
         pass  # pragma: no cover

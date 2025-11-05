@@ -12,10 +12,12 @@ from collections.abc import Iterator
 from typing import Any
 
 import litellm
+import numpy as np
 from openai import OpenAI
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
+from langres.core.reports import ScoreInspectionReport
 
 logger = logging.getLogger(__name__)
 
@@ -271,3 +273,186 @@ class LLMJudgeModule(Module[SchemaT]):
 
         cost = (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
         return float(cost)
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        """Explore scores without ground truth labels.
+
+        Use this method to understand scoring output before labeling:
+        - Score distribution statistics
+        - High and low scoring examples with reasoning
+        - Threshold recommendations based on distribution
+
+        For quality evaluation with ground truth labels, use
+        PipelineDebugger.analyze_scores() instead.
+
+        Args:
+            judgements: List of PairwiseJudgement objects to analyze
+            sample_size: Number of examples to include (default: 10)
+
+        Returns:
+            ScoreInspectionReport with statistics, examples, and recommendations
+        """
+        return _inspect_scores_impl(judgements, sample_size)
+
+
+def _inspect_scores_impl(
+    judgements: list[PairwiseJudgement], sample_size: int = 10
+) -> ScoreInspectionReport:
+    """Shared implementation of inspect_scores for all Module types.
+
+    This function provides common score inspection logic that works for all
+    Module implementations since they all return PairwiseJudgement objects.
+
+    Args:
+        judgements: List of PairwiseJudgement objects to analyze
+        sample_size: Number of examples to include (default: 10)
+
+    Returns:
+        ScoreInspectionReport with statistics, examples, and recommendations
+    """
+    # Handle empty judgements
+    if not judgements:
+        return ScoreInspectionReport(
+            total_judgements=0,
+            score_distribution={},
+            high_scoring_examples=[],
+            low_scoring_examples=[],
+            recommendations=[
+                "No judgements to analyze - generate some predictions first",
+                "Run Module.forward() on candidates to produce judgements",
+            ],
+        )
+
+    # Extract scores
+    scores = [j.score for j in judgements]
+    total = len(judgements)
+
+    # Compute statistics
+    score_distribution = {
+        "mean": float(np.mean(scores)),
+        "median": float(np.median(scores)),
+        "std": float(np.std(scores)),
+        "p25": float(np.percentile(scores, 25)),
+        "p50": float(np.percentile(scores, 50)),
+        "p75": float(np.percentile(scores, 75)),
+        "p90": float(np.percentile(scores, 90)),
+        "p95": float(np.percentile(scores, 95)),
+        "min": float(np.min(scores)),
+        "max": float(np.max(scores)),
+    }
+
+    # Extract high-scoring examples (top sample_size)
+    sorted_by_score_desc = sorted(judgements, key=lambda j: j.score, reverse=True)
+    high_scoring_examples = [
+        {
+            "left_id": j.left_id,
+            "right_id": j.right_id,
+            "score": j.score,
+            "reasoning": j.reasoning if j.reasoning else "",
+        }
+        for j in sorted_by_score_desc[:sample_size]
+    ]
+
+    # Extract low-scoring examples (bottom sample_size)
+    sorted_by_score_asc = sorted(judgements, key=lambda j: j.score)
+    low_scoring_examples = [
+        {
+            "left_id": j.left_id,
+            "right_id": j.right_id,
+            "score": j.score,
+            "reasoning": j.reasoning if j.reasoning else "",
+        }
+        for j in sorted_by_score_asc[:sample_size]
+    ]
+
+    # Generate recommendations
+    recommendations = _generate_recommendations_impl(
+        total_judgements=total,
+        score_distribution=score_distribution,
+        scores=scores,
+    )
+
+    return ScoreInspectionReport(
+        total_judgements=total,
+        score_distribution=score_distribution,
+        high_scoring_examples=high_scoring_examples,
+        low_scoring_examples=low_scoring_examples,
+        recommendations=recommendations,
+    )
+
+
+def _generate_recommendations_impl(
+    total_judgements: int,
+    score_distribution: dict[str, float],
+    scores: list[float],
+) -> list[str]:
+    """Generate rule-based recommendations based on score distribution.
+
+    Args:
+        total_judgements: Total number of judgements
+        score_distribution: Statistics dictionary
+        scores: List of all scores
+
+    Returns:
+        List of actionable recommendations
+    """
+    recommendations = []
+
+    # 1. Threshold suggestion based on median
+    median = score_distribution["median"]
+    if median > 0.7:
+        recommendations.append(
+            "High median score (>0.7) suggests most pairs are matches. "
+            "Consider threshold=0.6 for balanced precision/recall."
+        )
+    elif median < 0.3:
+        recommendations.append(
+            "Low median score (<0.3) suggests most pairs are non-matches. "
+            "Consider threshold=0.2 as starting point."
+        )
+    else:
+        recommendations.append(
+            f"Median score is {median:.2f}. Consider threshold={median:.1f} as starting point."
+        )
+
+    # 2. Score separation analysis
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+    high_scores = sorted_scores[int(0.75 * n) :]  # Top 25%
+    low_scores = sorted_scores[: int(0.25 * n)]  # Bottom 25%
+
+    if high_scores and low_scores:
+        separation = abs(float(np.mean(high_scores)) - float(np.mean(low_scores)))
+        if separation < 0.3:
+            recommendations.append(
+                "⚠️ Poor score separation (<0.3) - scores are not well-calibrated. "
+                "Consider tuning the prompt or using a different model."
+            )
+
+    # 3. Variance analysis
+    std = score_distribution["std"]
+    if std < 0.1:
+        recommendations.append(
+            "⚠️ Very uniform distribution (std<0.1) - scores lack discriminative power. "
+            "Consider more diverse scoring or feature engineering."
+        )
+    elif std > 0.35:
+        recommendations.append(
+            "✅ Good score variance (std>0.35) - indicates discriminative scoring."
+        )
+
+    # 4. Sample size guidance
+    if total_judgements < 50:
+        recommendations.append(
+            "Small sample (<50 judgements) - results may not be representative. "
+            "Generate more predictions for reliable analysis."
+        )
+    elif total_judgements > 1000:
+        recommendations.append(
+            "Large sample (>1000 judgements) - consider sampling a subset for faster iteration "
+            "during parameter tuning."
+        )
+
+    return recommendations

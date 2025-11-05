@@ -12,6 +12,8 @@ from rapidfuzz import fuzz
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
+from langres.core.modules.llm_judge import _inspect_scores_impl
+from langres.core.reports import ScoreInspectionReport
 
 # Supported rapidfuzz algorithms
 Algorithm = Literal["ratio", "token_sort_ratio", "token_set_ratio"]
@@ -178,3 +180,20 @@ class RapidfuzzModule(Module[SchemaT]):
         else:  # pragma: no cover
             # This should never happen due to validation in __init__
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        """Explore scores without ground truth labels.
+
+        This implementation delegates to a shared utility function that works
+        for all Module types since they all return PairwiseJudgement objects.
+
+        Args:
+            judgements: List of PairwiseJudgement objects to analyze
+            sample_size: Number of examples to include (default: 10)
+
+        Returns:
+            ScoreInspectionReport with statistics, examples, and recommendations
+        """
+        return _inspect_scores_impl(judgements, sample_size)

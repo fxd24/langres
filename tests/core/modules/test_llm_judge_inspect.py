@@ -437,3 +437,34 @@ class TestLLMJudgeModuleInspection:
         assert (
             "sampling" in recommendations_text.lower() or "faster" in recommendations_text.lower()
         )
+
+    def test_inspect_scores_medium_variance_no_special_recommendation(
+        self, mock_llm_client
+    ) -> None:
+        """Test that medium variance (0.1 < std < 0.35) doesn't trigger variance warnings."""
+        # Create distribution with medium variance (std ~ 0.2)
+        scores = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+        judgements = [
+            PairwiseJudgement(
+                left_id=f"left_{i}",
+                right_id=f"right_{i}",
+                score=score,
+                score_type="prob_llm",
+                decision_step="llm_judgment",
+                reasoning="Test",
+                provenance={},
+            )
+            for i, score in enumerate(scores)
+        ]
+
+        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        report = module.inspect_scores(judgements, sample_size=5)
+
+        # Should have std in medium range
+        std = report.score_distribution["std"]
+        assert 0.1 < std < 0.35
+
+        # Should NOT have warnings about uniform distribution or good variance
+        recommendations_text = " ".join(report.recommendations)
+        assert "uniform" not in recommendations_text.lower()
+        assert "Good score variance" not in recommendations_text
