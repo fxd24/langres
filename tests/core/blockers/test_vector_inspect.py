@@ -245,3 +245,24 @@ class TestVectorBlockerInspection:
         suggested_k = int(report.avg_candidates_per_entity / 2)
         if suggested_k == 2:  # Same as our k_neighbors
             assert len(k_recommendations) == 0
+
+    def test_inspect_candidates_zero_avg_skips_k_suggestion(self) -> None:
+        """Test that zero avg_candidates_per_entity skips k suggestion branch.
+
+        This covers the branch 318->325 where avg_candidates_per_entity == 0,
+        so the entire k-suggestion logic is skipped (line 318 jumps to 325).
+        """
+        # Single entity generates zero candidates (no pairs possible)
+        data = [{"id": "c1", "name": "Single Company"}]
+
+        blocker = create_fake_blocker(k_neighbors=5)
+        candidates = list(blocker.stream(data))
+        entities = [company_factory(record) for record in data]
+
+        report = blocker.inspect_candidates(candidates=candidates, entities=entities, sample_size=5)
+
+        # Zero average means no k-suggestion logic is executed
+        assert report.avg_candidates_per_entity == 0.0
+        # No k-based recommendations (since avg == 0)
+        k_recommendations = [rec for rec in report.recommendations if "k_neighbors=" in rec]
+        assert len(k_recommendations) == 0

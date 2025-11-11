@@ -191,6 +191,28 @@ def calculate_pairwise_metrics(
     }
 
 
+def pairs_from_clusters(clusters: list[set[str]]) -> set[tuple[str, str]]:
+    """Convert clusters to set of entity pairs (public API).
+
+    This function extracts all pairwise entity matches implied by a clustering.
+    For each cluster, it generates all pairs of entities within that cluster.
+    Pairs are returned in lexicographic order for consistency.
+
+    Args:
+        clusters: List of clusters (sets of entity IDs)
+
+    Returns:
+        Set of entity pairs (tuples with lexicographic ordering)
+
+    Example:
+        >>> clusters = [{"e1", "e2", "e3"}, {"e4", "e5"}]
+        >>> pairs = pairs_from_clusters(clusters)
+        >>> sorted(pairs)
+        [('e1', 'e2'), ('e1', 'e3'), ('e2', 'e3'), ('e4', 'e5')]
+    """
+    return _clusters_to_pairs(clusters)
+
+
 def _clusters_to_pairs(clusters: list[set[str]]) -> set[tuple[str, str]]:
     """Convert clusters to set of entity pairs.
 

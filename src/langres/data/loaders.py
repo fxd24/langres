@@ -14,7 +14,7 @@ from langres.data.schemas import LabeledDeduplicationDataset, LabeledGroup
 logger = logging.getLogger(__name__)
 
 
-def load_iteration_05_data(
+def load_iteration_05_data(  # TODO change name to be general or if below is already implemented general then remove old not used code.
     data_dir: Path | str | None = None,
 ) -> tuple[dict[str, str], list[dict[str, Any]], dict[str, Any]]:
     """Load iteration 05 labeled deduplication data.
@@ -130,7 +130,7 @@ def load_labeled_dedup_data(
 
     This is a generic loader that works with any labeled deduplication dataset
     following the standard format. It replaces dataset-specific loaders like
-    load_iteration_05_data() with a general-purpose, schema-driven approach.
+    load_iteration_05_data() with a general-purpose, schema-driven approach. # TODO: remove any mention like load_iteration_05_data which is specific to a folder name. has not lost anything here.
 
     Args:
         data_dir: Directory containing labeled data files
@@ -253,7 +253,7 @@ def load_labeled_dedup_data(
     )
 
 
-def load_labeled_dedup_data_legacy(
+def load_labeled_dedup_data_legacy(  # TODO: remove and build it in the example directly. do not pollute the library with examples.
     data_dir: Path | str,
 ) -> LabeledDeduplicationDataset:
     """Load data in legacy iteration_05 format.
