@@ -12,12 +12,14 @@ import random
 from collections import defaultdict
 from typing import Any
 
+from langres.data.schemas import LabeledDeduplicationDataset
+
 logger = logging.getLogger(__name__)
 
 
 def stratified_dedup_split(
-    all_names: dict[str, str],
-    duplicate_groups: list[dict[str, Any]],
+    dataset_or_names: LabeledDeduplicationDataset | dict[str, str],
+    duplicate_groups: list[dict[str, Any]] | None = None,
     test_size: float = 0.2,
     random_state: int = 42,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[set[str]], list[set[str]]]:
@@ -29,8 +31,10 @@ def stratified_dedup_split(
     3. Ensures both train and test have representative samples of all cluster sizes
 
     Args:
-        all_names: Dictionary mapping entity ID to name (e.g., {"1": "Company A"})
-        duplicate_groups: List of duplicate groups, each with "variant_ids" key
+        dataset_or_names: Either a LabeledDeduplicationDataset object (new API)
+                         or a dict mapping entity ID to name (legacy API)
+        duplicate_groups: List of duplicate groups with "variant_ids" key (legacy API only).
+                         Must be None when using LabeledDeduplicationDataset.
         test_size: Fraction of data for test set (default: 0.2)
         random_state: Random seed for reproducibility (default: 42)
 
@@ -41,13 +45,43 @@ def stratified_dedup_split(
         - train_clusters: List of sets of entity IDs (ground truth clusters)
         - test_clusters: List of sets of entity IDs (ground truth clusters)
 
-    Example:
+    Examples:
+        >>> # New API: Use dataset object
+        >>> dataset = LabeledDeduplicationDataset(...)
+        >>> train_rec, test_rec, train_cls, test_cls = stratified_dedup_split(
+        ...     dataset, test_size=0.2, random_state=42
+        ... )
+
+        >>> # Legacy API: Use dicts and lists
         >>> all_names = {"1": "Acme", "2": "Acme Inc", "3": "Widget Co"}
         >>> groups = [{"variant_ids": [1, 2]}]
         >>> train_rec, test_rec, train_cls, test_cls = stratified_dedup_split(
         ...     all_names, groups, test_size=0.5, random_state=42
         ... )
     """
+    # Handle both new API (dataset object) and legacy API (dict + list)
+    if isinstance(dataset_or_names, LabeledDeduplicationDataset):
+        # New API: Extract from dataset object
+        if duplicate_groups is not None:
+            msg = "duplicate_groups must be None when using LabeledDeduplicationDataset"
+            raise ValueError(msg)
+
+        all_names = dataset_or_names.entity_names
+        # Convert LabeledGroup objects to legacy format for processing
+        duplicate_groups = [
+            {
+                "variant_ids": [int(id_) for id_ in group.entity_ids],
+                "canonical_name": group.canonical_name,
+            }
+            for group in dataset_or_names.labeled_groups
+        ]
+    else:
+        # Legacy API: Use provided dict and list
+        if duplicate_groups is None:
+            msg = "duplicate_groups is required when not using LabeledDeduplicationDataset"
+            raise ValueError(msg)
+
+        all_names = dataset_or_names
     # Set random seed for reproducibility
     random.seed(random_state)
 
