@@ -1078,11 +1078,13 @@ class DiskCachedEmbedder:
             # Remove least recently used (first item)
             self._hot_cache.popitem(last=False)
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
         """Encode with two-tier caching (hot memory + cold disk).
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt for task-specific encoding.
+                Different prompts create separate cache entries for same text.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
@@ -1090,6 +1092,7 @@ class DiskCachedEmbedder:
         Note:
             Batch optimization: Only cache misses are computed with embedder.
             Results maintain input order.
+            Cache key includes both text AND prompt for correct cache isolation.
         """
         if len(texts) == 0:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
@@ -1099,7 +1102,7 @@ class DiskCachedEmbedder:
         texts_to_compute: list[str] = []
 
         for text in texts:
-            text_hash = self._hash_text(text, prompt=None)
+            text_hash = self._hash_text(text, prompt=prompt)
 
             # Check hot cache
             if text_hash in self._hot_cache:
@@ -1125,14 +1128,14 @@ class DiskCachedEmbedder:
 
         # Compute missing embeddings (batch)
         if texts_to_compute:
-            computed = self.embedder.encode(texts_to_compute)
+            computed = self.embedder.encode(texts_to_compute, prompt=prompt)
 
             # Store computed embeddings
             for text, embedding in zip(texts_to_compute, computed):
-                text_hash = self._hash_text(text, prompt=None)
+                text_hash = self._hash_text(text, prompt=prompt)
 
                 # Store in cold storage (SQLite)
-                self._put_to_db(text_hash, embedding, text, prompt=None)
+                self._put_to_db(text_hash, embedding, text, prompt=prompt)
 
                 # Store in hot cache
                 self._promote_to_hot(text_hash, embedding)

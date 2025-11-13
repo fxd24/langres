@@ -138,7 +138,7 @@ def main() -> None:
     )
 
     start = time.time()
-    embeddings_4 = new_cached.encode(company_names[:10])  # Just first 10
+    new_cached.encode(company_names[:10])  # Just first 10
     elapsed_4 = time.time() - start
 
     info_4 = new_cached.cache_info()
