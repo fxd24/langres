@@ -147,11 +147,14 @@ class SparseEmbeddingProvider(Protocol):
         # ]
     """
 
-    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[dict[str, Any]]:
         """Generate sparse vectors from texts.
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt (ignored for sparse embeddings).
+                Sparse embedders (BM25, SPLADE) don't use prompts for keyword matching.
+                This parameter exists for protocol compatibility.
 
         Returns:
             List of sparse vectors in Qdrant format.
@@ -166,6 +169,10 @@ class SparseEmbeddingProvider(Protocol):
             #     {"indices": [10, 25, 100], "values": [0.8, 0.6, 0.3]},
             #     {"indices": [15, 50, 120], "values": [0.9, 0.5, 0.4]}
             # ]
+
+        Note:
+            The prompt parameter is intentionally ignored, as sparse embedders
+            perform keyword matching and don't benefit from instruction prompts.
         """
         ...  # pragma: no cover
 
@@ -192,11 +199,15 @@ class LateInteractionEmbeddingProvider(Protocol):
         The number of tokens varies per text based on tokenization.
     """
 
-    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[list[list[float]]]:
         """Encode texts into multi-vectors.
 
         Args:
             texts: List of texts to encode. Can be empty.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                If the underlying model supports instruction prompts, this will
+                be used. Otherwise, it's silently ignored (model-dependent).
+                Default: None.
 
         Returns:
             List of multi-vectors, one per text.
@@ -211,6 +222,11 @@ class LateInteractionEmbeddingProvider(Protocol):
             #   [[0.1, 0.2, ...], [0.3, 0.4, ...]],  # "Hello": 2 tokens x 128 dim
             #   [[0.5, 0.6, ...], [0.7, 0.8, ...]]   # "World": 2 tokens x 128 dim
             # ]
+
+        Note:
+            Prompt support depends on the specific late-interaction model.
+            Traditional ColBERT models don't use prompts, but newer variants
+            may support instruction-based encoding.
         """
         ...  # pragma: no cover
 
@@ -500,15 +516,22 @@ class FastEmbedSparseEmbedder:
         self.model_name = model_name
         self._model: Any = None  # Lazy-loaded on first encode
 
-    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[dict[str, Any]]:
         """Generate sparse vectors using FastEmbed.
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt (ignored for sparse embeddings).
+                Sparse embedders (BM25, SPLADE) don't use prompts for keyword matching.
+                This parameter exists for protocol compatibility.
 
         Returns:
             List of sparse vectors in Qdrant format.
             Each vector is {"indices": [...], "values": [...]}.
+
+        Note:
+            The prompt parameter is intentionally ignored, as sparse embedders
+            perform keyword matching and don't benefit from instruction prompts.
         """
         # Lazy-load model on first use
         if self._model is None:
@@ -519,6 +542,7 @@ class FastEmbedSparseEmbedder:
 
         # Generate sparse embeddings
         # FastEmbed returns SparseEmbedding objects with .indices and .values
+        # Note: prompt is intentionally ignored (sparse = keyword matching)
         sparse_embeddings = list(self._model.embed(texts))
 
         # Convert to Qdrant format
@@ -544,19 +568,27 @@ class FakeSparseEmbedder:
         # Each text gets a single index based on hash(text) % 1000
     """
 
-    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[dict[str, Any]]:
         """Generate deterministic fake sparse vectors.
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt (ignored for sparse embeddings).
+                Sparse embedders (BM25, SPLADE) don't use prompts for keyword matching.
+                This parameter exists for protocol compatibility.
 
         Returns:
             List of fake sparse vectors in Qdrant format.
             Each vector has a single index based on text hash.
+
+        Note:
+            The prompt parameter is intentionally ignored, as sparse embedders
+            perform keyword matching and don't benefit from instruction prompts.
         """
         result = []
         for text in texts:
             # Generate deterministic index from text hash
+            # Note: prompt is intentionally ignored (sparse = keyword matching)
             idx = (
                 abs(hash(text)) % 1000
             )  # TODO what happens when there are more then 1000 embeddings?
@@ -626,11 +658,15 @@ class FastEmbedLateInteractionEmbedder:
             self._model = LateInteractionTextEmbedding(self.model_name)
         return self._model
 
-    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[list[list[float]]]:
         """Encode texts into multi-vectors using FastEmbed.
 
         Args:
             texts: List of texts to encode. Can be empty.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                If the underlying model supports instruction prompts, this will
+                be used. Otherwise, it's silently ignored (model-dependent).
+                Default: None.
 
         Returns:
             List of multi-vectors, one per text.
@@ -639,7 +675,9 @@ class FastEmbedLateInteractionEmbedder:
 
         Note:
             This method triggers model loading on first call if not
-            already loaded.
+            already loaded. Prompt support depends on the specific FastEmbed
+            late-interaction model being used (e.g., ColBERT may not support
+            prompts, but newer models might).
         """
         if len(texts) == 0:
             return []
@@ -648,6 +686,8 @@ class FastEmbedLateInteractionEmbedder:
 
         # FastEmbed returns generator of numpy arrays
         # Shape: (num_tokens, embedding_dim) per text
+        # Note: Current FastEmbed late-interaction models (ColBERT) don't support prompts
+        # We include the parameter for future compatibility, but it's currently ignored
         embeddings_generator = model.embed(texts)
 
         # Convert generator to list and numpy arrays to nested lists
@@ -719,11 +759,15 @@ class FakeLateInteractionEmbedder:
         self._embedding_dim = embedding_dim
         self.num_tokens = num_tokens
 
-    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+    def encode(self, texts: list[str], prompt: str | None = None) -> list[list[list[float]]]:
         """Generate fake deterministic multi-vectors from texts.
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                When provided, produces different multi-vectors to simulate
+                real prompt-aware late-interaction models (e.g., ColBERT-v2+).
+                Default: None.
 
         Returns:
             List of multi-vectors, one per text.
@@ -731,8 +775,9 @@ class FakeLateInteractionEmbedder:
             each with embedding_dim dimensions.
 
         Note:
-            Same text always produces the same multi-vectors.
-            Different texts produce different multi-vectors.
+            Same text + same prompt always produces the same multi-vectors.
+            Different prompts produce different multi-vectors (simulating
+            real late-interaction models with instruction-following capability).
             Different token indices within same text produce different embeddings.
         """
         if len(texts) == 0:
@@ -743,9 +788,14 @@ class FakeLateInteractionEmbedder:
             # Generate num_tokens token embeddings for this text
             text_tokens: list[list[float]] = []
             for token_idx in range(self.num_tokens):
-                # Create deterministic embedding from text + token_idx hash
+                # Create deterministic embedding from text + prompt + token_idx hash
+                # Include prompt in hash to simulate prompt-aware behavior
+                if prompt is not None:
+                    token_key = f"{text}||PROMPT:{prompt}__token{token_idx}"
+                else:
+                    token_key = f"{text}__token{token_idx}"
+
                 # Use SHA256 to get stable, uniformly distributed values
-                token_key = f"{text}__token{token_idx}"
                 token_hash = hashlib.sha256(token_key.encode("utf-8")).digest()
 
                 # Convert hash bytes to integers, then to floats
@@ -819,7 +869,7 @@ class DiskCachedEmbedder:
         embedder: EmbeddingProvider,
         cache_dir: Path,
         namespace: str = "default",
-        memory_cache_size: int = 10_000,
+        memory_cache_size: int = 100_000,
         hash_algorithm: str = "blake2b",
     ):
         """Initialize DiskCachedEmbedder.
