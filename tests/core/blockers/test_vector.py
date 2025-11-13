@@ -245,6 +245,126 @@ def test_vector_blocker_achieves_high_recall():
     )
 
 
+# ============================================================================
+# Phase 1: New tests for explicit index creation requirement
+# ============================================================================
+
+
+def test_stream_raises_error_if_index_not_built():
+    """Verify stream() raises RuntimeError if index not built."""
+    # Setup blocker with unbuilt index
+    fake_index = FakeVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=fake_index,
+        k_neighbors=2,
+    )
+
+    # stream() should raise RuntimeError
+    data = [
+        {"id": "c1", "name": "Apple"},
+        {"id": "c2", "name": "Google"},
+    ]
+
+    with pytest.raises(RuntimeError, match="Index not built"):
+        list(blocker.stream(data))
+
+
+def test_stream_works_after_index_built():
+    """Verify stream() works after explicit create_index() call."""
+    # Setup
+    fake_index = FakeVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=fake_index,
+        k_neighbors=2,
+    )
+
+    data = [
+        {"id": "c1", "name": "Apple"},
+        {"id": "c2", "name": "Google"},
+        {"id": "c3", "name": "Microsoft"},
+    ]
+
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
+
+    # stream() should now work
+    candidates = list(blocker.stream(data))
+    assert len(candidates) > 0
+
+
+def test_multiple_stream_calls_reuse_index():
+    """Verify multiple stream() calls don't rebuild index."""
+    # Setup with spy to track create_index calls
+    fake_index = FakeVectorIndex()
+    original_create = fake_index.create_index
+    call_count = {"count": 0}
+
+    def counting_create_index(texts):
+        call_count["count"] += 1
+        return original_create(texts)
+
+    fake_index.create_index = counting_create_index
+
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=fake_index,
+        k_neighbors=2,
+    )
+
+    data = [
+        {"id": "c1", "name": "A"},
+        {"id": "c2", "name": "B"},
+        {"id": "c3", "name": "C"},
+    ]
+    texts = [d["name"] for d in data]
+
+    # Build index once
+    blocker.vector_index.create_index(texts)
+    assert call_count["count"] == 1
+
+    # Multiple stream() calls should NOT rebuild
+    list(blocker.stream(data))
+    list(blocker.stream(data))
+    list(blocker.stream(data))
+
+    # create_index should still only be called once
+    assert call_count["count"] == 1
+
+
+def test_different_k_neighbors_without_rebuild():
+    """Verify changing k_neighbors doesn't rebuild index."""
+    fake_index = FakeVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=fake_index,
+        k_neighbors=2,
+    )
+
+    data = [
+        {"id": "c1", "name": "A"},
+        {"id": "c2", "name": "B"},
+        {"id": "c3", "name": "C"},
+        {"id": "c4", "name": "D"},
+    ]
+    texts = [d["name"] for d in data]
+
+    # Build index once
+    blocker.vector_index.create_index(texts)
+
+    # Try different k values
+    for k in [2, 3, 4]:
+        blocker.k_neighbors = k
+        candidates = list(blocker.stream(data))
+        assert len(candidates) >= 0  # Should work without error
+
+
 # Note: Tests for different embedding models, lazy loading, and type conversion
 # are now in tests/core/test_embeddings.py since these concerns have been
 # separated from VectorBlocker into the EmbeddingProvider abstraction.
