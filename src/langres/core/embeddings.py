@@ -749,13 +749,38 @@ class FakeLateInteractionEmbedder:
         return self._embedding_dim
 
 
-# ============ DISK-CACHED EMBEDDER (STUB FOR TDD) ============
+# ============ DISK-CACHED EMBEDDER ============
 
 
 class DiskCachedEmbedder:
     """Disk-backed embedding cache with two-tier caching (hot memory + cold disk).
 
-    This is a stub implementation for TDD. Will be implemented after tests are written.
+    This implementation prevents OOM by keeping only hot data in memory while storing
+    unlimited embeddings on disk using SQLite.
+
+    Architecture:
+    - Hot cache: In-memory OrderedDict with LRU eviction (configurable size)
+    - Cold storage: SQLite database for unlimited disk-backed storage
+
+    Lookup flow:
+        Text → Hash → Hot cache?
+                      ↓ No
+                      Cold storage (SQLite)?
+                      ↓ No
+                      Compute with embedder → Store in both hot + cold
+
+    Example:
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        cached = DiskCachedEmbedder(
+            embedder=embedder,
+            cache_dir=Path("./cache"),
+            namespace="my_model",
+            memory_cache_size=10_000,
+        )
+        embeddings = cached.encode(texts)  # Uses cache when available
+
+    Note:
+        Future versions will support prompt-based caching for instruction embeddings.
     """
 
     def __init__(
@@ -766,34 +791,348 @@ class DiskCachedEmbedder:
         memory_cache_size: int = 10_000,
         hash_algorithm: str = "blake2b",
     ):
-        """Initialize DiskCachedEmbedder."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        """Initialize DiskCachedEmbedder.
+
+        Args:
+            embedder: Underlying embedding provider to use for cache misses.
+            cache_dir: Directory to store SQLite database(s).
+            namespace: Namespace for this cache (each namespace gets separate DB).
+            memory_cache_size: Maximum number of embeddings in hot cache.
+            hash_algorithm: Hash algorithm for cache keys (default: blake2b).
+        """
+        import sqlite3
+        from collections import OrderedDict
+
+        self.embedder = embedder
+        self.cache_dir = Path(cache_dir)
+        self.namespace = namespace
+        self.memory_cache_size = memory_cache_size
+        self.hash_algorithm = hash_algorithm
+
+        # Create cache directory
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize SQLite database
+        self.db_path = self.cache_dir / f"{namespace}.db"
+        self._init_db()
+
+        # Initialize hot cache (LRU using OrderedDict)
+        self._hot_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+
+        # Statistics
+        self._stats = {
+            "hits_hot": 0,
+            "hits_cold": 0,
+            "misses": 0,
+        }
+
+    def _init_db(self) -> None:
+        """Initialize SQLite database with schema.
+
+        Creates the embeddings table with:
+        - text_hash (PRIMARY KEY): Hash of text (and future prompt)
+        - embedding (BLOB): Serialized numpy array
+        - text (TEXT): Original text (for debugging/inspection)
+        - prompt (TEXT): Future prompt support
+        - created_at (TIMESTAMP): Creation timestamp
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Create embeddings table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                text_hash TEXT PRIMARY KEY,
+                embedding BLOB NOT NULL,
+                text TEXT,
+                prompt TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create index on text_hash (already primary key, but explicit for clarity)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_text_hash ON embeddings(text_hash)
+        """)
+
+        conn.commit()
+        conn.close()
+
+        logger.debug("Initialized SQLite database at %s", self.db_path)
+
+    def _hash_text(self, text: str, prompt: str | None = None) -> str:
+        """Generate cache key from text (and future prompt).
+
+        Args:
+            text: Text to hash.
+            prompt: Optional prompt for instruction-based embeddings.
+
+        Returns:
+            Hexadecimal hash string.
+
+        Note:
+            Cache key design:
+            - Without prompt: hash(text)
+            - With prompt: hash(text + "|||PROMPT|||" + prompt)
+
+            This ensures same text with different prompts gets different cache entries.
+        """
+        if prompt is None:
+            cache_input = text
+        else:
+            # Use separator to distinguish text from prompt
+            cache_input = f"{text}|||PROMPT|||{prompt}"
+
+        # Use blake2b for fast, collision-resistant hashing
+        hasher = hashlib.blake2b()
+        hasher.update(cache_input.encode("utf-8"))
+        return hasher.hexdigest()
+
+    def _serialize_embedding(self, embedding: np.ndarray) -> bytes:
+        """Convert numpy array to bytes for SQLite BLOB.
+
+        Args:
+            embedding: Numpy array to serialize.
+
+        Returns:
+            Bytes representation of the array.
+
+        Note:
+            Uses numpy's tobytes() for efficient serialization.
+            Stores dtype and shape information implicitly (assumes float32).
+        """
+        return embedding.astype(np.float32).tobytes()
+
+    def _deserialize_embedding(self, blob: bytes) -> np.ndarray:
+        """Convert SQLite BLOB back to numpy array.
+
+        Args:
+            blob: Bytes from SQLite BLOB column.
+
+        Returns:
+            Numpy array (1D, will be reshaped by caller if needed).
+
+        Note:
+            Assumes float32 dtype. Caller must know embedding dimension for reshaping.
+        """
+        return np.frombuffer(blob, dtype=np.float32)
+
+    def _get_from_db(self, text_hash: str) -> np.ndarray | None:
+        """Lookup embedding in SQLite.
+
+        Args:
+            text_hash: Cache key (hash of text/prompt).
+
+        Returns:
+            Embedding array if found, None otherwise.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT embedding FROM embeddings WHERE text_hash = ?", (text_hash,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row is None:
+            return None
+
+        # Deserialize and reshape
+        embedding = self._deserialize_embedding(row[0])
+        return embedding
+
+    def _put_to_db(
+        self, text_hash: str, embedding: np.ndarray, text: str, prompt: str | None = None
+    ) -> None:
+        """Store embedding in SQLite with metadata.
+
+        Args:
+            text_hash: Cache key (hash of text/prompt).
+            embedding: Embedding array to store.
+            text: Original text (for debugging).
+            prompt: Optional prompt (for future support).
+        """
+        import sqlite3
+
+        serialized = self._serialize_embedding(embedding)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO embeddings (text_hash, embedding, text, prompt)
+            VALUES (?, ?, ?, ?)
+        """,
+            (text_hash, serialized, text, prompt),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def _promote_to_hot(self, text_hash: str, embedding: np.ndarray) -> None:
+        """Add to hot cache with LRU eviction.
+
+        Args:
+            text_hash: Cache key.
+            embedding: Embedding to add to hot cache.
+
+        Note:
+            Uses OrderedDict for LRU:
+            - move_to_end() marks as most recent
+            - popitem(last=False) removes least recent
+        """
+        # If already in hot cache, move to end (mark as most recent)
+        if text_hash in self._hot_cache:
+            self._hot_cache.move_to_end(text_hash)
+            return
+
+        # Add to hot cache
+        self._hot_cache[text_hash] = embedding
+
+        # Evict oldest if exceeds max size
+        if len(self._hot_cache) > self.memory_cache_size:
+            # Remove least recently used (first item)
+            self._hot_cache.popitem(last=False)
 
     def encode(self, texts: list[str]) -> np.ndarray:
-        """Encode with two-tier caching (hot memory + cold disk)."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        """Encode with two-tier caching (hot memory + cold disk).
+
+        Args:
+            texts: List of texts to encode.
+
+        Returns:
+            Numpy array of shape (len(texts), embedding_dim).
+
+        Note:
+            Batch optimization: Only cache misses are computed with embedder.
+            Results maintain input order.
+        """
+        if len(texts) == 0:
+            return np.zeros((0, self.embedding_dim), dtype=np.float32)
+
+        # Build lookup: text → hash → embedding
+        results: dict[str, np.ndarray] = {}
+        texts_to_compute: list[str] = []
+
+        for text in texts:
+            text_hash = self._hash_text(text, prompt=None)
+
+            # Check hot cache
+            if text_hash in self._hot_cache:
+                results[text] = self._hot_cache[text_hash]
+                self._stats["hits_hot"] += 1
+                # Move to end (mark as most recent)
+                self._hot_cache.move_to_end(text_hash)
+                continue
+
+            # Check cold storage (SQLite)
+            cold_embedding = self._get_from_db(text_hash)
+            if cold_embedding is not None:
+                results[text] = cold_embedding
+                self._stats["hits_cold"] += 1
+                # Promote to hot cache
+                self._promote_to_hot(text_hash, cold_embedding)
+                continue
+
+            # Cache miss - need to compute
+            if text not in results:  # Avoid duplicates in same batch
+                texts_to_compute.append(text)
+            self._stats["misses"] += 1
+
+        # Compute missing embeddings (batch)
+        if texts_to_compute:
+            computed = self.embedder.encode(texts_to_compute)
+
+            # Store computed embeddings
+            for text, embedding in zip(texts_to_compute, computed):
+                text_hash = self._hash_text(text, prompt=None)
+
+                # Store in cold storage (SQLite)
+                self._put_to_db(text_hash, embedding, text, prompt=None)
+
+                # Store in hot cache
+                self._promote_to_hot(text_hash, embedding)
+
+                # Store in results
+                results[text] = embedding
+
+        # Build output maintaining input order
+        output = np.array([results[text] for text in texts], dtype=np.float32)
+        return output
 
     @property
     def embedding_dim(self) -> int:
-        """Get embedding dimension from underlying embedder."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        """Get embedding dimension from underlying embedder.
+
+        Returns:
+            Embedding dimension.
+        """
+        return self.embedder.embedding_dim
 
     def cache_info(self) -> dict[str, int | float]:
-        """Return cache statistics."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        """Return cache statistics: hits_hot, hits_cold, misses, hot_size, cold_size, hit_rate.
+
+        Returns:
+            Dictionary with cache statistics:
+            - hits_hot: Number of hot cache hits
+            - hits_cold: Number of cold storage hits
+            - misses: Number of cache misses (computed)
+            - hot_size: Current hot cache size
+            - cold_size: Current cold storage size
+            - hit_rate: Overall hit rate (0.0 to 1.0)
+        """
+        import sqlite3
+
+        # Get cold storage size
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM embeddings")
+        cold_size = cursor.fetchone()[0]
+        conn.close()
+
+        # Calculate hit rate
+        total_requests = self._stats["hits_hot"] + self._stats["hits_cold"] + self._stats["misses"]
+        if total_requests == 0:
+            hit_rate = 0.0
+        else:
+            total_hits = self._stats["hits_hot"] + self._stats["hits_cold"]
+            hit_rate = total_hits / total_requests
+
+        return {
+            "hits_hot": self._stats["hits_hot"],
+            "hits_cold": self._stats["hits_cold"],
+            "misses": self._stats["misses"],
+            "hot_size": len(self._hot_cache),
+            "cold_size": cold_size,
+            "hit_rate": hit_rate,
+        }
 
     def cache_clear(self) -> None:
-        """Clear both hot and cold caches."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        """Clear both hot and cold caches.
 
-    def _hash_text(self, text: str, prompt: str | None = None) -> str:
-        """Generate cache key from text (and future prompt)."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        This removes all cached embeddings and resets statistics.
+        """
+        import sqlite3
 
-    def _serialize_embedding(self, embedding: np.ndarray) -> bytes:
-        """Convert numpy array to bytes for SQLite BLOB."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        # Clear hot cache
+        self._hot_cache.clear()
 
-    def _deserialize_embedding(self, blob: bytes) -> np.ndarray:
-        """Convert SQLite BLOB back to numpy array."""
-        raise NotImplementedError("TDD: Implement after tests are written")
+        # Clear cold storage
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM embeddings")
+        conn.commit()
+        conn.close()
+
+        # Reset statistics
+        self._stats = {
+            "hits_hot": 0,
+            "hits_cold": 0,
+            "misses": 0,
+        }
+
+        logger.debug("Cleared all caches for namespace %s", self.namespace)

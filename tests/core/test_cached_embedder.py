@@ -566,3 +566,31 @@ class TestDiskCachedEmbedderDuplicateInputs:
         # Cache should only store unique texts
         info = cached.cache_info()
         assert info["cold_size"] == 3  # Only a, b, c (unique)
+
+    def test_handles_duplicates_with_some_cached(self, tmp_path):
+        """Test duplicates when some texts are already cached."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        cached = DiskCachedEmbedder(
+            embedder=embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # First encode: cache "a" and "b"
+        cached.encode(["a", "b"])
+
+        # Second encode: "a" is cached, "c" is new, but we have duplicate "c"s
+        texts = ["a", "c", "a", "c", "c"]
+        result = cached.encode(texts)
+
+        # Should return correct shape
+        assert result.shape == (5, 128)
+
+        # All instances of same text should have identical embeddings
+        np.testing.assert_array_equal(result[0], result[2])  # Both "a"
+        np.testing.assert_array_equal(result[1], result[3])  # Both "c"
+        np.testing.assert_array_equal(result[1], result[4])  # Both "c"
+
+        # Cache should have 3 unique texts total
+        info = cached.cache_info()
+        assert info["cold_size"] == 3  # a, b, c
