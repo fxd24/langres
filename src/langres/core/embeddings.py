@@ -675,10 +675,10 @@ class FakeLateInteractionEmbedder:
         if len(texts) == 0:
             return []
 
-        result = []
+        result: list[list[list[float]]] = []
         for text in texts:
             # Generate num_tokens token embeddings for this text
-            text_tokens = []
+            text_tokens: list[list[float]] = []
             for token_idx in range(self.num_tokens):
                 # Create deterministic embedding from text + token_idx hash
                 # Use SHA256 to get stable, uniformly distributed values

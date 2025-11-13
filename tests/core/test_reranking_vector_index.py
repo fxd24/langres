@@ -215,6 +215,9 @@ class TestQdrantHybridRerankingIndex:
         assert len(query) > 0  # At least one token
         assert isinstance(query[0], list)  # Token embedding
 
+        # Verify using parameter specifies reranking vector
+        assert call_args[1]["using"] == "reranking"
+
         # Verify results shape (single query)
         assert distances.shape == (2,)
         assert indices.shape == (2,)
@@ -502,3 +505,111 @@ class TestRerankingVectorIndexProtocol:
         assert callable(index.create_index)
         assert callable(index.search)
         assert callable(index.search_all)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_reranking_index_with_real_qdrant_integration():
+    """Integration test with real Qdrant and FastEmbed embedders.
+
+    This test validates the complete pipeline with actual model loading
+    and vector operations. It's marked as slow due to model downloads.
+    """
+    # Setup - Import real implementations
+    from qdrant_client import QdrantClient
+
+    from langres.core.embeddings import (
+        FastEmbedLateInteractionEmbedder,
+        FastEmbedSparseEmbedder,
+        SentenceTransformerEmbedder,
+    )
+
+    # In-memory Qdrant (no external service needed)
+    client = QdrantClient(":memory:")
+
+    # Lightweight models for fast testing
+    dense = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")  # 384-dim
+    sparse = FastEmbedSparseEmbedder(model_name="Qdrant/bm25")  # BM25
+    reranking = FastEmbedLateInteractionEmbedder(
+        model_name="colbert-ir/colbertv2.0"
+    )  # 128-dim tokens
+
+    index = QdrantHybridRerankingIndex(
+        client=client,
+        collection_name="test_integration",
+        dense_embedder=dense,
+        sparse_embedder=sparse,
+        reranking_embedder=reranking,
+        prefetch_limit=5,
+    )
+
+    # Test corpus (small to keep test fast)
+    corpus = [
+        "Apple Inc. is a technology company",
+        "Microsoft Corporation develops software",
+        "Google LLC provides search services",
+        "Amazon.com is an e-commerce platform",
+        "Meta Platforms runs social media",
+    ]
+
+    # Create index
+    logger.info("Creating index with real embedders...")
+    index.create_index(corpus)
+
+    # Verify collection exists
+    collections = client.get_collections()
+    collection_names = [c.name for c in collections.collections]
+    assert "test_integration" in collection_names
+    logger.info("Collection created successfully")
+
+    # Verify collection has correct vector configuration
+    collection_info = client.get_collection("test_integration")
+    assert "dense" in collection_info.config.params.vectors
+    assert "reranking" in collection_info.config.params.vectors
+    assert collection_info.config.params.sparse_vectors is not None
+    assert "sparse" in collection_info.config.params.sparse_vectors
+    logger.info("Vector configuration verified")
+
+    # Test single query search
+    logger.info("Testing single query search...")
+    distances, indices = index.search("Apple Company", k=3)
+    assert distances.shape == (3,)
+    assert indices.shape == (3,)
+    assert all(0 <= idx < len(corpus) for idx in indices)
+    # MaxSim scores are not normalized to 0-1 (can be > 1)
+    assert all(score >= 0 for score in distances)  # Scores should be non-negative
+    logger.info(f"Single query results: indices={indices}, distances={distances}")
+
+    # Test batch query search
+    logger.info("Testing batch query search...")
+    queries = ["Apple", "Microsoft"]
+    distances, indices = index.search(queries, k=2)
+    assert distances.shape == (2, 2)
+    assert indices.shape == (2, 2)
+    assert all(0 <= idx < len(corpus) for row in indices for idx in row)
+    logger.info(f"Batch query results: indices=\n{indices}\ndistances=\n{distances}")
+
+    # Test search_all (deduplication pattern)
+    logger.info("Testing search_all (deduplication)...")
+    distances, indices = index.search_all(k=3)
+    assert distances.shape == (5, 3)
+    assert indices.shape == (5, 3)
+    logger.info(f"Search all results shape: {indices.shape}")
+
+    # Sanity check: first neighbor should be itself (highest similarity)
+    for i in range(len(corpus)):
+        assert indices[i, 0] == i
+        # Self-similarity should be highest score (MaxSim is not normalized to 1.0)
+        # Just verify it's the maximum in that row
+        assert distances[i, 0] == max(distances[i, :])
+        logger.info(f"Item {i} self-similarity: {distances[i, 0]:.4f} (highest in row)")
+
+    # Sanity check: results should not be random
+    # For "Apple Company" query, first result should be "Apple Inc..." (index 0)
+    apple_query_distances, apple_query_indices = index.search("Apple Company", k=3)
+    assert apple_query_indices[0] == 0, (
+        f"Expected Apple Inc. (0) as first result, got {apple_query_indices[0]}"
+    )
+    logger.info("Sanity check passed: Apple query correctly ranks Apple Inc. first")
+
+    logger.info("All integration tests passed!")

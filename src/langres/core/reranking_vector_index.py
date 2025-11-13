@@ -11,7 +11,6 @@ all token pairs (MaxSim strategy).
 """
 
 import logging
-from typing import Any
 
 import numpy as np
 from qdrant_client import QdrantClient
@@ -169,7 +168,7 @@ class QdrantHybridRerankingIndex:
         reranking_embeddings = self.reranking_embedder.encode(texts)
 
         # 3. Build PointStruct list with all three vectors
-        points = []
+        points: list[PointStruct] = []
         for i, text in enumerate(texts):
             point = PointStruct(
                 id=i,
@@ -244,8 +243,8 @@ class QdrantHybridRerankingIndex:
         reranking_query_embeddings = self.reranking_embedder.encode(texts)
 
         # Batch search (one query_points call per query)
-        all_distances = []
-        all_indices = []
+        all_distances: list[np.ndarray] = []
+        all_indices: list[np.ndarray] = []
 
         for i in range(len(texts)):
             # Build prefetch for hybrid search (dense + sparse)
@@ -273,6 +272,7 @@ class QdrantHybridRerankingIndex:
                 collection_name=self.collection_name,
                 prefetch=prefetch,
                 query=reranking_query_embeddings[i],  # Multi-vector for MaxSim reranking
+                using="reranking",  # Specify which named vector to use for multi-vector query
                 limit=k,
             )
 
