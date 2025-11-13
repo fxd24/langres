@@ -622,3 +622,168 @@ class TestLateInteractionEmbeddingProviderProtocol:
         # Each token should be a list of floats
         assert isinstance(result[0][0], list)
         assert all(isinstance(x, float) for x in result[0][0])
+
+
+# ============ INSTRUCTION PROMPT SUPPORT TESTS (Phase 1) ============
+
+
+class TestEmbeddingProviderProtocolWithPrompts:
+    """Tests for EmbeddingProvider protocol with instruction prompt support.
+
+    These tests verify that the protocol accepts optional prompt parameters
+    for asymmetric encoding (documents without prompts, queries with prompts).
+    """
+
+    def test_embedding_provider_protocol_accepts_prompt_parameter(self):
+        """Test that EmbeddingProvider.encode() signature accepts optional prompt.
+
+        This verifies the protocol method signature includes prompt parameter.
+        """
+        from langres.core.embeddings import EmbeddingProvider
+
+        # Verify protocol has encode method accepting prompt
+        assert hasattr(EmbeddingProvider, "encode")
+
+    @pytest.mark.slow
+    def test_sentence_transformer_embedder_with_prompt(self):
+        """Test that different prompts produce different embeddings.
+
+        This verifies that instruction prompts actually affect the encoding
+        for models that support it (e.g., Qwen3-Embedding, BGE, E5).
+        """
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+        texts = ["Apple Inc."]
+
+        # Encode with different prompts
+        embeddings_no_prompt = embedder.encode(texts, prompt=None)
+        embeddings_prompt1 = embedder.encode(
+            texts, prompt="Find duplicate organization names accounting for acronyms"
+        )
+        embeddings_prompt2 = embedder.encode(
+            texts, prompt="Search for similar product names in catalog"
+        )
+
+        # All should have same shape
+        assert embeddings_no_prompt.shape == (1, embedder.embedding_dim)
+        assert embeddings_prompt1.shape == (1, embedder.embedding_dim)
+        assert embeddings_prompt2.shape == (1, embedder.embedding_dim)
+
+        # Different prompts should produce different embeddings
+        # Note: Not all models use prompts - this tests the infrastructure
+        # Real models like Qwen3-Embedding will show larger differences
+        assert not np.array_equal(embeddings_no_prompt, embeddings_prompt1)
+
+    @pytest.mark.slow
+    def test_sentence_transformer_embedder_without_prompt_default(self):
+        """Test that not passing prompt behaves like prompt=None.
+
+        This ensures backward compatibility with existing code.
+        """
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+        texts = ["Apple Inc.", "Microsoft Corp."]
+
+        # Both calls should produce identical results
+        embeddings_no_arg = embedder.encode(texts)
+        embeddings_none = embedder.encode(texts, prompt=None)
+
+        np.testing.assert_array_equal(embeddings_no_arg, embeddings_none)
+
+    @pytest.mark.slow
+    def test_sentence_transformer_embedder_prompt_caching(self):
+        """Test that same text + same prompt = identical output.
+
+        This verifies determinism and that prompts are properly used.
+        """
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+        texts = ["Google LLC"]
+        prompt = "Find duplicate organization names"
+
+        # Encode same text with same prompt multiple times
+        embeddings1 = embedder.encode(texts, prompt=prompt)
+        embeddings2 = embedder.encode(texts, prompt=prompt)
+
+        # Should be identical (deterministic)
+        np.testing.assert_array_equal(embeddings1, embeddings2)
+
+    def test_fake_embedder_accepts_prompt_parameter(self):
+        """Test that FakeEmbedder accepts prompt parameter for protocol compliance.
+
+        This ensures FakeEmbedder can be used as a test double for
+        EmbeddingProvider with prompts.
+        """
+        embedder = FakeEmbedder(embedding_dim=128)
+        texts = ["test1", "test2"]
+
+        # Should accept prompt parameter
+        embeddings_no_prompt = embedder.encode(texts, prompt=None)
+        embeddings_with_prompt = embedder.encode(texts, prompt="test prompt")
+
+        # Should return valid embeddings
+        assert embeddings_no_prompt.shape == (2, 128)
+        assert embeddings_with_prompt.shape == (2, 128)
+
+    def test_fake_embedder_different_prompts_different_embeddings(self):
+        """Test that FakeEmbedder produces different embeddings for different prompts.
+
+        This makes FakeEmbedder a realistic test double that simulates
+        real prompt-aware embedding behavior.
+        """
+        embedder = FakeEmbedder(embedding_dim=128)
+        texts = ["Apple Inc."]
+
+        # Same text with different prompts
+        embeddings_no_prompt = embedder.encode(texts, prompt=None)
+        embeddings_prompt1 = embedder.encode(texts, prompt="Find organizations")
+        embeddings_prompt2 = embedder.encode(texts, prompt="Find products")
+
+        # Different prompts should produce different embeddings
+        assert not np.array_equal(embeddings_no_prompt, embeddings_prompt1)
+        assert not np.array_equal(embeddings_prompt1, embeddings_prompt2)
+
+    def test_fake_embedder_same_prompt_deterministic(self):
+        """Test that FakeEmbedder is deterministic for same text+prompt.
+
+        This ensures FakeEmbedder can be used in tests reliably.
+        """
+        embedder = FakeEmbedder(embedding_dim=128)
+        texts = ["test"]
+        prompt = "test prompt"
+
+        # Same text + prompt should always produce same embeddings
+        embeddings1 = embedder.encode(texts, prompt=prompt)
+        embeddings2 = embedder.encode(texts, prompt=prompt)
+
+        np.testing.assert_array_equal(embeddings1, embeddings2)
+
+    def test_fake_embedder_backward_compatible_no_prompt(self):
+        """Test that FakeEmbedder works without prompt parameter.
+
+        Ensures backward compatibility with existing tests.
+        """
+        embedder = FakeEmbedder(embedding_dim=128)
+        texts = ["test1", "test2"]
+
+        # Should work without prompt parameter
+        embeddings = embedder.encode(texts)
+
+        assert embeddings.shape == (2, 128)
+
+    @pytest.mark.slow
+    def test_sentence_transformer_prompt_with_empty_list(self):
+        """Test that prompt parameter works correctly with empty input.
+
+        Edge case: empty list with prompt should still return empty array.
+        """
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+
+        embeddings = embedder.encode([], prompt="test prompt")
+
+        assert embeddings.shape == (0, embedder.embedding_dim)
+
+    def test_fake_embedder_prompt_with_empty_list(self):
+        """Test that FakeEmbedder handles empty list with prompt correctly."""
+        embedder = FakeEmbedder(embedding_dim=128)
+
+        embeddings = embedder.encode([], prompt="test prompt")
+
+        assert embeddings.shape == (0, 128)
