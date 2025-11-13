@@ -435,6 +435,160 @@ class TestFakeHybridVectorIndex:
             index.search_all(k=2)
 
 
+class TestQdrantHybridIndexInstructionPrompts:
+    """Tests for QdrantHybridIndex instruction prompt support (asymmetric encoding)."""
+
+    def test_qdrant_hybrid_documents_no_prompts(self):
+        """Test that create_index encodes documents without prompts."""
+        from unittest.mock import Mock
+
+        # Create tracking embedders
+        dense_call_log = []
+        sparse_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                sparse_call_log.append({"texts": texts, "prompt": prompt})
+                # Return sparse embeddings format
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        mock_client = MagicMock()
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            query_prompt="Find duplicates",
+        )
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Verify both embedders called with prompt=None (documents shouldn't have prompts)
+        assert len(dense_call_log) == 1
+        assert dense_call_log[0]["prompt"] is None
+
+        assert len(sparse_call_log) == 1
+        assert sparse_call_log[0]["prompt"] is None
+
+    def test_qdrant_hybrid_queries_dense_with_prompt_sparse_without(self):
+        """Test that search encodes queries with prompt for dense, without for sparse."""
+        from unittest.mock import Mock
+
+        # Create tracking embedders
+        dense_call_log = []
+        sparse_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                sparse_call_log.append({"texts": texts, "prompt": prompt})
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={})
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+
+        query_prompt = "Find duplicate organization names"
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            query_prompt=query_prompt,
+        )
+
+        # Create index (first calls)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Clear logs
+        dense_call_log.clear()
+        sparse_call_log.clear()
+
+        # Search (second calls - should use prompt for dense only)
+        index.search("Apple Company", k=2)
+
+        # Verify dense embedder got the prompt
+        assert len(dense_call_log) == 1
+        assert dense_call_log[0]["prompt"] == query_prompt
+
+        # Verify sparse embedder did NOT get prompt (BM25 doesn't use instructions)
+        assert len(sparse_call_log) == 1
+        assert sparse_call_log[0]["prompt"] is None
+
+    def test_qdrant_hybrid_search_all_delegates_with_prompt(self):
+        """Test that search_all delegates to search which applies prompt."""
+        from unittest.mock import Mock
+
+        # Create tracking dense embedder
+        dense_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=1.0, payload={}, vector={}),
+            ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+
+        query_prompt = "test instruction"
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            query_prompt=query_prompt,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(texts)
+
+        # Clear logs
+        dense_call_log.clear()
+
+        # search_all should call search() which applies prompt
+        index.search_all(k=2)
+
+        # Verify dense embedder was called for each corpus text with the prompt
+        assert len(dense_call_log) == 2  # Once per corpus item
+        for call in dense_call_log:
+            assert call["prompt"] == query_prompt
+
+
 class TestHybridVectorIndexProtocol:
     """Tests for VectorIndex protocol compliance."""
 
