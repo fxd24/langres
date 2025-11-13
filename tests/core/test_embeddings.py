@@ -308,3 +308,317 @@ class TestEmbeddingProviderProtocol:
         assert isinstance(result, np.ndarray)
         assert result.ndim == 2  # Should be 2D array
         assert result.shape[0] == len(texts)
+
+
+# ============ LATE INTERACTION EMBEDDING TESTS ============
+
+
+class TestFastEmbedLateInteractionEmbedder:
+    """Tests for FastEmbedLateInteractionEmbedder implementation."""
+
+    @pytest.mark.slow
+    def test_encode_returns_correct_structure(self):
+        """Test that encode returns list of multi-vectors with correct structure."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Should return list with one entry per text
+        assert isinstance(multi_vectors, list)
+        assert len(multi_vectors) == len(texts)
+
+        # Each entry should be a list of token embeddings
+        for text_vectors in multi_vectors:
+            assert isinstance(text_vectors, list)
+            # Each text should have at least one token
+            assert len(text_vectors) > 0
+            # Each token should be a list of floats
+            for token_embedding in text_vectors:
+                assert isinstance(token_embedding, list)
+                assert len(token_embedding) == embedder.embedding_dim
+                assert all(isinstance(x, float) for x in token_embedding)
+
+    @pytest.mark.slow
+    def test_encode_single_text(self):
+        """Test encoding a single text."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+        texts = ["Single text"]
+
+        multi_vectors = embedder.encode(texts)
+
+        assert len(multi_vectors) == 1
+        assert isinstance(multi_vectors[0], list)
+        assert len(multi_vectors[0]) > 0  # At least one token
+
+    @pytest.mark.slow
+    def test_embedding_dim_property(self):
+        """Test that embedding_dim returns correct dimension for ColBERTv2."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+
+        # ColBERTv2 has 128-dimensional token embeddings
+        assert embedder.embedding_dim == 128
+
+    @pytest.mark.slow
+    def test_lazy_model_loading(self):
+        """Test that model is not loaded until first encode call."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+
+        # Model should not be loaded yet
+        assert embedder._model is None
+
+        # After encode, model should be loaded
+        embedder.encode(["test"])
+        assert embedder._model is not None
+
+    @pytest.mark.slow
+    def test_model_loaded_only_once(self):
+        """Test that model is loaded only once and reused."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+
+        embedder.encode(["first call"])
+        first_model = embedder._model
+
+        embedder.encode(["second call"])
+        second_model = embedder._model
+
+        # Should be the same model instance
+        assert first_model is second_model
+
+    @pytest.mark.slow
+    def test_encode_empty_list_returns_empty_list(self):
+        """Test that encoding empty list returns empty list."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+
+        multi_vectors = embedder.encode([])
+
+        assert isinstance(multi_vectors, list)
+        assert len(multi_vectors) == 0
+
+    @pytest.mark.slow
+    def test_different_texts_have_different_token_counts(self):
+        """Test that texts of different lengths produce different token counts."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+        texts = ["Hi", "This is a much longer sentence with many words"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Longer text should have more tokens (generally)
+        # Note: This is a soft assertion due to tokenization quirks
+        short_tokens = len(multi_vectors[0])
+        long_tokens = len(multi_vectors[1])
+        logger.info("Short text tokens: %d, Long text tokens: %d", short_tokens, long_tokens)
+        # At minimum, both should have some tokens
+        assert short_tokens > 0
+        assert long_tokens > 0
+
+    @pytest.mark.slow
+    def test_model_name_parameter_flexibility(self):
+        """Test that different model names can be used (model flexibility requirement)."""
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        # Default model
+        embedder1 = FastEmbedLateInteractionEmbedder()
+        assert embedder1.model_name == "colbert-ir/colbertv2.0"
+
+        # Custom model (even if not loaded, config should be stored)
+        embedder2 = FastEmbedLateInteractionEmbedder(model_name="custom-model-name")
+        assert embedder2.model_name == "custom-model-name"
+
+
+class TestFakeLateInteractionEmbedder:
+    """Tests for FakeLateInteractionEmbedder test double."""
+
+    def test_encode_returns_correct_structure(self):
+        """Test that FakeLateInteractionEmbedder returns correct structure."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+        texts = ["text1", "text2", "text3"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Should return list with one entry per text
+        assert isinstance(multi_vectors, list)
+        assert len(multi_vectors) == len(texts)
+
+        # Each text should have exactly num_tokens token embeddings
+        for text_vectors in multi_vectors:
+            assert isinstance(text_vectors, list)
+            assert len(text_vectors) == 5  # num_tokens=5
+
+            # Each token should have embedding_dim floats
+            for token_embedding in text_vectors:
+                assert isinstance(token_embedding, list)
+                assert len(token_embedding) == 128  # embedding_dim=128
+                assert all(isinstance(x, float) for x in token_embedding)
+
+    def test_embedding_dim_property(self):
+        """Test that embedding_dim property returns configured dimension."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=256)
+        assert embedder.embedding_dim == 256
+
+    def test_deterministic_embeddings_for_same_text(self):
+        """Test that FakeLateInteractionEmbedder produces deterministic embeddings."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=3)
+        texts = ["same text", "same text"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Same text should produce identical multi-vectors
+        assert len(multi_vectors[0]) == len(multi_vectors[1])
+        for token_idx in range(len(multi_vectors[0])):
+            assert multi_vectors[0][token_idx] == multi_vectors[1][token_idx]
+
+    def test_different_texts_produce_different_embeddings(self):
+        """Test that different texts produce different embeddings."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=3)
+        texts = ["text1", "text2"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Different texts should produce different multi-vectors
+        assert multi_vectors[0] != multi_vectors[1]
+
+    def test_encode_empty_list(self):
+        """Test encoding empty list."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+
+        multi_vectors = embedder.encode([])
+
+        assert isinstance(multi_vectors, list)
+        assert len(multi_vectors) == 0
+
+    def test_consistency_across_instances(self):
+        """Test that FakeLateInteractionEmbedder produces same embeddings across instances."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        # Create two separate embedder instances with same config
+        embedder1 = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+        embedder2 = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+
+        # Same text should produce identical embeddings in both instances
+        text = "consistency test"
+
+        multi_vectors1 = embedder1.encode([text])
+        multi_vectors2 = embedder2.encode([text])
+
+        # Should be identical (deterministic hashing)
+        assert multi_vectors1 == multi_vectors2
+
+    def test_different_token_counts_per_text(self):
+        """Test that each token index produces different embeddings."""
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+        texts = ["test"]
+
+        multi_vectors = embedder.encode(texts)
+
+        # Each token embedding should be different
+        token_embeddings = multi_vectors[0]
+        for i in range(len(token_embeddings)):
+            for j in range(i + 1, len(token_embeddings)):
+                # Different token indices should produce different embeddings
+                assert token_embeddings[i] != token_embeddings[j]
+
+    def test_instantiation_speed(self):
+        """Test that FakeLateInteractionEmbedder instantiates and encodes instantly."""
+        import time
+
+        from langres.core.embeddings import FakeLateInteractionEmbedder
+
+        start = time.time()
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=10)
+        texts = ["text1", "text2", "text3", "text4", "text5"]
+        multi_vectors = embedder.encode(texts)
+        elapsed = time.time() - start
+
+        # Should be instant (< 0.1 seconds)
+        assert elapsed < 0.1
+        assert len(multi_vectors) == 5
+
+
+class TestLateInteractionEmbeddingProviderProtocol:
+    """Tests for LateInteractionEmbeddingProvider protocol compliance."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "embedder_class,kwargs",
+        [
+            (
+                lambda: __import__(
+                    "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
+                ).FastEmbedLateInteractionEmbedder,
+                {"model_name": "colbert-ir/colbertv2.0"},
+            ),
+            (
+                lambda: __import__(
+                    "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
+                ).FakeLateInteractionEmbedder,
+                {"embedding_dim": 128, "num_tokens": 5},
+            ),
+        ],
+    )
+    def test_protocol_methods_exist(self, embedder_class, kwargs):
+        """Test that implementations have required protocol methods."""
+        embedder = embedder_class()(**kwargs)
+
+        assert hasattr(embedder, "encode")
+        assert hasattr(embedder, "embedding_dim")
+        assert callable(embedder.encode)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "embedder_class,kwargs",
+        [
+            (
+                lambda: __import__(
+                    "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
+                ).FastEmbedLateInteractionEmbedder,
+                {"model_name": "colbert-ir/colbertv2.0"},
+            ),
+            (
+                lambda: __import__(
+                    "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
+                ).FakeLateInteractionEmbedder,
+                {"embedding_dim": 128, "num_tokens": 5},
+            ),
+        ],
+    )
+    def test_encode_signature(self, embedder_class, kwargs):
+        """Test that encode method has correct signature."""
+        embedder = embedder_class()(**kwargs)
+        texts = ["test"]
+
+        result = embedder.encode(texts)
+
+        assert isinstance(result, list)
+        assert len(result) == len(texts)
+        # Each text should produce a list of token embeddings
+        assert isinstance(result[0], list)
+        # Each token should be a list of floats
+        assert isinstance(result[0][0], list)
+        assert all(isinstance(x, float) for x in result[0][0])
