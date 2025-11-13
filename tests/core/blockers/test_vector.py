@@ -80,6 +80,11 @@ def test_vector_blocker_generates_candidates_from_small_dataset():
     ]
 
     blocker = create_fake_blocker(k_neighbors=2)
+
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
+
     candidates = list(blocker.stream(data))
 
     # Should generate candidates for each entity with its k nearest neighbors
@@ -108,6 +113,10 @@ def test_vector_blocker_finds_similar_entities():
 
     blocker = create_fake_blocker(k_neighbors=1)
 
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
+
     candidates = list(blocker.stream(data))
 
     # c1's nearest neighbor should be c2 (similar name)
@@ -132,6 +141,10 @@ def test_vector_blocker_no_duplicate_pairs():
 
     blocker = create_fake_blocker(k_neighbors=2)
 
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
+
     candidates = list(blocker.stream(data))
 
     # Convert to a set of frozensets to check for duplicates
@@ -151,6 +164,10 @@ def test_vector_blocker_handles_single_entity():
 
     blocker = create_fake_blocker(k_neighbors=5)
 
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
+
     candidates = list(blocker.stream(data))
 
     # With only one entity, no pairs can be formed
@@ -163,6 +180,10 @@ def test_vector_blocker_handles_empty_dataset():
     data: list[dict] = []
 
     blocker = create_fake_blocker(k_neighbors=5)
+
+    # Build index explicitly (empty)
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
 
     candidates = list(blocker.stream(data))
 
@@ -181,6 +202,10 @@ def test_vector_blocker_with_missing_fields():
     ]
 
     blocker = create_fake_blocker(k_neighbors=2)
+
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
 
     candidates = list(blocker.stream(data))
 
@@ -226,6 +251,10 @@ def test_vector_blocker_achieves_high_recall():
     }
 
     blocker = create_fake_blocker(k_neighbors=3)
+
+    # Build index explicitly
+    texts = [d["name"] for d in data]
+    blocker.vector_index.create_index(texts)
 
     candidates = list(blocker.stream(data))
     generated_pairs = {frozenset([c.left.id, c.right.id]) for c in candidates}
