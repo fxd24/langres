@@ -583,10 +583,10 @@ class TestQdrantHybridIndexInstructionPrompts:
         # search_all should call search() which applies prompt
         index.search_all(k=2)
 
-        # Verify dense embedder was called for each corpus text with the prompt
-        assert len(dense_call_log) == 2  # Once per corpus item
-        for call in dense_call_log:
-            assert call["prompt"] == query_prompt
+        # Verify dense embedder was called once with batch of corpus texts and prompt
+        assert len(dense_call_log) == 1  # Single batch call
+        assert dense_call_log[0]["texts"] == texts  # All corpus texts
+        assert dense_call_log[0]["prompt"] == query_prompt  # With prompt
 
 
 class TestHybridVectorIndexProtocol:

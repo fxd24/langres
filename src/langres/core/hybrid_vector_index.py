@@ -84,6 +84,7 @@ class QdrantHybridIndex:
         sparse_embedder: SparseEmbeddingProvider,
         fusion: Literal["RRF", "DBSF"] = "RRF",
         prefetch_limit: int = 20,
+        query_prompt: str | None = None,
     ):
         """Initialize QdrantHybridIndex.
 
@@ -96,6 +97,9 @@ class QdrantHybridIndex:
                 Default: "RRF" (Reciprocal Rank Fusion).
             prefetch_limit: Number of results to fetch per vector type before fusion.
                 Default: 20 (20 from dense + 20 from sparse → fused to top-k).
+            query_prompt: Optional instruction prompt for query encoding (asymmetric encoding).
+                Applied only to dense embedder for queries. Documents and sparse embeddings
+                never use prompts. Default: None.
 
         Note:
             The Qdrant client must be configured externally (URL, API key, etc.).
@@ -107,6 +111,7 @@ class QdrantHybridIndex:
         self.sparse_embedder = sparse_embedder
         self.fusion = fusion
         self.prefetch_limit = prefetch_limit
+        self.query_prompt = query_prompt
 
         # State (populated by create_index)
         self._corpus_texts: list[str] | None = None
@@ -219,7 +224,9 @@ class QdrantHybridIndex:
             texts = query_texts  # type: ignore[assignment]
 
         # Encode queries with both embedders
-        dense_query_embeddings = self.dense_embedder.encode(texts)
+        # Dense: apply query_prompt for asymmetric encoding
+        dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+        # Sparse: never use prompts (BM25 doesn't support instructions)
         sparse_query_embeddings = self.sparse_embedder.encode(texts)
 
         # Batch search (one query_points call per query)
