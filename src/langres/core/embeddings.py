@@ -128,6 +128,64 @@ class SparseEmbeddingProvider(Protocol):
         ...  # pragma: no cover
 
 
+class LateInteractionEmbeddingProvider(Protocol):
+    """Protocol for late-interaction embeddings (ColBERT, ColPali, etc.).
+
+    Generates multi-vectors (one per token) for contextualized matching.
+    Compatible with Qdrant's MultiVectorConfig + MaxSim comparator.
+
+    Late-interaction models encode each token separately, enabling more nuanced
+    similarity computation compared to single-vector dense embeddings. The final
+    similarity score is computed by taking the maximum similarity between all
+    token pairs (MaxSim strategy).
+
+    Example:
+        embedder = FastEmbedLateInteractionEmbedder(model_name="colbert-ir/colbertv2.0")
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        multi_vectors = embedder.encode(texts)
+        # Returns: List of [num_tokens, embedding_dim] arrays, one per text
+
+    Note:
+        ColBERT models typically produce 128-dimensional token embeddings.
+        The number of tokens varies per text based on tokenization.
+    """
+
+    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+        """Encode texts into multi-vectors.
+
+        Args:
+            texts: List of texts to encode. Can be empty.
+
+        Returns:
+            List of multi-vectors, one per text.
+            Shape: (num_texts,) with variable-length token dimension.
+            Each text becomes [num_tokens, embedding_dim] array.
+            Returns empty list for empty input.
+
+        Example:
+            multi_vectors = embedder.encode(["Hello", "World"])
+            # Returns:
+            # [
+            #   [[0.1, 0.2, ...], [0.3, 0.4, ...]],  # "Hello": 2 tokens x 128 dim
+            #   [[0.5, 0.6, ...], [0.7, 0.8, ...]]   # "World": 2 tokens x 128 dim
+            # ]
+        """
+        ...  # pragma: no cover
+
+    @property
+    def embedding_dim(self) -> int:
+        """Dimensionality of each token embedding (e.g., 128 for ColBERTv2).
+
+        Returns:
+            The number of dimensions in each token embedding vector.
+
+        Note:
+            This is the dimension of individual token embeddings, not the
+            total number of tokens (which varies per text).
+        """
+        ...  # pragma: no cover
+
+
 class SentenceTransformerEmbedder:
     """Embedding provider using sentence-transformers library.
 
@@ -443,3 +501,217 @@ class FakeSparseEmbedder:
 
         logger.debug("Generated %d fake sparse vectors", len(result))
         return result
+
+
+# ============ LATE INTERACTION EMBEDDING IMPLEMENTATIONS ============
+
+
+class FastEmbedLateInteractionEmbedder:
+    """Late-interaction embedding provider using FastEmbed library.
+
+    Wraps FastEmbed's LateInteractionTextEmbedding for ColBERT-style multi-vector
+    encoding. Each text is encoded into multiple token-level embeddings, enabling
+    more nuanced similarity matching via MaxSim strategy.
+
+    The model is lazy-loaded (only when first encode() is called) to avoid
+    expensive loading during object construction.
+
+    Recommended models:
+    - "colbert-ir/colbertv2.0": Standard ColBERTv2 (128-dim token embeddings)
+
+    Example:
+        embedder = FastEmbedLateInteractionEmbedder("colbert-ir/colbertv2.0")
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        multi_vectors = embedder.encode(texts)
+        # Returns: List of [num_tokens, 128] arrays, one per text
+
+    Note:
+        FastEmbed uses ONNX runtime for efficient CPU inference.
+        Token count varies per text based on tokenization.
+    """
+
+    def __init__(self, model_name: str = "colbert-ir/colbertv2.0"):
+        """Initialize FastEmbed late-interaction embedder.
+
+        Args:
+            model_name: FastEmbed late-interaction model name.
+                Default: "colbert-ir/colbertv2.0" (ColBERTv2 standard)
+                The model_name parameter enables flexibility to use any
+                FastEmbed-compatible late-interaction model.
+
+        Note:
+            The model is NOT loaded during __init__. It will be loaded
+            lazily on the first call to encode() or embedding_dim.
+        """
+        self.model_name = model_name
+        self._model: Any = None  # Lazy-loaded on first encode
+
+    def _get_model(self) -> Any:
+        """Get or load the FastEmbed late-interaction model.
+
+        Returns:
+            Loaded LateInteractionTextEmbedding model instance.
+
+        Note:
+            This method implements lazy loading. The model is cached
+            after the first call for reuse.
+        """
+        if self._model is None:
+            from fastembed import LateInteractionTextEmbedding
+
+            logger.info("Loading FastEmbed late-interaction model: %s", self.model_name)
+            self._model = LateInteractionTextEmbedding(self.model_name)
+        return self._model
+
+    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+        """Encode texts into multi-vectors using FastEmbed.
+
+        Args:
+            texts: List of texts to encode. Can be empty.
+
+        Returns:
+            List of multi-vectors, one per text.
+            Each text becomes [num_tokens, embedding_dim] array.
+            Returns empty list for empty input.
+
+        Note:
+            This method triggers model loading on first call if not
+            already loaded.
+        """
+        if len(texts) == 0:
+            return []
+
+        model = self._get_model()
+
+        # FastEmbed returns generator of numpy arrays
+        # Shape: (num_tokens, embedding_dim) per text
+        embeddings_generator = model.embed(texts)
+
+        # Convert generator to list and numpy arrays to nested lists
+        result = []
+        for embedding in embeddings_generator:
+            # embedding is numpy array of shape (num_tokens, embedding_dim)
+            # Convert to list[list[float]]
+            result.append(embedding.tolist())
+
+        logger.debug(
+            "Generated %d multi-vectors with dimensions %s",
+            len(result),
+            [len(mv) for mv in result],
+        )
+        return result
+
+    @property
+    def embedding_dim(self) -> int:
+        """Get the token embedding dimension of the model.
+
+        Returns:
+            The number of dimensions in each token embedding.
+            ColBERTv2 returns 128.
+
+        Note:
+            This property triggers model loading if not already loaded,
+            as we need the model to determine its dimension.
+        """
+        model = self._get_model()
+        # FastEmbed's LateInteractionTextEmbedding exposes embedding_size property
+        dim: int = model.embedding_size
+        return dim
+
+
+class FakeLateInteractionEmbedder:
+    """Test double for LateInteractionEmbeddingProvider.
+
+    Produces deterministic fake multi-vectors for testing without expensive
+    model loading. Each text generates a fixed number of token embeddings,
+    all deterministic based on text hash + token index.
+
+    This is crucial for testing VectorBlocker logic with late-interaction
+    embeddings without 100MB+ model downloads and multi-second startup times.
+
+    Example:
+        embedder = FakeLateInteractionEmbedder(embedding_dim=128, num_tokens=5)
+        multi_vectors = embedder.encode(["text1", "text2"])
+        # Returns deterministic [5 tokens x 128 dim] per text, instantly
+
+    Note:
+        The fake embeddings are based on a hash of (text + token_index),
+        ensuring deterministic but pseudo-random vectors.
+    """
+
+    def __init__(self, embedding_dim: int = 128, num_tokens: int = 5):
+        """Initialize FakeLateInteractionEmbedder.
+
+        Args:
+            embedding_dim: Dimensionality of each token embedding.
+                Default: 128 (matches ColBERTv2).
+            num_tokens: Number of token embeddings per text.
+                Default: 5 (simple for testing).
+
+        Note:
+            Unlike real late-interaction models where token count varies
+            per text, this fake uses fixed num_tokens for simplicity and
+            determinism in tests.
+        """
+        self._embedding_dim = embedding_dim
+        self.num_tokens = num_tokens
+
+    def encode(self, texts: list[str]) -> list[list[list[float]]]:
+        """Generate fake deterministic multi-vectors from texts.
+
+        Args:
+            texts: List of texts to encode.
+
+        Returns:
+            List of multi-vectors, one per text.
+            Each text produces exactly num_tokens token embeddings,
+            each with embedding_dim dimensions.
+
+        Note:
+            Same text always produces the same multi-vectors.
+            Different texts produce different multi-vectors.
+            Different token indices within same text produce different embeddings.
+        """
+        if len(texts) == 0:
+            return []
+
+        result = []
+        for text in texts:
+            # Generate num_tokens token embeddings for this text
+            text_tokens = []
+            for token_idx in range(self.num_tokens):
+                # Create deterministic embedding from text + token_idx hash
+                # Use SHA256 to get stable, uniformly distributed values
+                token_key = f"{text}__token{token_idx}"
+                token_hash = hashlib.sha256(token_key.encode("utf-8")).digest()
+
+                # Convert hash bytes to integers, then to floats
+                hash_int = int.from_bytes(token_hash[:8], byteorder="big")
+                rng = np.random.default_rng(seed=hash_int)
+
+                # Generate random values in [-1, 1]
+                token_embedding = rng.uniform(-1.0, 1.0, size=self._embedding_dim).astype(
+                    np.float32
+                )
+
+                # Convert numpy array to list
+                text_tokens.append(token_embedding.tolist())
+
+            result.append(text_tokens)
+
+        logger.debug(
+            "Generated %d fake multi-vectors (%d tokens x %d dim each)",
+            len(result),
+            self.num_tokens,
+            self._embedding_dim,
+        )
+        return result
+
+    @property
+    def embedding_dim(self) -> int:
+        """Get the configured token embedding dimension.
+
+        Returns:
+            The dimensionality of each token embedding produced by this faker.
+        """
+        return self._embedding_dim
