@@ -1,0 +1,2954 @@
+{
+  "groups": [
+    {
+      "canonical_name": "Bundesamt für Sozialversicherungen (BSV) / Office fédéral des assurances sociales (OFAS)",
+      "variant_ids": [
+        178,
+        179,
+        180,
+        181,
+        187,
+        188,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        571,
+        952,
+        1095,
+        1096,
+        1099,
+        1100,
+        1101,
+        1102,
+        1103,
+        1526,
+        1527
+      ],
+      "variant_names": [
+        "BSV",
+        "BSV (Betre4ge BSV)",
+        "BSV (Bundesamt für Sozialversicherungen)",
+        "BSV / OFAS (Bundesamt für Sozialversicherungen / Office fédéral des assurances sociales)",
+        "Bund",
+        "Bund (Bundesamt für Sozialversicherungen)",
+        "Bundesamt für Sozialversicherung",
+        "Bundesamt für Sozialversicherung (BSV)",
+        "Bundesamt für Sozialversicherung BSV",
+        "Bundesamt für Sozialversicherungen",
+        "Bundesamt für Sozialversicherungen (BSV)",
+        "Bundesamt für Sozialversicherungen BSV",
+        "Bundesamt für Sozialversicherungen-BSV",
+        "Bundesamt für Sozialversicherungen (BSV) - Beitrag Öffentlichkeits- und Medienarbeit (VAF Nr. 2216)",
+        "Bundesamt für Sozialversicherungen (BSV / OFAS)",
+        "Bundesamt für Sozialversicherungen (BSV) / OFAS",
+        "Bundesamt für Sozialversicherungen (BSV) / Office fédéral des assurances sociales (OFAS)",
+        "Bundesamt für Sozialversicherungen (BSV) - vertragliche Entschädigung (VAF)",
+        "Fonds BSV",
+        "L'OFFICE FÉDÉRAL DES ASSURANCES SOCIALES",
+        "OFAS",
+        "OFAS (ART. 8, AL.1, LIT. A LEEJ)",
+        "Office Fédéral des Assurances Sociales",
+        "OFFICE FÉDÉRAL DES ASSURANCES SOCIALES",
+        "Office fédéral des assurances sociales (OFAS)",
+        "Office Fédéral des Assurances Sociales (OFAS)",
+        "Office Fédéral des Assurances Sociales OFAS",
+        "Sussidio federale UFAS - formazione",
+        "Sussidio federale UFAS - servizi"
+      ]
+    },
+    {
+      "canonical_name": "Eidgenössisches Büro für die Gleichstellung von Menschen mit Behinderungen (EBGB) / Bureau fédéral de l'égalité pour les personnes handicapées (BFEH) / Ufficio federale per le pari opportunità delle persone con disabilità (UFPD)",
+      "variant_ids": [
+        203,
+        388,
+        401,
+        402,
+        403,
+        404,
+        405,
+        406,
+        407,
+        1600,
+        1601,
+        1605
+      ],
+      "variant_names": [
+        "Bureau fédéral de l'égalité pour les personnes handicapées (BFEH)",
+        "EBGB",
+        "Eidg. Büro für die Gleichstellung von Menschen mit Behinderungen (EBGB)",
+        "Eidg. Büro für die Gleichstellung von Menschen mit Behinderungen EBGB",
+        "Eidg. Büro für die Menschen mit Behinderungen EBOB",
+        "Eidgenössisches Büro für die Gleichstellung von Menschen mit Behinderungen",
+        "Eidgenössisches Büro für die Gleichstellung von Menschen mit Behinderungen (EBGB)",
+        "Eidgenössisches Büro für die Gleichstellung von Menschen mit Behinderungen EBGB",
+        "Eidgenössisches Büro für Gleichstellung von Menschen mit Behinderung (EBGB)",
+        "Ufficio federale delle pari opportunità delle persone con disabilità (UFPD)",
+        "Ufficio federale per le pari opportunità delle persone con disabilità UFPD",
+        "UFPD Ufficio federale per le pari opportunità delle persone con disabilità"
+      ]
+    },
+    {
+      "canonical_name": "Bundesamt für Sport (BASPO)",
+      "variant_ids": [
+        116,
+        117,
+        202,
+        459
+      ],
+      "variant_names": [
+        "BASPO",
+        "baspo.admin.ch",
+        "Bundesamt für Sport (BASPO)",
+        "Federal Office of Sport (FOSPO)"
+      ]
+    },
+    {
+      "canonical_name": "Aargau (Kanton) / Canton of Aargau",
+      "variant_ids": [
+        4,
+        5,
+        215
+      ],
+      "variant_names": [
+        "Aargau",
+        "Aargau (Kanton)",
+        "Canton of Aargau"
+      ]
+    },
+    {
+      "canonical_name": "Appenzell Innerrhoden (Kanton)",
+      "variant_ids": [
+        73,
+        74
+      ],
+      "variant_names": [
+        "Appenzell Innerrhoden",
+        "Appenzell Innerrhoden (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Basel-Stadt (Kanton) / Canton of Basel-Stadt",
+      "variant_ids": [
+        113,
+        114,
+        216
+      ],
+      "variant_names": [
+        "Basel-Stadt",
+        "Basel-Stadt (Kanton)",
+        "Canton of Basel-Stadt"
+      ]
+    },
+    {
+      "canonical_name": "Kanton Bern / Canton of Bern",
+      "variant_ids": [
+        217,
+        828
+      ],
+      "variant_names": [
+        "Canton of Bern (Lottery Fund)",
+        "Kanton Bern"
+      ]
+    },
+    {
+      "canonical_name": "Canton de Genève / Kanton Genf / Canton of Geneva",
+      "variant_ids": [
+        218,
+        834
+      ],
+      "variant_names": [
+        "Canton of Geneva",
+        "Kanton Genf - Fonds de l'aide au sport"
+      ]
+    },
+    {
+      "canonical_name": "Glarus (Kanton) / Kanton Glarus",
+      "variant_ids": [
+        688,
+        689,
+        835
+      ],
+      "variant_names": [
+        "Glarus",
+        "Glarus (Kanton)",
+        "Kanton Glarus"
+      ]
+    },
+    {
+      "canonical_name": "Kanton Graubünden / Canton of Grison",
+      "variant_ids": [
+        219,
+        836
+      ],
+      "variant_names": [
+        "Canton of Grison",
+        "Kanton Graubünden"
+      ]
+    },
+    {
+      "canonical_name": "Nidwalden (Kanton) / Kanton Nidwalden",
+      "variant_ids": [
+        837,
+        1085,
+        1086
+      ],
+      "variant_names": [
+        "Kanton Nidwalden",
+        "Nidwalden",
+        "Nidwalden (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Schaffhausen (Kanton) / Kanton Schaffhausen",
+      "variant_ids": [
+        838,
+        1328,
+        1329
+      ],
+      "variant_names": [
+        "Kanton Schaffhausen",
+        "Schaffhausen",
+        "Schaffhausen (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Schwyz (Kanton) / Canton de Schwyz / Kanton Schwyz",
+      "variant_ids": [
+        210,
+        839,
+        1370
+      ],
+      "variant_names": [
+        "Canton de Schwyz",
+        "Kanton Schwyz",
+        "Schwyz"
+      ]
+    },
+    {
+      "canonical_name": "St. Gallen (Kanton) / Kanton St.Gallen",
+      "variant_ids": [
+        841,
+        1445,
+        1446
+      ],
+      "variant_names": [
+        "Kanton St.Gallen",
+        "St. Gallen",
+        "St. Gallen (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Tessin (Kanton) / Kanton Tessin / Cantone Ticino",
+      "variant_ids": [
+        213,
+        214,
+        842,
+        1565,
+        1566
+      ],
+      "variant_names": [
+        "Cantone",
+        "Cantone Ticino",
+        "Kanton Tessin",
+        "Tessin",
+        "Tessin (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Thurgau (Kanton) / Kanton Thurgau",
+      "variant_ids": [
+        843,
+        1582,
+        1583
+      ],
+      "variant_names": [
+        "Kanton Thurgau",
+        "Thurgau",
+        "Thurgau (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Uri (Kanton) / Canton d'Uri / Kanton Uri",
+      "variant_ids": [
+        211,
+        844,
+        1627,
+        1628
+      ],
+      "variant_names": [
+        "Canton d'Uri",
+        "Kanton Uri",
+        "Uri",
+        "Uri (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Canton du Valais",
+      "variant_ids": [
+        212
+      ],
+      "variant_names": [
+        "Canton du Valais"
+      ]
+    },
+    {
+      "canonical_name": "Zürich (Kanton) / Kanton Zürich / City of Zurich",
+      "variant_ids": [
+        257,
+        845,
+        1733,
+        1734
+      ],
+      "variant_names": [
+        "City of Zurich",
+        "Kanton Zürich",
+        "Zürich",
+        "Zürich (Kanton)"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung «Denk an mich» / Fondation «Denk an mich»",
+      "variant_ids": [
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        347,
+        348,
+        349,
+        492,
+        1458,
+        1459,
+        1460,
+        1461,
+        1462,
+        1463
+      ],
+      "variant_names": [
+        "Aktion \"Denk an mich\" (Bildungsferien 50 plus)",
+        "Aktion \"Denk an mich\" (EUDY Youth-Camp)",
+        "Aktion \"Denk an mich\" (Fortbildung GebärdensprachlehrerInnen)",
+        "Aktion \"Denk an mich\" (Fortbildung GEMÖA)",
+        "Aktion \"Denk an mich\" (Fortbildung JugendleiterInnen)",
+        "Aktion \"Denk an mich\" (Frauentag)",
+        "Aktion \"Denk an mich\" (Intensivkurs für Hörgeschädigte)",
+        "Aktion \"Denk an mich\" (Kinderlager)",
+        "Denk an mich",
+        "Denk an Mich",
+        "Denk an mich, Zürich",
+        "Fondation «Denk an mich»",
+        "Stiftung «Denk an mich»",
+        "Stiftung Denk an mich",
+        "Stiftung Denk an Mich",
+        "Stiftung DENK AN MICH",
+        "Stiftung «Denk an mich», Zürich",
+        "Stiftung Denk an mich, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Ernst Göhner Stiftung",
+      "variant_ids": [
+        420,
+        421,
+        422
+      ],
+      "variant_names": [
+        "Ernst Göhner Stiftung",
+        "Ernst Göhner Stiftung, Zug",
+        "Ernst Göhrer Foundation"
+      ]
+    },
+    {
+      "canonical_name": "Carl und Elise Elsener-Gut Stiftung / Carl and Elise Elsener-Gut Foundation",
+      "variant_ids": [
+        221,
+        222,
+        223,
+        224,
+        225,
+        227,
+        228,
+        331,
+        1454
+      ],
+      "variant_names": [
+        "Carl and Elise Elsener-Gut Foundation",
+        "Carl and Elise Elsener-Gut Foundation c/o Victorinox AG",
+        "Carl & Elise Elsener",
+        "Carl & Elise Elsener, Schwarz",
+        "Carl \\& Elise Elsener, Schwyz",
+        "Carl und Elise Elsener-Gut Stiftung",
+        "Carl und Elise Elsener-Gut Stiftung, Ibach",
+        "c/o Victorinox AG",
+        "Stiftung Carl und Elise Elsener"
+      ]
+    },
+    {
+      "canonical_name": "Bärbel und Paul Geissbühler Stiftung",
+      "variant_ids": [
+        109,
+        110,
+        111
+      ],
+      "variant_names": [
+        "Bärbel and Paul Geissbühler Stiftung",
+        "Bärbel & Paul Geissbühler Stiftung",
+        "Bärbel und Paul Geissbühler Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Béatrice Ederer-Weber Stiftung",
+      "variant_ids": [
+        123,
+        124,
+        569
+      ],
+      "variant_names": [
+        "Béatrice Ederer-Weber Stiftung",
+        "Béatrice Ederer-Weber Stiftung, Zürich",
+        "Fonds Béatrice Ederer Weber Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Benecare Foundation",
+      "variant_ids": [
+        141,
+        142
+      ],
+      "variant_names": [
+        "Benecare Foundation",
+        "BENECARE Foundation, Vaduz"
+      ]
+    },
+    {
+      "canonical_name": "René & Rosel Champion-Harsch Stiftung",
+      "variant_ids": [
+        1248,
+        1249,
+        1250,
+        1251
+      ],
+      "variant_names": [
+        "René Champion-Harsch, Reinach BL",
+        "Rene & Rosel Champion-Harsch Stiftung",
+        "René & Rosel Champion-Harsch Stiftung",
+        "Rene & Rosel Champion-Harsch Stiftung, Basel"
+      ]
+    },
+    {
+      "canonical_name": "David Bruderer Stiftung",
+      "variant_ids": [
+        342,
+        343,
+        344
+      ],
+      "variant_names": [
+        "David Bruderer Stiftung",
+        "David Bruderer Stiftung, Littikon",
+        "David Bruderer Stiftung, Uitikon"
+      ]
+    },
+    {
+      "canonical_name": "Dr. Jean Stieger-Stiftung",
+      "variant_ids": [
+        376,
+        377,
+        378,
+        379
+      ],
+      "variant_names": [
+        "Dr. Jean Steiger-Stiftung",
+        "Dr Jean Stieger-Stiftung",
+        "Dr. Jean Stieger-Stiftung",
+        "Dr. Jean Stieger-Stiftung, Vaduz"
+      ]
+    },
+    {
+      "canonical_name": "Dr. Stephan à Porta-Stiftung",
+      "variant_ids": [
+        71,
+        385,
+        386
+      ],
+      "variant_names": [
+        "à Porta Stiftung",
+        "Dr. Stephan à Porta-Stiftung",
+        "Dr. Stephan à Porta-Stiftung, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Fragile Suisse",
+      "variant_ids": [
+        589,
+        590,
+        591
+      ],
+      "variant_names": [
+        "Fragile Suisse",
+        "FRAGILE Suisse",
+        "Fragile Suisse, Schweizerische Vereinigung für hirnverletzte Menschen, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Georges und Jenny Bloch-Stiftung",
+      "variant_ids": [
+        660,
+        661,
+        662
+      ],
+      "variant_names": [
+        "Georges und Jenny Bloch-Stiftung",
+        "Georges und Jenny Bloch-Stiftung, Kilchberg",
+        "Georges und Jenny Bloch-Stiftung, Klichberg"
+      ]
+    },
+    {
+      "canonical_name": "Geschwister Albert und Ida Beer Stiftung, Zürich",
+      "variant_ids": [
+        33,
+        672,
+        673,
+        674,
+        675
+      ],
+      "variant_names": [
+        "Albert und Ida Beer Stiftung, Zürich",
+        "Geschwister Albert & Ida Beer",
+        "Geschwister Albert \\& Ida Beer",
+        "Geschwister Albert u. Ida Beer Stiftung, Zürich",
+        "Geschwister Albert und Ida Beer Stiftung, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Graber-Brack-Stiftung",
+      "variant_ids": [
+        698,
+        699
+      ],
+      "variant_names": [
+        "Graber-Brack-Stiftung",
+        "Graber-Brack-Stiftung, Aarau"
+      ]
+    },
+    {
+      "canonical_name": "Helfer und Schlüter Stiftung",
+      "variant_ids": [
+        739,
+        740,
+        741
+      ],
+      "variant_names": [
+        "Helfer und Schlüter Stiftung",
+        "Helfer und Schlüter-Stiftung",
+        "Helfer und Schlüter Stiftung, Bern"
+      ]
+    },
+    {
+      "canonical_name": "Hirschmann-Stiftung",
+      "variant_ids": [
+        749,
+        750
+      ],
+      "variant_names": [
+        "Hirschmann Stiftung",
+        "Hirschmann-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Kriegstrauma-Therapie Foundation",
+      "variant_ids": [
+        900,
+        901
+      ],
+      "variant_names": [
+        "Kriegstrauma Therapie Foundation",
+        "Kriegstrauma-Therapie Foundation"
+      ]
+    },
+    {
+      "canonical_name": "Laureus Sport for Good Foundation / Laureus Stiftung Schweiz",
+      "variant_ids": [
+        920,
+        921
+      ],
+      "variant_names": [
+        "Laureus Sport for Good Foundation",
+        "Laureus Stiftung Schweiz"
+      ]
+    },
+    {
+      "canonical_name": "MBF Foundation",
+      "variant_ids": [
+        1024,
+        1025
+      ],
+      "variant_names": [
+        "MBF Foundation",
+        "MBF Foundation, Triesen"
+      ]
+    },
+    {
+      "canonical_name": "Max Bircher Stiftung",
+      "variant_ids": [
+        1018,
+        1019
+      ],
+      "variant_names": [
+        "Max Bircher Stiftung",
+        "Max Bircher Stiftung, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Paul Hess Stiftung",
+      "variant_ids": [
+        1127,
+        1128
+      ],
+      "variant_names": [
+        "Paul Hess Stiftung",
+        "Paul Hess Stiftung, Bern"
+      ]
+    },
+    {
+      "canonical_name": "Ritschard-Welker-Stiftung, Unterseen",
+      "variant_ids": [
+        1259,
+        1260,
+        1261
+      ],
+      "variant_names": [
+        "Ritschard Welker Stiftung",
+        "Ritschard-Welker Stiftung, Unterseen",
+        "Ritschard-Welker-Stiftung, Unterseen"
+      ]
+    },
+    {
+      "canonical_name": "Schweizerische Stiftung für das cerebral gelähmte Kind",
+      "variant_ids": [
+        1361,
+        1363,
+        1364
+      ],
+      "variant_names": [
+        "Schweizerische Stiftung für das cerebral gelähmte Kind",
+        "Schweiz. Stiftung für das cerebral gelähmte Kind",
+        "Schweiz. Stiftung für das cerebral gelähmte Kind, Bern"
+      ]
+    },
+    {
+      "canonical_name": "Sophie und Karl Binding Stiftung / Sophie and Karl Binding Foundation",
+      "variant_ids": [
+        1408,
+        1409
+      ],
+      "variant_names": [
+        "Sophie and Karl Binding Foundation",
+        "Sophie und Karl Binding Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung Cerebral",
+      "variant_ids": [
+        555,
+        1455
+      ],
+      "variant_names": [
+        "Fondation suisse en faveur de l'enfant infirme moteur cérébral",
+        "Stiftung Cerebral"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung Clara und Walter Burkhardt-Gloor",
+      "variant_ids": [
+        1456,
+        1457
+      ],
+      "variant_names": [
+        "Stiftung Clara und Walter Burkhardt-Gloor",
+        "Stiftung Clara u. Walter Burkhardt-Gloor"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung Hans und Lilly Knecht-Wethli",
+      "variant_ids": [
+        1476,
+        1477,
+        1478
+      ],
+      "variant_names": [
+        "Stiftung Hans und Lilly Knecht-Wethli",
+        "Stiftung Hans und Lilly Knecht-Wethli, Küh ZH",
+        "Stiftung Hans und Lilly Knecht-Wethli, Rüti ZH"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung Herbert und Helene von Moos",
+      "variant_ids": [
+        1481,
+        1482,
+        1483
+      ],
+      "variant_names": [
+        "Stiftung Herbert und Helene von Moos",
+        "Stiftung Herbert und Helene von Moos, Luzern",
+        "Stiftung Herbert und Helene von Moos-Neumann"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung Lebensraum Aargau",
+      "variant_ids": [
+        1486,
+        1487
+      ],
+      "variant_names": [
+        "Stiftung Lebensraum Aargau",
+        "Stiftung LEBENSRAUM AARGAU"
+      ]
+    },
+    {
+      "canonical_name": "Stiftung «Perspektiven»",
+      "variant_ids": [
+        1495,
+        1496,
+        1497
+      ],
+      "variant_names": [
+        "Stiftung «Perspektiven»",
+        "Stiftung »Perspektiven«",
+        "Stiftung «Perspektiven» von Swiss Life"
+      ]
+    },
+    {
+      "canonical_name": "The SOL Foundation / SOL-Stiftung",
+      "variant_ids": [
+        1401,
+        1403,
+        1504,
+        1574,
+        1575
+      ],
+      "variant_names": [
+        "SOL FOUNDATION",
+        "SOL-Stiftung",
+        "STIFTUNG SOL FOUNDATION",
+        "The SOL Foundation",
+        "THE SOL FOUNDATION"
+      ]
+    },
+    {
+      "canonical_name": "Uniscientia Stiftung",
+      "variant_ids": [
+        1615,
+        1616,
+        1617
+      ],
+      "variant_names": [
+        "Uniscentia Stiftung, 11–Voduz",
+        "Uniscientia Stiftung",
+        "Uniscientia Stiftung, Vaduz"
+      ]
+    },
+    {
+      "canonical_name": "Verena Boller Stiftung",
+      "variant_ids": [
+        1510,
+        1661,
+        1662,
+        1663
+      ],
+      "variant_names": [
+        "Stiftung Verena Boler",
+        "Verena Boiler-Stiftung",
+        "Verena Boller Stiftung",
+        "Verena Boller Stiftung, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Walter, Ruedi und Emma Brändli-Stiftung",
+      "variant_ids": [
+        1689,
+        1690
+      ],
+      "variant_names": [
+        "Walter, Ruedi & Emma Brändli-Stiftung",
+        "Walter, Ruedi und Emma Brändli-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Zürcher Stiftung für das Hören",
+      "variant_ids": [
+        1718,
+        1729,
+        1730,
+        1731,
+        1732
+      ],
+      "variant_names": [
+        "Zfcrcher Stiftung f. das Hf6ren",
+        "Zürcher Stiftung f. das Hören",
+        "Zürcher Stiftung für das Hören",
+        "Zürcher Stiftung für das Hören, Künacht ZH",
+        "Zürcher Stiftung für das Hören, Küsnacht ZH"
+      ]
+    },
+    {
+      "canonical_name": "Adele Koller-Knüsli Stiftung",
+      "variant_ids": [
+        9,
+        10,
+        11,
+        12
+      ],
+      "variant_names": [
+        "Adele Koller-Knücli Stiftung",
+        "Adele Koller-Knüsli Stiftung",
+        "Adele Koller-Knüśli Stiftung",
+        "Adèle-Koller-Knüsli-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Adent Cliniques Dentaires SA",
+      "variant_ids": [
+        13,
+        14
+      ],
+      "variant_names": [
+        "Adent Cliniques dentaires",
+        "Adent Cliniques Dentaires SA"
+      ]
+    },
+    {
+      "canonical_name": "Alfa Klebstoffe AG",
+      "variant_ids": [
+        36,
+        37
+      ],
+      "variant_names": [
+        "Alfa Klebstoffe AG",
+        "ALFA Klebstoffe AG"
+      ]
+    },
+    {
+      "canonical_name": "Alfred und Getrud Bernays-Richard Stiftung",
+      "variant_ids": [
+        39,
+        40,
+        41
+      ],
+      "variant_names": [
+        "Alfred und Getrud Bernays",
+        "Alfred und Getrud Bernays-",
+        "Alfred und Getrud Bernays-Richard Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Anandic Medical Systems AG",
+      "variant_ids": [
+        55,
+        56
+      ],
+      "variant_names": [
+        "Anandic Medical Systems AG",
+        "Anandic Medical Systems AG, Feuerthalen"
+      ]
+    },
+    {
+      "canonical_name": "Annina Schenk",
+      "variant_ids": [
+        60,
+        66,
+        67
+      ],
+      "variant_names": [
+        "Anina Schenk, Interlaken",
+        "Annina Schenk",
+        "Annina Schenk, Interlaken"
+      ]
+    },
+    {
+      "canonical_name": "August Weidmann Fürsorge-Stiftung",
+      "variant_ids": [
+        87,
+        88
+      ],
+      "variant_names": [
+        "August Weidmann Fürsorge-Stiftung",
+        "August Weidmann Fürsorge-Stiftung, Thalwil"
+      ]
+    },
+    {
+      "canonical_name": "Bangerter-Rhyner Stiftung / Gottfried und Julia Bangerter-Rhyner-Stiftung",
+      "variant_ids": [
+        101,
+        695,
+        696
+      ],
+      "variant_names": [
+        "Bangerter-Rhyner Stiftung",
+        "Gottfried und Julia Bangerter-Rhyner Stiftung",
+        "Gottfried und Julia Bangerter-Rhyner-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "BerGIBike 2023",
+      "variant_ids": [
+        145,
+        146,
+        147
+      ],
+      "variant_names": [
+        "BerGIBike 2023",
+        "BerGIBike (BergIBike 2023)",
+        "BerGIBike (organizers of BerGIBike 2023)"
+      ]
+    },
+    {
+      "canonical_name": "Bernhard Heger",
+      "variant_ids": [
+        148,
+        149
+      ],
+      "variant_names": [
+        "Bernhard Heger",
+        "Bernhard Heger, Fahrwangen"
+      ]
+    },
+    {
+      "canonical_name": "BRACK.CH",
+      "variant_ids": [
+        167,
+        168
+      ],
+      "variant_names": [
+        "brack.ch",
+        "BRACK.CH"
+      ]
+    },
+    {
+      "canonical_name": "Anita Brüelhart / Anita Brülhart",
+      "variant_ids": [
+        61,
+        174,
+        175
+      ],
+      "variant_names": [
+        "Anita Brüelhart",
+        "Brüelhart Anita, Oberschrot",
+        "Brülhart Anita"
+      ]
+    },
+    {
+      "canonical_name": "BPW SWITZERLAND",
+      "variant_ids": [
+        165,
+        166
+      ],
+      "variant_names": [
+        "BPW Lake Geneva",
+        "BPW SWITZERLAND"
+      ]
+    },
+    {
+      "canonical_name": "Caduff Marcel + Marianne, Märwil",
+      "variant_ids": [
+        206,
+        207
+      ],
+      "variant_names": [
+        "Caduff Marcel + Marianne, Märwil",
+        "Caduff Marcel+Marianne, Märwil"
+      ]
+    },
+    {
+      "canonical_name": "Chocolats Camille Bloch SA",
+      "variant_ids": [
+        238,
+        239
+      ],
+      "variant_names": [
+        "Chocolate Camille Bloch SA",
+        "Chocolats Camille Bloch SA"
+      ]
+    },
+    {
+      "canonical_name": "Chris Haag",
+      "variant_ids": [
+        242,
+        243
+      ],
+      "variant_names": [
+        "Chris Haag",
+        "Chris Haag, Liobefeld"
+      ]
+    },
+    {
+      "canonical_name": "Christian Bachschuster Stiftung / Christian Bachschuster Foundation",
+      "variant_ids": [
+        245,
+        246
+      ],
+      "variant_names": [
+        "Christian Bachschuster Foundation",
+        "Christian Bachschuster Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "citizenM Hotels",
+      "variant_ids": [
+        253,
+        254,
+        255
+      ],
+      "variant_names": [
+        "citizenM",
+        "citizenM Hotels",
+        "citizenMovement"
+      ]
+    },
+    {
+      "canonical_name": "Claire Sturzenegger-Jean Favre Stiftung",
+      "variant_ids": [
+        258,
+        259,
+        260
+      ],
+      "variant_names": [
+        "Claire Sturzenegger-Jean favre Stiftung",
+        "Claire Sturzenegger-Jeanfavre Stiftung",
+        "Claire Sturzenegger-Jean Favre Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Cochlear AG",
+      "variant_ids": [
+        265,
+        266
+      ],
+      "variant_names": [
+        "Cochlear",
+        "Cochlear AG"
+      ]
+    },
+    {
+      "canonical_name": "Commune de Collonge-Bellerive",
+      "variant_ids": [
+        281,
+        282
+      ],
+      "variant_names": [
+        "Commune de Collonge Bellerive",
+        "Commune de Collonge-Bellerive"
+      ]
+    },
+    {
+      "canonical_name": "Commune de Cuarnens",
+      "variant_ids": [
+        285
+      ],
+      "variant_names": [
+        "COMMUNE DE CUARNENS"
+      ]
+    },
+    {
+      "canonical_name": "Commune de Vandœuvres",
+      "variant_ids": [
+        301,
+        302
+      ],
+      "variant_names": [
+        "Commune de Vandoeuvres",
+        "Commune de Vandœuvres"
+      ]
+    },
+    {
+      "canonical_name": "Commune de Vayrier / Commune de Veyrier",
+      "variant_ids": [
+        303,
+        306
+      ],
+      "variant_names": [
+        "Commune de Vayrier",
+        "Commune de Veyrier"
+      ]
+    },
+    {
+      "canonical_name": "Coop Genossenschaft",
+      "variant_ids": [
+        321,
+        322,
+        323,
+        324
+      ],
+      "variant_names": [
+        "Coop",
+        "COOP",
+        "Coop Genossenschaft",
+        "Coop Genosssenschaft, Bern"
+      ]
+    },
+    {
+      "canonical_name": "Cornaz Michel",
+      "variant_ids": [
+        327,
+        328
+      ],
+      "variant_names": [
+        "Cornaz Michael",
+        "Cornaz Michel"
+      ]
+    },
+    {
+      "canonical_name": "Covid-19 Stabilisierungspaket Sport",
+      "variant_ids": [
+        332,
+        333
+      ],
+      "variant_names": [
+        "Covid-19 Gelder Stabilisierungspaket",
+        "Covid-19 Stabilisierungspaket Sport"
+      ]
+    },
+    {
+      "canonical_name": "Dixi Services SA",
+      "variant_ids": [
+        356,
+        357
+      ],
+      "variant_names": [
+        "Dixi Services",
+        "Dixi Services SA"
+      ]
+    },
+    {
+      "canonical_name": "Dominique Guenat-Jobin",
+      "variant_ids": [
+        358,
+        359,
+        360,
+        361
+      ],
+      "variant_names": [
+        "Dominique Guelat",
+        "Dominique Guenat-Jobin",
+        "Dominique Guenot-Jabin",
+        "Dominique Guenot, Jabin, Les Bois"
+      ]
+    },
+    {
+      "canonical_name": "Ecole Moser",
+      "variant_ids": [
+        390,
+        391
+      ],
+      "variant_names": [
+        "Ecole Moser",
+        "Ecole Moses"
+      ]
+    },
+    {
+      "canonical_name": "EPFL Tech4Dev",
+      "variant_ids": [
+        415,
+        416,
+        1559
+      ],
+      "variant_names": [
+        "EPFL Tech4Dev",
+        "EPFL Tech4Dev grant",
+        "Tech4Dev"
+      ]
+    },
+    {
+      "canonical_name": "European Union of the Deaf (EUD) / Unione Europea dei Sordi - EUD",
+      "variant_ids": [
+        426,
+        427,
+        1610
+      ],
+      "variant_names": [
+        "European Union of the Deaf - EUD",
+        "European Union of the Deaf – EUD",
+        "Unione Europea dei Sordi - EUD"
+      ]
+    },
+    {
+      "canonical_name": "Evang. Kirchgemeinde Buchs SG",
+      "variant_ids": [
+        433,
+        434
+      ],
+      "variant_names": [
+        "Evang. Kirchgemeinde, Buchs",
+        "Evang. Kirchgemeinde Buchs SG"
+      ]
+    },
+    {
+      "canonical_name": "Evangelisch-reformierte Kirchgemeinde Wädenswil / Ev. ref. Kirche Wädenswil",
+      "variant_ids": [
+        432,
+        444
+      ],
+      "variant_names": [
+        "Evangelisch-reformierte Kirchgemeinde Wädenswil",
+        "Ev. ref. Kirche We4denswil"
+      ]
+    },
+    {
+      "canonical_name": "Ev. ref. Kirchgemeinde Neuhausen / Ex. ref. Kirchgemeinde Neuhausen",
+      "variant_ids": [
+        446,
+        452
+      ],
+      "variant_names": [
+        "Ev. ref. Kirchgemeinde Neuhausen",
+        "Ex. ref. Kirchgemeinde Neuhausen"
+      ]
+    },
+    {
+      "canonical_name": "Farmwood SA",
+      "variant_ids": [
+        457,
+        458
+      ],
+      "variant_names": [
+        "Farmwood SA",
+        "FARMWOOD SA"
+      ]
+    },
+    {
+      "canonical_name": "Fédération Internationale de Football Association (FIFA)",
+      "variant_ids": [
+        460
+      ],
+      "variant_names": [
+        "Fédération Internationale de Football Association (FIFA)"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Docteur Alfred Fischer / Fondation Dr Alfred Fischer",
+      "variant_ids": [
+        493,
+        494
+      ],
+      "variant_names": [
+        "Fondation Docteur Alfred Fischer",
+        "Fondation Dr Alfred Fischer"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Eugénie Baur-Duret",
+      "variant_ids": [
+        501,
+        502
+      ],
+      "variant_names": [
+        "Fondation Eugenie Baur-Duret",
+        "Fondation Eugénie Baur-Duret"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Francis et Marie-France Minkoff",
+      "variant_ids": [
+        504,
+        505
+      ],
+      "variant_names": [
+        "Fondation Francis et Marie-France Minkoff",
+        "Fondation Francis et Marie Minkoff"
+      ]
+    },
+    {
+      "canonical_name": "Fondation genevoise qui souhaite garder l'anonymat",
+      "variant_ids": [
+        509,
+        510
+      ],
+      "variant_names": [
+        "Fondation genevoise qui souhaite garder l'anonymat",
+        "Fondation genevoise qui souhaite garder l'anonymat."
+      ]
+    },
+    {
+      "canonical_name": "Fondation Konstanze Märki-Boehringer",
+      "variant_ids": [
+        522,
+        523
+      ],
+      "variant_names": [
+        "Fondation Konstanze Mârki-Boehringer",
+        "Fondation Konstanze Märki-Boehringer"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Lord Michelham of Hellingly",
+      "variant_ids": [
+        525,
+        526
+      ],
+      "variant_names": [
+        "Fondation Lord Michelham of Hellingly",
+        "Fondation Lord Michelham of HetSingly"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Philanthropique Famille Sandoz",
+      "variant_ids": [
+        455,
+        491,
+        538,
+        539,
+        540,
+        541,
+        554,
+        1318
+      ],
+      "variant_names": [
+        "Famille Sandoz",
+        "Fondation de Famille Sandoz",
+        "Fondation Philanthropique Famille Firmenich",
+        "Fondation Philanthropique Famille Sandoz",
+        "Fondation Philantropique Famille",
+        "Fondation Philantropique Famille Sandoz",
+        "Fondation Sandoz",
+        "Sandoz"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Pierre Demaurex",
+      "variant_ids": [
+        542,
+        543,
+        585
+      ],
+      "variant_names": [
+        "Fondation Pierre Demaurex & Aligro Chavannes",
+        "Fondation Pierre Demaurex, St. Sulpice VD",
+        "Fondtion Pierre Demaurex, St-Sulpice VD"
+      ]
+    },
+    {
+      "canonical_name": "Fondation Pierre et Andrée Haas / Fondation de Bienfaisance Pierre et Andrée Haas",
+      "variant_ids": [
+        490,
+        544
+      ],
+      "variant_names": [
+        "Fondation de Bienfaisance Pierre et Andrée Haas",
+        "Fondation Pierre et Andrée Haas"
+      ]
+    },
+    {
+      "canonical_name": "Fondation «Plain Vent» Emilie, Marthe et Charlotte E. Rüphi",
+      "variant_ids": [
+        547,
+        548
+      ],
+      "variant_names": [
+        "Fondation \"Plain Vent\" Emilie, Marthe et Charlotte E. Rüphi",
+        "Fondation «Plain Vent» Emilie, Marthe et Charlotte E. Rüphi"
+      ]
+    },
+    {
+      "canonical_name": "Fonds projet Visites Fantastiques Fribourg",
+      "variant_ids": [
+        577,
+        578,
+        579
+      ],
+      "variant_names": [
+        "Fonds Projekt Fantastische Stadtführungen Freiburg",
+        "Fonds projet Visites Fantastiques",
+        "Fonds projet Visites Fantastiques Fribourg"
+      ]
+    },
+    {
+      "canonical_name": "Freude herrscht Foundation / Stiftung Freude herrscht",
+      "variant_ids": [
+        611,
+        1469
+      ],
+      "variant_names": [
+        "Freude herrscht Foundation",
+        "Stiftung Freude herrscht"
+      ]
+    },
+    {
+      "canonical_name": "Freunde Para-Skisport St.Moritz",
+      "variant_ids": [
+        612,
+        613
+      ],
+      "variant_names": [
+        "Freunde Para-Skisport St. Moritz",
+        "Freunde Para-Skisport St.Moritz"
+      ]
+    },
+    {
+      "canonical_name": "Frey-Ryf Barbara",
+      "variant_ids": [
+        105,
+        615,
+        616
+      ],
+      "variant_names": [
+        "Barbara Frey-Ryf",
+        "Frey-Ryf Barbara",
+        "Frey-Ryf Barbara, Golaten"
+      ]
+    },
+    {
+      "canonical_name": "Frey-Ryf Walter",
+      "variant_ids": [
+        617,
+        618,
+        1687
+      ],
+      "variant_names": [
+        "Frey-Ryf Walter",
+        "Frey-Ryf Walter, Golaten",
+        "Walter Frey-Ryf"
+      ]
+    },
+    {
+      "canonical_name": "Gabrijela Mamuzic",
+      "variant_ids": [
+        634,
+        635
+      ],
+      "variant_names": [
+        "Gabrijela Mamuzic",
+        "Gabrijela Mamuzic, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "GAMA-Soft KLG",
+      "variant_ids": [
+        637,
+        638
+      ],
+      "variant_names": [
+        "GAMA-Soft",
+        "GAMA-Soft KLG"
+      ]
+    },
+    {
+      "canonical_name": "Gehrig R.M.",
+      "variant_ids": [
+        643,
+        644
+      ],
+      "variant_names": [
+        "Gehrig R.M.",
+        "Gehrig R.M., Bern"
+      ]
+    },
+    {
+      "canonical_name": "Gemeinnütziger Fonds Zürich / Gemeinnütziger Fonds des Kanton Zürich",
+      "variant_ids": [
+        651,
+        652
+      ],
+      "variant_names": [
+        "Gemeinnütziger Fonds des Kanton Zürich",
+        "Gemeinnütziger Fonds Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Gemeinnützige Stiftung Accentus / Stiftung Accentus",
+      "variant_ids": [
+        654,
+        655,
+        1448,
+        1449
+      ],
+      "variant_names": [
+        "Gemeinnützige Stiftung Accentus",
+        "Gemeinnützige Stiftung ACCENTUS",
+        "Stiftung Accentus",
+        "Stiftung ACCENTUS"
+      ]
+    },
+    {
+      "canonical_name": "Georg Wagner Stiftung",
+      "variant_ids": [
+        665,
+        666
+      ],
+      "variant_names": [
+        "Georg Wagner Stiftung",
+        "Georg Wagner Stiftung, Oberwil"
+      ]
+    },
+    {
+      "canonical_name": "Gesundheitsförderung Schweiz",
+      "variant_ids": [
+        676,
+        677
+      ],
+      "variant_names": [
+        "Gesundheitsförderung Schweiz",
+        "Gesundheitsförderung Schweiz (WGD)"
+      ]
+    },
+    {
+      "canonical_name": "Giant Group / Giant Bicycles",
+      "variant_ids": [
+        679,
+        680
+      ],
+      "variant_names": [
+        "Giant Bicycles",
+        "Giant Group"
+      ]
+    },
+    {
+      "canonical_name": "Giron des Jeunesses de la Broye",
+      "variant_ids": [
+        683,
+        684
+      ],
+      "variant_names": [
+        "Giron des jeunesses de la Broye",
+        "Giron des Jeunesses de la Broye"
+      ]
+    },
+    {
+      "canonical_name": "Gisela Kougionis",
+      "variant_ids": [
+        685,
+        686
+      ],
+      "variant_names": [
+        "Gisela Kaugionis",
+        "Gisela Kougionis, Jena"
+      ]
+    },
+    {
+      "canonical_name": "Graf Gut / Gret Gut",
+      "variant_ids": [
+        700,
+        701,
+        704,
+        705
+      ],
+      "variant_names": [
+        "Graf Gut",
+        "Graf Gut, Longendorf",
+        "Gret Gut",
+        "Gret Gut, Langendorf"
+      ]
+    },
+    {
+      "canonical_name": "Groupe E SA",
+      "variant_ids": [
+        708,
+        709
+      ],
+      "variant_names": [
+        "Groupe E Celsius",
+        "Groupe E SA"
+      ]
+    },
+    {
+      "canonical_name": "Groupe Mutuel",
+      "variant_ids": [
+        710,
+        711,
+        1473
+      ],
+      "variant_names": [
+        "groupemutuel",
+        "GROUPE MUTUEL",
+        "Stiftung Groupe Mutuel"
+      ]
+    },
+    {
+      "canonical_name": "Günther Caspar-Stiftung",
+      "variant_ids": [
+        712,
+        713
+      ],
+      "variant_names": [
+        "Günther Caspar Stiftung",
+        "Günther Caspar-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Hans Vollmöller Stiftung",
+      "variant_ids": [
+        729,
+        730
+      ],
+      "variant_names": [
+        "Hans Vollmöller Stiftung, Zürich",
+        "Hans Vollmüller Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Heinz Schöffler-Stiftung",
+      "variant_ids": [
+        736,
+        737
+      ],
+      "variant_names": [
+        "Heinz Schöffler",
+        "Heinz Schöffler-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Hodel Monika und Johann",
+      "variant_ids": [
+        753,
+        754
+      ],
+      "variant_names": [
+        "Hodel Monika",
+        "Hodel Monika und Johann"
+      ]
+    },
+    {
+      "canonical_name": "IWC Schaffhausen",
+      "variant_ids": [
+        792,
+        793
+      ],
+      "variant_names": [
+        "IWC Schaffhausen",
+        "IWC SCHAFFHAUSEN"
+      ]
+    },
+    {
+      "canonical_name": "IPF Construction SA / JPF Construction SA",
+      "variant_ids": [
+        784,
+        811
+      ],
+      "variant_names": [
+        "IPF Construction SA",
+        "JPF Construction SA"
+      ]
+    },
+    {
+      "canonical_name": "Invalidenversicherung (IV) / Assicurazione invalidità (AI)",
+      "variant_ids": [
+        82,
+        783,
+        788,
+        789,
+        790,
+        1603,
+        1604
+      ],
+      "variant_names": [
+        "Assicurazione invalidità (AI)",
+        "Invalidenversicherung (IV)",
+        "IV Beiträge",
+        "IV-Beiträge",
+        "IV (Invalidenversicherung)",
+        "Ufficio invalidi",
+        "Ufficio invalidi del Canton Ticino"
+      ]
+    },
+    {
+      "canonical_name": "Jürg Walter-Meier-Stiftung",
+      "variant_ids": [
+        822,
+        823,
+        824
+      ],
+      "variant_names": [
+        "Jürg Walter Meier-Stiftung",
+        "Jürg Walter-Meier-Stiftung",
+        "Jürg Walter-Weier-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Keller-Allenspach Erich + Zita, Wil",
+      "variant_ids": [
+        866,
+        867
+      ],
+      "variant_names": [
+        "Keller-Allenspach Erich + Zita, Wil",
+        "Keller-Allenspach Erich+Zita, Wil"
+      ]
+    },
+    {
+      "canonical_name": "Kommission für Entwicklungshilfe und Missionen (KEM), römisch-katholische Gesamtkirchgemeinde Bern - Seeland",
+      "variant_ids": [
+        889,
+        890
+      ],
+      "variant_names": [
+        "Kommission für Entwicklungshilfe und Missionen (KEMI), römisch-katholische Gesamtkirchgemeinde Bern – Seeland",
+        "Kommission für Entwicklungshilfe und Missionen (KEM), römisch-katholische Gesamtkirchgemeinde Bern - Seeland"
+      ]
+    },
+    {
+      "canonical_name": "Kramer Franziska",
+      "variant_ids": [
+        598,
+        895,
+        896
+      ],
+      "variant_names": [
+        "Franziska Kramer",
+        "Kramer Franziska",
+        "Kramer Franziska, Mörigen"
+      ]
+    },
+    {
+      "canonical_name": "Kramer Marc",
+      "variant_ids": [
+        897,
+        898,
+        983
+      ],
+      "variant_names": [
+        "Kramer Marc",
+        "Kramer Marc, Mörigen",
+        "Marc Kramer"
+      ]
+    },
+    {
+      "canonical_name": "Legate (Bequests)",
+      "variant_ids": [
+        927,
+        928
+      ],
+      "variant_names": [
+        "Legate",
+        "Legate (Bequests)"
+      ]
+    },
+    {
+      "canonical_name": "Lerch Peter",
+      "variant_ids": [
+        931,
+        932,
+        1145
+      ],
+      "variant_names": [
+        "Lerch Peter",
+        "Lerch Peter, Busswil",
+        "Peter Lerch"
+      ]
+    },
+    {
+      "canonical_name": "Lions Club Morges Sport",
+      "variant_ids": [
+        926,
+        943,
+        944,
+        945
+      ],
+      "variant_names": [
+        "LC Morges Sport",
+        "Lions Club Marges Sport",
+        "Lion's Club Morges Sport",
+        "Lions Club Morges Sport"
+      ]
+    },
+    {
+      "canonical_name": "Linus Oertli",
+      "variant_ids": [
+        936,
+        937
+      ],
+      "variant_names": [
+        "Linus Oertli",
+        "Linus Oertli, Luzern"
+      ]
+    },
+    {
+      "canonical_name": "Loterie Romande",
+      "variant_ids": [
+        576,
+        911,
+        956,
+        957,
+        958,
+        959,
+        960,
+        964,
+        965
+      ],
+      "variant_names": [
+        "Fonds Loterie Romande",
+        "La Lotterie romande",
+        "Loterie Romande",
+        "Loterie Romande - CPOR",
+        "Loterie Romande délégation valaisanne",
+        "Loterie Romande Organe fribourgeois",
+        "Loterie Romande - VD",
+        "Lotterie Romande",
+        "Lotterie Romande Délégation valaisanne"
+      ]
+    },
+    {
+      "canonical_name": "Madeleine und Albert Erlanger-Wyler-Stiftung / M. und A. Erlanger-Wyler-Stiftung",
+      "variant_ids": [
+        973,
+        1068
+      ],
+      "variant_names": [
+        "Madeleine und Albert Erlanger-Wyler-Stiftung",
+        "M. und A. Erlanger-Wyler-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Mammut",
+      "variant_ids": [
+        978,
+        979
+      ],
+      "variant_names": [
+        "Mammut",
+        "MAMMUT SWISS1862"
+      ]
+    },
+    {
+      "canonical_name": "Manuela Hany",
+      "variant_ids": [
+        980,
+        981
+      ],
+      "variant_names": [
+        "Manuela Hany",
+        "Manuela Hany, Winterthur"
+      ]
+    },
+    {
+      "canonical_name": "Margareth Ursula Ladurner-Stiftung",
+      "variant_ids": [
+        985,
+        986
+      ],
+      "variant_names": [
+        "Margareth Ursula Ladurner Stiftung",
+        "Margareth Ursula Ladurner-Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Marianne Haenssler",
+      "variant_ids": [
+        715,
+        996
+      ],
+      "variant_names": [
+        "Haenssler Marianne, Biel",
+        "Marianne Haenssler"
+      ]
+    },
+    {
+      "canonical_name": "Maria Seitz-Köppel / Mario Seitz-Köppel",
+      "variant_ids": [
+        997,
+        998,
+        1007,
+        1008,
+        1009
+      ],
+      "variant_names": [
+        "Maria Seitz-Köppel",
+        "Maria Seitz-Köppel, Engelburg",
+        "Mario Korle, Zeehäusern, Bern",
+        "Mario Seitz-Köppel",
+        "Mario Seitz-Köppel, Engelburg"
+      ]
+    },
+    {
+      "canonical_name": "Marie-Christine Wackernagel-Burckhardt",
+      "variant_ids": [
+        1000,
+        1001,
+        1002,
+        1006
+      ],
+      "variant_names": [
+        "Marie-Christine Wackernagel-Burckhardt",
+        "Marie-Christine Wackernagel-Burckhardt, Basel",
+        "Marie-Christine Waskerengel-Burckhardt",
+        "Mario-Christine Wackernagel-Burchhardt, Basel"
+      ]
+    },
+    {
+      "canonical_name": "Marinitz AG (typos)",
+      "variant_ids": [
+        1003,
+        1004,
+        1005,
+        1011
+      ],
+      "variant_names": [
+        "Marinitri AG",
+        "Marinitti AG",
+        "Marinitz AG",
+        "Marmitri AG"
+      ]
+    },
+    {
+      "canonical_name": "Martin Liechty-Witschi",
+      "variant_ids": [
+        1013,
+        1014
+      ],
+      "variant_names": [
+        "Martin Liechty-Witsch",
+        "Martin Liechty-Witschi, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "MED-EL Schweiz GmbH",
+      "variant_ids": [
+        1027,
+        1028,
+        1029
+      ],
+      "variant_names": [
+        "Med-EL",
+        "MED-EL Schweiz GmbH",
+        "MEDEL Schweiz GmbH"
+      ]
+    },
+    {
+      "canonical_name": "Mental Help Club",
+      "variant_ids": [
+        1034,
+        1035
+      ],
+      "variant_names": [
+        "mental help club",
+        "Mental Help Club"
+      ]
+    },
+    {
+      "canonical_name": "Michael Hunziker (\"Brätzeli Mike\")",
+      "variant_ids": [
+        1040,
+        1041
+      ],
+      "variant_names": [
+        "Michael «Brätzeli-Mike» Hunziker",
+        "Michael Hunziker (\"Brätzeli Mike\")"
+      ]
+    },
+    {
+      "canonical_name": "Migros Kulturprozent Genossenschaft Migros Aare",
+      "variant_ids": [
+        1048,
+        1049,
+        1050
+      ],
+      "variant_names": [
+        "Migros Kulturprozent Genossenschaft Aare",
+        "Migros Kulturprozent Genossenschaft Migros Aare",
+        "Migros-Kulturprozent Genossenschaft Migros Aare"
+      ]
+    },
+    {
+      "canonical_name": "Minimum bouldering gym",
+      "variant_ids": [
+        1052,
+        1053
+      ],
+      "variant_names": [
+        "Minimum",
+        "Minimum bouldering gym"
+      ]
+    },
+    {
+      "canonical_name": "MSS Holding AG",
+      "variant_ids": [
+        1063,
+        1064
+      ],
+      "variant_names": [
+        "MSS Holding AG",
+        "MSS HOLDING AG"
+      ]
+    },
+    {
+      "canonical_name": "Müller-Hanselmann Anna Marie, St.Gallen",
+      "variant_ids": [
+        1066,
+        1067
+      ],
+      "variant_names": [
+        "Müller-Hanselmann Anna Marie, St. Gallen",
+        "Müller-Hanselmann Anna Marie, St.Gallen"
+      ]
+    },
+    {
+      "canonical_name": "Naef Immobilier SA",
+      "variant_ids": [
+        1073,
+        1074
+      ],
+      "variant_names": [
+        "Naef Immobilier SA",
+        "Naef Immobilier Vevey SA"
+      ]
+    },
+    {
+      "canonical_name": "Nahestehende Vereine (aggregiert)",
+      "variant_ids": [
+        1076,
+        1077
+      ],
+      "variant_names": [
+        "Nahestehende Vereine",
+        "Nahestehende Vereine (aggregiert, als Einnahmeposition)"
+      ]
+    },
+    {
+      "canonical_name": "Norwegian Olympic and Paralympic Committee and Confederation of Sports (NIF)",
+      "variant_ids": [
+        309,
+        1089,
+        1090
+      ],
+      "variant_names": [
+        "Confederation of Sports (NIF)",
+        "Norwegian Olympic and Paralympic Committee",
+        "Norwegian Olympic and Paralympic Committee and Confederation of Sports (NIF)"
+      ]
+    },
+    {
+      "canonical_name": "Pastoralraum Hürntal",
+      "variant_ids": [
+        1125,
+        1126
+      ],
+      "variant_names": [
+        "Pastoralraum Huerntal Dagmersellen",
+        "Pastoralraum Hürntal"
+      ]
+    },
+    {
+      "canonical_name": "Pedal to Empower",
+      "variant_ids": [
+        1130,
+        1131,
+        1553
+      ],
+      "variant_names": [
+        "Pedal to Empower",
+        "Pedal to Empower participants",
+        "Sydney Coluzi team (Pedal to Empower)"
+      ]
+    },
+    {
+      "canonical_name": "peka-metall AG / Peka Metall AG",
+      "variant_ids": [
+        1133,
+        1134
+      ],
+      "variant_names": [
+        "peka-metall AG",
+        "Peka Metall AG"
+      ]
+    },
+    {
+      "canonical_name": "Peter & Eveline Imhof",
+      "variant_ids": [
+        442,
+        1132,
+        1139,
+        1140,
+        1142
+      ],
+      "variant_names": [
+        "Eveline und Peter Imhof",
+        "P. & E. Imhof",
+        "Peter & Eveline Imhof",
+        "Peter & Eveline Imhof, Myrigen",
+        "Peter Imhof, Wynigen"
+      ]
+    },
+    {
+      "canonical_name": "Peter & Monique Regenass-Bucher",
+      "variant_ids": [
+        1146,
+        1147,
+        1148,
+        1149
+      ],
+      "variant_names": [
+        "Peter & Monique Regenass Bucher",
+        "Peter & Monique Regenass-Bucher",
+        "Peter & Monique Regenoss Bucher",
+        "Peter und Monique Regenass-Bucher, Langenthal"
+      ]
+    },
+    {
+      "canonical_name": "Praxis für Ergotherapie Jacqueline Bürki",
+      "variant_ids": [
+        1166,
+        1167,
+        1168
+      ],
+      "variant_names": [
+        "Praxis für Ergotherapie Bürki",
+        "Praxis für Ergotherapie Bürki, Bern",
+        "Praxis für Ergotherapie Jacqueline Bürki"
+      ]
+    },
+    {
+      "canonical_name": "Prof. Otto Beisheim Stiftung",
+      "variant_ids": [
+        130,
+        549,
+        1177
+      ],
+      "variant_names": [
+        "Beisheim Stiftung",
+        "Fondation Prof. Otto Beisheim",
+        "Prof. Otto Bescheim Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Prot. Frauenverein Cham",
+      "variant_ids": [
+        1182,
+        1183
+      ],
+      "variant_names": [
+        "Prot. Frauenverein Cham",
+        "Prot. Frauenverein Cham, Cham"
+      ]
+    },
+    {
+      "canonical_name": "QoQa SA",
+      "variant_ids": [
+        580,
+        1188,
+        1189
+      ],
+      "variant_names": [
+        "Fonds QoQa",
+        "QoQa",
+        "QoQa SA"
+      ],
+      "note": "Corrected: Fonds QoQa is an internal program of QoQa SA (CHE-112.640.276), not a separate legal entity"
+    },
+    {
+      "canonical_name": "RADELN & HELFEN E.V.",
+      "variant_ids": [
+        668,
+        1192
+      ],
+      "variant_names": [
+        "GERHARD DASHUBER OF RADELN & HELFEN E.V.",
+        "RADELN & HELFEN E.V."
+      ]
+    },
+    {
+      "canonical_name": "Ralph Maria Wyss",
+      "variant_ids": [
+        1200,
+        1201,
+        1202,
+        1203
+      ],
+      "variant_names": [
+        "Ralph & Maria Wyss",
+        "Ralph Maria Wyss",
+        "Ralph Maria Wyss, Crans Montana",
+        "Ralph Maria Wyss, Crans-Montana"
+      ]
+    },
+    {
+      "canonical_name": "Rapha",
+      "variant_ids": [
+        1205,
+        1206
+      ],
+      "variant_names": [
+        "Rapha",
+        "RAPHA"
+      ],
+      "note": "Corrected: Split from Rapha group. For-profit apparel company (CHE-258.654.639)"
+    },
+    {
+      "canonical_name": "The Rapha Foundation",
+      "variant_ids": [
+        1572
+      ],
+      "variant_names": [
+        "The Rapha Foundation"
+      ],
+      "note": "Corrected: Split from Rapha group. Nonprofit foundation"
+    },
+    {
+      "canonical_name": "Rebecca Rusch's Be Good Foundation",
+      "variant_ids": [
+        1210,
+        1211
+      ],
+      "variant_names": [
+        "Rebecca Rusch",
+        "REBECCA RUSCH'S BE GOOD FOUNDATION"
+      ]
+    },
+    {
+      "canonical_name": "Rechsteiner Margrit / Margrit Rechsteiner",
+      "variant_ids": [
+        992,
+        1212
+      ],
+      "variant_names": [
+        "Margrit Rechsteiner",
+        "Rechsteiner Margrit"
+      ]
+    },
+    {
+      "canonical_name": "Ref. Kirchgemeinde Heimberg",
+      "variant_ids": [
+        1222,
+        1223
+      ],
+      "variant_names": [
+        "Ref. Kirchgemeinde Heimberg",
+        "Ref. Kirchgemeinde, Heimberg"
+      ]
+    },
+    {
+      "canonical_name": "Regionale Pro Audito Vereine",
+      "variant_ids": [
+        1244,
+        1245
+      ],
+      "variant_names": [
+        "Regionale pro audito Vereine",
+        "Regionale Pro Audito Vereine"
+      ]
+    },
+    {
+      "canonical_name": "Riehen (municipality) / Gemeinde Riehen",
+      "variant_ids": [
+        648,
+        1258
+      ],
+      "variant_names": [
+        "Gemeinde Riehen (municipality)",
+        "Riehen (municipality)"
+      ]
+    },
+    {
+      "canonical_name": "Rolf Zehnder-Haefeli",
+      "variant_ids": [
+        1199,
+        1272,
+        1273
+      ],
+      "variant_names": [
+        "Ralf Zehnder-Hoeffel, Gipf-Oberfrick",
+        "Rolf Zehnder-Haefeli",
+        "Rolf Zehnder-Haefeli, Gipf-Oberfrick"
+      ]
+    },
+    {
+      "canonical_name": "Romeo Cerutti",
+      "variant_ids": [
+        1274,
+        1275
+      ],
+      "variant_names": [
+        "Romeo Cerruti",
+        "Romeo Cerutti"
+      ]
+    },
+    {
+      "canonical_name": "Römisch-katholische Pfarrei Bruder Klaus Zürich",
+      "variant_ids": [
+        848,
+        1277,
+        1278,
+        1279
+      ],
+      "variant_names": [
+        "Kath. Kirchgemeinde Bruder Klaus, Zürich",
+        "Römisch-katholische Pfarrei Bruder Klaus Zürich",
+        "Röm-kath. Kirchgemeinde Bruder Klaus, Zürich",
+        "Röm.-kath. Kirchgemeinde Bruder Klaus, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Röm. Kath. Kirchgemeinde Therwil/Biel-Benken",
+      "variant_ids": [
+        850,
+        1266,
+        1282,
+        1283
+      ],
+      "variant_names": [
+        "Kath. Kirchgemeinde Therwil/Biel-Benken",
+        "Roem. Kath. Kirchgemeinde Therwil/Biel-Benken",
+        "Röm. Kath. Kirchgemeinde Therwil",
+        "Röm. Kath. Kirchgemeinde Therwil/Biel-Benken"
+      ]
+    },
+    {
+      "canonical_name": "Röm. Kath. Pfarramt Küssnacht am Rigi",
+      "variant_ids": [
+        858,
+        1286
+      ],
+      "variant_names": [
+        "Kath. Pfarramt Küssnacht am Rigi",
+        "Röm. Kath. Pfarramt Küssnacht"
+      ]
+    },
+    {
+      "canonical_name": "Röm. Kath. Pfarramt Sursee",
+      "variant_ids": [
+        862,
+        863
+      ],
+      "variant_names": [
+        "Kath. Pfarramt Sursan",
+        "Kath. Pfarramt Sursee"
+      ]
+    },
+    {
+      "canonical_name": "Rosmarie und Armin Däster-Schild Stiftung / Däster-Schild Stiftung",
+      "variant_ids": [
+        340,
+        1289
+      ],
+      "variant_names": [
+        "Däster-Schild Stiftung",
+        "Rosmarie und Armin Däster-Schild Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Rosset Technik AG",
+      "variant_ids": [
+        1290,
+        1291,
+        1292
+      ],
+      "variant_names": [
+        "ROSSET TECHNIK",
+        "Rosset Technik AG",
+        "Rosset Technik, Maschinen und Werkzeuge AG"
+      ]
+    },
+    {
+      "canonical_name": "Sager Sandra",
+      "variant_ids": [
+        1312,
+        1321
+      ],
+      "variant_names": [
+        "Sager Sandra, Spiegel",
+        "Sandra Sager"
+      ]
+    },
+    {
+      "canonical_name": "Schenkung SG",
+      "variant_ids": [
+        1331,
+        1332
+      ],
+      "variant_names": [
+        "Schenkungen SG",
+        "Schenkung SG"
+      ]
+    },
+    {
+      "canonical_name": "Schindler Management AG",
+      "variant_ids": [
+        1336,
+        1337
+      ],
+      "variant_names": [
+        "Schindler Management AG",
+        "Schindler Management AG, Ebikon"
+      ]
+    },
+    {
+      "canonical_name": "Schroders (Fonds Bank Schroders)",
+      "variant_ids": [
+        567,
+        1347
+      ],
+      "variant_names": [
+        "Fonds Bank Schroders",
+        "Schroders (Fonds Bank Schroders)"
+      ]
+    },
+    {
+      "canonical_name": "Schwarber Christof + Cornelia, Au SG",
+      "variant_ids": [
+        1350,
+        1351,
+        1352
+      ],
+      "variant_names": [
+        "Schwarber Christof + Cornelia, Au SG",
+        "Schwarber Christof+Cornelia, Au SG",
+        "Schwarber Christoph + Cornelia, Au"
+      ]
+    },
+    {
+      "canonical_name": "Schweizerische Eidgenossenschaft / Bund / Confederazione",
+      "variant_ids": [
+        310,
+        1353,
+        1354
+      ],
+      "variant_names": [
+        "Confederazione",
+        "Schweizerische Eidgenossenschaft",
+        "Schweizerische Eidgenossenschaft / Bund"
+      ]
+    },
+    {
+      "canonical_name": "Schweizerische Gemeinnützige Gesellschaft (SGG)",
+      "variant_ids": [
+        1355,
+        1356
+      ],
+      "variant_names": [
+        "Schweizerische Gemeinnützige Gesellschaft (SGG)",
+        "Schweizerische Gemeinnützige Gesellschaft SGG"
+      ]
+    },
+    {
+      "canonical_name": "Schweizerische Mobiliar Versicherungsgesellschaft AG / Die Mobiliar / La Mobilière",
+      "variant_ids": [
+        352,
+        912,
+        1357,
+        1358,
+        1359,
+        1360
+      ],
+      "variant_names": [
+        "Die Mobiliar",
+        "La Mobilière",
+        "Schweizerische Mobiliar, Bern",
+        "Schweizerische Mobiliar Versicherungsgesellschaft",
+        "Schweizerische Mobiliar Versicherungsgesellschaft AG",
+        "Schweizerische Mobiliar Versicherungsgesellschaft Olten"
+      ]
+    },
+    {
+      "canonical_name": "Schwyter Raphaela",
+      "variant_ids": [
+        1368,
+        1369
+      ],
+      "variant_names": [
+        "Schwyter Raphaela, Siebnen",
+        "Schwyter Raphaela, Wangen SZ"
+      ]
+    },
+    {
+      "canonical_name": "Securitas Direct SA",
+      "variant_ids": [
+        1374,
+        1375
+      ],
+      "variant_names": [
+        "Securitas-Direct",
+        "Securitas Direct SA"
+      ]
+    },
+    {
+      "canonical_name": "Senn Ruedi",
+      "variant_ids": [
+        1303,
+        1377,
+        1378
+      ],
+      "variant_names": [
+        "Ruedi Senn",
+        "Senn Ruedi",
+        "Senn Ruedi, Thun"
+      ]
+    },
+    {
+      "canonical_name": "September Walk (Nationwide)",
+      "variant_ids": [
+        1380,
+        1381
+      ],
+      "variant_names": [
+        "September Walk 2024",
+        "September Walk (Nationwide)"
+      ]
+    },
+    {
+      "canonical_name": "Silvia Lüthy-Jenzer",
+      "variant_ids": [
+        1386,
+        1387
+      ],
+      "variant_names": [
+        "Silvia Lüthy-Jenzer",
+        "Silvia Lütky-Jenzer"
+      ]
+    },
+    {
+      "canonical_name": "Silvia Volery-Morattel",
+      "variant_ids": [
+        1390,
+        1554,
+        1555,
+        1556
+      ],
+      "variant_names": [
+        "Silvia Volery-Morattel",
+        "Sylvia Valery-Morattel",
+        "Sylvia Volary-Morattel",
+        "Sylvia Volery-Morattel"
+      ]
+    },
+    {
+      "canonical_name": "Similasan AG",
+      "variant_ids": [
+        1391,
+        1392,
+        1393
+      ],
+      "variant_names": [
+        "Similasan",
+        "Similasan AG",
+        "SIMILASAN AG"
+      ]
+    },
+    {
+      "canonical_name": "Starr International Foundation",
+      "variant_ids": [
+        1440,
+        1441
+      ],
+      "variant_names": [
+        "Starr International Foundation",
+        "STARR INTERNATIONAL FOUNDATION"
+      ]
+    },
+    {
+      "canonical_name": "Sunstar Suisse SA",
+      "variant_ids": [
+        1521,
+        1522,
+        1523
+      ],
+      "variant_names": [
+        "Sumstar Suisse SA",
+        "Sunstar SA",
+        "Sunstar Suisse SA"
+      ]
+    },
+    {
+      "canonical_name": "Suva",
+      "variant_ids": [
+        1528,
+        1529
+      ],
+      "variant_names": [
+        "Suva",
+        "suva.ch"
+      ]
+    },
+    {
+      "canonical_name": "Swisscom AG",
+      "variant_ids": [
+        1532,
+        1533,
+        1534
+      ],
+      "variant_names": [
+        "Swisscom",
+        "Swisscom AG",
+        "Swisscom Fixnet AG"
+      ]
+    },
+    {
+      "canonical_name": "Swiss Football League (SFL)",
+      "variant_ids": [
+        1535,
+        1536
+      ],
+      "variant_names": [
+        "Swiss Football League",
+        "Swiss Football League (SFL)"
+      ]
+    },
+    {
+      "canonical_name": "Swisslos",
+      "variant_ids": [
+        1538,
+        1539,
+        1540,
+        1541,
+        1542,
+        1543,
+        1544,
+        1545,
+        1546,
+        1602
+      ],
+      "variant_names": [
+        "Swisslos",
+        "Swisslos-Fonds Basel-Stadt",
+        "Swisslos-Fonds des Kantons Basel-Landschaft",
+        "Swisslosfonds Kanton Aargau",
+        "Swisslos-Fonds Kanton A. Ausserrhoden",
+        "Swisslos-Fonds Kanton Basel Landschaft",
+        "Swisslos-Fonds Kanton Schwyz",
+        "Swisslos Kanton Aargau",
+        "Swisslos - Kultur Kanton Bern",
+        "Ufficio fondi Swisslos e Sport-toto"
+      ]
+    },
+    {
+      "canonical_name": "Swiss Olympic Association",
+      "variant_ids": [
+        1547,
+        1548,
+        1549
+      ],
+      "variant_names": [
+        "Swiss Olympic",
+        "Swiss Olympic Association",
+        "swissolympic.ch"
+      ]
+    },
+    {
+      "canonical_name": "Swissto12 SA",
+      "variant_ids": [
+        1551,
+        1552
+      ],
+      "variant_names": [
+        "Swissto12 SA",
+        "SwisstotZ SA"
+      ]
+    },
+    {
+      "canonical_name": "Teamco Foundation Schweiz / Fondation Teamco Suisse",
+      "variant_ids": [
+        557,
+        1558
+      ],
+      "variant_names": [
+        "Fondation Teamco Suisse",
+        "Teamco Foundation Schweiz"
+      ]
+    },
+    {
+      "canonical_name": "Temperatio Stiftung / Temperatio Foundation",
+      "variant_ids": [
+        1561,
+        1562,
+        1563
+      ],
+      "variant_names": [
+        "Temperatio Foundation",
+        "Temperatio Stiftung",
+        "Temperatur Stiftung"
+      ]
+    },
+    {
+      "canonical_name": "Tischhauser-Linder Urs + Simone, Bühler",
+      "variant_ids": [
+        1585,
+        1586
+      ],
+      "variant_names": [
+        "Tischhauser-Linder Urs + Simone, Bühler",
+        "Tischhauser-Linder Urs+Simone, Bühler"
+      ]
+    },
+    {
+      "canonical_name": "Transa / Transa Travel & Outdoor",
+      "variant_ids": [
+        1590,
+        1591
+      ],
+      "variant_names": [
+        "Transa",
+        "TRAVSA TRAVEL & OUTDOOR"
+      ]
+    },
+    {
+      "canonical_name": "Trek Bicycle",
+      "variant_ids": [
+        1592,
+        1593
+      ],
+      "variant_names": [
+        "TREK",
+        "Trek Bicycle"
+      ]
+    },
+    {
+      "canonical_name": "UBS",
+      "variant_ids": [
+        1596
+      ],
+      "variant_names": [
+        "UBS"
+      ],
+      "note": "Corrected: Split from UBS group. Bank (CHE-395.345.924)"
+    },
+    {
+      "canonical_name": "Fonds UBS SA",
+      "variant_ids": [
+        583
+      ],
+      "variant_names": [
+        "Fonds UBS SA"
+      ],
+      "note": "Corrected: Split from UBS group. Fund management entity (CHE-102.674.664)"
+    },
+    {
+      "canonical_name": "UBS Philanthropy Foundation",
+      "variant_ids": [
+        1597
+      ],
+      "variant_names": [
+        "UBS Philanthropy Foundation"
+      ],
+      "note": "Corrected: Split from UBS group. Foundation (CHE-414.731.332)"
+    },
+    {
+      "canonical_name": "Union of European Football Associations (UEFA)",
+      "variant_ids": [
+        1614
+      ],
+      "variant_names": [
+        "Union of European Football Associations (UEFA)"
+      ],
+      "note": "Corrected: Split from UEFA group. Sports association (CHE-103.107.646)"
+    },
+    {
+      "canonical_name": "Fondation UEFA pour l'enfance",
+      "variant_ids": [
+        559
+      ],
+      "variant_names": [
+        "Fondation UEFA pour l'enfance"
+      ],
+      "note": "Corrected: Split from UEFA group. Separate foundation (CHE-138.872.463)"
+    },
+    {
+      "canonical_name": "Union Maraîchère de Genève",
+      "variant_ids": [
+        1612,
+        1613
+      ],
+      "variant_names": [
+        "UNION MARAICHERE DE GENEVE-MARRITING",
+        "Union Maralchère de Genève"
+      ]
+    },
+    {
+      "canonical_name": "USAID / United States Agency for International Development",
+      "variant_ids": [
+        1619,
+        1640
+      ],
+      "variant_names": [
+        "United States Agency for International Development (USAID)",
+        "USAID"
+      ]
+    },
+    {
+      "canonical_name": "Urs Eichenberger",
+      "variant_ids": [
+        1629,
+        1630
+      ],
+      "variant_names": [
+        "Urs Eichenberger",
+        "Urs Eichenberger, Dieriken"
+      ]
+    },
+    {
+      "canonical_name": "Urs Endress",
+      "variant_ids": [
+        1631,
+        1632,
+        1633
+      ],
+      "variant_names": [
+        "Urs Endress",
+        "Urs Endress, Arlesheim",
+        "Urs Grabess, Arlszheim"
+      ]
+    },
+    {
+      "canonical_name": "Vaudoise Assurances",
+      "variant_ids": [
+        1646,
+        1647,
+        1648,
+        1649,
+        1650
+      ],
+      "variant_names": [
+        "Vaudoise Assurances",
+        "Vaudoises Assurances",
+        "veao asmac",
+        "Vegdoise Assurances",
+        "Vendoise Assurances"
+      ]
+    },
+    {
+      "canonical_name": "Verena Keller Stiftung",
+      "variant_ids": [
+        1664,
+        1665
+      ],
+      "variant_names": [
+        "Verena Keller",
+        "Verena Keller Stiftung, Zürich"
+      ]
+    },
+    {
+      "canonical_name": "Ville de Genève",
+      "variant_ids": [
+        1673,
+        1674
+      ],
+      "variant_names": [
+        "Ville de Genève",
+        "Ville de Genève - Département de la cohésion sociale et de la solidarité"
+      ]
+    },
+    {
+      "canonical_name": "VSAO asmac",
+      "variant_ids": [
+        1648,
+        1686
+      ],
+      "variant_names": [
+        "veao asmac",
+        "VSAO asmac"
+      ]
+    },
+    {
+      "canonical_name": "Weitere Stiftungen (nicht namentlich genannt)",
+      "variant_ids": [
+        1607,
+        1696,
+        1697,
+        1698,
+        1699
+      ],
+      "variant_names": [
+        "... und weitere Stiftungen, die ungenannt sein möchten.",
+        "weitere Stiftungen",
+        "Weitere Stiftungen (anonym)",
+        "Weitere Stiftungen (nicht genannt)",
+        "Weitere Stiftungen (nicht namentlich genannt)"
+      ]
+    },
+    {
+      "canonical_name": "Weyermann Nelly",
+      "variant_ids": [
+        1079,
+        1702,
+        1703
+      ],
+      "variant_names": [
+        "Nelly Weyermann",
+        "Weyermann Daniel",
+        "Weyermann Nelly, Ittigen"
+      ]
+    },
+    {
+      "canonical_name": "Winkler Florian",
+      "variant_ids": [
+        472,
+        1706,
+        1707
+      ],
+      "variant_names": [
+        "Florian Winkler",
+        "Winkler Florian",
+        "Winkler Florian, Bern"
+      ]
+    },
+    {
+      "canonical_name": "Wyssmann & Zigerli Advokaturbüro / Wyssmann, Zigerli & Keusen, Advokatur",
+      "variant_ids": [
+        1712,
+        1713,
+        1714
+      ],
+      "variant_names": [
+        "Wyssmann & Zigerli Advokaturbüro",
+        "Wyssmann & Zigerli, Advokaturbüro, Bern",
+        "Wyssmann, Zigerli & Keusen, Advokatur"
+      ]
+    },
+    {
+      "canonical_name": "zahlreiche Privatpersonen / unzählige Privatpersonen",
+      "variant_ids": [
+        1623,
+        1624,
+        1716
+      ],
+      "variant_names": [
+        "unzählige Privatpersonen",
+        "Unzählige Privatpersonen",
+        "zahlreiche Privatpersonen"
+      ]
+    },
+    {
+      "canonical_name": "ZF hilft e.V.",
+      "variant_ids": [
+        1719,
+        1720
+      ],
+      "variant_names": [
+        "ZF hift e.V.",
+        "ZF hilft e.V."
+      ]
+    },
+    {
+      "canonical_name": "ZKB / Zürcher Kantonalbank",
+      "variant_ids": [
+        1722,
+        1727
+      ],
+      "variant_names": [
+        "ZKB",
+        "Zürcher Kantonalbank"
+      ]
+    },
+    {
+      "canonical_name": "Zürich Versicherungs-Gesellschaft AG",
+      "variant_ids": [
+        1735,
+        1736,
+        1741
+      ],
+      "variant_names": [
+        "Zurich Versicherungs-Gesellschaft AG",
+        "Zürich Versicherungs-Gesellschaft AG",
+        "Z Zurich Stiftung"
+      ]
+    }
+  ]
+}

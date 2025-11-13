@@ -45,7 +45,7 @@ from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.metrics import (
     calculate_bcubed_metrics,
     calculate_pairwise_metrics,
-    pairs_from_clusters,
+    evaluate_blocking,
 )
 from langres.core.modules.llm_judge import LLMJudgeModule
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
@@ -158,60 +158,40 @@ def run_deduplication_pipeline(
     return predicted_clusters, judgements, candidates
 
 
-def assess_blocking_recall(
-    candidates: list[Any],
-    ground_truth_clusters: list[set[str]],
-) -> dict[str, float]:
-    """Assess blocking stage recall (true positive capture rate).
+def log_blocking_evaluation(stats: Any) -> None:
+    """Log blocking evaluation results in formatted output.
 
     Args:
-        candidates: List of ERCandidate objects from blocker
-        ground_truth_clusters: Ground truth clusters
-
-    Returns:
-        Dict with blocking metrics (recall, precision, pairs_found, pairs_total)
+        stats: CandidateStats from evaluate_blocking()
     """
-    # Get ground truth pairs
-    gold_pairs = pairs_from_clusters(ground_truth_clusters)
-
-    # Get candidate pairs
-    candidate_pairs = {tuple(sorted([c.left.id, c.right.id])) for c in candidates}
-
-    # Normalize gold pairs format
-    gold_pairs_normalized = {tuple(sorted([left, right])) for left, right in gold_pairs}
-
-    # Calculate metrics
-    tp = len(gold_pairs_normalized & candidate_pairs)
-    fn = len(gold_pairs_normalized - candidate_pairs)
-    fp = len(candidate_pairs - gold_pairs_normalized)
-
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
     logger.info("=" * 80)
-    logger.info("BLOCKING ASSESSMENT")
+    logger.info("BLOCKING EVALUATION")
     logger.info("=" * 80)
-    logger.info("Ground truth pairs: %d", len(gold_pairs_normalized))
-    logger.info("Candidate pairs generated: %d", len(candidate_pairs))
-    logger.info("True positives: %d", tp)
-    logger.info("False negatives (missed): %d", fn)
-    logger.info("False positives (extra): %d", fp)
-    logger.info("Recall: %.2f%% (captured %.0f%% of true duplicates)", recall * 100, recall * 100)
-    logger.info("Precision: %.2f%%", precision * 100)
+    total_gold = (
+        stats.total_candidates - stats.false_positive_candidates_count + stats.missed_matches_count
+    )
+    logger.info("Ground truth pairs: %d", total_gold)
+    logger.info("Candidate pairs generated: %d", stats.total_candidates)
+    logger.info(
+        "True positives: %d", stats.total_candidates - stats.false_positive_candidates_count
+    )
+    logger.info("False negatives (missed): %d", stats.missed_matches_count)
+    logger.info("False positives (extra): %d", stats.false_positive_candidates_count)
+    logger.info(
+        "Recall: %.2f%% (captured %.0f%% of true duplicates)",
+        stats.candidate_recall * 100,
+        stats.candidate_recall * 100,
+    )
+    logger.info("Precision: %.2f%%", stats.candidate_precision * 100)
+    f1 = (
+        2
+        * (stats.candidate_precision * stats.candidate_recall)
+        / (stats.candidate_precision + stats.candidate_recall)
+        if (stats.candidate_precision + stats.candidate_recall) > 0
+        else 0.0
+    )
     logger.info("F1: %.2f%%", f1 * 100)
     logger.info("=" * 80)
-
-    return {
-        "recall": recall,
-        "precision": precision,
-        "f1": f1,
-        "true_positives": tp,
-        "false_negatives": fn,
-        "false_positives": fp,
-        "gold_pairs": len(gold_pairs_normalized),
-        "candidate_pairs": len(candidate_pairs),
-    }
 
 
 def main() -> None:
@@ -288,16 +268,20 @@ def main() -> None:
     )
 
     # Assess blocking recall
-    blocking_metrics = assess_blocking_recall(train_candidates, train_clusters)
+    # Evaluate blocking performance
+    blocking_stats = evaluate_blocking(train_candidates, train_clusters)
+    log_blocking_evaluation(blocking_stats)
 
     # Check if blocking recall is acceptable
-    if blocking_metrics["recall"] < 0.90:
+    if blocking_stats.candidate_recall < 0.90:
         logger.warning(
             "⚠️  Blocking recall is low (%.1f%%). Consider increasing k_neighbors or trying different embedding model.",
-            blocking_metrics["recall"] * 100,
+            blocking_stats.candidate_recall * 100,
         )
+        logger.warning("Missed true matches: %d", blocking_stats.missed_matches_count)
+        return  # Exit early if blocking is insufficient
     else:
-        logger.info("✓ Blocking recall is good (%.1f%%)", blocking_metrics["recall"] * 100)
+        logger.info("✓ Blocking recall is good (%.1f%%)", blocking_stats.candidate_recall * 100)
 
     # ==================================================================================
     # FULL PIPELINE ASSESSMENT (Stage 2: End-to-end evaluation)
@@ -463,7 +447,9 @@ def main() -> None:
     )
 
     # Assess test blocking
-    test_blocking_metrics = assess_blocking_recall(test_candidates, test_clusters)
+    # Evaluate test set blocking performance
+    test_blocking_stats = evaluate_blocking(test_candidates, test_clusters)
+    log_blocking_evaluation(test_blocking_stats)
 
     # Calculate test metrics
     test_bcubed = calculate_bcubed_metrics(predicted_test_clusters, test_clusters)
@@ -511,7 +497,7 @@ def main() -> None:
                     "bcubed_precision": test_bcubed["precision"],
                     "bcubed_recall": test_bcubed["recall"],
                     "pairwise_f1": test_pairwise["f1"],
-                    "blocking_recall": test_blocking_metrics["recall"],
+                    "blocking_recall": test_blocking_stats.candidate_recall,
                     "cost_usd": test_total_cost,
                 }
             )
@@ -538,13 +524,17 @@ def main() -> None:
     logger.info("  Test: %d entities, %d clusters", len(test_records), len(test_clusters))
     logger.info("-" * 80)
     logger.info("Blocking Performance (Test Set):")
+    tp_test = (
+        test_blocking_stats.total_candidates - test_blocking_stats.false_positive_candidates_count
+    )
+    total_gold_test = tp_test + test_blocking_stats.missed_matches_count
     logger.info(
         "  Recall: %.2f%% (%d/%d true pairs captured)",
-        test_blocking_metrics["recall"] * 100,
-        test_blocking_metrics["true_positives"],
-        test_blocking_metrics["gold_pairs"],
+        test_blocking_stats.candidate_recall * 100,
+        tp_test,
+        total_gold_test,
     )
-    logger.info("  Precision: %.2f%%", test_blocking_metrics["precision"] * 100)
+    logger.info("  Precision: %.2f%%", test_blocking_stats.candidate_precision * 100)
     logger.info("-" * 80)
     logger.info("End-to-End Performance (Test Set):")
     logger.info("  BCubed F1: %.4f", test_bcubed["f1"])

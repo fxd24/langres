@@ -267,3 +267,50 @@ class Clusterer:
             recommendations.append("Large number of clusters - consider sampling for review")
 
         return recommendations
+
+    def evaluate(
+        self,
+        predicted_clusters: list[set[str]],
+        gold_clusters: list[set[str]],
+    ) -> dict[str, dict[str, float]]:
+        """Evaluate clustering quality with ground truth labels.
+
+        Convenience method that delegates to metrics.evaluate_clustering() for
+        actual computation. Computes both BCubed and pairwise metrics for a
+        complete view of clustering quality.
+
+        Args:
+            predicted_clusters: Clusters produced by this clusterer
+            gold_clusters: Ground truth entity clusters
+
+        Returns:
+            Dictionary with two keys:
+            - 'bcubed': BCubed metrics (precision, recall, f1)
+            - 'pairwise': Pairwise metrics (precision, recall, f1, tp, fp, fn)
+
+        Example:
+            >>> clusterer = Clusterer(threshold=0.7)
+            >>> predicted = clusterer.cluster(judgements)
+            >>> metrics = clusterer.evaluate(predicted, gold_clusters)
+            >>> print(f"BCubed F1: {metrics['bcubed']['f1']:.2%}")
+            >>> print(f"Pairwise F1: {metrics['pairwise']['f1']:.2%}")
+            >>>
+            >>> # Check if threshold needs tuning
+            >>> if metrics['bcubed']['precision'] < 0.80:
+            ...     print("Low precision - threshold may be too low")
+            >>> if metrics['bcubed']['recall'] < 0.80:
+            ...     print("Low recall - threshold may be too high")
+
+        Note:
+            BCubed and pairwise metrics can differ significantly:
+            - BCubed is more forgiving of singleton errors
+            - Pairwise treats each pair as equally important
+            Both perspectives are valuable for understanding clustering quality.
+
+        Note:
+            This method provides the same functionality as calling
+            metrics.evaluate_clustering(predicted, gold_clusters) directly.
+        """
+        from langres.core.metrics import evaluate_clustering
+
+        return evaluate_clustering(predicted_clusters, gold_clusters)
