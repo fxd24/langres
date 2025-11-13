@@ -52,6 +52,11 @@ class TestVectorBlockerInspection:
         ]
 
         blocker = create_fake_blocker(k_neighbors=2)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -70,6 +75,10 @@ class TestVectorBlockerInspection:
         """Test inspect_candidates with empty candidate list."""
         data = [{"id": "c1", "name": "Single Company"}]
         blocker = create_fake_blocker(k_neighbors=2)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
 
         # Single entity generates no candidates
         candidates = list(blocker.stream(data))
@@ -94,6 +103,11 @@ class TestVectorBlockerInspection:
         ]
 
         blocker = create_fake_blocker(k_neighbors=1)  # Very low k
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -113,6 +127,11 @@ class TestVectorBlockerInspection:
         data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(10)]
 
         blocker = create_fake_blocker(k_neighbors=9)  # High k
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -136,6 +155,11 @@ class TestVectorBlockerInspection:
         ]
 
         blocker = create_fake_blocker(k_neighbors=2)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -155,6 +179,11 @@ class TestVectorBlockerInspection:
         data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(20)]
 
         blocker = create_fake_blocker(k_neighbors=5)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -169,6 +198,11 @@ class TestVectorBlockerInspection:
         data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(10)]
 
         blocker = create_fake_blocker(k_neighbors=3)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -190,6 +224,11 @@ class TestVectorBlockerInspection:
         ]
 
         blocker = create_fake_blocker(k_neighbors=2)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -208,6 +247,11 @@ class TestVectorBlockerInspection:
         ]
 
         blocker = create_fake_blocker(k_neighbors=1)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -231,6 +275,11 @@ class TestVectorBlockerInspection:
 
         # Set k=2, which should result in avg_candidates around 4 (suggested_k = 2)
         blocker = create_fake_blocker(k_neighbors=2)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
@@ -255,6 +304,11 @@ class TestVectorBlockerInspection:
         data = [{"id": "c1", "name": "Single Company"}]
 
         blocker = create_fake_blocker(k_neighbors=5)
+
+        # Build index explicitly
+        texts = [d["name"] for d in data]
+        blocker.vector_index.create_index(texts)
+
         candidates = list(blocker.stream(data))
         entities = [company_factory(record) for record in data]
 
