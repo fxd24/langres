@@ -162,6 +162,129 @@ class TestFakeVectorIndex:
         assert np.array_equal(indices[:, 0], [0, 1, 2, 3])
 
 
+class TestFAISSIndexInstructionPrompts:
+    """Tests for FAISSIndex instruction prompt support (asymmetric encoding)."""
+
+    def test_faiss_index_documents_encoded_without_prompt(self):
+        """Test that create_index encodes documents without prompt."""
+        from unittest.mock import Mock
+
+        # Create mock embedder to track calls
+        embedder = Mock(spec=FakeEmbedder)
+        embedder.encode.return_value = np.random.rand(3, 128).astype(np.float32)
+
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt="Find duplicates")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Verify encode was called with prompt=None (documents shouldn't have prompts)
+        embedder.encode.assert_called_once()
+        call_args = embedder.encode.call_args
+        assert call_args[0][0] == texts  # First positional arg is texts
+        # Check that prompt was either not passed or explicitly None
+        if "prompt" in call_args[1]:
+            assert call_args[1]["prompt"] is None
+
+    def test_faiss_index_queries_encoded_with_prompt(self):
+        """Test that search encodes queries with the configured prompt."""
+        from unittest.mock import Mock
+
+        # Create mock embedder to track calls
+        embedder = Mock(spec=FakeEmbedder)
+
+        # First call (create_index): return corpus embeddings
+        # Second call (search): return query embeddings
+        embedder.encode.side_effect = [
+            np.random.rand(3, 128).astype(np.float32),  # corpus
+            np.random.rand(1, 128).astype(np.float32),  # query
+        ]
+
+        query_prompt = "Find duplicate organization names"
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+
+        # Create index (first encode call)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Search (second encode call - should use prompt)
+        index.search("Apple Company", k=2)
+
+        # Verify second call used the prompt
+        assert embedder.encode.call_count == 2
+        second_call_args = embedder.encode.call_args_list[1]
+        assert second_call_args[1]["prompt"] == query_prompt
+
+    def test_faiss_index_search_all_reuses_corpus(self):
+        """Test that search_all reuses cached corpus embeddings without re-encoding."""
+        from unittest.mock import Mock
+
+        embedder = Mock(spec=FakeEmbedder)
+        embedder.encode.return_value = np.random.rand(4, 128).astype(np.float32)
+
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt="test")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
+
+        # search_all should NOT call encode again (reuses corpus)
+        index.search_all(k=3)
+
+        # Verify encode was only called once (in create_index, not search_all)
+        assert embedder.encode.call_count == 1
+
+    def test_faiss_index_no_query_prompt_backward_compatible(self):
+        """Test that FAISSIndex without query_prompt uses prompt=None everywhere."""
+        from unittest.mock import Mock
+
+        embedder = Mock(spec=FakeEmbedder)
+        embedder.encode.side_effect = [
+            np.random.rand(3, 128).astype(np.float32),  # corpus
+            np.random.rand(1, 128).astype(np.float32),  # query
+        ]
+
+        # No query_prompt specified (backward compatible)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+        index.search("Apple", k=2)
+
+        # Both calls should use prompt=None (or not pass prompt)
+        assert embedder.encode.call_count == 2
+        for call_args in embedder.encode.call_args_list:
+            if "prompt" in call_args[1]:
+                assert call_args[1]["prompt"] is None
+
+    @pytest.mark.slow
+    def test_faiss_index_different_prompts_affect_search(self):
+        """Test that different query prompts produce different search results."""
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+
+        # Create two indexes with different query prompts
+        index_with_prompt = FAISSIndex(
+            embedder=embedder,
+            metric="cosine",
+            query_prompt="Find duplicate organization names accounting for acronyms",
+        )
+        index_without_prompt = FAISSIndex(embedder=embedder, metric="cosine")
+
+        # Same corpus
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index_with_prompt.create_index(texts)
+        index_without_prompt.create_index(texts)
+
+        # Same query
+        query = "Apple Company"
+
+        distances_with, indices_with = index_with_prompt.search(query, k=2)
+        distances_without, indices_without = index_without_prompt.search(query, k=2)
+
+        # Different prompts should produce different distances
+        # (indices might be same if ranking is preserved, but distances should differ)
+        assert not np.allclose(distances_with, distances_without)
+
+
 class TestVectorIndexProtocol:
     """Tests for VectorIndex protocol compliance with new API."""
 
