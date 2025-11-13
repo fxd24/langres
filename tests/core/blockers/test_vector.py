@@ -14,7 +14,7 @@ import logging
 import pytest
 
 from langres.core.blockers.vector import VectorBlocker
-from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
+from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.models import CompanySchema
 from langres.core.vector_index import FAISSIndex, FakeVectorIndex
 
@@ -37,7 +37,6 @@ def create_fake_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
     return VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=lambda x: x.name,
-        embedding_provider=FakeEmbedder(embedding_dim=128),
         vector_index=FakeVectorIndex(),
         k_neighbors=k_neighbors,
     )
@@ -45,11 +44,11 @@ def create_fake_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
 
 def create_real_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
     """Create a VectorBlocker with real implementations for integration testing."""
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
     return VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=lambda x: x.name,
-        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
-        vector_index=FAISSIndex(metric="L2"),
+        vector_index=FAISSIndex(embedder=embedder, metric="L2"),
         k_neighbors=k_neighbors,
     )
 
@@ -59,7 +58,6 @@ def test_vector_blocker_initialization():
     blocker = create_fake_blocker(k_neighbors=5)
 
     assert blocker.k_neighbors == 5
-    assert isinstance(blocker.embedding_provider, FakeEmbedder)
     assert isinstance(blocker.vector_index, FakeVectorIndex)
 
 

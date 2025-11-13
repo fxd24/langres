@@ -32,7 +32,6 @@ def create_fake_blocker(k_neighbors: int = 10) -> VectorBlocker[CompanySchema]:
     return VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=lambda x: x.name,
-        embedding_provider=FakeEmbedder(embedding_dim=128),
         vector_index=FakeVectorIndex(),
         k_neighbors=k_neighbors,
     )
