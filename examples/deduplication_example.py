@@ -1,13 +1,22 @@
-"""Iteration 05 Deduplication Example with Blocker Optimization.
+"""Entity Deduplication Example with Full Pipeline.
 
-This example demonstrates entity resolution on the Swiss funder dataset (iteration 05)
-with 1,741 organization names and 1,305 unique entities.
+This example demonstrates end-to-end entity resolution using the langres library
+on a real-world dataset of Swiss funder organization names.
+
+Dataset: 1,741 organization names with 1,305 unique entities
+Source: Manually curated and verified against Zefix business registry
 
 Key features:
-1. **Realistic labeled data**: Manually curated ground truth verified against Zefix registry
+1. **Realistic labeled data**: Real-world ground truth with quality verification
 2. **Stratified train/test split**: Preserves cluster size distribution (singletons, pairs, etc.)
 3. **Full pipeline**: VectorBlocker → LLMJudge → Clusterer with optimization
 4. **Comprehensive evaluation**: Blocking recall, LLM judge F1, BCubed F1
+
+This example shows how to:
+- Load labeled deduplication data with custom file names
+- Create stratified train/test splits
+- Run blocking, scoring, and clustering
+- Evaluate performance with multiple metrics
 
 Environment variables required:
     AZURE_API_ENDPOINT: Azure OpenAI endpoint URL
@@ -41,7 +50,7 @@ from langres.core.metrics import (
 from langres.core.modules.llm_judge import LLMJudgeModule
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
 from langres.core.vector_index import FAISSIndex
-from langres.data import load_labeled_dedup_data_legacy, stratified_dedup_split
+from langres.data import load_labeled_dedup_data, stratified_dedup_split
 
 # Configure logging
 logging.basicConfig(
@@ -51,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 class OrganizationSchema(BaseModel):
-    """Simple organization entity schema for iteration_05 data."""
+    """Simple organization entity schema."""
 
     id: str = Field(description="Unique entity identifier")
     name: str = Field(description="Organization name")
@@ -115,9 +124,7 @@ def run_deduplication_pipeline(
     )
 
     # Generate candidates
-    candidates = list(
-        blocker.stream(entities)
-    )  # TODO is the similarity also provided in the candidates? where should we set that threshold?
+    candidates = list(blocker.stream(entities))
     logger.info("Generated %d candidate pairs", len(candidates))
 
     # If not using LLM, return early (for blocking assessment)
@@ -136,9 +143,7 @@ def run_deduplication_pipeline(
     )
 
     # Score candidates
-    judgements = list(
-        llm_judge.forward(iter(candidates))
-    )  # TODO: we only want to judge the ones above a certain score.
+    judgements = list(llm_judge.forward(iter(candidates)))
     logger.info("Scored %d pairs", len(judgements))
 
     # ==================================================================================
@@ -153,7 +158,7 @@ def run_deduplication_pipeline(
     return predicted_clusters, judgements, candidates
 
 
-def assess_blocking_recall(  # TODO use build in code or analysis assesment. function can stay but use the built in code
+def assess_blocking_recall(
     candidates: list[Any],
     ground_truth_clusters: list[set[str]],
 ) -> dict[str, float]:
@@ -221,16 +226,22 @@ def main() -> None:
 
     # Initialize LiteLLM client (only if we'll use LLM judge)
     logger.info("Initializing LiteLLM client...")
-    llm_client = create_llm_client(
-        settings
-    )  # TODO: we shall set as well the reasoning effort and verbosity for gpt-5-mini (yes gpt-5-mini!). see online docs.
+    llm_client = create_llm_client(settings)
     azure_model = "azure/gpt-5-mini"
 
     # ==================================================================================
-    # Load iteration_05 data
+    # Load labeled deduplication data
     # ==================================================================================
-    logger.info("Loading iteration_05 labeled data...")
-    dataset = load_labeled_dedup_data_legacy()
+    # This example uses a dataset with custom file names stored in tmp/dedup_iteration_05/
+    # For your own data, prepare files following the langres schema:
+    #   entity_names.json: {"names": {"1": "Name 1", "2": "Name 2", ...}}
+    #   labeled_groups.json: {"groups": [{"canonical_name": "...", "entity_ids": [...], ...}]}
+    logger.info("Loading labeled deduplication data...")
+    dataset = load_labeled_dedup_data(
+        data_dir="tmp/dedup_iteration_05",
+        entity_names_file="all_names_with_ids.json",  # Custom file name for this dataset
+        labeled_groups_file="deduplicated_groups.json",  # Custom file name for this dataset
+    )
 
     logger.info(
         "Loaded %d entity names, %d unique entities",
