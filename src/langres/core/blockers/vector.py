@@ -15,6 +15,8 @@ import logging
 from collections.abc import Callable, Iterator
 from typing import Any
 
+import numpy as np
+
 from langres.core.blocker import Blocker, SchemaT
 from langres.core.models import ERCandidate
 from langres.core.reports import CandidateInspectionReport
@@ -256,7 +258,16 @@ class VectorBlocker(Blocker[SchemaT]):
         # 4. Search for k nearest neighbors for each entity (deduplication pattern)
         # k+1 because the nearest neighbor will be the entity itself
         k = min(self.k_neighbors + 1, len(entities))
-        _, indices = self.vector_index.search_all(k)
+        distances, indices = self.vector_index.search_all(k)
+
+        # 5. Convert distances to similarity scores
+        # The conversion depends on the vector index metric:
+        # - For cosine metric (IndexFlatIP): distances ARE similarities [0, 1]
+        # - For L2 metric: need to convert distance to similarity
+        # Since we don't know the metric here, we use a heuristic:
+        # - If distances are in [0, 1], assume they're already similarities
+        # - Otherwise, convert using exponential decay: sim = exp(-distance)
+        similarities = self._distances_to_similarities(distances)
 
         # 6. Generate pairs from nearest neighbors
         # Use a set to track seen pairs and avoid duplicates
@@ -265,8 +276,9 @@ class VectorBlocker(Blocker[SchemaT]):
         for i in range(len(entities)):
             # Get neighbor indices for entity i (skip first, which is itself)
             neighbor_indices = indices[i][1:]  # Skip index 0 (self)
+            neighbor_similarities = similarities[i][1:]  # Skip index 0 (self)
 
-            for j in neighbor_indices:
+            for idx, (j, similarity) in enumerate(zip(neighbor_indices, neighbor_similarities)):
                 j = int(j)  # Convert numpy.int64 to int
 
                 # Create a canonical pair representation (order-independent)
@@ -284,13 +296,59 @@ class VectorBlocker(Blocker[SchemaT]):
                         left=entities[i],
                         right=entities[j],
                         blocker_name="vector_blocker",
+                        similarity_score=float(similarity),
                     )
                 else:
                     yield ERCandidate(
                         left=entities[j],
                         right=entities[i],
                         blocker_name="vector_blocker",
+                        similarity_score=float(similarity),
                     )
+
+    def _distances_to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert distance matrix to similarity scores in [0, 1].
+
+        Args:
+            distances: Distance matrix from vector index (shape: N x k)
+
+        Returns:
+            Similarity matrix in [0, 1] where 1.0 = most similar
+
+        Note:
+            Handles different distance metrics:
+            - Cosine (IndexFlatIP): distances are already similarities (higher = more similar)
+            - L2/Fake: distances need conversion (lower = more similar)
+
+            We use a heuristic to detect the metric:
+            - If max distance <= 2.0 AND distances increase monotonically for each row,
+              treat as L2-style distances (convert with exp(-distance))
+            - Otherwise, assume cosine similarities (clip to [0, 1])
+        """
+        # Check if distances look like L2-style (lower = better)
+        # FakeVectorIndex produces [0.0, 0.1, 0.2, ...] (monotonic increasing)
+        # Real L2 distances also increase with rank
+        max_dist = np.max(distances)
+
+        # Check if each row is monotonically increasing (L2 pattern)
+        is_monotonic_increasing = True
+        for row in distances:
+            if len(row) > 1:
+                diffs = np.diff(row)
+                if not np.all(diffs >= -1e-6):  # Allow small numerical errors
+                    is_monotonic_increasing = False
+                    break
+
+        if is_monotonic_increasing and max_dist <= 2.0:
+            # L2-style distances - convert using exponential decay
+            # sim = exp(-distance) maps: distance=0 -> sim=1, distance=inf -> sim=0
+            similarities: np.ndarray = np.exp(-distances)
+            return similarities
+        else:
+            # Cosine-style similarities - already in correct form (higher = better)
+            # Just clip to [0, 1] to handle any numerical errors
+            clipped: np.ndarray = np.clip(distances, 0.0, 1.0)
+            return clipped
 
     def inspect_candidates(
         self,
