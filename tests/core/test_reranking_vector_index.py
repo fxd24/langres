@@ -159,7 +159,7 @@ class TestQdrantHybridRerankingIndex:
         assert point0.payload["id"] == "0"
 
     def test_search_single_text_uses_reranking_query(self):
-        """Test that search() with single text uses reranking query (not FusionQuery)."""
+        """Test that search() with single text uses reranking query with nested prefetch."""
         # Setup
         mock_client = MagicMock()
         dense_embedder = FakeEmbedder(embedding_dim=128)
@@ -196,24 +196,33 @@ class TestQdrantHybridRerankingIndex:
         assert call_args[1]["collection_name"] == "test_collection"
         assert call_args[1]["limit"] == 2
 
-        # Check prefetch structure (dense + sparse)
+        # Check prefetch structure - should be nested Prefetch with fusion
         prefetch = call_args[1]["prefetch"]
-        assert len(prefetch) == 2  # Dense + sparse
+        assert isinstance(prefetch, Prefetch)
+
+        # Verify inner prefetches (dense + sparse)
+        assert hasattr(prefetch, "prefetch")
+        inner_prefetches = prefetch.prefetch
+        assert isinstance(inner_prefetches, list)
+        assert len(inner_prefetches) == 2
 
         # Verify dense prefetch
-        dense_prefetch = next(p for p in prefetch if p.using == "dense")
+        dense_prefetch = next(p for p in inner_prefetches if p.using == "dense")
         assert isinstance(dense_prefetch.query, list)
         assert len(dense_prefetch.query) == 128
         assert dense_prefetch.limit == 20
 
         # Verify sparse prefetch
-        sparse_prefetch = next(p for p in prefetch if p.using == "sparse")
+        sparse_prefetch = next(p for p in inner_prefetches if p.using == "sparse")
         assert isinstance(sparse_prefetch.query, SparseVector)
         assert sparse_prefetch.limit == 20
 
-        # Verify query uses reranking multi-vectors (NOT FusionQuery)
+        # Verify fusion at outer Prefetch level
+        assert isinstance(prefetch.query, FusionQuery)
+        assert prefetch.query.fusion == Fusion.RRF  # Default fusion
+
+        # Verify query uses reranking multi-vectors (at top level)
         query = call_args[1]["query"]
-        assert not hasattr(query, "fusion")  # Not a FusionQuery
         assert isinstance(query, list)  # Multi-vector list
         assert len(query) > 0  # At least one token
         assert isinstance(query[0], list)  # Token embedding
@@ -371,7 +380,7 @@ class TestQdrantHybridRerankingIndex:
             index.search_all(k=3)
 
     def test_prefetch_limit_configurable(self):
-        """Test that prefetch limit is configurable."""
+        """Test that prefetch limit is configurable at all prefetch levels."""
         # Setup
         mock_client = MagicMock()
         dense_embedder = FakeEmbedder(embedding_dim=128)
@@ -397,11 +406,15 @@ class TestQdrantHybridRerankingIndex:
         index.create_index(texts)
         index.search("Apple", k=1)
 
-        # Verify prefetch limit was used
+        # Verify prefetch limit was used at all levels
         call_args = mock_client.query_points.call_args
         prefetch = call_args[1]["prefetch"]
 
-        for p in prefetch:
+        # Check outer Prefetch limit (fusion level)
+        assert prefetch.limit == 50
+
+        # Check inner prefetches limits (dense + sparse)
+        for p in prefetch.prefetch:
             assert p.limit == 50
 
     def test_default_rrf_fusion(self):

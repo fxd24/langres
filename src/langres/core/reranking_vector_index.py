@@ -3,7 +3,8 @@
 This module provides hybrid search with 3-stage pipeline:
 1. Dense prefetch (semantic similarity)
 2. Sparse prefetch (keyword matching)
-3. Late-interaction reranking (ColBERT/ColPali MaxSim)
+3. Fusion (RRF or DBSF for combining dense + sparse)
+4. Late-interaction reranking (ColBERT/ColPali MaxSim)
 
 The late-interaction reranking enables more nuanced similarity computation
 by encoding each token separately and computing maximum similarity between
@@ -11,11 +12,14 @@ all token pairs (MaxSim strategy).
 """
 
 import logging
+from typing import Literal
 
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
+    Fusion,
+    FusionQuery,
     MultiVectorComparator,
     MultiVectorConfig,
     PointStruct,
@@ -37,16 +41,17 @@ logger = logging.getLogger(__name__)
 class QdrantHybridRerankingIndex:
     """Qdrant-backed hybrid index with dense + sparse + late-interaction reranking.
 
-    Three-stage hybrid search:
+    Four-stage hybrid search pipeline:
     1. Prefetch: Dense semantic search (top-N)
     2. Prefetch: Sparse keyword search (top-N)
-    3. Rerank: Late-interaction (ColBERT/ColPali) on combined results
+    3. Fusion: Combine dense + sparse results (RRF or DBSF)
+    4. Rerank: Late-interaction (ColBERT/ColPali) on fused results
 
     Implements VectorIndex protocol for compatibility with existing blockers.
 
     The index owns all three embedders and manages the complete lifecycle:
     1. create_index(texts) - Preprocessing: embed and upload to Qdrant
-    2. search(query_texts, k) - Runtime: hybrid search with reranking
+    2. search(query_texts, k) - Runtime: hybrid search with fusion + reranking
     3. search_all(k) - Runtime: deduplication pattern (all-vs-all)
 
     Example:
@@ -68,6 +73,7 @@ class QdrantHybridRerankingIndex:
             dense_embedder=dense,
             sparse_embedder=sparse,
             reranking_embedder=reranker,
+            fusion="RRF",  # Reciprocal Rank Fusion (default)
             prefetch_limit=20,
         )
 
@@ -95,6 +101,7 @@ class QdrantHybridRerankingIndex:
         dense_embedder: EmbeddingProvider,
         sparse_embedder: SparseEmbeddingProvider,
         reranking_embedder: LateInteractionEmbeddingProvider,
+        fusion: Literal["RRF", "DBSF"] = "RRF",
         prefetch_limit: int = 20,
     ):
         """Initialize QdrantHybridRerankingIndex.
@@ -105,8 +112,11 @@ class QdrantHybridRerankingIndex:
             dense_embedder: Provider for dense vector embeddings.
             sparse_embedder: Provider for sparse vector embeddings.
             reranking_embedder: Provider for late-interaction multi-vectors.
-            prefetch_limit: Number of results to fetch per vector type before reranking.
-                Default: 20 (20 from dense + 20 from sparse → reranked to top-k).
+            fusion: Fusion method for combining dense + sparse results.
+                "RRF" (Reciprocal Rank Fusion) or "DBSF" (Distribution-Based Score Fusion).
+                Default: "RRF".
+            prefetch_limit: Number of results to fetch per vector type before fusion.
+                Default: 20 (20 from dense + 20 from sparse → fused → reranked to top-k).
 
         Note:
             The Qdrant client must be configured externally (URL, API key, etc.).
@@ -117,6 +127,7 @@ class QdrantHybridRerankingIndex:
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
         self.reranking_embedder = reranking_embedder
+        self.fusion = fusion
         self.prefetch_limit = prefetch_limit
 
         # State (populated by create_index)
@@ -247,8 +258,9 @@ class QdrantHybridRerankingIndex:
         all_indices: list[np.ndarray] = []
 
         for i in range(len(texts)):
-            # Build prefetch for hybrid search (dense + sparse)
-            prefetch = [
+            # Build nested prefetch: [dense, sparse] → fusion → reranking
+            # Stage 1 & 2: Dense and sparse prefetches (inner level)
+            inner_prefetches = [
                 # Dense vector search
                 Prefetch(
                     query=dense_query_embeddings[i].tolist(),
@@ -266,8 +278,14 @@ class QdrantHybridRerankingIndex:
                 ),
             ]
 
-            # Execute hybrid query with late-interaction reranking
-            # Key difference from QdrantHybridIndex: use reranking multi-vectors instead of FusionQuery
+            # Stage 3: Fusion (outer Prefetch level)
+            prefetch = Prefetch(
+                prefetch=inner_prefetches,
+                query=FusionQuery(fusion=Fusion.RRF if self.fusion == "RRF" else Fusion.DBSF),
+                limit=self.prefetch_limit,
+            )
+
+            # Stage 4: Late-interaction reranking (top query_points level)
             results = self.client.query_points(
                 collection_name=self.collection_name,
                 prefetch=prefetch,
