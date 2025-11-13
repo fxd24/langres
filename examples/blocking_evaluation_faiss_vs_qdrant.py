@@ -198,6 +198,10 @@ def evaluate_blocking_recall(
     """
     logger.info(f"[{name}] Generating candidates...")
 
+    # Extract texts and build index explicitly
+    texts = [entity["name"] for entity in entities]
+    blocker.vector_index.create_index(texts)
+
     # Generate candidates and measure time
     start_time = time.time()
     candidates = list(blocker.stream(entities))
