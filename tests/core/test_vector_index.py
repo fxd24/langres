@@ -217,11 +217,19 @@ class TestFAISSIndexInstructionPrompts:
 
     def test_faiss_index_search_all_reuses_corpus(self):
         """Test that search_all reuses cached corpus embeddings without re-encoding."""
-        from unittest.mock import Mock
+        # Use a wrapper around FakeEmbedder to track calls
+        encode_call_count = 0
+        base_embedder = FakeEmbedder(embedding_dim=128)
 
-        embedder = Mock(spec=FakeEmbedder)
-        embedder.encode.return_value = np.random.rand(4, 128).astype(np.float32)
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                nonlocal encode_call_count
+                encode_call_count += 1
+                # Delegate to FakeEmbedder for proper embeddings
+                return base_embedder.encode(texts, prompt=prompt)
 
+        embedder = TrackingEmbedder()
+        # Use cosine metric (matches existing working test)
         index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt="test")
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
@@ -231,7 +239,7 @@ class TestFAISSIndexInstructionPrompts:
         index.search_all(k=3)
 
         # Verify encode was only called once (in create_index, not search_all)
-        assert embedder.encode.call_count == 1
+        assert encode_call_count == 1
 
     def test_faiss_index_no_query_prompt_backward_compatible(self):
         """Test that FAISSIndex without query_prompt uses prompt=None everywhere."""

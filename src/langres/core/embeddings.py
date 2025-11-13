@@ -6,8 +6,39 @@ supporting both dense (semantic) and sparse (keyword) vectors for hybrid search.
 Key providers:
 - EmbeddingProvider: Dense embeddings (np.ndarray) for semantic similarity
 - SparseEmbeddingProvider: Sparse embeddings (BM25, SPLADE) for keyword matching
+- LateInteractionEmbeddingProvider: Multi-vector embeddings (ColBERT, ColPali)
 
-Both protocols share the same interface (encode(texts)) but different return types.
+Implementations:
+- SentenceTransformerEmbedder: Production dense embeddings (sentence-transformers)
+- DiskCachedEmbedder: Persistent caching wrapper with two-tier cache (hot memory + cold disk)
+- FastEmbedSparseEmbedder: Production sparse embeddings (BM25, SPLADE)
+- FastEmbedLateInteractionEmbedder: Production late-interaction embeddings (ColBERT)
+- FakeEmbedder: Test double for fast deterministic testing
+
+Caching:
+The DiskCachedEmbedder wrapper provides persistent, disk-backed caching for any
+EmbeddingProvider. It uses a two-tier architecture:
+- Hot cache (in-memory LRU): Fast access to recently used embeddings
+- Cold storage (SQLite): Unlimited disk-backed storage for all embeddings
+
+This prevents OOM on large datasets while avoiding re-computation across runs.
+
+Example (with caching):
+    from pathlib import Path
+
+    base_embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    cached_embedder = DiskCachedEmbedder(
+        embedder=base_embedder,
+        cache_dir=Path("./cache"),
+        namespace="my_model",
+        memory_cache_size=10_000  # Keep 10K hot in memory
+    )
+
+    # First run: computes and caches
+    embeddings = cached_embedder.encode(texts)
+
+    # Second run: loads from cache (fast!)
+    embeddings = cached_embedder.encode(texts)
 """
 
 import hashlib
@@ -800,7 +831,6 @@ class DiskCachedEmbedder:
             memory_cache_size: Maximum number of embeddings in hot cache.
             hash_algorithm: Hash algorithm for cache keys (default: blake2b).
         """
-        import sqlite3
         from collections import OrderedDict
 
         self.embedder = embedder

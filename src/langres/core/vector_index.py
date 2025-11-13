@@ -156,15 +156,23 @@ class FAISSIndex:
         # Returns: distances=(3,10), indices=(3,10)
     """
 
-    def __init__(self, embedder: EmbeddingProvider, metric: Literal["L2", "cosine"] = "L2"):
+    def __init__(
+        self,
+        embedder: EmbeddingProvider,
+        metric: Literal["L2", "cosine"] = "L2",
+        query_prompt: str | None = None,
+    ):
         """Initialize FAISSIndex.
 
         Args:
             embedder: Provider for generating embeddings from texts.
             metric: Distance metric ("L2" or "cosine").
+            query_prompt: Optional instruction prompt for query encoding (asymmetric encoding).
+                Documents are always encoded without prompts. Queries use this prompt if provided.
         """
         self.embedder = embedder
         self.metric = metric
+        self.query_prompt = query_prompt
 
         # State (populated by create_index)
         self._corpus_embeddings: np.ndarray | None = None
@@ -226,8 +234,8 @@ class FAISSIndex:
         else:
             texts = query_texts  # type: ignore[assignment]
 
-        # Embed queries
-        query_embeddings = self.embedder.encode(texts).astype(np.float32)
+        # Embed queries with optional prompt (asymmetric encoding)
+        query_embeddings = self.embedder.encode(texts, prompt=self.query_prompt).astype(np.float32)
 
         # Normalize for cosine similarity
         if self.metric == "cosine":
