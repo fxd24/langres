@@ -12,6 +12,7 @@ Both protocols share the same interface (encode(texts)) but different return typ
 
 import hashlib
 import logging
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -56,11 +57,15 @@ class EmbeddingProvider(Protocol):
         # Use with VectorIndex directly, no re-encoding needed
     """
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
         """Encode texts into vector embeddings.
 
         Args:
             texts: List of texts to encode. Can be empty.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                Documents (corpus) should use prompt=None for generic embeddings.
+                Queries should use task-specific prompts for better retrieval.
+                Default: None.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
@@ -69,6 +74,12 @@ class EmbeddingProvider(Protocol):
         Note:
             Implementations should return consistent dtypes (typically float32)
             for compatibility with vector index backends like FAISS.
+
+        Note:
+            Instruction prompts enable asymmetric encoding where queries are
+            encoded with task context (e.g., "Find duplicate organization names")
+            while documents remain generic. Models like Qwen3-Embedding, BGE,
+            and E5 show 1-5% improvement with query instructions.
         """
         ...  # pragma: no cover
 
@@ -262,11 +273,14 @@ class SentenceTransformerEmbedder:
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
         """Encode texts into embeddings using sentence-transformers.
 
         Args:
             texts: List of texts to encode. Can be empty.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                If provided, the prompt guides the embedding model to focus
+                on task-specific semantics. Default: None.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
@@ -275,6 +289,12 @@ class SentenceTransformerEmbedder:
         Note:
             This method triggers model loading on first call if not
             already loaded.
+
+        Note:
+            The prompt parameter is passed to sentence-transformers'
+            encode() method. Models like Qwen3-Embedding, BGE, and E5
+            use this for instruction-based encoding. Models without
+            prompt support will ignore this parameter.
         """
         if len(texts) == 0:
             # Return empty array with correct shape
@@ -287,6 +307,7 @@ class SentenceTransformerEmbedder:
             show_progress_bar=self.show_progress_bar,
             normalize_embeddings=self.normalize_embeddings,
             convert_to_numpy=True,
+            prompt=prompt,
         )
 
         # Ensure numpy array (sentence-transformers should return this, but be explicit)
@@ -346,29 +367,40 @@ class FakeEmbedder:
         self._embedding_dim = embedding_dim
         self.normalize_embeddings = normalize_embeddings
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
         """Generate fake deterministic embeddings from texts.
 
         Args:
             texts: List of texts to encode.
+            prompt: Optional instruction prompt for asymmetric encoding.
+                When provided, produces different embeddings to simulate
+                real prompt-aware embedding models. Default: None.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
             Each embedding is an L2-normalized vector derived from
-            a hash of the text.
+            a hash of the text (and prompt if provided).
 
         Note:
-            Same text always produces the same embedding vector.
-            Different texts produce different vectors.
+            Same text + same prompt always produces the same embedding.
+            Different prompts produce different embeddings (simulating
+            real models like Qwen3-Embedding, BGE, E5).
         """
         if len(texts) == 0:
             return np.zeros((0, self._embedding_dim), dtype=np.float32)
 
         embeddings = []
         for text in texts:
-            # Create deterministic embedding from text hash
+            # Create deterministic embedding from text + prompt hash
+            # Include prompt in hash to simulate prompt-aware behavior
+            if prompt is not None:
+                # Combine text and prompt for hashing
+                combined = f"{text}||PROMPT:{prompt}"
+            else:
+                combined = text
+
             # Use SHA256 to get stable, uniformly distributed values
-            text_hash = hashlib.sha256(text.encode("utf-8")).digest()
+            text_hash = hashlib.sha256(combined.encode("utf-8")).digest()
 
             # Convert hash bytes to integers, then to floats
             # Use numpy random with hash as seed for deterministic generation
@@ -715,3 +747,53 @@ class FakeLateInteractionEmbedder:
             The dimensionality of each token embedding produced by this faker.
         """
         return self._embedding_dim
+
+
+# ============ DISK-CACHED EMBEDDER (STUB FOR TDD) ============
+
+
+class DiskCachedEmbedder:
+    """Disk-backed embedding cache with two-tier caching (hot memory + cold disk).
+
+    This is a stub implementation for TDD. Will be implemented after tests are written.
+    """
+
+    def __init__(
+        self,
+        embedder: EmbeddingProvider,
+        cache_dir: Path,
+        namespace: str = "default",
+        memory_cache_size: int = 10_000,
+        hash_algorithm: str = "blake2b",
+    ):
+        """Initialize DiskCachedEmbedder."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """Encode with two-tier caching (hot memory + cold disk)."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    @property
+    def embedding_dim(self) -> int:
+        """Get embedding dimension from underlying embedder."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def cache_info(self) -> dict[str, int | float]:
+        """Return cache statistics."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def cache_clear(self) -> None:
+        """Clear both hot and cold caches."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def _hash_text(self, text: str, prompt: str | None = None) -> str:
+        """Generate cache key from text (and future prompt)."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def _serialize_embedding(self, embedding: np.ndarray) -> bytes:
+        """Convert numpy array to bytes for SQLite BLOB."""
+        raise NotImplementedError("TDD: Implement after tests are written")
+
+    def _deserialize_embedding(self, blob: bytes) -> np.ndarray:
+        """Convert SQLite BLOB back to numpy array."""
+        raise NotImplementedError("TDD: Implement after tests are written")
