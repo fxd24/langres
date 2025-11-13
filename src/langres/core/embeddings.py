@@ -1,18 +1,18 @@
 """Embedding providers for text-to-vector encoding.
 
-This module provides abstractions for converting text into vector embeddings,
-separating embedding computation from vector search to enable:
-- Swapping embedding models (sentence-transformers, OpenAI, etc.)
-- Caching embeddings between train/optimize and inference phases
-- Independent testing of embedding logic
+This module provides abstractions for converting text into embeddings,
+supporting both dense (semantic) and sparse (keyword) vectors for hybrid search.
 
-The core abstraction is the EmbeddingProvider Protocol, which defines a
-standard interface for encoding text into numerical vectors.
+Key providers:
+- EmbeddingProvider: Dense embeddings (np.ndarray) for semantic similarity
+- SparseEmbeddingProvider: Sparse embeddings (BM25, SPLADE) for keyword matching
+
+Both protocols share the same interface (encode(texts)) but different return types.
 """
 
 import hashlib
 import logging
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -82,6 +82,48 @@ class EmbeddingProvider(Protocol):
         Note:
             This property allows VectorIndex implementations to validate
             embedding dimensions and configure index parameters correctly.
+        """
+        ...  # pragma: no cover
+
+
+class SparseEmbeddingProvider(Protocol):
+    """Protocol for sparse vector generation (BM25, SPLADE, etc.).
+
+    Sparse embeddings complement dense embeddings in hybrid search by providing
+    keyword-based matching. They return vectors in Qdrant-compatible format
+    with vocabulary indices and corresponding weights.
+
+    Example:
+        sparse_embedder = FastEmbedSparseEmbedder("Qdrant/bm25")
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        sparse_vectors = sparse_embedder.encode(texts)
+
+        # Result format (Qdrant compatible):
+        # [
+        #     {"indices": [1, 5, 10], "values": [0.8, 0.6, 0.3]},
+        #     {"indices": [2, 5, 15], "values": [0.9, 0.5, 0.4]}
+        # ]
+    """
+
+    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Generate sparse vectors from texts.
+
+        Args:
+            texts: List of texts to encode.
+
+        Returns:
+            List of sparse vectors in Qdrant format.
+            Each sparse vector is a dict with:
+            - "indices": List of vocabulary indices (int)
+            - "values": List of corresponding weights (float)
+
+        Example:
+            sparse_vectors = embedder.encode(["Hello world", "Python code"])
+            # Returns:
+            # [
+            #     {"indices": [10, 25, 100], "values": [0.8, 0.6, 0.3]},
+            #     {"indices": [15, 50, 120], "values": [0.9, 0.5, 0.4]}
+            # ]
         """
         ...  # pragma: no cover
 
@@ -295,3 +337,109 @@ class FakeEmbedder:
             The dimensionality of embeddings produced by this faker.
         """
         return self._embedding_dim
+
+
+# ============ SPARSE EMBEDDING IMPLEMENTATIONS ============
+
+
+class FastEmbedSparseEmbedder:
+    """Sparse embedding provider using FastEmbed library.
+
+    Wraps FastEmbed's SparseTextEmbedding for efficient sparse vector generation.
+    Supports BM25 and neural sparse models (SPLADE).
+
+    Recommended models:
+    - "Qdrant/bm25": Classic BM25 keyword matching (lightweight, fast)
+    - "prithivida/Splade_PP_en_v1": Neural sparse embeddings (better quality)
+
+    Example:
+        # BM25 (lightweight)
+        sparse_embedder = FastEmbedSparseEmbedder("Qdrant/bm25")
+
+        # Neural sparse (higher quality)
+        sparse_embedder = FastEmbedSparseEmbedder("prithivida/Splade_PP_en_v1")
+
+        # Encode texts
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        sparse_vectors = sparse_embedder.encode(texts)
+
+    Note:
+        FastEmbed uses ONNX runtime for efficient CPU inference.
+        Model is loaded lazily on first encode() call.
+    """
+
+    def __init__(self, model_name: str = "Qdrant/bm25"):
+        """Initialize FastEmbed sparse embedder.
+
+        Args:
+            model_name: FastEmbed sparse model name.
+                Default: "Qdrant/bm25" (classic BM25)
+                Alternative: "prithivida/Splade_PP_en_v1" (neural sparse)
+        """
+        self.model_name = model_name
+        self._model: Any = None  # Lazy-loaded on first encode
+
+    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Generate sparse vectors using FastEmbed.
+
+        Args:
+            texts: List of texts to encode.
+
+        Returns:
+            List of sparse vectors in Qdrant format.
+            Each vector is {"indices": [...], "values": [...]}.
+        """
+        # Lazy-load model on first use
+        if self._model is None:
+            from fastembed import SparseTextEmbedding
+
+            logger.info("Loading FastEmbed sparse model: %s", self.model_name)
+            self._model = SparseTextEmbedding(self.model_name)
+
+        # Generate sparse embeddings
+        # FastEmbed returns SparseEmbedding objects with .indices and .values
+        sparse_embeddings = list(self._model.embed(texts))
+
+        # Convert to Qdrant format
+        result = []
+        for emb in sparse_embeddings:
+            result.append({"indices": emb.indices.tolist(), "values": emb.values.tolist()})
+
+        logger.debug("Generated %d sparse vectors", len(result))
+        return result
+
+
+class FakeSparseEmbedder:
+    """Test double for SparseEmbeddingProvider.
+
+    Produces deterministic fake sparse vectors for testing.
+    No actual embedding computation - instant and deterministic.
+
+    Example:
+        sparse_embedder = FakeSparseEmbedder()
+        sparse_vectors = sparse_embedder.encode(["Apple", "Google"])
+
+        # Returns deterministic fake sparse vectors based on text hashes
+        # Each text gets a single index based on hash(text) % 1000
+    """
+
+    def encode(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Generate deterministic fake sparse vectors.
+
+        Args:
+            texts: List of texts to encode.
+
+        Returns:
+            List of fake sparse vectors in Qdrant format.
+            Each vector has a single index based on text hash.
+        """
+        result = []
+        for text in texts:
+            # Generate deterministic index from text hash
+            idx = (
+                abs(hash(text)) % 1000
+            )  # TODO what happens when there are more then 1000 embeddings?
+            result.append({"indices": [idx], "values": [1.0]})
+
+        logger.debug("Generated %d fake sparse vectors", len(result))
+        return result

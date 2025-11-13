@@ -18,7 +18,14 @@ from langres.core.debugging import (
 from langres.core.embeddings import (
     EmbeddingProvider,
     FakeEmbedder,
+    FakeSparseEmbedder,
+    FastEmbedSparseEmbedder,
     SentenceTransformerEmbedder,
+    SparseEmbeddingProvider,
+)
+from langres.core.hybrid_vector_index import (
+    FakeHybridVectorIndex,
+    QdrantHybridIndex,
 )
 from langres.core.models import (
     CompanySchema,
@@ -41,13 +48,18 @@ __all__ = [
     "ErrorExample",
     "FAISSIndex",
     "FakeEmbedder",
+    "FakeHybridVectorIndex",
+    "FakeSparseEmbedder",
     "FakeVectorIndex",
+    "FastEmbedSparseEmbedder",
     "metrics",
     "Module",
     "optimizers",
     "PairwiseJudgement",
     "PipelineDebugger",
+    "QdrantHybridIndex",
     "ScoreStats",
     "SentenceTransformerEmbedder",
+    "SparseEmbeddingProvider",
     "VectorIndex",
 ]

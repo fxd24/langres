@@ -5,246 +5,185 @@ import logging
 import numpy as np
 import pytest
 
-from langres.core.vector_index import FAISSIndex, FakeVectorIndex, VectorIndex
+from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
+from langres.core.vector_index import FAISSIndex, FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 
 
 class TestFAISSIndex:
-    """Tests for FAISSIndex implementation."""
+    """Tests for FAISSIndex implementation with new API."""
 
-    def test_build_and_search_l2_metric(self):
-        """Test building index and searching with L2 metric."""
-        index = FAISSIndex(metric="L2")
+    # ============ NEW API TESTS ============
+    def test_create_index_from_texts(self):
+        """Test creating index from texts (index owns embedder)."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-        # Create simple embeddings
-        embeddings = np.array(
-            [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [0.9, 0.1, 0.0],  # Close to first embedding
-            ],
-            dtype=np.float32,
-        )
-
-        index.build(embeddings)
-
-        # Search for nearest neighbors (k=2)
-        distances, indices = index.search(embeddings, k=2)
-
-        # Verify shape
-        assert distances.shape == (4, 2)
-        assert indices.shape == (4, 2)
-
-        # First neighbor should always be itself (distance ≈ 0)
-        assert np.allclose(distances[:, 0], 0.0, atol=1e-5)
-        assert np.array_equal(indices[:, 0], [0, 1, 2, 3])
-
-        # Fourth embedding should have first embedding as second neighbor
-        assert indices[3, 1] == 0  # Second nearest to [0.9, 0.1, 0] is [1, 0, 0]
-
-    def test_build_and_search_cosine_metric(self):
-        """Test building index and searching with cosine similarity."""
-        index = FAISSIndex(metric="cosine")
-
-        # Create embeddings (will be normalized for cosine)
-        embeddings = np.array(
-            [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.5, 0.5, 0.0],  # 45° between first two
-            ],
-            dtype=np.float32,
-        )
-
-        index.build(embeddings)
-
-        # Search
-        distances, indices = index.search(embeddings, k=2)
-
-        assert distances.shape == (3, 2)
-        assert indices.shape == (3, 2)
-
-    def test_build_accepts_numpy_array(self):
-        """Test that build accepts numpy arrays."""
-        index = FAISSIndex(metric="L2")
-        embeddings = np.random.rand(10, 128).astype(np.float32)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
 
         # Should not raise
-        index.build(embeddings)
+        index.create_index(texts)
 
-    def test_search_before_build_raises_error(self):
-        """Test that searching before building raises an error."""
-        index = FAISSIndex(metric="L2")
-        embeddings = np.random.rand(5, 128).astype(np.float32)
+    def test_search_single_text_query(self):
+        """Test searching with a single text query."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-        with pytest.raises(RuntimeError, match="Index not built"):
-            index.search(embeddings, k=3)
+        corpus_texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(corpus_texts)
 
-    def test_search_returns_correct_shape(self):
-        """Test that search returns arrays with correct shape."""
-        index = FAISSIndex(metric="L2")
-        embeddings = np.random.rand(100, 64).astype(np.float32)
+        # Search with single text
+        distances, indices = index.search("Apple", k=2)
 
-        index.build(embeddings)
-        distances, indices = index.search(embeddings, k=10)
+        # Should return 1D arrays (single query)
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
+        assert isinstance(distances, np.ndarray)
+        assert isinstance(indices, np.ndarray)
 
-        assert distances.shape == (100, 10)
-        assert indices.shape == (100, 10)
-        assert distances.dtype == np.float32
-        assert indices.dtype == np.int64
+    def test_search_batch_text_queries(self):
+        """Test searching with batch of text queries (native batching)."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-    def test_search_with_k_larger_than_dataset(self):
-        """Test searching with k larger than dataset size."""
-        index = FAISSIndex(metric="L2")
-        embeddings = np.random.rand(5, 32).astype(np.float32)
+        corpus_texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(corpus_texts)
 
-        index.build(embeddings)
+        # Search with batch of texts (native batching!)
+        query_texts = ["Apple", "Google"]
+        distances, indices = index.search(query_texts, k=2)
 
-        # k=10 but only 5 embeddings - FAISS should handle this
-        distances, indices = index.search(embeddings, k=10)
+        # Should return 2D arrays (batch)
+        assert distances.shape == (2, 2)  # 2 queries, 2 neighbors each
+        assert indices.shape == (2, 2)
 
-        # Should return k=5 (all available)
-        assert distances.shape == (5, 10)
-        assert indices.shape == (5, 10)
+    def test_search_all_deduplication_pattern(self):
+        """Test search_all for efficient deduplication."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-    def test_multiple_builds_replace_index(self):
-        """Test that building multiple times replaces the index."""
-        index = FAISSIndex(metric="L2")
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
 
-        # First build
-        embeddings1 = np.random.rand(10, 32).astype(np.float32)
-        index.build(embeddings1)
+        # Search all items against all (dedup pattern)
+        distances, indices = index.search_all(k=3)
 
-        # Second build with different data
-        embeddings2 = np.random.rand(20, 32).astype(np.float32)
-        index.build(embeddings2)
+        # Should return shape (N, k) where N = corpus size
+        assert distances.shape == (4, 3)
+        assert indices.shape == (4, 3)
 
-        # Search should work with second dataset size
-        distances, indices = index.search(embeddings2, k=5)
-        assert distances.shape == (20, 5)
+        # First neighbor should be itself
+        assert np.array_equal(indices[:, 0], [0, 1, 2, 3])
 
-    def test_invalid_metric_raises_error(self):
-        """Test that FAISSIndex raises ValueError for invalid metric."""
-        index = FAISSIndex(metric="invalid_metric")
-        embeddings = np.random.rand(10, 32).astype(np.float32)
+    def test_search_before_create_index_raises_error(self):
+        """Test that searching before create_index raises error."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-        with pytest.raises(ValueError, match="Unknown metric"):
-            index.build(embeddings)
+        with pytest.raises(RuntimeError, match="Must call create_index"):
+            index.search("Apple", k=3)
+
+    def test_search_all_before_create_index_raises_error(self):
+        """Test that search_all before create_index raises error."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        with pytest.raises(RuntimeError, match="Must call create_index"):
+            index.search_all(k=3)
+
+    @pytest.mark.slow
+    def test_create_index_with_real_embedder(self):
+        """Test create_index with real sentence transformer."""
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        texts = ["Apple Inc.", "Microsoft Corporation", "Google LLC"]
+        index.create_index(texts)
+
+        # Search for similar company
+        distances, indices = index.search("Apple Company", k=2)
+
+        assert distances.shape == (2,)
+        # "Apple Inc." should be most similar
+        assert indices[0] == 0
 
 
 class TestFakeVectorIndex:
-    """Tests for FakeVectorIndex test double."""
+    """Tests for FakeVectorIndex test double with new API."""
 
-    def test_build_and_search_returns_correct_shape(self):
-        """Test that FakeVectorIndex returns correct shapes."""
+    # ============ NEW API TESTS ============
+    def test_fake_create_index_from_texts(self):
+        """Test FakeVectorIndex.create_index with texts."""
         index = FakeVectorIndex()
-        embeddings = np.random.rand(50, 128).astype(np.float32)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
 
-        index.build(embeddings)
-        distances, indices = index.search(embeddings, k=10)
+        # Should not raise
+        index.create_index(texts)
 
-        assert distances.shape == (50, 10)
-        assert indices.shape == (50, 10)
-
-    def test_search_returns_valid_indices(self):
-        """Test that FakeVectorIndex returns valid indices."""
+    def test_fake_search_single_text(self):
+        """Test FakeVectorIndex.search with single text."""
         index = FakeVectorIndex()
-        n_samples = 30
-        embeddings = np.random.rand(n_samples, 64).astype(np.float32)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
 
-        index.build(embeddings)
-        _, indices = index.search(embeddings, k=5)
+        distances, indices = index.search("Apple", k=2)
 
-        # All indices should be within valid range [0, n_samples)
-        assert np.all(indices >= 0)
-        assert np.all(indices < n_samples)
+        # Should return 1D arrays
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
 
-    def test_search_includes_self_as_nearest(self):
-        """Test that each query's nearest neighbor is itself."""
+    def test_fake_search_batch_texts(self):
+        """Test FakeVectorIndex.search with batch of texts."""
         index = FakeVectorIndex()
-        embeddings = np.random.rand(20, 32).astype(np.float32)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
 
-        index.build(embeddings)
-        _, indices = index.search(embeddings, k=5)
+        query_texts = ["Apple", "Google"]
+        distances, indices = index.search(query_texts, k=2)
 
-        # First neighbor should be itself
-        expected_self_indices = np.arange(20)
-        assert np.array_equal(indices[:, 0], expected_self_indices)
+        # Should return 2D arrays
+        assert distances.shape == (2, 2)
+        assert indices.shape == (2, 2)
 
-    def test_deterministic_results(self):
-        """Test that FakeVectorIndex produces deterministic results."""
-        index1 = FakeVectorIndex()
-        index2 = FakeVectorIndex()
-
-        embeddings = np.random.rand(10, 16).astype(np.float32)
-
-        index1.build(embeddings)
-        index2.build(embeddings)
-
-        distances1, indices1 = index1.search(embeddings, k=3)
-        distances2, indices2 = index2.search(embeddings, k=3)
-
-        np.testing.assert_array_equal(distances1, distances2)
-        np.testing.assert_array_equal(indices1, indices2)
-
-    def test_search_before_build_raises_error(self):
-        """Test that searching before building raises an error."""
+    def test_fake_search_all(self):
+        """Test FakeVectorIndex.search_all."""
         index = FakeVectorIndex()
-        embeddings = np.random.rand(5, 32).astype(np.float32)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
 
-        with pytest.raises(RuntimeError, match="Index not built"):
-            index.search(embeddings, k=3)
+        distances, indices = index.search_all(k=3)
 
-    def test_protocol_compliance(self):
-        """Test that FakeVectorIndex implements VectorIndex protocol."""
-        index = FakeVectorIndex()
+        # Should return shape (N, k)
+        assert distances.shape == (4, 3)
+        assert indices.shape == (4, 3)
 
-        assert hasattr(index, "build")
-        assert hasattr(index, "search")
-        assert callable(index.build)
-        assert callable(index.search)
+        # First neighbor should be itself (deterministic pattern)
+        assert np.array_equal(indices[:, 0], [0, 1, 2, 3])
 
 
 class TestVectorIndexProtocol:
-    """Tests for VectorIndex protocol compliance."""
+    """Tests for VectorIndex protocol compliance with new API."""
 
-    @pytest.mark.parametrize(
-        "index_class,kwargs",
-        [
-            (FAISSIndex, {"metric": "L2"}),
-            (FakeVectorIndex, {}),
-        ],
-    )
-    def test_protocol_methods_exist(self, index_class, kwargs):
-        """Test that implementations have required protocol methods."""
-        index = index_class(**kwargs)
+    def test_faiss_index_implements_protocol(self):
+        """Test that FAISSIndex implements VectorIndex protocol."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-        assert hasattr(index, "build")
+        assert hasattr(index, "create_index")
         assert hasattr(index, "search")
-        assert callable(index.build)
+        assert hasattr(index, "search_all")
+        assert callable(index.create_index)
         assert callable(index.search)
+        assert callable(index.search_all)
 
-    @pytest.mark.parametrize(
-        "index_class,kwargs",
-        [
-            (FAISSIndex, {"metric": "L2"}),
-            (FakeVectorIndex, {}),
-        ],
-    )
-    def test_build_search_workflow(self, index_class, kwargs):
-        """Test that all implementations support build → search workflow."""
-        index = index_class(**kwargs)
-        embeddings = np.random.rand(10, 32).astype(np.float32)
+    def test_fake_index_implements_protocol(self):
+        """Test that FakeVectorIndex implements VectorIndex protocol."""
+        index = FakeVectorIndex()
 
-        # Build should accept embeddings
-        index.build(embeddings)
-
-        # Search should return distances and indices
-        distances, indices = index.search(embeddings, k=3)
-
-        assert isinstance(distances, np.ndarray)
-        assert isinstance(indices, np.ndarray)
-        assert distances.shape == (10, 3)
-        assert indices.shape == (10, 3)
+        assert hasattr(index, "create_index")
+        assert hasattr(index, "search")
+        assert hasattr(index, "search_all")
+        assert callable(index.create_index)
+        assert callable(index.search)
+        assert callable(index.search_all)

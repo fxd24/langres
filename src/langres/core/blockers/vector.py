@@ -16,7 +16,6 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from langres.core.blocker import Blocker, SchemaT
-from langres.core.embeddings import EmbeddingProvider
 from langres.core.models import ERCandidate
 from langres.core.reports import CandidateInspectionReport
 from langres.core.vector_index import VectorIndex
@@ -39,7 +38,7 @@ class VectorBlocker(Blocker[SchemaT]):
     accepting a schema_factory (to transform raw dicts) and a
     text_field_extractor (to extract text for embedding).
 
-    Example (production with real implementations):
+    Example (production with FAISS):
         from langres.core.embeddings import SentenceTransformerEmbedder
         from langres.core.vector_index import FAISSIndex
 
@@ -51,29 +50,48 @@ class VectorBlocker(Blocker[SchemaT]):
             )
 
         embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
-        index = FAISSIndex(metric="L2")
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         blocker = VectorBlocker(
             schema_factory=company_factory,
             text_field_extractor=lambda x: x.name,
-            embedding_provider=embedder,
             vector_index=index,
             k_neighbors=10
         )
 
         candidates = blocker.stream(company_records)
 
+    Example (production with Qdrant hybrid search):
+        from qdrant_client import QdrantClient
+        from langres.core.embeddings import SentenceTransformerEmbedder, FastEmbedSparseEmbedder
+        from langres.core.hybrid_vector_index import QdrantHybridIndex
+
+        client = QdrantClient(url="http://localhost:6333")
+        dense_embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        sparse_embedder = FastEmbedSparseEmbedder("Qdrant/bm25")
+
+        index = QdrantHybridIndex(
+            client=client,
+            collection_name="companies",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+        )
+
+        blocker = VectorBlocker(
+            schema_factory=company_factory,
+            text_field_extractor=lambda x: x.name,
+            vector_index=index,
+            k_neighbors=10
+        )
+
     Example (testing with fakes):
-        from langres.core.embeddings import FakeEmbedder
         from langres.core.vector_index import FakeVectorIndex
 
-        embedder = FakeEmbedder(embedding_dim=128)
         index = FakeVectorIndex()
 
         blocker = VectorBlocker(
             schema_factory=company_factory,
             text_field_extractor=lambda x: x.name,
-            embedding_provider=embedder,
             vector_index=index,
             k_neighbors=10
         )
@@ -98,7 +116,6 @@ class VectorBlocker(Blocker[SchemaT]):
             [dict[str, Any]], SchemaT
         ],  # TODO this seems a tight coupling to the schema.
         text_field_extractor: Callable[[SchemaT], str],
-        embedding_provider: EmbeddingProvider,
         vector_index: VectorIndex,
         k_neighbors: int = 10,
     ):
@@ -110,11 +127,10 @@ class VectorBlocker(Blocker[SchemaT]):
                 to work with any schema type.
             text_field_extractor: Callable that extracts the text to embed
                 from a SchemaT object. For example, lambda x: x.name.
-            embedding_provider: Provider for encoding text into embeddings.
-                Use SentenceTransformerEmbedder for production,
-                FakeEmbedder for testing.
             vector_index: Index for ANN search on embeddings.
-                Use FAISSIndex for production, FakeVectorIndex for testing.
+                The index owns the embedder and handles all embedding logic.
+                Use FAISSIndex or QdrantHybridIndex for production,
+                FakeVectorIndex or FakeHybridVectorIndex for testing.
             k_neighbors: Number of nearest neighbors to retrieve for each
                 entity. Higher values improve recall but generate more
                 candidates. Default: 10.
@@ -127,7 +143,6 @@ class VectorBlocker(Blocker[SchemaT]):
 
         self.schema_factory = schema_factory
         self.text_field_extractor = text_field_extractor
-        self.embedding_provider = embedding_provider
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
 
@@ -170,17 +185,14 @@ class VectorBlocker(Blocker[SchemaT]):
         # 2. Extract text for embedding
         texts = [self.text_field_extractor(entity) for entity in entities]
 
-        # 3. Encode texts into embeddings using injected provider
-        logger.info("Encoding %d entities into embeddings", len(texts))
-        embeddings = self.embedding_provider.encode(texts)
+        # 3. Build vector index from texts (index handles embedding internally)
+        logger.info("Building vector index for %d entities", len(texts))
+        self.vector_index.create_index(texts)
 
-        # 4. Build vector index using injected index
-        self.vector_index.build(embeddings)
-
-        # 5. Search for k nearest neighbors for each entity
+        # 4. Search for k nearest neighbors for each entity (deduplication pattern)
         # k+1 because the nearest neighbor will be the entity itself
         k = min(self.k_neighbors + 1, len(entities))
-        _, indices = self.vector_index.search(embeddings, k)
+        _, indices = self.vector_index.search_all(k)
 
         # 6. Generate pairs from nearest neighbors
         # Use a set to track seen pairs and avoid duplicates

@@ -1,13 +1,14 @@
 """Vector index implementations for approximate nearest neighbor search.
 
-This module provides abstractions for vector indexing and similarity search,
-separating index management from embedding computation to enable:
-- Swapping index backends (FAISS, Annoy, cloud services)
-- Using pre-computed embeddings (cached or from databases)
-- Rebuilding indices without re-computing embeddings
+This module provides abstractions for vector indexing and similarity search.
+The index owns the embedding logic, providing a clean separation between
+domain logic (handled by blockers) and technical concerns (handled by indexes).
 
-The core abstraction is the VectorIndex Protocol, which defines a standard
-interface for building indices and searching for nearest neighbors.
+Key design principles:
+- Index owns embedder: No blocker-level embedding dependencies
+- Lifecycle separation: create_index() (preprocessing) vs search() (runtime)
+- Native batching: Leverage FAISS/Qdrant batch APIs for efficiency
+- Text-focused: Optimized for text inputs (extensible to multi-modal later)
 """
 
 import logging
@@ -16,173 +17,271 @@ from typing import Literal, Protocol
 import faiss  # type: ignore[import-untyped]
 import numpy as np
 
+from langres.core.embeddings import EmbeddingProvider
+
 logger = logging.getLogger(__name__)
 
 
 class VectorIndex(Protocol):
-    """Protocol for vector indexing and approximate nearest neighbor search.
+    """Protocol for vector indexing with lifecycle separation and native batching.
 
-    This abstraction handles index building and ANN search, separate from
-    embedding computation. This separation enables several key workflows:
+    The index owns embedding logic and provides three key operations:
+    1. create_index(texts): Preprocessing - embed and build searchable index
+    2. search(query_texts, k): Runtime - search with text queries (native batching)
+    3. search_all(k): Runtime - efficient deduplication pattern (all vs all)
 
-    1. **Using pre-computed embeddings**:
-       Load embeddings from disk/DB that were computed earlier,
-       build index, search immediately.
+    This design enables:
+    - Clean separation: Index handles technical concerns (embedding, indexing)
+    - Blocker simplicity: Blocker only handles domain logic
+    - Efficient batching: Leverage native vector DB batch APIs
+    - Swappable backends: FAISS, Qdrant, or custom implementations
 
-    2. **Rebuilding indices without re-embedding**:
-       After optimization, rebuild index with different parameters
-       without re-computing expensive embeddings.
+    Example (FAISS backend):
+        from langres.core.embeddings import SentenceTransformerEmbedder
 
-    3. **Swapping index backends**:
-       Try FAISS, Annoy, ScaNN, or cloud services (Pinecone, Qdrant)
-       with the same embeddings.
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-    Example (using pre-computed embeddings):
-        # Load cached embeddings from optimization phase
-        embeddings = np.load("production_embeddings.npy")
+        # Preprocessing: build index from texts
+        corpus = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(corpus)
 
-        # Build index and search
-        index = FAISSIndex(metric="L2")
-        index.build(embeddings)
-        distances, indices = index.search(embeddings, k=10)
+        # Runtime: search with single query
+        distances, indices = index.search("Apple Company", k=2)
+        # Returns 1D arrays: distances=(2,), indices=(2,)
 
-    Example (rebuilding index with different parameters):
-        # Already have embeddings
-        embeddings = embedder.encode(texts)
+        # Runtime: search with batch queries (native batching!)
+        queries = ["Apple", "Google"]
+        distances, indices = index.search(queries, k=2)
+        # Returns 2D arrays: distances=(2,2), indices=(2,2)
 
-        # Try different index configurations
-        for metric in ["L2", "cosine"]:
-            index = FAISSIndex(metric=metric)
-            index.build(embeddings)
-            recall = evaluate_recall(index.search(embeddings, k=10))
-            print(f"{metric}: recall={recall}")
+        # Runtime: deduplication pattern (all vs all)
+        distances, indices = index.search_all(k=10)
+        # Returns 2D arrays: distances=(3,10), indices=(3,10)
     """
 
-    def build(self, embeddings: np.ndarray) -> None:
-        """Build index from pre-computed embeddings.
+    def create_index(self, texts: list[str]) -> None:
+        """Preprocessing: Build searchable index from text corpus.
+
+        The index handles embedding internally using its configured embedder.
+        This is a one-time operation - build once, query many times.
 
         Args:
-            embeddings: Pre-computed embedding vectors, shape (N, dim).
-                Must be a 2D numpy array of float32 values.
+            texts: Corpus texts to embed and index.
 
         Note:
-            This method should be idempotent - calling build() multiple
-            times should replace the existing index each time.
-
-        Note:
-            Implementations may modify embeddings in-place (e.g., L2
-            normalization for cosine similarity). Callers should not
-            rely on embeddings being unchanged after build().
+            Calling create_index() multiple times replaces the existing index.
+            This enables rebuilding with new data without recreating the index object.
         """
         ...  # pragma: no cover
 
-    def search(self, query_embeddings: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Search for k nearest neighbors for each query embedding.
+    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Runtime: Search for k nearest neighbors using text queries.
+
+        Supports both single query and batch queries. For batch queries,
+        implementations MUST use native batching (e.g., FAISS batch search,
+        Qdrant query_batch_points) for efficiency.
 
         Args:
-            query_embeddings: Query vectors, shape (N, dim).
+            query_texts: Single text query or list of text queries.
             k: Number of nearest neighbors to return per query.
 
         Returns:
             Tuple of (distances, indices):
-            - distances: shape (N, k), similarity/distance scores
-            - indices: shape (N, k), indices of neighbors in the
-              original embeddings passed to build()
+            - If single query: distances=(k,), indices=(k,)
+            - If batch: distances=(N,k), indices=(N,k)
 
         Raises:
-            RuntimeError: If search() is called before build().
+            RuntimeError: If search() is called before create_index().
 
         Note:
-            Indices refer to positions in the embeddings array passed
-            to build(). For example, indices[0, 0] = 5 means the
-            nearest neighbor of query 0 is embeddings[5].
+            The index embeds query texts on-the-fly using its embedder.
+            For external queries (entity linking pattern).
+        """
+        ...  # pragma: no cover
+
+    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Runtime: Search all corpus items against each other (deduplication).
+
+        Efficient batch operation that uses cached corpus embeddings.
+        No re-embedding needed - reuses embeddings from create_index().
+
+        Args:
+            k: Number of nearest neighbors to return per corpus item.
+
+        Returns:
+            Tuple of (distances, indices), both shape (N, k) where N = corpus size.
+
+        Raises:
+            RuntimeError: If search_all() is called before create_index().
 
         Note:
-            Distance semantics depend on the metric:
-            - L2: smaller = more similar (0 = identical)
-            - Cosine: larger = more similar (inner product after normalization)
+            For deduplication pattern where you want neighbors for all items.
+            More efficient than calling search(all_texts, k) because it reuses
+            cached embeddings without re-encoding.
         """
         ...  # pragma: no cover
 
 
 class FAISSIndex:
-    """FAISS-based vector index for approximate nearest neighbor search.
+    """FAISS-backed index with native batch search and lifecycle separation.
 
-    This implementation wraps Facebook AI's FAISS library for efficient
-    similarity search. It supports both L2 (Euclidean) and cosine similarity
-    metrics.
+    The index owns the embedder and provides three operations:
+    1. create_index(texts) - Preprocessing: embed texts and build FAISS index
+    2. search(query_texts, k) - Runtime: search with text queries (native batching)
+    3. search_all(k) - Runtime: efficient deduplication (all vs all)
 
-    FAISS is well-suited for:
-    - In-memory search on single machine (100k-10M vectors)
-    - CPU or GPU acceleration
-    - Exact search (IndexFlat) or approximate search (IndexIVF, IndexHNSW)
-
-    For larger datasets or distributed search, consider cloud alternatives
-    like Pinecone, Qdrant, or Weaviate.
+    Supports L2 (Euclidean) and cosine similarity metrics.
 
     Example:
-        index = FAISSIndex(metric="L2")
-        embeddings = np.random.rand(1000, 384).astype(np.float32)
-        index.build(embeddings)
-        distances, indices = index.search(embeddings, k=10)
+        from langres.core.embeddings import SentenceTransformerEmbedder
 
-    Note:
-        This implementation uses IndexFlat (exact search) for simplicity
-        and correctness. For large datasets (>1M vectors), consider
-        using approximate indices (IndexIVFFlat, IndexHNSW) for speed.
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
-    Note:
-        FAISS expects float32 arrays. This implementation converts
-        inputs to float32 automatically.
+        # Preprocessing
+        corpus = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(corpus)
+
+        # Runtime: single query
+        distances, indices = index.search("Apple Company", k=2)
+        # Returns: distances=(2,), indices=(2,)
+
+        # Runtime: batch queries (native batching!)
+        distances, indices = index.search(["Apple", "Google"], k=2)
+        # Returns: distances=(2,2), indices=(2,2)
+
+        # Runtime: deduplication
+        distances, indices = index.search_all(k=10)
+        # Returns: distances=(3,10), indices=(3,10)
     """
 
-    def __init__(self, metric: Literal["L2", "cosine"] = "L2"):
+    def __init__(self, embedder: EmbeddingProvider, metric: Literal["L2", "cosine"] = "L2"):
         """Initialize FAISSIndex.
 
         Args:
-            metric: Distance metric to use.
-                - "L2": Euclidean distance (smaller = more similar)
-                - "cosine": Cosine similarity via inner product
-                  (larger = more similar)
-
-        Note:
-            For cosine similarity, embeddings will be L2-normalized
-            during build() so that inner product equals cosine similarity.
+            embedder: Provider for generating embeddings from texts.
+            metric: Distance metric ("L2" or "cosine").
         """
+        self.embedder = embedder
         self.metric = metric
+
+        # State (populated by create_index)
+        self._corpus_embeddings: np.ndarray | None = None
         self._index: faiss.Index | None = None
 
-    def build(self, embeddings: np.ndarray) -> None:
-        """Build FAISS index from pre-computed embeddings.
+    def create_index(self, texts: list[str]) -> None:
+        """Build FAISS index from text corpus.
+
+        Embeds texts using the configured embedder and builds searchable index.
 
         Args:
-            embeddings: Pre-computed embeddings, shape (N, dim).
-
-        Note:
-            For cosine metric, embeddings are L2-normalized in-place.
-            For L2 metric, embeddings are used as-is.
-
-        Note:
-            Calling build() multiple times replaces the existing index.
+            texts: Corpus texts to embed and index.
         """
-        # Convert to float32 (FAISS requirement)
-        embeddings = embeddings.astype(np.float32)
+        # 1. Embed corpus (index handles this!)
+        self._corpus_embeddings = self.embedder.encode(texts).astype(np.float32)
 
-        # Get embedding dimension
-        dim = embeddings.shape[1]
+        # 2. Create FAISS index based on metric
+        dim = self._corpus_embeddings.shape[1]
 
-        # Create appropriate index based on metric
         if self.metric == "L2":
             self._index = faiss.IndexFlatL2(dim)
         elif self.metric == "cosine":
-            # For cosine similarity, normalize embeddings and use inner product
-            faiss.normalize_L2(embeddings)  # Modifies in-place
-            self._index = faiss.IndexFlatIP(dim)  # Inner Product
+            # Normalize for cosine similarity (in-place)
+            faiss.normalize_L2(self._corpus_embeddings)
+            self._index = faiss.IndexFlatIP(dim)  # Inner product
         else:
             raise ValueError(f"Unknown metric: {self.metric}")
 
-        # Add embeddings to index
+        # 3. Add embeddings to index
+        self._index.add(self._corpus_embeddings)
+
+        logger.info(
+            "Built FAISS index with %d vectors, dim=%d, metric=%s",
+            self._corpus_embeddings.shape[0],
+            dim,
+            self.metric,
+        )
+
+    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Search for k nearest neighbors using text queries.
+
+        Supports both single query and batch queries with native FAISS batching.
+
+        Args:
+            query_texts: Single text or list of texts.
+            k: Number of neighbors per query.
+
+        Returns:
+            - If single query: distances=(k,), indices=(k,)
+            - If batch: distances=(N,k), indices=(N,k)
+        """
+        if self._index is None:
+            raise RuntimeError("Index not built. Must call create_index() first.")
+
+        # Handle single vs batch
+        is_single = isinstance(query_texts, str)
+        if is_single:
+            texts: list[str] = [query_texts]  # type: ignore[list-item]
+        else:
+            texts = query_texts  # type: ignore[assignment]
+
+        # Embed queries
+        query_embeddings = self.embedder.encode(texts).astype(np.float32)
+
+        # Normalize for cosine similarity
+        if self.metric == "cosine":
+            faiss.normalize_L2(query_embeddings)
+
+        # NATIVE BATCH SEARCH (single FAISS call!)
+        distances, indices = self._index.search(query_embeddings, k)
+
+        # Return shape depends on input
+        if is_single:
+            return distances[0], indices[0]
+        else:
+            return distances, indices
+
+    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Search all corpus items against each other (deduplication pattern).
+
+        Efficient batch operation using cached corpus embeddings.
+
+        Args:
+            k: Number of neighbors per corpus item.
+
+        Returns:
+            distances: shape (N, k) where N = corpus size
+            indices: shape (N, k)
+        """
+        if self._corpus_embeddings is None or self._index is None:
+            raise RuntimeError("Index not built. Must call create_index() first.")
+
+        # Single FAISS call with cached embeddings (no re-encoding!)
+        distances, indices = self._index.search(self._corpus_embeddings, k)
+
+        return distances, indices
+
+    # ============ OLD API (for backward compatibility during transition) ============
+    def build(self, embeddings: np.ndarray) -> None:
+        """DEPRECATED: Use create_index() instead.
+
+        Build FAISS index from pre-computed embeddings.
+        """
+        # Convert to float32 (FAISS requirement)
+        embeddings = embeddings.astype(np.float32)
+        dim = embeddings.shape[1]
+
+        if self.metric == "L2":
+            self._index = faiss.IndexFlatL2(dim)
+        elif self.metric == "cosine":
+            faiss.normalize_L2(embeddings)
+            self._index = faiss.IndexFlatIP(dim)
+        else:
+            raise ValueError(f"Unknown metric: {self.metric}")
+
         self._index.add(embeddings)
+        self._corpus_embeddings = embeddings
 
         logger.info(
             "Built FAISS index with %d vectors, dim=%d, metric=%s",
@@ -191,115 +290,108 @@ class FAISSIndex:
             self.metric,
         )
 
-    def search(self, query_embeddings: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Search for k nearest neighbors using FAISS.
-
-        Args:
-            query_embeddings: Query vectors, shape (N, dim).
-            k: Number of neighbors per query.
-
-        Returns:
-            Tuple of (distances, indices), each shape (N, k).
-
-        Raises:
-            RuntimeError: If index hasn't been built yet.
-
-        Note:
-            For cosine metric, query embeddings are L2-normalized
-            before search (in-place modification).
-        """
-        if self._index is None:
-            raise RuntimeError("Index not built. Call build() first.")
-
-        # Convert to float32
-        query_embeddings = query_embeddings.astype(np.float32)
-
-        # Normalize for cosine similarity
-        if self.metric == "cosine":
-            faiss.normalize_L2(query_embeddings)  # Modifies in-place
-
-        # Search
-        distances, indices = self._index.search(query_embeddings, k)
-
-        return distances, indices
-
 
 class FakeVectorIndex:
-    """Test double for VectorIndex that produces deterministic neighbors.
+    """Test double for VectorIndex with deterministic results.
 
-    This implementation creates fake search results that are:
-    1. Deterministic: same embeddings always produce same neighbors
-    2. Valid: all indices are within bounds [0, N)
-    3. Include self: each query's nearest neighbor is itself
-    4. Fast: no actual similarity computation
+    Produces fake search results that are:
+    - Deterministic: Same inputs always produce same outputs
+    - Valid: All indices are within bounds
+    - Fast: No actual embedding or similarity computation
 
-    This is crucial for testing VectorBlocker logic without expensive
-    FAISS operations or needing valid embeddings.
+    Perfect for testing blocker logic without expensive operations.
 
     Example:
         index = FakeVectorIndex()
-        embeddings = np.random.rand(100, 128).astype(np.float32)
-        index.build(embeddings)
-        distances, indices = index.search(embeddings, k=10)
-        # Returns deterministic (100, 10) arrays instantly
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
 
-    Note:
-        The fake neighbors are generated using a simple deterministic
-        pattern: for query i, neighbors are [i, (i+1)%N, (i+2)%N, ...].
-        Distances are synthetic (just scaled indices).
+        index.create_index(texts)
+
+        # Single query
+        distances, indices = index.search("Apple", k=2)
+        # Returns: distances=(2,), indices=(2,)
+
+        # Batch queries
+        distances, indices = index.search(["Apple", "Google"], k=2)
+        # Returns: distances=(2,2), indices=(2,2)
+
+        # Deduplication
+        distances, indices = index.search_all(k=2)
+        # Returns: distances=(3,2), indices=(3,2)
     """
 
     def __init__(self) -> None:
         """Initialize FakeVectorIndex."""
         self._n_samples: int | None = None
 
-    def build(self, embeddings: np.ndarray) -> None:
-        """Record the number of samples for generating valid indices.
+    def create_index(self, texts: list[str]) -> None:
+        """Record corpus size for generating valid indices.
 
         Args:
-            embeddings: Embeddings to "index" (only shape is used).
-
-        Note:
-            This doesn't actually build an index - it just records
-            the dataset size for generating valid neighbor indices.
+            texts: Corpus texts (only length is used).
         """
-        self._n_samples = embeddings.shape[0]
+        self._n_samples = len(texts)
         logger.debug("FakeVectorIndex: recorded %d samples", self._n_samples)
 
-    def search(self, query_embeddings: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Generate fake nearest neighbor results.
+    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Generate fake search results (deterministic).
 
         Args:
-            query_embeddings: Query vectors, shape (N, dim).
+            query_texts: Single text or list of texts.
             k: Number of neighbors per query.
 
         Returns:
-            Tuple of (distances, indices), each shape (N, k).
-            - indices[i, 0] = i (self is nearest neighbor)
-            - indices[i, j] = (i + j) % n_samples (deterministic pattern)
-            - distances[i, j] = j * 0.1 (synthetic distances)
-
-        Raises:
-            RuntimeError: If build() hasn't been called yet.
-
-        Note:
-            This is a deterministic fake - same inputs always produce
-            same outputs, which is perfect for testing.
+            - If single query: distances=(k,), indices=(k,)
+            - If batch: distances=(N,k), indices=(N,k)
         """
         if self._n_samples is None:
-            raise RuntimeError("Index not built. Call build() first.")
+            raise RuntimeError("Index not built. Call create_index() first.")
 
-        n_queries = query_embeddings.shape[0]
+        # Handle single vs batch
+        is_single = isinstance(query_texts, str)
+        n_queries = 1 if is_single else len(query_texts)
 
-        # Generate deterministic neighbor indices
-        # Pattern: for query i, neighbors are [i, (i+1)%N, (i+2)%N, ...]
+        # Generate deterministic indices
         indices = np.zeros((n_queries, k), dtype=np.int64)
         distances = np.zeros((n_queries, k), dtype=np.float32)
 
         for i in range(n_queries):
             for j in range(k):
+                indices[i, j] = j % self._n_samples
+                distances[i, j] = j * 0.1
+
+        # Return shape depends on input
+        if is_single:
+            return distances[0], indices[0]
+        else:
+            return distances, indices
+
+    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """Generate fake deduplication results (deterministic).
+
+        Args:
+            k: Number of neighbors per corpus item.
+
+        Returns:
+            distances: shape (N, k) where N = corpus size
+            indices: shape (N, k)
+        """
+        if self._n_samples is None:
+            raise RuntimeError("Index not built. Call create_index() first.")
+
+        # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
+        indices = np.zeros((self._n_samples, k), dtype=np.int64)
+        distances = np.zeros((self._n_samples, k), dtype=np.float32)
+
+        for i in range(self._n_samples):
+            for j in range(k):
                 indices[i, j] = (i + j) % self._n_samples
-                # Synthetic distances: 0 for self, then increasing
                 distances[i, j] = j * 0.1
 
         return distances, indices
+
+    # ============ OLD API (for backward compatibility) ============
+    def build(self, embeddings: np.ndarray) -> None:
+        """DEPRECATED: Use create_index() instead."""
+        self._n_samples = embeddings.shape[0]
+        logger.debug("FakeVectorIndex: recorded %d samples", self._n_samples)

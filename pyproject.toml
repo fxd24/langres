@@ -13,6 +13,7 @@ requires-python = ">=3.12"
 dependencies = [
     "dspy-ai>=3.0.3",
     "faiss-cpu>=1.12.0",
+    "fastembed>=0.7.3",
     "langfuse==2.59.7",
     "litellm>=1.79.0",
     "networkx>=3.5",
@@ -21,6 +22,7 @@ dependencies = [
     "optuna-integration[wandb]>=4.5.0",
     "pydantic>=2.12.3",
     "pydantic-settings>=2.11.0",
+    "qdrant-client>=1.15.1",
     "rapidfuzz>=3.14.1",
     "scikit-learn>=1.7.2",
     "sentence-transformers>=5.1.2",
