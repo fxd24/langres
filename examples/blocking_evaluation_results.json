@@ -1,0 +1,42 @@
+{
+  "dataset": {
+    "name": "funder_names_with_ids",
+    "total_entities": 1741,
+    "ground_truth_pairs": 1311
+  },
+  "model": {
+    "name": "Qwen/Qwen3-Embedding-0.6B",
+    "embedding_dim": 1024,
+    "k_neighbors": 20
+  },
+  "experiments": {
+    "faiss_dense_only": {
+      "recall": 0.8222730739893211,
+      "precision": 0.03727395318280834,
+      "f1": 0.071315162741466,
+      "true_positives": 1078,
+      "false_negatives": 233,
+      "false_positives": 27843,
+      "total_candidates": 28921,
+      "indexing_time_seconds": 8.91191816329956,
+      "avg_query_time_ms": 5.118850179953797
+    },
+    "qdrant_hybrid": {
+      "recall": 0.8352402745995423,
+      "precision": 0.03937998993023088,
+      "f1": 0.07521379262973521,
+      "true_positives": 1095,
+      "false_negatives": 216,
+      "false_positives": 26711,
+      "total_candidates": 27806,
+      "indexing_time_seconds": 117.37012600898743,
+      "avg_query_time_ms": 67.41535095289342
+    }
+  },
+  "comparison": {
+    "recall_improvement": 0.012967200610221163,
+    "precision_change": 0.002106036747422539,
+    "f1_improvement": 0.003898629888269209,
+    "indexing_time_ratio": 13.170018379694383
+  }
+}

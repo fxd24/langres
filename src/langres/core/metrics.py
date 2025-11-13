@@ -1,7 +1,7 @@
 """Evaluation metrics for entity resolution pipelines.
 
 This module provides metrics for evaluating different pipeline stages:
-- Blocking stage: evaluate_blocking()
+- Blocking stage: evaluate_blocking(), evaluate_blocking_with_ranking()
 - Clustering stage: evaluate_clustering(), calculate_bcubed_metrics(), calculate_pairwise_metrics()
 
 References:
@@ -11,6 +11,8 @@ References:
 """
 
 from typing import Any
+
+from ranx import Qrels, Run, evaluate  # type: ignore[import-untyped]
 
 from langres.core.debugging import CandidateStats
 from langres.core.models import ERCandidate
@@ -359,3 +361,201 @@ def evaluate_clustering(
         "bcubed": calculate_bcubed_metrics(predicted_clusters, gold_clusters),
         "pairwise": calculate_pairwise_metrics(predicted_clusters, gold_clusters),
     }
+
+
+def evaluate_blocking_with_ranking(
+    candidates: list[ERCandidate[Any]],
+    gold_clusters: list[set[str]],
+    k_values: list[int] | None = None,
+) -> dict[str, Any]:
+    """Evaluate blocking stage with ranking metrics (MAP, MRR, NDCG@K, Recall@K, Precision@K).
+
+    This function extends evaluate_blocking() by computing ranking metrics that measure
+    HOW WELL true matches are ranked by the blocker. This is critical for budget-constrained
+    downstream processing (e.g., LLM judging) where we want to process the most promising
+    candidates first.
+
+    Args:
+        candidates: List of candidate pairs with similarity_score populated
+        gold_clusters: List of ground truth entity clusters (sets of entity IDs)
+        k_values: List of K values for Recall@K and Precision@K metrics.
+            Defaults to [20] if not specified.
+
+    Returns:
+        Dictionary with ranking metrics:
+        - map: Mean Average Precision (0-1, higher is better)
+        - mrr: Mean Reciprocal Rank (0-1, higher is better)
+        - ndcg_at_K: NDCG@K for each K in k_values (0-1, higher is better)
+        - recall_at_K: Recall@K for each K (0-1, higher is better)
+        - precision_at_K: Precision@K for each K (0-1, higher is better)
+        - total_candidates: Number of candidate pairs
+        - avg_candidates_per_entity: Average candidates per entity
+
+    Raises:
+        ValueError: If any candidate is missing similarity_score
+
+    Example:
+        >>> from langres.core.metrics import evaluate_blocking_with_ranking
+        >>> blocker = VectorBlocker(...)
+        >>> candidates = list(blocker.stream(data))  # with similarity_score
+        >>> metrics = evaluate_blocking_with_ranking(candidates, gold_clusters)
+        >>> print(f"MAP: {metrics['map']:.3f}")
+        >>> print(f"MRR: {metrics['mrr']:.3f}")
+        >>> print(f"NDCG@20: {metrics['ndcg_at_20']:.3f}")
+
+    Note:
+        This function requires candidates to have similarity_score populated.
+        VectorBlocker.stream() automatically populates this field.
+
+    Note:
+        Ranking metrics complement precision/recall metrics:
+        - Precision/Recall: "Are true matches in the candidates?"
+        - Ranking: "Are true matches ranked highly?"
+    """
+    if k_values is None:
+        k_values = [20]
+
+    # Validate that all candidates have similarity scores
+    for candidate in candidates:
+        if candidate.similarity_score is None:
+            raise ValueError(
+                "evaluate_blocking_with_ranking requires similarity_score to be populated "
+                "in all candidates. VectorBlocker.stream() automatically populates this field."
+            )
+
+    # Convert gold clusters to pairs for relevance judgments
+    gold_pairs = pairs_from_clusters(gold_clusters)
+
+    # Handle empty candidates edge case
+    if len(candidates) == 0:
+        result: dict[str, Any] = {
+            "map": 0.0,
+            "mrr": 0.0,
+            "total_candidates": 0,
+            "avg_candidates_per_entity": 0.0,
+        }
+        for k in k_values:
+            result[f"ndcg_at_{k}"] = 0.0
+            result[f"recall_at_{k}"] = 0.0
+            result[f"precision_at_{k}"] = 0.0
+        return result
+
+    # Build per-entity candidate lists (for ranking evaluation)
+    # Structure: {entity_id: [(candidate_id, similarity_score), ...]}
+    entity_rankings: dict[str, list[tuple[str, float]]] = {}
+
+    for candidate in candidates:
+        left_id = str(candidate.left.id)
+        right_id = str(candidate.right.id)
+        score = candidate.similarity_score
+
+        assert score is not None  # Already validated above
+
+        # Add to left entity's ranking
+        if left_id not in entity_rankings:
+            entity_rankings[left_id] = []
+        entity_rankings[left_id].append((right_id, score))
+
+        # Add to right entity's ranking (bidirectional)
+        if right_id not in entity_rankings:
+            entity_rankings[right_id] = []
+        entity_rankings[right_id].append((left_id, score))
+
+    # Sort each entity's candidates by similarity (descending)
+    for entity_id in entity_rankings:
+        entity_rankings[entity_id].sort(key=lambda x: x[1], reverse=True)
+
+    # Convert to ranx format for NDCG and MRR
+    # Qrels: {query_id: {doc_id: relevance}}
+    # Run: {query_id: {doc_id: score}}
+    qrels_dict: dict[str, dict[str, int]] = {}
+    run_dict: dict[str, dict[str, float]] = {}
+
+    for entity_id, ranked_candidates in entity_rankings.items():
+        # Build relevance judgments (qrels)
+        qrels_dict[entity_id] = {}
+        for candidate_id, _ in ranked_candidates:
+            # Check if (entity_id, candidate_id) is a true match
+            pair = tuple(sorted([entity_id, candidate_id]))
+            is_relevant = pair in gold_pairs
+            qrels_dict[entity_id][candidate_id] = 1 if is_relevant else 0
+
+        # Build run (predictions with scores)
+        run_dict[entity_id] = {candidate_id: score for candidate_id, score in ranked_candidates}
+
+    # Create ranx objects
+    qrels = Qrels(qrels_dict)
+    run = Run(run_dict)
+
+    # Compute ranx metrics (MRR, NDCG@K)
+    ranx_metrics = evaluate(
+        qrels,
+        run,
+        metrics=["mrr", "map"] + [f"ndcg@{k}" for k in k_values],
+    )
+
+    # Compute Recall@K and Precision@K manually
+    recall_at_k = {}
+    precision_at_k = {}
+
+    for k in k_values:
+        total_recall = 0.0
+        total_precision = 0.0
+        num_queries = 0
+
+        for entity_id, ranked_candidates in entity_rankings.items():
+            # Get top-K candidates
+            top_k = ranked_candidates[:k]
+
+            # Count true matches in top-K
+            true_matches_in_top_k = 0
+            for candidate_id, _ in top_k:
+                pair = tuple(sorted([entity_id, candidate_id]))
+                if pair in gold_pairs:
+                    true_matches_in_top_k += 1
+
+            # Count total true matches for this entity
+            total_true_matches = sum(
+                1
+                for candidate_id, _ in ranked_candidates
+                if tuple(sorted([entity_id, candidate_id])) in gold_pairs
+            )
+
+            # Recall@K = (true matches in top-K) / (total true matches)
+            if total_true_matches > 0:
+                recall = true_matches_in_top_k / total_true_matches
+                total_recall += recall
+
+            # Precision@K = (true matches in top-K) / K
+            if len(top_k) > 0:
+                precision = true_matches_in_top_k / len(top_k)
+                total_precision += precision
+
+            num_queries += 1
+
+        # Average across all queries
+        recall_at_k[k] = total_recall / num_queries if num_queries > 0 else 0.0
+        precision_at_k[k] = total_precision / num_queries if num_queries > 0 else 0.0
+
+    # Calculate average candidates per entity
+    total_entities = len({e_id for cluster in gold_clusters for e_id in cluster})
+    avg_candidates_per_entity = len(candidates) * 2 / total_entities if total_entities > 0 else 0.0
+
+    # Build result dictionary
+    result = {
+        "map": ranx_metrics.get("map", 0.0),
+        "mrr": ranx_metrics.get("mrr", 0.0),
+        "total_candidates": len(candidates),
+        "avg_candidates_per_entity": avg_candidates_per_entity,
+    }
+
+    # Add NDCG@K metrics
+    for k in k_values:
+        result[f"ndcg_at_{k}"] = ranx_metrics.get(f"ndcg@{k}", 0.0)
+
+    # Add Recall@K and Precision@K metrics
+    for k in k_values:
+        result[f"recall_at_{k}"] = recall_at_k[k]
+        result[f"precision_at_{k}"] = precision_at_k[k]
+
+    return result

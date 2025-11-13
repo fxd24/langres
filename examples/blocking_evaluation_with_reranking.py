@@ -307,48 +307,60 @@ def evaluate_crossencoder_blocking(
     texts = [entity["name"] for entity in entities]
     qdrant_index.create_index(texts)
 
-    logger.info(f"[{name}] Generating candidates with CrossEncoder reranking...")
+    logger.info(f"[{name}] Retrieving candidates from hybrid search...")
 
     # Generate candidates and measure time
     start_time = time.time()
 
-    # For each entity, get top-N candidates and rerank
-    all_candidate_pairs = set()
+    # PHASE 1: Collect all query-candidate pairs from hybrid search
+    all_pairs_to_score = []  # List of (query_text, cand_text, query_id, cand_id)
 
     for entity in entities:
         query_text = entity["name"]
         query_id = entity["id"]
 
-        # Step 1: Get top-N candidates from hybrid search
+        # Get top-N candidates from hybrid search
         distances, indices = qdrant_index.search(query_text, k=CROSSENCODER_PREFETCH)
 
-        # Step 2: Fetch candidate texts (skip self-matches)
-        candidate_texts = []
-        candidate_ids = []
+        # Collect candidate texts (skip self-matches)
         for idx in indices:
             if idx >= 0 and idx < len(entities):  # Valid index
                 cand_id = entities[idx]["id"]
                 if cand_id != query_id:  # Skip self
-                    candidate_texts.append(entities[idx]["name"])
-                    candidate_ids.append(cand_id)
+                    all_pairs_to_score.append(
+                        (query_text, entities[idx]["name"], query_id, cand_id)
+                    )
 
-        if not candidate_texts:
-            continue
+    logger.info(f"[{name}] Scoring {len(all_pairs_to_score)} pairs with CrossEncoder in batch...")
 
-        # Step 3: Format pairs for CrossEncoder
-        # CrossEncoder expects list of [query, document] pairs
-        pairs = [[query_text, cand_text] for cand_text in candidate_texts]
+    # PHASE 2: Score ALL pairs in one batch (MUCH more efficient!)
+    all_candidate_pairs = set()
 
-        # Step 4: Score with CrossEncoder
-        scores = cross_encoder.predict(pairs)
+    if all_pairs_to_score:
+        # Format all pairs for CrossEncoder
+        pairs_for_encoder = [
+            [query_text, cand_text] for query_text, cand_text, _, _ in all_pairs_to_score
+        ]
 
-        # Step 5: Get top-k after reranking
-        top_k_idx = np.argsort(scores)[-K_NEIGHBORS:][::-1]  # Descending order
+        # Score everything in one batch call
+        all_scores = cross_encoder.predict(pairs_for_encoder)
 
-        # Step 6: Create candidate pairs
-        for idx in top_k_idx:
-            if idx < len(candidate_ids):
-                pair = tuple(sorted([query_id, candidate_ids[idx]]))
+        # PHASE 3: Group scores by query and select top-k per query
+        query_results: dict[str, list[tuple[float, str]]] = {}  # query_id -> [(score, cand_id)]
+
+        for (query_text, cand_text, query_id, cand_id), score in zip(
+            all_pairs_to_score, all_scores
+        ):
+            if query_id not in query_results:
+                query_results[query_id] = []
+            query_results[query_id].append((score, cand_id))
+
+        # Select top-k candidates for each query
+        for query_id, scored_candidates in query_results.items():
+            # Sort by score descending and take top-k
+            top_k_candidates = sorted(scored_candidates, reverse=True)[:K_NEIGHBORS]
+            for _, cand_id in top_k_candidates:
+                pair = tuple(sorted([query_id, cand_id]))
                 all_candidate_pairs.add(pair)
 
     indexing_time = time.time() - start_time
@@ -754,7 +766,7 @@ def main() -> None:
     logger.info(f"Loading {DENSE_MODEL} embedding model...")
     dense_embedder = SentenceTransformerEmbedder(
         model_name=DENSE_MODEL,
-        batch_size=32,
+        batch_size=128,
         normalize_embeddings=True,
     )
     embedding_dim = dense_embedder.embedding_dim

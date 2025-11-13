@@ -273,7 +273,9 @@ class VectorBlocker(Blocker[SchemaT]):
         # Use a set to track seen pairs and avoid duplicates
         seen_pairs: set[frozenset[str]] = set()
 
-        for i in range(len(entities)):
+        for i in range(
+            len(entities)
+        ):  # TODO: instead of loop is there a vector operation that can speed things up?
             # Get neighbor indices for entity i (skip first, which is itself)
             neighbor_indices = indices[i][1:]  # Skip index 0 (self)
             neighbor_similarities = similarities[i][1:]  # Skip index 0 (self)
@@ -306,7 +308,9 @@ class VectorBlocker(Blocker[SchemaT]):
                         similarity_score=float(similarity),
                     )
 
-    def _distances_to_similarities(self, distances: np.ndarray) -> np.ndarray:
+    def _distances_to_similarities(
+        self, distances: np.ndarray
+    ) -> np.ndarray:  # TODO verify if this is doing what you think it does.
         """Convert distance matrix to similarity scores in [0, 1].
 
         Args:

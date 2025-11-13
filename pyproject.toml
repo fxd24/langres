@@ -23,6 +23,7 @@ dependencies = [
     "pydantic>=2.12.3",
     "pydantic-settings>=2.11.0",
     "qdrant-client>=1.15.1",
+    "ranx>=0.3.21",
     "rapidfuzz>=3.14.1",
     "scikit-learn>=1.7.2",
     "sentence-transformers>=5.1.2",
