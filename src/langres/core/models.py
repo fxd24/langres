@@ -66,11 +66,13 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
         left: The left entity in the pair
         right: The right entity in the pair
         blocker_name: Name of the blocker that generated this candidate pair
+        similarity_score: Optional similarity score in [0, 1] for ranking evaluation
     """
 
     left: SchemaT
     right: SchemaT
     blocker_name: str
+    similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class PairwiseJudgement(BaseModel):
