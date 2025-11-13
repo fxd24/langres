@@ -106,10 +106,16 @@ def load_labeled_dedup_data(
     # Convert to LabeledGroup objects
     labeled_groups: list[LabeledGroup] = []
     for raw_group in raw_groups:
+        # Support both "entity_ids"/"entity_names" and "variant_ids"/"variant_names"
+        # Convert IDs to strings (some data files use integers)
+        raw_ids = raw_group.get("entity_ids") or raw_group.get("variant_ids", [])
+        group_entity_ids = [str(id_val) for id_val in raw_ids]
+        group_entity_names = raw_group.get("entity_names") or raw_group.get("variant_names", [])
+
         labeled_group = LabeledGroup(
             canonical_name=raw_group["canonical_name"],
-            entity_ids=raw_group["entity_ids"],
-            entity_names=raw_group["entity_names"],
+            entity_ids=group_entity_ids,
+            entity_names=group_entity_names,
             note=raw_group.get("note"),
         )
         labeled_groups.append(labeled_group)

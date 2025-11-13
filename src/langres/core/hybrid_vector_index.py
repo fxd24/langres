@@ -165,11 +165,20 @@ class QdrantHybridIndex:
             )
             points.append(point)
 
-        # 4. Batch upsert points (single network call)
-        self.client.upsert(
-            collection_name=self.collection_name,
-            points=points,
-        )
+        # 4. Batch upsert points (chunk to avoid payload size limits)
+        # Qdrant cloud has 32MB payload limit - batch in chunks of 100 points
+        batch_size = 100
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=batch,
+            )
+            logger.debug(
+                "Upserted batch %d/%d",
+                i // batch_size + 1,
+                (len(points) + batch_size - 1) // batch_size,
+            )
 
         logger.info("Upserted %d points to collection '%s'", len(points), self.collection_name)
 
@@ -245,15 +254,17 @@ class QdrantHybridIndex:
                 limit=k,
             )
 
-            # Extract distances and indices from ScoredPoint results
-            distances = np.array(
-                [point.score for point in results],  # type: ignore[attr-defined]
-                dtype=np.float32,
-            )
-            indices = np.array(
-                [point.id for point in results],  # type: ignore[attr-defined]
-                dtype=np.int64,
-            )
+            # Extract distances and indices from query results
+            # query_points returns QueryResponse with .points attribute
+            points = results.points if hasattr(results, "points") else results
+
+            # Pad results to ensure consistent shape (some queries may return fewer than k points)
+            distances = np.full(k, np.nan, dtype=np.float32)
+            indices = np.full(k, -1, dtype=np.int64)
+
+            for j, point in enumerate(points):
+                distances[j] = point.score  # type: ignore[attr-defined]
+                indices[j] = point.id  # type: ignore[attr-defined]
 
             all_distances.append(distances)
             all_indices.append(indices)

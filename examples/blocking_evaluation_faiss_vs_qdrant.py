@@ -55,7 +55,7 @@ class OrganizationSchema(BaseModel):
     name: str = Field(description="Organization name")
 
 
-def load_funder_data():
+def load_funder_data() -> tuple[list[dict[str, Any]], set[tuple[str, str]]]:
     """Load funder names dataset with ground truth labels.
 
     Returns:
@@ -73,7 +73,9 @@ def load_funder_data():
     entities = [{"id": entity_id, "name": name} for entity_id, name in dataset.entity_names.items()]
 
     # Get ground truth pairs from labeled groups
-    gold_pairs = pairs_from_clusters(dataset.labeled_groups)
+    # Convert LabeledGroup objects to sets of entity_ids
+    gold_clusters = [set(group.entity_ids) for group in dataset.labeled_groups]
+    gold_pairs = pairs_from_clusters(gold_clusters)
 
     logger.info(
         f"Loaded {len(entities)} entities with {len(gold_pairs)} ground truth duplicate pairs"
@@ -82,7 +84,7 @@ def load_funder_data():
     return entities, gold_pairs
 
 
-def connect_to_qdrant():
+def connect_to_qdrant() -> QdrantClient:
     """Connect to managed Qdrant cloud instance.
 
     Returns:
@@ -110,7 +112,9 @@ def connect_to_qdrant():
     return client
 
 
-def setup_faiss_blocker(qwen_embedder: SentenceTransformerEmbedder) -> VectorBlocker:
+def setup_faiss_blocker(
+    qwen_embedder: SentenceTransformerEmbedder,
+) -> VectorBlocker[OrganizationSchema]:
     """Setup FAISS blocker with dense vectors only.
 
     Args:
@@ -138,7 +142,7 @@ def setup_faiss_blocker(qwen_embedder: SentenceTransformerEmbedder) -> VectorBlo
 
 def setup_qdrant_blocker(
     qwen_embedder: SentenceTransformerEmbedder, qdrant_client: QdrantClient
-) -> VectorBlocker:
+) -> VectorBlocker[OrganizationSchema]:
     """Setup Qdrant blocker with dense + sparse hybrid search.
 
     Args:
@@ -176,11 +180,11 @@ def setup_qdrant_blocker(
 
 
 def evaluate_blocking_recall(
-    blocker: VectorBlocker,
-    entities: list[dict],
+    blocker: VectorBlocker[OrganizationSchema],
+    entities: list[dict[str, Any]],
     gold_pairs: set[tuple[str, str]],
     name: str,
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate blocking recall, precision, F1, and performance.
 
     Args:
@@ -236,7 +240,7 @@ def evaluate_blocking_recall(
     return results
 
 
-def print_comparison_table(faiss_results: dict, qdrant_results: dict):
+def print_comparison_table(faiss_results: dict[str, Any], qdrant_results: dict[str, Any]) -> None:
     """Print side-by-side comparison table.
 
     Args:
@@ -288,12 +292,12 @@ def print_comparison_table(faiss_results: dict, qdrant_results: dict):
 
 
 def save_results(
-    faiss_results: dict,
-    qdrant_results: dict,
-    entities: list[dict],
-    gold_pairs: set,
+    faiss_results: dict[str, Any],
+    qdrant_results: dict[str, Any],
+    entities: list[dict[str, Any]],
+    gold_pairs: set[tuple[str, str]],
     embedding_dim: int,
-):
+) -> None:
     """Save evaluation results to JSON file.
 
     Args:
@@ -337,7 +341,7 @@ def save_results(
     logger.info(f"✅ Results saved to: {output_path}")
 
 
-def main():
+def main() -> None:
     """Run blocking evaluation comparing FAISS vs Qdrant hybrid search."""
     print("=" * 90)
     print("BLOCKING EVALUATION: FAISS vs Qdrant Hybrid Search")
