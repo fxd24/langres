@@ -6,6 +6,8 @@ similarity_score field in ERCandidate objects, enabling ranking evaluation.
 
 import logging
 
+import numpy as np
+
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.models import CompanySchema
 from langres.core.vector_index import FakeVectorIndex
@@ -191,3 +193,51 @@ def test_vector_blocker_scores_single_entity() -> None:
 
     assert len(candidates) == 0
     logger.info("Single entity: no pairs, no scores (expected)")
+
+
+def test_vector_blocker_handles_nan_distances() -> None:
+    """Test that VectorBlocker handles NaN distances gracefully.
+
+    Some vector index implementations (e.g., Qdrant hybrid) can return NaN
+    distance values in certain scenarios. The blocker should convert these
+    to 0.0 (lowest similarity) rather than propagating NaN values.
+    """
+    entities = [
+        {"id": "c1", "name": "Apple Inc"},
+        {"id": "c2", "name": "Microsoft Corp"},
+        {"id": "c3", "name": "Google LLC"},
+    ]
+
+    # Create a custom vector index that returns NaN values
+    class NaNVectorIndex(FakeVectorIndex):
+        def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+            """Override to return distances with NaN values."""
+            distances, indices = super().search_all(k)
+            # Inject NaN into some distance values
+            distances[0][1] = np.nan  # Second neighbor of first entity
+            return distances, indices
+
+    nan_index = NaNVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=lambda x: CompanySchema(**x),
+        text_field_extractor=lambda x: x.name,
+        vector_index=nan_index,
+        k_neighbors=2,
+    )
+
+    texts = [e["name"] for e in entities]
+    nan_index.create_index(texts)
+
+    candidates = list(blocker.stream(entities))
+
+    # Verify all candidates have valid (non-NaN) similarity scores
+    for candidate in candidates:
+        assert candidate.similarity_score is not None
+        assert not np.isnan(candidate.similarity_score), (
+            f"Candidate ({candidate.left.id}, {candidate.right.id}) has NaN similarity_score"
+        )
+        assert 0.0 <= candidate.similarity_score <= 1.0
+        logger.info(
+            f"Candidate ({candidate.left.id}, {candidate.right.id}): "
+            f"similarity_score={candidate.similarity_score:.4f} (NaN handled correctly)"
+        )

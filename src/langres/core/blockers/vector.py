@@ -328,7 +328,13 @@ class VectorBlocker(Blocker[SchemaT]):
             - If max distance <= 2.0 AND distances increase monotonically for each row,
               treat as L2-style distances (convert with exp(-distance))
             - Otherwise, assume cosine similarities (clip to [0, 1])
+
+            NaN values are replaced with 0.0 (lowest similarity).
         """
+        # Replace NaN values with 0.0 (lowest similarity)
+        # This can happen with some vector index implementations
+        distances = np.nan_to_num(distances, nan=0.0)  # TODO: verify.
+
         # Check if distances look like L2-style (lower = better)
         # FakeVectorIndex produces [0.0, 0.1, 0.2, ...] (monotonic increasing)
         # Real L2 distances also increase with rank

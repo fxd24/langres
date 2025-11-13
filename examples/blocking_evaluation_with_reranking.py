@@ -15,6 +15,7 @@ Metrics evaluated:
 - Blocking recall: % of true duplicate pairs captured
 - Precision: % of candidate pairs that are true duplicates
 - F1 score: Harmonic mean of precision and recall
+- Ranking metrics: MAP, MRR, NDCG@20, Recall@20, Precision@20
 - Performance: Indexing time and average query latency
 
 Expected findings:
@@ -51,7 +52,7 @@ from langres.core.embeddings import (
     SentenceTransformerEmbedder,
 )
 from langres.core.hybrid_vector_index import QdrantHybridIndex
-from langres.core.metrics import pairs_from_clusters
+from langres.core.metrics import evaluate_blocking_with_ranking, pairs_from_clusters
 from langres.core.reranking_vector_index import QdrantHybridRerankingIndex
 from langres.core.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data
@@ -71,6 +72,17 @@ CROSSENCODER_MODEL = "tomaarsen/Qwen3-Reranker-0.6B-seq-cls"  # Qwen3 cross-enco
 K_NEIGHBORS = 20  # Number of neighbors to retrieve
 PREFETCH_LIMIT = 20  # For Qdrant hybrid/reranking prefetch
 CROSSENCODER_PREFETCH = 100  # Fetch more candidates for client-side cross-encoder reranking
+CROSSENCODER_BATCH_SIZE = 64  # Batch size for CrossEncoder (128/256/512 based on GPU memory)
+
+# Instruction prompts for Qwen3 models
+EMBEDDING_INSTRUCTION = (
+    "Instruct: Find duplicate organization names accounting for "
+    "acronyms, abbreviations, and spelling variations\nQuery: "
+)
+RERANKER_INSTRUCTION = (
+    "Judge whether these two organization names refer to the same entity, "
+    "accounting for acronyms, abbreviations, and spelling variations"
+)
 
 
 class OrganizationSchema(BaseModel):
@@ -80,11 +92,11 @@ class OrganizationSchema(BaseModel):
     name: str = Field(description="Organization name")
 
 
-def load_funder_data() -> tuple[list[dict[str, Any]], set[tuple[str, str]]]:
+def load_funder_data() -> tuple[list[dict[str, Any]], set[tuple[str, str]], list[set[str]]]:
     """Load funder names dataset with ground truth labels.
 
     Returns:
-        tuple: (entities list, gold pairs set)
+        tuple: (entities list, gold pairs set, gold clusters list)
     """
     logger.info("Loading funder names dataset...")
 
@@ -106,7 +118,7 @@ def load_funder_data() -> tuple[list[dict[str, Any]], set[tuple[str, str]]]:
         f"Loaded {len(entities)} entities with {len(gold_pairs)} ground truth duplicate pairs"
     )
 
-    return entities, gold_pairs
+    return entities, gold_pairs, gold_clusters
 
 
 def connect_to_qdrant() -> QdrantClient:
@@ -262,6 +274,49 @@ def setup_qdrant_reranking_blocker(
     return blocker
 
 
+def format_qwen_reranker_pair(query: str, document: str, instruction: str) -> list[str]:
+    """Format query-document pair for Qwen3-Reranker with required chat template.
+
+    The Qwen3-Reranker models require a specific chat template format split into
+    two parts for CrossEncoder: a query side (with system/instruct/query) and a
+    document side (with document tag and assistant thinking space).
+
+    Args:
+        query: Query organization name
+        document: Candidate organization name
+        instruction: Task instruction describing the matching criteria
+
+    Returns:
+        List of [query_formatted, document_formatted] for CrossEncoder.predict()
+
+    Example:
+        >>> format_qwen_reranker_pair(
+        ...     "Apple Inc.",
+        ...     "Apple Computer Inc.",
+        ...     "Judge whether these are the same entity"
+        ... )
+        ['<|im_start|>system\\n...\\n<Query>: Apple Inc.\\n',
+         '<Document>: Apple Computer Inc.<|im_end|>...']
+    """
+    system_msg = (
+        "Judge whether the Document meets the requirements based on the Query "
+        'and the Instruct provided. Note that the answer can only be "yes" or "no".'
+    )
+
+    # Query side: system message + instruction + query
+    query_formatted = (
+        f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+        f"<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n"
+    )
+
+    # Document side: document tag + assistant thinking space
+    document_formatted = (
+        f"<Document>: {document}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
+
+    return [query_formatted, document_formatted]
+
+
 def evaluate_crossencoder_blocking(
     dense_embedder: SentenceTransformerEmbedder,
     qdrant_client: QdrantClient,
@@ -337,13 +392,33 @@ def evaluate_crossencoder_blocking(
     all_candidate_pairs = set()
 
     if all_pairs_to_score:
-        # Format all pairs for CrossEncoder
-        pairs_for_encoder = [
-            [query_text, cand_text] for query_text, cand_text, _, _ in all_pairs_to_score
+        # Format all pairs with Qwen3 chat template (returns list of [query, doc] pairs)
+        logger.info(
+            f"[{name}] Formatting {len(all_pairs_to_score)} pairs with Qwen3 chat template..."
+        )
+        formatted_pairs = [
+            format_qwen_reranker_pair(query_text, cand_text, RERANKER_INSTRUCTION)
+            for query_text, cand_text, _, _ in all_pairs_to_score
         ]
 
-        # Score everything in one batch call
-        all_scores = cross_encoder.predict(pairs_for_encoder)
+        # Log first formatted pair for verification
+        if formatted_pairs:
+            logger.info(
+                f"[{name}] First formatted pair (preview):\n"
+                f"  Query side: {formatted_pairs[0][0][:150]}...\n"
+                f"  Doc side: {formatted_pairs[0][1][:100]}..."
+            )
+
+        # Score everything in one batch call with optimized batch size
+        logger.info(
+            f"[{name}] Scoring with batch_size={CROSSENCODER_BATCH_SIZE} "
+            f"({len(formatted_pairs) // CROSSENCODER_BATCH_SIZE + 1} batches expected)..."
+        )
+        all_scores = cross_encoder.predict(
+            formatted_pairs,
+            batch_size=CROSSENCODER_BATCH_SIZE,
+            show_progress_bar=True,
+        )
 
         # PHASE 3: Group scores by query and select top-k per query
         query_results: dict[str, list[tuple[float, str]]] = {}  # query_id -> [(score, cand_id)]
@@ -391,11 +466,21 @@ def evaluate_crossencoder_blocking(
         "total_candidates": len(all_candidate_pairs),
         "indexing_time_seconds": indexing_time,
         "avg_query_time_ms": (indexing_time / len(entities)) * 1000,
+        # Note: CrossEncoder path doesn't produce ERCandidate objects with scores, # TODO: this is for now. but
+        # so ranking metrics are not computed. Set to 0.0 for consistency.
+        "map": 0.0,
+        "mrr": 0.0,
+        "ndcg@20": 0.0,
+        "recall@20": 0.0,
+        "precision@20": 0.0,
     }
 
     logger.info(
         f"[{name}] Recall={recall:.1%}, Precision={precision:.1%}, F1={f1:.1%}, "
         f"TP={tp}, FN={fn}, FP={fp}"
+    )
+    logger.info(
+        f"[{name}] Note: Ranking metrics not computed for CrossEncoder path (different code path)"
     )
 
     return results
@@ -405,18 +490,20 @@ def evaluate_blocking_recall(
     blocker: VectorBlocker[OrganizationSchema],
     entities: list[dict[str, Any]],
     gold_pairs: set[tuple[str, str]],
+    gold_clusters: list[set[str]],
     name: str,
 ) -> dict[str, Any]:
-    """Evaluate blocking recall, precision, F1, and performance.
+    """Evaluate blocking recall, precision, F1, ranking quality, and performance.
 
     Args:
         blocker: VectorBlocker instance to evaluate
         entities: List of entity dicts to process
         gold_pairs: Set of ground truth duplicate pairs
+        gold_clusters: List of ground truth clusters
         name: Name for logging (e.g., "FAISS", "Qdrant Hybrid", "Qdrant Reranking")
 
     Returns:
-        dict with evaluation metrics
+        dict with evaluation metrics including ranking metrics
     """
     logger.info(f"[{name}] Generating candidates...")
 
@@ -446,6 +533,13 @@ def evaluate_blocking_recall(
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
+    # Compute ranking metrics
+    ranking_metrics = evaluate_blocking_with_ranking(
+        candidates=candidates,
+        gold_clusters=gold_clusters,
+        k_values=[20],
+    )
+
     results = {
         "recall": recall,
         "precision": precision,
@@ -456,11 +550,21 @@ def evaluate_blocking_recall(
         "total_candidates": len(candidates),
         "indexing_time_seconds": indexing_time,
         "avg_query_time_ms": (indexing_time / len(entities)) * 1000,
+        # Add ranking metrics (note: function returns underscore keys like "ndcg_at_20")
+        "map": ranking_metrics["map"],
+        "mrr": ranking_metrics["mrr"],
+        "ndcg@20": ranking_metrics["ndcg_at_20"],
+        "recall@20": ranking_metrics["recall_at_20"],
+        "precision@20": ranking_metrics["precision_at_20"],
     }
 
     logger.info(
         f"[{name}] Recall={recall:.1%}, Precision={precision:.1%}, F1={f1:.1%}, "
         f"TP={tp}, FN={fn}, FP={fp}"
+    )
+    logger.info(
+        f"[{name}] Ranking: MAP={ranking_metrics['map']:.3f}, MRR={ranking_metrics['mrr']:.3f}, "
+        f"NDCG@20={ranking_metrics['ndcg_at_20']:.3f}, Recall@20={ranking_metrics['recall_at_20']:.1%}"
     )
 
     return results
@@ -492,6 +596,13 @@ def print_comparison_table(
         ("False Negatives", "false_negatives", ""),
         ("False Positives", "false_positives", ""),
         ("Total Candidates", "total_candidates", ""),
+        ("--- RANKING METRICS ---", None, ""),
+        ("MAP", "map", ".3f"),
+        ("MRR", "mrr", ".3f"),
+        ("NDCG@20", "ndcg@20", ".3f"),
+        ("Recall@20", "recall@20", "%"),
+        ("Precision@20", "precision@20", "%"),
+        ("--- PERFORMANCE ---", None, ""),
         ("Indexing Time", "indexing_time_seconds", "s"),
         ("Avg Query Time", "avg_query_time_ms", "ms"),
     ]
@@ -503,13 +614,28 @@ def print_comparison_table(
     print("-" * 140)
 
     for label, key, unit in metrics:
+        # Handle section headers
+        if key is None:
+            print(f"\n{label}")
+            continue
+
         faiss_val = faiss_results[key]
         hybrid_val = qdrant_hybrid_results[key]
         rerank_val = qdrant_reranking_results[key]
         crossenc_val = qdrant_crossencoder_results[key]
 
         # Determine best (depends on metric type)
-        if key in ["recall", "precision", "f1", "true_positives"]:
+        if key in [
+            "recall",
+            "precision",
+            "f1",
+            "true_positives",
+            "map",
+            "mrr",
+            "ndcg@20",
+            "recall@20",
+            "precision@20",
+        ]:
             # Higher is better
             best_val = max(faiss_val, hybrid_val, rerank_val, crossenc_val)
             if faiss_val == best_val:
@@ -546,6 +672,11 @@ def print_comparison_table(
             hybrid_str = f"{hybrid_val * 100:.2f}%"
             rerank_str = f"{rerank_val * 100:.2f}%"
             crossenc_str = f"{crossenc_val * 100:.2f}%"
+        elif unit == ".3f":
+            faiss_str = f"{faiss_val:.3f}"
+            hybrid_str = f"{hybrid_val:.3f}"
+            rerank_str = f"{rerank_val:.3f}"
+            crossenc_str = f"{crossenc_val:.3f}"
         elif unit in ["s", "ms"]:
             faiss_str = f"{faiss_val:.3f}{unit}"
             hybrid_str = f"{hybrid_val:.3f}{unit}"
@@ -757,20 +888,26 @@ def main() -> None:
     print(f"k-neighbors: {K_NEIGHBORS}")
     print(f"Prefetch limit: {PREFETCH_LIMIT}")
     print(f"CrossEncoder prefetch: {CROSSENCODER_PREFETCH}")
+    print(f"CrossEncoder batch size: {CROSSENCODER_BATCH_SIZE}")
+    print(f"\nEmbedding instruction: {EMBEDDING_INSTRUCTION[:80]}...")
+    print(f"Reranker instruction: {RERANKER_INSTRUCTION[:80]}...")
     print()
 
     # Load data
-    entities, gold_pairs = load_funder_data()
+    entities, gold_pairs, gold_clusters = load_funder_data()
 
     # Setup shared Qwen3 embedder (used by all approaches for dense vectors)
+    # TODO: Add prompt support to SentenceTransformerEmbedder for Qwen3 instructions
+    # Expected improvement: 1-5% with EMBEDDING_INSTRUCTION
     logger.info(f"Loading {DENSE_MODEL} embedding model...")
     dense_embedder = SentenceTransformerEmbedder(
         model_name=DENSE_MODEL,
-        batch_size=128,
+        batch_size=256,
         normalize_embeddings=True,
     )
     embedding_dim = dense_embedder.embedding_dim
     logger.info(f"Embedding model loaded (dim={embedding_dim})")
+    logger.info("NOTE: Embedding instructions not yet implemented (expected +1-5% improvement)")
 
     # Connect to Qdrant cloud
     qdrant_client = connect_to_qdrant()
@@ -778,7 +915,8 @@ def main() -> None:
     # Load CrossEncoder for client-side reranking
     logger.info(f"Loading CrossEncoder model: {CROSSENCODER_MODEL}...")
     cross_encoder = CrossEncoder(CROSSENCODER_MODEL)
-    logger.info("CrossEncoder model loaded")
+    device_name = getattr(cross_encoder, "device", "unknown")
+    logger.info(f"CrossEncoder loaded on device: {device_name}")
 
     # Setup blockers
     faiss_blocker = setup_faiss_blocker(dense_embedder)
@@ -790,14 +928,16 @@ def main() -> None:
     print("RUNNING EVALUATIONS")
     print("-" * 120)
 
-    faiss_results = evaluate_blocking_recall(faiss_blocker, entities, gold_pairs, "FAISS")
+    faiss_results = evaluate_blocking_recall(
+        faiss_blocker, entities, gold_pairs, gold_clusters, "FAISS"
+    )
 
     qdrant_hybrid_results = evaluate_blocking_recall(
-        qdrant_hybrid_blocker, entities, gold_pairs, "Qdrant Hybrid"
+        qdrant_hybrid_blocker, entities, gold_pairs, gold_clusters, "Qdrant Hybrid"
     )
 
     qdrant_reranking_results = evaluate_blocking_recall(
-        qdrant_reranking_blocker, entities, gold_pairs, "ColBERT Reranking"
+        qdrant_reranking_blocker, entities, gold_pairs, gold_clusters, "ColBERT Reranking"
     )
 
     qdrant_crossencoder_results = evaluate_crossencoder_blocking(
@@ -983,6 +1123,50 @@ def main() -> None:
     print("   • Hybrid: Best recall/cost trade-off, good for production")
     print("   • ColBERT: Late-interaction reranking, balanced quality/cost")
     print("   • CrossEncoder: Maximum quality via full cross-attention, highest cost")
+
+    # Explain ranking metrics
+    print("\n" + "=" * 140)
+    print("UNDERSTANDING RANKING METRICS")
+    print("=" * 140)
+    print("""
+📊 RANKING METRICS EXPLAINED:
+
+These metrics evaluate HOW WELL true matches are ranked (not just whether they're retrieved).
+This matters for budget-constrained downstream processing (e.g., expensive LLM judges).
+
+• MAP (Mean Average Precision):
+  Overall ranking quality across all true matches.
+  Higher = true matches appear earlier in rankings.
+  Range: 0.0-1.0, where 1.0 = perfect ranking.
+
+• MRR (Mean Reciprocal Rank):
+  Average rank of the FIRST true match per entity.
+  Higher = faster "time to first success".
+  Example: MRR=0.5 means first match at rank 2 on average.
+
+• NDCG@20 (Normalized Discounted Cumulative Gain):
+  Standard IR metric for ranking quality within top-20.
+  Accounts for position bias (earlier is better).
+  Range: 0.0-1.0, where 1.0 = ideal ranking.
+
+• Recall@20:
+  % of true matches found in top-20 candidates per entity.
+  Critical for budget planning: "Can I get 85% recall with k=20?"
+
+• Precision@20:
+  % of top-20 candidates that are true matches.
+  Estimates false positive load on downstream LLM judge.
+
+💡 WHY THIS MATTERS:
+If your LLM judge can only afford to process k=20 candidates per entity,
+these metrics tell you exactly how much recall you'll capture and how many
+false positives you'll need to filter.
+
+Example interpretation:
+- Recall@20 = 87% → Captures 87% of true matches with budget k=20
+- Precision@20 = 42% → 42% of judged pairs will be true matches (58% false positives)
+- MAP = 0.85 → True matches generally rank very high (good overall quality)
+    """)
 
     print("=" * 140)
     print("\n✅ Evaluation complete!")
