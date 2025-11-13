@@ -575,6 +575,254 @@ class TestQdrantHybridRerankingIndex:
         assert isinstance(sparse_prefetch.query, SparseVector)
         assert sparse_prefetch.limit == 20
 
+    def test_reranking_index_documents_encoded_without_prompt(self):
+        """Test that all 3 embedders encode documents with prompt=None in create_index()."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        dense_embedder.embedding_dim = 128
+        dense_embedder.encode.return_value = np.zeros((2, 128))
+
+        sparse_embedder = MagicMock(spec=["encode"])
+        sparse_embedder.encode.return_value = [
+            {"indices": [0, 1], "values": [0.5, 0.3]},
+            {"indices": [2, 3], "values": [0.7, 0.2]},
+        ]
+
+        reranking_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        reranking_embedder.embedding_dim = 128
+        reranking_embedder.encode.return_value = [
+            [[0.1] * 128, [0.2] * 128],  # Multi-vector for doc 0
+            [[0.3] * 128, [0.4] * 128],  # Multi-vector for doc 1
+        ]
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            query_prompt="Find duplicate companies",  # Should NOT be used for documents
+        )
+
+        # Execute
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(texts)
+
+        # Verify all 3 embedders called with prompt=None (not query_prompt)
+        dense_embedder.encode.assert_called_once_with(texts, prompt=None)
+        sparse_embedder.encode.assert_called_once_with(texts, prompt=None)
+        reranking_embedder.encode.assert_called_once_with(texts, prompt=None)
+
+    def test_reranking_index_queries_dense_and_reranking_with_prompt(self):
+        """Test that dense + reranking embedders use query_prompt, sparse does not."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        dense_embedder.embedding_dim = 128
+        dense_embedder.encode.side_effect = [
+            # First call: documents (create_index)
+            np.zeros((2, 128)),
+            # Second call: queries (search)
+            np.zeros((1, 128)),
+        ]
+
+        sparse_embedder = MagicMock(spec=["encode"])
+        sparse_embedder.encode.side_effect = [
+            # First call: documents
+            [
+                {"indices": [0, 1], "values": [0.5, 0.3]},
+                {"indices": [2, 3], "values": [0.7, 0.2]},
+            ],
+            # Second call: queries
+            [{"indices": [4, 5], "values": [0.6, 0.4]}],
+        ]
+
+        reranking_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        reranking_embedder.embedding_dim = 128
+        reranking_embedder.encode.side_effect = [
+            # First call: documents
+            [
+                [[0.1] * 128, [0.2] * 128],
+                [[0.3] * 128, [0.4] * 128],
+            ],
+            # Second call: queries
+            [[[0.5] * 128, [0.6] * 128]],
+        ]
+
+        # Mock query_points response
+        mock_scored_points = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+        ]
+        mock_client.query_points.return_value = mock_scored_points
+
+        query_prompt = "Find duplicate companies accounting for abbreviations"
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            query_prompt=query_prompt,
+        )
+
+        # Create index first
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(texts)
+
+        # Execute search
+        index.search(["Apple"], k=1)
+
+        # Verify dense embedder: documents with prompt=None, queries with prompt
+        assert dense_embedder.encode.call_count == 2
+        assert dense_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert dense_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": query_prompt})
+
+        # Verify sparse embedder: ALWAYS prompt=None (BM25 doesn't use prompts)
+        assert sparse_embedder.encode.call_count == 2
+        assert sparse_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert sparse_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": None})
+
+        # Verify reranking embedder: documents with prompt=None, queries with prompt
+        assert reranking_embedder.encode.call_count == 2
+        assert reranking_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert reranking_embedder.encode.call_args_list[1] == (
+            (["Apple"],),
+            {"prompt": query_prompt},
+        )
+
+    def test_reranking_index_no_query_prompt_backward_compatible(self):
+        """Test that without query_prompt parameter, all embedders use prompt=None."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        dense_embedder.embedding_dim = 128
+        dense_embedder.encode.side_effect = [
+            np.zeros((2, 128)),  # documents
+            np.zeros((1, 128)),  # queries
+        ]
+
+        sparse_embedder = MagicMock(spec=["encode"])
+        sparse_embedder.encode.side_effect = [
+            [
+                {"indices": [0, 1], "values": [0.5, 0.3]},
+                {"indices": [2, 3], "values": [0.7, 0.2]},
+            ],
+            [{"indices": [4, 5], "values": [0.6, 0.4]}],
+        ]
+
+        reranking_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        reranking_embedder.embedding_dim = 128
+        reranking_embedder.encode.side_effect = [
+            [
+                [[0.1] * 128, [0.2] * 128],
+                [[0.3] * 128, [0.4] * 128],
+            ],
+            [[[0.5] * 128, [0.6] * 128]],
+        ]
+
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+        ]
+
+        # Create index WITHOUT query_prompt parameter (backward compatibility)
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            # No query_prompt parameter
+        )
+
+        # Create index and search
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(texts)
+        index.search(["Apple"], k=1)
+
+        # Verify ALL embedders use prompt=None for both documents AND queries
+        assert dense_embedder.encode.call_count == 2
+        assert dense_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert dense_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": None})
+
+        assert sparse_embedder.encode.call_count == 2
+        assert sparse_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert sparse_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": None})
+
+        assert reranking_embedder.encode.call_count == 2
+        assert reranking_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
+        assert reranking_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": None})
+
+    def test_reranking_index_search_all_with_prompt(self):
+        """Test that search_all() delegates to search() which applies query_prompt."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        dense_embedder.embedding_dim = 128
+        dense_embedder.encode.side_effect = [
+            np.zeros((2, 128)),  # documents (create_index)
+            np.zeros((2, 128)),  # queries (search_all via search)
+        ]
+
+        sparse_embedder = MagicMock(spec=["encode"])
+        sparse_embedder.encode.side_effect = [
+            [
+                {"indices": [0, 1], "values": [0.5, 0.3]},
+                {"indices": [2, 3], "values": [0.7, 0.2]},
+            ],
+            [
+                {"indices": [4, 5], "values": [0.6, 0.4]},
+                {"indices": [6, 7], "values": [0.8, 0.1]},
+            ],
+        ]
+
+        reranking_embedder = MagicMock(spec=["encode", "embedding_dim"])
+        reranking_embedder.embedding_dim = 128
+        reranking_embedder.encode.side_effect = [
+            [
+                [[0.1] * 128, [0.2] * 128],
+                [[0.3] * 128, [0.4] * 128],
+            ],
+            [
+                [[0.5] * 128, [0.6] * 128],
+                [[0.7] * 128, [0.8] * 128],
+            ],
+        ]
+
+        mock_client.query_points.side_effect = [
+            [ScoredPoint(id=0, version=0, score=1.0, payload={}, vector={})],
+            [ScoredPoint(id=1, version=0, score=1.0, payload={}, vector={})],
+        ]
+
+        query_prompt = "Find duplicates"
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            query_prompt=query_prompt,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(texts)
+
+        # Execute search_all
+        index.search_all(k=1)
+
+        # Verify that query_prompt was used for queries in search()
+        # (search_all delegates to search with corpus texts)
+        assert dense_embedder.encode.call_count == 2
+        # Second call should use query_prompt (for queries)
+        assert dense_embedder.encode.call_args_list[1] == ((texts,), {"prompt": query_prompt})
+
+        # Sparse should still use prompt=None
+        assert sparse_embedder.encode.call_args_list[1] == ((texts,), {"prompt": None})
+
+        # Reranking should use query_prompt
+        assert reranking_embedder.encode.call_args_list[1] == ((texts,), {"prompt": query_prompt})
+
 
 class TestFakeHybridRerankingVectorIndex:
     """Tests for FakeHybridRerankingVectorIndex test double."""
