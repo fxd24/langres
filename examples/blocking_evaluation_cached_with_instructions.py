@@ -128,7 +128,9 @@ def evaluate_blocking_recall(
     # Phase 1: Indexing (preprocessing)
     print(f"\n[1] Building index...")
     indexing_start = time.time()
-    blocker.build_index(entities)
+    # Extract texts and build index explicitly
+    texts = [entity["name"] for entity in entities]
+    blocker.vector_index.create_index(texts)
     indexing_time = time.time() - indexing_start
     print(f"    Indexing time: {indexing_time:.2f}s")
 
