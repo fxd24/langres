@@ -7,9 +7,12 @@ import numpy as np
 import pytest
 from qdrant_client.models import (
     Distance,
+    Fusion,
+    FusionQuery,
     MultiVectorComparator,
     MultiVectorConfig,
     PointStruct,
+    Prefetch,
     ScoredPoint,
     SparseVector,
     VectorParams,
@@ -400,6 +403,164 @@ class TestQdrantHybridRerankingIndex:
 
         for p in prefetch:
             assert p.limit == 50
+
+    def test_default_rrf_fusion(self):
+        """Test that QdrantHybridRerankingIndex uses RRF fusion by default."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = FakeEmbedder(embedding_dim=128)
+        sparse_embedder = FakeSparseEmbedder()
+        reranking_embedder = FakeLateInteractionEmbedder(embedding_dim=128)
+
+        # Mock query_points response
+        mock_scored_points = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+        ]
+        mock_client.query_points.return_value = mock_scored_points
+
+        # Create index without explicit fusion parameter (should default to RRF)
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+        )
+
+        # Create index and search
+        texts = ["Apple Inc."]
+        index.create_index(texts)
+        index.search("Apple", k=1)
+
+        # Verify query_points was called with nested prefetch + RRF fusion
+        mock_client.query_points.assert_called_once()
+        call_args = mock_client.query_points.call_args
+
+        # Check prefetch structure - should be a single Prefetch object, not list
+        prefetch = call_args[1]["prefetch"]
+        assert isinstance(prefetch, Prefetch)
+        assert not isinstance(prefetch, list)
+
+        # Verify the nested prefetch contains [dense, sparse]
+        assert hasattr(prefetch, "prefetch")
+        assert isinstance(prefetch.prefetch, list)
+        assert len(prefetch.prefetch) == 2
+
+        # Verify the outer Prefetch uses FusionQuery with RRF
+        assert hasattr(prefetch, "query")
+        from qdrant_client.models import FusionQuery, Fusion
+
+        assert isinstance(prefetch.query, FusionQuery)
+        assert prefetch.query.fusion == Fusion.RRF
+
+    def test_explicit_dbsf_fusion(self):
+        """Test that QdrantHybridRerankingIndex uses DBSF fusion when specified."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = FakeEmbedder(embedding_dim=128)
+        sparse_embedder = FakeSparseEmbedder()
+        reranking_embedder = FakeLateInteractionEmbedder(embedding_dim=128)
+
+        # Mock query_points response
+        mock_scored_points = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+        ]
+        mock_client.query_points.return_value = mock_scored_points
+
+        # Create index with explicit DBSF fusion parameter
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            fusion="DBSF",
+        )
+
+        # Create index and search
+        texts = ["Apple Inc."]
+        index.create_index(texts)
+        index.search("Apple", k=1)
+
+        # Verify query_points was called with nested prefetch + DBSF fusion
+        mock_client.query_points.assert_called_once()
+        call_args = mock_client.query_points.call_args
+
+        # Check prefetch structure
+        prefetch = call_args[1]["prefetch"]
+        assert isinstance(prefetch, Prefetch)
+
+        # Verify the outer Prefetch uses FusionQuery with DBSF
+        from qdrant_client.models import FusionQuery, Fusion
+
+        assert isinstance(prefetch.query, FusionQuery)
+        assert prefetch.query.fusion == Fusion.DBSF
+
+    def test_nested_prefetch_structure(self):
+        """Test that prefetch has correct 3-stage structure: [dense, sparse] → fusion → reranking."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = FakeEmbedder(embedding_dim=128)
+        sparse_embedder = FakeSparseEmbedder()
+        reranking_embedder = FakeLateInteractionEmbedder(embedding_dim=128)
+
+        # Mock query_points response
+        mock_scored_points = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+        ]
+        mock_client.query_points.return_value = mock_scored_points
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            prefetch_limit=20,
+        )
+
+        # Create index and search
+        texts = ["Apple Inc."]
+        index.create_index(texts)
+        index.search("Apple", k=1)
+
+        # Verify complete 3-stage structure
+        call_args = mock_client.query_points.call_args
+
+        # Stage 3 (outermost): Reranking query at top level
+        assert call_args[1]["using"] == "reranking"
+        query = call_args[1]["query"]
+        assert isinstance(query, list)  # Multi-vector for reranking
+        assert len(query) > 0
+        assert isinstance(query[0], list)  # Token embeddings
+
+        # Stage 2: Fusion at outer Prefetch level
+        prefetch = call_args[1]["prefetch"]
+        assert isinstance(prefetch, Prefetch)
+        from qdrant_client.models import FusionQuery, Fusion
+
+        assert isinstance(prefetch.query, FusionQuery)
+        assert prefetch.query.fusion == Fusion.RRF
+        assert prefetch.limit == 20
+
+        # Stage 1: Dense + sparse prefetches at inner level
+        assert hasattr(prefetch, "prefetch")
+        inner_prefetches = prefetch.prefetch
+        assert isinstance(inner_prefetches, list)
+        assert len(inner_prefetches) == 2
+
+        # Verify dense prefetch
+        dense_prefetch = next(p for p in inner_prefetches if p.using == "dense")
+        assert isinstance(dense_prefetch, Prefetch)
+        assert isinstance(dense_prefetch.query, list)
+        assert len(dense_prefetch.query) == 128
+        assert dense_prefetch.limit == 20
+
+        # Verify sparse prefetch
+        sparse_prefetch = next(p for p in inner_prefetches if p.using == "sparse")
+        assert isinstance(sparse_prefetch, Prefetch)
+        assert isinstance(sparse_prefetch.query, SparseVector)
+        assert sparse_prefetch.limit == 20
 
 
 class TestFakeHybridRerankingVectorIndex:
