@@ -38,6 +38,9 @@ class VectorBlocker(Blocker[SchemaT]):
     accepting a schema_factory (to transform raw dicts) and a
     text_field_extractor (to extract text for embedding).
 
+    IMPORTANT: You must call vector_index.create_index(texts) BEFORE
+    calling stream(data).
+
     Example (production with FAISS):
         from langres.core.embeddings import SentenceTransformerEmbedder
         from langres.core.vector_index import FAISSIndex
@@ -49,17 +52,30 @@ class VectorBlocker(Blocker[SchemaT]):
                 address=record.get("address")
             )
 
+        # 1. Setup embedder and index
         embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
         index = FAISSIndex(embedder=embedder, metric="cosine")
 
+        # 2. Build index (one-time preprocessing)
+        entities = [{"id": 1, "name": "Apple"}, ...]
+        texts = [e["name"] for e in entities]
+        index.create_index(texts)  # <- REQUIRED
+
+        # 3. Create blocker with pre-built index
         blocker = VectorBlocker(
             schema_factory=company_factory,
             text_field_extractor=lambda x: x.name,
-            vector_index=index,
+            vector_index=index,  # Pre-built!
             k_neighbors=10
         )
 
-        candidates = blocker.stream(company_records)
+        # 4. Generate candidates (fast - reuses index)
+        candidates = list(blocker.stream(entities))
+
+        # 5. Optimize k (fast - no re-indexing)
+        for k in [10, 20, 30]:
+            blocker.k_neighbors = k
+            candidates = list(blocker.stream(entities))
 
     Example (production with Qdrant hybrid search):
         from qdrant_client import QdrantClient
@@ -77,6 +93,10 @@ class VectorBlocker(Blocker[SchemaT]):
             sparse_embedder=sparse_embedder,
         )
 
+        # Build index first
+        texts = [e["name"] for e in entities]
+        index.create_index(texts)
+
         blocker = VectorBlocker(
             schema_factory=company_factory,
             text_field_extractor=lambda x: x.name,
@@ -84,10 +104,16 @@ class VectorBlocker(Blocker[SchemaT]):
             k_neighbors=10
         )
 
+        candidates = list(blocker.stream(entities))
+
     Example (testing with fakes):
         from langres.core.vector_index import FakeVectorIndex
 
         index = FakeVectorIndex()
+
+        # Build index first
+        texts = [d["name"] for d in test_data]
+        index.create_index(texts)
 
         blocker = VectorBlocker(
             schema_factory=company_factory,
@@ -97,7 +123,12 @@ class VectorBlocker(Blocker[SchemaT]):
         )
 
         # Instant, deterministic testing!
-        candidates = blocker.stream(test_data)
+        candidates = list(blocker.stream(test_data))
+
+    Why separate index creation?
+        - Performance: Build once, search many times
+        - Optimization: Tune k_neighbors without re-indexing
+        - Clarity: Explicit preprocessing vs runtime phases
 
     Note:
         This blocker has O(N log N) complexity for building the index and
@@ -146,6 +177,26 @@ class VectorBlocker(Blocker[SchemaT]):
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
 
+    def _index_is_built(self) -> bool:
+        """Check if vector index has been built.
+
+        Returns:
+            True if index is ready for search, False otherwise.
+        """
+        # Check for FAISSIndex
+        if hasattr(self.vector_index, "_index"):
+            return self.vector_index._index is not None
+
+        # Check for QdrantHybridIndex / QdrantHybridRerankingIndex
+        if hasattr(self.vector_index, "_corpus_texts"):
+            return self.vector_index._corpus_texts is not None
+
+        # Check for fake indexes (test doubles)
+        if hasattr(self.vector_index, "_n_samples"):
+            return self.vector_index._n_samples is not None
+
+        return False
+
     def stream(self, data: list[Any]) -> Iterator[ERCandidate[SchemaT]]:
         """Generate candidate pairs using embedding similarity and ANN search.
 
@@ -159,18 +210,38 @@ class VectorBlocker(Blocker[SchemaT]):
             - right: Normalized entity (SchemaT)
             - blocker_name: "vector_blocker"
 
+        Raises:
+            RuntimeError: If index has not been built via create_index().
+
+        Note:
+            You must call vector_index.create_index(texts) before calling
+            this method. Extract texts in the same order as data records.
+
         Note:
             This implementation:
             1. Normalizes raw data to SchemaT using schema_factory
-            2. Extracts text for each entity using text_field_extractor
-            3. Encodes text into embeddings using embedding_provider
-            4. Builds a vector index for efficient ANN search
-            5. For each entity, finds k nearest neighbors
-            6. Yields deduplicated pairs (no both (a,b) and (b,a))
+            2. Searches pre-built index for k nearest neighbors
+            3. Yields deduplicated pairs (no both (a,b) and (b,a))
 
         Note:
             Empty datasets or single-entity datasets produce no candidates.
+
+        Example:
+            texts = [record['name'] for record in data]
+            blocker.vector_index.create_index(texts)
+            candidates = list(blocker.stream(data))
         """
+        # Validate index is built
+        if not self._index_is_built():
+            raise RuntimeError(
+                "Index not built. Call vector_index.create_index(texts) "
+                "before blocker.stream(data).\n\n"
+                "Example:\n"
+                "    texts = [record['name'] for record in data]\n"
+                "    blocker.vector_index.create_index(texts)\n"
+                "    candidates = list(blocker.stream(data))"
+            )
+
         # Handle empty dataset
         if len(data) == 0:
             return
@@ -181,13 +252,6 @@ class VectorBlocker(Blocker[SchemaT]):
         # Handle single entity (no pairs possible)
         if len(entities) <= 1:
             return
-
-        # 2. Extract text for embedding
-        texts = [self.text_field_extractor(entity) for entity in entities]
-
-        # 3. Build vector index from texts (index handles embedding internally)
-        logger.info("Building vector index for %d entities", len(texts))
-        self.vector_index.create_index(texts)
 
         # 4. Search for k nearest neighbors for each entity (deduplication pattern)
         # k+1 because the nearest neighbor will be the entity itself
