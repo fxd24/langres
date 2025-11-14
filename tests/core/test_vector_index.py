@@ -161,6 +161,24 @@ class TestFakeVectorIndex:
         # First neighbor should be itself (deterministic pattern)
         assert np.array_equal(indices[:, 0], [0, 1, 2, 3])
 
+    def test_fake_vector_index_accepts_embeddings(self):
+        """Test that FakeVectorIndex accepts np.ndarray for protocol compliance."""
+        index = FakeVectorIndex()
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Should accept single embedding
+        embedding = np.random.rand(128).astype(np.float32)
+        distances, indices = index.search(embedding, k=2)
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
+
+        # Should accept batch embeddings
+        embeddings = np.random.rand(2, 128).astype(np.float32)
+        distances, indices = index.search(embeddings, k=2)
+        assert distances.shape == (2, 2)
+        assert indices.shape == (2, 2)
+
 
 class TestFAISSIndexInstructionPrompts:
     """Tests for FAISSIndex instruction prompt support (asymmetric encoding)."""
@@ -215,31 +233,44 @@ class TestFAISSIndexInstructionPrompts:
         second_call_args = embedder.encode.call_args_list[1]
         assert second_call_args[1]["prompt"] == query_prompt
 
-    def test_faiss_index_search_all_reuses_corpus(self):
-        """Test that search_all reuses cached corpus embeddings without re-encoding."""
+    def test_faiss_index_search_all_reencodes_with_prompt(self):
+        """Test that search_all re-encodes with query_prompt for asymmetric encoding."""
         # Use a wrapper around FakeEmbedder to track calls
-        encode_call_count = 0
+        encode_calls = []
         base_embedder = FakeEmbedder(embedding_dim=128)
 
         class TrackingEmbedder:
             def encode(self, texts, prompt=None):
-                nonlocal encode_call_count
-                encode_call_count += 1
+                encode_calls.append({"texts": texts, "prompt": prompt})
                 # Delegate to FakeEmbedder for proper embeddings
                 return base_embedder.encode(texts, prompt=prompt)
 
+            @property
+            def embedding_dim(self):
+                return base_embedder.embedding_dim
+
         embedder = TrackingEmbedder()
-        # Use cosine metric (matches existing working test)
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt="test")
+        query_prompt = "Find duplicate organization names"
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
         index.create_index(texts)
 
-        # search_all should NOT call encode again (reuses corpus)
+        # search_all should re-encode corpus texts WITH the query_prompt
         index.search_all(k=3)
 
-        # Verify encode was only called once (in create_index, not search_all)
-        assert encode_call_count == 1
+        # Verify two encode calls:
+        # 1. create_index: corpus without prompt
+        # 2. search_all: corpus WITH prompt (for asymmetric encoding)
+        assert len(encode_calls) == 2
+
+        # First call (create_index): no prompt
+        assert encode_calls[0]["texts"] == texts
+        assert encode_calls[0]["prompt"] is None
+
+        # Second call (search_all): WITH prompt
+        assert encode_calls[1]["texts"] == texts
+        assert encode_calls[1]["prompt"] == query_prompt
 
     def test_faiss_index_no_query_prompt_backward_compatible(self):
         """Test that FAISSIndex without query_prompt uses prompt=None everywhere."""
@@ -293,6 +324,177 @@ class TestFAISSIndexInstructionPrompts:
         assert not np.allclose(distances_with, distances_without)
 
 
+class TestFAISSIndexPrecomputedEmbeddings:
+    """Tests for FAISSIndex pre-computed embedding support (performance fix)."""
+
+    def test_faiss_index_search_with_precomputed_embeddings(self):
+        """Test that search() accepts np.ndarray input without calling embedder.encode()."""
+        # Use tracking embedder to verify NO encode() call when using pre-computed embeddings
+        encode_calls = []
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                # Return fake embeddings
+                if isinstance(texts, list):
+                    return np.random.rand(len(texts), 128).astype(np.float32)
+                return np.random.rand(128).astype(np.float32)
+
+            @property
+            def embedding_dim(self):
+                return 128
+
+        embedder = TrackingEmbedder()
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        # Create index (first encode call)
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Clear tracking
+        encode_calls.clear()
+
+        # Search with pre-computed embeddings (should NOT call encode)
+        query_embedding = np.random.rand(128).astype(np.float32)
+        distances, indices = index.search(query_embedding, k=2)
+
+        # Verify NO encode() call
+        assert len(encode_calls) == 0, (
+            "search() should not call encode() with pre-computed embeddings"
+        )
+
+        # Verify results are valid
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
+
+        # Test batch embeddings
+        batch_embeddings = np.random.rand(2, 128).astype(np.float32)
+        distances, indices = index.search(batch_embeddings, k=2)
+
+        # Still no encode calls
+        assert len(encode_calls) == 0
+        assert distances.shape == (2, 2)
+        assert indices.shape == (2, 2)
+
+    def test_faiss_index_precomputed_embeddings_same_results_as_text(self):
+        """Test that pre-computed embeddings produce same results as text queries."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Encode query manually
+        query_text = "Apple"
+        query_embedding = embedder.encode([query_text])
+
+        # Compare search(text) vs search(embedding)
+        distances_text, indices_text = index.search(query_text, k=2)
+        distances_embed, indices_embed = index.search(query_embedding, k=2)
+
+        # Results should be identical
+        np.testing.assert_array_equal(indices_text, indices_embed)
+        np.testing.assert_allclose(distances_text, distances_embed)
+
+    def test_faiss_index_search_all_no_reencoding(self):
+        """Test that search_all() does NOT re-encode corpus (uses cached embeddings)."""
+        encode_calls = []
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                # Return fake embeddings
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+            @property
+            def embedding_dim(self):
+                return 128
+
+        embedder = TrackingEmbedder()
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
+
+        # Verify single encode call (create_index)
+        assert len(encode_calls) == 1
+
+        # Call search_all - should NOT re-encode
+        distances, indices = index.search_all(k=3)
+
+        # Still only one encode call (no re-encoding)
+        assert len(encode_calls) == 1, "search_all() should NOT re-encode corpus"
+
+        # Verify results are valid
+        assert distances.shape == (4, 3)
+        assert indices.shape == (4, 3)
+
+    def test_faiss_index_search_all_with_prompt_no_reencoding(self):
+        """Test that search_all() doesn't re-encode even with query_prompt set.
+
+        For deduplication, we should use symmetric encoding (no prompt) because
+        both sides are from the same corpus. The current behavior of re-encoding
+        with prompt is inefficient and semantically incorrect for dedup.
+        """
+        encode_calls = []
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+            @property
+            def embedding_dim(self):
+                return 128
+
+        embedder = TrackingEmbedder()
+        query_prompt = "Find duplicate organization names"
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
+
+        # Verify single encode call (create_index, no prompt)
+        assert len(encode_calls) == 1
+        assert encode_calls[0]["prompt"] is None
+
+        # Call search_all - should NOT re-encode (should reuse cached embeddings)
+        distances, indices = index.search_all(k=3)
+
+        # Still only one encode call - deduplication uses symmetric encoding
+        assert len(encode_calls) == 1, (
+            "search_all() should NOT re-encode corpus, even with query_prompt"
+        )
+
+    def test_faiss_index_search_text_uses_query_prompt(self):
+        """Test that search() with text still applies query_prompt (no regression)."""
+        encode_calls = []
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+            @property
+            def embedding_dim(self):
+                return 128
+
+        embedder = TrackingEmbedder()
+        query_prompt = "Find duplicate organization names"
+        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        encode_calls.clear()
+
+        # Search with text - should use query_prompt
+        index.search("Apple Company", k=2)
+
+        assert len(encode_calls) == 1
+        assert encode_calls[0]["prompt"] == query_prompt
+
+
 class TestVectorIndexProtocol:
     """Tests for VectorIndex protocol compliance with new API."""
 
@@ -318,3 +520,29 @@ class TestVectorIndexProtocol:
         assert callable(index.create_index)
         assert callable(index.search)
         assert callable(index.search_all)
+
+    def test_vector_index_protocol_accepts_union_types(self):
+        """Test that VectorIndex protocol accepts str | list[str] | np.ndarray."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Protocol should accept str
+        distances, indices = index.search("Apple", k=2)
+        assert distances.shape == (2,)
+
+        # Protocol should accept list[str]
+        distances, indices = index.search(["Apple", "Google"], k=2)
+        assert distances.shape == (2, 2)
+
+        # Protocol should accept np.ndarray (single embedding)
+        embedding = np.random.rand(128).astype(np.float32)
+        distances, indices = index.search(embedding, k=2)
+        assert distances.shape == (2,)
+
+        # Protocol should accept np.ndarray (batch embeddings)
+        embeddings = np.random.rand(2, 128).astype(np.float32)
+        distances, indices = index.search(embeddings, k=2)
+        assert distances.shape == (2, 2)
