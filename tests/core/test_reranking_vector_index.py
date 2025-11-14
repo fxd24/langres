@@ -1035,3 +1035,153 @@ def test_reranking_index_with_real_qdrant_integration():
     logger.info("Sanity check passed: Apple query correctly ranks Apple Inc. first")
 
     logger.info("All integration tests passed!")
+
+
+class TestQdrantHybridRerankingIndexPrecomputedEmbeddings:
+    """Tests for QdrantHybridRerankingIndex pre-computed embedding support (performance fix)."""
+
+    def test_qdrant_reranking_index_internal_precomputed_dense(self):
+        """Test that search() with _dense_embeddings parameter skips dense encoding.
+
+        This is an internal API used by search_all() for performance optimization.
+        Sparse and late-interaction embedders are still called because Qdrant
+        requires sparse vectors and late-interaction multi-vectors for hybrid reranking.
+        """
+        dense_call_log = []
+        sparse_call_log = []
+        reranking_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                sparse_call_log.append({"texts": texts, "prompt": prompt})
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        class TrackingRerankingEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                reranking_call_log.append({"texts": texts, "prompt": prompt})
+                # Return multi-vectors (list of vectors per text)
+                return [
+                    [np.random.rand(128).astype(np.float32) for _ in range(3)]  # 3 token vectors
+                    for _ in range(len(texts))
+                ]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+            ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+        reranking_embedder = TrackingRerankingEmbedder()
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Clear tracking
+        dense_call_log.clear()
+        sparse_call_log.clear()
+        reranking_call_log.clear()
+
+        # Call search() with internal _dense_embeddings parameter
+        precomputed_dense = np.random.rand(1, 128).astype(np.float32)
+        distances, indices = index.search("Apple", k=2, _dense_embeddings=precomputed_dense)
+
+        # Verify dense embedder NOT called (pre-computed embeddings)
+        assert len(dense_call_log) == 0, (
+            "Dense embedder should not be called with _dense_embeddings"
+        )
+
+        # Verify sparse embedder IS called (Qdrant limitation - must encode from text)
+        assert len(sparse_call_log) == 1, "Sparse embedder must be called for hybrid search"
+
+        # Verify reranking embedder IS called (late-interaction reranking requires text)
+        assert len(reranking_call_log) == 1, (
+            "Reranking embedder must be called for late-interaction"
+        )
+
+        # Verify results are valid
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
+
+    def test_qdrant_reranking_index_search_all_no_reencoding_dense(self):
+        """Test that search_all() reuses cached dense embeddings.
+
+        Dense embeddings are cached and reused.
+        Sparse and late-interaction embeddings still need to be recomputed (Qdrant limitation).
+        """
+        dense_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        class TrackingRerankingEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                # Return multi-vectors
+                return [
+                    [np.random.rand(128).astype(np.float32) for _ in range(3)]
+                    for _ in range(len(texts))
+                ]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=1.0, payload={}, vector={}),
+            ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+        reranking_embedder = TrackingRerankingEmbedder()
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
+
+        # Verify single dense encode call (create_index)
+        assert len(dense_call_log) == 1
+
+        # Call search_all - should NOT re-encode dense embeddings
+        distances, indices = index.search_all(k=3)
+
+        # Still only one dense encode call (no re-encoding)
+        assert len(dense_call_log) == 1, "search_all() should NOT re-encode dense embeddings"
+
+        # Verify results are valid
+        assert distances.shape == (4, 3)
+        assert indices.shape == (4, 3)
