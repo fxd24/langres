@@ -191,7 +191,8 @@ class TestFAISSIndexInstructionPrompts:
         embedder = Mock(spec=FakeEmbedder)
         embedder.encode.return_value = np.random.rand(3, 128).astype(np.float32)
 
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt="Find duplicates")
+        # Note: query_prompt removed from constructor - it's now a search-time parameter
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
         index.create_index(texts)
@@ -205,7 +206,7 @@ class TestFAISSIndexInstructionPrompts:
             assert call_args[1]["prompt"] is None
 
     def test_faiss_index_queries_encoded_with_prompt(self):
-        """Test that search encodes queries with the configured prompt."""
+        """Test that search encodes queries with the query-time prompt parameter."""
         from unittest.mock import Mock
 
         # Create mock embedder to track calls
@@ -219,14 +220,15 @@ class TestFAISSIndexInstructionPrompts:
         ]
 
         query_prompt = "Find duplicate organization names"
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+        # Note: query_prompt removed from constructor
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         # Create index (first encode call)
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
         index.create_index(texts)
 
-        # Search (second encode call - should use prompt)
-        index.search("Apple Company", k=2)
+        # Search (second encode call - pass prompt at query time)
+        index.search("Apple Company", k=2, query_prompt=query_prompt)
 
         # Verify second call used the prompt
         assert embedder.encode.call_count == 2
@@ -238,7 +240,7 @@ class TestFAISSIndexInstructionPrompts:
 
         For deduplication, both query and document sides come from the same corpus,
         so we use symmetric encoding (no prompt) for efficiency and correctness.
-        The old behavior of re-encoding with query_prompt was inefficient.
+        query_prompt can optionally be passed to search_all, but by default it's None.
         """
         # Use a wrapper around FakeEmbedder to track calls
         encode_calls = []
@@ -255,13 +257,14 @@ class TestFAISSIndexInstructionPrompts:
                 return base_embedder.embedding_dim
 
         embedder = TrackingEmbedder()
-        query_prompt = "Find duplicate organization names"
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+        # Note: query_prompt removed from constructor
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
         index.create_index(texts)
 
         # search_all should NOT re-encode - it reuses cached embeddings
+        # No query_prompt passed (default=None for symmetric encoding)
         index.search_all(k=3)
 
         # Verify only one encode call (create_index)
@@ -299,24 +302,20 @@ class TestFAISSIndexInstructionPrompts:
         """Test that different query prompts produce different search results."""
         embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
 
-        # Create two indexes with different query prompts
-        index_with_prompt = FAISSIndex(
-            embedder=embedder,
-            metric="cosine",
-            query_prompt="Find duplicate organization names accounting for acronyms",
-        )
-        index_without_prompt = FAISSIndex(embedder=embedder, metric="cosine")
+        # Create single index (same for both searches)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         # Same corpus
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
-        index_with_prompt.create_index(texts)
-        index_without_prompt.create_index(texts)
+        index.create_index(texts)
 
-        # Same query
+        # Same query, different prompts passed at query time
         query = "Apple Company"
 
-        distances_with, indices_with = index_with_prompt.search(query, k=2)
-        distances_without, indices_without = index_without_prompt.search(query, k=2)
+        distances_with, indices_with = index.search(
+            query, k=2, query_prompt="Find duplicate organization names accounting for acronyms"
+        )
+        distances_without, indices_without = index.search(query, k=2, query_prompt=None)
 
         # Different prompts should produce different distances
         # (indices might be same if ranking is preserved, but distances should differ)
@@ -437,11 +436,11 @@ class TestFAISSIndexPrecomputedEmbeddings:
         assert indices.shape == (4, 3)
 
     def test_faiss_index_search_all_with_prompt_no_reencoding(self):
-        """Test that search_all() doesn't re-encode even with query_prompt set.
+        """Test that search_all() doesn't re-encode even when query_prompt is passed.
 
-        For deduplication, we should use symmetric encoding (no prompt) because
-        both sides are from the same corpus. The current behavior of re-encoding
-        with prompt is inefficient and semantically incorrect for dedup.
+        For deduplication, we typically use symmetric encoding (no prompt) because
+        both sides are from the same corpus. If a prompt is passed to search_all,
+        it would be applied at query time, but by default it's None.
         """
         encode_calls = []
 
@@ -455,8 +454,8 @@ class TestFAISSIndexPrecomputedEmbeddings:
                 return 128
 
         embedder = TrackingEmbedder()
-        query_prompt = "Find duplicate organization names"
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+        # Note: query_prompt removed from constructor
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
         index.create_index(texts)
@@ -466,15 +465,16 @@ class TestFAISSIndexPrecomputedEmbeddings:
         assert encode_calls[0]["prompt"] is None
 
         # Call search_all - should NOT re-encode (should reuse cached embeddings)
+        # No query_prompt passed - uses default None
         distances, indices = index.search_all(k=3)
 
         # Still only one encode call - deduplication uses symmetric encoding
         assert len(encode_calls) == 1, (
-            "search_all() should NOT re-encode corpus, even with query_prompt"
+            "search_all() should NOT re-encode corpus when using cached embeddings"
         )
 
     def test_faiss_index_search_text_uses_query_prompt(self):
-        """Test that search() with text still applies query_prompt (no regression)."""
+        """Test that search() with text applies query_prompt when passed at query time."""
         encode_calls = []
 
         class TrackingEmbedder:
@@ -488,18 +488,42 @@ class TestFAISSIndexPrecomputedEmbeddings:
 
         embedder = TrackingEmbedder()
         query_prompt = "Find duplicate organization names"
-        index = FAISSIndex(embedder=embedder, metric="cosine", query_prompt=query_prompt)
+        # Note: query_prompt removed from constructor
+        index = FAISSIndex(embedder=embedder, metric="cosine")
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
         index.create_index(texts)
 
         encode_calls.clear()
 
-        # Search with text - should use query_prompt
-        index.search("Apple Company", k=2)
+        # Search with text - pass query_prompt at query time
+        index.search("Apple Company", k=2, query_prompt=query_prompt)
 
         assert len(encode_calls) == 1
         assert encode_calls[0]["prompt"] == query_prompt
+
+    def test_faiss_index_different_prompts_same_index(self):
+        """Test using different prompts per query without rebuilding index.
+
+        This demonstrates the key benefit of the refactor: query_prompt as a
+        query-time parameter allows trying different prompts on the same index.
+        """
+        embedder = FakeEmbedder(embedding_dim=128)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+
+        corpus = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(corpus)
+
+        # Same query, different prompts - all without rebuilding index
+        query = "Apple"
+        results_no_prompt = index.search(query, k=2, query_prompt=None)
+        results_with_prompt_a = index.search(query, k=2, query_prompt="Find duplicates")
+        results_with_prompt_b = index.search(query, k=2, query_prompt="Match companies")
+
+        # All should work without rebuilding index
+        assert results_no_prompt[0].shape == (2,)
+        assert results_with_prompt_a[0].shape == (2,)
+        assert results_with_prompt_b[0].shape == (2,)
 
 
 class TestVectorIndexProtocol:
