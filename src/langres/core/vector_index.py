@@ -76,7 +76,10 @@ class VectorIndex(Protocol):
         ...  # pragma: no cover
 
     def search(
-        self, query_texts: str | list[str] | np.ndarray, k: int
+        self,
+        query_texts: str | list[str] | np.ndarray,
+        k: int,
+        query_prompt: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search for k nearest neighbors using text queries or pre-computed embeddings.
 
@@ -90,6 +93,9 @@ class VectorIndex(Protocol):
                 - list[str]: Batch of text queries
                 - np.ndarray: Pre-computed embeddings (shape: (dim,) or (N, dim))
             k: Number of nearest neighbors to return per query.
+            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
+                Applied only to text queries. Ignored for pre-computed embeddings.
+                Default: None.
 
         Returns:
             Tuple of (distances, indices):
@@ -105,7 +111,7 @@ class VectorIndex(Protocol):
         """
         ...  # pragma: no cover
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search all corpus items against each other (deduplication).
 
         Efficient batch operation that uses cached corpus embeddings.
@@ -113,6 +119,9 @@ class VectorIndex(Protocol):
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
+            query_prompt: Optional instruction prompt for query encoding.
+                Typically None for deduplication (symmetric encoding).
+                Default: None.
 
         Returns:
             Tuple of (distances, indices), both shape (N, k) where N = corpus size.
@@ -165,19 +174,15 @@ class FAISSIndex:
         self,
         embedder: EmbeddingProvider,
         metric: Literal["L2", "cosine"] = "L2",
-        query_prompt: str | None = None,
     ):
         """Initialize FAISSIndex.
 
         Args:
             embedder: Provider for generating embeddings from texts.
             metric: Distance metric ("L2" or "cosine").
-            query_prompt: Optional instruction prompt for query encoding (asymmetric encoding).
-                Documents are always encoded without prompts. Queries use this prompt if provided.
         """
         self.embedder = embedder
         self.metric = metric
-        self.query_prompt = query_prompt
 
         # State (populated by create_index)
         self._corpus_embeddings: np.ndarray | None = None
@@ -222,7 +227,10 @@ class FAISSIndex:
         )
 
     def search(
-        self, query_texts: str | list[str] | np.ndarray, k: int
+        self,
+        query_texts: str | list[str] | np.ndarray,
+        k: int,
+        query_prompt: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Search for k nearest neighbors using text queries or pre-computed embeddings.
 
@@ -231,6 +239,9 @@ class FAISSIndex:
         Args:
             query_texts: Single text, list of texts, or pre-computed embeddings.
             k: Number of neighbors per query.
+            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
+                Applied only to text queries. Ignored for pre-computed embeddings.
+                Default: None.
 
         Returns:
             - If single query: distances=(k,), indices=(k,)
@@ -250,9 +261,7 @@ class FAISSIndex:
             # Path 2: Text queries (encode with optional prompt)
             is_single = isinstance(query_texts, str)
             texts: list[str] = [query_texts] if is_single else query_texts  # type: ignore[assignment,list-item]
-            query_embeddings = self.embedder.encode(texts, prompt=self.query_prompt).astype(
-                np.float32
-            )
+            query_embeddings = self.embedder.encode(texts, prompt=query_prompt).astype(np.float32)
 
         # Normalize for cosine similarity
         if self.metric == "cosine":
@@ -267,15 +276,18 @@ class FAISSIndex:
         else:
             return distances, indices
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Search all corpus items against each other (deduplication pattern).
 
         Reuses cached corpus embeddings for efficiency. For deduplication,
-        we use symmetric encoding (no prompt) since both query and document
+        symmetric encoding (no prompt) is typical since both query and document
         sides come from the same corpus.
 
         Args:
             k: Number of neighbors per corpus item.
+            query_prompt: Optional instruction prompt for query encoding.
+                Typically None for deduplication (symmetric encoding).
+                Default: None.
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -285,8 +297,8 @@ class FAISSIndex:
             raise RuntimeError("Index not built. Must call create_index() first.")
 
         # Pass pre-computed embeddings to search() - no re-encoding!
-        # For deduplication, we use symmetric encoding (no query_prompt)
-        return self.search(self._corpus_embeddings, k)
+        # query_prompt parameter is passed through but ignored for pre-computed embeddings
+        return self.search(self._corpus_embeddings, k, query_prompt=query_prompt)
 
     # ============ OLD API (for backward compatibility during transition) ============
     def build(self, embeddings: np.ndarray) -> None:
@@ -360,13 +372,17 @@ class FakeVectorIndex:
         logger.debug("FakeVectorIndex: recorded %d samples", self._n_samples)
 
     def search(
-        self, query_texts: str | list[str] | np.ndarray, k: int
+        self,
+        query_texts: str | list[str] | np.ndarray,
+        k: int,
+        query_prompt: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake search results (deterministic).
 
         Args:
             query_texts: Single text, list of texts, or pre-computed embeddings.
             k: Number of neighbors per query.
+            query_prompt: Optional instruction prompt (ignored by fake implementation).
 
         Returns:
             - If single query: distances=(k,), indices=(k,)
@@ -400,11 +416,12 @@ class FakeVectorIndex:
         else:
             return distances, indices
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake deduplication results (deterministic).
 
         Args:
             k: Number of neighbors per corpus item.
+            query_prompt: Optional instruction prompt (ignored by fake implementation).
 
         Returns:
             distances: shape (N, k) where N = corpus size
