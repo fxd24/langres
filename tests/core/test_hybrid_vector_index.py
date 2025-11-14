@@ -463,12 +463,12 @@ class TestQdrantHybridIndexInstructionPrompts:
         dense_embedder = TrackingDenseEmbedder()
         sparse_embedder = TrackingSparseEmbedder()
 
+        # Note: query_prompt removed from constructor
         index = QdrantHybridIndex(
             client=mock_client,
             collection_name="test",
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
-            query_prompt="Find duplicates",
         )
 
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
@@ -510,12 +510,12 @@ class TestQdrantHybridIndexInstructionPrompts:
         sparse_embedder = TrackingSparseEmbedder()
 
         query_prompt = "Find duplicate organization names"
+        # Note: query_prompt removed from constructor
         index = QdrantHybridIndex(
             client=mock_client,
             collection_name="test",
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
-            query_prompt=query_prompt,
         )
 
         # Create index (first calls)
@@ -526,8 +526,8 @@ class TestQdrantHybridIndexInstructionPrompts:
         dense_call_log.clear()
         sparse_call_log.clear()
 
-        # Search (second calls - should use prompt for dense only)
-        index.search("Apple Company", k=2)
+        # Search (second calls - pass prompt at query time)
+        index.search("Apple Company", k=2, query_prompt=query_prompt)
 
         # Verify dense embedder got the prompt
         assert len(dense_call_log) == 1
@@ -570,13 +570,12 @@ class TestQdrantHybridIndexInstructionPrompts:
         dense_embedder = TrackingDenseEmbedder()
         sparse_embedder = TrackingSparseEmbedder()
 
-        query_prompt = "test instruction"
+        # Note: query_prompt removed from constructor
         index = QdrantHybridIndex(
             client=mock_client,
             collection_name="test",
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
-            query_prompt=query_prompt,
         )
 
         # Create index
@@ -592,6 +591,7 @@ class TestQdrantHybridIndexInstructionPrompts:
         sparse_call_log.clear()
 
         # search_all should use cached dense embeddings (NO re-encoding)
+        # No query_prompt passed (default=None)
         index.search_all(k=2)
 
         # Verify dense embedder NOT called (cached embeddings used)
