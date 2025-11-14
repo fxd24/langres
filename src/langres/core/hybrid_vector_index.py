@@ -84,7 +84,6 @@ class QdrantHybridIndex:
         sparse_embedder: SparseEmbeddingProvider,
         fusion: Literal["RRF", "DBSF"] = "RRF",
         prefetch_limit: int = 20,
-        query_prompt: str | None = None,
     ):
         """Initialize QdrantHybridIndex.
 
@@ -97,9 +96,6 @@ class QdrantHybridIndex:
                 Default: "RRF" (Reciprocal Rank Fusion).
             prefetch_limit: Number of results to fetch per vector type before fusion.
                 Default: 20 (20 from dense + 20 from sparse → fused to top-k).
-            query_prompt: Optional instruction prompt for query encoding (asymmetric encoding).
-                Applied only to dense embedder for queries. Documents and sparse embeddings
-                never use prompts. Default: None.
 
         Note:
             The Qdrant client must be configured externally (URL, API key, etc.).
@@ -111,7 +107,6 @@ class QdrantHybridIndex:
         self.sparse_embedder = sparse_embedder
         self.fusion = fusion
         self.prefetch_limit = prefetch_limit
-        self.query_prompt = query_prompt
 
         # State (populated by create_index)
         self._corpus_texts: list[str] | None = None
@@ -196,7 +191,11 @@ class QdrantHybridIndex:
         self._n_samples = len(texts)
 
     def search(
-        self, query_texts: str | list[str], k: int, _dense_embeddings: np.ndarray | None = None
+        self,
+        query_texts: str | list[str],
+        k: int,
+        query_prompt: str | None = None,
+        _dense_embeddings: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Hybrid search for k nearest neighbors.
 
@@ -206,6 +205,9 @@ class QdrantHybridIndex:
         Args:
             query_texts: Single text query or list of text queries.
             k: Number of nearest neighbors to return per query.
+            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
+                Applied only to dense embedder. Sparse embedder never uses prompts.
+                Default: None.
             _dense_embeddings: INTERNAL - Pre-computed dense embeddings (used by search_all).
                 When provided, dense embedder is NOT called. Sparse embedder still processes texts.
 
@@ -236,15 +238,16 @@ class QdrantHybridIndex:
             texts = query_texts  # type: ignore[assignment]
 
         # Encode queries with both embedders
-        # Dense: use cached if provided (search_all optimization), otherwise encode
+        # Dense: use cached if provided (search_all optimization), otherwise encode with prompt
         if _dense_embeddings is not None:
             dense_query_embeddings = _dense_embeddings
         else:
             # Dense: apply query_prompt for asymmetric encoding
-            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=query_prompt)
 
         # Sparse: ALWAYS encode from text (no caching possible for Qdrant hybrid)
-        sparse_query_embeddings = self.sparse_embedder.encode(texts)
+        # Sparse never uses prompts (BM25 doesn't support instructions)
+        sparse_query_embeddings = self.sparse_embedder.encode(texts, prompt=None)
 
         # Batch search (one query_points call per query)
         all_distances = []
@@ -303,13 +306,16 @@ class QdrantHybridIndex:
         else:
             return distances_array, indices_array
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search all corpus items against each other (deduplication).
 
         Uses cached corpus texts and dense embeddings for efficient deduplication.
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
+            query_prompt: Optional instruction prompt for query encoding.
+                Typically None for deduplication (symmetric encoding).
+                Default: None.
 
         Returns:
             Tuple of (distances, indices), both shape (N, k) where N = corpus size.
@@ -326,7 +332,13 @@ class QdrantHybridIndex:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
         # Reuse search() with cached dense embeddings (performance optimization)
-        return self.search(self._corpus_texts, k, _dense_embeddings=self._cached_dense_embeddings)
+        # query_prompt is passed through but not used (we use cached embeddings)
+        return self.search(
+            self._corpus_texts,
+            k,
+            query_prompt=query_prompt,
+            _dense_embeddings=self._cached_dense_embeddings,
+        )
 
 
 class FakeHybridVectorIndex:
@@ -369,12 +381,15 @@ class FakeHybridVectorIndex:
         self._texts = texts
         logger.debug("FakeHybridVectorIndex: recorded %d samples", self._n_samples)
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search(
+        self, query_texts: str | list[str], k: int, query_prompt: str | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake search results (deterministic).
 
         Args:
             query_texts: Single text or list of texts.
             k: Number of neighbors per query.
+            query_prompt: Optional instruction prompt (ignored by fake implementation).
 
         Returns:
             - If single query: distances=(k,), indices=(k,)
@@ -402,11 +417,12 @@ class FakeHybridVectorIndex:
         else:
             return distances, indices
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake deduplication results (deterministic).
 
         Args:
             k: Number of neighbors per corpus item.
+            query_prompt: Optional instruction prompt (ignored by fake implementation).
 
         Returns:
             distances: shape (N, k) where N = corpus size
