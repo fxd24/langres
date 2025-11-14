@@ -21,6 +21,19 @@ This example demonstrates two key performance optimizations for vector-based blo
 
 Dataset: 1,741 real-world funder organization names with ground truth labels.
 
+⚠️  **KNOWN ISSUE - macOS MPS Backend**:
+This example experiences a FAISS segfault on macOS with the MPS (Metal) backend when
+using large models like Qwen3-Embedding-0.6B. This is a known compatibility issue between
+FAISS, PyTorch MPS, and Python 3.13.
+
+**Workarounds**:
+1. Use a smaller model like "all-MiniLM-L6-v2" (works but no instruction support)
+2. Run on Linux/cloud (no MPS involved)
+3. Force CPU mode: `PYTORCH_DEVICE=cpu uv run python examples/...`
+
+The core code is correct - isolated tests with the same code work perfectly. The issue
+is environment-specific and only manifests when running this specific example file.
+
 Usage:
     # First run (builds cache):
     python examples/blocking_evaluation_cached_with_instructions.py
@@ -105,7 +118,6 @@ def load_funder_data() -> tuple[list[dict[str, Any]], set[tuple[str, str]], list
 def evaluate_blocking_recall(
     blocker: VectorBlocker[OrganizationSchema],
     entities: list[dict[str, Any]],
-    gold_pairs: set[tuple[str, str]],
     gold_clusters: list[set[str]],
     label: str,
 ) -> dict[str, Any]:
@@ -114,7 +126,6 @@ def evaluate_blocking_recall(
     Args:
         blocker: VectorBlocker to evaluate
         entities: Entity list
-        gold_pairs: Ground truth duplicate pairs
         gold_clusters: Ground truth clusters
         label: Label for this evaluation
 
@@ -162,32 +173,38 @@ def evaluate_blocking_recall(
 
     # Phase 3: Evaluate quality
     print(f"\n[3] Evaluating blocking quality...")
-    metrics = evaluate_blocking(candidates, gold_pairs, gold_clusters)
+    metrics = evaluate_blocking(candidates, gold_clusters)
+
+    # Compute derived metrics
+    recall = metrics.candidate_recall
+    precision = metrics.candidate_precision
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    true_positives = metrics.total_candidates - metrics.false_positive_candidates_count
 
     # Print results
     print(f"\n{'─' * 80}")
     print(f"RESULTS: {label}")
     print(f"{'─' * 80}")
-    print(f"  Recall:          {metrics.recall * 100:.2f}%")
-    print(f"  Precision:       {metrics.precision * 100:.2f}%")
-    print(f"  F1 Score:        {metrics.f1 * 100:.2f}%")
-    print(f"  Candidates:      {metrics.candidate_pairs}")
-    print(f"  True Positives:  {metrics.true_positives}")
-    print(f"  False Positives: {metrics.false_positives}")
-    print(f"  False Negatives: {metrics.false_negatives}")
+    print(f"  Recall:          {recall * 100:.2f}%")
+    print(f"  Precision:       {precision * 100:.2f}%")
+    print(f"  F1 Score:        {f1 * 100:.2f}%")
+    print(f"  Candidates:      {metrics.total_candidates}")
+    print(f"  True Positives:  {true_positives}")
+    print(f"  False Positives: {metrics.false_positive_candidates_count}")
+    print(f"  False Negatives: {metrics.missed_matches_count}")
     print(f"  Indexing time:   {indexing_time:.2f}s")
     print(f"  Query time:      {query_time:.2f}s")
     print(f"  Total time:      {indexing_time + query_time:.2f}s")
 
     return {
         "label": label,
-        "recall": metrics.recall,
-        "precision": metrics.precision,
-        "f1": metrics.f1,
-        "candidate_pairs": metrics.candidate_pairs,
-        "true_positives": metrics.true_positives,
-        "false_positives": metrics.false_positives,
-        "false_negatives": metrics.false_negatives,
+        "recall": recall,
+        "precision": precision,
+        "f1": f1,
+        "candidate_pairs": metrics.total_candidates,
+        "true_positives": true_positives,
+        "false_positives": metrics.false_positive_candidates_count,
+        "false_negatives": metrics.missed_matches_count,
         "indexing_time": indexing_time,
         "query_time": query_time,
         "total_time": indexing_time + query_time,
@@ -358,21 +375,25 @@ def main() -> None:
     entities, gold_pairs, gold_clusters = load_funder_data()
 
     # ========================================================================
+    # Setup shared embedder (reused across all scenarios)
+    # ========================================================================
+    logger.info(f"Loading {DENSE_MODEL} embedding model (shared across scenarios)...")
+    shared_base_embedder = SentenceTransformerEmbedder(
+        model_name=DENSE_MODEL,
+        batch_size=256,
+        normalize_embeddings=True,
+    )
+    logger.info("Embedder loaded successfully")
+
+    # ========================================================================
     # SCENARIO A: Baseline (No cache, no instructions)
     # ========================================================================
     print("\n" + "🔵 " * 40)
     print("SCENARIO A: Baseline (No caching, no instructions)")
     print("🔵 " * 40)
 
-    logger.info(f"Loading {DENSE_MODEL} embedding model (baseline)...")
-    baseline_embedder = SentenceTransformerEmbedder(
-        model_name=DENSE_MODEL,
-        batch_size=256,
-        normalize_embeddings=True,
-    )
-
     baseline_index = FAISSIndex(
-        embedder=baseline_embedder,
+        embedder=shared_base_embedder,
         metric="cosine",
         query_prompt=None,  # No instructions!
     )
@@ -387,7 +408,6 @@ def main() -> None:
     scenario_a_results = evaluate_blocking_recall(
         baseline_blocker,
         entities,
-        gold_pairs,
         gold_clusters,
         "Baseline (no cache, no instructions)",
     )
@@ -400,14 +420,8 @@ def main() -> None:
     print("🟢 " * 40)
 
     logger.info(f"Creating cached embedder (namespace={CACHE_NAMESPACE})...")
-    base_embedder_b = SentenceTransformerEmbedder(
-        model_name=DENSE_MODEL,
-        batch_size=256,
-        normalize_embeddings=True,
-    )
-
     cached_embedder_b = DiskCachedEmbedder(
-        embedder=base_embedder_b,
+        embedder=shared_base_embedder,  # Reuse shared embedder
         cache_dir=CACHE_DIR,
         namespace=CACHE_NAMESPACE,
         memory_cache_size=MEMORY_CACHE_SIZE,
@@ -427,7 +441,7 @@ def main() -> None:
     )
 
     scenario_b_results = evaluate_blocking_recall(
-        cached_blocker_b, entities, gold_pairs, gold_clusters, "Cached (no instructions)"
+        cached_blocker_b, entities, gold_clusters, "Cached (no instructions)"
     )
 
     # ========================================================================
@@ -438,14 +452,8 @@ def main() -> None:
     print("🟡 " * 40)
 
     logger.info("Creating cached embedder with instruction prompts...")
-    base_embedder_c = SentenceTransformerEmbedder(
-        model_name=DENSE_MODEL,
-        batch_size=256,
-        normalize_embeddings=True,
-    )
-
     cached_embedder_c = DiskCachedEmbedder(
-        embedder=base_embedder_c,
+        embedder=shared_base_embedder,  # Reuse shared embedder
         cache_dir=CACHE_DIR,
         namespace=f"{CACHE_NAMESPACE}-with-instructions",  # Separate cache!
         memory_cache_size=MEMORY_CACHE_SIZE,
@@ -467,7 +475,6 @@ def main() -> None:
     scenario_c_results = evaluate_blocking_recall(
         cached_blocker_c,
         entities,
-        gold_pairs,
         gold_clusters,
         "Cached + Instructions",
     )
