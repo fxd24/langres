@@ -113,6 +113,12 @@ class QdrantHybridIndex:
         self._n_samples: int | None = None
         self._cached_dense_embeddings: np.ndarray | None = None
 
+        # TODO: Memory optimization (post-POC)
+        # Currently cache dense embeddings for search_all() optimization.
+        # This is acceptable for POC (<100K entities) but may need optimization
+        # for larger datasets. Qdrant handles server-side memory management,
+        # so client-side caching is the only concern here.
+
     def create_index(self, texts: list[str]) -> None:
         """Preprocessing: Build hybrid index from text corpus.
 

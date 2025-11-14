@@ -142,6 +142,10 @@ class QdrantHybridRerankingIndex:
         self._n_samples: int | None = None
         self._cached_dense_embeddings: np.ndarray | None = None
 
+        # TODO: Memory optimization (post-POC)
+        # Same as QdrantHybridIndex - caching dense embeddings for search_all().
+        # Acceptable for POC, may need optimization for production scale.
+
     def create_index(self, texts: list[str]) -> None:
         """Preprocessing: Build hybrid index from text corpus.
 

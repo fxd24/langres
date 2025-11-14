@@ -189,6 +189,17 @@ class FAISSIndex:
         self._corpus_texts: list[str] | None = None
         self._index: faiss.Index | None = None
 
+        # TODO: Memory optimization (post-POC)
+        # Current implementation stores embeddings twice (2× memory):
+        # - _corpus_embeddings for search_all() optimization
+        # - FAISS internal storage for index search
+        # For large datasets (>1M vectors), this causes OOM.
+        # Possible solutions:
+        # 1. Remove _corpus_embeddings, rely on DiskCachedEmbedder (slower but saves RAM)
+        # 2. Add automatic threshold: RAM for small datasets, disk for large
+        # 3. Use FAISS quantization (IVF-PQ) for 4-32x compression
+        # 4. Recommend QdrantHybridIndex for production (server-side memory management)
+
     def create_index(self, texts: list[str]) -> None:
         """Build FAISS index from text corpus.
 
