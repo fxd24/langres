@@ -233,8 +233,13 @@ class TestFAISSIndexInstructionPrompts:
         second_call_args = embedder.encode.call_args_list[1]
         assert second_call_args[1]["prompt"] == query_prompt
 
-    def test_faiss_index_search_all_reencodes_with_prompt(self):
-        """Test that search_all re-encodes with query_prompt for asymmetric encoding."""
+    def test_faiss_index_search_all_uses_symmetric_encoding(self):
+        """Test that search_all uses symmetric encoding (no re-encoding).
+
+        For deduplication, both query and document sides come from the same corpus,
+        so we use symmetric encoding (no prompt) for efficiency and correctness.
+        The old behavior of re-encoding with query_prompt was inefficient.
+        """
         # Use a wrapper around FakeEmbedder to track calls
         encode_calls = []
         base_embedder = FakeEmbedder(embedding_dim=128)
@@ -256,21 +261,15 @@ class TestFAISSIndexInstructionPrompts:
         texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
         index.create_index(texts)
 
-        # search_all should re-encode corpus texts WITH the query_prompt
+        # search_all should NOT re-encode - it reuses cached embeddings
         index.search_all(k=3)
 
-        # Verify two encode calls:
-        # 1. create_index: corpus without prompt
-        # 2. search_all: corpus WITH prompt (for asymmetric encoding)
-        assert len(encode_calls) == 2
+        # Verify only one encode call (create_index)
+        assert len(encode_calls) == 1
 
-        # First call (create_index): no prompt
+        # Single call (create_index): no prompt (symmetric encoding)
         assert encode_calls[0]["texts"] == texts
         assert encode_calls[0]["prompt"] is None
-
-        # Second call (search_all): WITH prompt
-        assert encode_calls[1]["texts"] == texts
-        assert encode_calls[1]["prompt"] == query_prompt
 
     def test_faiss_index_no_query_prompt_backward_compatible(self):
         """Test that FAISSIndex without query_prompt uses prompt=None everywhere."""
@@ -386,15 +385,23 @@ class TestFAISSIndexPrecomputedEmbeddings:
 
         # Encode query manually
         query_text = "Apple"
-        query_embedding = embedder.encode([query_text])
+        query_embedding_single = embedder.encode([query_text])[0]  # Extract single embedding
 
-        # Compare search(text) vs search(embedding)
+        # Compare search(text) vs search(embedding) - both single queries
         distances_text, indices_text = index.search(query_text, k=2)
-        distances_embed, indices_embed = index.search(query_embedding, k=2)
+        distances_embed, indices_embed = index.search(query_embedding_single, k=2)
 
         # Results should be identical
         np.testing.assert_array_equal(indices_text, indices_embed)
         np.testing.assert_allclose(distances_text, distances_embed)
+
+        # Also test batch embeddings
+        query_batch = embedder.encode([query_text, "Google"])
+        distances_batch, indices_batch = index.search(query_batch, k=2)
+
+        # Batch should have shape (2, 2)
+        assert distances_batch.shape == (2, 2)
+        assert indices_batch.shape == (2, 2)
 
     def test_faiss_index_search_all_no_reencoding(self):
         """Test that search_all() does NOT re-encode corpus (uses cached embeddings)."""

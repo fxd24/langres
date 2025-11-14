@@ -75,15 +75,20 @@ class VectorIndex(Protocol):
         """
         ...  # pragma: no cover
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Runtime: Search for k nearest neighbors using text queries.
+    def search(
+        self, query_texts: str | list[str] | np.ndarray, k: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Runtime: Search for k nearest neighbors using text queries or pre-computed embeddings.
 
         Supports both single query and batch queries. For batch queries,
         implementations MUST use native batching (e.g., FAISS batch search,
         Qdrant query_batch_points) for efficiency.
 
         Args:
-            query_texts: Single text query or list of text queries.
+            query_texts: Single text, list of texts, or pre-computed embeddings (np.ndarray).
+                - str: Single text query
+                - list[str]: Batch of text queries
+                - np.ndarray: Pre-computed embeddings (shape: (dim,) or (N, dim))
             k: Number of nearest neighbors to return per query.
 
         Returns:
@@ -95,8 +100,8 @@ class VectorIndex(Protocol):
             RuntimeError: If search() is called before create_index().
 
         Note:
-            The index embeds query texts on-the-fly using its embedder.
-            For external queries (entity linking pattern).
+            When using text queries, the index embeds texts on-the-fly using its embedder.
+            When using pre-computed embeddings, no encoding is performed (performance optimization).
         """
         ...  # pragma: no cover
 
@@ -176,6 +181,7 @@ class FAISSIndex:
 
         # State (populated by create_index)
         self._corpus_embeddings: np.ndarray | None = None
+        self._corpus_texts: list[str] | None = None
         self._index: faiss.Index | None = None
 
     def create_index(self, texts: list[str]) -> None:
@@ -187,6 +193,7 @@ class FAISSIndex:
             texts: Corpus texts to embed and index.
         """
         # 1. Embed corpus (index handles this!)
+        # Documents are always encoded without prompts
         self._corpus_embeddings = self.embedder.encode(texts).astype(np.float32)
 
         # 2. Create FAISS index based on metric
@@ -204,6 +211,9 @@ class FAISSIndex:
         # 3. Add embeddings to index
         self._index.add(self._corpus_embeddings)
 
+        # 4. Cache corpus texts for search_all() (needed for query_prompt support)
+        self._corpus_texts = texts
+
         logger.info(
             "Built FAISS index with %d vectors, dim=%d, metric=%s",
             self._corpus_embeddings.shape[0],
@@ -211,13 +221,15 @@ class FAISSIndex:
             self.metric,
         )
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Search for k nearest neighbors using text queries.
+    def search(
+        self, query_texts: str | list[str] | np.ndarray, k: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Search for k nearest neighbors using text queries or pre-computed embeddings.
 
         Supports both single query and batch queries with native FAISS batching.
 
         Args:
-            query_texts: Single text or list of texts.
+            query_texts: Single text, list of texts, or pre-computed embeddings.
             k: Number of neighbors per query.
 
         Returns:
@@ -227,15 +239,20 @@ class FAISSIndex:
         if self._index is None:
             raise RuntimeError("Index not built. Must call create_index() first.")
 
-        # Handle single vs batch
-        is_single = isinstance(query_texts, str)
-        if is_single:
-            texts: list[str] = [query_texts]  # type: ignore[list-item]
+        # Separate code paths for testability and clarity
+        if isinstance(query_texts, np.ndarray):
+            # Path 1: Pre-computed embeddings (no encoding)
+            query_embeddings = query_texts.astype(np.float32)
+            is_single = query_embeddings.ndim == 1
+            if is_single:
+                query_embeddings = query_embeddings.reshape(1, -1)
         else:
-            texts = query_texts  # type: ignore[assignment]
-
-        # Embed queries with optional prompt (asymmetric encoding)
-        query_embeddings = self.embedder.encode(texts, prompt=self.query_prompt).astype(np.float32)
+            # Path 2: Text queries (encode with optional prompt)
+            is_single = isinstance(query_texts, str)
+            texts: list[str] = [query_texts] if is_single else query_texts  # type: ignore[assignment,list-item]
+            query_embeddings = self.embedder.encode(texts, prompt=self.query_prompt).astype(
+                np.float32
+            )
 
         # Normalize for cosine similarity
         if self.metric == "cosine":
@@ -253,7 +270,9 @@ class FAISSIndex:
     def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
         """Search all corpus items against each other (deduplication pattern).
 
-        Efficient batch operation using cached corpus embeddings.
+        Reuses cached corpus embeddings for efficiency. For deduplication,
+        we use symmetric encoding (no prompt) since both query and document
+        sides come from the same corpus.
 
         Args:
             k: Number of neighbors per corpus item.
@@ -265,10 +284,9 @@ class FAISSIndex:
         if self._corpus_embeddings is None or self._index is None:
             raise RuntimeError("Index not built. Must call create_index() first.")
 
-        # Single FAISS call with cached embeddings (no re-encoding!)
-        distances, indices = self._index.search(self._corpus_embeddings, k)
-
-        return distances, indices
+        # Pass pre-computed embeddings to search() - no re-encoding!
+        # For deduplication, we use symmetric encoding (no query_prompt)
+        return self.search(self._corpus_embeddings, k)
 
     # ============ OLD API (for backward compatibility during transition) ============
     def build(self, embeddings: np.ndarray) -> None:
@@ -341,11 +359,13 @@ class FakeVectorIndex:
         self._n_samples = len(texts)
         logger.debug("FakeVectorIndex: recorded %d samples", self._n_samples)
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search(
+        self, query_texts: str | list[str] | np.ndarray, k: int
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake search results (deterministic).
 
         Args:
-            query_texts: Single text or list of texts.
+            query_texts: Single text, list of texts, or pre-computed embeddings.
             k: Number of neighbors per query.
 
         Returns:
@@ -355,9 +375,15 @@ class FakeVectorIndex:
         if self._n_samples is None:
             raise RuntimeError("Index not built. Call create_index() first.")
 
-        # Handle single vs batch
-        is_single = isinstance(query_texts, str)
-        n_queries = 1 if is_single else len(query_texts)
+        # Handle single vs batch (same logic for text and embeddings)
+        if isinstance(query_texts, np.ndarray):
+            # Pre-computed embeddings
+            is_single = query_texts.ndim == 1
+            n_queries = 1 if is_single else query_texts.shape[0]
+        else:
+            # Text queries
+            is_single = isinstance(query_texts, str)
+            n_queries = 1 if is_single else len(query_texts)
 
         # Generate deterministic indices
         indices = np.zeros((n_queries, k), dtype=np.int64)
@@ -388,7 +414,9 @@ class FakeVectorIndex:
             raise RuntimeError("Index not built. Call create_index() first.")
 
         # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
-        indices = np.zeros((self._n_samples, k), dtype=np.int64)
+        indices = np.zeros(
+            (self._n_samples, k), dtype=np.int64
+        )  # TODO mimic behavior of FAISS, where the search is passed on to search function. do not reimplement twice.
         distances = np.zeros((self._n_samples, k), dtype=np.float32)
 
         for i in range(self._n_samples):
