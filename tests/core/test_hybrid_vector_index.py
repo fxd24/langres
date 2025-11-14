@@ -537,12 +537,17 @@ class TestQdrantHybridIndexInstructionPrompts:
         assert len(sparse_call_log) == 1
         assert sparse_call_log[0]["prompt"] is None
 
-    def test_qdrant_hybrid_search_all_delegates_with_prompt(self):
-        """Test that search_all delegates to search which applies prompt."""
+    def test_qdrant_hybrid_search_all_uses_cached_embeddings(self):
+        """Test that search_all uses cached dense embeddings from create_index.
+
+        Performance optimization: search_all should reuse dense embeddings,
+        not re-encode with prompt. Sparse embeddings still need to be encoded.
+        """
         from unittest.mock import Mock
 
-        # Create tracking dense embedder
+        # Create tracking embedders
         dense_call_log = []
+        sparse_call_log = []
 
         class TrackingDenseEmbedder:
             embedding_dim = 128
@@ -553,6 +558,7 @@ class TestQdrantHybridIndexInstructionPrompts:
 
         class TrackingSparseEmbedder:
             def encode(self, texts, prompt=None):
+                sparse_call_log.append({"texts": texts, "prompt": prompt})
                 return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
 
         mock_client = MagicMock()
@@ -577,26 +583,33 @@ class TestQdrantHybridIndexInstructionPrompts:
         texts = ["Apple Inc.", "Microsoft Corp."]
         index.create_index(texts)
 
+        # Verify create_index encoded WITHOUT prompt (documents don't use instructions)
+        assert len(dense_call_log) == 1
+        assert dense_call_log[0]["prompt"] is None  # Documents encoded without prompt
+
         # Clear logs
         dense_call_log.clear()
+        sparse_call_log.clear()
 
-        # search_all should call search() which applies prompt
+        # search_all should use cached dense embeddings (NO re-encoding)
         index.search_all(k=2)
 
-        # Verify dense embedder was called once with batch of corpus texts and prompt
-        assert len(dense_call_log) == 1  # Single batch call
-        assert dense_call_log[0]["texts"] == texts  # All corpus texts
-        assert dense_call_log[0]["prompt"] == query_prompt  # With prompt
+        # Verify dense embedder NOT called (cached embeddings used)
+        assert len(dense_call_log) == 0, "Dense embedder should not be called (cache)"
+
+        # Verify sparse embedder STILL called (no caching for sparse)
+        assert len(sparse_call_log) == 1  # Sparse must be recomputed
 
 
 class TestQdrantHybridIndexPrecomputedEmbeddings:
     """Tests for QdrantHybridIndex pre-computed embedding support (performance fix)."""
 
-    def test_qdrant_hybrid_index_search_with_precomputed_embeddings(self):
-        """Test that search() accepts pre-computed dense embeddings without calling dense embedder.
+    def test_qdrant_hybrid_index_internal_precomputed_dense(self):
+        """Test that search() with _dense_embeddings parameter skips dense encoding.
 
-        Sparse embedder is still called because Qdrant's sparse vectors
-        must be recomputed (no way to pass pre-computed sparse vectors to query_points).
+        This is an internal API used by search_all() for performance optimization.
+        Sparse embedder is still called because Qdrant's sparse vectors must be
+        recomputed from text (Qdrant limitation - query_points API requires sparse vectors).
         """
         dense_call_log = []
         sparse_call_log = []
@@ -637,18 +650,17 @@ class TestQdrantHybridIndexPrecomputedEmbeddings:
         dense_call_log.clear()
         sparse_call_log.clear()
 
-        # Search with pre-computed dense embeddings (should NOT call dense embedder)
-        query_embedding = np.random.rand(128).astype(np.float32)
-        distances, indices = index.search(query_embedding, k=2)
+        # Call search() with internal _dense_embeddings parameter
+        precomputed_dense = np.random.rand(1, 128).astype(np.float32)
+        distances, indices = index.search("Apple", k=2, _dense_embeddings=precomputed_dense)
 
         # Verify dense embedder NOT called (pre-computed embeddings)
         assert len(dense_call_log) == 0, (
-            "Dense embedder should not be called with pre-computed embeddings"
+            "Dense embedder should not be called with _dense_embeddings"
         )
 
-        # Verify sparse embedder IS called (Qdrant limitation - can't pass pre-computed sparse)
-        # Note: Sparse encoding still happens because Qdrant requires sparse vectors for hybrid search
-        # We can't optimize this away like with FAISS
+        # Verify sparse embedder IS called (Qdrant limitation - must encode from text)
+        assert len(sparse_call_log) == 1, "Sparse embedder must be called for hybrid search"
 
         # Verify results are valid
         assert distances.shape == (2,)

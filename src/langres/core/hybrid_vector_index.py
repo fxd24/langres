@@ -116,6 +116,7 @@ class QdrantHybridIndex:
         # State (populated by create_index)
         self._corpus_texts: list[str] | None = None
         self._n_samples: int | None = None
+        self._cached_dense_embeddings: np.ndarray | None = None
 
     def create_index(self, texts: list[str]) -> None:
         """Preprocessing: Build hybrid index from text corpus.
@@ -154,6 +155,9 @@ class QdrantHybridIndex:
         dense_embeddings = self.dense_embedder.encode(texts)
         sparse_embeddings = self.sparse_embedder.encode(texts)
 
+        # Cache dense embeddings for search_all() optimization
+        self._cached_dense_embeddings = dense_embeddings
+
         # 3. Build PointStruct list with both vectors
         points = []
         for i, text in enumerate(texts):
@@ -191,7 +195,9 @@ class QdrantHybridIndex:
         self._corpus_texts = texts
         self._n_samples = len(texts)
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search(
+        self, query_texts: str | list[str], k: int, _dense_embeddings: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Hybrid search for k nearest neighbors.
 
         Supports both single query and batch queries. Uses Qdrant's prefetch
@@ -200,6 +206,8 @@ class QdrantHybridIndex:
         Args:
             query_texts: Single text query or list of text queries.
             k: Number of nearest neighbors to return per query.
+            _dense_embeddings: INTERNAL - Pre-computed dense embeddings (used by search_all).
+                When provided, dense embedder is NOT called. Sparse embedder still processes texts.
 
         Returns:
             Tuple of (distances, indices):
@@ -212,6 +220,10 @@ class QdrantHybridIndex:
         Note:
             For batch queries, this makes one query_points() call per query.
             Qdrant doesn't have explicit batch API, but client handles efficiently.
+
+            Hybrid search REQUIRES text because sparse vectors need text encoding.
+            Unlike FAISSIndex (dense-only), this cannot accept np.ndarray for query_texts.
+            The _dense_embeddings parameter is INTERNAL for search_all() optimization only.
         """
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search().")
@@ -224,9 +236,14 @@ class QdrantHybridIndex:
             texts = query_texts  # type: ignore[assignment]
 
         # Encode queries with both embedders
-        # Dense: apply query_prompt for asymmetric encoding
-        dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
-        # Sparse: never use prompts (BM25 doesn't support instructions)
+        # Dense: use cached if provided (search_all optimization), otherwise encode
+        if _dense_embeddings is not None:
+            dense_query_embeddings = _dense_embeddings
+        else:
+            # Dense: apply query_prompt for asymmetric encoding
+            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+
+        # Sparse: ALWAYS encode from text (no caching possible for Qdrant hybrid)
         sparse_query_embeddings = self.sparse_embedder.encode(texts)
 
         # Batch search (one query_points call per query)
@@ -289,7 +306,7 @@ class QdrantHybridIndex:
     def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search all corpus items against each other (deduplication).
 
-        Uses cached corpus texts to perform hybrid search for all items.
+        Uses cached corpus texts and dense embeddings for efficient deduplication.
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
@@ -301,15 +318,15 @@ class QdrantHybridIndex:
             RuntimeError: If search_all() is called before create_index().
 
         Note:
-            This is more efficient than calling search(all_texts, k) because
-            we reuse cached corpus texts without re-fetching.
+            Performance optimization: Reuses cached dense embeddings from create_index(),
+            avoiding re-encoding the corpus. Sparse embeddings still need re-encoding
+            (Qdrant limitation - query_points API requires fresh sparse vectors).
         """
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
-        # Reuse search() implementation for all corpus texts
-        # This delegates to search() which handles batching and fusion
-        return self.search(self._corpus_texts, k)
+        # Reuse search() with cached dense embeddings (performance optimization)
+        return self.search(self._corpus_texts, k, _dense_embeddings=self._cached_dense_embeddings)
 
 
 class FakeHybridVectorIndex:
