@@ -753,16 +753,17 @@ class TestQdrantHybridRerankingIndex:
         assert reranking_embedder.encode.call_args_list[0] == ((texts,), {"prompt": None})
         assert reranking_embedder.encode.call_args_list[1] == ((["Apple"],), {"prompt": None})
 
-    def test_reranking_index_search_all_with_prompt(self):
-        """Test that search_all() delegates to search() which applies query_prompt."""
+    def test_reranking_index_search_all_uses_cached_embeddings(self):
+        """Test that search_all() uses cached dense embeddings from create_index.
+
+        Performance optimization: search_all should reuse dense embeddings,
+        not re-encode. Sparse and reranking embeddings still need to be encoded.
+        """
         # Setup
         mock_client = MagicMock()
         dense_embedder = MagicMock(spec=["encode", "embedding_dim"])
         dense_embedder.embedding_dim = 128
-        dense_embedder.encode.side_effect = [
-            np.zeros((2, 128)),  # documents (create_index)
-            np.zeros((2, 128)),  # queries (search_all via search)
-        ]
+        dense_embedder.encode.return_value = np.zeros((2, 128))  # documents only
 
         sparse_embedder = MagicMock(spec=["encode"])
         sparse_embedder.encode.side_effect = [
@@ -808,14 +809,21 @@ class TestQdrantHybridRerankingIndex:
         texts = ["Apple Inc.", "Microsoft Corp."]
         index.create_index(texts)
 
-        # Execute search_all
+        # Verify create_index encoded WITHOUT prompt (documents don't use instructions)
+        assert dense_embedder.encode.call_count == 1
+        assert dense_embedder.encode.call_args == ((texts,), {"prompt": None})
+
+        # Execute search_all - should NOT call dense embedder (uses cache)
         index.search_all(k=1)
 
-        # Verify that query_prompt was used for queries in search()
-        # (search_all delegates to search with corpus texts)
-        assert dense_embedder.encode.call_count == 2
-        # Second call should use query_prompt (for queries)
-        assert dense_embedder.encode.call_args_list[1] == ((texts,), {"prompt": query_prompt})
+        # Verify dense embedder NOT called again (cached embeddings)
+        assert dense_embedder.encode.call_count == 1, "Dense embedder should not be called (cache)"
+
+        # Verify sparse embedder STILL called (no caching for sparse)
+        assert sparse_embedder.encode.call_count == 2
+
+        # Verify reranking embedder STILL called (no caching for late-interaction)
+        assert reranking_embedder.encode.call_count == 2
 
         # Sparse should still use prompt=None
         assert sparse_embedder.encode.call_args_list[1] == ((texts,), {"prompt": None})

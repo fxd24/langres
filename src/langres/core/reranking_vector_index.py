@@ -140,6 +140,7 @@ class QdrantHybridRerankingIndex:
         # State (populated by create_index)
         self._corpus_texts: list[str] | None = None
         self._n_samples: int | None = None
+        self._cached_dense_embeddings: np.ndarray | None = None
 
     def create_index(self, texts: list[str]) -> None:
         """Preprocessing: Build hybrid index from text corpus.
@@ -185,6 +186,9 @@ class QdrantHybridRerankingIndex:
         sparse_embeddings = self.sparse_embedder.encode(texts, prompt=None)
         reranking_embeddings = self.reranking_embedder.encode(texts, prompt=None)
 
+        # Cache dense embeddings for search_all() optimization
+        self._cached_dense_embeddings = dense_embeddings
+
         # 3. Build PointStruct list with all three vectors
         points: list[PointStruct] = []
         for i, text in enumerate(texts):
@@ -223,7 +227,9 @@ class QdrantHybridRerankingIndex:
         self._corpus_texts = texts
         self._n_samples = len(texts)
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search(
+        self, query_texts: str | list[str], k: int, _dense_embeddings: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Hybrid search with reranking for k nearest neighbors.
 
         Supports both single query and batch queries. Uses Qdrant's prefetch
@@ -232,6 +238,9 @@ class QdrantHybridRerankingIndex:
         Args:
             query_texts: Single text query or list of text queries.
             k: Number of nearest neighbors to return per query.
+            _dense_embeddings: INTERNAL - Pre-computed dense embeddings (used by search_all).
+                When provided, dense embedder is NOT called. Sparse and reranking embedders
+                still process texts.
 
         Returns:
             Tuple of (distances, indices):
@@ -244,6 +253,10 @@ class QdrantHybridRerankingIndex:
         Note:
             For batch queries, this makes one query_points() call per query.
             Qdrant doesn't have explicit batch API, but client handles efficiently.
+
+            Hybrid reranking REQUIRES text because sparse vectors and late-interaction
+            multi-vectors need text encoding. The _dense_embeddings parameter is
+            INTERNAL for search_all() optimization only.
         """
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search().")
@@ -256,8 +269,14 @@ class QdrantHybridRerankingIndex:
             texts = query_texts  # type: ignore[assignment]
 
         # Encode queries with all three embedders
-        # Dense and reranking use query_prompt (if provided), sparse always uses None (keyword matching)
-        dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+        # Dense: use cached if provided (search_all optimization), otherwise encode
+        if _dense_embeddings is not None:
+            dense_query_embeddings = _dense_embeddings
+        else:
+            # Dense and reranking use query_prompt (if provided), sparse always uses None
+            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+
+        # Sparse and reranking: ALWAYS encode from text (no caching possible for Qdrant hybrid)
         sparse_query_embeddings = self.sparse_embedder.encode(texts, prompt=None)
         reranking_query_embeddings = self.reranking_embedder.encode(texts, prompt=self.query_prompt)
 
@@ -330,7 +349,7 @@ class QdrantHybridRerankingIndex:
     def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search all corpus items against each other (deduplication).
 
-        Uses cached corpus texts to perform hybrid search with reranking for all items.
+        Uses cached corpus texts and dense embeddings for efficient deduplication.
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
@@ -342,15 +361,15 @@ class QdrantHybridRerankingIndex:
             RuntimeError: If search_all() is called before create_index().
 
         Note:
-            This is more efficient than calling search(all_texts, k) because
-            we reuse cached corpus texts without re-fetching.
+            Performance optimization: Reuses cached dense embeddings from create_index(),
+            avoiding re-encoding the corpus. Sparse and reranking embeddings still need
+            re-encoding (Qdrant limitation - query_points API requires fresh vectors).
         """
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
-        # Reuse search() implementation for all corpus texts
-        # This delegates to search() which handles batching and reranking
-        return self.search(self._corpus_texts, k)
+        # Reuse search() with cached dense embeddings (performance optimization)
+        return self.search(self._corpus_texts, k, _dense_embeddings=self._cached_dense_embeddings)
 
 
 class FakeHybridRerankingVectorIndex:
