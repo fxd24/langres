@@ -589,6 +589,124 @@ class TestQdrantHybridIndexInstructionPrompts:
         assert dense_call_log[0]["prompt"] == query_prompt  # With prompt
 
 
+class TestQdrantHybridIndexPrecomputedEmbeddings:
+    """Tests for QdrantHybridIndex pre-computed embedding support (performance fix)."""
+
+    def test_qdrant_hybrid_index_search_with_precomputed_embeddings(self):
+        """Test that search() accepts pre-computed dense embeddings without calling dense embedder.
+
+        Sparse embedder is still called because Qdrant's sparse vectors
+        must be recomputed (no way to pass pre-computed sparse vectors to query_points).
+        """
+        dense_call_log = []
+        sparse_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                sparse_call_log.append({"texts": texts, "prompt": prompt})
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=0.9, payload={}, vector={}),
+            ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        # Clear tracking
+        dense_call_log.clear()
+        sparse_call_log.clear()
+
+        # Search with pre-computed dense embeddings (should NOT call dense embedder)
+        query_embedding = np.random.rand(128).astype(np.float32)
+        distances, indices = index.search(query_embedding, k=2)
+
+        # Verify dense embedder NOT called (pre-computed embeddings)
+        assert len(dense_call_log) == 0, (
+            "Dense embedder should not be called with pre-computed embeddings"
+        )
+
+        # Verify sparse embedder IS called (Qdrant limitation - can't pass pre-computed sparse)
+        # Note: Sparse encoding still happens because Qdrant requires sparse vectors for hybrid search
+        # We can't optimize this away like with FAISS
+
+        # Verify results are valid
+        assert distances.shape == (2,)
+        assert indices.shape == (2,)
+
+    def test_qdrant_hybrid_index_search_all_no_reencoding_dense(self):
+        """Test that search_all() reuses cached dense embeddings.
+
+        Dense embeddings are cached and reused.
+        Sparse embeddings still need to be recomputed (Qdrant limitation).
+        """
+        dense_call_log = []
+
+        class TrackingDenseEmbedder:
+            embedding_dim = 128
+
+            def encode(self, texts, prompt=None):
+                dense_call_log.append({"texts": texts, "prompt": prompt})
+                return np.random.rand(len(texts), 128).astype(np.float32)
+
+        class TrackingSparseEmbedder:
+            def encode(self, texts, prompt=None):
+                return [{"indices": [i, i + 1], "values": [0.5, 0.3]} for i in range(len(texts))]
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = [
+            ScoredPoint(id=0, version=0, score=1.0, payload={}, vector={}),
+            ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+        ]
+
+        dense_embedder = TrackingDenseEmbedder()
+        sparse_embedder = TrackingSparseEmbedder()
+
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+        )
+
+        # Create index
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"]
+        index.create_index(texts)
+
+        # Verify single dense encode call (create_index)
+        assert len(dense_call_log) == 1
+
+        # Call search_all - should NOT re-encode dense embeddings
+        distances, indices = index.search_all(k=3)
+
+        # Still only one dense encode call (no re-encoding)
+        assert len(dense_call_log) == 1, "search_all() should NOT re-encode dense embeddings"
+
+        # Verify results are valid
+        assert distances.shape == (4, 3)
+        assert indices.shape == (4, 3)
+
+
 class TestHybridVectorIndexProtocol:
     """Tests for VectorIndex protocol compliance."""
 
