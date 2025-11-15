@@ -738,3 +738,59 @@ def test_compute_score_metrics_uses_default_bins():
     # Behavior should be unchanged
     assert isinstance(true_hist, dict)
     assert isinstance(false_hist, dict)
+
+
+# Tests for deterministic tie-breaking in rank computation
+
+
+def test_rank_computation_deterministic_with_tied_scores():
+    """Test that rank computation is deterministic when scores are tied."""
+    # Create candidates with tied scores
+    entities = [CompanySchema(id=str(i), name=f"Company {i}") for i in range(5)]
+    candidates = [
+        ERCandidate(
+            left=entities[0], right=entities[1], similarity_score=0.9, blocker_name="test"
+        ),  # True match
+        ERCandidate(
+            left=entities[0], right=entities[2], similarity_score=0.9, blocker_name="test"
+        ),  # Tied score!
+        ERCandidate(left=entities[0], right=entities[3], similarity_score=0.8, blocker_name="test"),
+    ]
+    gold_clusters = [{"0", "1"}]
+
+    # Run multiple times - should get same result every time
+    metrics1 = _compute_rank_metrics(candidates, gold_clusters)
+    metrics2 = _compute_rank_metrics(candidates, gold_clusters)
+    metrics3 = _compute_rank_metrics(candidates, gold_clusters)
+
+    assert metrics1.median == metrics2.median == metrics3.median
+    assert metrics1.rank_counts == metrics2.rank_counts == metrics3.rank_counts
+    assert metrics1.percent_in_top_5 == metrics2.percent_in_top_5 == metrics3.percent_in_top_5
+
+
+def test_rank_computation_tie_breaking_uses_entity_ids():
+    """Test that ties are broken by lexicographic entity ID ordering."""
+    # Create candidates where score alone doesn't determine rank
+    entities = [CompanySchema(id=str(i), name=f"Company {i}") for i in range(6)]
+    candidates = [
+        # For entity "0", all candidates have same score
+        ERCandidate(
+            left=entities[0], right=entities[5], similarity_score=0.9, blocker_name="test"
+        ),  # right.id="5"
+        ERCandidate(
+            left=entities[0], right=entities[3], similarity_score=0.9, blocker_name="test"
+        ),  # right.id="3"
+        ERCandidate(
+            left=entities[0], right=entities[1], similarity_score=0.9, blocker_name="test"
+        ),  # right.id="1" (true match)
+    ]
+    gold_clusters = [{"0", "1"}]
+
+    # After sorting by score (all 0.9), then by right.id: "1" < "3" < "5"
+    # So (0,1) should be rank 1
+    metrics = _compute_rank_metrics(candidates, gold_clusters)
+
+    # The true match should be ranked first due to tie-breaking
+    assert 1 in metrics.rank_counts, f"Expected rank 1, got ranks: {metrics.rank_counts}"
+    assert metrics.rank_counts[1] == 1  # Exactly one match at rank 1
+    assert metrics.median == 1.0

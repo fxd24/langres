@@ -27,6 +27,22 @@ from langres.core.reports import (
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_HISTOGRAM_BINS = 50
+"""Default number of bins for score distribution histograms.
+
+This value balances granularity (seeing score distribution details) with
+robustness (avoiding noise from sparse bins). Suitable for typical blocker
+evaluation with 100-10,000 candidate pairs.
+
+Can be adjusted for specific use cases:
+- Fewer bins (20-30): Small datasets (<1000 pairs)
+- More bins (100+): Large datasets (>100,000 pairs) with high precision needs
+
+The value 50 provides good discrimination between true and false score
+distributions while being robust to outliers.
+"""
+
+
 def _build_ground_truth_pairs(gold_clusters: list[set[str]]) -> set[tuple[str, str]]:
     """Build set of all true matching pairs from clusters.
 
@@ -61,12 +77,12 @@ def _is_true_match(left_id: str, right_id: str, true_pairs: set[tuple[str, str]]
     return pair in true_pairs
 
 
-def _create_histogram(scores: list[float], bins: int = 50) -> dict[float, int]:
+def _create_histogram(scores: list[float], bins: int = _DEFAULT_HISTOGRAM_BINS) -> dict[float, int]:
     """Create histogram dict from scores.
 
     Args:
         scores: List of similarity scores
-        bins: Number of histogram bins
+        bins: Number of histogram bins (default: _DEFAULT_HISTOGRAM_BINS)
 
     Returns:
         Dict mapping bin centers to counts
@@ -143,8 +159,8 @@ def _compute_score_metrics(
         false_mean = false_median = false_std = 0.0
 
     # Step 4: Compute histograms
-    true_histogram = _create_histogram(true_scores, bins=50)
-    false_histogram = _create_histogram(false_scores, bins=50)
+    true_histogram = _create_histogram(true_scores, bins=_DEFAULT_HISTOGRAM_BINS)
+    false_histogram = _create_histogram(false_scores, bins=_DEFAULT_HISTOGRAM_BINS)
 
     # Step 5: Compute separation
     separation = true_median - false_median
@@ -233,8 +249,10 @@ def _compute_rank_metrics(
     all_true_ranks: list[int] = []
 
     for entity_id, entity_cands in entity_candidates.items():
-        # Sort by similarity_score descending
-        sorted_cands = sorted(entity_cands, key=lambda c: c.similarity_score or 0.0, reverse=True)
+        # Sort by similarity_score descending, with deterministic tie-breaking by entity ID
+        sorted_cands = sorted(
+            entity_cands, key=lambda c: (-(c.similarity_score or 0.0), c.right.id)
+        )
 
         # Find positions of true matches (1-indexed)
         for rank, candidate in enumerate(sorted_cands, start=1):
@@ -335,9 +353,9 @@ def _compute_recall_curve(
     for candidate in candidates:
         entity_candidates[candidate.left.id].append(candidate)
 
-    # Sort each entity's candidates by score descending
+    # Sort each entity's candidates by score descending, with deterministic tie-breaking by entity ID
     for entity_id in entity_candidates:
-        entity_candidates[entity_id].sort(key=lambda c: c.similarity_score or 0.0, reverse=True)
+        entity_candidates[entity_id].sort(key=lambda c: (-(c.similarity_score or 0.0), c.right.id))
 
     num_entities = len(entity_candidates)
 
