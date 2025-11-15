@@ -103,7 +103,6 @@ class QdrantHybridRerankingIndex:
         reranking_embedder: LateInteractionEmbeddingProvider,
         fusion: Literal["RRF", "DBSF"] = "RRF",
         prefetch_limit: int = 20,
-        query_prompt: str | None = None,
     ):
         """Initialize QdrantHybridRerankingIndex.
 
@@ -118,11 +117,6 @@ class QdrantHybridRerankingIndex:
                 Default: "RRF".
             prefetch_limit: Number of results to fetch per vector type before fusion.
                 Default: 20 (20 from dense + 20 from sparse → fused → reranked to top-k).
-            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
-                If provided, dense and reranking embedders will use this prompt for queries.
-                Sparse embedder never uses prompts (keyword matching).
-                Documents are always encoded with prompt=None.
-                Default: None.
 
         Note:
             The Qdrant client must be configured externally (URL, API key, etc.).
@@ -135,7 +129,6 @@ class QdrantHybridRerankingIndex:
         self.reranking_embedder = reranking_embedder
         self.fusion = fusion
         self.prefetch_limit = prefetch_limit
-        self.query_prompt = query_prompt
 
         # State (populated by create_index)
         self._corpus_texts: list[str] | None = None
@@ -232,7 +225,11 @@ class QdrantHybridRerankingIndex:
         self._n_samples = len(texts)
 
     def search(
-        self, query_texts: str | list[str], k: int, _dense_embeddings: np.ndarray | None = None
+        self,
+        query_texts: str | list[str],
+        k: int,
+        query_prompt: str | None = None,
+        _dense_embeddings: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Hybrid search with reranking for k nearest neighbors.
 
@@ -242,6 +239,11 @@ class QdrantHybridRerankingIndex:
         Args:
             query_texts: Single text query or list of text queries.
             k: Number of nearest neighbors to return per query.
+            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
+                If provided, dense and reranking embedders will use this prompt for queries.
+                Sparse embedder never uses prompts (keyword matching).
+                Documents are always encoded with prompt=None.
+                Default: None.
             _dense_embeddings: INTERNAL - Pre-computed dense embeddings (used by search_all).
                 When provided, dense embedder is NOT called. Sparse and reranking embedders
                 still process texts.
@@ -278,11 +280,11 @@ class QdrantHybridRerankingIndex:
             dense_query_embeddings = _dense_embeddings
         else:
             # Dense and reranking use query_prompt (if provided), sparse always uses None
-            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=self.query_prompt)
+            dense_query_embeddings = self.dense_embedder.encode(texts, prompt=query_prompt)
 
         # Sparse and reranking: ALWAYS encode from text (no caching possible for Qdrant hybrid)
         sparse_query_embeddings = self.sparse_embedder.encode(texts, prompt=None)
-        reranking_query_embeddings = self.reranking_embedder.encode(texts, prompt=self.query_prompt)
+        reranking_query_embeddings = self.reranking_embedder.encode(texts, prompt=query_prompt)
 
         # Batch search (one query_points call per query)
         all_distances: list[np.ndarray] = []
@@ -350,13 +352,17 @@ class QdrantHybridRerankingIndex:
         else:
             return distances_array, indices_array
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Runtime: Search all corpus items against each other (deduplication).
 
         Uses cached corpus texts and dense embeddings for efficient deduplication.
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
+            query_prompt: Optional instruction prompt for query encoding (asymmetric search).
+                If provided, reranking embedder will use this prompt for queries.
+                Dense embeddings are cached, so this only affects reranking.
+                Default: None.
 
         Returns:
             Tuple of (distances, indices), both shape (N, k) where N = corpus size.
@@ -373,7 +379,12 @@ class QdrantHybridRerankingIndex:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
         # Reuse search() with cached dense embeddings (performance optimization)
-        return self.search(self._corpus_texts, k, _dense_embeddings=self._cached_dense_embeddings)
+        return self.search(
+            self._corpus_texts,
+            k,
+            query_prompt=query_prompt,
+            _dense_embeddings=self._cached_dense_embeddings,
+        )
 
 
 class FakeHybridRerankingVectorIndex:

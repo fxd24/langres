@@ -602,14 +602,13 @@ class TestQdrantHybridRerankingIndex:
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
             reranking_embedder=reranking_embedder,
-            query_prompt="Find duplicate companies",  # Should NOT be used for documents
         )
 
         # Execute
         texts = ["Apple Inc.", "Microsoft Corp."]
         index.create_index(texts)
 
-        # Verify all 3 embedders called with prompt=None (not query_prompt)
+        # Verify all 3 embedders called with prompt=None during create_index
         dense_embedder.encode.assert_called_once_with(texts, prompt=None)
         sparse_embedder.encode.assert_called_once_with(texts, prompt=None)
         reranking_embedder.encode.assert_called_once_with(texts, prompt=None)
@@ -656,22 +655,21 @@ class TestQdrantHybridRerankingIndex:
         ]
         mock_client.query_points.return_value = mock_scored_points
 
-        query_prompt = "Find duplicate companies accounting for abbreviations"
         index = QdrantHybridRerankingIndex(
             client=mock_client,
             collection_name="test_collection",
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
             reranking_embedder=reranking_embedder,
-            query_prompt=query_prompt,
         )
 
         # Create index first
         texts = ["Apple Inc.", "Microsoft Corp."]
         index.create_index(texts)
 
-        # Execute search
-        index.search(["Apple"], k=1)
+        # Execute search with query_prompt
+        query_prompt = "Find duplicate companies accounting for abbreviations"
+        index.search(["Apple"], k=1, query_prompt=query_prompt)
 
         # Verify dense embedder: documents with prompt=None, queries with prompt
         assert dense_embedder.encode.call_count == 2
@@ -795,14 +793,12 @@ class TestQdrantHybridRerankingIndex:
             [ScoredPoint(id=1, version=0, score=1.0, payload={}, vector={})],
         ]
 
-        query_prompt = "Find duplicates"
         index = QdrantHybridRerankingIndex(
             client=mock_client,
             collection_name="test_collection",
             dense_embedder=dense_embedder,
             sparse_embedder=sparse_embedder,
             reranking_embedder=reranking_embedder,
-            query_prompt=query_prompt,
         )
 
         # Create index
@@ -813,8 +809,9 @@ class TestQdrantHybridRerankingIndex:
         assert dense_embedder.encode.call_count == 1
         assert dense_embedder.encode.call_args == ((texts,), {"prompt": None})
 
-        # Execute search_all - should NOT call dense embedder (uses cache)
-        index.search_all(k=1)
+        # Execute search_all with query_prompt - should NOT call dense embedder (uses cache)
+        query_prompt = "Find duplicates"
+        index.search_all(k=1, query_prompt=query_prompt)
 
         # Verify dense embedder NOT called again (cached embeddings)
         assert dense_embedder.encode.call_count == 1, "Dense embedder should not be called (cache)"
