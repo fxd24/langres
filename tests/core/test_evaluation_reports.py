@@ -786,6 +786,162 @@ class TestBlockerEvaluationReport:
         assert "Candidate" in markdown or "candidate" in markdown
         assert "Ranking" in markdown or "ranking" in markdown
 
+    def test_blocker_evaluation_report_optimal_k_delegates_to_recall_curve(self):
+        """Test that report.optimal_k() delegates to recall_curve.optimal_k()."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        # Should delegate with default target_recall=0.95
+        optimal_k = report.optimal_k()
+        expected_k = report.recall_curve.optimal_k(target_recall=0.95)
+        assert optimal_k == expected_k
+        assert optimal_k == 20  # From recall_curve data
+
+    def test_blocker_evaluation_report_optimal_k_custom_target(self):
+        """Test that custom target_recall is passed through."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        # Test with custom target_recall
+        optimal_k = report.optimal_k(target_recall=0.85)
+        expected_k = report.recall_curve.optimal_k(target_recall=0.85)
+        assert optimal_k == expected_k
+        assert optimal_k == 10  # From recall_curve data
+
+    def test_blocker_evaluation_report_optimal_k_docstring_example(self):
+        """Test docstring example works."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        # From docstring: "Optimal k for 95% recall: report.optimal_k()"
+        k = report.optimal_k()
+        assert isinstance(k, int)
+        assert k >= 1
+        assert k == 20  # Verify actual value from test data
+
 
 class TestBlockerEvaluationReportPlotting:
     """Test BlockerEvaluationReport plotting methods (delegation)."""
@@ -992,3 +1148,178 @@ class TestBlockerEvaluationReportPlotting:
         with pytest.raises(ImportError) as exc_info:
             report.plot_all()
         assert "matplotlib" in str(exc_info.value).lower()
+
+    def test_blocker_evaluation_report_summary_contains_key_metrics(self):
+        """Test that summary property returns essential metrics."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        summary = report.summary
+
+        # Must include these essential metrics
+        assert "candidate_recall" in summary
+        assert "candidate_precision" in summary
+        assert "map" in summary
+        assert "mrr" in summary
+        assert "ndcg_at_10" in summary
+        assert "score_separation" in summary
+        assert "median_rank" in summary
+        assert "percent_in_top_10" in summary
+
+        # Values should match original properties
+        assert summary["candidate_recall"] == report.candidates.recall
+        assert summary["candidate_precision"] == report.candidates.precision
+        assert summary["map"] == report.ranking.map
+        assert summary["mrr"] == report.ranking.mrr
+        assert summary["ndcg_at_10"] == report.ranking.ndcg_at_10
+        assert summary["score_separation"] == report.scores.separation
+        assert summary["median_rank"] == report.ranks.median
+        assert summary["percent_in_top_10"] == report.ranks.percent_in_top_10
+
+    def test_blocker_evaluation_report_summary_values_are_numbers(self):
+        """Test that all summary values are numeric."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        summary = report.summary
+
+        for key, value in summary.items():
+            assert isinstance(value, (int, float)), f"{key} should be numeric, got {type(value)}"
+
+    def test_blocker_evaluation_report_summary_immutable(self):
+        """Test that modifying summary dict doesn't affect report."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        summary = report.summary
+        original_recall = summary["candidate_recall"]
+
+        # Modify the dict
+        summary["candidate_recall"] = 0.0
+
+        # Should not affect report (new dict returned each time)
+        assert report.candidates.recall == original_recall
+        assert report.summary["candidate_recall"] == original_recall
