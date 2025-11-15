@@ -1323,6 +1323,8 @@ class TestBlockerEvaluationReportPlotting:
         # Should not affect report (new dict returned each time)
         assert report.candidates.recall == original_recall
         assert report.summary["candidate_recall"] == original_recall
+
+
 """Tests for BlockerEvaluationReport.to_markdown() recommendations feature."""
 
 import pytest
@@ -1616,3 +1618,110 @@ class TestBlockerEvaluationReportRecommendations:
             or "production-ready" in markdown.lower()
             or "✅" in markdown
         )
+
+    def test_to_markdown_recommends_high_cost_when_optimal_k_large(self):
+        """Test recommendation when optimal k is very high (>50)."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.90,
+                precision=0.70,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=100,
+                false_positives=300,
+            ),
+            ranking=RankingMetrics(
+                map=0.75,
+                mrr=0.80,
+                ndcg_at_10=0.78,
+                ndcg_at_20=0.79,
+                recall_at_5=0.65,
+                recall_at_10=0.75,
+                recall_at_20=0.85,
+            ),
+            scores=ScoreMetrics(
+                separation=0.25,
+                true_median=0.75,
+                true_mean=0.72,
+                true_std=0.12,
+                false_median=0.50,
+                false_mean=0.48,
+                false_std=0.15,
+                overlap_fraction=0.30,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=12.0,
+                percentile_95=45.0,
+                percent_in_top_5=45.0,
+                percent_in_top_10=65.0,
+                percent_in_top_20=80.0,
+                rank_counts={1: 5, 10: 15, 20: 20},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50, 100],
+                recall_values=[0.10, 0.40, 0.60, 0.75, 0.90, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0, 100.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should recommend cost optimization since optimal_k = 100 (> 50)
+        assert (
+            "high cost" in markdown.lower()
+            or "k=100" in markdown.lower()
+            or "faster search" in markdown.lower()
+            or "ensemble" in markdown.lower()
+        )
+
+    def test_to_markdown_no_specific_recommendations_when_all_mediocre(self):
+        """Test fallback recommendation when metrics are mediocre (no specific issues)."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.88,  # Between 0.85 and 0.95 - mediocre
+                precision=0.75,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=120,
+                false_positives=250,
+            ),
+            ranking=RankingMetrics(
+                map=0.80,
+                mrr=0.85,
+                ndcg_at_10=0.82,
+                ndcg_at_20=0.83,
+                recall_at_5=0.70,
+                recall_at_10=0.80,
+                recall_at_20=0.88,
+            ),
+            scores=ScoreMetrics(
+                separation=0.20,  # Between 0.1 and 0.3 - mediocre
+                true_median=0.75,
+                true_mean=0.72,
+                true_std=0.12,
+                false_median=0.55,
+                false_mean=0.52,
+                false_std=0.15,
+                overlap_fraction=0.30,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=10.0,  # Between 5 and 20 - mediocre
+                percentile_95=35.0,
+                percent_in_top_5=50.0,
+                percent_in_top_10=70.0,
+                percent_in_top_20=85.0,
+                rank_counts={1: 5, 10: 15, 20: 20},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.20, 0.50, 0.70, 0.85, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should have fallback recommendation since no specific issues triggered
+        assert "all metrics look good" in markdown.lower() or "production-ready" in markdown.lower()
