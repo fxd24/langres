@@ -942,6 +942,64 @@ class TestBlockerEvaluationReport:
         assert k >= 1
         assert k == 20  # Verify actual value from test data
 
+    def test_ranks_property_deprecated_but_works(self):
+        """Test that old 'ranks' property still works with DeprecationWarning.
+
+        The 'ranks' property is deprecated in favor of 'rank_distribution' for clarity.
+        This test ensures backwards compatibility while warning users to migrate.
+        """
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            rank_distribution=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        # Old 'ranks' property should work but issue deprecation warning
+        with pytest.warns(DeprecationWarning, match="Use 'rank_distribution'"):
+            median = report.ranks.median
+
+        # Should still return same value as new property
+        assert median == report.rank_distribution.median
+        assert median == 5.0
+
 
 class TestBlockerEvaluationReportPlotting:
     """Test BlockerEvaluationReport plotting methods (delegation)."""
