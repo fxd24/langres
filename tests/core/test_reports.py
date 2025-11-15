@@ -469,3 +469,167 @@ class TestRecallCurveStats:
         )
         assert len(stats.k_values) == 1
         assert stats.k_values[0] == 5
+
+
+class TestBlockerEvaluationReportImportErrors:
+    """Tests for BlockerEvaluationReport plotting method ImportError messages."""
+
+    @pytest.fixture
+    def mock_report(self) -> "BlockerEvaluationReport":  # noqa: F821
+        """Create a minimal BlockerEvaluationReport for testing."""
+        from langres.core.reports import (
+            BlockerEvaluationReport,
+            CandidateMetrics,
+            RankingMetrics,
+            RankMetrics,
+            RecallCurveStats,
+            ScoreMetrics,
+        )
+
+        return BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=100,
+                avg_per_entity=10.0,
+                missed_matches=5,
+                false_positives=20,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {0.8: 10}, "false": {0.4: 20}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10, 2: 15, 5: 12},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20],
+                recall_values=[0.10, 0.60, 0.85, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0],
+            ),
+        )
+
+    def test_plot_score_distribution_import_error_message(
+        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+    ) -> None:
+        """Test that plot_score_distribution ImportError has multi-package-manager instructions."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def mock_import(name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if "matplotlib" in name or "langres.plotting" in name:
+                raise ImportError("No module named 'matplotlib'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        with pytest.raises(ImportError) as exc_info:
+            mock_report.plot_score_distribution()
+
+        error_msg = str(exc_info.value)
+        # Check for all package managers
+        assert "pip install" in error_msg
+        assert "uv add" in error_msg
+        assert "poetry add" in error_msg
+        assert "conda install" in error_msg
+        assert "langres[viz]" in error_msg or "matplotlib" in error_msg
+
+    def test_plot_rank_distribution_import_error_message(
+        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+    ) -> None:
+        """Test that plot_rank_distribution ImportError has multi-package-manager instructions."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def mock_import(name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if "matplotlib" in name or "langres.plotting" in name:
+                raise ImportError("No module named 'matplotlib'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        with pytest.raises(ImportError) as exc_info:
+            mock_report.plot_rank_distribution()
+
+        error_msg = str(exc_info.value)
+        # Check for all package managers
+        assert "pip install" in error_msg
+        assert "uv add" in error_msg
+        assert "poetry add" in error_msg
+        assert "conda install" in error_msg
+        assert "langres[viz]" in error_msg or "matplotlib" in error_msg
+
+    def test_plot_recall_curve_import_error_message(
+        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+    ) -> None:
+        """Test that plot_recall_curve ImportError has multi-package-manager instructions."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def mock_import(name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if "matplotlib" in name or "langres.plotting" in name:
+                raise ImportError("No module named 'matplotlib'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        with pytest.raises(ImportError) as exc_info:
+            mock_report.plot_recall_curve()
+
+        error_msg = str(exc_info.value)
+        # Check for all package managers
+        assert "pip install" in error_msg
+        assert "uv add" in error_msg
+        assert "poetry add" in error_msg
+        assert "conda install" in error_msg
+        assert "langres[viz]" in error_msg or "matplotlib" in error_msg
+
+    def test_plot_all_import_error_message(
+        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+    ) -> None:
+        """Test that plot_all ImportError has multi-package-manager instructions."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def mock_import(name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if "matplotlib" in name or "langres.plotting" in name:
+                raise ImportError("No module named 'matplotlib'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        with pytest.raises(ImportError) as exc_info:
+            mock_report.plot_all()
+
+        error_msg = str(exc_info.value)
+        # Check for all package managers
+        assert "pip install" in error_msg
+        assert "uv add" in error_msg
+        assert "poetry add" in error_msg
+        assert "conda install" in error_msg
+        assert "langres[viz]" in error_msg or "matplotlib" in error_msg
