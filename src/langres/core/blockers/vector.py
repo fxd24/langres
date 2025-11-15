@@ -151,6 +151,7 @@ class VectorBlocker(Blocker[SchemaT]):
         text_field_extractor: Callable[[SchemaT], str],
         vector_index: VectorIndex,
         k_neighbors: int = 10,
+        query_prompt: str | None = None,
     ):
         """Initialize VectorBlocker with injected dependencies.
 
@@ -167,6 +168,9 @@ class VectorBlocker(Blocker[SchemaT]):
             k_neighbors: Number of nearest neighbors to retrieve for each
                 entity. Higher values improve recall but generate more
                 candidates. Default: 10.
+            query_prompt: Optional instruction to prepend to each query at
+                search time (for instructional embeddings). If None, no
+                instruction is added. Default: None.
 
         Raises:
             ValueError: If k_neighbors is not positive.
@@ -178,6 +182,7 @@ class VectorBlocker(Blocker[SchemaT]):
         self.text_field_extractor = text_field_extractor
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
+        self.query_prompt = query_prompt
 
     def _index_is_built(self) -> bool:
         """Check if vector index has been built.
@@ -258,7 +263,7 @@ class VectorBlocker(Blocker[SchemaT]):
         # 4. Search for k nearest neighbors for each entity (deduplication pattern)
         # k+1 because the nearest neighbor will be the entity itself
         k = min(self.k_neighbors + 1, len(entities))
-        distances, indices = self.vector_index.search_all(k)
+        distances, indices = self.vector_index.search_all(k, query_prompt=self.query_prompt)
 
         # 5. Convert distances to similarity scores
         # The conversion depends on the vector index metric:

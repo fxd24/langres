@@ -415,8 +415,9 @@ def test_vector_blocker_passes_query_prompt_to_index():
     mock_index._index = object()  # Make _index_is_built() return True
     mock_index.search_all = MagicMock(
         return_value=(
-            np.array([[0.1, 0.2]], dtype=np.float32),
-            np.array([[1, 2]], dtype=np.int64),
+            # Return 3 rows (one per entity) with 2 neighbors each
+            np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], dtype=np.float32),
+            np.array([[1, 2], [0, 2], [0, 1]], dtype=np.int64),
         )
     )
 
@@ -454,8 +455,9 @@ def test_vector_blocker_with_no_query_prompt():
     mock_index._index = object()
     mock_index.search_all = MagicMock(
         return_value=(
-            np.array([[0.1, 0.2]], dtype=np.float32),
-            np.array([[1, 2]], dtype=np.int64),
+            # Return 2 rows (one per entity) with 2 neighbors each
+            np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+            np.array([[1, 0], [0, 1]], dtype=np.int64),
         )
     )
 
