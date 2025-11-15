@@ -640,7 +640,7 @@ class BlockerEvaluationReport(BaseModel):
             >>> report.plot_score_distribution()
         """
         try:
-            from langres.plotting.blockers import plot_score_distribution  # type: ignore[import-untyped]
+            from langres.plotting.blockers import plot_score_distribution
         except ImportError as e:
             raise ImportError(
                 "Plotting requires matplotlib. Install with: pip install langres[viz]"

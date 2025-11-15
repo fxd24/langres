@@ -65,7 +65,7 @@ def sample_report():
     )
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_score_distribution_creates_histogram(mock_plt, sample_report):
     """Test plot_score_distribution creates overlaid histograms."""
     from langres.plotting.blockers import plot_score_distribution
@@ -94,7 +94,7 @@ def test_plot_score_distribution_creates_histogram(mock_plt, sample_report):
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_score_distribution_creates_figure_if_no_ax(mock_plt, sample_report):
     """Test creates new figure when ax=None."""
     from langres.plotting.blockers import plot_score_distribution
@@ -112,7 +112,7 @@ def test_plot_score_distribution_creates_figure_if_no_ax(mock_plt, sample_report
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_rank_distribution_creates_bar_chart(mock_plt, sample_report):
     """Test plot_rank_distribution creates bar chart of ranks."""
     from langres.plotting.blockers import plot_rank_distribution
@@ -141,7 +141,7 @@ def test_plot_rank_distribution_creates_bar_chart(mock_plt, sample_report):
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_rank_distribution_creates_figure_if_no_ax(mock_plt, sample_report):
     """Test creates new figure when ax=None."""
     from langres.plotting.blockers import plot_rank_distribution
@@ -159,7 +159,7 @@ def test_plot_rank_distribution_creates_figure_if_no_ax(mock_plt, sample_report)
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_recall_curve_creates_line_plot(mock_plt, sample_report):
     """Test plot_recall_curve creates recall vs k plot with cost proxy."""
     from langres.plotting.blockers import plot_recall_curve
@@ -167,6 +167,13 @@ def test_plot_recall_curve_creates_line_plot(mock_plt, sample_report):
     mock_ax = MagicMock()
     mock_ax2 = MagicMock()
     mock_ax.twinx.return_value = mock_ax2
+
+    # Mock get_legend_handles_labels to return proper data
+    mock_ax.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax2.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
 
     result = plot_recall_curve(sample_report, ax=mock_ax)
 
@@ -197,7 +204,7 @@ def test_plot_recall_curve_creates_line_plot(mock_plt, sample_report):
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_recall_curve_creates_figure_if_no_ax(mock_plt, sample_report):
     """Test creates new figure when ax=None."""
     from langres.plotting.blockers import plot_recall_curve
@@ -208,6 +215,13 @@ def test_plot_recall_curve_creates_figure_if_no_ax(mock_plt, sample_report):
     mock_plt.subplots.return_value = (mock_fig, mock_ax)
     mock_ax.twinx.return_value = mock_ax2
 
+    # Mock get_legend_handles_labels to return proper data
+    mock_ax.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax2.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
+
     result = plot_recall_curve(sample_report, ax=None)
 
     # Verify subplots called
@@ -217,7 +231,7 @@ def test_plot_recall_curve_creates_figure_if_no_ax(mock_plt, sample_report):
     assert result == mock_ax
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_evaluation_summary_creates_4_panels(mock_plt, sample_report):
     """Test plot_evaluation_summary creates 2x2 subplot grid."""
     from langres.plotting.blockers import plot_evaluation_summary
@@ -246,6 +260,15 @@ def test_plot_evaluation_summary_creates_4_panels(mock_plt, sample_report):
 
     mock_axes.__getitem__ = MagicMock(side_effect=axes_getitem)
 
+    # Mock get_legend_handles_labels for recall curve (axes[1, 0])
+    mock_ax_10.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax_10_secondary = MagicMock()
+    mock_ax_10_secondary.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
+    mock_ax_10.twinx.return_value = mock_ax_10_secondary
+
     result = plot_evaluation_summary(sample_report)
 
     # Verify 2x2 subplots created
@@ -263,7 +286,7 @@ def test_plot_evaluation_summary_creates_4_panels(mock_plt, sample_report):
     assert result == mock_fig
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_evaluation_summary_saves_figure(mock_plt, sample_report, tmp_path):
     """Test save_path parameter saves figure."""
     from langres.plotting.blockers import plot_evaluation_summary
@@ -292,6 +315,15 @@ def test_plot_evaluation_summary_saves_figure(mock_plt, sample_report, tmp_path)
 
     mock_axes.__getitem__ = MagicMock(side_effect=axes_getitem)
 
+    # Mock get_legend_handles_labels for recall curve (axes[1, 0])
+    mock_ax_10.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax_10_secondary = MagicMock()
+    mock_ax_10_secondary.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
+    mock_ax_10.twinx.return_value = mock_ax_10_secondary
+
     save_path = str(tmp_path / "test_plot.png")
     result = plot_evaluation_summary(sample_report, save_path=save_path)
 
@@ -299,7 +331,7 @@ def test_plot_evaluation_summary_saves_figure(mock_plt, sample_report, tmp_path)
     mock_fig.savefig.assert_called_once_with(save_path, dpi=300, bbox_inches="tight")
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_evaluation_summary_custom_figsize(mock_plt, sample_report):
     """Test custom figsize parameter works."""
     from langres.plotting.blockers import plot_evaluation_summary
@@ -328,6 +360,15 @@ def test_plot_evaluation_summary_custom_figsize(mock_plt, sample_report):
 
     mock_axes.__getitem__ = MagicMock(side_effect=axes_getitem)
 
+    # Mock get_legend_handles_labels for recall curve (axes[1, 0])
+    mock_ax_10.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax_10_secondary = MagicMock()
+    mock_ax_10_secondary.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
+    mock_ax_10.twinx.return_value = mock_ax_10_secondary
+
     custom_figsize = (20, 15)
     plot_evaluation_summary(sample_report, figsize=custom_figsize)
 
@@ -336,7 +377,7 @@ def test_plot_evaluation_summary_custom_figsize(mock_plt, sample_report):
     assert call_args[1]["figsize"] == custom_figsize
 
 
-@patch("langres.plotting.blockers.plt")
+@patch("matplotlib.pyplot")
 def test_plot_metrics_bars_is_called_by_summary(mock_plt, sample_report):
     """Test _plot_metrics_bars is called as part of summary."""
     from langres.plotting.blockers import plot_evaluation_summary
@@ -374,6 +415,15 @@ def test_plot_metrics_bars_is_called_by_summary(mock_plt, sample_report):
         raise IndexError
 
     mock_axes.__getitem__ = MagicMock(side_effect=axes_getitem)
+
+    # Mock get_legend_handles_labels for recall curve (axes[1, 0])
+    mock_ax_10.get_legend_handles_labels.return_value = (
+        [MagicMock(), MagicMock()],
+        ["Recall@k", "95% Target"],
+    )
+    mock_ax_10_secondary = MagicMock()
+    mock_ax_10_secondary.get_legend_handles_labels.return_value = ([MagicMock()], ["Cost"])
+    mock_ax_10.twinx.return_value = mock_ax_10_secondary
 
     plot_evaluation_summary(sample_report)
 
