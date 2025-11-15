@@ -633,3 +633,115 @@ class TestBlockerEvaluationReportImportErrors:
         assert "poetry add" in error_msg
         assert "conda install" in error_msg
         assert "langres[viz]" in error_msg or "matplotlib" in error_msg
+
+
+class TestBlockerEvaluationReportSummary:
+    """Tests for BlockerEvaluationReport.summary property."""
+
+    @pytest.fixture
+    def mock_report(self) -> "BlockerEvaluationReport":  # noqa: F821
+        """Create a minimal BlockerEvaluationReport for testing."""
+        from langres.core.reports import (
+            BlockerEvaluationReport,
+            CandidateMetrics,
+            RankingMetrics,
+            RankMetrics,
+            RecallCurveStats,
+            ScoreMetrics,
+        )
+
+        return BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=100,
+                avg_per_entity=10.0,
+                missed_matches=5,
+                false_positives=20,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {0.8: 10}, "false": {0.4: 20}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10, 2: 15, 5: 12},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20],
+                recall_values=[0.10, 0.60, 0.85, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0],
+            ),
+        )
+
+    def test_summary_returns_dict_with_eight_metrics(
+        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+    ) -> None:
+        """Test that summary property returns dict with 8 key metrics."""
+        summary = mock_report.summary
+
+        # Check that it returns a dict
+        assert isinstance(summary, dict)
+
+        # Check that it has exactly 8 metrics
+        assert len(summary) == 8
+
+        # Check that all expected keys are present
+        expected_keys = {
+            "candidate_recall",
+            "candidate_precision",
+            "map",
+            "mrr",
+            "ndcg_at_10",
+            "score_separation",
+            "median_rank",
+            "percent_in_top_10",
+        }
+        assert set(summary.keys()) == expected_keys
+
+    def test_summary_values_are_numeric(
+        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+    ) -> None:
+        """Test that all values in summary are numeric (int or float)."""
+        summary = mock_report.summary
+
+        for key, value in summary.items():
+            assert isinstance(
+                value, (int, float)
+            ), f"Expected {key} to be numeric, got {type(value)}"
+
+    def test_summary_values_match_underlying_properties(
+        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+    ) -> None:
+        """Test that summary values match the underlying report properties."""
+        summary = mock_report.summary
+
+        # Verify each metric matches its source
+        assert summary["candidate_recall"] == mock_report.candidates.recall
+        assert summary["candidate_precision"] == mock_report.candidates.precision
+        assert summary["map"] == mock_report.ranking.map
+        assert summary["mrr"] == mock_report.ranking.mrr
+        assert summary["ndcg_at_10"] == mock_report.ranking.ndcg_at_10
+        assert summary["score_separation"] == mock_report.scores.separation
+        assert summary["median_rank"] == mock_report.ranks.median
+        assert summary["percent_in_top_10"] == mock_report.ranks.percent_in_top_10
