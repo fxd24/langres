@@ -23,7 +23,7 @@ from langres.core.embeddings import (
     FakeLateInteractionEmbedder,
     FakeSparseEmbedder,
 )
-from langres.core.reranking_vector_index import (
+from langres.core.indexes.reranking_vector_index import (
     FakeHybridRerankingVectorIndex,
     QdrantHybridRerankingIndex,
 )

@@ -23,9 +23,12 @@ from langres.core.embeddings import (
     SentenceTransformerEmbedder,
     SparseEmbeddingProvider,
 )
-from langres.core.hybrid_vector_index import (
+from langres.core.indexes import (
+    FAISSIndex,
     FakeHybridVectorIndex,
+    FakeVectorIndex,
     QdrantHybridIndex,
+    VectorIndex,
 )
 from langres.core.models import (
     CompanySchema,
@@ -34,7 +37,6 @@ from langres.core.models import (
     PairwiseJudgement,
 )
 from langres.core.module import Module
-from langres.core.vector_index import FAISSIndex, FakeVectorIndex, VectorIndex
 
 __all__ = [
     "Blocker",

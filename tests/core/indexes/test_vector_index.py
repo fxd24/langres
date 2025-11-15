@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
-from langres.core.vector_index import FAISSIndex, FakeVectorIndex
+from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -577,3 +577,99 @@ class TestVectorIndexProtocol:
         embeddings = np.random.rand(2, 128).astype(np.float32)
         distances, indices = index.search(embeddings, k=2)
         assert distances.shape == (2, 2)
+
+
+class TestFAISSIndexWithCachedEmbedder:
+    """Integration tests for FAISSIndex with DiskCachedEmbedder."""
+
+    def test_faiss_index_with_cached_embedder_and_query_prompts(self, tmp_path):
+        """Test FAISSIndex with DiskCachedEmbedder using query prompts."""
+        from pathlib import Path
+
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        # Create cached embedder
+        base_embedder = FakeEmbedder(embedding_dim=128)
+        cached_embedder = DiskCachedEmbedder(
+            embedder=base_embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Create FAISSIndex with cached embedder
+        index = FAISSIndex(embedder=cached_embedder, metric="cosine")
+
+        # Build index with corpus
+        corpus = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(corpus)
+
+        # Verify corpus was cached
+        info1 = cached_embedder.cache_info()
+        assert info1["misses"] == 3  # Corpus texts computed
+        assert info1["cold_size"] == 3
+
+        # Query "Apple" with prompt "Find duplicate organizations" → cache miss
+        index.search("Apple", k=1, query_prompt="Find duplicate organizations")
+        info2 = cached_embedder.cache_info()
+        assert info2["misses"] == 4  # +1 for query with prompt
+
+        # Query "Apple" with prompt "Match company names" → another cache miss
+        index.search("Apple", k=1, query_prompt="Match company names")
+        info3 = cached_embedder.cache_info()
+        assert info3["misses"] == 5  # +1 for query with different prompt
+
+        # Query "Apple" with prompt "Find duplicate organizations" again → cache hit
+        index.search("Apple", k=1, query_prompt="Find duplicate organizations")
+        info4 = cached_embedder.cache_info()
+        assert info4["misses"] == 5  # No new miss
+        assert info4["hits_hot"] >= 1 or info4["hits_cold"] >= 1  # Should hit cache
+
+        # Query "Apple" with prompt=None → another cache miss (different from prompts)
+        index.search("Apple", k=1, query_prompt=None)
+        info5 = cached_embedder.cache_info()
+        assert info5["misses"] == 6  # +1 for query without prompt
+
+    def test_faiss_index_with_cached_embedder_and_precomputed(self, tmp_path):
+        """Test FAISSIndex with DiskCachedEmbedder using pre-computed query embeddings."""
+        from pathlib import Path
+
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        # Create cached embedder
+        base_embedder = FakeEmbedder(embedding_dim=128)
+        cached_embedder = DiskCachedEmbedder(
+            embedder=base_embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Create FAISSIndex with cached embedder
+        index = FAISSIndex(embedder=cached_embedder, metric="cosine")
+
+        # Build index with corpus
+        corpus = ["Apple Inc.", "Microsoft Corp."]
+        index.create_index(corpus)
+
+        # Verify corpus was cached
+        info1 = cached_embedder.cache_info()
+        assert info1["misses"] == 2  # Corpus texts computed
+        assert info1["cold_size"] == 2
+
+        # Create pre-computed query embeddings using the same embedder
+        # This ensures they have the correct shape and normalization
+        query_texts = ["Apple", "Microsoft"]
+        precomputed = base_embedder.encode(query_texts)
+
+        # Search with pre-computed embeddings
+        distances, indices = index.search(precomputed, k=1)
+
+        # Verify search worked
+        assert distances.shape == (2, 1)
+        assert indices.shape == (2, 1)
+
+        # Cache stats should show only corpus items (no query caching for pre-computed)
+        info2 = cached_embedder.cache_info()
+        assert info2["misses"] == 2  # Still just the corpus
+        assert info2["hits_hot"] == 0  # No cache operations for pre-computed
+        assert info2["hits_cold"] == 0
+        assert info2["cold_size"] == 2  # Still just corpus

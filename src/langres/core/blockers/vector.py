@@ -18,9 +18,9 @@ from typing import Any
 import numpy as np
 
 from langres.core.blocker import Blocker, SchemaT
+from langres.core.indexes.vector_index import VectorIndex
 from langres.core.models import ERCandidate
 from langres.core.reports import CandidateInspectionReport
-from langres.core.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 

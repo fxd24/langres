@@ -15,7 +15,7 @@ from qdrant_client.models import (
 )
 
 from langres.core.embeddings import FakeEmbedder, FakeSparseEmbedder
-from langres.core.hybrid_vector_index import (
+from langres.core.indexes.hybrid_vector_index import (
     FakeHybridVectorIndex,
     QdrantHybridIndex,
 )
