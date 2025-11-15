@@ -397,3 +397,85 @@ def test_different_k_neighbors_without_rebuild():
 # Note: Tests for different embedding models, lazy loading, and type conversion
 # are now in tests/core/test_embeddings.py since these concerns have been
 # separated from VectorBlocker into the EmbeddingProvider abstraction.
+
+
+# ============================================================================
+# Phase 1: Tests for query_prompt parameter (TDD)
+# ============================================================================
+
+
+def test_vector_blocker_passes_query_prompt_to_index():
+    """Test that VectorBlocker passes query_prompt to index.search_all()."""
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    # Setup: Mock index with create_index and search_all
+    mock_index = MagicMock()
+    mock_index._index = object()  # Make _index_is_built() return True
+    mock_index.search_all = MagicMock(
+        return_value=(
+            np.array([[0.1, 0.2]], dtype=np.float32),
+            np.array([[1, 2]], dtype=np.int64),
+        )
+    )
+
+    # Create blocker WITH query_prompt
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=mock_index,
+        k_neighbors=2,
+        query_prompt="Find duplicate companies",  # NEW parameter
+    )
+
+    # Generate candidates
+    data = [
+        {"id": "1", "name": "Apple Inc."},
+        {"id": "2", "name": "Microsoft"},
+        {"id": "3", "name": "Google"},
+    ]
+    list(blocker.stream(data))
+
+    # Verify: search_all() was called with the query_prompt
+    mock_index.search_all.assert_called_once()
+    call_args = mock_index.search_all.call_args
+    assert call_args[1]["query_prompt"] == "Find duplicate companies"
+
+
+def test_vector_blocker_with_no_query_prompt():
+    """Test that VectorBlocker passes None when query_prompt not configured."""
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    # Setup: Mock index
+    mock_index = MagicMock()
+    mock_index._index = object()
+    mock_index.search_all = MagicMock(
+        return_value=(
+            np.array([[0.1, 0.2]], dtype=np.float32),
+            np.array([[1, 2]], dtype=np.int64),
+        )
+    )
+
+    # Create blocker WITHOUT query_prompt (default behavior)
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=mock_index,
+        k_neighbors=2,
+        # NO query_prompt parameter
+    )
+
+    # Generate candidates
+    data = [
+        {"id": "1", "name": "Apple"},
+        {"id": "2", "name": "Google"},
+    ]
+    list(blocker.stream(data))
+
+    # Verify: search_all() was called with query_prompt=None
+    mock_index.search_all.assert_called_once()
+    call_args = mock_index.search_all.call_args
+    assert call_args[1]["query_prompt"] is None
