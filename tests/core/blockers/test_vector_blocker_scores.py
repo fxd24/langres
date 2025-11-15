@@ -9,8 +9,8 @@ import logging
 import numpy as np
 
 from langres.core.blockers.vector import VectorBlocker
+from langres.core.indexes import FakeVectorIndex
 from langres.core.models import CompanySchema
-from langres.core.vector_index import FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -210,9 +210,11 @@ def test_vector_blocker_handles_nan_distances() -> None:
 
     # Create a custom vector index that returns NaN values
     class NaNVectorIndex(FakeVectorIndex):
-        def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        def search_all(
+            self, k: int, query_prompt: str | None = None
+        ) -> tuple[np.ndarray, np.ndarray]:
             """Override to return distances with NaN values."""
-            distances, indices = super().search_all(k)
+            distances, indices = super().search_all(k, query_prompt=query_prompt)
             # Inject NaN into some distance values
             distances[0][1] = np.nan  # Second neighbor of first entity
             return distances, indices

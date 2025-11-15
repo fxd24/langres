@@ -10,9 +10,9 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FakeEmbedder
+from langres.core.indexes import FakeVectorIndex
 from langres.core.models import CompanySchema
 from langres.core.reports import CandidateInspectionReport
-from langres.core.vector_index import FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 

@@ -16,10 +16,10 @@ import pytest
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.embeddings import SentenceTransformerEmbedder
+from langres.core.indexes import FAISSIndex
 from langres.core.metrics import calculate_bcubed_metrics
 from langres.core.models import CompanySchema
 from langres.core.modules.cascade import CascadeModule
-from langres.core.vector_index import FAISSIndex
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 logger = logging.getLogger(__name__)
@@ -81,11 +81,11 @@ def test_approach3_end_to_end_pipeline(mocker):
     api_key = "test_key_for_mocking"
 
     # Step 1: Generate candidates using VectorBlocker
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
-        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
-        vector_index=FAISSIndex(metric="L2"),
+        vector_index=FAISSIndex(embedder=embedder, metric="L2"),
         k_neighbors=5,  # Low for test dataset (15 companies)
     )
 
@@ -215,11 +215,11 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
     )
 
     # Step 1: Generate candidates using VectorBlocker
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
-        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
-        vector_index=FAISSIndex(metric="L2"),
+        vector_index=FAISSIndex(embedder=embedder, metric="L2"),
         k_neighbors=5,
     )
 
@@ -256,11 +256,11 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
 def test_approach3_pipeline_components():
     """Test that Approach 3 pipeline components work together correctly."""
     # Step 1: VectorBlocker generates candidates
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=text_extractor,
-        embedding_provider=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
-        vector_index=FAISSIndex(metric="L2"),
+        vector_index=FAISSIndex(embedder=embedder, metric="L2"),
         k_neighbors=3,  # Small for test
     )
 
