@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CandidateInspectionReport(BaseModel):
@@ -489,6 +489,34 @@ class RecallCurveStats(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    @model_validator(mode="after")
+    def validate_list_lengths(self) -> "RecallCurveStats":
+        """Validate that all lists have the same length and are non-empty.
+
+        Raises:
+            ValueError: If lists have different lengths or are empty
+        """
+        lengths = {
+            "k_values": len(self.k_values),
+            "recall_values": len(self.recall_values),
+            "avg_pairs_values": len(self.avg_pairs_values),
+        }
+
+        # Check non-empty
+        if any(length == 0 for length in lengths.values()):
+            raise ValueError(
+                f"RecallCurveStats requires at least one data point. Got lengths: {lengths}"
+            )
+
+        # Check consistency
+        unique_lengths = set(lengths.values())
+        if len(unique_lengths) > 1:
+            raise ValueError(
+                f"All lists in RecallCurveStats must have the same length. Got lengths: {lengths}"
+            )
+
+        return self
+
     def optimal_k(self, target_recall: float = 0.95) -> int:
         """Find smallest k achieving target recall.
 
@@ -550,6 +578,41 @@ class BlockerEvaluationReport(BaseModel):
     recall_curve: RecallCurveStats = Field(description="Recall@k curve data")
 
     model_config = ConfigDict(frozen=True)
+
+    @property
+    def summary(self) -> dict[str, float]:
+        """Get quick overview of key metrics.
+
+        Returns dictionary with the most important metrics for blocker
+        quality assessment. Useful for logging, dashboards, or quick
+        comparison between different blocker configurations.
+
+        Returns:
+            Dictionary with key metrics:
+            - candidate_recall: Recall of candidate generation
+            - candidate_precision: Precision of candidates
+            - map: Mean Average Precision
+            - mrr: Mean Reciprocal Rank
+            - ndcg_at_10: NDCG@10 score
+            - score_separation: Separation between true/false scores
+            - median_rank: Median rank of true matches
+            - percent_in_top_10: % of true matches in top-10
+
+        Example:
+            >>> report = blocker.evaluate(candidates, gold_clusters)
+            >>> print(report.summary)
+            {'candidate_recall': 0.95, 'map': 0.82, ...}
+        """
+        return {
+            "candidate_recall": self.candidates.recall,
+            "candidate_precision": self.candidates.precision,
+            "map": self.ranking.map,
+            "mrr": self.ranking.mrr,
+            "ndcg_at_10": self.ranking.ndcg_at_10,
+            "score_separation": self.scores.separation,
+            "median_rank": self.ranks.median,
+            "percent_in_top_10": self.ranks.percent_in_top_10,
+        }
 
     def to_markdown(self) -> str:
         """Generate human-readable markdown report.
@@ -621,6 +684,60 @@ class BlockerEvaluationReport(BaseModel):
         lines.append(f"- **K values evaluated**: {self.recall_curve.k_values}")
         lines.append("")
 
+        # Recommendations section
+        lines.append("## Actionable Recommendations\n")
+
+        recommendations = []
+
+        # Recall recommendations
+        if self.candidates.recall < 0.85:
+            recommendations.append(
+                "- **Low Recall**: Blocker misses many true matches. "
+                "Consider: (1) Increasing k value, (2) Using different embeddings, "
+                "(3) Adding more blocking methods (e.g., phonetic + semantic)"
+            )
+        elif self.candidates.recall >= 0.95:
+            recommendations.append(
+                "- ✅ **Excellent Recall**: Blocker finds >95% of true matches"
+            )
+
+        # Separation recommendations
+        if self.scores.separation < 0.1:
+            recommendations.append(
+                "- **Poor Score Separation**: Hard to set threshold. "
+                "Consider: (1) Different embedding model, (2) Hybrid index (dense + sparse), "
+                "(3) Add reranking step"
+            )
+        elif self.scores.separation >= 0.3:
+            recommendations.append(
+                "- ✅ **Good Separation**: Easy to distinguish true/false matches"
+            )
+
+        # Ranking recommendations
+        if self.ranks.median > 20:
+            recommendations.append(
+                "- **Poor Ranking**: True matches ranked low. "
+                "Consider: (1) Tuning index parameters (nlist, nprobe), "
+                "(2) Different distance metric, (3) Add learned reranker"
+            )
+        elif self.ranks.median <= 5:
+            recommendations.append(
+                "- ✅ **Excellent Ranking**: True matches typically in top-5"
+            )
+
+        # Cost/efficiency recommendations
+        if optimal_k > 50:
+            recommendations.append(
+                f"- **High Cost**: Need k={optimal_k} for 95% recall. "
+                "Consider: (1) Better index for faster search, "
+                "(2) Ensemble of blockers, (3) Adaptive k per entity"
+            )
+
+        if not recommendations:
+            recommendations.append("- ✅ All metrics look good! Blocker is production-ready.")
+
+        lines.extend(recommendations)
+
         return "\n".join(lines)
 
     def plot_score_distribution(self, ax=None, **kwargs):  # type: ignore[no-untyped-def]
@@ -643,7 +760,11 @@ class BlockerEvaluationReport(BaseModel):
             from langres.plotting.blockers import plot_score_distribution
         except ImportError as e:
             raise ImportError(
-                "Plotting requires matplotlib. Install with: pip install langres[viz]"
+                "Plotting requires matplotlib. Install with one of:\n"
+                "  pip install 'langres[viz]'\n"
+                "  uv add --extra viz langres\n"
+                "  poetry add langres[viz]\n"
+                "  conda install matplotlib seaborn"
             ) from e
         return plot_score_distribution(self, ax=ax, **kwargs)
 
@@ -667,7 +788,11 @@ class BlockerEvaluationReport(BaseModel):
             from langres.plotting.blockers import plot_rank_distribution
         except ImportError as e:
             raise ImportError(
-                "Plotting requires matplotlib. Install with: pip install langres[viz]"
+                "Plotting requires matplotlib. Install with one of:\n"
+                "  pip install 'langres[viz]'\n"
+                "  uv add --extra viz langres\n"
+                "  poetry add langres[viz]\n"
+                "  conda install matplotlib seaborn"
             ) from e
         return plot_rank_distribution(self, ax=ax, **kwargs)
 
@@ -691,7 +816,11 @@ class BlockerEvaluationReport(BaseModel):
             from langres.plotting.blockers import plot_recall_curve
         except ImportError as e:
             raise ImportError(
-                "Plotting requires matplotlib. Install with: pip install langres[viz]"
+                "Plotting requires matplotlib. Install with one of:\n"
+                "  pip install 'langres[viz]'\n"
+                "  uv add --extra viz langres\n"
+                "  poetry add langres[viz]\n"
+                "  conda install matplotlib seaborn"
             ) from e
         return plot_recall_curve(self, ax=ax, **kwargs)
 
@@ -715,6 +844,10 @@ class BlockerEvaluationReport(BaseModel):
             from langres.plotting.blockers import plot_evaluation_summary
         except ImportError as e:
             raise ImportError(
-                "Plotting requires matplotlib. Install with: pip install langres[viz]"
+                "Plotting requires matplotlib. Install with one of:\n"
+                "  pip install 'langres[viz]'\n"
+                "  uv add --extra viz langres\n"
+                "  poetry add langres[viz]\n"
+                "  conda install matplotlib seaborn"
             ) from e
         return plot_evaluation_summary(self, save_path=save_path, figsize=figsize)
