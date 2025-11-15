@@ -84,6 +84,7 @@ class QdrantHybridIndex:
         sparse_embedder: SparseEmbeddingProvider,
         fusion: Literal["RRF", "DBSF"] = "RRF",
         prefetch_limit: int = 20,
+        upsert_batch_size: int = 100,
     ):
         """Initialize QdrantHybridIndex.
 
@@ -96,6 +97,8 @@ class QdrantHybridIndex:
                 Default: "RRF" (Reciprocal Rank Fusion).
             prefetch_limit: Number of results to fetch per vector type before fusion.
                 Default: 20 (20 from dense + 20 from sparse → fused to top-k).
+            upsert_batch_size: Number of points to upsert per batch.
+                Default: 100. Qdrant cloud has 32MB payload limit.
 
         Note:
             The Qdrant client must be configured externally (URL, API key, etc.).
@@ -106,6 +109,7 @@ class QdrantHybridIndex:
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
         self.fusion = fusion
+        self.upsert_batch_size = upsert_batch_size
         self.prefetch_limit = prefetch_limit
 
         # State (populated by create_index)
@@ -176,18 +180,17 @@ class QdrantHybridIndex:
             points.append(point)
 
         # 4. Batch upsert points (chunk to avoid payload size limits)
-        # Qdrant cloud has 32MB payload limit - batch in chunks of 100 points
-        batch_size = 100
-        for i in range(0, len(points), batch_size):
-            batch = points[i : i + batch_size]
+        # Qdrant cloud has 32MB payload limit - batch in configurable chunks
+        for i in range(0, len(points), self.upsert_batch_size):
+            batch = points[i : i + self.upsert_batch_size]
             self.client.upsert(
                 collection_name=self.collection_name,
                 points=batch,
             )
             logger.debug(
                 "Upserted batch %d/%d",
-                i // batch_size + 1,
-                (len(points) + batch_size - 1) // batch_size,
+                i // self.upsert_batch_size + 1,
+                (len(points) + self.upsert_batch_size - 1) // self.upsert_batch_size,
             )
 
         logger.info("Upserted %d points to collection '%s'", len(points), self.collection_name)
