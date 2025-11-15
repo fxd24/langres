@@ -531,7 +531,9 @@ class TestBlockerEvaluationReportImportErrors:
         )
 
     def test_plot_score_distribution_import_error_message(
-        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",
+        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
     ) -> None:
         """Test that plot_score_distribution ImportError has multi-package-manager instructions."""
         import builtins
@@ -557,7 +559,9 @@ class TestBlockerEvaluationReportImportErrors:
         assert "langres[viz]" in error_msg or "matplotlib" in error_msg
 
     def test_plot_rank_distribution_import_error_message(
-        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",
+        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
     ) -> None:
         """Test that plot_rank_distribution ImportError has multi-package-manager instructions."""
         import builtins
@@ -583,7 +587,9 @@ class TestBlockerEvaluationReportImportErrors:
         assert "langres[viz]" in error_msg or "matplotlib" in error_msg
 
     def test_plot_recall_curve_import_error_message(
-        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",
+        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
     ) -> None:
         """Test that plot_recall_curve ImportError has multi-package-manager instructions."""
         import builtins
@@ -609,7 +615,9 @@ class TestBlockerEvaluationReportImportErrors:
         assert "langres[viz]" in error_msg or "matplotlib" in error_msg
 
     def test_plot_all_import_error_message(
-        self, mock_report: "BlockerEvaluationReport", monkeypatch: pytest.MonkeyPatch  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",
+        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
     ) -> None:
         """Test that plot_all ImportError has multi-package-manager instructions."""
         import builtins
@@ -695,7 +703,8 @@ class TestBlockerEvaluationReportSummary:
         )
 
     def test_summary_returns_dict_with_eight_metrics(
-        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
     ) -> None:
         """Test that summary property returns dict with 8 key metrics."""
         summary = mock_report.summary
@@ -720,18 +729,20 @@ class TestBlockerEvaluationReportSummary:
         assert set(summary.keys()) == expected_keys
 
     def test_summary_values_are_numeric(
-        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
     ) -> None:
         """Test that all values in summary are numeric (int or float)."""
         summary = mock_report.summary
 
         for key, value in summary.items():
-            assert isinstance(
-                value, (int, float)
-            ), f"Expected {key} to be numeric, got {type(value)}"
+            assert isinstance(value, (int, float)), (
+                f"Expected {key} to be numeric, got {type(value)}"
+            )
 
     def test_summary_values_match_underlying_properties(
-        self, mock_report: "BlockerEvaluationReport"  # noqa: F821
+        self,
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
     ) -> None:
         """Test that summary values match the underlying report properties."""
         summary = mock_report.summary
@@ -745,3 +756,156 @@ class TestBlockerEvaluationReportSummary:
         assert summary["score_separation"] == mock_report.scores.separation
         assert summary["median_rank"] == mock_report.ranks.median
         assert summary["percent_in_top_10"] == mock_report.ranks.percent_in_top_10
+
+
+class TestBlockerEvaluationReportOptimalK:
+    """Tests for BlockerEvaluationReport.optimal_k() convenience method."""
+
+    @pytest.fixture
+    def mock_report(self) -> "BlockerEvaluationReport":  # noqa: F821
+        """Create a minimal BlockerEvaluationReport for testing."""
+        from langres.core.reports import (
+            BlockerEvaluationReport,
+            CandidateMetrics,
+            RankingMetrics,
+            RankMetrics,
+            RecallCurveStats,
+            ScoreMetrics,
+        )
+
+        return BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=100,
+                avg_per_entity=10.0,
+                missed_matches=5,
+                false_positives=20,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {0.8: 10}, "false": {0.4: 20}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10, 2: 15, 5: 12},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20],
+                recall_values=[0.10, 0.60, 0.85, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0],
+            ),
+        )
+
+    def test_optimal_k_delegates_to_recall_curve_with_default_target(
+        self,
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+    ) -> None:
+        """Test that optimal_k() delegates to recall_curve.optimal_k() with default target_recall=0.95."""
+        # mock_report has recall_values=[0.10, 0.60, 0.85, 0.95] at k_values=[1, 5, 10, 20]
+        # For target_recall=0.95, the optimal k should be 20
+        result = mock_report.optimal_k()
+        assert result == 20
+
+        # Verify it's the same as calling recall_curve.optimal_k() directly
+        expected = mock_report.recall_curve.optimal_k(target_recall=0.95)
+        assert result == expected
+
+    def test_optimal_k_passes_through_custom_target_recall(
+        self,
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+    ) -> None:
+        """Test that custom target_recall values are passed through correctly."""
+        # mock_report has recall_values=[0.10, 0.60, 0.85, 0.95] at k_values=[1, 5, 10, 20]
+        # For target_recall=0.60, the optimal k should be 5
+        result = mock_report.optimal_k(target_recall=0.60)
+        assert result == 5
+
+        # For target_recall=0.85, the optimal k should be 10
+        result = mock_report.optimal_k(target_recall=0.85)
+        assert result == 10
+
+        # Verify consistency with underlying method
+        expected = mock_report.recall_curve.optimal_k(target_recall=0.85)
+        assert result == expected
+
+    def test_optimal_k_docstring_example(self) -> None:
+        """Test that the docstring example works correctly."""
+        from langres.core.reports import (
+            BlockerEvaluationReport,
+            CandidateMetrics,
+            RankingMetrics,
+            RankMetrics,
+            RecallCurveStats,
+            ScoreMetrics,
+        )
+
+        # Create a report (simulating blocker.evaluate() output)
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=100,
+                avg_per_entity=10.0,
+                missed_matches=5,
+                false_positives=20,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {0.8: 10}, "false": {0.4: 20}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10, 2: 15, 5: 12},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20],
+                recall_values=[0.10, 0.60, 0.85, 0.95],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0],
+            ),
+        )
+
+        # Test the docstring example: k = report.optimal_k(target_recall=0.95)
+        k = report.optimal_k(target_recall=0.95)
+        assert isinstance(k, int)
+        assert k == 20  # Should return k=20 for 95% recall
