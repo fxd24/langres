@@ -594,3 +594,105 @@ class TestDiskCachedEmbedderDuplicateInputs:
         # Cache should have 3 unique texts total
         info = cached.cache_info()
         assert info["cold_size"] == 3  # a, b, c
+
+
+class TestDiskCachedEmbedderPromptCachingIntegration:
+    """Integration tests for prompt-based caching behavior."""
+
+    def test_different_prompts_create_separate_cache_entries(self, tmp_path):
+        """Test that encoding same text with different prompts creates separate cache entries."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        cached = DiskCachedEmbedder(
+            embedder=embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Encode "Apple Inc." with no prompt
+        result1 = cached.encode(["Apple Inc."], prompt=None)
+
+        # Encode "Apple Inc." with prompt "Find duplicates"
+        result2 = cached.encode(["Apple Inc."], prompt="Find duplicates")
+
+        # Encode "Apple Inc." with prompt "Match companies"
+        result3 = cached.encode(["Apple Inc."], prompt="Match companies")
+
+        # Cache should have 3 separate entries
+        info = cached.cache_info()
+        assert info["cold_size"] == 3
+        assert info["misses"] == 3
+
+        # Embeddings should all be different (FakeEmbedder uses prompt in hash)
+        assert not np.allclose(result1, result2)
+        assert not np.allclose(result1, result3)
+        assert not np.allclose(result2, result3)
+
+    def test_prompt_passed_through_to_wrapped_embedder(self, tmp_path):
+        """Test that prompt parameter is correctly passed to wrapped embedder on cache miss."""
+        from unittest.mock import Mock
+
+        # Create a mock embedder
+        base_embedder = Mock()
+        base_embedder.embedding_dim = 128
+        # Mock should return proper numpy array
+        base_embedder.encode.return_value = np.random.rand(2, 128).astype(np.float32)
+
+        cached = DiskCachedEmbedder(
+            embedder=base_embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Call encode with prompt
+        texts = ["Apple Inc.", "Microsoft Corp."]
+        prompt = "Find duplicate organizations"
+        cached.encode(texts, prompt=prompt)
+
+        # Verify base_embedder.encode was called with correct prompt
+        base_embedder.encode.assert_called_once_with(texts, prompt=prompt)
+
+    def test_precomputed_embeddings_bypass_cache(self, tmp_path):
+        """Test that pre-computed embeddings bypass caching entirely."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        cached = DiskCachedEmbedder(
+            embedder=embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Create pre-computed embeddings
+        precomputed = np.random.rand(5, 128).astype(np.float32)
+
+        # Pass pre-computed embeddings through cached embedder
+        result = cached.encode(precomputed, prompt="ignored")
+
+        # Result should be identical to input
+        np.testing.assert_array_equal(result, precomputed)
+
+        # Cache should remain completely empty (no misses, no hits)
+        info = cached.cache_info()
+        assert info["misses"] == 0
+        assert info["hits_hot"] == 0
+        assert info["hits_cold"] == 0
+        assert info["cold_size"] == 0
+
+    def test_precomputed_embeddings_correct_dtype(self, tmp_path):
+        """Test that pre-computed embeddings are converted to float32."""
+        embedder = FakeEmbedder(embedding_dim=128)
+        cached = DiskCachedEmbedder(
+            embedder=embedder,
+            cache_dir=tmp_path / "cache",
+            namespace="test",
+        )
+
+        # Create float64 array
+        precomputed_f64 = np.random.rand(3, 128).astype(np.float64)
+
+        # Pass through cached embedder
+        result = cached.encode(precomputed_f64)
+
+        # Result should be float32
+        assert result.dtype == np.float32
+
+        # Values should match (within tolerance for dtype conversion)
+        np.testing.assert_allclose(result, precomputed_f64, rtol=1e-6)

@@ -88,14 +88,18 @@ class EmbeddingProvider(Protocol):
         # Use with VectorIndex directly, no re-encoding needed
     """
 
-    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+    def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Encode texts into vector embeddings.
 
         Args:
-            texts: List of texts to encode. Can be empty.
+            texts: List of texts to encode OR pre-computed embeddings (np.ndarray).
+                For text input: List of strings to encode. Can be empty.
+                For pre-computed: np.ndarray of shape (N, embedding_dim).
+                    Pre-computed embeddings bypass encoding and are passed through.
             prompt: Optional instruction prompt for asymmetric encoding.
                 Documents (corpus) should use prompt=None for generic embeddings.
                 Queries should use task-specific prompts for better retrieval.
+                Ignored if texts is pre-computed embeddings.
                 Default: None.
 
         Returns:
@@ -105,6 +109,10 @@ class EmbeddingProvider(Protocol):
         Note:
             Implementations should return consistent dtypes (typically float32)
             for compatibility with vector index backends like FAISS.
+
+        Note:
+            Pre-computed embeddings enable workflows where embeddings are cached
+            externally (databases, vector stores) and reused without re-encoding.
 
         Note:
             Instruction prompts enable asymmetric encoding where queries are
@@ -320,18 +328,26 @@ class SentenceTransformerEmbedder:
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
-    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+    def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Encode texts into embeddings using sentence-transformers.
 
         Args:
-            texts: List of texts to encode. Can be empty.
+            texts: List of texts to encode OR pre-computed embeddings (np.ndarray).
+                For text input: List of strings to encode. Can be empty.
+                For pre-computed: np.ndarray of shape (N, embedding_dim).
+                    Pre-computed embeddings are passed through directly.
             prompt: Optional instruction prompt for asymmetric encoding.
                 If provided, the prompt guides the embedding model to focus
-                on task-specific semantics. Default: None.
+                on task-specific semantics. Ignored if texts is pre-computed.
+                Default: None.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
             Returns shape (0, embedding_dim) for empty input.
+
+        Note:
+            Pre-computed embeddings bypass model encoding and are returned
+            directly with dtype conversion to float32 if needed.
 
         Note:
             This method triggers model loading on first call if not
@@ -343,6 +359,11 @@ class SentenceTransformerEmbedder:
             use this for instruction-based encoding. Models without
             prompt support will ignore this parameter.
         """
+        # Pre-computed embeddings bypass model
+        if isinstance(texts, np.ndarray):
+            logger.debug("Pre-computed embeddings detected, bypassing model")
+            return texts.astype(np.float32)
+
         if len(texts) == 0:
             # Return empty array with correct shape
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
@@ -414,14 +435,18 @@ class FakeEmbedder:
         self._embedding_dim = embedding_dim
         self.normalize_embeddings = normalize_embeddings
 
-    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+    def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Generate fake deterministic embeddings from texts.
 
         Args:
-            texts: List of texts to encode.
+            texts: List of texts to encode OR pre-computed embeddings (np.ndarray).
+                For text input: List of strings to encode.
+                For pre-computed: np.ndarray of shape (N, embedding_dim).
+                    Pre-computed embeddings are passed through directly.
             prompt: Optional instruction prompt for asymmetric encoding.
                 When provided, produces different embeddings to simulate
-                real prompt-aware embedding models. Default: None.
+                real prompt-aware embedding models. Ignored if texts is pre-computed.
+                Default: None.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
@@ -429,10 +454,19 @@ class FakeEmbedder:
             a hash of the text (and prompt if provided).
 
         Note:
+            Pre-computed embeddings bypass fake generation and are returned
+            directly with dtype conversion to float32 if needed.
+
+        Note:
             Same text + same prompt always produces the same embedding.
             Different prompts produce different embeddings (simulating
             real models like Qwen3-Embedding, BGE, E5).
         """
+        # Pre-computed embeddings bypass fake generation
+        if isinstance(texts, np.ndarray):
+            logger.debug("Pre-computed embeddings detected, bypassing fake generation")
+            return texts.astype(np.float32)
+
         if len(texts) == 0:
             return np.zeros((0, self._embedding_dim), dtype=np.float32)
 
@@ -1078,22 +1112,35 @@ class DiskCachedEmbedder:
             # Remove least recently used (first item)
             self._hot_cache.popitem(last=False)
 
-    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+    def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Encode with two-tier caching (hot memory + cold disk).
 
         Args:
-            texts: List of texts to encode.
+            texts: List of texts to encode OR pre-computed embeddings (np.ndarray).
+                For text input: List of strings to encode. Can be empty.
+                For pre-computed: np.ndarray of shape (N, embedding_dim).
+                    Pre-computed embeddings bypass caching entirely.
             prompt: Optional instruction prompt for task-specific encoding.
                 Different prompts create separate cache entries for same text.
+                Ignored if texts is pre-computed embeddings.
 
         Returns:
             Numpy array of shape (len(texts), embedding_dim).
+
+        Note:
+            Pre-computed embeddings bypass both hot and cold caches and are
+            returned directly with dtype conversion to float32 if needed.
 
         Note:
             Batch optimization: Only cache misses are computed with embedder.
             Results maintain input order.
             Cache key includes both text AND prompt for correct cache isolation.
         """
+        # Pre-computed embeddings bypass cache entirely
+        if isinstance(texts, np.ndarray):
+            logger.debug("Pre-computed embeddings detected, bypassing cache")
+            return texts.astype(np.float32)
+
         if len(texts) == 0:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
 

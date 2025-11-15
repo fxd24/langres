@@ -160,6 +160,39 @@ class TestSentenceTransformerEmbedder:
         assert embedder._model is not None
         assert dim == 384  # all-MiniLM-L6-v2 dimension
 
+    def test_precomputed_embeddings_bypass_model(self):
+        """Test that pre-computed embeddings bypass model loading."""
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+
+        # Create pre-computed embeddings
+        precomputed = np.random.rand(3, 384).astype(np.float32)
+
+        # Pass through embedder
+        result = embedder.encode(precomputed)
+
+        # Model should NOT be loaded (bypassed)
+        assert embedder._model is None
+
+        # Result should be identical to input
+        np.testing.assert_array_equal(result, precomputed)
+        assert result.dtype == np.float32
+
+    def test_precomputed_embeddings_dtype_conversion(self):
+        """Test that pre-computed embeddings are converted to float32."""
+        embedder = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+
+        # Create float64 array
+        precomputed_f64 = np.random.rand(2, 384).astype(np.float64)
+
+        # Pass through embedder
+        result = embedder.encode(precomputed_f64)
+
+        # Result should be float32
+        assert result.dtype == np.float32
+
+        # Values should match (within tolerance)
+        np.testing.assert_allclose(result, precomputed_f64, rtol=1e-6)
+
 
 class TestFakeEmbedder:
     """Tests for FakeEmbedder test double."""
@@ -269,6 +302,36 @@ class TestFakeEmbedder:
         batch2 = embedder2.encode(texts)
 
         np.testing.assert_array_equal(batch1, batch2)
+
+    def test_precomputed_embeddings_bypass_generation(self):
+        """Test that pre-computed embeddings bypass fake generation."""
+        embedder = FakeEmbedder(embedding_dim=128)
+
+        # Create pre-computed embeddings
+        precomputed = np.random.rand(3, 128).astype(np.float32)
+
+        # Pass through embedder
+        result = embedder.encode(precomputed)
+
+        # Result should be identical to input
+        np.testing.assert_array_equal(result, precomputed)
+        assert result.dtype == np.float32
+
+    def test_precomputed_embeddings_dtype_conversion(self):
+        """Test that pre-computed embeddings are converted to float32."""
+        embedder = FakeEmbedder(embedding_dim=128)
+
+        # Create float64 array
+        precomputed_f64 = np.random.rand(2, 128).astype(np.float64)
+
+        # Pass through embedder
+        result = embedder.encode(precomputed_f64)
+
+        # Result should be float32
+        assert result.dtype == np.float32
+
+        # Values should match (within tolerance)
+        np.testing.assert_allclose(result, precomputed_f64, rtol=1e-6)
 
 
 class TestEmbeddingProviderProtocol:
