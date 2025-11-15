@@ -558,7 +558,7 @@ class BlockerEvaluationReport(BaseModel):
         candidates: Candidate generation metrics
         ranking: Ranking quality metrics
         scores: Score distribution analysis
-        ranks: Rank distribution analysis
+        rank_distribution: Rank distribution analysis
         recall_curve: Recall@k curve data
 
     Example:
@@ -574,10 +574,31 @@ class BlockerEvaluationReport(BaseModel):
     candidates: CandidateMetrics = Field(description="Candidate generation metrics")
     ranking: RankingMetrics = Field(description="Ranking quality metrics")
     scores: ScoreMetrics = Field(description="Score distribution analysis")
-    ranks: RankMetrics = Field(description="Rank distribution analysis")
+    rank_distribution: RankMetrics = Field(description="Rank distribution analysis")
     recall_curve: RecallCurveStats = Field(description="Recall@k curve data")
 
     model_config = ConfigDict(frozen=True)
+
+    @property
+    def ranks(self) -> RankMetrics:
+        """Deprecated: Use rank_distribution instead.
+
+        .. deprecated:: 0.2.0
+            Use :attr:`rank_distribution` instead. This property will be
+            removed in version 0.3.0.
+
+        Returns:
+            RankMetrics: The rank distribution metrics (same as rank_distribution)
+        """
+        import warnings
+
+        warnings.warn(
+            "Property 'ranks' is deprecated and will be removed in v0.3.0. "
+            "Use 'rank_distribution' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.rank_distribution
 
     @property
     def summary(self) -> dict[str, float]:
@@ -610,8 +631,8 @@ class BlockerEvaluationReport(BaseModel):
             "mrr": self.ranking.mrr,
             "ndcg_at_10": self.ranking.ndcg_at_10,
             "score_separation": self.scores.separation,
-            "median_rank": self.ranks.median,
-            "percent_in_top_10": self.ranks.percent_in_top_10,
+            "median_rank": self.rank_distribution.median,
+            "percent_in_top_10": self.rank_distribution.percent_in_top_10,
         }
 
     def to_markdown(self) -> str:
@@ -670,11 +691,11 @@ class BlockerEvaluationReport(BaseModel):
         lines.append("## Rank Distribution\n")
         lines.append("| Metric | Value |")
         lines.append("|--------|-------|")
-        lines.append(f"| Median Rank | {self.ranks.median:.1f} |")
-        lines.append(f"| 95th Percentile Rank | {self.ranks.percentile_95:.1f} |")
-        lines.append(f"| % in Top-5 | {self.ranks.percent_in_top_5:.1f}% |")
-        lines.append(f"| % in Top-10 | {self.ranks.percent_in_top_10:.1f}% |")
-        lines.append(f"| % in Top-20 | {self.ranks.percent_in_top_20:.1f}% |")
+        lines.append(f"| Median Rank | {self.rank_distribution.median:.1f} |")
+        lines.append(f"| 95th Percentile Rank | {self.rank_distribution.percentile_95:.1f} |")
+        lines.append(f"| % in Top-5 | {self.rank_distribution.percent_in_top_5:.1f}% |")
+        lines.append(f"| % in Top-10 | {self.rank_distribution.percent_in_top_10:.1f}% |")
+        lines.append(f"| % in Top-20 | {self.rank_distribution.percent_in_top_20:.1f}% |")
         lines.append("")
 
         # Recall curve summary
@@ -712,13 +733,13 @@ class BlockerEvaluationReport(BaseModel):
             )
 
         # Ranking recommendations
-        if self.ranks.median > 20:
+        if self.rank_distribution.median > 20:
             recommendations.append(
                 "- **Poor Ranking**: True matches ranked low. "
                 "Consider: (1) Tuning index parameters (nlist, nprobe), "
                 "(2) Different distance metric, (3) Add learned reranker"
             )
-        elif self.ranks.median <= 5:
+        elif self.rank_distribution.median <= 5:
             recommendations.append("- ✅ **Excellent Ranking**: True matches typically in top-5")
 
         # Cost/efficiency recommendations

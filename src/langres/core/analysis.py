@@ -459,6 +459,6 @@ def evaluate_blocker_detailed(
         candidates=candidate_metrics,
         ranking=ranking_metrics,
         scores=score_metrics,
-        ranks=rank_metrics,
+        rank_distribution=rank_metrics,
         recall_curve=recall_curve,
     )

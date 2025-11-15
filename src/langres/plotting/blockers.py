@@ -126,19 +126,19 @@ def plot_rank_distribution(
         _, ax = plt.subplots(figsize=(10, 6))
 
     # Extract rank data
-    ranks = sorted(report.ranks.rank_counts.keys())
-    counts = [report.ranks.rank_counts[r] for r in ranks]
+    ranks = sorted(report.rank_distribution.rank_counts.keys())
+    counts = [report.rank_distribution.rank_counts[r] for r in ranks]
 
     # Bar chart
     ax.bar(ranks, counts, **kwargs)
 
     # Add median line
     ax.axvline(
-        report.ranks.median,
+        report.rank_distribution.median,
         color="red",
         linestyle="--",
         linewidth=2,
-        label=f"Median Rank: {report.ranks.median:.1f}",
+        label=f"Median Rank: {report.rank_distribution.median:.1f}",
     )
 
     # Labels

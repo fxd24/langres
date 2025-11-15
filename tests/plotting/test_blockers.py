@@ -49,7 +49,7 @@ def sample_report():
                 "false": {0.3: 20, 0.4: 30, 0.5: 10},
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=3.0,
             percentile_95=12.0,
             percent_in_top_5=78.0,
@@ -477,7 +477,7 @@ def test_plot_score_distribution_with_empty_true_histogram(mock_plt):
                 "false": {0.2: 10, 0.3: 20, 0.4: 15, 0.5: 5},
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=1.0,  # Min valid value when no ranks exist
             percentile_95=1.0,  # Min valid value when no ranks exist
             percent_in_top_5=0.0,
@@ -549,7 +549,7 @@ def test_plot_score_distribution_with_single_bin(mock_plt):
                 "false": {0.40: 20},  # Single bin - all scores identical
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=1.0,
             percentile_95=1.0,
             percent_in_top_5=100.0,
@@ -621,7 +621,7 @@ def test_plot_rank_distribution_with_extreme_ranks(mock_plt):
                 "false": {0.4: 200, 0.5: 300, 0.6: 250, 0.7: 150},
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=25.0,
             percentile_95=5000.0,  # Extreme 95th percentile
             percent_in_top_5=15.0,
@@ -703,7 +703,7 @@ def test_plot_recall_curve_with_single_k(mock_plt):
                 "false": {0.3: 2, 0.4: 3},
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=2.0,
             percentile_95=8.0,
             percent_in_top_5=85.0,
@@ -782,7 +782,7 @@ def test_plot_score_distribution_with_empty_false_histogram(mock_plt):
                 "false": {},  # Empty - no false candidates
             },
         ),
-        ranks=RankMetrics(
+        rank_distribution=RankMetrics(
             median=1.0,
             percentile_95=2.0,
             percent_in_top_5=100.0,

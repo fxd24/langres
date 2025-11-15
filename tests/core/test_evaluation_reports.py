@@ -542,7 +542,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -561,7 +561,7 @@ class TestBlockerEvaluationReport:
         assert report.candidates.recall == 0.95
         assert report.ranking.map == 0.85
         assert report.scores.separation == 0.45
-        assert report.ranks.median == 5.0
+        assert report.rank_distribution.median == 5.0
         assert report.recall_curve.k_values == [1, 5, 10, 20, 50]
 
     def test_blocker_evaluation_report_semantic_access(self):
@@ -595,7 +595,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -614,7 +614,7 @@ class TestBlockerEvaluationReport:
         assert isinstance(report.candidates, CandidateMetrics)
         assert isinstance(report.ranking, RankingMetrics)
         assert isinstance(report.scores, ScoreMetrics)
-        assert isinstance(report.ranks, RankMetrics)
+        assert isinstance(report.rank_distribution, RankMetrics)
         assert isinstance(report.recall_curve, RecallCurveStats)
 
     def test_blocker_evaluation_report_immutable(self):
@@ -648,7 +648,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -705,7 +705,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {0.8: 10}, "false": {0.4: 20}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -725,7 +725,7 @@ class TestBlockerEvaluationReport:
         assert "candidates" in data
         assert "ranking" in data
         assert "scores" in data
-        assert "ranks" in data
+        assert "rank_distribution" in data
         assert "recall_curve" in data
 
         # Test round-trip
@@ -764,7 +764,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -817,7 +817,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -869,7 +869,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -921,7 +921,7 @@ class TestBlockerEvaluationReport:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1035,7 +1035,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1088,7 +1088,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1138,7 +1138,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1188,7 +1188,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1238,7 +1238,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1272,8 +1272,8 @@ class TestBlockerEvaluationReportPlotting:
         assert summary["mrr"] == report.ranking.mrr
         assert summary["ndcg_at_10"] == report.ranking.ndcg_at_10
         assert summary["score_separation"] == report.scores.separation
-        assert summary["median_rank"] == report.ranks.median
-        assert summary["percent_in_top_10"] == report.ranks.percent_in_top_10
+        assert summary["median_rank"] == report.rank_distribution.median
+        assert summary["percent_in_top_10"] == report.rank_distribution.percent_in_top_10
 
     def test_blocker_evaluation_report_summary_values_are_numbers(self):
         """Test that all summary values are numeric."""
@@ -1306,7 +1306,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1357,7 +1357,7 @@ class TestBlockerEvaluationReportPlotting:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1431,7 +1431,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1482,7 +1482,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1538,7 +1538,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.80,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -1595,7 +1595,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.20,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=50.0,  # High median rank (> 20)
                 percentile_95=150.0,
                 percent_in_top_5=20.0,
@@ -1652,7 +1652,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.05,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=3.0,  # Excellent ranking (<= 5)
                 percentile_95=8.0,
                 percent_in_top_5=75.0,
@@ -1708,7 +1708,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.30,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=12.0,
                 percentile_95=45.0,
                 percent_in_top_5=45.0,
@@ -1764,7 +1764,7 @@ class TestBlockerEvaluationReportRecommendations:
                 overlap_fraction=0.30,
                 histogram={"true": {}, "false": {}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=10.0,  # Between 5 and 20 - mediocre
                 percentile_95=35.0,
                 percent_in_top_5=50.0,

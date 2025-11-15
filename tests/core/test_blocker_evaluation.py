@@ -123,10 +123,10 @@ def test_blocker_evaluate_metrics_are_accessible(
     assert isinstance(report.scores.false_median, float)
 
     # Rank metrics
-    assert isinstance(report.ranks.median, float)
-    assert report.ranks.median >= 1.0
-    assert isinstance(report.ranks.percentile_95, float)
-    assert report.ranks.percentile_95 >= 1.0
+    assert isinstance(report.rank_distribution.median, float)
+    assert report.rank_distribution.median >= 1.0
+    assert isinstance(report.rank_distribution.percentile_95, float)
+    assert report.rank_distribution.percentile_95 >= 1.0
 
     # Recall curve
     assert isinstance(report.recall_curve.k_values, list)
@@ -200,11 +200,11 @@ def test_blocker_evaluate_rank_metrics(test_blocker, sample_candidates, sample_g
     report = test_blocker.evaluate(sample_candidates, sample_gold_clusters)
 
     # Ranks should be >= 1
-    assert report.ranks.median >= 1.0
-    assert report.ranks.percentile_95 >= 1.0
-    assert 0.0 <= report.ranks.percent_in_top_5 <= 100.0
-    assert 0.0 <= report.ranks.percent_in_top_10 <= 100.0
-    assert 0.0 <= report.ranks.percent_in_top_20 <= 100.0
+    assert report.rank_distribution.median >= 1.0
+    assert report.rank_distribution.percentile_95 >= 1.0
+    assert 0.0 <= report.rank_distribution.percent_in_top_5 <= 100.0
+    assert 0.0 <= report.rank_distribution.percent_in_top_10 <= 100.0
+    assert 0.0 <= report.rank_distribution.percent_in_top_20 <= 100.0
 
 
 def test_blocker_evaluate_recall_curve_values(
@@ -358,7 +358,7 @@ def test_blocker_evaluation_with_messy_production_data():
     assert 0.0 <= report.candidates.recall <= 1.0
     assert 0.0 <= report.candidates.precision <= 1.0
     assert report.candidates.total == len(candidates)
-    assert report.ranks.median >= 1.0
+    assert report.rank_distribution.median >= 1.0
 
     # Should handle entities with no candidates
     assert report.candidates.missed_matches > 0  # Entity 15 + cluster 50-55 have no candidates
@@ -447,8 +447,8 @@ def test_blocker_evaluation_with_perfect_blocking():
     assert report.candidates.precision == 1.0
     assert report.ranking.map == 1.0
     assert report.ranking.mrr == 1.0
-    assert report.ranks.median == 1.0
-    assert report.ranks.percent_in_top_5 == 100.0
+    assert report.rank_distribution.median == 1.0
+    assert report.rank_distribution.percent_in_top_5 == 100.0
 
     # All true scores should be 1.0
     assert report.scores.true_mean == 1.0

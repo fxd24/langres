@@ -585,7 +585,7 @@ def test_evaluate_blocker_detailed_complete_pipeline(
     assert report.scores.separation > 0
 
     # Rank metrics
-    assert report.ranks.median >= 1
+    assert report.rank_distribution.median >= 1
 
     # Recall curve (default k_values)
     assert 1 in report.recall_curve.k_values
@@ -689,7 +689,7 @@ def test_evaluate_blocker_detailed_realistic_data():
     # MAP should be (1.0 + 1.0) / 2 = 1.0... but evaluate_blocking_with_ranking might differ
     # Accept MAP > 0.5 as "good"
     assert report.ranking.map > 0.5
-    assert report.ranks.median <= 2
+    assert report.rank_distribution.median <= 2
 
     # Clear score separation
     assert report.scores.separation > 0.2

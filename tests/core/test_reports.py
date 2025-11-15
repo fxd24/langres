@@ -515,7 +515,7 @@ class TestBlockerEvaluationReportImportErrors:
                 overlap_fraction=0.20,
                 histogram={"true": {0.8: 10}, "false": {0.4: 20}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -687,7 +687,7 @@ class TestBlockerEvaluationReportSummary:
                 overlap_fraction=0.20,
                 histogram={"true": {0.8: 10}, "false": {0.4: 20}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -754,8 +754,8 @@ class TestBlockerEvaluationReportSummary:
         assert summary["mrr"] == mock_report.ranking.mrr
         assert summary["ndcg_at_10"] == mock_report.ranking.ndcg_at_10
         assert summary["score_separation"] == mock_report.scores.separation
-        assert summary["median_rank"] == mock_report.ranks.median
-        assert summary["percent_in_top_10"] == mock_report.ranks.percent_in_top_10
+        assert summary["median_rank"] == mock_report.rank_distribution.median
+        assert summary["percent_in_top_10"] == mock_report.rank_distribution.percent_in_top_10
 
 
 class TestBlockerEvaluationReportOptimalK:
@@ -802,7 +802,7 @@ class TestBlockerEvaluationReportOptimalK:
                 overlap_fraction=0.20,
                 histogram={"true": {0.8: 10}, "false": {0.4: 20}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
@@ -890,7 +890,7 @@ class TestBlockerEvaluationReportOptimalK:
                 overlap_fraction=0.20,
                 histogram={"true": {0.8: 10}, "false": {0.4: 20}},
             ),
-            ranks=RankMetrics(
+            rank_distribution=RankMetrics(
                 median=5.0,
                 percentile_95=18.0,
                 percent_in_top_5=60.0,
