@@ -414,3 +414,58 @@ class TestClusterInspectionReport:
         assert "## Cluster Size Distribution" not in markdown
         assert "## Largest Clusters" not in markdown
         assert "## Recommendations" not in markdown
+
+
+class TestRecallCurveStats:
+    """Tests for RecallCurveStats validation."""
+
+    def test_recall_curve_stats_validates_equal_list_lengths(self) -> None:
+        """Test that RecallCurveStats requires all lists to have same length."""
+        from langres.core.reports import RecallCurveStats
+
+        # Should succeed - all same length
+        valid_stats = RecallCurveStats(
+            k_values=[1, 5, 10],
+            recall_values=[0.1, 0.6, 0.9],
+            avg_pairs_values=[1.0, 5.0, 10.0],
+        )
+        assert len(valid_stats.k_values) == 3
+
+        # Should fail - recall_values too short
+        with pytest.raises(ValueError, match="same length"):
+            RecallCurveStats(
+                k_values=[1, 5, 10],
+                recall_values=[0.1, 0.6],  # Too short
+                avg_pairs_values=[1.0, 5.0, 10.0],
+            )
+
+        # Should fail - recall_values too long
+        with pytest.raises(ValueError, match="same length"):
+            RecallCurveStats(
+                k_values=[1, 5],
+                recall_values=[0.1, 0.6, 0.9],  # Too long
+                avg_pairs_values=[1.0, 5.0],
+            )
+
+    def test_recall_curve_stats_rejects_empty_lists(self) -> None:
+        """Test that empty lists are rejected."""
+        from langres.core.reports import RecallCurveStats
+
+        with pytest.raises(ValueError, match="at least one"):
+            RecallCurveStats(
+                k_values=[],
+                recall_values=[],
+                avg_pairs_values=[],
+            )
+
+    def test_recall_curve_stats_allows_single_element(self) -> None:
+        """Test that single-element lists are valid."""
+        from langres.core.reports import RecallCurveStats
+
+        stats = RecallCurveStats(
+            k_values=[5],
+            recall_values=[0.85],
+            avg_pairs_values=[5.0],
+        )
+        assert len(stats.k_values) == 1
+        assert stats.k_values[0] == 5
