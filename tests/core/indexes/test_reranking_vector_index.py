@@ -960,6 +960,63 @@ class TestQdrantHybridRerankingIndex:
         assert reranking_embedder.encode.call_count == 2
         assert reranking_embedder.encode.call_args_list[1] == ((texts,), {"prompt": query_prompt})
 
+    def test_reranking_index_configurable_upsert_batch_size(self):
+        """Test that upsert_batch_size parameter controls batching during create_index."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = FakeEmbedder(embedding_dim=128)
+        sparse_embedder = FakeSparseEmbedder()
+        reranking_embedder = FakeLateInteractionEmbedder(embedding_dim=128)
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            upsert_batch_size=50,  # Custom batch size
+        )
+
+        # Create index with 150 texts (should create 3 batches of 50)
+        texts = [f"Company {i}" for i in range(150)]
+        index.create_index(texts)
+
+        # Verify upsert was called 3 times with batches of 50
+        assert mock_client.upsert.call_count == 3
+
+        # Check each batch size
+        for i, call in enumerate(mock_client.upsert.call_args_list):
+            points = call[1]["points"]
+            assert len(points) == 50, f"Batch {i} should have 50 points"
+
+    def test_reranking_index_default_upsert_batch_size(self):
+        """Test that default upsert_batch_size is 100."""
+        # Setup
+        mock_client = MagicMock()
+        dense_embedder = FakeEmbedder(embedding_dim=128)
+        sparse_embedder = FakeSparseEmbedder()
+        reranking_embedder = FakeLateInteractionEmbedder(embedding_dim=128)
+
+        index = QdrantHybridRerankingIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=dense_embedder,
+            sparse_embedder=sparse_embedder,
+            reranking_embedder=reranking_embedder,
+            # No upsert_batch_size specified - should default to 100
+        )
+
+        # Create index with 250 texts (should create 3 batches: 100, 100, 50)
+        texts = [f"Company {i}" for i in range(250)]
+        index.create_index(texts)
+
+        # Verify upsert was called 3 times
+        assert mock_client.upsert.call_count == 3
+
+        # Check batch sizes
+        batch_sizes = [len(call[1]["points"]) for call in mock_client.upsert.call_args_list]
+        assert batch_sizes == [100, 100, 50]
+
 
 class TestFakeHybridRerankingVectorIndex:
     """Tests for FakeHybridRerankingVectorIndex test double."""
