@@ -15,8 +15,8 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
+from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
-from langres.core.vector_index import FAISSIndex, FakeVectorIndex
 
 logger = logging.getLogger(__name__)
 
