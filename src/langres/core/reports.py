@@ -697,9 +697,7 @@ class BlockerEvaluationReport(BaseModel):
                 "(3) Adding more blocking methods (e.g., phonetic + semantic)"
             )
         elif self.candidates.recall >= 0.95:
-            recommendations.append(
-                "- ✅ **Excellent Recall**: Blocker finds >95% of true matches"
-            )
+            recommendations.append("- ✅ **Excellent Recall**: Blocker finds >95% of true matches")
 
         # Separation recommendations
         if self.scores.separation < 0.1:
@@ -721,9 +719,7 @@ class BlockerEvaluationReport(BaseModel):
                 "(2) Different distance metric, (3) Add learned reranker"
             )
         elif self.ranks.median <= 5:
-            recommendations.append(
-                "- ✅ **Excellent Ranking**: True matches typically in top-5"
-            )
+            recommendations.append("- ✅ **Excellent Ranking**: True matches typically in top-5")
 
         # Cost/efficiency recommendations
         if optimal_k > 50:
@@ -739,6 +735,29 @@ class BlockerEvaluationReport(BaseModel):
         lines.extend(recommendations)
 
         return "\n".join(lines)
+
+    def optimal_k(self, target_recall: float = 0.95) -> int:
+        """Find smallest k achieving target recall (convenience method).
+
+        This method delegates to recall_curve.optimal_k() for better
+        discoverability. Use when you want to find the optimal k value
+        without navigating to the recall_curve property.
+
+        Args:
+            target_recall: Target recall threshold (default: 0.95)
+
+        Returns:
+            Smallest k value achieving target recall
+
+        Raises:
+            ValueError: If target recall is unreachable
+
+        Example:
+            >>> report = blocker.evaluate(candidates, gold_clusters)
+            >>> k = report.optimal_k(target_recall=0.95)
+            >>> print(f"Use k={k} for 95% recall")
+        """
+        return self.recall_curve.optimal_k(target_recall=target_recall)
 
     def plot_score_distribution(self, ax=None, **kwargs):  # type: ignore[no-untyped-def]
         """Plot score distribution (delegates to plotting module).
