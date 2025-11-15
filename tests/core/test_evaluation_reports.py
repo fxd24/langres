@@ -1323,3 +1323,296 @@ class TestBlockerEvaluationReportPlotting:
         # Should not affect report (new dict returned each time)
         assert report.candidates.recall == original_recall
         assert report.summary["candidate_recall"] == original_recall
+"""Tests for BlockerEvaluationReport.to_markdown() recommendations feature."""
+
+import pytest
+
+from langres.core.reports import (
+    BlockerEvaluationReport,
+    CandidateMetrics,
+    RankingMetrics,
+    RankMetrics,
+    RecallCurveStats,
+    ScoreMetrics,
+)
+
+
+class TestBlockerEvaluationReportRecommendations:
+    """Test BlockerEvaluationReport.to_markdown() recommendations feature."""
+
+    def test_to_markdown_includes_recommendations_section(self):
+        """Test that to_markdown() includes recommendations section."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should have recommendations section
+        assert "## Actionable Recommendations" in markdown or "## Recommendations" in markdown
+
+    def test_to_markdown_recommends_recall_improvement(self):
+        """Test recommendation when recall is low."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.70,  # Low recall (< 0.85)
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=300,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.70, 0.75, 0.78],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should recommend increasing k or improving blocking
+        assert (
+            "increase k" in markdown.lower()
+            or "blocking recall" in markdown.lower()
+            or "more blocking methods" in markdown.lower()
+            or "low recall" in markdown.lower()
+        )
+
+    def test_to_markdown_recommends_separation_improvement(self):
+        """Test recommendation when score separation is poor."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.85,
+                mrr=0.90,
+                ndcg_at_10=0.88,
+                ndcg_at_20=0.89,
+                recall_at_5=0.75,
+                recall_at_10=0.85,
+                recall_at_20=0.92,
+            ),
+            scores=ScoreMetrics(
+                separation=0.05,  # Low separation (< 0.1)
+                true_median=0.55,
+                true_mean=0.52,
+                true_std=0.12,
+                false_median=0.50,
+                false_mean=0.48,
+                false_std=0.15,
+                overlap_fraction=0.80,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=5.0,
+                percentile_95=18.0,
+                percent_in_top_5=60.0,
+                percent_in_top_10=80.0,
+                percent_in_top_20=95.0,
+                rank_counts={1: 10},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should recommend better embedder or different index
+        assert (
+            "embedder" in markdown.lower()
+            or "embedding model" in markdown.lower()
+            or "separation" in markdown.lower()
+            or "index" in markdown.lower()
+            or "rerank" in markdown.lower()
+        )
+
+    def test_to_markdown_recommends_ranking_improvement(self):
+        """Test recommendation when median rank is high."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.95,
+                precision=0.80,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=50,
+                false_positives=200,
+            ),
+            ranking=RankingMetrics(
+                map=0.65,
+                mrr=0.70,
+                ndcg_at_10=0.68,
+                ndcg_at_20=0.69,
+                recall_at_5=0.45,
+                recall_at_10=0.65,
+                recall_at_20=0.82,
+            ),
+            scores=ScoreMetrics(
+                separation=0.45,
+                true_median=0.85,
+                true_mean=0.82,
+                true_std=0.12,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.20,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=50.0,  # High median rank (> 20)
+                percentile_95=150.0,
+                percent_in_top_5=20.0,
+                percent_in_top_10=35.0,
+                percent_in_top_20=55.0,
+                rank_counts={1: 2, 50: 20, 100: 15},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.10, 0.60, 0.85, 0.95, 0.99],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should recommend index tuning or reranking
+        assert (
+            "ranking" in markdown.lower()
+            or "rerank" in markdown.lower()
+            or "index parameters" in markdown.lower()
+            or "ranked low" in markdown.lower()
+            or "poor ranking" in markdown.lower()
+        )
+
+    def test_to_markdown_positive_feedback_when_excellent(self):
+        """Test that excellent metrics get positive feedback."""
+        report = BlockerEvaluationReport(
+            candidates=CandidateMetrics(
+                recall=0.98,  # Excellent recall (>= 0.95)
+                precision=0.85,
+                total=1000,
+                avg_per_entity=10.5,
+                missed_matches=20,
+                false_positives=150,
+            ),
+            ranking=RankingMetrics(
+                map=0.95,
+                mrr=0.98,
+                ndcg_at_10=0.96,
+                ndcg_at_20=0.97,
+                recall_at_5=0.92,
+                recall_at_10=0.96,
+                recall_at_20=0.98,
+            ),
+            scores=ScoreMetrics(
+                separation=0.50,  # Good separation (>= 0.3)
+                true_median=0.90,
+                true_mean=0.88,
+                true_std=0.08,
+                false_median=0.40,
+                false_mean=0.38,
+                false_std=0.15,
+                overlap_fraction=0.05,
+                histogram={"true": {}, "false": {}},
+            ),
+            ranks=RankMetrics(
+                median=3.0,  # Excellent ranking (<= 5)
+                percentile_95=8.0,
+                percent_in_top_5=75.0,
+                percent_in_top_10=92.0,
+                percent_in_top_20=98.0,
+                rank_counts={1: 50, 2: 30, 3: 15},
+            ),
+            recall_curve=RecallCurveStats(
+                k_values=[1, 5, 10, 20, 50],
+                recall_values=[0.50, 0.92, 0.98, 0.99, 1.0],
+                avg_pairs_values=[1.0, 5.0, 10.0, 20.0, 50.0],
+            ),
+        )
+
+        markdown = report.to_markdown()
+
+        # Should have positive indicators
+        assert (
+            "excellent" in markdown.lower()
+            or "good" in markdown.lower()
+            or "production-ready" in markdown.lower()
+            or "✅" in markdown
+        )
