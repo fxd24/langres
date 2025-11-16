@@ -458,13 +458,19 @@ def evaluate_blocker_detailed(
         ranking_metrics.map,
     )
 
-    return BlockerEvaluationReport(
+    report = BlockerEvaluationReport(
         candidates=candidate_metrics,
         ranking=ranking_metrics,
         scores=score_metrics,
         rank_distribution=rank_metrics,
         recall_curve=recall_curve,
     )
+
+    # Store gold clusters for .diagnose() method
+    # Use private attr to avoid breaking serialization
+    object.__setattr__(report, "_gold_clusters", gold_clusters)
+
+    return report
 
 
 def extract_missed_matches(
