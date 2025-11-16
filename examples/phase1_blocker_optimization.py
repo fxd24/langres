@@ -62,11 +62,11 @@ logger = logging.getLogger(__name__)
 
 # Models to compare (from POC requirements)
 MODELS = [
-    "all-MiniLM-L6-v2",  # 384d, fast baseline (22M params)
+    #"all-MiniLM-L6-v2",  # 384d, fast baseline (22M params)
     "all-mpnet-base-v2",  # 768d, better quality (109M params)
-    "paraphrase-MiniLM-L3-v2",  # 384d, fastest (17M params)
-    "intfloat/multilingual-e5-base",  # 768d, strong multilingual (118M params)
-    "BAAI/bge-m3",  # 1024d, multi-lingual, multi-granular (568M params)
+    #"paraphrase-MiniLM-L3-v2",  # 384d, fastest (17M params)
+    #"intfloat/multilingual-e5-base",  # 768d, strong multilingual (118M params)
+    #"BAAI/bge-m3",  # 1024d, multi-lingual, multi-granular (568M params)
 ]
 
 # K values to test (from POC requirements)
@@ -448,6 +448,9 @@ Recommendation Strategy:
         dense_embedder=cached_embedder,
         sparse_embedder=sparse_embedder,
     )
+
+    # Build index (collection already exists from earlier evaluation, so this is fast)
+    winner_index.create_index(texts)
 
     winner_blocker = VectorBlocker(
         schema_factory=lambda r: FunderSchema(id=r["id"], name=r["name"]),
