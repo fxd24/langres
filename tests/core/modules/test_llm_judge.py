@@ -329,6 +329,7 @@ def test_llm_judge_client_integration(mock_llm_client):
     module = LLMJudgeModule(
         client=mock_llm_client,
         model="gpt-4o-mini",
+        temperature=0.5,
     )
 
     candidate = ERCandidate(
@@ -343,7 +344,7 @@ def test_llm_judge_client_integration(mock_llm_client):
     mock_llm_client.completion.assert_called_once()
     call_kwargs = mock_llm_client.completion.call_args.kwargs
     assert call_kwargs["model"] == "gpt-4o-mini"
-    assert call_kwargs["temperature"] == 0.0
+    assert call_kwargs["temperature"] == 0.5
 
     # Verify judgement
     assert len(judgements) == 1
