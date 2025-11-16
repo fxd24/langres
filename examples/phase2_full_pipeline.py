@@ -145,7 +145,10 @@ def main() -> None:
     DIAGNOSTICS_PATH = Path("tmp/diagnostics_phase2_full_pipeline.md")
 
     # Candidate filtering (for faster testing)
-    SIMILARITY_THRESHOLD = 0.5  # Only judge pairs with similarity >= 0.5
+    # NOTE: Run Phase 1 first to get optimal threshold recommendations
+    # See Phase 1 output or tmp/phase1_threshold_recommendations.json for suggested values
+    # Current setting is a placeholder - update based on Phase 1 analysis
+    SIMILARITY_THRESHOLD = 0.5  # TODO: Update from Phase 1 recommendations (balanced threshold)
     MAX_CANDIDATES = 3000  # Limit candidates (~12 min at 250 RPM, ~3 min at 1000 RPM)
 
     logger.info(f"Configuration:")

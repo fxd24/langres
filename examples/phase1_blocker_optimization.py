@@ -417,7 +417,123 @@ Recommendation Strategy:
     logger.info("")
 
     # -------------------------------------------------------------------------
-    # 8. Summary and next steps
+    # 8. Generate threshold recommendations for Phase 2
+    # -------------------------------------------------------------------------
+    logger.info("=" * 80)
+    logger.info("🎯 SIMILARITY THRESHOLD RECOMMENDATIONS FOR PHASE 2")
+    logger.info("=" * 80)
+    logger.info("")
+
+    # Re-evaluate winner to get detailed score metrics
+    logger.info("Generating threshold recommendations based on winner model score distribution...")
+    logger.info("")
+
+    # Recreate winner blocker
+    winner_model = str(winner["Model"])
+    winner_k = int(winner["K"])
+    winner_namespace = str(winner_model).replace("/", "_").replace("-", "_")
+
+    base_embedder = SentenceTransformerEmbedder(model_name=winner_model)
+    cached_embedder = DiskCachedEmbedder(
+        embedder=base_embedder,
+        cache_dir=CACHE_DIR,
+        namespace=winner_namespace,
+        memory_cache_size=2000,
+    )
+
+    winner_collection = f"funders_{winner_namespace}"
+    winner_index = QdrantHybridIndex(
+        client=client,
+        collection_name=winner_collection,
+        dense_embedder=cached_embedder,
+        sparse_embedder=sparse_embedder,
+    )
+
+    winner_blocker = VectorBlocker(
+        schema_factory=lambda r: FunderSchema(id=r["id"], name=r["name"]),
+        text_field_extractor=lambda x: x.name,
+        vector_index=winner_index,  # type: ignore[arg-type]
+        k_neighbors=winner_k,
+    )
+
+    # Generate candidates and evaluate
+    winner_candidates = list(winner_blocker.stream(entities))
+    winner_report = winner_blocker.evaluate(winner_candidates, gold_clusters)
+
+    # Extract score metrics
+    false_med = winner_report.scores.false_median
+    true_med = winner_report.scores.true_median
+    sep = winner_report.scores.separation
+
+    # Calculate threshold recommendations
+    conservative = false_med + sep / 3
+    balanced = (true_med + false_med) / 2
+    aggressive = false_med + 2 * sep / 3
+
+    logger.info(f"Winner model: {winner_model}")
+    logger.info(f"Winner k: {winner_k}")
+    logger.info("")
+    logger.info("Score Distribution:")
+    logger.info(f"  True matches (median):     {true_med:.3f}")
+    logger.info(f"  False candidates (median): {false_med:.3f}")
+    logger.info(f"  Separation:                {sep:.3f}")
+    logger.info("")
+    logger.info("Recommended thresholds for Phase 2:")
+    logger.info(
+        f"  • Conservative (max recall): {conservative:.2f}  "
+        f"(~99% true matches, more candidates)"
+    )
+    logger.info(
+        f"  • Balanced:                  {balanced:.2f}  "
+        f"(~95% true matches, moderate candidates)"
+    )
+    logger.info(
+        f"  • Aggressive (min cost):     {aggressive:.2f}  "
+        f"(~85-90% true matches, fewer candidates)"
+    )
+    logger.info("")
+    logger.info("To use in Phase 2, update:")
+    logger.info(f"  SIMILARITY_THRESHOLD = {balanced:.2f}  # Recommended: balanced")
+    logger.info("")
+
+    # Save threshold recommendations to JSON
+    import json
+
+    threshold_recommendations = {
+        "model": winner_model,
+        "k": winner_k,
+        "score_distribution": {
+            "true_median": true_med,
+            "false_median": false_med,
+            "separation": sep,
+        },
+        "recommended_thresholds": {
+            "conservative": {
+                "value": round(conservative, 2),
+                "description": "Max recall (~99% true matches, more candidates)",
+                "formula": "false_median + separation/3",
+            },
+            "balanced": {
+                "value": round(balanced, 2),
+                "description": "Balanced (~95% true matches, moderate candidates)",
+                "formula": "(true_median + false_median) / 2",
+            },
+            "aggressive": {
+                "value": round(aggressive, 2),
+                "description": "Min cost (~85-90% true matches, fewer candidates)",
+                "formula": "false_median + 2*separation/3",
+            },
+        },
+    }
+
+    threshold_path = Path("tmp/phase1_threshold_recommendations.json")
+    threshold_path.parent.mkdir(exist_ok=True)
+    threshold_path.write_text(json.dumps(threshold_recommendations, indent=2))
+    logger.info(f"💾 Threshold recommendations saved to: {threshold_path}")
+    logger.info("")
+
+    # -------------------------------------------------------------------------
+    # 9. Summary and next steps
     # -------------------------------------------------------------------------
     logger.info("=" * 80)
     logger.info("✅ PHASE 1 EVALUATION COMPLETE")
@@ -430,11 +546,13 @@ Recommendation Strategy:
         f"(Recall={winner['Recall']:.1%}, Sep={winner['Separation']:.3f})"
     )
     logger.info(f"  • Diagnostics: {DIAGNOSTICS_DIR}/diagnostics_blocker_*.md")
+    logger.info(f"  • Threshold recommendations: {threshold_path}")
     logger.info("")
     logger.info("Next Steps:")
     logger.info("  1. Review diagnostic examples to understand failure modes")
-    logger.info("  2. Proceed to Phase 2: Build RapidfuzzModule baseline")
-    logger.info("  3. Proceed to Phase 3: Build LLMJudgeModule for hybrid approach")
+    logger.info("  2. Copy recommended threshold to Phase 2 SIMILARITY_THRESHOLD config")
+    logger.info("  3. Proceed to Phase 2: Build RapidfuzzModule baseline")
+    logger.info("  4. Proceed to Phase 3: Build LLMJudgeModule for hybrid approach")
     logger.info("")
 
 
