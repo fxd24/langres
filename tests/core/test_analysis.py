@@ -794,3 +794,184 @@ def test_rank_computation_tie_breaking_uses_entity_ids():
     assert 1 in metrics.rank_counts, f"Expected rank 1, got ranks: {metrics.rank_counts}"
     assert metrics.rank_counts[1] == 1  # Exactly one match at rank 1
     assert metrics.median == 1.0
+
+
+# ============================================================================
+# Diagnostic Example Extraction Tests (Task 2)
+# ============================================================================
+
+
+def test_extract_missed_matches():
+    """Test extracting missed match examples."""
+    from langres.core.analysis import extract_missed_matches
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    # Create test data
+    e1 = Entity(id="e1", name="Acme Corp")
+    e2 = Entity(id="e2", name="Acme Corporation")
+    e3 = Entity(id="e3", name="TechCo")
+    e4 = Entity(id="e4", name="TechCo Inc")
+
+    # Gold clusters: e1-e2 are same, e3-e4 are same
+    gold_clusters = [{"e1", "e2"}, {"e3", "e4"}]
+
+    # Candidates: only found e3-e4, missed e1-e2
+    candidates = [
+        ERCandidate(left=e3, right=e4, similarity_score=0.9, blocker_name="test"),
+    ]
+
+    # Entity dict for text extraction
+    entities = {
+        "e1": {"name": "Acme Corp"},
+        "e2": {"name": "Acme Corporation"},
+        "e3": {"name": "TechCo"},
+        "e4": {"name": "TechCo Inc"},
+    }
+
+    # Extract
+    missed = extract_missed_matches(candidates, gold_clusters, entities, n=10)
+
+    # Should find e1-e2 as missed
+    assert len(missed) == 1
+    assert missed[0].left_id in ["e1", "e2"]
+    assert missed[0].right_id in ["e1", "e2"]
+    assert "Acme" in missed[0].left_text
+    assert "Acme" in missed[0].right_text
+
+
+def test_extract_missed_matches_respects_limit():
+    """Test that extract_missed_matches respects n parameter."""
+    from langres.core.analysis import extract_missed_matches
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    # Create many entities in same cluster
+    entities_dict = {f"e{i}": {"name": f"Entity {i}"} for i in range(10)}
+    gold_clusters = [set(entities_dict.keys())]
+
+    # No candidates (miss everything)
+    candidates = []
+
+    # Extract with limit
+    missed = extract_missed_matches(candidates, gold_clusters, entities_dict, n=5)
+
+    # Should respect limit
+    assert len(missed) <= 5
+
+
+def test_extract_false_positives():
+    """Test extracting false positive examples."""
+    from langres.core.analysis import extract_false_positives
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    e1 = Entity(id="e1", name="Apple Inc")
+    e2 = Entity(id="e2", name="Apple Corporation")
+    e3 = Entity(id="e3", name="Apple Fruit")
+
+    # Gold: e1-e2 are same company, e3 is different
+    gold_clusters = [{"e1", "e2"}, {"e3"}]
+
+    # Candidates: blocker wrongly thinks e1-e3 are similar
+    candidates = [
+        ERCandidate(
+            left=e1, right=e2, similarity_score=0.95, blocker_name="test"
+        ),  # True positive
+        ERCandidate(
+            left=e1, right=e3, similarity_score=0.85, blocker_name="test"
+        ),  # False positive
+    ]
+
+    entities = {
+        "e1": {"name": "Apple Inc"},
+        "e2": {"name": "Apple Corporation"},
+        "e3": {"name": "Apple Fruit"},
+    }
+
+    # Extract (min_score=0.7)
+    fps = extract_false_positives(candidates, gold_clusters, entities, n=10, min_score=0.7)
+
+    # Should find e1-e3 as false positive
+    assert len(fps) == 1
+    assert fps[0].left_id in ["e1", "e3"]
+    assert fps[0].right_id in ["e1", "e3"]
+    assert fps[0].score == 0.85
+
+
+def test_extract_false_positives_respects_min_score():
+    """Test that extract_false_positives respects min_score threshold."""
+    from langres.core.analysis import extract_false_positives
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    e1 = Entity(id="e1", name="A")
+    e2 = Entity(id="e2", name="B")
+
+    gold_clusters = [{"e1"}, {"e2"}]  # Different clusters
+
+    # Low-scoring false positive
+    candidates = [
+        ERCandidate(left=e1, right=e2, similarity_score=0.5, blocker_name="test"),
+    ]
+
+    entities = {"e1": {"name": "A"}, "e2": {"name": "B"}}
+
+    # Extract with high threshold
+    fps = extract_false_positives(candidates, gold_clusters, entities, n=10, min_score=0.7)
+
+    # Should not include low-scoring pairs
+    assert len(fps) == 0
+
+
+def test_extract_false_positives_sorts_by_score():
+    """Test that false positives are sorted by score descending."""
+    from langres.core.analysis import extract_false_positives
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    e1 = Entity(id="e1", name="A")
+    e2 = Entity(id="e2", name="B")
+    e3 = Entity(id="e3", name="C")
+
+    gold_clusters = [{"e1"}, {"e2"}, {"e3"}]
+
+    candidates = [
+        ERCandidate(left=e1, right=e2, similarity_score=0.75, blocker_name="test"),
+        ERCandidate(left=e1, right=e3, similarity_score=0.95, blocker_name="test"),
+        ERCandidate(left=e2, right=e3, similarity_score=0.85, blocker_name="test"),
+    ]
+
+    entities = {
+        "e1": {"name": "A"},
+        "e2": {"name": "B"},
+        "e3": {"name": "C"},
+    }
+
+    fps = extract_false_positives(candidates, gold_clusters, entities, n=10, min_score=0.7)
+
+    # Should be sorted by score descending
+    assert len(fps) == 3
+    assert fps[0].score == 0.95
+    assert fps[1].score == 0.85
+    assert fps[2].score == 0.75
