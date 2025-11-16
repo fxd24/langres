@@ -23,6 +23,17 @@ This directory contains example scripts demonstrating how to use the langres lib
   - Demonstrates hyperparameter tuning
   - Requires: AZURE_API_*, WANDB_API_KEY, LANGFUSE_* env vars
 
+### POC Evaluation Scripts
+
+- **phase2_full_pipeline.py** - Phase 2 POC evaluation: Full pipeline assessment
+  - Complete pipeline: VectorBlocker → LLMJudge → Clusterer
+  - Evaluates POC success criteria (BCubed F1 ≥ 0.85, Blocker Recall ≥ 0.95, Separation ≥ 0.2)
+  - Tests multiple clustering thresholds [0.5, 0.6, 0.7, 0.8, 0.9]
+  - Generates comprehensive diagnostics with cost analysis
+  - Uses disk-cached embeddings to avoid recomputation
+  - Caches LLM judgments for fast reruns
+  - Requires: AZURE_API_* env vars (LANGFUSE_* optional)
+
 ## Setup
 
 ### 1. Configure Environment Variables
