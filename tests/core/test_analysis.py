@@ -975,3 +975,31 @@ def test_extract_false_positives_sorts_by_score():
     assert fps[0].score == 0.95
     assert fps[1].score == 0.85
     assert fps[2].score == 0.75
+
+
+def test_extract_false_positives_skips_none_scores():
+    """Test that extract_false_positives skips candidates with None scores."""
+    from langres.core.analysis import extract_false_positives
+    from langres.core.models import ERCandidate
+    from pydantic import BaseModel
+
+    class Entity(BaseModel):
+        id: str
+        name: str
+
+    e1 = Entity(id="e1", name="A")
+    e2 = Entity(id="e2", name="B")
+
+    gold_clusters = [{"e1"}, {"e2"}]  # Different clusters
+
+    # Candidate with None score (blocker didn't compute scores)
+    candidates = [
+        ERCandidate(left=e1, right=e2, similarity_score=None, blocker_name="test"),
+    ]
+
+    entities = {"e1": {"name": "A"}, "e2": {"name": "B"}}
+
+    fps = extract_false_positives(candidates, gold_clusters, entities, n=10, min_score=0.7)
+
+    # Should skip candidates with None scores
+    assert len(fps) == 0

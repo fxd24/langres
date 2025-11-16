@@ -138,6 +138,30 @@ def test_diagnostic_examples_to_markdown():
     assert "Score: 0.92" in md
 
 
+def test_diagnostic_examples_to_markdown_without_baseline():
+    """Test markdown generation with missed match without baseline similarity."""
+    examples = DiagnosticExamples(
+        missed_matches=[
+            MissedMatchExample(
+                left_id="e1",
+                left_text="Acme Corp",
+                right_id="e2",
+                right_text="Acme Corporation",
+                cluster_id=0,
+                # No baseline_similarity
+            ),
+        ],
+    )
+
+    md = examples.to_markdown()
+
+    # Should include match info
+    assert "Acme Corp" in md
+    assert "Cluster: 0" in md
+    # Should NOT include baseline similarity line
+    assert "Baseline similarity" not in md
+
+
 def test_diagnostic_examples_to_markdown_empty():
     """Test markdown generation with no examples."""
     examples = DiagnosticExamples()
