@@ -1,5 +1,5 @@
 # Documentation Implementation Plan
-
+ TODO: see new docs framework: https://github.com/zensical/zensical (from Material for MkDocs creator)
 ## Stack Decision
 
 **Chosen Stack**: MkDocs + Material Theme + mkdocstrings + GitHub Pages

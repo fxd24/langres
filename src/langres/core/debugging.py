@@ -1,6 +1,15 @@
 """
 Debugging utilities for entity resolution pipelines.
 
+.. deprecated:: 0.1.0
+    This module is deprecated. Use component-level diagnostics instead:
+
+    - For blocker diagnostics: ``BlockerEvaluationReport.diagnose()``
+    - For module diagnostics: Coming in future release
+    - For clusterer diagnostics: Coming in future release
+
+    See ``docs/FUTURE.md`` for migration guide.
+
 This module provides tools for analyzing and debugging entity resolution pipelines,
 offering visibility into candidate generation, scoring quality, and clustering results.
 Users can identify issues like poor blocker recall, miscalibrated scores, or incorrect
@@ -16,6 +25,7 @@ Example:
 
 import json
 import logging
+import warnings
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -87,6 +97,19 @@ class PipelineDebugger(Generic[SchemaT]):
     """
     Debugger for entity resolution pipelines.
 
+    .. deprecated:: 0.1.0
+        ``PipelineDebugger`` is deprecated. Use component-level diagnostics instead:
+
+        For blocker diagnostics::
+
+            report = blocker.evaluate(candidates, gold_clusters)
+            diagnostics = report.diagnose(candidates, entities)
+            print(diagnostics.to_markdown())
+
+        For module/clusterer diagnostics: Coming in future release.
+
+        See ``docs/FUTURE.md`` for migration guide and roadmap.
+
     This class provides comprehensive analysis of three pipeline stages:
     1. Candidate generation (blocker quality)
     2. Scoring (LLM calibration and separation)
@@ -104,6 +127,13 @@ class PipelineDebugger(Generic[SchemaT]):
         ground_truth_clusters: list[set[str]],
         sample_size: int = 10,
     ):
+        warnings.warn(
+            "PipelineDebugger is deprecated and will be removed in a future version. "
+            "Use BlockerEvaluationReport.diagnose() for blocker diagnostics. "
+            "See docs/FUTURE.md for details.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         """
         Initialize debugger with ground truth labels.
 

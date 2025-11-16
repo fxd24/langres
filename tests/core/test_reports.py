@@ -992,7 +992,9 @@ class TestBlockerEvaluationReportDiagnose:
         e2 = Entity(id="e2", name="B")
 
         gold_clusters = [{"e1", "e2"}]
-        candidates = [ERCandidate(left=e1, right=e2, similarity_score=0.9, blocker_name="test_blocker")]
+        candidates = [
+            ERCandidate(left=e1, right=e2, similarity_score=0.9, blocker_name="test_blocker")
+        ]
 
         report = evaluate_blocker_detailed(candidates, gold_clusters)
 
