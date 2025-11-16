@@ -144,12 +144,17 @@ def main() -> None:
     CACHE_PATH = Path("tmp/llm_judgments_cache.json")
     DIAGNOSTICS_PATH = Path("tmp/diagnostics_phase2_full_pipeline.md")
 
+    # Candidate filtering (for faster testing)
+    SIMILARITY_THRESHOLD = 0.5  # Only judge pairs with similarity >= 0.5
+    MAX_CANDIDATES = 3000  # Limit candidates (~12 min at 250 RPM, ~3 min at 1000 RPM)
+
     logger.info(f"Configuration:")
     logger.info(f"  Embedding model: {WINNER_MODEL}")
     logger.info(f"  k_neighbors: {K_NEIGHBORS}")
     logger.info(f"  LLM model: {LLM_MODEL}")
     logger.info(f"  LLM temperature: {LLM_TEMPERATURE}")
     logger.info(f"  Cluster thresholds: {CLUSTER_THRESHOLDS}")
+    logger.info(f"  Candidate filtering: similarity >= {SIMILARITY_THRESHOLD}, max {MAX_CANDIDATES}")
 
     # =========================================================================
     # Load Data
@@ -220,14 +225,31 @@ def main() -> None:
     # Generate candidates
     logger.info("Generating candidates...")
     start_time = time.time()
-    candidates = list(blocker.stream(entities_data))
+    all_candidates = list(blocker.stream(entities_data))
     blocker_runtime = time.time() - start_time
-    logger.info(f"Generated {len(candidates)} candidate pairs in {blocker_runtime:.1f}s")
+    logger.info(f"Generated {len(all_candidates)} candidate pairs in {blocker_runtime:.1f}s")
 
-    # Evaluate blocker
+    # Filter candidates by similarity score for faster testing
+    # Only send high-confidence pairs to expensive LLM judge
+    candidates_filtered = [
+        c for c in all_candidates if c.similarity_score and c.similarity_score >= SIMILARITY_THRESHOLD
+    ]
+    candidates_filtered.sort(key=lambda c: c.similarity_score or 0.0, reverse=True)
+    candidates = candidates_filtered[:MAX_CANDIDATES]
+
+    logger.info(
+        f"Filtered to {len(candidates)} high-confidence candidates "
+        f"(similarity >= {SIMILARITY_THRESHOLD}, top {MAX_CANDIDATES})"
+    )
+    logger.info(
+        f"Skipped {len(all_candidates) - len(candidates)} low-similarity pairs "
+        f"({(len(all_candidates) - len(candidates)) / len(all_candidates):.1%} reduction)"
+    )
+
+    # Evaluate blocker (use ALL candidates, not filtered)
     logger.info("Evaluating blocker...")
     report = blocker.evaluate(
-        candidates=candidates,
+        candidates=all_candidates,  # Evaluate with all candidates for accurate metrics
         gold_clusters=gold_clusters,
         k_values=[1, 5, 10, 20, 50, 100],
     )
@@ -275,7 +297,10 @@ def main() -> None:
             logger.info(
                 "Scoring pairs with async LLM (max_concurrent=50, rate limits: 250 RPM, 250K TPM)..."
             )
-            logger.info("This will take ~2-3 minutes for 1,741 entities...")
+            estimated_time_min = len(candidates) / (250 / 60)  # 250 RPM = 4.17 req/sec
+            logger.info(
+                f"Scoring {len(candidates)} filtered candidates (estimated: {estimated_time_min:.1f} minutes)..."
+            )
 
             # Run async forward_async with rate limiting
             judgements = asyncio.run(
