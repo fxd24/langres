@@ -909,3 +909,97 @@ class TestBlockerEvaluationReportOptimalK:
         k = report.optimal_k(target_recall=0.95)
         assert isinstance(k, int)
         assert k == 20  # Should return k=20 for 95% recall
+
+
+class TestBlockerEvaluationReportDiagnose:
+    """Tests for BlockerEvaluationReport.diagnose() method."""
+
+    def test_blocker_evaluation_report_diagnose(self) -> None:
+        """Test BlockerEvaluationReport.diagnose() method."""
+        from langres.core.analysis import evaluate_blocker_detailed
+        from langres.core.models import ERCandidate
+        from pydantic import BaseModel
+
+        class Entity(BaseModel):
+            id: str
+            name: str
+
+        e1 = Entity(id="e1", name="Acme Corp")
+        e2 = Entity(id="e2", name="Acme Corporation")
+        e3 = Entity(id="e3", name="TechCo")
+        e4 = Entity(id="e4", name="TechCo Inc")
+
+        gold_clusters = [{"e1", "e2"}, {"e3", "e4"}]
+
+        # Candidates: found e3-e4, missed e1-e2
+        candidates = [
+            ERCandidate(left=e3, right=e4, similarity_score=0.9, blocker_name="test_blocker"),
+        ]
+
+        entities = {
+            "e1": {"name": "Acme Corp"},
+            "e2": {"name": "Acme Corporation"},
+            "e3": {"name": "TechCo"},
+            "e4": {"name": "TechCo Inc"},
+        }
+
+        # Evaluate
+        report = evaluate_blocker_detailed(candidates, gold_clusters)
+
+        # Diagnose
+        diagnostics = report.diagnose(candidates, entities)
+
+        # Check results
+        assert len(diagnostics.missed_matches) == 1
+        assert "Acme" in diagnostics.missed_matches[0].left_text
+
+    def test_blocker_evaluation_report_diagnose_respects_limits(self) -> None:
+        """Test that diagnose respects n_missed and n_false_positives."""
+        from langres.core.analysis import evaluate_blocker_detailed
+        from langres.core.models import ERCandidate
+        from pydantic import BaseModel
+
+        class Entity(BaseModel):
+            id: str
+            name: str
+
+        # Create test scenario
+        entities_dict = {f"e{i}": {"name": f"Entity {i}"} for i in range(20)}
+        gold_clusters = [set(entities_dict.keys())]
+
+        # No candidates (everything is missed)
+        candidates = []
+
+        report = evaluate_blocker_detailed(candidates, gold_clusters)
+
+        # Diagnose with limit
+        diagnostics = report.diagnose(candidates, entities_dict, n_missed=5)
+
+        # Should respect limit
+        assert len(diagnostics.missed_matches) <= 5
+
+    def test_blocker_evaluation_report_serialization_with_diagnose(self) -> None:
+        """Test that report can still serialize even with _gold_clusters."""
+        from langres.core.analysis import evaluate_blocker_detailed
+        from langres.core.models import ERCandidate
+        from pydantic import BaseModel
+
+        class Entity(BaseModel):
+            id: str
+            name: str
+
+        e1 = Entity(id="e1", name="A")
+        e2 = Entity(id="e2", name="B")
+
+        gold_clusters = [{"e1", "e2"}]
+        candidates = [ERCandidate(left=e1, right=e2, similarity_score=0.9, blocker_name="test_blocker")]
+
+        report = evaluate_blocker_detailed(candidates, gold_clusters)
+
+        # Should still serialize (private attrs excluded)
+        json_str = report.model_dump_json()
+        assert "e1" not in json_str  # Gold clusters not serialized
+
+        # Should deserialize
+        data = report.model_dump()
+        assert "_gold_clusters" not in data
