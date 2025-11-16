@@ -887,9 +887,7 @@ def test_extract_false_positives():
 
     # Candidates: blocker wrongly thinks e1-e3 are similar
     candidates = [
-        ERCandidate(
-            left=e1, right=e2, similarity_score=0.95, blocker_name="test"
-        ),  # True positive
+        ERCandidate(left=e1, right=e2, similarity_score=0.95, blocker_name="test"),  # True positive
         ERCandidate(
             left=e1, right=e3, similarity_score=0.85, blocker_name="test"
         ),  # False positive
