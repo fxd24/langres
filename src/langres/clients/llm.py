@@ -104,6 +104,12 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
         # LiteLLM will read LANGFUSE_* env vars for its own Langfuse client
         litellm.success_callback = ["langfuse"]
         litellm.failure_callback = ["langfuse"]
+
+        # Suppress verbose LiteLLM logging (prevents "Langfuse Layer Logging - logging success" spam)
+        # LiteLLM logs every single API call at INFO level, which pollutes logs with thousands of messages
+        litellm_logger = logging.getLogger("LiteLLM")
+        litellm_logger.setLevel(logging.WARNING)  # Only show warnings and errors
+
         logger.info("LiteLLM configured with Langfuse callbacks")
     else:
         logger.info("LiteLLM client configured without tracing")
