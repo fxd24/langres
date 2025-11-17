@@ -138,7 +138,7 @@ def main() -> None:
 
     # Configuration
     WINNER_MODEL = "all-mpnet-base-v2"  # Winner from Phase 1
-    K_NEIGHBORS = 50  # Optimal k from Phase 1
+    K_NEIGHBORS = 30  # Optimal k from Phase 1
     CLUSTER_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9]
     LLM_MODEL = "azure/gpt-5-mini"  # Note: Correct Azure deployment name
     LLM_TEMPERATURE = 1.0
@@ -149,7 +149,7 @@ def main() -> None:
     # NOTE: Run Phase 1 first to get optimal threshold recommendations
     # See Phase 1 output or tmp/phase1_threshold_recommendations.json for suggested values
     # Current setting is a placeholder - update based on Phase 1 analysis
-    SIMILARITY_THRESHOLD = 0.5  # TODO: Update from Phase 1 recommendations (balanced threshold)
+    SIMILARITY_THRESHOLD = 0.24  # TODO: Update from Phase 1 recommendations (balanced threshold)
     MAX_CANDIDATES = 3000  # Limit candidates (~12 min at 250 RPM, ~3 min at 1000 RPM)
 
     logger.info(f"Configuration:")
