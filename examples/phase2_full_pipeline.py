@@ -34,6 +34,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from tqdm import tqdm  # type: ignore[import-untyped]
+from tqdm.asyncio import tqdm as tqdm_async  # type: ignore[import-untyped]
 
 from langres.clients import create_llm_client
 from langres.clients.settings import Settings
@@ -305,16 +306,47 @@ def main() -> None:
                 f"Scoring {len(candidates)} filtered candidates (estimated: {estimated_time_min:.1f} minutes)..."
             )
 
-            # Run async forward_async with rate limiting
-            judgements = asyncio.run(
-                llm_judge.forward_async(
-                    candidates=candidates,
-                    max_concurrent=50,  # Process 50 requests in parallel
-                    rpm_limit=250,  # Respect API rate limits
-                    tpm_limit=250000,
-                    max_retries=3,  # Retry on rate limit errors
-                )
-            )
+            # Run async forward_async with rate limiting and progress bar
+            async def score_with_progress() -> list[PairwiseJudgement]:
+                """Score candidates with real-time progress tracking."""
+                from langres.core.modules.llm_judge import _RateLimiter
+
+                # Initialize rate limiter and semaphore (same as forward_async)
+                rate_limiter = _RateLimiter(rpm_limit=250, tpm_limit=250000)
+                semaphore = asyncio.Semaphore(50)
+
+                # Create tasks for each candidate
+                tasks = [
+                    llm_judge._process_candidate_async(
+                        candidate=candidate,
+                        semaphore=semaphore,
+                        rate_limiter=rate_limiter,
+                        max_retries=3,
+                    )
+                    for candidate in candidates
+                ]
+
+                # Process tasks with real-time progress bar
+                results: list[PairwiseJudgement] = []
+                with tqdm_async(total=len(tasks), desc="LLM scoring (async)", unit="pairs") as pbar:
+                    for coro in asyncio.as_completed(tasks):
+                        result = await coro
+                        results.append(result)
+                        pbar.update(1)
+
+                # Reorder results to match input order (as_completed doesn't preserve order)
+                # Create a mapping from candidate to result
+                candidate_to_result = {
+                    (r.left_id, r.right_id): r for r in results
+                }
+                # Return in original order
+                ordered_results = [
+                    candidate_to_result[(c.left.id, c.right.id)]
+                    for c in candidates
+                ]
+                return ordered_results
+
+            judgements = asyncio.run(score_with_progress())
             logger.info(
                 f"✓ Async scoring complete: {len(judgements)} judgments in {time.time() - start_time:.1f}s"
             )
