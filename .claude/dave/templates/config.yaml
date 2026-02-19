@@ -1,0 +1,93 @@
+# Dave Framework - config.yaml Template
+#
+# Unified configuration for all external tools, models, and verification
+# capabilities. Lives at `.state/project/config.yaml`.
+#
+# Self-updating: Claude Code can verify what tools are available and update
+# config.yaml accordingly. When a new tool could improve the workflow, Claude
+# Code can suggest installation and update the config after the user confirms.
+
+# ─────────────────────────────────────────────────────────
+# Models
+# ─────────────────────────────────────────────────────────
+models:
+  primary: claude-opus-4-6
+  profiles:
+    quality:   { planner: opus, executor: opus, verifier: sonnet }
+    balanced:  { planner: opus, executor: sonnet, verifier: sonnet }
+    budget:    { planner: sonnet, executor: sonnet, verifier: haiku }
+
+# ─────────────────────────────────────────────────────────
+# External review models
+# ─────────────────────────────────────────────────────────
+# Each review model runs in read-only mode: analyze and suggest, never modify.
+# The `command` field is a shell command that accepts a file path or diff as
+# input and produces structured review findings on stdout.
+review_models:
+  - name: codex
+    command: "codex exec -m gpt-5.3-codex -c 'model_reasoning_effort=\"high\"'"
+    strengths: "code-focused reasoning, catches logic bugs"
+    available: true
+  - name: kimi
+    command: "opencode run -m opencode/kimi-k2.5-free --variant high"
+    strengths: "different reasoning approach, catches design issues"
+    available: true
+
+# ─────────────────────────────────────────────────────────
+# Build tools
+# ─────────────────────────────────────────────────────────
+# Standard commands used across all phases. These must work from the project
+# root directory.
+tools:
+  test: "make test"
+  lint: "make lint"
+  run_script: "uv run --env-file .env python"
+
+# ─────────────────────────────────────────────────────────
+# Verification tools
+# ─────────────────────────────────────────────────────────
+# Tool-agnostic: add new tools as they become available. The planner reads
+# this section to decide which verification steps to include in the
+# verification matrix. Each tool declares:
+#   available    - Whether the tool is currently usable
+#   type         - Category (browser, script, query, container)
+#   capabilities - What it can do (used by the planner to match needs to tools)
+#   notes        - Any prerequisites or limitations
+#   install      - Command to install (if available: false and installable)
+#   test_connection - Command to verify the tool works
+#   query_tool   - Command prefix for running queries (type: query only)
+verification:
+  chrome_mcp:
+    available: true
+    type: browser
+    capabilities: [navigate, click, screenshot, read_page, form_input]
+    notes: "Requires Chrome with extension running"
+  playwright:
+    available: false
+    type: browser
+    capabilities: [navigate, click, screenshot, headless]
+    install: "npm install -g @anthropic/mcp-playwright"
+  bash:
+    available: true
+    type: script
+    capabilities: [run_command, check_exit_code, file_operations]
+  database:
+    available: true
+    type: query
+    capabilities: [select, count, verify_schema]
+    test_connection: "make db-test"
+    query_tool: "uv run --env-file .env python -c"
+  docker:
+    available: true
+    type: container
+    capabilities: [build, run, compose]
+
+# ─────────────────────────────────────────────────────────
+# Knowledge settings
+# ─────────────────────────────────────────────────────────
+# Controls how the knowledge system behaves:
+#   tier2_promotion_threshold     - How many times a Tier 2 entry must be
+#                                   independently verified before it becomes
+#                                   eligible for promotion to Tier 1.
+knowledge:
+  tier2_promotion_threshold: 3
