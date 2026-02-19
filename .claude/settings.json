@@ -10,10 +10,10 @@
       "**/*credentials*"
     ],
     "ask": [
-      "bash:rm",
-      "bash:git push",
-      "bash:pip install",
-      "bash:uv add"
+      "Bash:rm",
+      "Bash:git push",
+      "Bash:pip install",
+      "Bash:uv add"
     ]
   },
   "sandbox": {
