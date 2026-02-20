@@ -632,15 +632,19 @@ class TestLateInteractionEmbeddingProviderProtocol:
         "embedder_class,kwargs",
         [
             (
-                lambda: __import__(
-                    "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
-                ).FastEmbedLateInteractionEmbedder,
+                lambda: (
+                    __import__(
+                        "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
+                    ).FastEmbedLateInteractionEmbedder
+                ),
                 {"model_name": "colbert-ir/colbertv2.0"},
             ),
             (
-                lambda: __import__(
-                    "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
-                ).FakeLateInteractionEmbedder,
+                lambda: (
+                    __import__(
+                        "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
+                    ).FakeLateInteractionEmbedder
+                ),
                 {"embedding_dim": 128, "num_tokens": 5},
             ),
         ],
@@ -658,15 +662,19 @@ class TestLateInteractionEmbeddingProviderProtocol:
         "embedder_class,kwargs",
         [
             (
-                lambda: __import__(
-                    "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
-                ).FastEmbedLateInteractionEmbedder,
+                lambda: (
+                    __import__(
+                        "langres.core.embeddings", fromlist=["FastEmbedLateInteractionEmbedder"]
+                    ).FastEmbedLateInteractionEmbedder
+                ),
                 {"model_name": "colbert-ir/colbertv2.0"},
             ),
             (
-                lambda: __import__(
-                    "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
-                ).FakeLateInteractionEmbedder,
+                lambda: (
+                    __import__(
+                        "langres.core.embeddings", fromlist=["FakeLateInteractionEmbedder"]
+                    ).FakeLateInteractionEmbedder
+                ),
                 {"embedding_dim": 128, "num_tokens": 5},
             ),
         ],
