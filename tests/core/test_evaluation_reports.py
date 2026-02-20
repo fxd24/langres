@@ -12,6 +12,8 @@ These tests verify Pydantic validation, immutability, serialization,
 and the plotting delegation interface.
 """
 
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
 
@@ -1050,12 +1052,14 @@ class TestBlockerEvaluationReportPlotting:
             ),
         )
 
-        # Should raise ImportError when matplotlib not available
-        # (We test the delegation interface, not actual plotting)
-        with pytest.raises(ImportError) as exc_info:
-            report.plot_score_distribution()
-        assert "matplotlib" in str(exc_info.value).lower()
-        assert "langres[viz]" in str(exc_info.value) or "pip install" in str(exc_info.value)
+        # Simulate matplotlib not being available by blocking the plotting import
+        with patch.dict(
+            "sys.modules", {"langres.plotting": None, "langres.plotting.blockers": None}
+        ):
+            with pytest.raises(ImportError) as exc_info:
+                report.plot_score_distribution()
+            assert "matplotlib" in str(exc_info.value).lower()
+            assert "langres[viz]" in str(exc_info.value) or "pip install" in str(exc_info.value)
 
     def test_plot_rank_distribution_delegates(self):
         """Test plot_rank_distribution() delegates to plotting module."""
@@ -1103,9 +1107,12 @@ class TestBlockerEvaluationReportPlotting:
             ),
         )
 
-        with pytest.raises(ImportError) as exc_info:
-            report.plot_rank_distribution()
-        assert "matplotlib" in str(exc_info.value).lower()
+        with patch.dict(
+            "sys.modules", {"langres.plotting": None, "langres.plotting.blockers": None}
+        ):
+            with pytest.raises(ImportError) as exc_info:
+                report.plot_rank_distribution()
+            assert "matplotlib" in str(exc_info.value).lower()
 
     def test_plot_recall_curve_delegates(self):
         """Test plot_recall_curve() delegates to plotting module."""
@@ -1153,9 +1160,12 @@ class TestBlockerEvaluationReportPlotting:
             ),
         )
 
-        with pytest.raises(ImportError) as exc_info:
-            report.plot_recall_curve()
-        assert "matplotlib" in str(exc_info.value).lower()
+        with patch.dict(
+            "sys.modules", {"langres.plotting": None, "langres.plotting.blockers": None}
+        ):
+            with pytest.raises(ImportError) as exc_info:
+                report.plot_recall_curve()
+            assert "matplotlib" in str(exc_info.value).lower()
 
     def test_plot_all_delegates(self):
         """Test plot_all() delegates to plotting module."""
@@ -1203,9 +1213,12 @@ class TestBlockerEvaluationReportPlotting:
             ),
         )
 
-        with pytest.raises(ImportError) as exc_info:
-            report.plot_all()
-        assert "matplotlib" in str(exc_info.value).lower()
+        with patch.dict(
+            "sys.modules", {"langres.plotting": None, "langres.plotting.blockers": None}
+        ):
+            with pytest.raises(ImportError) as exc_info:
+                report.plot_all()
+            assert "matplotlib" in str(exc_info.value).lower()
 
     def test_blocker_evaluation_report_summary_contains_key_metrics(self):
         """Test that summary property returns essential metrics."""
