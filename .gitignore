@@ -1,7 +1,13 @@
 # Custom
 .agent/
+tmp/
 uv.lock
 .claude/*.bak
+wandb/
+
+# macOS
+.DS_Store
+
 
 # Claude Code
 # Keep .claude/settings.json (shared project settings) but ignore local settings
@@ -55,6 +61,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.json
 *.cover
 *.py.cover
 .hypothesis/

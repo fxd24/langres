@@ -1,0 +1,141 @@
+{
+  "dataset": {
+    "name": "funder_names_with_ids",
+    "total_entities": 1741,
+    "ground_truth_pairs": 1311
+  },
+  "models": {
+    "dense_model": "Qwen/Qwen3-Embedding-0.6B",
+    "sparse_model": "Qdrant/bm25",
+    "reranking_model": "colbert-ir/colbertv2.0",
+    "crossencoder_model": "tomaarsen/Qwen3-Reranker-0.6B-seq-cls",
+    "embedding_dim": 1024,
+    "k_neighbors": 20,
+    "prefetch_limit": 20,
+    "crossencoder_prefetch": 100
+  },
+  "experiments": {
+    "faiss_dense_only": {
+      "recall": 0.8222730739893211,
+      "precision": 0.03727395318280834,
+      "f1": 0.071315162741466,
+      "true_positives": 1078,
+      "false_negatives": 233,
+      "false_positives": 27843,
+      "total_candidates": 28921,
+      "indexing_time_seconds": 0.2612166404724121,
+      "avg_query_time_ms": 0.15003827712372897,
+      "map": 0.31071374222710196,
+      "mrr": 0.33849805827710105,
+      "ndcg@20": 0.3236564954399957,
+      "recall@20": 0.3397452404448995,
+      "precision@20": 0.054365307294657876
+    },
+    "qdrant_hybrid": {
+      "recall": 0.8367658276125095,
+      "precision": 0.039415061799367636,
+      "f1": 0.07528394468654566,
+      "true_positives": 1097,
+      "false_negatives": 214,
+      "false_positives": 26735,
+      "total_candidates": 27832,
+      "indexing_time_seconds": 114.12070202827454,
+      "avg_query_time_ms": 65.54893855730876,
+      "map": 0.3169244597750291,
+      "mrr": 0.3364804232019959,
+      "ndcg@20": 0.33491005104831156,
+      "recall@20": 0.3640934853642764,
+      "precision@20": 0.058615738081561924
+    },
+    "colbert_reranking": {
+      "recall": 0.8276125095347063,
+      "precision": 0.03867127633032755,
+      "f1": 0.07388994824298557,
+      "true_positives": 1085,
+      "false_negatives": 226,
+      "false_positives": 26972,
+      "total_candidates": 28057,
+      "indexing_time_seconds": 135.6749062538147,
+      "avg_query_time_ms": 77.92929710155927,
+      "map": 0.055817337662693,
+      "mrr": 0.04455745208636839,
+      "ndcg@20": 0.09984031482084327,
+      "recall@20": 0.32699516947618196,
+      "precision@20": 0.055468726382296565
+    },
+    "qwen3_crossencoder": {
+      "recall": 0.881769641495042,
+      "precision": 0.04029278494248867,
+      "f1": 0.07706409786340455,
+      "true_positives": 1156,
+      "false_negatives": 155,
+      "false_positives": 27534,
+      "total_candidates": 28690,
+      "indexing_time_seconds": 5073.88605093956,
+      "avg_query_time_ms": 2914.3515513725215,
+      "map": 0.0,
+      "mrr": 0.0,
+      "ndcg@20": 0.0,
+      "recall@20": 0.0,
+      "precision@20": 0.0
+    }
+  },
+  "comparison": {
+    "recall_ranking": [
+      "Qwen3 CrossEncoder",
+      "Qdrant Hybrid",
+      "ColBERT Reranking",
+      "FAISS"
+    ],
+    "precision_ranking": [
+      "Qwen3 CrossEncoder",
+      "Qdrant Hybrid",
+      "ColBERT Reranking",
+      "FAISS"
+    ],
+    "speed_ranking": [
+      "FAISS",
+      "Qdrant Hybrid",
+      "ColBERT Reranking",
+      "Qwen3 CrossEncoder"
+    ],
+    "recall_improvements": {
+      "hybrid_vs_faiss": 0.01449275362318836,
+      "colbert_vs_faiss": 0.005339435545385185,
+      "colbert_vs_hybrid": -0.009153318077803174,
+      "crossencoder_vs_faiss": 0.059496567505720854,
+      "crossencoder_vs_hybrid": 0.045003813882532495,
+      "crossencoder_vs_colbert": 0.05415713196033567
+    },
+    "precision_improvements": {
+      "hybrid_vs_faiss": 0.0021411086165592924,
+      "colbert_vs_faiss": 0.0013973231475192041,
+      "colbert_vs_hybrid": -0.0007437854690400883,
+      "crossencoder_vs_faiss": 0.003018831759680325,
+      "crossencoder_vs_hybrid": 0.0008777231431210328,
+      "crossencoder_vs_colbert": 0.001621508612161121
+    },
+    "f1_improvements": {
+      "hybrid_vs_faiss": 0.003968781945079658,
+      "colbert_vs_faiss": 0.002574785501519572,
+      "colbert_vs_hybrid": -0.001393996443560086,
+      "crossencoder_vs_faiss": 0.005748935121938553,
+      "crossencoder_vs_hybrid": 0.0017801531768588952,
+      "crossencoder_vs_colbert": 0.003174149620418981
+    },
+    "indexing_time_ratios": {
+      "hybrid_vs_faiss": 436.88143994917954,
+      "colbert_vs_faiss": 519.396107416609,
+      "colbert_vs_hybrid": 1.1888719911677366,
+      "crossencoder_vs_faiss": 19424.0536964391,
+      "crossencoder_vs_hybrid": 44.460697846762756,
+      "crossencoder_vs_colbert": 37.39738018648456
+    },
+    "recommendations": {
+      "best_recall": "Qwen3 CrossEncoder",
+      "best_precision": "Qwen3 CrossEncoder",
+      "fastest": "FAISS",
+      "best_f1": "Qwen3 CrossEncoder"
+    }
+  }
+}

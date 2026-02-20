@@ -1,4 +1,5 @@
 # langres: Proof of Concept
+## TODO Add as well the idea of training a classifier (classical) after the blocker to decide whether is a match or not.
 
 ## Purpose
 

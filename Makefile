@@ -1,11 +1,12 @@
-.PHONY: help build clean publish test
+.PHONY: help build clean publish test test-full
 
 help:
 	@echo "Available commands:"
 	@echo "  make build     - Build the package"
 	@echo "  make clean     - Remove build artifacts"
 	@echo "  make publish   - Publish package to PyPI"
-	@echo "  make test      - Run tests"
+	@echo "  make test      - Run fast tests (no slow/integration)"
+	@echo "  make test-full - Run all tests with coverage"
 
 build:
 	uv build
@@ -25,4 +26,7 @@ publish: build
 	@source .env && uv publish
 
 test:
-	uv run pytest
+	uv run pytest -m "not slow and not integration"
+
+test-full:
+	uv run pytest --cov --cov-report=term-missing
