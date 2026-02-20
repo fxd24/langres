@@ -30,9 +30,9 @@ def mock_llm_response():
     """Create a mock LLM API response."""
     response = Mock()
     response.choices = [Mock()]
-    response.choices[0].message.content = (
-        "MATCH\nScore: 0.85\nReasoning: Same company with minor variations."
-    )
+    response.choices[
+        0
+    ].message.content = "MATCH\nScore: 0.85\nReasoning: Same company with minor variations."
     response.usage = Mock()
     response.usage.prompt_tokens = 100
     response.usage.completion_tokens = 50
@@ -177,7 +177,7 @@ async def test_forward_async_respects_max_concurrent(mock_llm_client, mock_llm_r
     candidates = [
         ERCandidate(
             left=CompanySchema(id=f"c{i}", name=f"Company {i}"),
-            right=CompanySchema(id=f"c{i+100}", name=f"Company {i}"),
+            right=CompanySchema(id=f"c{i + 100}", name=f"Company {i}"),
             blocker_name="test",
         )
         for i in range(10)
@@ -483,7 +483,7 @@ async def test_forward_async_score_extraction(mock_llm_client):
     candidates = [
         ERCandidate(
             left=CompanySchema(id=f"c{i}", name=f"Company {i}"),
-            right=CompanySchema(id=f"c{i+100}", name=f"Company {i}"),
+            right=CompanySchema(id=f"c{i + 100}", name=f"Company {i}"),
             blocker_name="test",
         )
         for i in range(3)
@@ -533,9 +533,7 @@ async def test_forward_async_with_custom_prompt_template(mock_llm_client, mock_l
 
     custom_prompt = "Compare: {left} vs {right}"
     module = LLMJudgeModule(
-        client=mock_llm_client,
-        model="gpt-4o-mini",
-        prompt_template=custom_prompt
+        client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
     )
 
     candidate = ERCandidate(
@@ -593,7 +591,7 @@ async def test_forward_async_partial_failures_all_fail():
     candidates = [
         ERCandidate(
             left=CompanySchema(id=f"c{i}", name=f"Company {i}"),
-            right=CompanySchema(id=f"c{i+100}", name=f"Company {i}"),
+            right=CompanySchema(id=f"c{i + 100}", name=f"Company {i}"),
             blocker_name="test",
         )
         for i in range(3)
@@ -615,7 +613,7 @@ async def test_forward_async_memory_efficient_large_batch(mock_llm_client, mock_
     candidates = [
         ERCandidate(
             left=CompanySchema(id=f"c{i}", name=f"Company {i}"),
-            right=CompanySchema(id=f"c{i+100}", name=f"Company {i}"),
+            right=CompanySchema(id=f"c{i + 100}", name=f"Company {i}"),
             blocker_name="test",
         )
         for i in range(100)
@@ -623,10 +621,7 @@ async def test_forward_async_memory_efficient_large_batch(mock_llm_client, mock_
 
     # Should complete without memory errors
     judgements = await module.forward_async(
-        candidates,
-        max_concurrent=20,
-        rpm_limit=10000,
-        tpm_limit=1000000
+        candidates, max_concurrent=20, rpm_limit=10000, tpm_limit=1000000
     )
 
     assert len(judgements) == 100
@@ -634,7 +629,7 @@ async def test_forward_async_memory_efficient_large_batch(mock_llm_client, mock_
     # Verify order is preserved
     for i, j in enumerate(judgements):
         assert j.left_id == f"c{i}"
-        assert j.right_id == f"c{i+100}"
+        assert j.right_id == f"c{i + 100}"
 
 
 @pytest.mark.asyncio
@@ -648,7 +643,7 @@ async def test_forward_async_with_very_high_concurrency(mock_llm_client, mock_ll
     candidates = [
         ERCandidate(
             left=CompanySchema(id=f"c{i}", name=f"Company {i}"),
-            right=CompanySchema(id=f"c{i+100}", name=f"Company {i}"),
+            right=CompanySchema(id=f"c{i + 100}", name=f"Company {i}"),
             blocker_name="test",
         )
         for i in range(3)
@@ -712,7 +707,9 @@ async def test_forward_async_score_clamping():
 
 
 @pytest.mark.asyncio
-async def test_forward_async_with_entities_missing_optional_fields(mock_llm_client, mock_llm_response):
+async def test_forward_async_with_entities_missing_optional_fields(
+    mock_llm_client, mock_llm_response
+):
     """Test async with entities that have None for optional fields."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 

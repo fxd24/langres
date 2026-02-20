@@ -103,7 +103,9 @@ class _RateLimiter:
             while current_tokens + estimated_tokens > self.tpm_limit:
                 oldest_token_time = self._token_usage[0][0]
                 sleep_time = 60.0 - (now - oldest_token_time) + 0.1  # Add 100ms buffer
-                logger.debug("TPM limit reached (%d tokens), sleeping for %.2fs", current_tokens, sleep_time)
+                logger.debug(
+                    "TPM limit reached (%d tokens), sleeping for %.2fs", current_tokens, sleep_time
+                )
                 await asyncio.sleep(sleep_time)
 
                 # Refresh window

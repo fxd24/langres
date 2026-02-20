@@ -158,7 +158,9 @@ def main() -> None:
     logger.info(f"  LLM model: {LLM_MODEL}")
     logger.info(f"  LLM temperature: {LLM_TEMPERATURE}")
     logger.info(f"  Cluster thresholds: {CLUSTER_THRESHOLDS}")
-    logger.info(f"  Candidate filtering: similarity >= {SIMILARITY_THRESHOLD}, max {MAX_CANDIDATES}")
+    logger.info(
+        f"  Candidate filtering: similarity >= {SIMILARITY_THRESHOLD}, max {MAX_CANDIDATES}"
+    )
 
     # =========================================================================
     # Load Data
@@ -236,7 +238,9 @@ def main() -> None:
     # Filter candidates by similarity score for faster testing
     # Only send high-confidence pairs to expensive LLM judge
     candidates_filtered = [
-        c for c in all_candidates if c.similarity_score and c.similarity_score >= SIMILARITY_THRESHOLD
+        c
+        for c in all_candidates
+        if c.similarity_score and c.similarity_score >= SIMILARITY_THRESHOLD
     ]
     candidates_filtered.sort(key=lambda c: c.similarity_score or 0.0, reverse=True)
     candidates = candidates_filtered[:MAX_CANDIDATES]
@@ -336,14 +340,9 @@ def main() -> None:
 
                 # Reorder results to match input order (as_completed doesn't preserve order)
                 # Create a mapping from candidate to result
-                candidate_to_result = {
-                    (r.left_id, r.right_id): r for r in results
-                }
+                candidate_to_result = {(r.left_id, r.right_id): r for r in results}
                 # Return in original order
-                ordered_results = [
-                    candidate_to_result[(c.left.id, c.right.id)]
-                    for c in candidates
-                ]
+                ordered_results = [candidate_to_result[(c.left.id, c.right.id)] for c in candidates]
                 return ordered_results
 
             judgements = asyncio.run(score_with_progress())
@@ -421,8 +420,12 @@ def main() -> None:
         bcubed = metrics["bcubed"]
         pairwise = metrics["pairwise"]
 
-        logger.info(f"  BCubed - P: {bcubed['precision']:.1%}, R: {bcubed['recall']:.1%}, F1: {bcubed['f1']:.1%}")
-        logger.info(f"  Pairwise - P: {pairwise['precision']:.1%}, R: {pairwise['recall']:.1%}, F1: {pairwise['f1']:.1%}")
+        logger.info(
+            f"  BCubed - P: {bcubed['precision']:.1%}, R: {bcubed['recall']:.1%}, F1: {bcubed['f1']:.1%}"
+        )
+        logger.info(
+            f"  Pairwise - P: {pairwise['precision']:.1%}, R: {pairwise['recall']:.1%}, F1: {pairwise['f1']:.1%}"
+        )
 
         # Track best threshold
         if bcubed["f1"] > best_f1:
@@ -447,7 +450,9 @@ def main() -> None:
     optimal_clusterer = Clusterer(threshold=best_threshold)
     optimal_clusters = optimal_clusterer.cluster(judgements)
     entities_list = [FunderSchema(id=eid, name=name) for eid, name in dataset.entity_names.items()]
-    cluster_report = optimal_clusterer.inspect_clusters(optimal_clusters, entities_list, sample_size=10)
+    cluster_report = optimal_clusterer.inspect_clusters(
+        optimal_clusters, entities_list, sample_size=10
+    )
 
     logger.info(f"\nCluster Statistics (threshold={best_threshold}):")
     logger.info(f"  Total clusters:   {cluster_report.total_clusters}")
@@ -479,9 +484,15 @@ def main() -> None:
     )
 
     logger.info("\nSuccess Criteria:")
-    logger.info(f"  {'✅' if bcubed_f1_pass else '❌'} BCubed F1 ≥ 0.85: {'ACHIEVED' if bcubed_f1_pass else 'NOT MET'} ({optimal_bcubed['f1']:.3f})")
-    logger.info(f"  {'✅' if blocker_recall_pass else '❌'} Blocker Recall ≥ 0.95: {'ACHIEVED' if blocker_recall_pass else 'NOT MET'} ({report.candidates.recall:.3f})")
-    logger.info(f"  {'✅' if separation_pass else '❌'} Separation ≥ 0.2: {'ACHIEVED' if separation_pass else 'NOT MET'} ({report.scores.separation:.3f})")
+    logger.info(
+        f"  {'✅' if bcubed_f1_pass else '❌'} BCubed F1 ≥ 0.85: {'ACHIEVED' if bcubed_f1_pass else 'NOT MET'} ({optimal_bcubed['f1']:.3f})"
+    )
+    logger.info(
+        f"  {'✅' if blocker_recall_pass else '❌'} Blocker Recall ≥ 0.95: {'ACHIEVED' if blocker_recall_pass else 'NOT MET'} ({report.candidates.recall:.3f})"
+    )
+    logger.info(
+        f"  {'✅' if separation_pass else '❌'} Separation ≥ 0.2: {'ACHIEVED' if separation_pass else 'NOT MET'} ({report.scores.separation:.3f})"
+    )
 
     logger.info("\nCost Analysis:")
     logger.info(f"  Total cost:        ${llm_metrics['total_cost_usd']:.2f}")
@@ -490,7 +501,7 @@ def main() -> None:
 
     logger.info("\nRuntime Analysis:")
     logger.info(f"  Blocker:      {blocker_runtime:.1f}s")
-    logger.info(f"  LLM Judge:    {llm_runtime:.1f}s ({llm_runtime/60:.1f}m)")
+    logger.info(f"  LLM Judge:    {llm_runtime:.1f}s ({llm_runtime / 60:.1f}m)")
     logger.info(f"  Clustering:   {optimal_runtime:.1f}s")
     logger.info(f"  Total:        {blocker_runtime + llm_runtime + optimal_runtime:.1f}s")
 
@@ -505,7 +516,9 @@ def main() -> None:
         if not bcubed_f1_pass:
             logger.info(f"    - Improve clustering (current F1={optimal_bcubed['f1']:.3f})")
         if not blocker_recall_pass:
-            logger.info(f"    - Increase k_neighbors or try different embedding model (current recall={report.candidates.recall:.3f})")
+            logger.info(
+                f"    - Increase k_neighbors or try different embedding model (current recall={report.candidates.recall:.3f})"
+            )
         if not separation_pass:
             logger.info(f"    - Improve score separation (current={report.scores.separation:.3f})")
 
@@ -524,7 +537,9 @@ def main() -> None:
     diagnostics.append(f"- **k_neighbors**: {K_NEIGHBORS}")
     diagnostics.append(f"- **LLM Model**: {LLM_MODEL}")
     diagnostics.append(f"- **LLM Temperature**: {LLM_TEMPERATURE}")
-    diagnostics.append(f"- **Dataset**: {len(dataset.entity_names)} entities, {dataset.num_unique_entities} unique")
+    diagnostics.append(
+        f"- **Dataset**: {len(dataset.entity_names)} entities, {dataset.num_unique_entities} unique"
+    )
     diagnostics.append("")
 
     diagnostics.append("## Stage 1: Blocking")
@@ -561,15 +576,19 @@ def main() -> None:
     diagnostics.append(f"| F1         | {llm_metrics['f1']:.1%}  |")
     diagnostics.append(f"| Accuracy   | {llm_metrics['accuracy']:.1%}  |")
     diagnostics.append(f"| Total Cost | ${llm_metrics['total_cost_usd']:.2f} |")
-    diagnostics.append(f"| Runtime    | {llm_runtime:.1f}s ({llm_runtime/60:.1f}m) |")
+    diagnostics.append(f"| Runtime    | {llm_runtime:.1f}s ({llm_runtime / 60:.1f}m) |")
     diagnostics.append("")
 
     diagnostics.append("## Stage 3: Clustering")
     diagnostics.append("")
     diagnostics.append("### Threshold Comparison")
     diagnostics.append("")
-    diagnostics.append("| Threshold | BCubed P | BCubed R | BCubed F1 | Pairwise P | Pairwise R | Pairwise F1 | Clusters |")
-    diagnostics.append("|-----------|----------|----------|-----------|------------|------------|-------------|----------|")
+    diagnostics.append(
+        "| Threshold | BCubed P | BCubed R | BCubed F1 | Pairwise P | Pairwise R | Pairwise F1 | Clusters |"
+    )
+    diagnostics.append(
+        "|-----------|----------|----------|-----------|------------|------------|-------------|----------|"
+    )
     for result in clustering_results:
         result_bcubed: dict[str, float] = result["bcubed"]  # type: ignore[assignment]
         result_pairwise: dict[str, float] = result["pairwise"]  # type: ignore[assignment]
@@ -600,9 +619,15 @@ def main() -> None:
     diagnostics.append("")
     diagnostics.append("| Criterion | Target | Actual | Status |")
     diagnostics.append("|-----------|--------|--------|--------|")
-    diagnostics.append(f"| BCubed F1 | ≥ 0.85 | {optimal_bcubed['f1']:.3f} | {'✅ PASS' if bcubed_f1_pass else '❌ FAIL'} |")
-    diagnostics.append(f"| Blocker Recall | ≥ 0.95 | {report.candidates.recall:.3f} | {'✅ PASS' if blocker_recall_pass else '❌ FAIL'} |")
-    diagnostics.append(f"| Separation | ≥ 0.2 | {report.scores.separation:.3f} | {'✅ PASS' if separation_pass else '❌ FAIL'} |")
+    diagnostics.append(
+        f"| BCubed F1 | ≥ 0.85 | {optimal_bcubed['f1']:.3f} | {'✅ PASS' if bcubed_f1_pass else '❌ FAIL'} |"
+    )
+    diagnostics.append(
+        f"| Blocker Recall | ≥ 0.95 | {report.candidates.recall:.3f} | {'✅ PASS' if blocker_recall_pass else '❌ FAIL'} |"
+    )
+    diagnostics.append(
+        f"| Separation | ≥ 0.2 | {report.scores.separation:.3f} | {'✅ PASS' if separation_pass else '❌ FAIL'} |"
+    )
     diagnostics.append("")
 
     diagnostics.append("## Cost & Performance Summary")
@@ -611,17 +636,23 @@ def main() -> None:
     diagnostics.append(f"- **Cost per entity**: ${cost_per_entity:.4f}")
     diagnostics.append(f"- **Cost per judgment**: ${cost_per_judgment:.5f}")
     diagnostics.append(f"- **Blocker runtime**: {blocker_runtime:.1f}s")
-    diagnostics.append(f"- **LLM runtime**: {llm_runtime:.1f}s ({llm_runtime/60:.1f}m)")
+    diagnostics.append(f"- **LLM runtime**: {llm_runtime:.1f}s ({llm_runtime / 60:.1f}m)")
     diagnostics.append(f"- **Clustering runtime**: {optimal_runtime:.1f}s")
-    diagnostics.append(f"- **Total runtime**: {blocker_runtime + llm_runtime + optimal_runtime:.1f}s")
+    diagnostics.append(
+        f"- **Total runtime**: {blocker_runtime + llm_runtime + optimal_runtime:.1f}s"
+    )
     diagnostics.append("")
 
     diagnostics.append("## Recommendation")
     diagnostics.append("")
     if all_pass:
-        diagnostics.append(f"✅ **POC SUCCESS**: Model `{WINNER_MODEL}` with k={K_NEIGHBORS}, threshold={best_threshold} meets all POC requirements.")
+        diagnostics.append(
+            f"✅ **POC SUCCESS**: Model `{WINNER_MODEL}` with k={K_NEIGHBORS}, threshold={best_threshold} meets all POC requirements."
+        )
         diagnostics.append("")
-        diagnostics.append("The hybrid blocking + LLM judge + clustering approach is validated. Ready to proceed with:")
+        diagnostics.append(
+            "The hybrid blocking + LLM judge + clustering approach is validated. Ready to proceed with:"
+        )
         diagnostics.append("- Building the full langres framework")
         diagnostics.append("- Implementing optimizer components")
         diagnostics.append("- Adding task-level APIs")
@@ -629,11 +660,17 @@ def main() -> None:
         diagnostics.append("❌ **POC NOT MET**: Some criteria failed. Recommendations:")
         diagnostics.append("")
         if not bcubed_f1_pass:
-            diagnostics.append(f"- **Clustering quality low** (F1={optimal_bcubed['f1']:.3f}): Consider improving LLM prompts or using more sophisticated clustering")
+            diagnostics.append(
+                f"- **Clustering quality low** (F1={optimal_bcubed['f1']:.3f}): Consider improving LLM prompts or using more sophisticated clustering"
+            )
         if not blocker_recall_pass:
-            diagnostics.append(f"- **Blocker recall low** (recall={report.candidates.recall:.3f}): Increase k_neighbors or try different embedding model")
+            diagnostics.append(
+                f"- **Blocker recall low** (recall={report.candidates.recall:.3f}): Increase k_neighbors or try different embedding model"
+            )
         if not separation_pass:
-            diagnostics.append(f"- **Poor score separation** (sep={report.scores.separation:.3f}): Improve blocker quality or use different similarity metric")
+            diagnostics.append(
+                f"- **Poor score separation** (sep={report.scores.separation:.3f}): Improve blocker quality or use different similarity metric"
+            )
 
     # Save diagnostics
     DIAGNOSTICS_PATH.parent.mkdir(parents=True, exist_ok=True)

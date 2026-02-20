@@ -62,11 +62,11 @@ logger = logging.getLogger(__name__)
 
 # Models to compare (from POC requirements)
 MODELS = [
-    #"all-MiniLM-L6-v2",  # 384d, fast baseline (22M params)
+    # "all-MiniLM-L6-v2",  # 384d, fast baseline (22M params)
     "all-mpnet-base-v2",  # 768d, better quality (109M params)
-    #"paraphrase-MiniLM-L3-v2",  # 384d, fastest (17M params)
-    #"intfloat/multilingual-e5-base",  # 768d, strong multilingual (118M params)
-    #"BAAI/bge-m3",  # 1024d, multi-lingual, multi-granular (568M params)
+    # "paraphrase-MiniLM-L3-v2",  # 384d, fastest (17M params)
+    # "intfloat/multilingual-e5-base",  # 768d, strong multilingual (118M params)
+    # "BAAI/bge-m3",  # 1024d, multi-lingual, multi-granular (568M params)
 ]
 
 # K values to test (from POC requirements)
@@ -231,7 +231,9 @@ def main() -> None:
             # Generate and save diagnostics for each configuration
             # (We'll filter to top ones later, but save all for completeness)
             entity_dict = {str(e["id"]): e for e in entities}
-            diagnostics = report.diagnose(candidates, entity_dict, n_missed=10, n_false_positives=10)
+            diagnostics = report.diagnose(
+                candidates, entity_dict, n_missed=10, n_false_positives=10
+            )
 
             diag_path = DIAGNOSTICS_DIR / f"diagnostics_blocker_{namespace}_k{k}.md"
             diag_path.parent.mkdir(exist_ok=True)
@@ -483,16 +485,13 @@ Recommendation Strategy:
     logger.info("")
     logger.info("Recommended thresholds for Phase 2:")
     logger.info(
-        f"  • Conservative (max recall): {conservative:.2f}  "
-        f"(~99% true matches, more candidates)"
+        f"  • Conservative (max recall): {conservative:.2f}  (~99% true matches, more candidates)"
     )
     logger.info(
-        f"  • Balanced:                  {balanced:.2f}  "
-        f"(~95% true matches, moderate candidates)"
+        f"  • Balanced:                  {balanced:.2f}  (~95% true matches, moderate candidates)"
     )
     logger.info(
-        f"  • Aggressive (min cost):     {aggressive:.2f}  "
-        f"(~85-90% true matches, fewer candidates)"
+        f"  • Aggressive (min cost):     {aggressive:.2f}  (~85-90% true matches, fewer candidates)"
     )
     logger.info("")
     logger.info("To use in Phase 2, update:")
@@ -543,7 +542,9 @@ Recommendation Strategy:
     logger.info("=" * 80)
     logger.info("")
     logger.info("Summary:")
-    logger.info(f"  • Evaluated {len(MODELS)} models × {len(K_VALUES)} k values = {len(results)} configs")
+    logger.info(
+        f"  • Evaluated {len(MODELS)} models × {len(K_VALUES)} k values = {len(results)} configs"
+    )
     logger.info(
         f"  • Winner: {winner['Model']} with k={winner['K']} "
         f"(Recall={winner['Recall']:.1%}, Sep={winner['Separation']:.3f})"
