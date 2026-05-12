@@ -14,7 +14,7 @@ dependencies = [
     "dspy-ai>=3.0.3",
     "faiss-cpu>=1.12.0",
     "fastembed>=0.7.3",
-    "langfuse==2.59.7",
+    "langfuse==4.6.1",
     "litellm>=1.79.0",
     "networkx>=3.5",
     "onnxruntime>=1.23.2",
