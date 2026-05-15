@@ -1,19 +1,15 @@
 {
   "permissions": {
     "deny": [
-      ".env",
-      ".env.*",
-      "**/.env",
-      "**/.env.*",
-      "**/secrets/**",
-      "**/*_secret*",
-      "**/*credentials*"
-    ],
-    "ask": [
-      "Bash:rm",
-      "Bash:git push",
-      "Bash:pip install",
-      "Bash:uv add"
+      "Read(./.env)",
+      "Read(**/.env)",
+      "Read(**/secrets/**)",
+      "Read(**/*_secret*)",
+      "Read(**/*credentials*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(/etc/shadow)"
     ]
   },
   "sandbox": {
