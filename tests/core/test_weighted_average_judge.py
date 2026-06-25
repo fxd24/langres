@@ -75,6 +75,25 @@ class TestScore:
         )
         assert judge.score(vec, specs) == 0.0
 
+    def test_empty_specs_scores_zero(self) -> None:
+        # Defensive: scoring with no specs yields an empty weight map, which
+        # combine_present treats as no-evidence -> 0.0 (never divides by zero).
+        judge = WeightedAverageJudge()
+        vec = ComparisonVector(levels={}, similarities={})
+        assert judge.score(vec, []) == 0.0
+
+    def test_all_zero_weights_falls_back_to_even_split(self) -> None:
+        # When every spec has weight 0, normalization splits evenly (1/n each)
+        # rather than dividing by zero. Two present features clear the floor.
+        specs = [FeatureSpec(name="name", weight=0.0), FeatureSpec(name="address", weight=0.0)]
+        judge = WeightedAverageJudge()
+        vec = ComparisonVector(
+            levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.PRESENT},
+            similarities={"name": 1.0, "address": 0.0},
+        )
+        # Even split 0.5 / 0.5: 0.5*1.0 + 0.5*0.0 = 0.5.
+        assert judge.score(vec, specs) == pytest.approx(0.5)
+
 
 class TestForward:
     def _specs(self) -> list[FeatureSpec]:
@@ -130,6 +149,11 @@ class TestForward:
         gen = judge.forward(iter([]), comparator=comp)
         assert list(gen) == []
 
+    def test_forward_without_comparator_raises(self) -> None:
+        judge: WeightedAverageJudge[CompanySchema] = WeightedAverageJudge()
+        with pytest.raises(ValueError, match="requires a comparator"):
+            list(judge.forward(iter([])))
+
 
 class TestInspectScores:
     def test_inspect_scores_delegates(self) -> None:
@@ -171,8 +195,11 @@ class TestCompanyFixtureBehavior:
 
     def test_name_only_match_scores_high(self) -> None:
         # Mirrors c4 / c4_partial: identical name, all other fields missing.
-        # name weight 0.6 of total 1.0 -> clears the 0.5 evidence floor.
-        comp = StringComparator.from_schema(CompanySchema, weights={"name": 0.6})
+        # name carries 0.6 of total weight (0.6 / (0.6+0.2+0.1+0.1)) -> clears
+        # the 0.5 evidence floor on a name-only match.
+        comp = StringComparator.from_schema(
+            CompanySchema, weights={"name": 0.6, "address": 0.2, "phone": 0.1, "website": 0.1}
+        )
         judge = WeightedAverageJudge()
         cand = _candidate(
             _company(id="c4", name="DataFlow Solutions", address="321 Tech Way"),

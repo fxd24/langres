@@ -34,12 +34,16 @@ from langres.core.reports import ScoreInspectionReport
 
 
 def _normalized_weights(specs: list[FeatureSpec]) -> dict[str, float]:
-    """FeatureSpec weights normalized to sum to 1.0 (even split if all zero)."""
+    """FeatureSpec weights normalized to sum to 1.0 (even split if all zero).
+
+    ``combine_present`` defends against an empty/zero-weight map by returning
+    ``0.0``, so an even split over zero specs (empty dict) is safe.
+    """
     total = sum(spec.weight for spec in specs)
     if total > 0:
         return {spec.name: spec.weight / total for spec in specs}
-    n = len(specs)
-    return {spec.name: (1.0 / n if n else 0.0) for spec in specs}
+    even = 1.0 / len(specs) if specs else 0.0
+    return {spec.name: even for spec in specs}
 
 
 @register("weighted_average_judge")
@@ -60,7 +64,7 @@ class WeightedAverageJudge(Module[SchemaT]):
         weights = _normalized_weights(specs)
         return combine_present(vector.similarities, weights)
 
-    def forward(  # type: ignore[override]
+    def forward(
         self,
         candidates: Iterator[ERCandidate[SchemaT]],
         *,

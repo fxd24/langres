@@ -13,6 +13,7 @@ deliberately absent here so Wave 2/3 code against a frozen contract.
 import difflib
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel
@@ -28,7 +29,7 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 # Supported rapidfuzz algorithms (mirrors RapidfuzzModule.Algorithm).
 Algorithm = Literal["ratio", "token_sort_ratio", "token_set_ratio"]
 
-_FUZZ_FUNCS: dict[str, object] = {
+_FUZZ_FUNCS: dict[str, Callable[[str, str], float]] = {
     "ratio": fuzz.ratio,
     "token_sort_ratio": fuzz.token_sort_ratio,
     "token_set_ratio": fuzz.token_set_ratio,
@@ -166,9 +167,7 @@ class StringComparator(Comparator[SchemaT]):
         self.algorithm = algorithm
 
     @staticmethod
-    def _validate_against_schema(
-        feature_specs: list[FeatureSpec], schema: type[BaseModel]
-    ) -> None:
+    def _validate_against_schema(feature_specs: list[FeatureSpec], schema: type[BaseModel]) -> None:
         valid = set(schema.model_fields)
         for spec in feature_specs:
             if spec.name not in valid:
@@ -215,7 +214,7 @@ class StringComparator(Comparator[SchemaT]):
 
     def compare(self, left: SchemaT, right: SchemaT) -> ComparisonVector:
         """Compare two entities into a ComparisonVector (see class docstring)."""
-        fuzz_func = cast("type", _FUZZ_FUNCS[self.algorithm])  # callable; cast for mypy
+        fuzz_func = _FUZZ_FUNCS[self.algorithm]
         levels: dict[str, ComparisonLevel] = {}
         similarities: dict[str, float] = {}
 
@@ -227,7 +226,7 @@ class StringComparator(Comparator[SchemaT]):
                 levels[spec.name] = ComparisonLevel.MISSING
                 continue
             levels[spec.name] = ComparisonLevel.PRESENT
-            similarities[spec.name] = fuzz_func(left_val, right_val) / 100.0  # type: ignore[operator]
+            similarities[spec.name] = fuzz_func(left_val, right_val) / 100.0
 
         return ComparisonVector(levels=levels, similarities=similarities)
 
@@ -242,7 +241,9 @@ class StringComparator(Comparator[SchemaT]):
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "StringComparator[SchemaT]":
         """Reconstruct a StringComparator from its :attr:`config`."""
-        specs = [FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])]
+        specs = [
+            FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])
+        ]
         return cls(specs, algorithm=cast("Algorithm", config["algorithm"]))
 
 
