@@ -9,6 +9,13 @@ updates:
     # giving the community time to detect and yank malicious releases.
     cooldown:
       default-days: 7
+    # Hold langfuse at 2.x until a deliberate v3/v4 (OpenTelemetry rewrite)
+    # migration is validated. The LiteLLM↔Langfuse callback integration in
+    # src/langres/clients/llm.py is a side-effect not covered by unit tests
+    # and must be validated end-to-end before taking the major bump (#25).
+    ignore:
+      - dependency-name: "langfuse"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
