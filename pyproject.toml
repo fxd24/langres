@@ -64,7 +64,9 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "guarddog>=1.3.0",
     "mypy>=1.18.2",
+    "pip-audit>=2.9.0",
     "pre-commit>=4.3.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.3.0",
@@ -74,6 +76,14 @@ dev = [
     "testcontainers[qdrant]>=4.13.2",
     "types-networkx>=3.5.0.20251001",
 ]
+
+[tool.uv]
+# 7-day supply-chain quarantine: resolution only picks packages published at
+# least 7 days ago, giving time for malicious uploads to be caught and
+# yanked. Roll this forward with `make upgrade-deps`.
+exclude-newer = "2026-06-18"
+# To block a known-bad version, uncomment and set:
+# constraint-dependencies = ["somepkg!=1.2.3"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

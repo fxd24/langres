@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly on Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.24"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: pip-audit (CVE scan)
+        run: uv run pip-audit
+
+      - name: guarddog (malicious-package scan)
+        run: |
+          uv export --no-hashes --format requirements-txt -o /tmp/langres-req.txt
+          uv run guarddog pypi verify /tmp/langres-req.txt
