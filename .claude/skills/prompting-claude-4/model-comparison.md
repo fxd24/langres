@@ -1,5 +1,12 @@
 # Claude 4.5 Model Comparison
 
+> **Point-in-time snapshot (Claude 4.5 generation).** Tiers, prices, benchmarks,
+> and per-model feature flags below were accurate at capture and drift fast.
+> The tier *trade-offs* (intelligence vs. latency vs. cost) stay useful, but
+> verify any specific ID, price, or benchmark against the live Anthropic model
+> docs — see the links at the bottom of [SKILL.md](SKILL.md) — before relying on
+> it. The parent skill is deliberately version-agnostic; this file is not.
+
 ## Quick Selection Guide
 
 | Need                 | Model          | Why                                                    |

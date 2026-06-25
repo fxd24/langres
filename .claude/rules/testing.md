@@ -1,5 +1,6 @@
 ---
 paths:
+  - "src/**"
   - "tests/**"
   - "pyproject.toml"
   - "conftest.py"

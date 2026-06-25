@@ -22,7 +22,7 @@ Skip for:
 
 ```python
 response = client.messages.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     max_tokens=16000,
     thinking={
         "type": "enabled",
@@ -54,7 +54,7 @@ headers = {
 }
 
 response = client.messages.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     max_tokens=16000,
     thinking={
         "type": "enabled",
@@ -104,7 +104,7 @@ After receiving tool results, carefully reflect on their quality and determine o
 **Tip:** Use 1-hour cache duration for long thinking sessions:
 
 ```python
-cache_control={"type": "ephemeral", "ttl": 3600}
+cache_control={"type": "ephemeral", "ttl": "1h"}
 ```
 
 ## Summarized Thinking (Claude 4 models)

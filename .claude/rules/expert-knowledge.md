@@ -59,7 +59,6 @@ them accordingly:
   of reasoning about them abstractly.
 - **Code reads** — trace the execution path, don't assume from function names.
 - **Log analysis** — what actually happened vs what you think happened.
-- **Running the code** — execute a script or function to confirm behavior.
 
 ## Take Responsibility and Find Solutions
 
