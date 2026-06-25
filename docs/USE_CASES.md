@@ -1,5 +1,14 @@
 # langres: Use Case Taxonomy & Development Roadmap
 
+> **Note (2026-06-25):** Several components named below — `tasks.*`
+> (`DeduplicationTask`, `EntityLinkingTask`, `RecordLinkageTask`),
+> `core.Canonicalizer`, `data.ReviewQueue`, `data.SyntheticGenerator`, and
+> `Blocker.stream_against` — are **not yet implemented**; they describe the
+> intended API. See **[ROADMAP.md](ROADMAP.md)** for the delivery timeline
+> (the golden-record / canonicalization loop lands in M5; the cold-start
+> data generator in M1). The "Status" column below predates the roadmap; the
+> roadmap's use-case compass (§2.5) is the current source of truth.
+
 ## 1. Introduction
 
 Entity Resolution (ER) is not a single problem but a wide spectrum of use cases. A core design principle of langres is to provide a robust, flexible, and lightweight framework for the most common and critical ER tasks.

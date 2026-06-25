@@ -84,6 +84,7 @@ The `.agent/` folder contains external expert analyses of the langres project:
 
 ## Reference Documentation (`docs/`)
 
+- **`docs/ROADMAP.md`** ⭐ **DIRECTION** — the post-POC vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones M0–M6. Read alongside `POC.md` before planning new work.
 - **`docs/POC.md`** ⭐ **START HERE** — current development stage and priorities; the three approaches; success criteria; what's in scope NOW vs. later. Read before any implementation work.
 - **`docs/PROJECT_OVERVIEW.md`** — architecture and philosophy; the "why" behind design decisions; component relationships; the two-layer API.
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).

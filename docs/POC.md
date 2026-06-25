@@ -1,4 +1,9 @@
 # langres: Proof of Concept
+
+> **See [ROADMAP.md](ROADMAP.md) for the post-POC direction** (vision, the
+> feature-bag architecture, the use-case compass, and milestones M0–M6). This
+> document remains the record of the original POC validation plan.
+
 ## TODO Add as well the idea of training a classifier (classical) after the blocker to decide whether is a match or not.
 
 ## Purpose
