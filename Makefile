@@ -35,11 +35,12 @@ test:
 test-full:
 	uv run pytest --cov --cov-report=term-missing
 
-# Roll the quarantine window forward (today-7d on macOS) then re-solve all deps.
-# Primary dev env is macOS; on Linux swap `date -v-7d` for `date -d '-7 days'`.
+# Roll the quarantine window forward (today-7d) then re-solve all deps.
+# Uses python3 (a project dependency) for portability — `date -v-7d` is BSD-only
+# and silently fails on Linux/CI.
 upgrade-deps:
-	@NEW_DATE=$$(date -v-7d +%Y-%m-%d) && \
-	python3 -c "import re, sys; \
+	@NEW_DATE=$$(python3 -c "from datetime import date, timedelta; print(date.today() - timedelta(days=7))") && \
+	python3 -c "import re; \
 	    text = open('pyproject.toml').read(); \
 	    text = re.sub(r'exclude-newer = \"[0-9-]+\"', 'exclude-newer = \"' + '$$NEW_DATE' + '\"', text); \
 	    open('pyproject.toml', 'w').write(text)" && \
@@ -50,7 +51,8 @@ audit:
 	uv run pip-audit
 
 scan-malware:
-	uv export --no-hashes --format requirements-txt -o /tmp/langres-req.txt
-	uv run guarddog pypi verify /tmp/langres-req.txt
+	@REQ=$$(mktemp -t langres-req) && \
+	uv export --no-hashes --format requirements-txt -o "$$REQ" && \
+	uv run guarddog pypi verify "$$REQ"
 
 security: audit scan-malware
