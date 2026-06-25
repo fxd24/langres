@@ -13,6 +13,21 @@ When uncertain, research first: read docs, search the codebase, run the code,
 inspect the actual data structures. Acknowledge gaps explicitly ("I'm not certain
 about X, let me verify…"). Present findings with sources.
 
+## Simplicity First
+
+**Write the minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked; no abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested. langres values
+  lightweight, composable units — but composability is *earned* by real reuse,
+  not anticipated with speculative knobs (see `component-design.md`).
+- No error handling for scenarios that can't occur.
+- If you wrote 200 lines and it could be 50, rewrite it. Ask: "Would a senior
+  engineer call this overcomplicated?" If yes, simplify.
+
+This applies everywhere — source, tests, agent prompts, scripts, config — not
+just components.
+
 ## Hypotheses Are Not Facts
 
 **Never present a hypothesis as a conclusion.** When diagnosing behavior or
@@ -133,6 +148,27 @@ stale dependencies when inserting new ones. When you change a function, check
 what data its callers actually pass in — don't assume from the parameter
 name. For example, before changing a Blocker's output shape, check what the
 Clusterer downstream actually expects to consume.
+
+## Surgical Changes
+
+**Touch only what the task requires. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting the task didn't ask you
+  to change. Don't refactor what isn't broken.
+- Match the existing style even if you'd do it differently.
+- If you spot unrelated dead code or an out-of-scope problem, *mention it* —
+  don't silently fix or delete it.
+
+When your change creates orphans:
+- Remove the imports, variables, and helpers that *your* change made unused.
+- Do **not** remove pre-existing dead code unless asked — that's a separate
+  decision with its own blast radius. (Contrast "Leaving Orphaned Code After
+  Removing a Feature" below: that's about fully removing a chain you *are*
+  deleting; this is about not touching what you aren't.)
+
+The test: every changed line should trace directly to the task. A diff full of
+incidental edits is harder to review and easy to get wrong.
 
 ## Leaving Orphaned Code After Removing a Feature
 
