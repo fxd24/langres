@@ -44,12 +44,36 @@ Example (with caching):
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 import numpy as np
+from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
+from langres.core.registry import register
+
 logger = logging.getLogger(__name__)
+
+
+class SentenceTransformerEmbedderConfig(BaseModel):
+    """Light, JSON-serializable construction config for a SentenceTransformerEmbedder.
+
+    Holds only the parameters needed to reconstruct the embedder. The loaded
+    model is NOT serialized — it is reloaded lazily from ``model_name`` on the
+    first ``encode()`` call.
+    """
+
+    model_name: str = "all-MiniLM-L6-v2"
+    batch_size: int = 32
+    show_progress_bar: bool = False
+    normalize_embeddings: bool = True
+
+
+class FakeEmbedderConfig(BaseModel):
+    """Light, JSON-serializable construction config for a FakeEmbedder."""
+
+    embedding_dim: int = 384
+    normalize_embeddings: bool = True
 
 
 class EmbeddingProvider(Protocol):
@@ -252,6 +276,7 @@ class LateInteractionEmbeddingProvider(Protocol):
         ...  # pragma: no cover
 
 
+@register("sentence_transformer_embedder")
 class SentenceTransformerEmbedder:
     """Embedding provider using sentence-transformers library.
 
@@ -280,6 +305,11 @@ class SentenceTransformerEmbedder:
         See https://www.sbert.net/docs/pretrained_models.html for full list
         of available models and their performance benchmarks.
     """
+
+    type_name: ClassVar[str] = "sentence_transformer_embedder"
+    config_model: ClassVar[type[SentenceTransformerEmbedderConfig]] = (
+        SentenceTransformerEmbedderConfig
+    )
 
     def __init__(
         self,
@@ -327,6 +357,35 @@ class SentenceTransformerEmbedder:
             logger.info("Loading sentence-transformers model: %s", self.model_name)
             self._model = SentenceTransformer(self.model_name)
         return self._model
+
+    def config(self) -> SentenceTransformerEmbedderConfig:
+        """Return the light, JSON-serializable construction config.
+
+        The loaded model is intentionally excluded — it is reloaded lazily from
+        ``model_name`` in :meth:`from_config`.
+        """
+        return SentenceTransformerEmbedderConfig(
+            model_name=self.model_name,
+            batch_size=self.batch_size,
+            show_progress_bar=self.show_progress_bar,
+            normalize_embeddings=self.normalize_embeddings,
+        )
+
+    @classmethod
+    def from_config(
+        cls, config: SentenceTransformerEmbedderConfig
+    ) -> "SentenceTransformerEmbedder":
+        """Reconstruct an embedder from its config.
+
+        The model stays unloaded (``_model is None``) until the first
+        ``encode()`` call.
+        """
+        return cls(
+            model_name=config.model_name,
+            batch_size=config.batch_size,
+            show_progress_bar=config.show_progress_bar,
+            normalize_embeddings=config.normalize_embeddings,
+        )
 
     def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Encode texts into embeddings using sentence-transformers.
@@ -401,6 +460,7 @@ class SentenceTransformerEmbedder:
         return dim
 
 
+@register("fake_embedder")
 class FakeEmbedder:
     """Test double for EmbeddingProvider that produces deterministic embeddings.
 
@@ -423,6 +483,9 @@ class FakeEmbedder:
         deterministic but pseudo-random vectors.
     """
 
+    type_name: ClassVar[str] = "fake_embedder"
+    config_model: ClassVar[type[FakeEmbedderConfig]] = FakeEmbedderConfig
+
     def __init__(self, embedding_dim: int = 384, normalize_embeddings: bool = True):
         """Initialize FakeEmbedder.
 
@@ -434,6 +497,21 @@ class FakeEmbedder:
         """
         self._embedding_dim = embedding_dim
         self.normalize_embeddings = normalize_embeddings
+
+    def config(self) -> FakeEmbedderConfig:
+        """Return the light, JSON-serializable construction config."""
+        return FakeEmbedderConfig(
+            embedding_dim=self._embedding_dim,
+            normalize_embeddings=self.normalize_embeddings,
+        )
+
+    @classmethod
+    def from_config(cls, config: FakeEmbedderConfig) -> "FakeEmbedder":
+        """Reconstruct a FakeEmbedder from its config."""
+        return cls(
+            embedding_dim=config.embedding_dim,
+            normalize_embeddings=config.normalize_embeddings,
+        )
 
     def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
         """Generate fake deterministic embeddings from texts.
