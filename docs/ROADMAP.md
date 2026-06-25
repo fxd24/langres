@@ -234,8 +234,8 @@ Compile a teacher→student judge (MIPROv2) against the gold set; the cheap stud
 becomes part of the artifact.
 - **Exit:** distilled student within a stated margin of teacher **BCubed at ≥N×
   lower cost/latency** (analogue of the Overture Maps DSPy distillation case
-  study — a small model went 60.7% → 82% accuracy after MIPRO prompt
-  compilation — measured on our data).
+  study — Drew Breunig, Databricks Data+AI Summit 2025: a small model went
+  60.7% → 82% accuracy after MIPRO prompt compilation — measured on our data).
 
 ### M5 — Generalise + incremental + golden-record loop
 Program/Project via **config-only** change; Geography via external authority
