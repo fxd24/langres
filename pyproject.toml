@@ -124,3 +124,11 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 explicit_package_bases = true
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+# faiss ships type information in some environments (CI) but not others (local),
+# so an inline `# type: ignore[import-untyped]` flips between "needed" and
+# "unused" — and an unused ignore fails strict mode's warn_unused_ignores.
+# Silencing the missing-import check here is stable across both.
+module = ["faiss.*"]
+ignore_missing_imports = true

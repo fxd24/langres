@@ -14,7 +14,7 @@ Key design principles:
 import logging
 from typing import Literal, Protocol
 
-import faiss  # type: ignore[import-untyped]
+import faiss
 import numpy as np
 
 from langres.core.embeddings import EmbeddingProvider
