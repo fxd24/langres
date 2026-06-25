@@ -475,3 +475,41 @@ def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> No
     # Every pair now scores base+bump = 1.0 >= 0.5 -> all records collapse.
     clusters = reloaded.resolve(COMPANY_RECORDS)
     assert len(clusters) == 1
+
+
+def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
+    """An external adapter (Pydantic-model config attr) round-trips through save/load.
+
+    Regression guard for the serialization seam: a component whose ``config`` is a
+    plain instance attribute holding a Pydantic model (not a property/method) must
+    serialize via its registered ``type_name`` and rebuild with matching config.
+    The adapter sits in the blocker slot; save/load never calls its stubbed
+    ``stream``/``forward``.
+    """
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageJudge
+    from langres.core.adapters.glinker import GLinkerAdapter, GLinkerConfig
+    from langres.core.models import CompanySchema
+
+    adapter: GLinkerAdapter[CompanySchema] = GLinkerAdapter(
+        GLinkerConfig(model_name="urchade/gliner_small-v2.1", threshold=0.42)
+    )
+    resolver = Resolver(
+        blocker=adapter,
+        comparator=None,
+        module=WeightedAverageJudge(),
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.save(tmp_path)
+
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    blocker_spec = manifest["components"][0]
+    assert blocker_spec["type_name"] == "glinker_adapter"
+    assert blocker_spec["config"] == {
+        "model_name": "urchade/gliner_small-v2.1",
+        "threshold": 0.42,
+    }
+
+    reloaded = Resolver.load(tmp_path)
+    assert isinstance(reloaded.blocker, GLinkerAdapter)
+    assert reloaded.blocker.config.model_name == "urchade/gliner_small-v2.1"
+    assert reloaded.blocker.config.threshold == 0.42

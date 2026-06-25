@@ -77,7 +77,9 @@ def _index_config_dict(index: object) -> dict[str, object]:
     """
     from pydantic import BaseModel
 
-    raw = index.config() if callable(getattr(index, "config")) else index.config  # type: ignore[attr-defined]
+    # Inspect ``config`` on the class so a property reads as non-callable and a
+    # real method reads as callable (see resolver._component_config_dict).
+    raw = index.config() if callable(getattr(type(index), "config", None)) else index.config  # type: ignore[attr-defined]
     if isinstance(raw, BaseModel):
         return raw.model_dump()
     return dict(raw)

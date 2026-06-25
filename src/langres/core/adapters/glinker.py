@@ -20,7 +20,7 @@ This class is a CONTRACT-CONFORMANCE STUB:
 """
 
 from collections.abc import Iterator
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,8 @@ class GLinkerAdapter(Blocker[SchemaT], Module[SchemaT], Generic[SchemaT]):
 
     All method bodies raise NotImplementedError until M3.
     """
+
+    type_name: ClassVar[str] = "glinker_adapter"
 
     def __init__(self, config: GLinkerConfig | None = None) -> None:
         self.config: GLinkerConfig = config or GLinkerConfig()

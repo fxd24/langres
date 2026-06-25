@@ -120,7 +120,7 @@ def combine_present(similarities: dict[str, float], weights: dict[str, float]) -
         The combined score in ``[0, 1]``, or ``0.0`` when the evidence floor is
         not met or there is no present evidence.
     """
-    # (a) Drop missing: only present features (keys of `similarities`) count.
+    # (1) Drop missing: only present features (keys of `similarities`) count.
     if not similarities:
         # All-features-missing — never 0/0.
         return 0.0
@@ -129,18 +129,18 @@ def combine_present(similarities: dict[str, float], weights: dict[str, float]) -
     total_present_weight = sum(present_weights.values())
     num_present = len(similarities)
 
-    # (c) Evidence floor: a single low-weight present feature is not enough.
+    # (2) Evidence floor: a single low-weight present feature is not enough.
     meets_floor = (
         num_present >= _EVIDENCE_FLOOR_MIN_PRESENT or total_present_weight >= _EVIDENCE_FLOOR_WEIGHT
     )
     if not meets_floor:
         return 0.0
 
-    # (d) Guard against zero present-weight (e.g. all present features weight 0).
+    # (3) Guard against zero present-weight (e.g. all present features weight 0).
     if total_present_weight <= 0.0:
         return 0.0
 
-    # (b) Renormalize weights over present features and take the weighted average.
+    # (4) Renormalize weights over present features and take the weighted average.
     score = sum(
         similarities[name] * (present_weights[name] / total_present_weight) for name in similarities
     )

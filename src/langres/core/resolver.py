@@ -69,7 +69,11 @@ def _component_config_dict(obj: object) -> dict[str, object]:
     - ``config`` **property** returning a ``dict`` -> returned as-is.
     - ``config()`` **method** returning a Pydantic ``BaseModel`` -> dumped.
     """
-    config = obj.config() if callable(getattr(obj, "config")) else obj.config  # type: ignore[attr-defined]
+    # Inspect ``config`` on the *class* so a property descriptor reads as
+    # non-callable while a real method reads as callable. (Checking the
+    # resolved value on the instance would misclassify a config stored as a
+    # plain instance attribute, e.g. a Pydantic model.)
+    config = obj.config() if callable(getattr(type(obj), "config", None)) else obj.config  # type: ignore[attr-defined]
     if isinstance(config, BaseModel):
         return config.model_dump()
     return dict(config)
@@ -133,7 +137,15 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
     else:
         component = cls.from_config(config_arg)  # type: ignore[attr-defined]
 
-    if isinstance(component, SerializableState) and state_dir is not None and state_dir.exists():
+    # Restore directly only when ``from_config`` did not already handle state
+    # itself (guards against a double ``load_state`` for a component that both
+    # accepts ``state_dir`` and implements SerializableState).
+    if (
+        not accepts_state_dir
+        and isinstance(component, SerializableState)
+        and state_dir is not None
+        and state_dir.exists()
+    ):
         component.load_state(state_dir)
     return component
 
@@ -387,8 +399,18 @@ class Resolver:
         blocker_spec = ordered[0]
         clusterer_spec = ordered[-1]
         module_spec = next(
-            spec for spec in ordered if spec not in (blocker_spec, clusterer_spec, comparator_spec)
+            (
+                spec
+                for spec in ordered
+                if spec not in (blocker_spec, clusterer_spec, comparator_spec)
+            ),
+            None,
         )
+        if module_spec is None:
+            raise ValueError(
+                f"Malformed artifact manifest: cannot identify a module spec among "
+                f"{[c.type_name for c in manifest.components]}"
+            )
 
         blocker = _rebuild_component(blocker_spec, state_dir=in_dir / "blocker")
         comparator = (
