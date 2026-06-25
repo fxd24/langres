@@ -158,7 +158,7 @@ flagship loop (§2.4) as a named use case in `USE_CASES.md` and promote UC4 ther
 | GLiNER / GLiNER2 | Extractor | feature extraction → blocking keys + comparison features |
 | LLM judge (litellm) | Module | strong judge / teacher |
 | **DSPy-distilled judge** | Module | cheap student compiled from the teacher (the differentiator) |
-| **GLinker** (`gliner-linker`, pg_trgm retrieval) | Blocker + Module | proven external linking tool, benchmarked as one option |
+| **GLinker** (`gliner-linker`, pg_trgm retrieval) | Blocker + Module | candidate — fit for record↔record is **unverified** (trained on mention↔description; see §8), benchmarked as one option in M3 |
 | Fellegi-Sunter / logistic | Module | learned weighted comparison |
 
 **Benchmark on two axes:** (a) brainsquad's own Person/Program gold sets
@@ -223,7 +223,9 @@ Person: feature bag → block → baseline judge (embedding cascade or
 ### M3 — The seam: multi-method benchmark
 Wrap ≥3 methods (rapidfuzz, embedding cascade, LLM judge, **GLinker**) behind the
 interfaces; benchmark harness emits BCubed / recall / cost / latency table on the
-Person gold set (+ ≥1 standard benchmark dataset).
+Person gold set (+ ≥1 standard benchmark dataset). These method families *are* the
+three `POC.md` approaches — 1 (classical/rapidfuzz), 2 (embedding ANN), 3 (hybrid
+LLM) — now raced head-to-head behind one interface instead of run in sequence.
 - **Exit:** a reproducible **method-comparison table**; a winner selected with
   evidence.
 
@@ -231,7 +233,9 @@ Person gold set (+ ≥1 standard benchmark dataset).
 Compile a teacher→student judge (MIPROv2) against the gold set; the cheap student
 becomes part of the artifact.
 - **Exit:** distilled student within a stated margin of teacher **BCubed at ≥N×
-  lower cost/latency** (the Overture 60→82% analogue, measured on our data).
+  lower cost/latency** (analogue of the Overture Maps DSPy distillation case
+  study — a small model went 60.7% → 82% accuracy after MIPRO prompt
+  compilation — measured on our data).
 
 ### M5 — Generalise + incremental + golden-record loop
 Program/Project via **config-only** change; Geography via external authority
