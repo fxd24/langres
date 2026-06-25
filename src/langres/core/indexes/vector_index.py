@@ -11,15 +11,67 @@ Key design principles:
 - Text-focused: Optimized for text inputs (extensible to multi-modal later)
 """
 
+import json
 import logging
-from typing import Literal, Protocol
+from pathlib import Path
+from typing import Literal, Protocol, cast
 
 import faiss
 import numpy as np
+from pydantic import BaseModel
 
 from langres.core.embeddings import EmbeddingProvider
+from langres.core.registry import get_component, register
+from langres.core.serialization import ComponentSpec
 
 logger = logging.getLogger(__name__)
+
+
+class SerializableEmbedder(EmbeddingProvider, Protocol):
+    """An :class:`EmbeddingProvider` that can round-trip through a ``ComponentSpec``.
+
+    The FAISS index needs its embedder to declare a registry ``type_name`` and
+    expose ``config`` / ``from_config`` so the embedder can be persisted in the
+    index config and rebuilt via the component registry. Plain
+    ``EmbeddingProvider`` does not require this — only embedders embedded in a
+    serializable index do.
+    """
+
+    type_name: str
+    config_model: type[BaseModel]
+
+    def config(self) -> BaseModel:
+        """Return the light, JSON-serializable construction config."""
+        ...  # pragma: no cover
+
+    @classmethod
+    def from_config(cls, config: BaseModel) -> "SerializableEmbedder":
+        """Reconstruct the embedder from its config."""
+        ...  # pragma: no cover
+
+
+class FAISSIndexConfig(BaseModel):
+    """Light, JSON-serializable construction config for a FAISSIndex.
+
+    Holds only what is needed to rebuild the index *shell*: the distance metric
+    and a nested :class:`ComponentSpec` describing the embedder. The heavy
+    corpus/index state (vectors, FAISS index, texts) is NOT stored here — it
+    round-trips through :meth:`FAISSIndex.save_state` / ``load_state``.
+    """
+
+    metric: Literal["L2", "cosine"] = "L2"
+    embedder: ComponentSpec
+
+
+def _embedder_from_spec(spec: ComponentSpec) -> EmbeddingProvider:
+    """Rebuild an embedder from its ``ComponentSpec`` via the component registry.
+
+    Looks up the registered class by ``type_name`` and reconstructs it from the
+    serialized config using the class's ``config_model`` and ``from_config``.
+    """
+    cls: type[SerializableEmbedder] = get_component(spec.type_name)
+    config = cls.config_model.model_validate(spec.config)
+    return cls.from_config(config)
 
 
 class VectorIndex(Protocol):
@@ -137,6 +189,7 @@ class VectorIndex(Protocol):
         ...  # pragma: no cover
 
 
+@register("faiss_index")
 class FAISSIndex:
     """FAISS-backed index with native batch search and lifecycle separation.
 
@@ -199,6 +252,66 @@ class FAISSIndex:
         # 2. Add automatic threshold: RAM for small datasets, disk for large
         # 3. Use FAISS quantization (IVF-PQ) for 4-32x compression
         # 4. Recommend QdrantHybridIndex for production (server-side memory management)
+
+    def config(self) -> FAISSIndexConfig:
+        """Return the light, JSON-serializable construction config.
+
+        Captures the metric and a nested :class:`ComponentSpec` for the embedder.
+        The heavy corpus/index state is excluded — it round-trips through
+        :meth:`save_state` / :meth:`load_state`.
+        """
+        embedder = cast(SerializableEmbedder, self.embedder)
+        embedder_spec = ComponentSpec(
+            type_name=embedder.type_name,
+            config=embedder.config().model_dump(),
+        )
+        return FAISSIndexConfig(metric=self.metric, embedder=embedder_spec)
+
+    @classmethod
+    def from_config(cls, config: FAISSIndexConfig) -> "FAISSIndex":
+        """Rebuild the index *shell* from config, reconstructing the embedder.
+
+        The returned index has no corpus/index state — call :meth:`load_state`
+        (or :meth:`create_index`) to populate it.
+        """
+        embedder = _embedder_from_spec(config.embedder)
+        return cls(embedder=embedder, metric=config.metric)
+
+    def save_state(self, state_dir: Path) -> None:
+        """Persist the built FAISS index, corpus vectors, and texts to ``state_dir``.
+
+        Writes three sidecar files:
+        - ``index.faiss`` — the FAISS index (via ``faiss.write_index``).
+        - ``corpus_embeddings.npy`` — cached corpus vectors (via ``np.save``).
+        - ``corpus.json`` — corpus texts and metric.
+
+        If the index has not been built (``create_index`` never called), there
+        is no out-of-band state to persist and this is a no-op.
+        """
+        if self._index is None or self._corpus_embeddings is None:
+            logger.debug("FAISSIndex.save_state: index not built, nothing to persist")
+            return
+
+        faiss.write_index(self._index, str(state_dir / "index.faiss"))
+        np.save(state_dir / "corpus_embeddings.npy", self._corpus_embeddings)
+        (state_dir / "corpus.json").write_text(
+            json.dumps({"corpus_texts": self._corpus_texts, "metric": self.metric})
+        )
+        logger.info("Persisted FAISS index state to %s", state_dir)
+
+    def load_state(self, state_dir: Path) -> None:
+        """Restore index, corpus vectors, and texts previously written to ``state_dir``.
+
+        Reuses the stored vectors verbatim — the embedder is never invoked, so a
+        loaded index never re-embeds its corpus.
+        """
+        self._index = faiss.read_index(str(state_dir / "index.faiss"))
+        self._corpus_embeddings = np.load(state_dir / "corpus_embeddings.npy")
+
+        payload = json.loads((state_dir / "corpus.json").read_text())
+        self._corpus_texts = payload["corpus_texts"]
+        self.metric = payload["metric"]
+        logger.info("Loaded FAISS index state from %s", state_dir)
 
     def create_index(self, texts: list[str]) -> None:
         """Build FAISS index from text corpus.
