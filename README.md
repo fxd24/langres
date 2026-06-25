@@ -248,6 +248,7 @@ See [docs/USE_CASES.md](docs/USE_CASES.md) for the complete taxonomy.
 - [Project Overview](docs/PROJECT_OVERVIEW.md) - Philosophy and architecture
 - [Technical Overview](docs/TECHNICAL_OVERVIEW.md) - API reference and data contracts
 - [Use Cases](docs/USE_CASES.md) - Formal taxonomy and roadmap
+- [Dependencies](docs/DEPENDENCIES.md) - Supply-chain security policy and dependency management
 - [Examples](examples/) - Sample scripts and usage patterns
 
 ---
