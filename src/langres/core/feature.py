@@ -131,8 +131,7 @@ def combine_present(similarities: dict[str, float], weights: dict[str, float]) -
 
     # (c) Evidence floor: a single low-weight present feature is not enough.
     meets_floor = (
-        num_present >= _EVIDENCE_FLOOR_MIN_PRESENT
-        or total_present_weight >= _EVIDENCE_FLOOR_WEIGHT
+        num_present >= _EVIDENCE_FLOOR_MIN_PRESENT or total_present_weight >= _EVIDENCE_FLOOR_WEIGHT
     )
     if not meets_floor:
         return 0.0
@@ -143,7 +142,6 @@ def combine_present(similarities: dict[str, float], weights: dict[str, float]) -
 
     # (b) Renormalize weights over present features and take the weighted average.
     score = sum(
-        similarities[name] * (present_weights[name] / total_present_weight)
-        for name in similarities
+        similarities[name] * (present_weights[name] / total_present_weight) for name in similarities
     )
     return score

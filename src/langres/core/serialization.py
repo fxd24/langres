@@ -38,11 +38,11 @@ class SerializableState(Protocol):
 
     def save_state(self, state_dir: Path) -> None:
         """Persist out-of-band state into ``state_dir`` (created by caller)."""
-        ...
+        ...  # pragma: no cover
 
     def load_state(self, state_dir: Path) -> None:
         """Restore out-of-band state previously written to ``state_dir``."""
-        ...
+        ...  # pragma: no cover
 
 
 class ComponentSpec(BaseModel):
