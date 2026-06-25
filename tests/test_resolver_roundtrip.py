@@ -1,20 +1,19 @@
-r"""M0 EXIT TEST — Resolver save/load round-trip (written RED, marked xfail).
+r"""M0 EXIT TEST — Resolver save/load round-trip (GREEN, Wave 3).
 
-This test pins the TARGET Resolver API that lands in Wave 3. It is marked
-``xfail`` so the suite stays GREEN now; Wave 3 removes the xfail once Resolver,
-the concrete Comparator, and WeightedAverageJudge exist.
+The Resolver, the concrete Comparator, and WeightedAverageJudge exist, so the
+xfail markers are gone and these tests assert the real behavior.
 
-The target API (none of this exists yet — imports live inside the test bodies
-so collection does not error before Wave 3):
-
-    from langres.core import (
-        Resolver, AllPairsBlocker, Comparator, WeightedAverageJudge, Clusterer,
-    )
-    from langres.core.models import CompanySchema
+The 4-slot resolver is built with **name-dominant weights** matching Approach 1
+(``name`` 0.6 / ``address`` 0.2 / ``phone`` 0.1 / ``website`` 0.1). Equal
+weights would gate out the name-only ``c4``/``c4_partial`` pair via the evidence
+floor (a single present feature at weight 0.25 < 0.5); name at 0.6 clears the
+floor so the missing-fields group is recovered. The bare
+``Resolver.from_schema(CompanySchema)`` one-liner (equal weights) is covered
+separately and only asserts the >= 0.70 accuracy floor (it need not recover c4).
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
-        comparator=Comparator.from_schema(CompanySchema),
+        comparator=Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS),
         module=WeightedAverageJudge(),   # the scorer slot, typed Module
         clusterer=Clusterer(threshold=0.7),
     )
@@ -33,6 +32,10 @@ import pytest
 
 from langres.core.metrics import calculate_bcubed_metrics
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
+
+# Name-dominant weights mirroring Approach 1 — required for the name-only
+# missing-fields group (c4/c4_partial) to clear the evidence floor.
+NAME_DOMINANT_WEIGHTS = {"name": 0.6, "address": 0.2, "phone": 0.1, "website": 0.1}
 
 
 def _canonical(clusters: list[set[str]]) -> frozenset[frozenset[str]]:
@@ -73,7 +76,6 @@ def _wrongly_merged_pairs(
     return wrong
 
 
-@pytest.mark.xfail(reason="Resolver lands in Wave 3", strict=False)
 def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     """A-D: in-process save/load round-trip, accuracy, over-merge, provenance."""
     from langres.core import (
@@ -87,7 +89,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
-        comparator=Comparator.from_schema(CompanySchema),
+        comparator=Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS),
         module=WeightedAverageJudge(),
         clusterer=Clusterer(threshold=0.7),
     )
@@ -112,15 +114,24 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     import langres
 
     manifest = json.loads((tmp_path / "resolver.json").read_text())
-    assert "artifact_version" in manifest
+    assert manifest["artifact_version"] == "0"
     assert manifest["langres_version"] == langres.__version__
+    type_names = [component["type_name"] for component in manifest["components"]]
+    assert type_names == [
+        "all_pairs_blocker",
+        "comparator",
+        "weighted_average_judge",
+        "clusterer",
+    ]
     for component in manifest["components"]:
         assert "type_name" in component
         assert "config" in component
+    # Clusterer config round-trips its threshold exactly.
+    clusterer_spec = next(c for c in manifest["components"] if c["type_name"] == "clusterer")
+    assert clusterer_spec["config"]["threshold"] == 0.7
     assert reloaded.clusterer.threshold == 0.7
 
 
-@pytest.mark.xfail(reason="Resolver lands in Wave 3", strict=False)
 def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     """E: reload in a fresh subprocess to catch registry/import side-effects."""
     from langres.core import (
@@ -134,7 +145,7 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
-        comparator=Comparator.from_schema(CompanySchema),
+        comparator=Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS),
         module=WeightedAverageJudge(),
         clusterer=Clusterer(threshold=0.7),
     )
@@ -160,9 +171,12 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     assert _canonical(clusters_before) == _canonical(clusters_subprocess)
 
 
-@pytest.mark.xfail(reason="Resolver lands in Wave 3", strict=False)
-def test_resolver_from_schema_one_liner(tmp_path: Path) -> None:
-    """Convenience constructor: Resolver.from_schema(CompanySchema, threshold=...)."""
+def test_resolver_from_schema_one_liner() -> None:
+    """Convenience constructor: Resolver.from_schema(CompanySchema, threshold=...).
+
+    Uses the bare (equal-weight) comparator: it need not recover the name-only
+    c4/c4_partial group, only clear the >= 0.70 accuracy floor.
+    """
     from langres.core import Resolver
     from langres.core.models import CompanySchema
 
@@ -171,3 +185,75 @@ def test_resolver_from_schema_one_liner(tmp_path: Path) -> None:
     metrics = calculate_bcubed_metrics(clusters, EXPECTED_DUPLICATE_GROUPS)
     assert metrics["f1"] >= 0.70
     assert resolver.clusterer.threshold == 0.7
+    # No over-merging even on the bare path.
+    assert _wrongly_merged_pairs(clusters, EXPECTED_DUPLICATE_GROUPS) == []
+
+
+def test_resolver_from_schema_name_dominant_recovers_all_groups() -> None:
+    """Name-dominant weights via from_schema recover the missing-fields group."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    resolver = Resolver.from_schema(
+        CompanySchema, threshold=0.7, weights=NAME_DOMINANT_WEIGHTS
+    )
+    clusters = resolver.resolve(COMPANY_RECORDS)
+    # c4/c4_partial (name-only) is recovered: perfect BCubed on this fixture.
+    assert calculate_bcubed_metrics(clusters, EXPECTED_DUPLICATE_GROUPS)["f1"] == 1.0
+
+
+def test_resolver_predict_returns_judgements() -> None:
+    """predict() exposes the scored judgements before clustering (observability)."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema, PairwiseJudgement
+
+    resolver = Resolver.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    judgements = resolver.predict(COMPANY_RECORDS)
+    assert all(isinstance(j, PairwiseJudgement) for j in judgements)
+    # AllPairs over 15 records -> 15*14/2 = 105 pairs.
+    assert len(judgements) == 105
+
+
+def test_resolver_fit_is_noop_returns_self() -> None:
+    """fit() is a no-op that returns self (sklearn convention; optimization is M3+)."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    resolver = Resolver.from_schema(CompanySchema)
+    assert resolver.fit(COMPANY_RECORDS) is resolver
+
+
+def test_resolver_load_rejects_newer_artifact(tmp_path: Path) -> None:
+    """A strictly-newer artifact_version is a hard error on load."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_version"] = "99"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="newer than this langres build"):
+        Resolver.load(tmp_path)
+
+
+def test_resolver_load_warns_on_langres_version_skew(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A langres_version mismatch warns but still loads (forward-compatible)."""
+    import logging
+
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["langres_version"] = "0.0.1"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with caplog.at_level(logging.WARNING):
+        reloaded = Resolver.load(tmp_path)
+    assert reloaded.clusterer.threshold == 0.7
+    assert any("0.0.1" in rec.message for rec in caplog.records)
