@@ -13,18 +13,62 @@ The separation of embedding and indexing concerns enables:
 
 import logging
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from langres.core.blocker import Blocker, SchemaT
+from langres.core.blockers.all_pairs import (
+    register_schema_idempotent,
+    schema_to_factory,
+)
 from langres.core.indexes.vector_index import VectorIndex
 from langres.core.models import ERCandidate
+from langres.core.registry import (
+    UnknownComponentType,
+    get_component,
+    get_schema,
+    register,
+)
 from langres.core.reports import CandidateInspectionReport
+from langres.core.serialization import ComponentSpec, SerializableState
 
 logger = logging.getLogger(__name__)
 
 
+def _index_type_name(index: object) -> str:
+    """Resolve the registry type name for a vector index instance.
+
+    The registry is keyed name->class with no reverse map, so this round-trips
+    each registered name through :func:`get_component` to find the one whose
+    class matches ``type(index)``.
+
+    Args:
+        index: A vector index instance whose class is registered.
+
+    Returns:
+        The registry key under which the index's class was registered.
+
+    Raises:
+        ValueError: If the index's class is not registered (Wave 2d/users must
+            register concrete indexes before a VectorBlocker can serialize).
+    """
+    from langres.core.registry import _COMPONENT_REGISTRY
+
+    for name in _COMPONENT_REGISTRY:
+        try:
+            if get_component(name) is type(index):
+                return name
+        except UnknownComponentType:  # pragma: no cover - name came from the map
+            continue
+    raise ValueError(
+        f"Vector index type {type(index).__name__!r} is not registered; "
+        "register it with @register(...) so the VectorBlocker can serialize it."
+    )
+
+
+@register("vector_blocker")
 class VectorBlocker(Blocker[SchemaT]):
     """Schema-agnostic blocker using embeddings and ANN search with dependency injection.
 
@@ -145,44 +189,167 @@ class VectorBlocker(Blocker[SchemaT]):
 
     def __init__(
         self,
-        schema_factory: Callable[
-            [dict[str, Any]], SchemaT
-        ],  # TODO this seems a tight coupling to the schema.
-        text_field_extractor: Callable[[SchemaT], str],
         vector_index: VectorIndex,
+        schema_factory: Callable[[dict[str, Any]], SchemaT] | None = None,
+        schema: type[SchemaT] | None = None,
+        text_field_extractor: Callable[[SchemaT], str] | None = None,
+        text_field: str | None = None,
         k_neighbors: int = 10,
         query_prompt: str | None = None,
     ):
         """Initialize VectorBlocker with injected dependencies.
 
+        Provide exactly one of ``schema``/``schema_factory`` and exactly one of
+        ``text_field``/``text_field_extractor``:
+
+        - ``schema=`` + ``text_field=`` (declarative): entities are rebuilt as
+          ``schema(**{f: record.get(f) for f in schema.model_fields})`` and text
+          is ``getattr(entity, text_field)``. This form is **config-serializable**.
+        - ``schema_factory=`` + ``text_field_extractor=`` (callables): full
+          control, but **not serializable** (callables can't round-trip).
+
+        The two styles can be mixed per-axis, but a blocker only serializes if
+        **both** axes are declarative.
+
         Args:
-            schema_factory: Callable that transforms a raw dict into a
-                Pydantic schema object (SchemaT). This allows the blocker
-                to work with any schema type.
-            text_field_extractor: Callable that extracts the text to embed
-                from a SchemaT object. For example, lambda x: x.name.
-            vector_index: Index for ANN search on embeddings.
-                The index owns the embedder and handles all embedding logic.
-                Use FAISSIndex or QdrantHybridIndex for production,
-                FakeVectorIndex or FakeHybridVectorIndex for testing.
-            k_neighbors: Number of nearest neighbors to retrieve for each
-                entity. Higher values improve recall but generate more
-                candidates. Default: 10.
-            query_prompt: Optional instruction to prepend to each query at
-                search time (for instructional embeddings). If None, no
-                instruction is added. Default: None.
+            vector_index: Index for ANN search on embeddings. The index owns the
+                embedder. Use FAISSIndex/QdrantHybridIndex for production,
+                FakeVectorIndex for testing.
+            schema_factory: Callable mapping a raw dict to a SchemaT. Mutually
+                exclusive with ``schema``.
+            schema: Pydantic schema class for declarative reconstruction.
+                Mutually exclusive with ``schema_factory``.
+            text_field_extractor: Callable extracting embed-text from a SchemaT
+                (e.g. ``lambda x: x.name``). Mutually exclusive with
+                ``text_field``.
+            text_field: Attribute name to read embed-text from each entity.
+                Mutually exclusive with ``text_field_extractor``.
+            k_neighbors: Number of nearest neighbors per entity. Higher = better
+                recall, more candidates. Default: 10.
+            query_prompt: Optional instruction prepended to each query at search
+                time (for instructional embeddings). Default: None.
 
         Raises:
-            ValueError: If k_neighbors is not positive.
+            ValueError: If k_neighbors is not positive, or if the schema /
+                text-field arguments are not provided exactly once each.
         """
         if k_neighbors <= 0:
             raise ValueError("k_neighbors must be positive")
 
-        self.schema_factory = schema_factory
-        self.text_field_extractor = text_field_extractor
+        if (schema is None) == (schema_factory is None):
+            raise ValueError(
+                "VectorBlocker requires exactly one of 'schema' or "
+                "'schema_factory' (got both or neither)."
+            )
+        if (text_field is None) == (text_field_extractor is None):
+            raise ValueError(
+                "VectorBlocker requires exactly one of 'text_field' or "
+                "'text_field_extractor' (got both or neither)."
+            )
+
+        # Schema axis: declarative form records a serializable type name.
+        self._schema_type_name: str | None = None
+        self.schema_factory: Callable[[dict[str, Any]], SchemaT]
+        if schema is not None:
+            self._schema_type_name = register_schema_idempotent(schema)
+            self.schema_factory = schema_to_factory(schema)
+        else:
+            assert schema_factory is not None  # narrowed by the guard above
+            self.schema_factory = schema_factory
+
+        # Text axis: declarative form records the field name to read.
+        self._text_field: str | None = text_field
+        self.text_field_extractor: Callable[[SchemaT], str]
+        if text_field is not None:
+            field = text_field
+            self.text_field_extractor = lambda entity: str(getattr(entity, field))
+        else:
+            assert text_field_extractor is not None  # narrowed by the guard
+            self.text_field_extractor = text_field_extractor
+
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
         self.query_prompt = query_prompt
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Serializable construction config for the registry.
+
+        Returns a mapping with the schema type name, the text field, the
+        ``k_neighbors`` / ``query_prompt`` knobs, and the vector index nested as
+        a :class:`~langres.core.serialization.ComponentSpec` (the index's own
+        ``type_name`` + ``config``). The index's out-of-band state (e.g. a built
+        FAISS index) is persisted separately via
+        :class:`~langres.core.serialization.SerializableState`, not here.
+
+        Raises:
+            ValueError: If the blocker was built with a ``schema_factory`` or a
+                ``text_field_extractor`` (opaque callables). Construct with
+                ``schema=`` and ``text_field=`` to persist.
+        """
+        if self._schema_type_name is None or self._text_field is None:
+            raise ValueError(
+                "VectorBlocker built with 'schema_factory' or "
+                "'text_field_extractor' is not serializable (callables cannot "
+                "round-trip through config); construct with schema= and "
+                "text_field= to persist."
+            )
+
+        index_type = _index_type_name(self.vector_index)
+        index_spec = ComponentSpec(
+            type_name=index_type,
+            config=dict(self.vector_index.config),  # type: ignore[attr-defined]
+        )
+        return {
+            "schema_type_name": self._schema_type_name,
+            "text_field": self._text_field,
+            "k_neighbors": self.k_neighbors,
+            "query_prompt": self.query_prompt,
+            "vector_index": index_spec,
+        }
+
+    @classmethod
+    def from_config(
+        cls,
+        config: dict[str, object],
+        state_dir: Path | None = None,
+    ) -> "VectorBlocker[SchemaT]":
+        """Rebuild a VectorBlocker from its serialized config.
+
+        Reconstructs the nested vector index via the registry
+        (``get_component(type_name).from_config(...)``) and, when the index
+        implements :class:`~langres.core.serialization.SerializableState` and a
+        ``state_dir`` is given, restores its out-of-band state.
+
+        Args:
+            config: A mapping as produced by :attr:`config` (the
+                ``"vector_index"`` value may be a ``ComponentSpec`` or its
+                ``model_dump()`` dict).
+            state_dir: Directory holding the index's persisted state. Required
+                only when the reconstructed index is a ``SerializableState``.
+
+        Returns:
+            A VectorBlocker equivalent to the one that produced ``config``.
+        """
+        schema = get_schema(str(config["schema_type_name"]))
+        index_spec = config["vector_index"]
+        if not isinstance(index_spec, ComponentSpec):
+            index_spec = ComponentSpec.model_validate(index_spec)
+
+        index_cls: Any = get_component(index_spec.type_name)
+        index = index_cls.from_config(index_spec.config)
+        if isinstance(index, SerializableState) and state_dir is not None:
+            index.load_state(state_dir)
+
+        return cls(
+            vector_index=index,
+            schema=schema,  # type: ignore[arg-type]
+            text_field=str(config["text_field"]),
+            k_neighbors=int(config["k_neighbors"]),  # type: ignore[call-overload]
+            query_prompt=(
+                str(config["query_prompt"]) if config["query_prompt"] is not None else None
+            ),
+        )
 
     def _index_is_built(self) -> bool:
         """Check if vector index has been built.

@@ -60,9 +60,7 @@ class _FakeSerializableIndex:
     ) -> tuple[np.ndarray, np.ndarray]:  # pragma: no cover - unused by stream()
         raise NotImplementedError
 
-    def search_all(
-        self, k: int, query_prompt: str | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         assert self._n_samples is not None
         indices = np.zeros((self._n_samples, k), dtype=np.int64)
         distances = np.zeros((self._n_samples, k), dtype=np.float32)
@@ -74,9 +72,7 @@ class _FakeSerializableIndex:
 
     # --- SerializableState --------------------------------------------
     def save_state(self, state_dir: Path) -> None:
-        (state_dir / "state.json").write_text(
-            json.dumps({"n_samples": self._n_samples})
-        )
+        (state_dir / "state.json").write_text(json.dumps({"n_samples": self._n_samples}))
 
     def load_state(self, state_dir: Path) -> None:
         data = json.loads((state_dir / "state.json").read_text())
@@ -299,3 +295,38 @@ def test_from_config_without_state_dir_when_not_serializable() -> None:
 
     after = list(rebuilt.stream(COMPANY_DATA))
     assert len(after) > 0
+
+
+def test_config_raises_for_unregistered_index() -> None:
+    """config fails clearly when the vector index class is not registered."""
+
+    class _UnregisteredIndex:
+        def __init__(self) -> None:
+            self._n_samples: int | None = None
+
+        @property
+        def config(self) -> dict[str, object]:
+            return {}
+
+        def create_index(self, texts: list[str]) -> None:
+            self._n_samples = len(texts)
+
+        def search(self, query_texts: Any, k: int, query_prompt: str | None = None) -> Any:
+            raise NotImplementedError  # pragma: no cover
+
+        def search_all(
+            self, k: int, query_prompt: str | None = None
+        ) -> tuple[np.ndarray, np.ndarray]:  # pragma: no cover
+            raise NotImplementedError
+
+    index = _UnregisteredIndex()
+    index.create_index([r["name"] for r in COMPANY_DATA])
+    blocker = VectorBlocker(
+        schema=CompanySchema,
+        text_field="name",
+        vector_index=index,
+        k_neighbors=2,
+    )
+
+    with pytest.raises(ValueError, match="is not registered"):
+        _ = blocker.config

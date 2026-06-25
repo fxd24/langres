@@ -152,3 +152,22 @@ def test_repeated_schema_registration_is_idempotent() -> None:
     # registration error.
     second = AllPairsBlocker(schema=CompanySchema)
     assert second.config == {"schema_type_name": "CompanySchema"}
+
+
+def test_schema_name_collision_with_different_class_raises() -> None:
+    """Two distinct classes sharing a __name__ is a real collision."""
+    from langres.core.blockers.all_pairs import register_schema_idempotent
+
+    class _Collide(BaseModel):
+        id: str
+
+    register_schema_idempotent(_Collide)
+
+    # A second, different class with the same __name__ must raise.
+    class _Outer:
+        class _Collide(BaseModel):  # noqa: N801 - intentional name reuse
+            id: str
+            extra: str | None = None
+
+    with pytest.raises(ValueError, match="already registered to a different class"):
+        register_schema_idempotent(_Outer._Collide)
