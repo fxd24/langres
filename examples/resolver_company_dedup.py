@@ -40,9 +40,7 @@ def _print_clusters(title: str, clusters: list[set[str]]) -> None:
 
 def main() -> None:
     # 1. One-line pipeline: blocker + comparator + scorer + clusterer.
-    resolver = Resolver.from_schema(
-        CompanySchema, threshold=0.7, weights=NAME_DOMINANT_WEIGHTS
-    )
+    resolver = Resolver.from_schema(CompanySchema, threshold=0.7, weights=NAME_DOMINANT_WEIGHTS)
 
     # 2. Resolve raw records into entity clusters (singletons dropped).
     clusters = resolver.resolve(COMPANY_RECORDS)

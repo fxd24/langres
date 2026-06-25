@@ -194,9 +194,7 @@ def test_resolver_from_schema_name_dominant_recovers_all_groups() -> None:
     from langres.core import Resolver
     from langres.core.models import CompanySchema
 
-    resolver = Resolver.from_schema(
-        CompanySchema, threshold=0.7, weights=NAME_DOMINANT_WEIGHTS
-    )
+    resolver = Resolver.from_schema(CompanySchema, threshold=0.7, weights=NAME_DOMINANT_WEIGHTS)
     clusters = resolver.resolve(COMPANY_RECORDS)
     # c4/c4_partial (name-only) is recovered: perfect BCubed on this fixture.
     assert calculate_bcubed_metrics(clusters, EXPECTED_DUPLICATE_GROUPS)["f1"] == 1.0
@@ -257,3 +255,223 @@ def test_resolver_load_warns_on_langres_version_skew(
         reloaded = Resolver.load(tmp_path)
     assert reloaded.clusterer.threshold == 0.7
     assert any("0.0.1" in rec.message for rec in caplog.records)
+
+
+def _vector_resolver() -> "object":
+    """Build a Resolver over a VectorBlocker + FAISSIndex (FakeEmbedder, fast)."""
+    from langres.core import (
+        Clusterer,
+        Comparator,
+        FAISSIndex,
+        FakeEmbedder,
+        Resolver,
+        VectorBlocker,
+        WeightedAverageJudge,
+    )
+    from langres.core.models import CompanySchema
+
+    index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
+    blocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=index,
+        schema=CompanySchema,
+        text_field="name",
+        k_neighbors=5,
+    )
+    return Resolver(
+        blocker=blocker,
+        comparator=Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS),
+        module=WeightedAverageJudge(),
+        clusterer=Clusterer(threshold=0.7),
+    )
+
+
+def test_resolver_builds_vector_index_transparently() -> None:
+    """resolve() builds an index-backed blocker's index without a manual call."""
+    resolver = _vector_resolver()
+    # The blocker's index starts unbuilt; resolve() must build it transparently.
+    assert not resolver.blocker._index_is_built()  # type: ignore[attr-defined]
+    clusters = resolver.resolve(COMPANY_RECORDS)
+    assert resolver.blocker._index_is_built()  # type: ignore[attr-defined]
+    # No over-merging from the vector path.
+    assert _wrongly_merged_pairs(clusters, EXPECTED_DUPLICATE_GROUPS) == []
+
+
+def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
+    """An index-backed Resolver persists + restores its FAISS state (sidecar)."""
+    from langres.core import Resolver
+
+    resolver = _vector_resolver()
+    clusters_before = resolver.resolve(COMPANY_RECORDS)
+
+    resolver.save(tmp_path)
+    # The blocker slot wrote a sidecar with the built FAISS index files.
+    assert (tmp_path / "blocker" / "index.faiss").exists()
+    assert (tmp_path / "blocker" / "corpus_embeddings.npy").exists()
+
+    reloaded = Resolver.load(tmp_path)
+    # Loaded index is already built (state restored) — resolve reuses it.
+    assert reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
+    clusters_after = reloaded.resolve(COMPANY_RECORDS)
+    assert _canonical(clusters_before) == _canonical(clusters_after)
+
+
+def test_resolver_without_comparator_uses_plain_module() -> None:
+    """comparator=None drives a self-contained Module directly (no compare stage)."""
+    from collections.abc import Iterator
+
+    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
+    from langres.core.module import Module
+    from langres.core.reports import ScoreInspectionReport
+
+    class ExactNameModule(Module[CompanySchema]):
+        """Tiny self-contained scorer: 1.0 iff names are identical."""
+
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            for pair in candidates:
+                score = 1.0 if pair.left.name == pair.right.name else 0.0
+                yield PairwiseJudgement(
+                    left_id=pair.left.id,
+                    right_id=pair.right.id,
+                    score=score,
+                    score_type="heuristic",
+                    decision_step="exact_name",
+                    provenance={},
+                )
+
+        def inspect_scores(
+            self, judgements: list[PairwiseJudgement], sample_size: int = 10
+        ) -> ScoreInspectionReport:  # pragma: no cover - not exercised here
+            raise NotImplementedError
+
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=ExactNameModule(),
+        clusterer=Clusterer(threshold=0.5),
+    )
+    clusters = resolver.resolve(COMPANY_RECORDS)
+    # Only exact-name duplicates merge: c1/c1_dup1, c4/c4_partial, c5/c5_addr_var.
+    canon = _canonical(clusters)
+    assert frozenset({"c1", "c1_dup1"}) in canon
+    assert frozenset({"c4", "c4_partial"}) in canon
+    assert frozenset({"c5", "c5_addr_var"}) in canon
+
+
+def test_resolver_save_without_comparator_omits_slot(tmp_path: Path) -> None:
+    """A comparator=None Resolver writes a 3-component manifest (no comparator)."""
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageJudge
+    from langres.core.models import CompanySchema
+
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=WeightedAverageJudge(),
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.save(tmp_path)
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    type_names = [c["type_name"] for c in manifest["components"]]
+    assert type_names == ["all_pairs_blocker", "weighted_average_judge", "clusterer"]
+    # Loads back with comparator=None.
+    reloaded = Resolver.load(tmp_path)
+    assert reloaded.comparator is None
+
+
+def test_resolver_load_rejects_incompatible_string_version(tmp_path: Path) -> None:
+    """A non-integer artifact_version that differs from supported is rejected."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_version"] = "1.0-beta"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="differs from supported"):
+        Resolver.load(tmp_path)
+
+
+def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> None:
+    """A scorer Module that is itself SerializableState round-trips its state.
+
+    Validates the *direct* (non-nested) state path: a slot component that both
+    declares a BaseModel ``config()`` and implements ``SerializableState`` is
+    saved to / restored from its own sidecar dir, exercising the
+    config_model + direct-state branches of the Resolver's save/load helpers.
+    """
+    from collections.abc import Iterator
+    from pathlib import Path as _Path
+
+    from pydantic import BaseModel as _BaseModel
+
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, register
+    from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
+    from langres.core.module import Module
+    from langres.core.reports import ScoreInspectionReport
+
+    class _StatefulConfig(_BaseModel):
+        base: float = 0.0
+
+    @register("stateful_test_module")
+    class StatefulModule(Module[CompanySchema]):
+        """Scores every pair at ``base + bump``; ``bump`` is restored from state."""
+
+        type_name = "stateful_test_module"
+        config_model = _StatefulConfig
+
+        def __init__(self, base: float = 0.0) -> None:
+            self.base = base
+            self.bump = 0.0
+
+        def config(self) -> _StatefulConfig:
+            return _StatefulConfig(base=self.base)
+
+        @classmethod
+        def from_config(cls, config: _StatefulConfig) -> "StatefulModule":
+            return cls(base=config.base)
+
+        def save_state(self, state_dir: _Path) -> None:
+            (state_dir / "bump.txt").write_text(str(self.bump))
+
+        def load_state(self, state_dir: _Path) -> None:
+            self.bump = float((state_dir / "bump.txt").read_text())
+
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            for pair in candidates:
+                yield PairwiseJudgement(
+                    left_id=pair.left.id,
+                    right_id=pair.right.id,
+                    score=min(1.0, self.base + self.bump),
+                    score_type="heuristic",
+                    decision_step="stateful",
+                    provenance={},
+                )
+
+        def inspect_scores(
+            self, judgements: list[PairwiseJudgement], sample_size: int = 10
+        ) -> ScoreInspectionReport:  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+    module = StatefulModule(base=0.4)
+    module.bump = 0.6  # state to persist (would be lost without save_state)
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=module,
+        clusterer=Clusterer(threshold=0.5),
+    )
+    resolver.save(tmp_path)
+    assert (tmp_path / "module" / "bump.txt").exists()
+
+    reloaded = Resolver.load(tmp_path)
+    assert reloaded.module.base == 0.4  # type: ignore[attr-defined]
+    assert reloaded.module.bump == 0.6  # type: ignore[attr-defined] - restored from state
+    # Every pair now scores base+bump = 1.0 >= 0.5 -> all records collapse.
+    clusters = reloaded.resolve(COMPANY_RECORDS)
+    assert len(clusters) == 1

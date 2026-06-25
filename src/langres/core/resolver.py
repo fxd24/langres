@@ -32,6 +32,7 @@ serialized and reconstructed uniformly. Every Resolver-slot component exposes a
 the helpers normalize the dict-vs-model and property-vs-method differences.
 """
 
+import inspect
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -84,23 +85,53 @@ def _component_spec(obj: object) -> ComponentSpec:
     return ComponentSpec(type_name=type_name, config=_component_config_dict(obj))
 
 
+def _state_owner(component: object) -> SerializableState | None:
+    """Return the out-of-band-state owner for a slot component, if any.
+
+    Two cases own persistable state in M0:
+
+    - The component itself implements
+      :class:`~langres.core.serialization.SerializableState` (e.g. a FAISS index
+      used directly).
+    - The component wraps a vector index that implements ``SerializableState``
+      (e.g. a ``VectorBlocker`` holding a built ``FAISSIndex``). The nested index
+      holds the heavy state; the blocker config only references it.
+
+    Returns ``None`` for stateless components (AllPairs, comparator, judge,
+    clusterer).
+    """
+    if isinstance(component, SerializableState):
+        return component
+    index = getattr(component, "vector_index", None)
+    if isinstance(index, SerializableState):
+        return index
+    return None
+
+
 def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> Any:
     """Rebuild a component from its :class:`ComponentSpec` via the registry.
 
     Looks up the class by ``type_name`` and calls its ``from_config``. Components
     whose ``from_config`` takes a Pydantic model (the FAISS/embedder convention)
     declare a ``config_model`` classvar; we validate the dict into it first.
-    Components whose ``from_config`` takes a plain dict receive the dict directly.
-    After construction, if the component implements
-    :class:`~langres.core.serialization.SerializableState` and a ``state_dir`` is
-    given, its out-of-band state is restored.
+    Components whose ``from_config`` accepts a ``state_dir`` (e.g. ``VectorBlocker``,
+    which restores its nested index's state) are given the slot's state dir.
+    Finally, if the rebuilt component is itself a
+    :class:`~langres.core.serialization.SerializableState` and a populated
+    ``state_dir`` exists, its state is restored directly.
     """
     cls = get_component(spec.type_name)
     config_model = getattr(cls, "config_model", None)
-    if config_model is not None:
-        component = cls.from_config(config_model.model_validate(spec.config))  # type: ignore[attr-defined]
+    config_arg = (
+        config_model.model_validate(spec.config) if config_model is not None else spec.config
+    )
+
+    # Pass state_dir only to from_config signatures that accept it.
+    accepts_state_dir = "state_dir" in inspect.signature(cls.from_config).parameters  # type: ignore[attr-defined]
+    if accepts_state_dir and state_dir is not None and state_dir.exists():
+        component = cls.from_config(config_arg, state_dir=state_dir)  # type: ignore[attr-defined]
     else:
-        component = cls.from_config(spec.config)  # type: ignore[attr-defined]
+        component = cls.from_config(config_arg)  # type: ignore[attr-defined]
 
     if isinstance(component, SerializableState) and state_dir is not None and state_dir.exists():
         component.load_state(state_dir)
@@ -249,9 +280,8 @@ class Resolver:
             return  # AllPairs and other index-free blockers.
 
         # Already built (e.g. restored via load_state) -> reuse, never re-embed.
-        if getattr(self.blocker, "_index_is_built", None) is not None:
-            if self.blocker._index_is_built():  # type: ignore[attr-defined]
-                return
+        if self.blocker._index_is_built():  # type: ignore[attr-defined]
+            return
 
         entities = [self.blocker.schema_factory(record) for record in records]  # type: ignore[attr-defined]
         texts = [self.blocker.text_field_extractor(entity) for entity in entities]  # type: ignore[attr-defined]
@@ -310,10 +340,11 @@ class Resolver:
         components: list[ComponentSpec] = []
         for slot_name, component in self._slots():
             components.append(_component_spec(component))
-            if isinstance(component, SerializableState):
+            owner = _state_owner(component)
+            if owner is not None:
                 state_dir = out_dir / slot_name
                 state_dir.mkdir(parents=True, exist_ok=True)
-                component.save_state(state_dir)
+                owner.save_state(state_dir)
 
         manifest = ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
@@ -343,9 +374,7 @@ class Resolver:
                 library understands.
         """
         in_dir = Path(path)
-        manifest = ArtifactManifest.model_validate_json(
-            (in_dir / _MANIFEST_FILENAME).read_text()
-        )
+        manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
         cls._check_versions(manifest)
 
         # Map specs back to slots. The comparator slot is present iff a spec has
@@ -358,9 +387,7 @@ class Resolver:
         blocker_spec = ordered[0]
         clusterer_spec = ordered[-1]
         module_spec = next(
-            spec
-            for spec in ordered
-            if spec not in (blocker_spec, clusterer_spec, comparator_spec)
+            spec for spec in ordered if spec not in (blocker_spec, clusterer_spec, comparator_spec)
         )
 
         blocker = _rebuild_component(blocker_spec, state_dir=in_dir / "blocker")
@@ -383,22 +410,21 @@ class Resolver:
     def _check_versions(manifest: ArtifactManifest) -> None:
         """Validate artifact compatibility; raise on an unreadably-new artifact.
 
-        A newer-or-equal ``artifact_version`` than this library's
-        :data:`~langres.core.serialization.ARTIFACT_VERSION` is fine to read
-        (same major layout). A *strictly newer* layout we cannot understand is a
-        hard error. A ``langres_version`` mismatch is logged as a warning, not a
-        failure — configs are forward-compatible within a layout version.
+        ``ARTIFACT_VERSION`` is a monotonic integer-valued string bumped on an
+        incompatible layout change. An artifact at an older-or-equal layout is
+        fine to read; a *strictly newer* (or malformed/non-integer) layout we
+        cannot understand is a hard error. A ``langres_version`` mismatch is
+        logged as a warning, not a failure — configs are forward-compatible
+        within a layout version.
         """
         try:
             artifact_v = int(manifest.artifact_version)
             current_v = int(ARTIFACT_VERSION)
-        except ValueError:  # non-integer versions: fall back to string equality
-            if manifest.artifact_version != ARTIFACT_VERSION:
-                raise ValueError(
-                    f"Artifact version {manifest.artifact_version!r} differs from "
-                    f"supported {ARTIFACT_VERSION!r}; cannot load."
-                ) from None
-            return
+        except ValueError:  # malformed/non-integer layout version -> incompatible.
+            raise ValueError(
+                f"Artifact version {manifest.artifact_version!r} differs from "
+                f"supported {ARTIFACT_VERSION!r}; cannot load."
+            ) from None
         if artifact_v > current_v:
             raise ValueError(
                 f"Artifact version {manifest.artifact_version!r} is newer than this "

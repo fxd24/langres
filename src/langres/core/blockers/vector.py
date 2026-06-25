@@ -14,7 +14,7 @@ The separation of embedding and indexing concerns enables:
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -66,6 +66,21 @@ def _index_type_name(index: object) -> str:
         f"Vector index type {type(index).__name__!r} is not registered; "
         "register it with @register(...) so the VectorBlocker can serialize it."
     )
+
+
+def _index_config_dict(index: object) -> dict[str, object]:
+    """Return a vector index's construction config as a plain JSON-able dict.
+
+    Bridges the two component-config conventions: a ``config`` **property**
+    returning a ``dict`` (returned as-is) and a ``config()`` **method**
+    returning a Pydantic model (dumped).
+    """
+    from pydantic import BaseModel
+
+    raw = index.config() if callable(getattr(index, "config")) else index.config  # type: ignore[attr-defined]
+    if isinstance(raw, BaseModel):
+        return raw.model_dump()
+    return dict(raw)
 
 
 @register("vector_blocker")
@@ -187,6 +202,10 @@ class VectorBlocker(Blocker[SchemaT]):
         Higher k = better recall but more candidates (and cost).
     """
 
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "vector_blocker"
+
     def __init__(
         self,
         vector_index: VectorIndex,
@@ -298,7 +317,7 @@ class VectorBlocker(Blocker[SchemaT]):
         index_type = _index_type_name(self.vector_index)
         index_spec = ComponentSpec(
             type_name=index_type,
-            config=dict(self.vector_index.config),  # type: ignore[attr-defined]
+            config=_index_config_dict(self.vector_index),
         )
         return {
             "schema_type_name": self._schema_type_name,
@@ -337,7 +356,11 @@ class VectorBlocker(Blocker[SchemaT]):
             index_spec = ComponentSpec.model_validate(index_spec)
 
         index_cls: Any = get_component(index_spec.type_name)
-        index = index_cls.from_config(index_spec.config)
+        index_config_model = getattr(index_cls, "config_model", None)
+        if index_config_model is not None:
+            index = index_cls.from_config(index_config_model.model_validate(index_spec.config))
+        else:
+            index = index_cls.from_config(index_spec.config)
         if isinstance(index, SerializableState) and state_dir is not None:
             index.load_state(state_dir)
 
