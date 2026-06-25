@@ -26,10 +26,20 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: pip-audit (CVE scan)
+      # pip-audit and guarddog are ADVISORY signals, not merge gates. The hard
+      # supply-chain controls are the exclude-newer 7-day quarantine (pyproject)
+      # + Dependabot cooldown + Dependabot security PRs. These steps run so their
+      # findings stay visible (reviewed via the weekly scheduled run) but must
+      # not block PRs: the quarantine deliberately delays patches (so a non-empty
+      # CVE list is expected and clears on the next `make upgrade-deps`), and
+      # guarddog is heuristic with many false positives (CUDA bundled binaries,
+      # the dspy<->dnspython typosquat FP, single-file packages, etc.).
+      - name: pip-audit (CVE scan, advisory)
+        continue-on-error: true
         run: uv run pip-audit
 
-      - name: guarddog (malicious-package scan)
+      - name: guarddog (malicious-package scan, advisory)
+        continue-on-error: true
         run: |
           uv export --no-hashes --format requirements-txt -o /tmp/langres-req.txt
           uv run guarddog pypi verify /tmp/langres-req.txt
