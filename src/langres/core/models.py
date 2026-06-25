@@ -14,6 +14,8 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
+from langres.core.registry import register_schema
+
 
 class EntityProtocol(Protocol):
     """Protocol defining minimum requirements for entity schemas.
@@ -36,6 +38,7 @@ class EntityProtocol(Protocol):
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
+@register_schema("CompanySchema")
 class CompanySchema(BaseModel):
     """
     Domain model for company entities (POC test data).

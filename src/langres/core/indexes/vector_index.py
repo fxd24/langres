@@ -14,7 +14,7 @@ Key design principles:
 import json
 import logging
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import ClassVar, Literal, Protocol, cast
 
 import faiss
 import numpy as np
@@ -222,6 +222,9 @@ class FAISSIndex:
         distances, indices = index.search_all(k=10)
         # Returns: distances=(3,10), indices=(3,10)
     """
+
+    type_name: ClassVar[str] = "faiss_index"
+    config_model: ClassVar[type[FAISSIndexConfig]] = FAISSIndexConfig
 
     def __init__(
         self,

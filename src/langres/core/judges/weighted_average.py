@@ -23,6 +23,7 @@ can score a single ComparisonVector without going through ``forward``.
 """
 
 from collections.abc import Iterator
+from typing import ClassVar
 
 from langres.core.comparator import Comparator
 from langres.core.feature import ComparisonVector, FeatureSpec, combine_present
@@ -54,6 +55,10 @@ class WeightedAverageJudge(Module[SchemaT]):
     time. The score combiner and the over-merge evidence floor live in
     :func:`~langres.core.feature.combine_present`.
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "weighted_average_judge"
 
     def score(self, vector: ComparisonVector, specs: list[FeatureSpec]) -> float:
         """Combine a ComparisonVector into a score in ``[0, 1]``.

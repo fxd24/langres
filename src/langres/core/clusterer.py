@@ -6,7 +6,7 @@ judgements into entity clusters using graph algorithms (connected components).
 """
 
 from collections.abc import Iterator
-from typing import Any, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 import networkx as nx
 
@@ -31,6 +31,10 @@ class Clusterer:
 
         # clusters is a list of sets: [{"id1", "id2"}, {"id3", "id4", "id5"}]
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "clusterer"
 
     def __init__(self, threshold: float = 0.5):
         """Initialize clusterer.
