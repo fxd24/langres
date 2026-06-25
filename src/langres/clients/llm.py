@@ -1,11 +1,10 @@
 """LiteLLM client factory with Langfuse tracing."""
 
 import logging
-import os
 from typing import Any
 
 import litellm
-from langfuse import Langfuse  # type: ignore[import-untyped]
+from langfuse import Langfuse
 
 from langres.clients.settings import Settings
 
@@ -15,8 +14,11 @@ logger = logging.getLogger(__name__)
 def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = True) -> Any:
     """Create LiteLLM client with optional Langfuse tracing.
 
-    This function configures LiteLLM with optional Langfuse callbacks for tracing.
-    LiteLLM and Langfuse read credentials directly from environment variables.
+    This function configures LiteLLM with the Langfuse OpenTelemetry callback
+    (``langfuse_otel``) for tracing. langfuse 4.x is the OpenTelemetry-based SDK,
+    so LiteLLM emits traces via its ``langfuse_otel`` integration rather than the
+    legacy v2 ``langfuse`` callback. LiteLLM's callback reads ``LANGFUSE_*``
+    credentials directly from environment variables.
 
     Args:
         settings: Optional Settings object. If None, loads from environment.
@@ -85,25 +87,27 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
             settings.langfuse_public_key[:10] if settings.langfuse_public_key else "None",
         )
 
-        # Explicitly initialize Langfuse client
-        # This ensures proper SDK setup before LiteLLM uses it
+        # Explicitly initialize the Langfuse client (v4 / OpenTelemetry SDK)
+        # to validate credentials before LiteLLM starts emitting traces.
         try:
             langfuse_client = Langfuse(
                 public_key=settings.langfuse_public_key,
                 secret_key=settings.langfuse_secret_key,
                 host=settings.langfuse_host,
             )
-            # Verify connection by flushing any pending events
-            langfuse_client.flush()
+            # Verify credentials and connectivity (returns False on failure).
+            if not langfuse_client.auth_check():
+                raise ValueError("Langfuse auth_check failed (invalid credentials or host)")
             logger.info("Langfuse client initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize Langfuse client: %s", e)
             raise ValueError(f"Langfuse initialization failed: {e}") from e
 
-        # Configure LiteLLM to use Langfuse callbacks
-        # LiteLLM will read LANGFUSE_* env vars for its own Langfuse client
-        litellm.success_callback = ["langfuse"]
-        litellm.failure_callback = ["langfuse"]
+        # Configure LiteLLM to use the Langfuse OpenTelemetry callback.
+        # langfuse 4.x is OTel-based, so LiteLLM's "langfuse_otel" integration
+        # (not the legacy v2 "langfuse" callback) is the correct one. It reads
+        # LANGFUSE_* env vars for its own exporter.
+        litellm.callbacks = ["langfuse_otel"]
 
         # Suppress verbose LiteLLM logging (prevents "Langfuse Layer Logging - logging success" spam)
         # LiteLLM logs every single API call at INFO level, which pollutes logs with thousands of messages

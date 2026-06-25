@@ -38,6 +38,7 @@ class TestCreateLLMClient:
             patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
+            mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
             client = create_llm_client(settings)
@@ -48,11 +49,10 @@ class TestCreateLLMClient:
                 secret_key="sk-lf-test",
                 host="https://custom.langfuse.com",
             )
-            mock_langfuse_instance.flush.assert_called_once()
+            mock_langfuse_instance.auth_check.assert_called_once()
 
-            # Verify litellm callbacks are configured
-            assert "langfuse" in mock_litellm.success_callback
-            assert "langfuse" in mock_litellm.failure_callback
+            # Verify litellm Langfuse OpenTelemetry callback is configured
+            assert mock_litellm.callbacks == ["langfuse_otel"]
 
             # Verify litellm module is returned
             assert client is mock_litellm
@@ -76,17 +76,17 @@ class TestCreateLLMClient:
                 patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
             ):
                 mock_langfuse_instance = MagicMock()
+                mock_langfuse_instance.auth_check.return_value = True
                 mock_langfuse_class.return_value = mock_langfuse_instance
 
                 client = create_llm_client()
 
                 # Verify Langfuse initialized with env vars
                 mock_langfuse_class.assert_called_once()
-                mock_langfuse_instance.flush.assert_called_once()
+                mock_langfuse_instance.auth_check.assert_called_once()
 
-                # Verify callbacks configured
-                assert "langfuse" in mock_litellm.success_callback
-                assert "langfuse" in mock_litellm.failure_callback
+                # Verify callback configured
+                assert mock_litellm.callbacks == ["langfuse_otel"]
 
     def test_create_llm_client_uses_default_host(self):
         """Test create_llm_client with Settings using default Langfuse host."""
@@ -105,6 +105,7 @@ class TestCreateLLMClient:
             patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
+            mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
             client = create_llm_client(settings)
@@ -115,11 +116,10 @@ class TestCreateLLMClient:
                 secret_key="sk-lf-test",
                 host="https://cloud.langfuse.com",
             )
-            mock_langfuse_instance.flush.assert_called_once()
+            mock_langfuse_instance.auth_check.assert_called_once()
 
-            # Verify callbacks configured
-            assert "langfuse" in mock_litellm.success_callback
-            assert "langfuse" in mock_litellm.failure_callback
+            # Verify callback configured
+            assert mock_litellm.callbacks == ["langfuse_otel"]
 
             # Verify Settings has default host
             assert settings.langfuse_host == "https://cloud.langfuse.com"
@@ -144,17 +144,17 @@ class TestCreateLLMClient:
             patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
+            mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
             client = create_llm_client(settings)
 
             # Verify Langfuse initialized
             mock_langfuse_class.assert_called_once()
-            mock_langfuse_instance.flush.assert_called_once()
+            mock_langfuse_instance.auth_check.assert_called_once()
 
-            # Verify callbacks configured
-            assert "langfuse" in mock_litellm.success_callback
-            assert "langfuse" in mock_litellm.failure_callback
+            # Verify callback configured
+            assert mock_litellm.callbacks == ["langfuse_otel"]
 
             # Verify Settings has Azure configuration
             assert settings.azure_api_key == "azure-key-123"
@@ -169,9 +169,8 @@ class TestCreateLLMClient:
         with patch("langres.clients.llm.litellm") as mock_litellm:
             client = create_llm_client(enable_langfuse=False)
 
-            # Verify callbacks NOT configured
-            assert mock_litellm.success_callback != ["langfuse"]
-            assert mock_litellm.failure_callback != ["langfuse"]
+            # Verify the Langfuse OTel callback is NOT configured
+            assert mock_litellm.callbacks != ["langfuse_otel"]
 
             # Verify litellm module is returned
             assert client is mock_litellm
@@ -212,17 +211,17 @@ class TestCreateLLMClient:
             patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
+            mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
             client = create_llm_client(settings)
 
             # Verify Langfuse initialized
             mock_langfuse_class.assert_called_once()
-            mock_langfuse_instance.flush.assert_called_once()
+            mock_langfuse_instance.auth_check.assert_called_once()
 
-            # Verify callbacks configured
-            assert "langfuse" in mock_litellm.success_callback
-            assert "langfuse" in mock_litellm.failure_callback
+            # Verify callback configured
+            assert mock_litellm.callbacks == ["langfuse_otel"]
 
             # Verify litellm module is returned
             assert client is mock_litellm
@@ -237,6 +236,22 @@ class TestCreateLLMClient:
         with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
             # Simulate Langfuse initialization failure
             mock_langfuse_class.side_effect = Exception("Connection failed")
+
+            with pytest.raises(ValueError, match="Langfuse initialization failed"):
+                create_llm_client(settings, enable_langfuse=True)
+
+    def test_create_llm_client_raises_error_on_failed_auth_check(self):
+        """Test create_llm_client raises ValueError if Langfuse auth_check fails."""
+        settings = Settings(
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret_key="sk-lf-test",
+        )
+
+        with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
+            mock_langfuse_instance = MagicMock()
+            # auth_check returns False -> invalid credentials/host
+            mock_langfuse_instance.auth_check.return_value = False
+            mock_langfuse_class.return_value = mock_langfuse_instance
 
             with pytest.raises(ValueError, match="Langfuse initialization failed"):
                 create_llm_client(settings, enable_langfuse=True)
