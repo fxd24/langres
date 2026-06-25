@@ -14,7 +14,7 @@ import difflib
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Generic, Literal, TypeVar, cast
+from typing import ClassVar, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 from rapidfuzz import fuzz
@@ -136,6 +136,11 @@ class StringComparator(Comparator[SchemaT]):
     Construction validates feature names against ``schema.model_fields`` when a
     ``schema`` is supplied (or implicitly via :meth:`from_schema`).
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name from any slot component
+    # (see :mod:`langres.core.resolver`).
+    type_name: ClassVar[str] = "comparator"
 
     def __init__(
         self,

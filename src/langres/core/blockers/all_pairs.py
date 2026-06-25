@@ -6,7 +6,7 @@ into any Pydantic schema type.
 """
 
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -111,6 +111,10 @@ class AllPairsBlocker(Blocker[SchemaT]):
         - Sorted neighborhood
         - LSH (Locality-Sensitive Hashing)
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "all_pairs_blocker"
 
     def __init__(
         self,
