@@ -1,5 +1,15 @@
 # Claude Code Guidelines for langres
 
+> **Lean router.** Detail lives in modular rules under `.claude/rules/` and in
+> `docs/`. Some rules are **always-on**; others are **path-scoped** (they load
+> only when you touch a file in their scope). Read the relevant rule before
+> writing code in its domain.
+>
+> **Keep docs in sync with code.** When a change touches behavior, paths,
+> commands, conventions, or data contracts that this file, a rule, or anything
+> under `docs/` describes, update the relevant doc/rule in the **same** change —
+> not a follow-up. Stale docs mislead silently.
+
 ## Project Overview
 
 **langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a two-layer API (high-level tasks and low-level core components).
@@ -9,43 +19,31 @@
 2. Semantic vector search (embedding-based)
 3. Hybrid blocking + LLM judge (target architecture)
 
-**📋 See `docs/POC.md` for the complete POC plan**, including:
-- The hypothesis we're validating
-- Success criteria (BCubed F1 ≥ 0.85 for Approach 3)
-- Core components to build (`Module`, `Blocker`, `Clusterer`)
-- TDD development approach
-- Go/No-Go decision criteria
+**📋 See `docs/POC.md` for the complete POC plan** (hypothesis, success criteria — BCubed F1 ≥ 0.85 for Approach 3 — core components, TDD approach, Go/No-Go criteria).
 
 **Current focus**: Building production-quality `langres.core` primitives with 100% test coverage. This is NOT throwaway prototype code—these components will become the foundation of the full library.
 
-## Code Style & Standards
+## How I Work — Rules (`.claude/rules/`)
 
-### Python Guidelines
+These auto-load. **Always-on** rules apply every session; **path-scoped** rules
+load only when you read/edit a file matching their `paths:`.
 
-- **Python Version**: Requires Python >=3.12
-- **Code Formatting**: Use `ruff` for code formatting and linting
-- **Type Hints**: Use comprehensive type hints throughout. Use built-in types (`list`, `dict`, `str`, etc.) instead of `typing.List`, `typing.Dict`, etc. (Python 3.12+ feature)
-- **Type Checking**: Use `mypy` in strict mode - all code must pass type checking
-- **Validation**: Pydantic-first approach - all data models should use Pydantic
-- **Logging**: ALWAYS use the `logging` module instead of `print()` statements in source code and tests. Print statements are ONLY acceptable in `examples/` directory for demonstration purposes. Ruff's T201 rule enforces this.
-- **Package Manager**: Use `uv add` for dependencies (runtime), `uv add --dev` for dev dependencies. Never manually edit `pyproject.toml`. See [uv docs](https://docs.astral.sh/uv/) for details.
-- **Test Coverage**: 100% coverage required (POC requirement). See `[tool.coverage.*]` in pyproject.toml for configuration.
+**Always-on:**
+- `expert-knowledge.md` — verify-before-asserting, hypotheses ≠ facts, own the failure, stay in scope, **commit before the worktree disappears**, timeouts. The baseline for how to reason and act.
+- `data-safety.md` — irreversible-actions guardrail; uncommitted changes are sacred.
+- `context-management.md` — delegate output-heavy ops to subagents; parallelize independent work.
 
-### Python Execution & File Management
+**Path-scoped:**
+- `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
+- `component-design.md` *(`src/**`)* — two-layer API, design principles, lightweight & composable / SRP, common patterns, adding components.
+- `testing.md` *(`tests/**`)* — 100% coverage, markers, human-like dev-iteration loop.
+- `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
-- **Python Execution**: ALWAYS use `uv run python` (not system `python` or `python3`) to ensure code runs in the project's virtual environment with correct dependencies
-- **Temporary Scripts**: When creating temporary test scripts or scratch files, place them in the repo's `tmp/` directory (which is gitignored), NOT in the system `/tmp` directory. This keeps temporary work organized and prevents polluting the system temp folder.
-  - Example: Create scripts in `/Users/davidgraf/work/langres/tmp/test_script.py` instead of `/tmp/test_script.py`
-- **Environment Variables**: The `.env` file contains environment configuration (including OpenMP settings for macOS). Use `uv run --env-file .env` for commands that need these settings. See `docs/FRICTION_LOG.md` for known issues and remedies.
+## Skills
 
-### Naming Conventions
+- `prompting-claude-4` — expert guidance for prompting Claude 4.x models (XML patterns, behavioral fixes, extended thinking). Use when writing system prompts for the LLM judge / flows, or any agent definition.
 
-- **Classes**: PascalCase (e.g., `DeduplicationTask`, `CompanyFlow`)
-- **Functions/Methods**: snake_case (e.g., `generate_candidates`, `compile`)
-- **Private Methods**: Prefix with underscore (e.g., `_internal_method`)
-- **Constants**: UPPER_SNAKE_CASE
-
-### Project Structure
+## Project Structure
 
 ```
 langres/
@@ -60,189 +58,11 @@ langres/
 └── docs/               # Documentation
 ```
 
-## Architecture Principles
-
-### The Two-Layer API
-
-1. **High-Level (`langres.tasks`)**: Pre-built task runners for common use cases
-   - Target: 80% of users
-   - Examples: `DeduplicationTask`, `EntityLinkingTask`
-   - Philosophy: Like scikit-learn's Pipeline
-
-2. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines
-   - Target: 20% of users (advanced use cases)
-   - Components: `Module`, `Blocker`, `Optimizer`, `Clusterer`, `Canonicalizer`
-   - Philosophy: Like PyTorch's primitives
-
-### Key Design Principles
-
-- **Pydantic-First**: All data models use Pydantic for validation
-- **Full Observability**: Every `PairwiseJudgement` carries provenance and reasoning
-- **Composable**: Components should be reusable across different tasks
-- **Optimizable**: Support both hyperparameter tuning (Optuna) and prompt optimization (DSPy)
-- **Cost-Aware**: Consider API costs, computation costs, and optimization budgets
-
-### Component Design: Lightweight & Composable
-
-**langres is "lightweight and composable" - but what does that mean in practice?**
-
-#### Single Responsibility Principle (SRP)
-Each component should have **ONE reason to change**. If you need "and" to describe what a class does, it's doing too much.
-
-**Example:**
-- ❌ Bad: "VectorBlocker normalizes schema AND extracts text AND generates embeddings AND builds indexes AND searches"
-- ✓ Good: "VectorBlocker orchestrates candidate generation by delegating to injected services"
-
-#### Lightweight = Single Abstraction Level
-A component is lightweight when it:
-- Has **≤3 constructor dependencies** (more suggests multiple responsibilities)
-- Operates at **single abstraction level** (don't mix high-level orchestration with low-level library calls)
-- Is **≤200 lines per class** (not a hard rule, but a warning sign)
-- Can be described **without "and"** in a single sentence
-
-**Red flags for over-complex components:**
-- Importing from multiple domains (e.g., `faiss` AND `transformers` AND `networkx` in same class)
-- Hard to test (must mock concrete libraries like SentenceTransformer)
-- Mixed abstractions (Blocker directly calling `faiss.IndexFlatL2()` instead of `VectorIndex.add()`)
-
-#### Composition Patterns: Extract Helper Classes
-When a component handles distinct technical concerns, extract them:
-
-```python
-# Instead of VectorBlocker doing everything:
-class VectorBlocker:
-    def __init__(self, ..., model_name, ...):
-        self.model = SentenceTransformer(model_name)  # ❌ Direct dependency
-
-# Extract services and inject them:
-class EmbeddingService:
-    """Helper: Only generates embeddings."""
-    def encode_batch(self, texts: list[str]) -> np.ndarray: ...
-
-class VectorBlocker:
-    def __init__(self, ..., embedding_service: EmbeddingService, ...):
-        self.embedding_service = embedding_service  # ✓ Injected dependency
-```
-
-**Benefits of extraction:**
-- ✓ Single responsibility (EmbeddingService only does embeddings)
-- ✓ Testable (mock interface, not concrete library)
-- ✓ Reusable (use same EmbeddingService in Module)
-- ✓ Swappable (try different embedding models)
-
-#### When to Extract Helper Classes
-Extract when you see:
-1. **Multiple technical libraries**: Same class imports `faiss` AND `transformers`
-2. **Hard to test**: Must mock concrete libraries (SentenceTransformer, FAISS)
-3. **Reuse potential**: Logic needed in multiple places (embeddings in Blocker AND Module)
-4. **Multiple "and"s**: "Does schema normalization AND text extraction AND embedding AND indexing"
-
-**When NOT to extract:**
-- Truly trivial (1-2 line lambda)
-- No reuse (used once, unlikely to change)
-- Already simple (meets lightweight criteria)
-
-**📋 See `.agent/component-design-principles.md` for comprehensive guidance**, including:
-- Complete SRP examples with before/after code
-- Decision framework for when to extract helper classes
-- VectorBlocker case study showing proper decomposition
-- Composition patterns (service classes, strategy pattern, factories)
-- Common anti-patterns and how to avoid them
-- Component design checklist
-
 ## Dependencies
 
-### Core Stack
+**Core stack**: Pydantic (validation), Optuna (hyperparameter optimization), DSPy (prompt optimization), sentence-transformers (embeddings), rapidfuzz (string similarity), networkx (graph clustering), PyTorch (learnable components).
 
-- **Pydantic**: Data validation and schema management
-- **Optuna**: Hyperparameter optimization
-- **DSPy**: Prompt optimization for LLM-based matchers
-- **sentence-transformers**: Semantic embeddings
-- **rapidfuzz**: String similarity metrics
-- **networkx**: Graph clustering algorithms
-- **PyTorch**: Deep learning and learnable components
-
-### Development Tools
-
-- **ruff**: Code formatting and linting
-- **pytest**: Testing framework with pytest-cov
-- **mypy**: Static type checking (strict mode)
-
-## Implementation Guidelines
-
-### When Adding New Components
-
-1. **Blockers**: Must implement candidate generation and schema normalization
-2. **Flows (Modules)**: Must yield `PairwiseJudgement` objects
-3. **Tasks**: Should compose Blocker + Flow + optional Optimizer
-4. **All Components**: Should support both `.run()` and `.compile()` methods where appropriate
-
-### Testing
-
-- **100% test coverage required** - all code must be tested (POC requirement)
-- Write tests for all new components in `tests/`
-- Use descriptive test names: `test_deduplication_task_with_company_flow`
-- Mark slow tests with `@pytest.mark.slow`, integration tests with `@pytest.mark.integration`
-- Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
-
-### Development Workflow (Human-Like Iteration)
-
-**Work iteratively like a human developer would:**
-
-1. **Verify as you go**: After writing a function, immediately run it to check it works
-2. **Test-first when appropriate**: If starting with tests (TDD), run them to see failures, then implement
-3. **Validate data contracts**: Print/inspect input and output data to ensure correct structure
-4. **Run type checking**: Use `uv run mypy src/` to catch type errors early
-5. **Check coverage**: Run `uv run pytest --cov` to verify 100% coverage is maintained
-6. **Incremental verification**: Don't write large blocks without testing - validate each step
-7. **Use the REPL/debugger**: When uncertain about behavior, test in isolation first
-8. **Read error messages carefully**: They often contain the exact fix needed
-
-**Example workflow**:
-- Write function → Run it with sample data → Fix errors → Add tests → Run tests → Check types → Check coverage → Commit
-
-This iterative approach catches issues early and ensures code works as expected before moving forward.
-
-### Documentation
-
-- Update relevant docs in `docs/` when changing architecture
-- Add docstrings to all public methods
-- Include usage examples for new components in `examples/`
-
-## Common Patterns
-
-### Task Implementation
-
-```python
-class SomeTask:
-    def __init__(self, flow: Module, blocker: Blocker):
-        self.flow = flow
-        self.blocker = blocker
-
-    def compile(self, gold_data, metric: str):
-        """Optimize hyperparameters on gold data"""
-        pass
-
-    def run(self, data):
-        """Execute the task on input data"""
-        pass
-```
-
-### Flow (Module) Implementation
-
-```python
-class SomeFlow(Module):
-    def forward(self, candidates):
-        """Yield PairwiseJudgement for each candidate pair"""
-        for pair in candidates:
-            score = self._compute_similarity(pair)
-            yield PairwiseJudgement(
-                left_id=pair.left.id,
-                right_id=pair.right.id,
-                score=score,
-                score_type="calibrated_prob"
-            )
-```
+**Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 
 ## Important Notes
 
@@ -251,57 +71,21 @@ class SomeFlow(Module):
 - Document design decisions in code comments
 - Focus on the core use cases: Deduplication and Entity Linking (V1 scope)
 
-## Agent Analysis & Expert Feedback
+## Agent Analysis & Expert Feedback (`.agent/`)
 
 The `.agent/` folder contains external expert analyses of the langres project:
 
-- **`.agent/genalysis/20251029_er_use_cases_expert_analysis.md`**: Comprehensive taxonomy of 18+ entity resolution use cases, mapping each to langres components, identifying gaps (incremental resolution, temporal support, streaming), and comparing langres to state-of-the-art ER systems (Dedupe.io, Splink, Zingg). Essential reading for understanding production requirements and missing features.
+- **`.agent/genalysis/20251029_er_use_cases_expert_analysis.md`**: Taxonomy of 18+ entity resolution use cases, mapping each to langres components, identifying gaps (incremental resolution, temporal support, streaming), and comparing langres to state-of-the-art ER systems (Dedupe.io, Splink, Zingg). Essential for understanding production requirements and missing features.
+- **`.agent/genalysis/20251029_comprehensive_documentation_evaluation.md`**: Expert evaluation (7.5/10) of architecture, feasibility, critical problems (blocking scalability, DSPy cost, clustering guarantees), and production-readiness gaps.
 
-- **`.agent/genalysis/20251029_comprehensive_documentation_evaluation.md`**: Expert evaluation (7.5/10) of the project architecture, feasibility analysis, critical problems (blocking scalability, DSPy cost implications, clustering guarantees), and production readiness gaps. Includes practical recommendations for performance benchmarks, cost models, and quality assurance.
+**When to consult**: before planning new features (check if already identified as a gap); when considering production requirements; when prioritizing work (these docs separate critical from nice-to-have).
 
-**When to consult**:
-- Before planning new features to check if they're already identified as gaps
-- When considering production deployment requirements
-- To understand real-world challenges and best practices in entity resolution
-- When prioritizing development work (these docs identify critical vs. nice-to-have features)
+**Note on documentation structure**: Keep `CLAUDE.md` concise and actionable. Substantial new guidance (>50 lines) belongs in a focused `.claude/rules/*.md` or `.agent/` doc linked from here, not inline — this keeps the always-on instructions scannable.
 
-**Note on documentation structure**: Keep `CLAUDE.md` concise and actionable. When adding substantial new guidance (>50 lines), consider creating a focused document in `.agent/` instead and linking to it here. This keeps the main instructions scannable while preserving detailed context.
+## Reference Documentation (`docs/`)
 
-## Reference Documentation
-
-When working on langres, consult these comprehensive docs for detailed context:
-
-### `docs/CHANGELOG.md` - Project Progress
-**When to use**: Understanding what's been built so far
-- To see the progression from architecture to implementation
-- Quick overview of completed POC milestones
-
-### `docs/POC.md` - Proof of Concept Plan ⭐ **START HERE**
-**When to use**: Understanding the current development stage and priorities
-- **Before starting any implementation work** - this defines our current focus
-- When deciding what to build next (we're doing core primitives, not tasks layer)
-- To understand the three approaches we're validating (classical, semantic, LLM hybrid)
-- When clarifying success criteria (BCubed F1 targets, TDD requirements)
-- To see what's in scope NOW vs. what's planned for later (no Optimizer, no tasks yet)
-- When evaluating architectural decisions (does this fit the POC validation goals?)
-
-### `docs/PROJECT_OVERVIEW.md` - Architecture and Philosophy
-**When to use**: Understanding the "why" behind design decisions
-- Before proposing major architectural changes
-- When clarifying the relationship between components (Blocker, Flow, Optimizer, etc.)
-- To understand the philosophy behind the two-layer API
-- When explaining langres to users or in documentation
-
-### `docs/TECHNICAL_OVERVIEW.md` - API Reference and Data Contracts
-**When to use**: Implementation details and type signatures
-- When implementing new components (Blocker, Flow, Task, etc.)
-- To understand data contracts (what `PairwiseJudgement`, `Candidate`, etc. should look like)
-- When defining method signatures for consistency
-- To see complete API examples and expected inputs/outputs
-
-### `docs/USE_CASES.md` - Use Case Taxonomy and Roadmap
-**When to use**: Understanding scope and future direction
-- When evaluating whether a feature request is in scope
-- To understand which use cases are V1 vs. V1.1 vs. out-of-scope
-- When someone asks "can langres do X?" (streaming, temporal, collective resolution, etc.)
-- To see the formal taxonomy of supported entity resolution patterns
+- **`docs/POC.md`** ⭐ **START HERE** — current development stage and priorities; the three approaches; success criteria; what's in scope NOW vs. later. Read before any implementation work.
+- **`docs/PROJECT_OVERVIEW.md`** — architecture and philosophy; the "why" behind design decisions; component relationships; the two-layer API.
+- **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
+- **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
+- **`docs/CHANGELOG.md`** — project progress; completed POC milestones.
