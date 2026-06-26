@@ -10,12 +10,10 @@ import asyncio
 import logging
 import re
 import time
-from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any, ClassVar
 
 import litellm
-from openai import OpenAI
 
 # Type checking for litellm exceptions
 try:
@@ -91,45 +89,55 @@ class _RateLimiter:
 
         Args:
             estimated_tokens: Estimated tokens for this request (default: 1000)
+
+        Note:
+            ``asyncio.sleep`` is **never** awaited while holding ``self._lock``.
+            Each iteration locks only long enough to prune the 1-minute sliding
+            windows and check the RPM/TPM limits; if the request fits it is
+            recorded and we return, otherwise we compute the required wait,
+            release the lock, sleep outside the critical section, and retry.
+            Holding the lock across the sleep would block every other coroutine
+            calling :meth:`acquire`/:meth:`record_usage_async`, stalling the
+            whole pipeline on the first rate-limit hit.
         """
-        async with self._lock:
-            now = time.time()
-            one_minute_ago = now - 60.0
-
-            # Remove old entries outside the 1-minute window
-            self._request_times = [t for t in self._request_times if t > one_minute_ago]
-            self._token_usage = [(t, c) for t, c in self._token_usage if t > one_minute_ago]
-
-            # Wait if we're at RPM limit
-            while len(self._request_times) >= self.rpm_limit:
-                oldest_request = self._request_times[0]
-                sleep_time = 60.0 - (now - oldest_request) + 0.1  # Add 100ms buffer
-                logger.debug("RPM limit reached, sleeping for %.2fs", sleep_time)
-                await asyncio.sleep(sleep_time)
-
-                # Refresh window
+        while True:
+            async with self._lock:
                 now = time.time()
                 one_minute_ago = now - 60.0
+
+                # Remove old entries outside the 1-minute window
                 self._request_times = [t for t in self._request_times if t > one_minute_ago]
-
-            # Wait if we're at TPM limit
-            current_tokens = sum(count for _, count in self._token_usage)
-            while current_tokens + estimated_tokens > self.tpm_limit:
-                oldest_token_time = self._token_usage[0][0]
-                sleep_time = 60.0 - (now - oldest_token_time) + 0.1  # Add 100ms buffer
-                logger.debug(
-                    "TPM limit reached (%d tokens), sleeping for %.2fs", current_tokens, sleep_time
-                )
-                await asyncio.sleep(sleep_time)
-
-                # Refresh window
-                now = time.time()
-                one_minute_ago = now - 60.0
                 self._token_usage = [(t, c) for t, c in self._token_usage if t > one_minute_ago]
-                current_tokens = sum(count for _, count in self._token_usage)
 
-            # Record this request
-            self._request_times.append(now)
+                # Compute how long we must wait (0.0 means "clear to proceed").
+                sleep_time = 0.0
+
+                # RPM sliding window
+                if len(self._request_times) >= self.rpm_limit:
+                    oldest_request = self._request_times[0]
+                    rpm_sleep = 60.0 - (now - oldest_request) + 0.1  # Add 100ms buffer
+                    logger.debug("RPM limit reached, sleeping for %.2fs", rpm_sleep)
+                    sleep_time = max(sleep_time, rpm_sleep)
+
+                # TPM sliding window
+                current_tokens = sum(count for _, count in self._token_usage)
+                if current_tokens + estimated_tokens > self.tpm_limit:
+                    oldest_token_time = self._token_usage[0][0]
+                    tpm_sleep = 60.0 - (now - oldest_token_time) + 0.1  # Add 100ms buffer
+                    logger.debug(
+                        "TPM limit reached (%d tokens), sleeping for %.2fs",
+                        current_tokens,
+                        tpm_sleep,
+                    )
+                    sleep_time = max(sleep_time, tpm_sleep)
+
+                # Within both limits → reserve this request and return.
+                if sleep_time == 0.0:
+                    self._request_times.append(now)
+                    return
+
+            # Lock released: sleep outside the critical section, then retry.
+            await asyncio.sleep(sleep_time)
 
     async def record_usage_async(self, token_count: int) -> None:
         """Record actual token usage after API call (async, thread-safe).

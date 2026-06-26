@@ -8,7 +8,11 @@ path, and a Resolver with an LLMJudge in the ``module`` slot can ``save`` /
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from langres.core.modules.llm_judge import (
     DEFAULT_PROMPT,
@@ -168,3 +172,50 @@ def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) 
     assert isinstance(reloaded.module, LLMJudge)
     assert reloaded.module.client is None  # lazy — not built at load
     assert reloaded.module.config == judge.config
+
+
+@pytest.mark.slow
+def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) -> None:
+    """A clean process can ``Resolver.load`` an LLMJudge artifact via ``langres.core`` alone.
+
+    Regression for the load-path registration bug: ``@register("llm_judge")`` only
+    fires when ``langres.core.modules.llm_judge`` is imported. ``langres.core`` must
+    import it so a fresh process that *only* does ``from langres.core import
+    Resolver`` finds ``llm_judge`` in the registry. Without the ``__init__`` import,
+    ``Resolver.load`` raises ``UnknownComponentType`` here (this test fails); with
+    it, load succeeds and stays offline (the client is rebuilt lazily, not at load).
+
+    The subprocess deliberately does NOT import ``langres.core.modules.llm_judge``
+    — that is the whole point of the check.
+    """
+    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core.models import CompanySchema
+
+    judge: LLMJudge[CompanySchema] = LLMJudge(
+        model="openrouter/openai/gpt-4o-mini",
+        client=object(),
+        entity_noun="company",
+    )
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=judge,
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.save(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"from langres.core import Resolver; Resolver.load(r'{tmp_path}')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, (
+        "fresh-process Resolver.load failed (LLMJudge not registered on the "
+        f"import-langres.core path).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "UnknownComponentType" not in result.stderr

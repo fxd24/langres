@@ -69,6 +69,17 @@ class CascadeModule(Module[SchemaT]):
         - low_threshold: 0.2-0.4 (below this is definitely not a match)
         - high_threshold: 0.85-0.95 (above this is definitely a match)
         - The gap between them determines LLM usage (larger gap = fewer LLM calls)
+
+    Note:
+        Known debt tracked for M2 consolidation:
+        - Not yet serializable: it carries no ``type_name`` / ``@register``, so it
+          cannot live in a ``Resolver`` slot that ``save`` / ``load`` (unlike
+          ``LLMJudge``).
+        - Instantiates ``SentenceTransformer`` internally rather than taking an
+          injected client — an SRP/dependency-injection gap vs. the injected-client
+          pattern ``LLMJudge`` uses.
+        - ``_extract_score`` / ``_extract_reasoning`` / ``_calculate_cost``
+          duplicate the same helpers in ``LLMJudge``.
     """
 
     def __init__(

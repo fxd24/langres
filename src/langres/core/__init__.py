@@ -43,6 +43,12 @@ from langres.core.models import (
     PairwiseJudgement,
 )
 from langres.core.module import Module
+
+# Importing LLMJudge here ensures its ``@register("llm_judge")`` runs on plain
+# ``import langres.core`` — so a fresh process doing ``Resolver.load(path)`` on
+# an LLMJudge artifact finds the type in the registry (mirrors WeightedAverageJudge
+# above). It also makes ``from langres.core import LLMJudge`` work.
+from langres.core.modules.llm_judge import LLMJudge
 from langres.core.registry import (
     SchemaNotRegistered,
     UnknownComponentType,
@@ -86,6 +92,7 @@ __all__ = [
     "get_component",
     "get_schema",
     "GLinkerAdapter",
+    "LLMJudge",
     "metrics",
     "Module",
     "optimizers",

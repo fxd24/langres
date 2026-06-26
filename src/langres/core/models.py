@@ -71,8 +71,13 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
         right: The right entity in the pair
         blocker_name: Name of the blocker that generated this candidate pair
         similarity_score: Optional similarity score in [0, 1] for ranking evaluation
-        comparison: Per-feature comparison vector attached by a Comparator stage;
-            consumed by comparison-aware judges. None for raw judges.
+        comparison: Per-feature ``ComparisonVector`` for the two-phase pipeline.
+            In phase one a Comparator stage attaches it (one entry per feature);
+            in phase two the judge runs. Comparison-aware judges (e.g.
+            ``WeightedAverageJudge``) consume this vector and raise if it is
+            ``None`` (the Comparator stage was skipped). Self-contained judges
+            (e.g. ``LLMJudge``) ignore it and read the raw ``left``/``right``
+            entities directly, so it stays ``None`` for them.
     """
 
     left: SchemaT
