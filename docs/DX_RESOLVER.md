@@ -119,10 +119,11 @@ The four-slot constructor is unchanged for advanced use — swap in a
 scorer:
 
 ```python
+comparator = Comparator.from_schema(CompanySchema, weights={...})
 Resolver(
     blocker=AllPairsBlocker(schema=CompanySchema),
-    comparator=Comparator.from_schema(CompanySchema, weights={...}),
-    module=WeightedAverageJudge(),
+    comparator=comparator,
+    module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
     clusterer=Clusterer(threshold=0.7),
 )
 ```

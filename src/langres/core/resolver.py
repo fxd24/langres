@@ -172,10 +172,11 @@ class Resolver:
         clusterer: Groups matched pairs into entity clusters.
 
     Example:
+        comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
-            comparator=Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...}),
-            module=WeightedAverageJudge(),
+            comparator=comparator,
+            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
         clusters = resolver.resolve(COMPANY_RECORDS)
@@ -231,10 +232,15 @@ class Resolver:
         """
         from langres.core.blockers.all_pairs import AllPairsBlocker
 
+        comparator: Comparator[Any] = Comparator.from_schema(
+            schema, exclude=exclude, weights=weights
+        )
         return cls(
             blocker=AllPairsBlocker(schema=schema),
-            comparator=Comparator.from_schema(schema, exclude=exclude, weights=weights),
-            module=WeightedAverageJudge(),
+            comparator=comparator,
+            # The judge scores on the same FeatureSpecs (weights) the comparator
+            # compares on, so the comparison vector and the weights line up.
+            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=threshold),
         )
 
@@ -263,7 +269,11 @@ class Resolver:
         self._ensure_index_built(records)
         candidates = self.blocker.stream(records)
         if self.comparator is not None:
-            return self.module.forward(candidates, comparator=self.comparator)  # type: ignore[call-arg]
+            comparator = self.comparator
+            candidates = (
+                c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
+                for c in candidates
+            )
         return self.module.forward(candidates)
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
