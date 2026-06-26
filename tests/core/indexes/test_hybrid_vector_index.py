@@ -805,3 +805,32 @@ class TestHybridVectorIndexProtocol:
         assert callable(index.create_index)
         assert callable(index.search)
         assert callable(index.search_all)
+
+
+class TestHybridToSimilarities:
+    """Tests for the hybrid indexes' distance->similarity conversion."""
+
+    def test_qdrant_hybrid_to_similarities_clips_scores(self):
+        """QdrantHybridIndex: fusion scores (higher=better) clipped to [0, 1], NaN -> 0."""
+        index = QdrantHybridIndex(
+            client=MagicMock(),
+            collection_name="test",
+            dense_embedder=FakeEmbedder(embedding_dim=8),
+            sparse_embedder=FakeSparseEmbedder(),
+        )
+        # Higher score = more similar; >1 clips down, NaN padding -> 0.0.
+        scores = np.array([[1.5, 0.4, np.nan], [0.9, -0.2, 0.1]])
+
+        sims = index.to_similarities(scores)
+
+        np.testing.assert_allclose(sims, [[1.0, 0.4, 0.0], [0.9, 0.0, 0.1]])
+
+    def test_fake_hybrid_to_similarities(self):
+        """FakeHybridVectorIndex: synthetic distances (lower=closer) -> 1/(1+d), NaN -> 0."""
+        index = FakeHybridVectorIndex()
+        distances = np.array([[0.0, 0.1, np.nan]])
+
+        sims = index.to_similarities(distances)
+
+        np.testing.assert_allclose(sims, [[1.0, 1.0 / 1.1, 0.0]])
+        assert sims[0, 0] > sims[0, 1]
