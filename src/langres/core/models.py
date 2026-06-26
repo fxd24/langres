@@ -14,6 +14,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
+from langres.core.feature import ComparisonVector
 from langres.core.registry import register_schema
 
 
@@ -70,12 +71,15 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
         right: The right entity in the pair
         blocker_name: Name of the blocker that generated this candidate pair
         similarity_score: Optional similarity score in [0, 1] for ranking evaluation
+        comparison: Per-feature comparison vector attached by a Comparator stage;
+            consumed by comparison-aware judges. None for raw judges.
     """
 
     left: SchemaT
     right: SchemaT
     blocker_name: str
     similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    comparison: ComparisonVector | None = None
 
 
 class PairwiseJudgement(BaseModel):

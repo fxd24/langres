@@ -1,17 +1,22 @@
 """WeightedAverageJudge: the M0 heuristic scorer Module.
 
-The judge is the scorer slot of the Resolver. It is **arg-free** to construct
-(``WeightedAverageJudge()``); it owns the scoring *rule* but not the features.
-The Resolver drives the pipeline:
+The judge is the scorer slot of the Resolver. It **owns its FeatureSpecs** (the
+weights) and reads each candidate's attached
+:class:`~langres.core.feature.ComparisonVector`. The Resolver drives the
+pipeline: a Comparator attaches a ``comparison`` to each candidate, then the
+judge scores it::
 
     comparator = Comparator.from_schema(CompanySchema)
-    judge = WeightedAverageJudge()
-    for judgement in judge.forward(candidates, comparator=comparator):
+    judge = WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    candidates = (
+        c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
+        for c in raw_candidates
+    )
+    for judgement in judge.forward(candidates):
         ...
 
-For each candidate the judge asks the ``comparator`` for a
-:class:`~langres.core.feature.ComparisonVector`, then combines the present
-similarities with :func:`~langres.core.feature.combine_present` using the
+For each candidate the judge reads ``candidate.comparison`` and combines the
+present similarities with :func:`~langres.core.feature.combine_present` using the
 FeatureSpec weights **normalized to sum to 1.0** (the 0.5 evidence floor is only
 meaningful against a unit-weight total). It emits a
 :class:`~langres.core.models.PairwiseJudgement` whose ``decision_step`` records
@@ -23,9 +28,8 @@ can score a single ComparisonVector without going through ``forward``.
 """
 
 from collections.abc import Iterator
-from typing import ClassVar
+from typing import ClassVar, cast
 
-from langres.core.comparator import Comparator
 from langres.core.feature import ComparisonVector, FeatureSpec, combine_present
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
@@ -51,8 +55,9 @@ def _normalized_weights(specs: list[FeatureSpec]) -> dict[str, float]:
 class WeightedAverageJudge(Module[SchemaT]):
     """Heuristic scorer: weighted average of present similarities + evidence floor.
 
-    Arg-free to construct; the Resolver supplies the Comparator at ``forward``
-    time. The score combiner and the over-merge evidence floor live in
+    Owns its FeatureSpecs (the weights). Consumes each candidate's attached
+    ``comparison`` (a :class:`~langres.core.feature.ComparisonVector`). The score
+    combiner and the over-merge evidence floor live in
     :func:`~langres.core.feature.combine_present`.
     """
 
@@ -60,45 +65,49 @@ class WeightedAverageJudge(Module[SchemaT]):
     # serialization helper can discover the type name (see resolver.py).
     type_name: ClassVar[str] = "weighted_average_judge"
 
-    def score(self, vector: ComparisonVector, specs: list[FeatureSpec]) -> float:
-        """Combine a ComparisonVector into a score in ``[0, 1]``.
-
-        Weights are taken from ``specs`` and normalized to sum to 1.0 before
-        applying the evidence floor.
-        """
-        weights = _normalized_weights(specs)
-        return combine_present(vector.similarities, weights)
-
-    def forward(
-        self,
-        candidates: Iterator[ERCandidate[SchemaT]],
-        *,
-        comparator: Comparator[SchemaT] | None = None,
-    ) -> Iterator[PairwiseJudgement]:
-        """Score each candidate via ``comparator`` and yield PairwiseJudgements.
+    def __init__(self, feature_specs: list[FeatureSpec]) -> None:
+        """Initialize with the features (and their weights) to score on.
 
         Args:
-            candidates: Stream of normalized pairs from a Blocker.
-            comparator: The Comparator that turns each pair into a
-                ComparisonVector. Supplied by the Resolver. Required.
+            feature_specs: The features to combine. Their weights are normalized
+                to sum to 1.0 at scoring time. These should match the
+                Comparator's features so the comparison vector and the weights
+                line up.
+        """
+        self.feature_specs = feature_specs
+
+    def score(self, vector: ComparisonVector) -> float:
+        """Combine a ComparisonVector into a score in ``[0, 1]``.
+
+        Weights are taken from :attr:`feature_specs` and normalized to sum to
+        1.0 before applying the evidence floor.
+        """
+        weights = _normalized_weights(self.feature_specs)
+        return combine_present(vector.similarities, weights)
+
+    def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
+        """Score each candidate's attached comparison and yield PairwiseJudgements.
+
+        Args:
+            candidates: Stream of normalized pairs from a Blocker, each carrying
+                a ``comparison`` vector attached by a Comparator stage.
 
         Yields:
             One PairwiseJudgement per candidate, with provenance carrying the
             per-feature levels and similarities.
 
         Raises:
-            ValueError: If ``comparator`` is not provided.
+            ValueError: If a candidate carries no comparison vector.
         """
-        if comparator is None:
-            raise ValueError(
-                "WeightedAverageJudge.forward requires a comparator "
-                "(the Resolver supplies it: forward(candidates, comparator=...))."
-            )
-        specs = comparator.feature_specs
-        weights = _normalized_weights(specs)
+        weights = _normalized_weights(self.feature_specs)
 
         for candidate in candidates:
-            vector = comparator.compare(candidate.left, candidate.right)
+            vector = candidate.comparison
+            if vector is None:
+                raise ValueError(
+                    "WeightedAverageJudge requires candidates carrying a comparison "
+                    "vector — add a Comparator to the pipeline."
+                )
             score = combine_present(vector.similarities, weights)
             decision_step = self._decision_step(vector, score)
             yield PairwiseJudgement(
@@ -130,10 +139,13 @@ class WeightedAverageJudge(Module[SchemaT]):
 
     @property
     def config(self) -> dict[str, object]:
-        """Serializable config. The judge is stateless, so config is empty."""
-        return {}
+        """Serializable config: the FeatureSpecs (names + weights) it scores on."""
+        return {"feature_specs": [spec.model_dump() for spec in self.feature_specs]}
 
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "WeightedAverageJudge[SchemaT]":
-        """Reconstruct from :attr:`config` (stateless)."""
-        return cls()
+        """Reconstruct from :attr:`config`, rebuilding the FeatureSpecs."""
+        specs = [
+            FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])
+        ]
+        return cls(feature_specs=specs)
