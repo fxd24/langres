@@ -49,7 +49,7 @@ from langres.core.metrics import (
 )
 from langres.core.modules.llm_judge import LLMJudgeModule
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
-from langres.core.vector_index import FAISSIndex
+from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data, stratified_dedup_split
 
 # Configure logging
@@ -99,8 +99,8 @@ def run_deduplication_pipeline(
     # Initialize embedding provider
     embedding_provider = SentenceTransformerEmbedder(model_name=embedding_model)
 
-    # Initialize vector index
-    vector_index = FAISSIndex(metric="L2")
+    # Initialize vector index (the index owns the embedder in the current API)
+    vector_index = FAISSIndex(embedder=embedding_provider, metric="L2")
 
     # Schema factory: dict → OrganizationSchema
     def org_factory(record: dict[str, Any]) -> OrganizationSchema:
@@ -114,11 +114,10 @@ def run_deduplication_pipeline(
         """Extract text for embedding."""
         return org.name
 
-    # Create VectorBlocker
+    # Create VectorBlocker (the index owns the embedder; no embedding_provider= arg)
     blocker = VectorBlocker(
         schema_factory=org_factory,
         text_field_extractor=org_text_extractor,
-        embedding_provider=embedding_provider,
         vector_index=vector_index,
         k_neighbors=k_neighbors,
     )
