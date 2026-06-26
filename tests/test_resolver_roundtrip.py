@@ -511,5 +511,11 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
 
     reloaded = Resolver.load(tmp_path)
     assert isinstance(reloaded.blocker, GLinkerAdapter)
-    assert reloaded.blocker.config.model_name == "urchade/gliner_small-v2.1"
-    assert reloaded.blocker.config.threshold == 0.42
+    # config is now a plain dict (convention, matching every other component);
+    # the underlying GLinkerConfig is on _config.
+    assert reloaded.blocker.config == {
+        "model_name": "urchade/gliner_small-v2.1",
+        "threshold": 0.42,
+    }
+    assert reloaded.blocker._config.model_name == "urchade/gliner_small-v2.1"
+    assert reloaded.blocker._config.threshold == 0.42

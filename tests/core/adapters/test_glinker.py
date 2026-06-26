@@ -71,25 +71,31 @@ class TestGLinkerConfig:
     def test_default_config_instantiation(self) -> None:
         """GLinkerAdapter() uses sensible default config."""
         adapter = GLinkerAdapter()
-        assert adapter.config.model_name == "urchade/gliner_medium-v2.1"
-        assert adapter.config.threshold == 0.5
+        assert adapter._config.model_name == "urchade/gliner_medium-v2.1"
+        assert adapter._config.threshold == 0.5
 
     def test_explicit_config_stored(self) -> None:
-        """GLinkerAdapter(config) stores the provided config."""
+        """GLinkerAdapter(config) stores the provided config on _config."""
         cfg = GLinkerConfig(model_name="my-model", threshold=0.8)
         adapter = GLinkerAdapter(config=cfg)
-        assert adapter.config is cfg
+        assert adapter._config is cfg
+
+    def test_config_property_returns_dict(self) -> None:
+        """The public config property returns a plain dict (component convention)."""
+        cfg = GLinkerConfig(model_name="my-model", threshold=0.8)
+        adapter = GLinkerAdapter(config=cfg)
+        assert adapter.config == {"model_name": "my-model", "threshold": 0.8}
 
     def test_config_round_trip_via_from_config(self) -> None:
         """from_config(cfg.model_dump()) round-trips to equal config."""
         cfg = GLinkerConfig(model_name="x", threshold=0.7)
         adapter = GLinkerAdapter.from_config(cfg.model_dump())
-        assert adapter.config == cfg
+        assert adapter._config == cfg
 
     def test_from_config_with_defaults(self) -> None:
         """from_config({}) uses field defaults."""
         adapter = GLinkerAdapter.from_config({})
-        assert adapter.config == GLinkerConfig()
+        assert adapter._config == GLinkerConfig()
 
     def test_config_threshold_bounds(self) -> None:
         """threshold must be in [0.0, 1.0]."""
