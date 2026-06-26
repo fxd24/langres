@@ -638,15 +638,17 @@ def test_cascade_module_llm_client_reused_across_calls(mocker):
 
 
 @pytest.mark.slow
-def test_cascade_module_gpt4_pricing(mocker):
-    """Test that GPT-4 pricing is calculated correctly."""
+def test_cascade_module_cost_uses_litellm_completion_cost(mocker):
+    """Cascade reports whatever litellm.completion_cost returns for the LLM call."""
     mock_client = Mock()
     mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    completion_cost = mocker.patch(
+        "langres.core.modules.cascade.litellm.completion_cost", return_value=0.036
+    )
 
-    # Use gpt-4 model (different pricing than gpt-4o-mini)
     module = CascadeModule(
         embedding_model_name="all-MiniLM-L6-v2",
-        llm_model="gpt-4",  # Standard GPT-4
+        llm_model="gpt-4",
         llm_api_key="test_key",
         low_threshold=0.3,
         high_threshold=0.9,
@@ -673,22 +675,21 @@ def test_cascade_module_gpt4_pricing(mocker):
     # Process candidate
     judgements = list(module.forward([candidate]))
 
-    # Should have cost calculated (GPT-4 pricing is higher than gpt-4o-mini)
     assert len(judgements) == 1
-    assert "llm_cost_usd" in judgements[0].provenance
-    # GPT-4: $30/1M input, $60/1M output
-    # Cost = (1000 * 30 + 100 * 60) / 1_000_000 = 0.036
-    expected_cost = (1000 * 30.0 + 100 * 60.0) / 1_000_000
-    assert abs(judgements[0].provenance["llm_cost_usd"] - expected_cost) < 0.001
+    assert judgements[0].provenance["llm_cost_usd"] == 0.036
+    completion_cost.assert_called_once_with(completion_response=mock_response)
 
 
 @pytest.mark.slow
-def test_cascade_module_unknown_model_pricing(mocker):
-    """Test that unknown models default to gpt-4o-mini pricing."""
+def test_cascade_module_cost_falls_back_to_zero_on_exception(mocker):
+    """If litellm.completion_cost raises, Cascade reports 0.0 (never flakes)."""
     mock_client = Mock()
     mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch(
+        "langres.core.modules.cascade.litellm.completion_cost",
+        side_effect=Exception("unknown model"),
+    )
 
-    # Use an unknown model name
     module = CascadeModule(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-5-future",  # Unknown model
@@ -713,11 +714,7 @@ def test_cascade_module_unknown_model_pricing(mocker):
 
     judgements = list(module.forward([candidate]))
 
-    # Should use default (gpt-4o-mini) pricing
-    assert "llm_cost_usd" in judgements[0].provenance
-    # Default: $0.150/1M input, $0.600/1M output
-    expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
-    assert abs(judgements[0].provenance["llm_cost_usd"] - expected_cost) < 0.001
+    assert judgements[0].provenance["llm_cost_usd"] == 0.0
 
 
 def test_cascade_module_inspect_scores():

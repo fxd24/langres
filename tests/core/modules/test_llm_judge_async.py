@@ -260,6 +260,73 @@ async def test_rate_limiter_concurrent_usage_recording():
     assert total_tokens == 10000
 
 
+@pytest.mark.asyncio
+async def test_acquire_does_not_hold_lock_while_sleeping(monkeypatch) -> None:
+    """A waiting ``acquire`` must release the lock before sleeping (no deadlock).
+
+    Regression for the rate-limiter deadlock: the old ``acquire`` awaited
+    ``asyncio.sleep`` *inside* ``async with self._lock``, so a single rate-limited
+    coroutine blocked every other coroutine touching the limiter until it woke.
+    Here we drive one ``acquire`` into its RPM-wait sleep and prove a concurrent
+    ``record_usage_async`` (which also needs the lock) makes progress meanwhile.
+    With the old code this assertion times out; with the fix it passes.
+    """
+    limiter = _RateLimiter(rpm_limit=1, tpm_limit=10**9)
+    # Seed at the RPM limit so the next acquire is forced to wait.
+    limiter._request_times.append(time.time())
+
+    sleep_entered = asyncio.Event()
+    release_sleep = asyncio.Event()
+
+    async def controlled_sleep(_seconds: float) -> None:
+        # Signal we are sleeping (lock must already be released here), then block
+        # until the test lets us continue, then "expire" the window so the retry
+        # succeeds.
+        sleep_entered.set()
+        await release_sleep.wait()
+        limiter._request_times.clear()
+
+    monkeypatch.setattr(asyncio, "sleep", controlled_sleep)
+
+    waiter = asyncio.create_task(limiter.acquire(estimated_tokens=1))
+
+    # Wait until the waiter is parked in its sleep (i.e. has hit the RPM branch).
+    await asyncio.wait_for(sleep_entered.wait(), timeout=2.0)
+
+    # The lock must be free now: a concurrent locked operation must NOT block.
+    # Old (buggy) code holds the lock across the sleep, so this times out.
+    await asyncio.wait_for(limiter.record_usage_async(5), timeout=2.0)
+
+    # Let the waiter finish; it should complete promptly once the window clears.
+    release_sleep.set()
+    await asyncio.wait_for(waiter, timeout=2.0)
+    assert len(limiter._request_times) == 1  # the waiter recorded its request
+
+
+@pytest.mark.asyncio
+async def test_acquire_tpm_wait_branch_releases_and_retries(monkeypatch) -> None:
+    """The TPM-wait branch sleeps outside the lock, then retries successfully."""
+    limiter = _RateLimiter(rpm_limit=1000, tpm_limit=500)
+    # Pre-fill token usage so the next request would exceed the TPM limit.
+    await limiter.record_usage_async(400)
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        # Simulate the 1-minute token window passing so the retry clears.
+        limiter._token_usage.clear()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    # 400 (recorded) + 200 (estimated) = 600 > 500 → must hit the TPM-wait branch.
+    await limiter.acquire(estimated_tokens=200)
+
+    assert len(sleeps) == 1  # slept exactly once, then proceeded
+    assert sleeps[0] > 0.0  # a positive wait was computed
+    assert len(limiter._request_times) == 1  # request reserved after the wait
+
+
 # Retry Logic Tests
 
 
@@ -382,9 +449,11 @@ async def test_forward_async_retries_with_exponential_backoff(mock_llm_client, m
 
 
 @pytest.mark.asyncio
-async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response):
-    """Test forward_async() tracks API costs in provenance."""
+async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response, mocker):
+    """Test forward_async() tracks API costs in provenance via litellm pricing."""
     mock_llm_client.acompletion.return_value = mock_llm_response
+
+    mocker.patch("langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.000123)
 
     module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
 
@@ -399,7 +468,7 @@ async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response):
     j = judgements[0]
     assert "cost_usd" in j.provenance
     assert isinstance(j.provenance["cost_usd"], float)
-    assert j.provenance["cost_usd"] > 0
+    assert j.provenance["cost_usd"] == 0.000123
     assert "prompt_tokens" in j.provenance
     assert "completion_tokens" in j.provenance
     assert j.provenance["method"] == "async_batch"

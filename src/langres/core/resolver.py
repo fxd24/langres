@@ -88,7 +88,13 @@ def _component_spec(obj: object, slot: str) -> ComponentSpec:
     ``slot`` name so :meth:`Resolver.load` can map the spec back self-describingly
     rather than by position or hard-coded ``type_name``.
     """
-    type_name = obj.type_name  # type: ignore[attr-defined]
+    type_name = getattr(obj, "type_name", None)
+    if not isinstance(type_name, str):
+        raise TypeError(
+            f"{type(obj).__name__} is not serializable (no `type_name`/@register). "
+            f"Use a registered component (e.g. LLMJudge, WeightedAverageJudge) in "
+            f"the {slot!r} slot."
+        )
     return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
 
 
@@ -172,10 +178,11 @@ class Resolver:
         clusterer: Groups matched pairs into entity clusters.
 
     Example:
+        comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
-            comparator=Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...}),
-            module=WeightedAverageJudge(),
+            comparator=comparator,
+            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
         clusters = resolver.resolve(COMPANY_RECORDS)
@@ -231,10 +238,15 @@ class Resolver:
         """
         from langres.core.blockers.all_pairs import AllPairsBlocker
 
+        comparator: Comparator[Any] = Comparator.from_schema(
+            schema, exclude=exclude, weights=weights
+        )
         return cls(
             blocker=AllPairsBlocker(schema=schema),
-            comparator=Comparator.from_schema(schema, exclude=exclude, weights=weights),
-            module=WeightedAverageJudge(),
+            comparator=comparator,
+            # The judge scores on the same FeatureSpecs (weights) the comparator
+            # compares on, so the comparison vector and the weights line up.
+            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=threshold),
         )
 
@@ -263,7 +275,11 @@ class Resolver:
         self._ensure_index_built(records)
         candidates = self.blocker.stream(records)
         if self.comparator is not None:
-            return self.module.forward(candidates, comparator=self.comparator)  # type: ignore[call-arg]
+            comparator = self.comparator
+            candidates = (
+                c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
+                for c in candidates
+            )
         return self.module.forward(candidates)
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
@@ -468,11 +484,14 @@ class Resolver:
         """Validate artifact compatibility; raise on an unreadably-new artifact.
 
         ``ARTIFACT_VERSION`` is a monotonic integer-valued string bumped on an
-        incompatible layout change. An artifact at an older-or-equal layout is
-        fine to read; a *strictly newer* (or malformed/non-integer) layout we
-        cannot understand is a hard error. A ``langres_version`` mismatch is
-        logged as a warning, not a failure — configs are forward-compatible
-        within a layout version.
+        incompatible layout change. Each bump breaks the config schema, so only
+        an artifact at the *exact* supported layout is readable: a *newer* layout
+        (this build is too old), an *older* layout (predates an incompatible
+        bump), or a malformed/non-integer layout are all hard errors — without
+        this guard an older artifact would fall through to a raw ``KeyError`` on
+        the changed config. A ``langres_version`` mismatch is logged as a
+        warning, not a failure — configs are forward-compatible *within* a layout
+        version.
         """
         try:
             artifact_v = int(manifest.artifact_version)
@@ -486,6 +505,12 @@ class Resolver:
             raise ValueError(
                 f"Artifact version {manifest.artifact_version!r} is newer than this "
                 f"langres build supports ({ARTIFACT_VERSION!r}); upgrade langres to load it."
+            )
+        if artifact_v < current_v:
+            raise ValueError(
+                f"Artifact version {manifest.artifact_version!r} predates the supported "
+                f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
+                f"schema changed incompatibly); re-save with this langres build."
             )
         if manifest.langres_version != langres.__version__:
             logger.warning(

@@ -1,4 +1,4 @@
-"""LLMJudgeModule implementation for LLM-based entity matching.
+"""LLMJudge: serializable LLM-based entity-matching Module.
 
 This module uses OpenAI API (or compatible) for match judgments with natural
 language reasoning and calibrated probability scores.
@@ -10,33 +10,36 @@ import asyncio
 import logging
 import re
 import time
-from collections import defaultdict
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 import litellm
-import numpy as np
-from openai import OpenAI
 
 # Type checking for litellm exceptions
 try:
-    from litellm import RateLimitError  # type: ignore[attr-defined]
+    from litellm import RateLimitError
 except ImportError:
-    RateLimitError = Exception  # type: ignore[misc, assignment]
+    RateLimitError = Exception
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
-from langres.core.reports import ScoreInspectionReport
+from langres.core.registry import register
+from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 logger = logging.getLogger(__name__)
 
-# Default prompt template for LLM judgment
-DEFAULT_PROMPT = """You are an expert at entity resolution. Determine if these two company records refer to the same real-world company.
+# Default prompt template for LLM judgment.
+#
+# Single source of truth for the neutral prompt (Cascade imports this too). It is
+# domain-neutral: ``{entity_noun}`` is woven in at render time so the same
+# template serves companies, products, people, etc. ``{left}`` / ``{right}`` stay
+# unfilled here and are formatted with the two records at judgement time.
+DEFAULT_PROMPT = """You are an expert at entity resolution. Determine if these two {entity_noun} records refer to the same real-world {entity_noun}.
 
-Company A:
+Record A:
 {left}
 
-Company B:
+Record B:
 {right}
 
 Respond in exactly this format:
@@ -44,7 +47,16 @@ MATCH or NO_MATCH
 Score: <probability between 0.0 and 1.0>
 Reasoning: <brief explanation>
 
-The score should be your confidence that these are the same company (1.0 = definitely same, 0.0 = definitely different)."""
+The score should be your confidence that these are the same {entity_noun} (1.0 = definitely same, 0.0 = definitely different)."""
+
+
+def render_default_prompt(entity_noun: str = "entity") -> str:
+    """Render :data:`DEFAULT_PROMPT` for ``entity_noun``, leaving ``{left}``/``{right}``.
+
+    Substitutes only the ``{entity_noun}`` placeholder so the result is still a
+    ``str.format`` template expecting ``left`` and ``right`` at judgement time.
+    """
+    return DEFAULT_PROMPT.replace("{entity_noun}", entity_noun)
 
 
 class _RateLimiter:
@@ -77,45 +89,55 @@ class _RateLimiter:
 
         Args:
             estimated_tokens: Estimated tokens for this request (default: 1000)
+
+        Note:
+            ``asyncio.sleep`` is **never** awaited while holding ``self._lock``.
+            Each iteration locks only long enough to prune the 1-minute sliding
+            windows and check the RPM/TPM limits; if the request fits it is
+            recorded and we return, otherwise we compute the required wait,
+            release the lock, sleep outside the critical section, and retry.
+            Holding the lock across the sleep would block every other coroutine
+            calling :meth:`acquire`/:meth:`record_usage_async`, stalling the
+            whole pipeline on the first rate-limit hit.
         """
-        async with self._lock:
-            now = time.time()
-            one_minute_ago = now - 60.0
-
-            # Remove old entries outside the 1-minute window
-            self._request_times = [t for t in self._request_times if t > one_minute_ago]
-            self._token_usage = [(t, c) for t, c in self._token_usage if t > one_minute_ago]
-
-            # Wait if we're at RPM limit
-            while len(self._request_times) >= self.rpm_limit:
-                oldest_request = self._request_times[0]
-                sleep_time = 60.0 - (now - oldest_request) + 0.1  # Add 100ms buffer
-                logger.debug("RPM limit reached, sleeping for %.2fs", sleep_time)
-                await asyncio.sleep(sleep_time)
-
-                # Refresh window
+        while True:
+            async with self._lock:
                 now = time.time()
                 one_minute_ago = now - 60.0
+
+                # Remove old entries outside the 1-minute window
                 self._request_times = [t for t in self._request_times if t > one_minute_ago]
-
-            # Wait if we're at TPM limit
-            current_tokens = sum(count for _, count in self._token_usage)
-            while current_tokens + estimated_tokens > self.tpm_limit:
-                oldest_token_time = self._token_usage[0][0]
-                sleep_time = 60.0 - (now - oldest_token_time) + 0.1  # Add 100ms buffer
-                logger.debug(
-                    "TPM limit reached (%d tokens), sleeping for %.2fs", current_tokens, sleep_time
-                )
-                await asyncio.sleep(sleep_time)
-
-                # Refresh window
-                now = time.time()
-                one_minute_ago = now - 60.0
                 self._token_usage = [(t, c) for t, c in self._token_usage if t > one_minute_ago]
-                current_tokens = sum(count for _, count in self._token_usage)
 
-            # Record this request
-            self._request_times.append(now)
+                # Compute how long we must wait (0.0 means "clear to proceed").
+                sleep_time = 0.0
+
+                # RPM sliding window
+                if len(self._request_times) >= self.rpm_limit:
+                    oldest_request = self._request_times[0]
+                    rpm_sleep = 60.0 - (now - oldest_request) + 0.1  # Add 100ms buffer
+                    logger.debug("RPM limit reached, sleeping for %.2fs", rpm_sleep)
+                    sleep_time = max(sleep_time, rpm_sleep)
+
+                # TPM sliding window
+                current_tokens = sum(count for _, count in self._token_usage)
+                if current_tokens + estimated_tokens > self.tpm_limit:
+                    oldest_token_time = self._token_usage[0][0]
+                    tpm_sleep = 60.0 - (now - oldest_token_time) + 0.1  # Add 100ms buffer
+                    logger.debug(
+                        "TPM limit reached (%d tokens), sleeping for %.2fs",
+                        current_tokens,
+                        tpm_sleep,
+                    )
+                    sleep_time = max(sleep_time, tpm_sleep)
+
+                # Within both limits → reserve this request and return.
+                if sleep_time == 0.0:
+                    self._request_times.append(now)
+                    return
+
+            # Lock released: sleep outside the critical section, then retry.
+            await asyncio.sleep(sleep_time)
 
     async def record_usage_async(self, token_count: int) -> None:
         """Record actual token usage after API call (async, thread-safe).
@@ -131,85 +153,76 @@ class _RateLimiter:
             self._token_usage.append((time.time(), token_count))
 
 
-class LLMJudgeModule(Module[SchemaT]):
+@register("llm_judge")
+class LLMJudge(Module[SchemaT]):
     """Schema-agnostic LLM-based matching module using LiteLLM.
 
-    This module uses an LLM (like GPT-4) to make match judgments with
-    natural language reasoning. It provides calibrated probability scores
-    and tracks API costs for observability.
+    This module uses an LLM to make match judgments with natural language
+    reasoning. It provides calibrated probability scores and tracks API costs
+    (via LiteLLM's own pricing) for observability.
 
-    The module accepts a pre-configured LiteLLM client, enabling:
+    It is a first-class, serializable Resolver component: it carries a registry
+    ``type_name`` and a pure :attr:`config` (model, temperature, prompt,
+    entity_noun) so a Resolver with an LLM judge in the ``module`` slot can
+    ``save`` / ``load``. The LLM ``client`` is **never** serialized — it is
+    reconstructed from environment at load time via the lazy-client path.
+
+    The client is optional. When omitted, it is lazily built from the
+    environment with ``create_llm_client(Settings())`` on first use, enabling:
     - Automatic Langfuse tracing for observability
     - Support for multiple LLM providers (OpenAI, Azure, etc.)
-    - Proper separation of concerns (client configuration vs. matching logic)
+    - Serialization without persisting any secret
 
     Example:
-        from langres.clients import create_llm_client
-        from langres.clients.settings import Settings
-
-        settings = Settings()
-        llm_client = create_llm_client(settings)
-
-        module = LLMJudgeModule(
-            client=llm_client,
-            model="gpt-4o-mini",
-            temperature=0.0,
-        )
+        # Happy path: build the client from environment.
+        module = LLMJudge.from_env(model="gpt-5-mini")
 
         for judgement in module.forward(candidates):
             print(f"{judgement.left_id} vs {judgement.right_id}: {judgement.score}")
             print(f"Reasoning: {judgement.reasoning}")
             print(f"Cost: ${judgement.provenance['cost_usd']}")
 
-    Note:
-        The module uses gpt-4o-mini by default for cost efficiency. For higher
-        quality, use gpt-4 (but costs ~30x more).
+    Example:
+        # Escape hatch: inject a pre-configured client (e.g. in tests).
+        from langres.clients import create_llm_client, Settings
+
+        module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
-        Cost tracking uses approximate pricing:
-        - gpt-5-mini: $0.150/1M input tokens, $0.600/1M output tokens
-        - gpt-4: $30/1M input tokens, $60/1M output tokens
+        Defaults to ``gpt-5-mini`` at ``temperature=1.0``. Cost tracking is
+        delegated to ``litellm.completion_cost`` so pricing stays honest for
+        whatever model is actually used (no hardcoded table).
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "llm_judge"
 
     def __init__(
         self,
-        client: Any,
+        client: Any = None,
         model: str = "gpt-5-mini",
         temperature: float = 1.0,
         prompt_template: str | None = None,
+        entity_noun: str = "entity",
     ):
-        """Initialize LLMJudgeModule.
+        """Initialize LLMJudge.
 
         Args:
-            client: Pre-configured LLM client (LiteLLM or OpenAI client).
-                   Use langres.clients.create_llm_client() to create a client
-                   with Langfuse tracing enabled.
-            model: Model name (e.g., "gpt-4o-mini", "azure/gpt-5-mini")
+            client: Optional pre-configured LLM client (LiteLLM or OpenAI
+                client). When ``None`` (the default), the client is lazily built
+                from the environment via ``create_llm_client(Settings())`` on
+                first use. Inject a client only as an escape hatch (e.g. tests
+                or a custom client); use :meth:`from_env` for the happy path.
+            model: Model name (e.g., "gpt-5-mini", "azure/gpt-5-mini")
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random)
-            prompt_template: Custom prompt template (uses DEFAULT_PROMPT if None)
+            prompt_template: Custom prompt template (uses the neutral
+                :data:`DEFAULT_PROMPT`, rendered for ``entity_noun``, if None)
+            entity_noun: Domain noun woven into the default prompt (e.g.
+                "company", "product"). Ignored when ``prompt_template`` is given.
 
         Raises:
             ValueError: If temperature out of range
-
-        Example:
-            # Create LiteLLM client with tracing
-            from langres.clients import create_llm_client
-            from langres.clients.settings import Settings
-
-            settings = Settings()
-            llm_client = create_llm_client(settings)
-
-            # Initialize module with client
-            module = LLMJudgeModule(
-                client=llm_client,
-                model="azure/gpt-5-mini",
-                temperature=0.0
-            )
-
-        Note:
-            The client handles all authentication and tracing configuration.
-            Use langres.clients.create_llm_client() to create a properly
-            configured client with Langfuse observability.
         """
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
@@ -217,7 +230,55 @@ class LLMJudgeModule(Module[SchemaT]):
         self.client = client
         self.model = model
         self.temperature = temperature
-        self.prompt_template = prompt_template if prompt_template else DEFAULT_PROMPT
+        self.entity_noun = entity_noun
+        self.prompt_template = (
+            prompt_template if prompt_template else render_default_prompt(entity_noun)
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        model: str = "gpt-5-mini",
+        **kwargs: Any,
+    ) -> "LLMJudge[SchemaT]":
+        """Build an LLMJudge with a client constructed from the environment.
+
+        The documented happy path: reads provider/tracing config from env via
+        ``create_llm_client(Settings())``. ``kwargs`` are forwarded to
+        ``__init__`` (``temperature``, ``prompt_template``, ``entity_noun``).
+        """
+        from langres.clients import Settings, create_llm_client
+
+        return cls(client=create_llm_client(Settings()), model=model, **kwargs)
+
+    def _get_client(self) -> Any:
+        """Return the client, lazily building one from env on first use."""
+        if self.client is None:
+            from langres.clients import Settings, create_llm_client
+
+            self.client = create_llm_client(Settings())
+        return self.client
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Pure, serializable construction config (never the client or secrets)."""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "prompt_template": self.prompt_template,
+            "entity_noun": self.entity_noun,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
+        """Rebuild from :attr:`config` via the lazy-client path (client from env)."""
+        return cls(
+            client=None,
+            model=str(config["model"]),
+            temperature=float(config["temperature"]),  # type: ignore[arg-type]
+            prompt_template=str(config["prompt_template"]),
+            entity_noun=str(config["entity_noun"]),
+        )
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
@@ -248,7 +309,7 @@ class LLMJudgeModule(Module[SchemaT]):
             )
 
             # Call client (works for both LiteLLM and OpenAI)
-            response = self.client.completion(
+            response = self._get_client().completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.temperature,
@@ -455,9 +516,10 @@ class LLMJudgeModule(Module[SchemaT]):
         Note:
             Implements exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s max
         """
+        client = self._get_client()
         for attempt in range(max_retries):
             try:
-                response = await self.client.acompletion(
+                response = await client.acompletion(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
@@ -533,39 +595,24 @@ class LLMJudgeModule(Module[SchemaT]):
         return content
 
     def _calculate_cost(self, response) -> float:  # type: ignore[no-untyped-def]
-        """Calculate API call cost in USD.
+        """Calculate API call cost in USD via LiteLLM's own pricing.
+
+        Delegates to ``litellm.completion_cost`` so pricing stays honest for
+        whatever model is actually used (no hardcoded table). Returns ``0.0`` if
+        the model is unknown to LiteLLM or usage is missing — cost tracking is
+        observability, so it must never raise or flake.
 
         Args:
-            response: OpenAI API response
+            response: LLM API response (LiteLLM/OpenAI shape)
 
         Returns:
-            Cost in USD
-
-        Note:
-            Uses approximate pricing as of 2024:
-            - gpt-4o-mini: $0.150/1M input, $0.600/1M output
-            - gpt-4: $30/1M input, $60/1M output
+            Cost in USD (``0.0`` when unavailable)
         """
-        if not response.usage:
+        try:
+            return float(litellm.completion_cost(completion_response=response))
+        except Exception:  # unknown model / missing usage — never raise/flake
+            logger.warning("completion_cost unavailable for model %s; reporting 0.0", self.model)
             return 0.0
-
-        prompt_tokens = response.usage.prompt_tokens
-        completion_tokens = response.usage.completion_tokens
-
-        # Pricing per 1M tokens (approximate)
-        if "gpt-4o-mini" in self.model:
-            input_price = 0.150
-            output_price = 0.600
-        elif "gpt-4" in self.model:
-            input_price = 30.0
-            output_price = 60.0
-        else:
-            # Default to gpt-4o-mini pricing
-            input_price = 0.150
-            output_price = 0.600
-
-        cost = (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
-        return float(cost)
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
@@ -590,162 +637,6 @@ class LLMJudgeModule(Module[SchemaT]):
         return _inspect_scores_impl(judgements, sample_size)
 
 
-def _inspect_scores_impl(
-    judgements: list[PairwiseJudgement], sample_size: int = 10
-) -> ScoreInspectionReport:
-    """Shared implementation of inspect_scores for all Module types.
-
-    This function provides common score inspection logic that works for all
-    Module implementations since they all return PairwiseJudgement objects.
-
-    Args:
-        judgements: List of PairwiseJudgement objects to analyze
-        sample_size: Number of examples to include (default: 10)
-
-    Returns:
-        ScoreInspectionReport with statistics, examples, and recommendations
-    """
-    # Handle empty judgements
-    if not judgements:
-        return ScoreInspectionReport(
-            total_judgements=0,
-            score_distribution={},
-            high_scoring_examples=[],
-            low_scoring_examples=[],
-            recommendations=[
-                "No judgements to analyze - generate some predictions first",
-                "Run Module.forward() on candidates to produce judgements",
-            ],
-        )
-
-    # Extract scores
-    scores = [j.score for j in judgements]
-    total = len(judgements)
-
-    # Compute statistics
-    score_distribution = {
-        "mean": float(np.mean(scores)),
-        "median": float(np.median(scores)),
-        "std": float(np.std(scores)),
-        "p25": float(np.percentile(scores, 25)),
-        "p50": float(np.percentile(scores, 50)),
-        "p75": float(np.percentile(scores, 75)),
-        "p90": float(np.percentile(scores, 90)),
-        "p95": float(np.percentile(scores, 95)),
-        "min": float(np.min(scores)),
-        "max": float(np.max(scores)),
-    }
-
-    # Extract high-scoring examples (top sample_size)
-    sorted_by_score_desc = sorted(judgements, key=lambda j: j.score, reverse=True)
-    high_scoring_examples = [
-        {
-            "left_id": j.left_id,
-            "right_id": j.right_id,
-            "score": j.score,
-            "reasoning": j.reasoning if j.reasoning else "",
-        }
-        for j in sorted_by_score_desc[:sample_size]
-    ]
-
-    # Extract low-scoring examples (bottom sample_size)
-    sorted_by_score_asc = sorted(judgements, key=lambda j: j.score)
-    low_scoring_examples = [
-        {
-            "left_id": j.left_id,
-            "right_id": j.right_id,
-            "score": j.score,
-            "reasoning": j.reasoning if j.reasoning else "",
-        }
-        for j in sorted_by_score_asc[:sample_size]
-    ]
-
-    # Generate recommendations
-    recommendations = _generate_recommendations_impl(
-        total_judgements=total,
-        score_distribution=score_distribution,
-        scores=scores,
-    )
-
-    return ScoreInspectionReport(
-        total_judgements=total,
-        score_distribution=score_distribution,
-        high_scoring_examples=high_scoring_examples,
-        low_scoring_examples=low_scoring_examples,
-        recommendations=recommendations,
-    )
-
-
-def _generate_recommendations_impl(
-    total_judgements: int,
-    score_distribution: dict[str, float],
-    scores: list[float],
-) -> list[str]:
-    """Generate rule-based recommendations based on score distribution.
-
-    Args:
-        total_judgements: Total number of judgements
-        score_distribution: Statistics dictionary
-        scores: List of all scores
-
-    Returns:
-        List of actionable recommendations
-    """
-    recommendations = []
-
-    # 1. Threshold suggestion based on median
-    median = score_distribution["median"]
-    if median > 0.7:
-        recommendations.append(
-            "High median score (>0.7) suggests most pairs are matches. "
-            "Consider threshold=0.6 for balanced precision/recall."
-        )
-    elif median < 0.3:
-        recommendations.append(
-            "Low median score (<0.3) suggests most pairs are non-matches. "
-            "Consider threshold=0.2 as starting point."
-        )
-    else:
-        recommendations.append(
-            f"Median score is {median:.2f}. Consider threshold={median:.1f} as starting point."
-        )
-
-    # 2. Score separation analysis
-    sorted_scores = sorted(scores)
-    n = len(sorted_scores)
-    high_scores = sorted_scores[int(0.75 * n) :]  # Top 25%
-    low_scores = sorted_scores[: int(0.25 * n)]  # Bottom 25%
-
-    if high_scores and low_scores:
-        separation = abs(float(np.mean(high_scores)) - float(np.mean(low_scores)))
-        if separation < 0.3:
-            recommendations.append(
-                "⚠️ Poor score separation (<0.3) - scores are not well-calibrated. "
-                "Consider tuning the prompt or using a different model."
-            )
-
-    # 3. Variance analysis
-    std = score_distribution["std"]
-    if std < 0.1:
-        recommendations.append(
-            "⚠️ Very uniform distribution (std<0.1) - scores lack discriminative power. "
-            "Consider more diverse scoring or feature engineering."
-        )
-    elif std > 0.35:
-        recommendations.append(
-            "✅ Good score variance (std>0.35) - indicates discriminative scoring."
-        )
-
-    # 4. Sample size guidance
-    if total_judgements < 50:
-        recommendations.append(
-            "Small sample (<50 judgements) - results may not be representative. "
-            "Generate more predictions for reliable analysis."
-        )
-    elif total_judgements > 1000:
-        recommendations.append(
-            "Large sample (>1000 judgements) - consider sampling a subset for faster iteration "
-            "during parameter tuning."
-        )
-
-    return recommendations
+# Backward-compatible public alias. ``LLMJudge`` is the public name; existing
+# imports of ``LLMJudgeModule`` keep working.
+LLMJudgeModule = LLMJudge

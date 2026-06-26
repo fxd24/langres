@@ -27,6 +27,56 @@ from langres.core.serialization import ComponentSpec
 logger = logging.getLogger(__name__)
 
 
+def inverse_distances_to_similarities(distances: np.ndarray) -> np.ndarray:
+    """Map non-negative distances (lower = closer) to similarities in ``(0, 1]``.
+
+    Uses ``1 / (1 + d)``, monotonically decreasing in the distance: a distance
+    of 0 maps to 1.0 (most similar) and decays toward 0.0 as the distance grows.
+    ``NaN`` distances map to 0.0 (least similar).
+
+    Shared by the in-memory fake indexes, whose synthetic distances are
+    rank-ordered (lower = closer), so their ``to_similarities`` stays meaningful.
+
+    Args:
+        distances: Distance matrix (any shape), values ``>= 0`` (negatives are
+            clamped to 0 before conversion).
+
+    Returns:
+        Similarity array of the same shape, values in ``[0, 1]``.
+    """
+    d = np.asarray(distances, dtype=np.float64)
+    sim = 1.0 / (1.0 + np.maximum(d, 0.0))
+    return np.nan_to_num(sim, nan=0.0)
+
+
+def clip_scores_to_similarities(scores: np.ndarray) -> np.ndarray:
+    """Clip "higher = more similar" scores into ``[0, 1]`` — bounded, but lossy.
+
+    Use when an index returns scores that are monotonic in true similarity
+    (higher = better) but **not** already on a ``[0, 1]`` scale — e.g. Qdrant
+    fusion (RRF/DBSF) or late-interaction (ColBERT/ColPali) MaxSim scores.
+    Despite their name these are NOT probabilities and do not sit in ``[0, 1]``:
+    RRF/DBSF fusion scores are typically tiny (~0.01–0.03) and MaxSim scores
+    routinely exceed 1.0. Clipping to ``[0, 1]`` is therefore a **lossy** mapping
+    — most fusion scores collapse toward 0.0 and MaxSim scores saturate at 1.0 —
+    so the resulting per-pair ``similarity_score`` is degenerate and should be
+    treated as **observability only**, never as a calibrated similarity. It does
+    not affect candidate membership: the blocker's candidate set comes from the
+    index's neighbour ranking, which this clip preserves (it is monotonic). For a
+    real score, run a downstream scorer (e.g. a Comparator + judge). ``NaN``
+    scores (such as the padding emitted when a query returns fewer than ``k``
+    results) map to 0.0.
+
+    Args:
+        scores: Score matrix (any shape), higher = more similar.
+
+    Returns:
+        Similarity array of the same shape, values clipped into ``[0, 1]``.
+    """
+    s = np.asarray(scores, dtype=np.float64)
+    return np.nan_to_num(np.clip(s, 0.0, 1.0), nan=0.0)
+
+
 class SerializableEmbedder(EmbeddingProvider, Protocol):
     """An :class:`EmbeddingProvider` that can round-trip through a ``ComponentSpec``.
 
@@ -185,6 +235,25 @@ class VectorIndex(Protocol):
             For deduplication pattern where you want neighbors for all items.
             More efficient than calling search(all_texts, k) because it reuses
             cached embeddings without re-encoding.
+        """
+        ...  # pragma: no cover
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert this index's raw distance/score matrix to similarities in [0, 1].
+
+        Each concrete index knows its own metric and converts so that 1.0 = most
+        similar and the result is monotonic in true similarity. ``NaN`` entries
+        map to 0.0 (least similar). This keeps the distance→similarity conversion
+        with the index that produced the distances, rather than having callers
+        guess the metric.
+
+        Args:
+            distances: The distance/score matrix returned by :meth:`search_all`
+                (or :meth:`search`), typically shape ``(N, k)``.
+
+        Returns:
+            Similarity array of the same shape, values in ``[0, 1]`` where 1.0 =
+            most similar.
         """
         ...  # pragma: no cover
 
@@ -427,6 +496,33 @@ class FAISSIndex:
         # query_prompt parameter is passed through but ignored for pre-computed embeddings
         return self.search(self._corpus_embeddings, k, query_prompt=query_prompt)
 
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert FAISS distances to similarities in [0, 1] using the index metric.
+
+        - ``metric="L2"`` (``IndexFlatL2``): ``distances`` are *squared* L2
+          distances (``d >= 0``, lower = closer, routinely ``> 2.0``). Converted
+          with ``1 / (1 + sqrt(d))``, monotonically decreasing in distance and in
+          ``(0, 1]``.
+        - ``metric="cosine"`` (``IndexFlatIP`` over normalized vectors):
+          ``distances`` are inner products in ``[-1, 1]`` (higher = more similar).
+          Mapped to ``[0, 1]`` with ``(ip + 1) / 2``.
+
+        ``NaN`` entries map to 0.0 (least similar).
+
+        Args:
+            distances: Distance/score matrix from :meth:`search_all` / :meth:`search`.
+
+        Returns:
+            Similarity array of the same shape, values in ``[0, 1]``.
+        """
+        d = np.asarray(distances, dtype=np.float64)
+        if self.metric == "L2":
+            sim = 1.0 / (1.0 + np.sqrt(np.maximum(d, 0.0)))
+        else:  # cosine: inner products of normalized vectors, in [-1, 1]
+            sim = np.clip((d + 1.0) / 2.0, 0.0, 1.0)
+        result: np.ndarray = np.nan_to_num(sim, nan=0.0)
+        return result
+
     # ============ OLD API (for backward compatibility during transition) ============
     def build(self, embeddings: np.ndarray) -> None:
         """DEPRECATED: Use create_index() instead.
@@ -569,6 +665,16 @@ class FakeVectorIndex:
                 distances[i, j] = j * 0.1
 
         return distances, indices
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert the fake's synthetic distances (lower = closer) to ``[0, 1]``.
+
+        Uses :func:`inverse_distances_to_similarities` (``1 / (1 + d)``), matching
+        the rank-ordered ``j * 0.1`` distances this double emits so its similarity
+        ordering stays meaningful (nearest neighbor scores highest). ``NaN`` maps
+        to 0.0.
+        """
+        return inverse_distances_to_similarities(distances)
 
     # ============ OLD API (for backward compatibility) ============
     def build(self, embeddings: np.ndarray) -> None:

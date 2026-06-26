@@ -9,32 +9,25 @@ import logging
 import re
 from collections.abc import Iterator
 
+import litellm
 import numpy as np
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
-from langres.core.modules.llm_judge import _inspect_scores_impl
-from langres.core.reports import ScoreInspectionReport
+from langres.core.modules.llm_judge import (
+    DEFAULT_PROMPT,
+    render_default_prompt,
+)
+from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 logger = logging.getLogger(__name__)
 
-# Default prompt template for LLM judgment
-DEFAULT_PROMPT = """You are an expert at entity resolution. Determine if these two company records refer to the same real-world company.
-
-Company A:
-{left}
-
-Company B:
-{right}
-
-Respond in exactly this format:
-MATCH or NO_MATCH
-Score: <probability between 0.0 and 1.0>
-Reasoning: <brief explanation>
-
-The score should be your confidence that these are the same company (1.0 = definitely same, 0.0 = definitely different)."""
+# The neutral LLM prompt is centralized in ``llm_judge`` (single source of
+# truth). ``DEFAULT_PROMPT`` is re-exported here for backward compatibility;
+# new code should call ``render_default_prompt(entity_noun)``.
+__all__ = ["CascadeModule", "DEFAULT_PROMPT"]
 
 
 class CascadeModule(Module[SchemaT]):
@@ -76,6 +69,17 @@ class CascadeModule(Module[SchemaT]):
         - low_threshold: 0.2-0.4 (below this is definitely not a match)
         - high_threshold: 0.85-0.95 (above this is definitely a match)
         - The gap between them determines LLM usage (larger gap = fewer LLM calls)
+
+    Note:
+        Known debt tracked for M2 consolidation:
+        - Not yet serializable: it carries no ``type_name`` / ``@register``, so it
+          cannot live in a ``Resolver`` slot that ``save`` / ``load`` (unlike
+          ``LLMJudge``).
+        - Instantiates ``SentenceTransformer`` internally rather than taking an
+          injected client — an SRP/dependency-injection gap vs. the injected-client
+          pattern ``LLMJudge`` uses.
+        - ``_extract_score`` / ``_extract_reasoning`` / ``_calculate_cost``
+          duplicate the same helpers in ``LLMJudge``.
     """
 
     def __init__(
@@ -87,6 +91,7 @@ class CascadeModule(Module[SchemaT]):
         high_threshold: float = 0.9,
         llm_temperature: float = 0.0,
         llm_prompt_template: str | None = None,
+        entity_noun: str = "entity",
     ):
         """Initialize CascadeModule.
 
@@ -97,7 +102,11 @@ class CascadeModule(Module[SchemaT]):
             low_threshold: Embedding similarity threshold for early exit (no match)
             high_threshold: Embedding similarity threshold for early exit (match)
             llm_temperature: LLM sampling temperature (0.0 = deterministic)
-            llm_prompt_template: Custom LLM prompt (uses DEFAULT_PROMPT if None)
+            llm_prompt_template: Custom LLM prompt (uses the neutral
+                :data:`~langres.core.modules.llm_judge.DEFAULT_PROMPT`, rendered
+                for ``entity_noun``, if None)
+            entity_noun: Domain noun woven into the default prompt (e.g.
+                "company", "product"). Ignored when ``llm_prompt_template`` is given.
 
         Raises:
             ValueError: If thresholds are invalid or API key is missing
@@ -117,7 +126,8 @@ class CascadeModule(Module[SchemaT]):
         self.low_threshold = low_threshold
         self.high_threshold = high_threshold
         self.llm_temperature = llm_temperature
-        self.llm_prompt_template = llm_prompt_template or DEFAULT_PROMPT
+        self.entity_noun = entity_noun
+        self.llm_prompt_template = llm_prompt_template or render_default_prompt(entity_noun)
 
         # Lazy-load models
         self._embedding_model: SentenceTransformer | None = None
@@ -337,34 +347,26 @@ class CascadeModule(Module[SchemaT]):
         return content
 
     def _calculate_cost(self, response) -> float:  # type: ignore[no-untyped-def]
-        """Calculate API call cost in USD.
+        """Calculate API call cost in USD via LiteLLM's own pricing.
+
+        Delegates to ``litellm.completion_cost`` so pricing stays honest for
+        whatever model is actually used (no hardcoded table). Returns ``0.0`` if
+        the model is unknown to LiteLLM or usage is missing — cost tracking is
+        observability, so it must never raise or flake.
 
         Args:
-            response: OpenAI API response
+            response: LLM API response (OpenAI shape)
 
         Returns:
-            Cost in USD
+            Cost in USD (``0.0`` when unavailable)
         """
-        if not response.usage:
+        try:
+            return float(litellm.completion_cost(completion_response=response))
+        except Exception:  # unknown model / missing usage — never raise/flake
+            logger.warning(
+                "completion_cost unavailable for model %s; reporting 0.0", self.llm_model
+            )
             return 0.0
-
-        prompt_tokens = response.usage.prompt_tokens
-        completion_tokens = response.usage.completion_tokens
-
-        # Pricing per 1M tokens (approximate)
-        if "gpt-4o-mini" in self.llm_model:
-            input_price = 0.150
-            output_price = 0.600
-        elif "gpt-4" in self.llm_model:
-            input_price = 30.0
-            output_price = 60.0
-        else:
-            # Default to gpt-4o-mini pricing
-            input_price = 0.150
-            output_price = 0.600
-
-        cost = (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
-        return float(cost)
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10

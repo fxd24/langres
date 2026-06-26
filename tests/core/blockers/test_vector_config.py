@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from langres.core.blockers.vector import VectorBlocker
+from langres.core.indexes.vector_index import inverse_distances_to_similarities
 from langres.core.models import CompanySchema
 from langres.core.registry import get_component, register
 from langres.core.serialization import ComponentSpec, SerializableState
@@ -69,6 +70,10 @@ class _FakeSerializableIndex:
                 indices[i, j] = (i + j) % self._n_samples
                 distances[i, j] = j * 0.1
         return distances, indices
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        # Synthetic distances are rank-ordered (lower = closer), like FakeVectorIndex.
+        return inverse_distances_to_similarities(distances)
 
     # --- SerializableState --------------------------------------------
     def save_state(self, state_dir: Path) -> None:
@@ -273,6 +278,9 @@ def test_from_config_without_state_dir_when_not_serializable() -> None:
                     indices[i, j] = (i + j) % self._n_samples
                     distances[i, j] = j * 0.1
             return distances, indices
+
+        def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+            return inverse_distances_to_similarities(distances)
 
     index = _PlainIndex(label="companies")
     index.create_index([r["name"] for r in COMPANY_DATA])

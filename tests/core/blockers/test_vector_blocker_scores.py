@@ -7,12 +7,95 @@ similarity_score field in ERCandidate objects, enabling ranking evaluation.
 import logging
 
 import numpy as np
+import pytest
 
 from langres.core.blockers.vector import VectorBlocker
-from langres.core.indexes import FakeVectorIndex
+from langres.core.indexes import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
 
 logger = logging.getLogger(__name__)
+
+
+class _StubEmbedder:
+    """Deterministic embedder mapping known texts to fixed vectors.
+
+    Lets a golden test build a *real* FAISSIndex with controlled geometry (no
+    model download, no ``@pytest.mark.slow``): a near-duplicate pair is placed
+    close together and a non-pair far apart, so distance/score ordering is known.
+    """
+
+    def __init__(self, mapping: dict[str, list[float]]) -> None:
+        self._mapping = mapping
+        self.embedding_dim = len(next(iter(mapping.values())))
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        return np.array([self._mapping[t] for t in texts], dtype=np.float32)
+
+
+def _score_for_pair(candidates: list, id_a: str, id_b: str) -> float:
+    """Return the similarity_score of the candidate for the unordered pair {a, b}."""
+    for candidate in candidates:
+        if {candidate.left.id, candidate.right.id} == {id_a, id_b}:
+            assert candidate.similarity_score is not None
+            return candidate.similarity_score
+    raise AssertionError(f"No candidate found for pair ({id_a}, {id_b})")
+
+
+@pytest.mark.parametrize("metric", ["cosine", "L2"])
+def test_vector_blocker_near_duplicate_outscores_non_pair(metric: str) -> None:
+    """GOLDEN regression guard for the distance->similarity inversion.
+
+    A known near-duplicate pair MUST receive a strictly higher similarity_score
+    than a known non-pair, for BOTH metrics. Geometry is fixed via _StubEmbedder:
+    c1 and c2 sit almost on top of each other; c3 is far away.
+
+    This FAILS on the old heuristic for metric="L2": FAISS L2 returns *squared*
+    distances (here ~26 for the non-pair, > 2.0), which the old code clipped to
+    1.0 — inverting it into the MOST-similar score. The index-owned
+    ``to_similarities`` converts L2 with ``1/(1+sqrt(d))`` and keeps order.
+    """
+    entities = [
+        {"id": "c1", "name": "apple inc"},
+        {"id": "c2", "name": "apple incorporated"},
+        {"id": "c3", "name": "microsoft corp"},
+    ]
+    # Near-duplicate c1/c2 are nearly identical; c3 is far along another axis.
+    embedder = _StubEmbedder(
+        {
+            "apple inc": [1.0, 0.0, 0.0],
+            "apple incorporated": [1.0, 0.05, 0.0],
+            "microsoft corp": [0.0, 5.0, 0.0],
+        }
+    )
+    index = FAISSIndex(embedder=embedder, metric=metric)  # type: ignore[arg-type]
+
+    blocker = VectorBlocker(
+        schema_factory=lambda x: CompanySchema(**x),
+        text_field_extractor=lambda x: x.name,
+        vector_index=index,
+        k_neighbors=2,  # k+1 == N: every pair is generated
+    )
+
+    texts = [e["name"] for e in entities]
+    index.create_index(texts)
+
+    candidates = list(blocker.stream(entities))
+
+    near_dup = _score_for_pair(candidates, "c1", "c2")
+    non_pair = _score_for_pair(candidates, "c1", "c3")
+
+    logger.info(
+        "metric=%s near_dup(c1,c2)=%.4f non_pair(c1,c3)=%.4f",
+        metric,
+        near_dup,
+        non_pair,
+    )
+    assert near_dup > non_pair, (
+        f"metric={metric}: near-duplicate score {near_dup} must exceed "
+        f"non-pair score {non_pair} (distance->similarity inversion?)"
+    )
+    # Sanity: both are valid similarities.
+    assert 0.0 <= non_pair <= near_dup <= 1.0
 
 
 def test_vector_blocker_populates_similarity_scores() -> None:

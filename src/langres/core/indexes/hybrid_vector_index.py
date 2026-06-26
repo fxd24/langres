@@ -28,6 +28,10 @@ from qdrant_client.models import (
 )
 
 from langres.core.embeddings import EmbeddingProvider, SparseEmbeddingProvider
+from langres.core.indexes.vector_index import (
+    clip_scores_to_similarities,
+    inverse_distances_to_similarities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +353,20 @@ class QdrantHybridIndex:
             _dense_embeddings=self._cached_dense_embeddings,
         )
 
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Map Qdrant fusion scores into ``[0, 1]`` — bounded but lossy, observability only.
+
+        ``search``/``search_all`` return RRF/DBSF fusion scores (higher = more
+        similar) plus ``NaN`` padding when a query returns fewer than ``k``
+        results. These fusion scores are **not** in ``[0, 1]`` — they are tiny
+        (~0.01–0.03) — so :func:`clip_scores_to_similarities` (clip to ``[0, 1]``,
+        ``NaN`` → 0.0) is a lossy mapping that collapses most of them toward 0.0.
+        The resulting ``similarity_score`` is therefore for observability only and
+        is degenerate for ranking; candidate membership is unaffected (it comes
+        from the index's neighbour ranking, which the monotonic clip preserves).
+        """
+        return clip_scores_to_similarities(distances)
+
 
 class FakeHybridVectorIndex:
     """Test double for hybrid vector index.
@@ -450,3 +468,12 @@ class FakeHybridVectorIndex:
                 distances[i, j] = j * 0.1
 
         return distances, indices
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert the fake's synthetic distances (lower = closer) to ``[0, 1]``.
+
+        Uses :func:`inverse_distances_to_similarities` to match the rank-ordered
+        ``j * 0.1`` distances this double emits (nearest neighbor scores highest),
+        keeping its similarity ordering meaningful. ``NaN`` maps to 0.0.
+        """
+        return inverse_distances_to_similarities(distances)

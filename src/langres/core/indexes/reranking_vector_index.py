@@ -34,6 +34,10 @@ from langres.core.embeddings import (
     LateInteractionEmbeddingProvider,
     SparseEmbeddingProvider,
 )
+from langres.core.indexes.vector_index import (
+    clip_scores_to_similarities,
+    inverse_distances_to_similarities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +393,20 @@ class QdrantHybridRerankingIndex:
             _dense_embeddings=self._cached_dense_embeddings,
         )
 
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Map MaxSim scores into ``[0, 1]`` — bounded but lossy, observability only.
+
+        ``search``/``search_all`` return late-interaction (ColBERT/ColPali) MaxSim
+        scores (higher = more similar) plus ``NaN`` padding when a query returns
+        fewer than ``k`` results. MaxSim scores are **not** in ``[0, 1]`` — they
+        routinely exceed 1.0 — so :func:`clip_scores_to_similarities` (clip to
+        ``[0, 1]``, ``NaN`` → 0.0) is a lossy mapping that saturates them at 1.0.
+        The resulting ``similarity_score`` is therefore for observability only and
+        is degenerate for ranking; candidate membership is unaffected (it comes
+        from the index's neighbour ranking, which the monotonic clip preserves).
+        """
+        return clip_scores_to_similarities(distances)
+
 
 class FakeHybridRerankingVectorIndex:
     """Test double for hybrid reranking vector index.
@@ -430,12 +448,16 @@ class FakeHybridRerankingVectorIndex:
         self._texts = texts
         logger.debug("FakeHybridRerankingVectorIndex: recorded %d samples", self._n_samples)
 
-    def search(self, query_texts: str | list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search(
+        self, query_texts: str | list[str], k: int, query_prompt: str | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake search results (deterministic).
 
         Args:
             query_texts: Single text or list of texts.
             k: Number of neighbors per query.
+            query_prompt: Optional instruction prompt (accepted for protocol
+                parity with the real index and VectorBlocker; fake ignores it).
 
         Returns:
             - If single query: distances=(k,), indices=(k,)
@@ -463,11 +485,13 @@ class FakeHybridRerankingVectorIndex:
         else:
             return distances, indices
 
-    def search_all(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+    def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Generate fake deduplication results (deterministic).
 
         Args:
             k: Number of neighbors per corpus item.
+            query_prompt: Optional instruction prompt (accepted for protocol
+                parity with the real index and VectorBlocker; fake ignores it).
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -486,3 +510,12 @@ class FakeHybridRerankingVectorIndex:
                 distances[i, j] = j * 0.1
 
         return distances, indices
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert the fake's synthetic distances (lower = closer) to ``[0, 1]``.
+
+        Uses :func:`inverse_distances_to_similarities` to match the rank-ordered
+        ``j * 0.1`` distances this double emits (nearest neighbor scores highest),
+        keeping its similarity ordering meaningful. ``NaN`` maps to 0.0.
+        """
+        return inverse_distances_to_similarities(distances)

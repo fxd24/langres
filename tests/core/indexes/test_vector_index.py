@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 
 from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
-from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
+from langres.core.indexes.vector_index import (
+    FAISSIndex,
+    FakeVectorIndex,
+    clip_scores_to_similarities,
+    inverse_distances_to_similarities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -673,3 +678,75 @@ class TestFAISSIndexWithCachedEmbedder:
         assert info2["hits_hot"] == 0  # No cache operations for pre-computed
         assert info2["hits_cold"] == 0
         assert info2["cold_size"] == 2  # Still just corpus
+
+
+class TestToSimilarities:
+    """Tests for the index-owned distance->similarity conversion."""
+
+    def test_faiss_l2_to_similarities(self):
+        """FAISS L2: squared distances (lower=closer) -> 1/(1+sqrt(d)) in (0, 1]."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=4), metric="L2")
+        distances = np.array([[0.0, 0.25, 4.0]])  # sqrt -> 0, 0.5, 2
+
+        sims = index.to_similarities(distances)
+
+        np.testing.assert_allclose(sims, [[1.0, 1.0 / 1.5, 1.0 / 3.0]])
+        # Monotonically decreasing in distance and within (0, 1].
+        assert sims[0, 0] > sims[0, 1] > sims[0, 2] > 0.0
+
+    def test_faiss_l2_to_similarities_large_distance_not_inverted(self):
+        """Regression: a large squared-L2 distance (>2) must score LOW, not ~1.0."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=4), metric="L2")
+        distances = np.array([[0.0025, 26.0]])  # near vs. far (the inversion case)
+
+        sims = index.to_similarities(distances)
+
+        # The far point (26) must be far less similar than the near point.
+        assert sims[0, 0] > sims[0, 1]
+        assert sims[0, 1] < 0.2  # not clipped up to ~1.0 like the old heuristic
+
+    def test_faiss_l2_to_similarities_nan(self):
+        """FAISS L2: NaN distance -> 0.0 (least similar)."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=4), metric="L2")
+        sims = index.to_similarities(np.array([[0.0, np.nan]]))
+        np.testing.assert_allclose(sims, [[1.0, 0.0]])
+
+    def test_faiss_cosine_to_similarities(self):
+        """FAISS cosine: inner products in [-1, 1] -> (ip+1)/2 in [0, 1]."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=4), metric="cosine")
+        distances = np.array([[1.0, 0.0, -1.0]])
+
+        sims = index.to_similarities(distances)
+
+        np.testing.assert_allclose(sims, [[1.0, 0.5, 0.0]])
+        assert sims[0, 0] > sims[0, 1] > sims[0, 2]
+
+    def test_faiss_cosine_to_similarities_nan(self):
+        """FAISS cosine: NaN inner product -> 0.0."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=4), metric="cosine")
+        sims = index.to_similarities(np.array([[1.0, np.nan]]))
+        np.testing.assert_allclose(sims, [[1.0, 0.0]])
+
+    def test_fake_to_similarities(self):
+        """FakeVectorIndex: synthetic distances (lower=closer) -> 1/(1+d), NaN -> 0."""
+        index = FakeVectorIndex()
+        distances = np.array([[0.0, 0.1, 0.2], [0.0, np.nan, 1.0]])
+
+        sims = index.to_similarities(distances)
+
+        np.testing.assert_allclose(
+            sims,
+            [[1.0, 1.0 / 1.1, 1.0 / 1.2], [1.0, 0.0, 0.5]],
+        )
+        # Ordering preserved for the clean row (nearest neighbor scores highest).
+        assert sims[0, 0] > sims[0, 1] > sims[0, 2]
+
+    def test_inverse_distances_helper(self):
+        """Shared helper: 1/(1+d) with negative clamp and NaN -> 0."""
+        sims = inverse_distances_to_similarities(np.array([0.0, -5.0, 3.0, np.nan]))
+        np.testing.assert_allclose(sims, [1.0, 1.0, 0.25, 0.0])
+
+    def test_clip_scores_helper(self):
+        """Shared helper: clip already-similarity-like scores to [0, 1], NaN -> 0."""
+        sims = clip_scores_to_similarities(np.array([1.5, 0.3, -0.2, np.nan]))
+        np.testing.assert_allclose(sims, [1.0, 0.3, 0.0, 0.0])
