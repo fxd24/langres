@@ -89,4 +89,5 @@ The `.agent/` folder contains external expert analyses of the langres project:
 - **`docs/PROJECT_OVERVIEW.md`** — architecture and philosophy; the "why" behind design decisions; component relationships; the two-layer API.
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
+- **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 - **`docs/CHANGELOG.md`** — project progress; completed POC milestones.

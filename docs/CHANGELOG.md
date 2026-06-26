@@ -25,10 +25,10 @@
   - `Clusterer.inspect_clusters(clusters, entities, sample_size)`: Review clustering results without labels
     - Singleton rate analysis and threshold tuning recommendations
 
-- **Example**: `examples/progressive_pipeline_building.py`
-  - Demonstrates complete exploratory workflow: inspect → tune → re-inspect → iterate
-  - Shows parameter calibration without expensive labeling
-  - All three inspection methods demonstrated with before/after comparisons
+- **Example**: exploratory inspect → tune → re-inspect → iterate workflow
+  - Demonstrates parameter calibration without expensive labeling
+  - All three inspection methods (the standalone `progressive_pipeline_building.py`
+    example was removed in M0, superseded by `examples/resolver_company_dedup.py`)
 
 **Key Benefits**:
 - **Progressive discovery**: Build pipelines incrementally with feedback at each stage

@@ -6,16 +6,18 @@ judgements into entity clusters using graph algorithms (connected components).
 """
 
 from collections.abc import Iterator
-from typing import Any, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 import networkx as nx
 
 from langres.core.models import PairwiseJudgement
+from langres.core.registry import register
 from langres.core.reports import ClusterInspectionReport
 
 SchemaT = TypeVar("SchemaT")
 
 
+@register("clusterer")
 class Clusterer:
     """Graph-based clusterer for entity formation.
 
@@ -30,6 +32,10 @@ class Clusterer:
         # clusters is a list of sets: [{"id1", "id2"}, {"id3", "id4", "id5"}]
     """
 
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "clusterer"
+
     def __init__(self, threshold: float = 0.5):
         """Initialize clusterer.
 
@@ -43,6 +49,27 @@ class Clusterer:
         if not 0.0 <= threshold <= 1.0:
             raise ValueError("threshold must be between 0.0 and 1.0")
         self.threshold = threshold
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Serializable construction config for the registry.
+
+        Returns:
+            ``{"threshold": <float>}`` — the only state the Clusterer holds.
+        """
+        return {"threshold": self.threshold}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "Clusterer":
+        """Rebuild a Clusterer from its serialized config.
+
+        Args:
+            config: A mapping with ``"threshold"`` (a float in ``[0.0, 1.0]``).
+
+        Returns:
+            A Clusterer with the given threshold.
+        """
+        return cls(threshold=float(config["threshold"]))  # type: ignore[arg-type]
 
     def cluster(
         self,
