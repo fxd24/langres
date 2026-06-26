@@ -581,7 +581,9 @@ def test_resolver_load_rejects_legacy_manifest_without_module(tmp_path: Path) ->
     manifest = json.loads(manifest_path.read_text())
     # Strip slots (legacy path) and keep only blocker + clusterer: with the
     # comparator and module gone, positional identification finds no module.
-    kept = [c for c in manifest["components"] if c["type_name"] in ("all_pairs_blocker", "clusterer")]
+    kept = [
+        c for c in manifest["components"] if c["type_name"] in ("all_pairs_blocker", "clusterer")
+    ]
     for component in kept:
         component.pop("slot", None)
     manifest["components"] = kept
