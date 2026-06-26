@@ -296,6 +296,45 @@ def test_resolver_builds_vector_index_transparently() -> None:
     assert _wrongly_merged_pairs(clusters, EXPECTED_DUPLICATE_GROUPS) == []
 
 
+def test_resolver_rebuilds_vector_index_on_new_corpus() -> None:
+    """Reusing a Resolver on a DIFFERENT record list rebuilds the index.
+
+    An already-built index must not be reused against a new corpus — that would
+    score the new records against the old corpus (wrong pairs / IndexError). The
+    Resolver compares the new corpus texts to the index's stored ``_corpus_texts``
+    and rebuilds when they differ.
+    """
+    from langres.core.models import CompanySchema
+
+    resolver = _vector_resolver()
+
+    records_a = [
+        {"id": "a1", "name": "Acme Corp"},
+        {"id": "a2", "name": "Acme Corp"},
+        {"id": "a3", "name": "Beta LLC"},
+    ]
+    records_b = [
+        {"id": "b1", "name": "Zenith Inc"},
+        {"id": "b2", "name": "Zenith Inc"},
+        {"id": "b3", "name": "Omega GmbH"},
+    ]
+
+    clusters_a = resolver.resolve(records_a)
+    ids_a = {i for cluster in clusters_a for i in cluster}
+    assert ids_a <= {r["id"] for r in records_a}
+
+    # Reuse the same resolver on a disjoint corpus: must rebuild, no IndexError,
+    # and the result references B's ids — never A's stale corpus.
+    clusters_b = resolver.resolve(records_b)
+    ids_b = {i for cluster in clusters_b for i in cluster}
+    assert ids_b, "expected at least one B cluster"
+    assert ids_b <= {r["id"] for r in records_b}
+    assert ids_b.isdisjoint({r["id"] for r in records_a})
+    # The index now holds B's corpus, not A's.
+    expected_texts_b = [CompanySchema(**r).name for r in records_b]
+    assert resolver.blocker.vector_index._corpus_texts == expected_texts_b  # type: ignore[attr-defined]
+
+
 def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
     """An index-backed Resolver persists + restores its FAISS state (sidecar)."""
     from langres.core import Resolver
@@ -313,6 +352,32 @@ def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
     assert reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
     clusters_after = reloaded.resolve(COMPANY_RECORDS)
     assert _canonical(clusters_before) == _canonical(clusters_after)
+
+
+def test_resolver_save_unbuilt_vector_index_writes_no_sidecar(tmp_path: Path) -> None:
+    """Saving a VectorBlocker Resolver BEFORE the index is built writes no sidecar.
+
+    The FAISS index has no state to persist until ``create_index`` runs, so
+    ``save`` must not leave an empty ``blocker/`` dir behind — otherwise ``load``
+    would try to read a missing ``index.faiss``. Loading the artifact succeeds,
+    and resolve() then builds the index transparently.
+    """
+    from langres.core import Resolver
+
+    resolver = _vector_resolver()
+    # Do NOT resolve() first — the index is unbuilt.
+    assert not resolver.blocker._index_is_built()  # type: ignore[attr-defined]
+
+    resolver.save(tmp_path)
+    # No empty/partial blocker sidecar was written.
+    assert not (tmp_path / "blocker").exists()
+
+    # Load succeeds (no missing-file error) and the reloaded index is unbuilt.
+    reloaded = Resolver.load(tmp_path)
+    assert not reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
+    # resolve() still works — it builds the index transparently.
+    reloaded.resolve(COMPANY_RECORDS)
+    assert reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
 
 
 def test_resolver_without_comparator_uses_plain_module() -> None:

@@ -36,12 +36,13 @@ import inspect
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, TypeGuard
 
 from pydantic import BaseModel
 
 import langres
 from langres.core.blocker import Blocker
+from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.judges.weighted_average import WeightedAverageJudge
@@ -114,6 +115,17 @@ def _state_owner(component: object) -> SerializableState | None:
     return None
 
 
+def _has_state(state_dir: Path | None) -> TypeGuard[Path]:
+    """True iff ``state_dir`` exists and holds at least one persisted state file.
+
+    An empty (or absent) sidecar dir signals "no out-of-band state to restore",
+    so callers must not invoke ``load_state`` on it — that would try to read a
+    missing state file (e.g. ``index.faiss``). Returning a ``TypeGuard`` narrows
+    ``state_dir`` to ``Path`` in the truthy branch for the type checker.
+    """
+    return state_dir is not None and state_dir.is_dir() and any(state_dir.iterdir())
+
+
 def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> Any:
     """Rebuild a component from its :class:`ComponentSpec` via the registry.
 
@@ -132,9 +144,10 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
         config_model.model_validate(spec.config) if config_model is not None else spec.config
     )
 
-    # Pass state_dir only to from_config signatures that accept it.
+    # Pass state_dir only to from_config signatures that accept it, and only
+    # when the sidecar actually holds state (an empty/absent dir means none).
     accepts_state_dir = "state_dir" in inspect.signature(cls.from_config).parameters  # type: ignore[attr-defined]
-    if accepts_state_dir and state_dir is not None and state_dir.exists():
+    if accepts_state_dir and _has_state(state_dir):
         component = cls.from_config(config_arg, state_dir=state_dir)  # type: ignore[attr-defined]
     else:
         component = cls.from_config(config_arg)  # type: ignore[attr-defined]
@@ -142,12 +155,7 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
     # Restore directly only when ``from_config`` did not already handle state
     # itself (guards against a double ``load_state`` for a component that both
     # accepts ``state_dir`` and implements SerializableState).
-    if (
-        not accepts_state_dir
-        and isinstance(component, SerializableState)
-        and state_dir is not None
-        and state_dir.exists()
-    ):
+    if not accepts_state_dir and isinstance(component, SerializableState) and _has_state(state_dir):
         component.load_state(state_dir)
     return component
 
@@ -282,23 +290,27 @@ class Resolver:
         return self.clusterer.cluster(self._judgements(records))
 
     def _ensure_index_built(self, records: list[Any]) -> None:
-        """Build/populate an index-backed blocker's index from ``records``.
+        """Build/populate a ``VectorBlocker``'s index from ``records``.
 
-        For a ``VectorBlocker`` whose index has not been built yet, embed the
-        records' text field and create the index in place. For a blocker with no
-        index (AllPairs), this is a no-op. Idempotent: an already-built index is
-        left untouched (so a freshly loaded FAISS index keeps its restored state).
+        Embeds the records' text field and creates the index in place when it is
+        not yet built. For a blocker with no index (AllPairs, GLinker), this is a
+        no-op. When the index *is* already built (e.g. a freshly loaded FAISS
+        index, or a Resolver reused on the same records), the would-be corpus is
+        compared to the index's stored ``_corpus_texts``: identical -> reuse
+        (never re-embed, so restore + same-records round-trips are cheap);
+        different -> rebuild (so reusing the Resolver on a new record list scores
+        against the right corpus rather than a stale one).
         """
-        index = getattr(self.blocker, "vector_index", None)
-        if index is None:
-            return  # AllPairs and other index-free blockers.
+        if not isinstance(self.blocker, VectorBlocker):
+            return  # AllPairs, GLinker, and other index-free blockers.
 
-        # Already built (e.g. restored via load_state) -> reuse, never re-embed.
-        if self.blocker._index_is_built():  # type: ignore[attr-defined]
-            return
+        entities = [self.blocker.schema_factory(record) for record in records]
+        texts = [self.blocker.text_field_extractor(entity) for entity in entities]
 
-        entities = [self.blocker.schema_factory(record) for record in records]  # type: ignore[attr-defined]
-        texts = [self.blocker.text_field_extractor(entity) for entity in entities]  # type: ignore[attr-defined]
+        index = self.blocker.vector_index
+        if self.blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
+            return  # Same corpus already indexed -> reuse, never re-embed.
+
         logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
         index.create_index(texts)
 
@@ -359,6 +371,12 @@ class Resolver:
                 state_dir = out_dir / slot_name
                 state_dir.mkdir(parents=True, exist_ok=True)
                 owner.save_state(state_dir)
+                # A SerializableState owner with nothing to persist (e.g. a
+                # VectorBlocker whose index was never built) writes no files;
+                # drop the empty sidecar so load() doesn't later try to read a
+                # missing state file from a dir that only signals "has state".
+                if not any(state_dir.iterdir()):
+                    state_dir.rmdir()
 
         manifest = ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
