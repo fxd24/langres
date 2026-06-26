@@ -142,3 +142,14 @@ mypy_path = "src"
 # Silencing the missing-import check here is stable across both.
 module = ["faiss.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# litellm ships type info in some installs but not others, and under strict
+# `no_implicit_reexport` an attribute like `litellm.completion_cost` flips
+# between typed (needs an inline `# type: ignore[attr-defined]`) and untyped
+# (the ignore is unused — which fails `warn_unused_ignores`). Treat litellm as
+# untyped uniformly so neither side flips. `create_llm_client` already returns
+# `Any`, so this introduces no `warn_return_any` regressions.
+module = ["litellm.*"]
+ignore_missing_imports = true
+follow_imports = "skip"

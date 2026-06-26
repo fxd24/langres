@@ -19,9 +19,9 @@ from openai import OpenAI
 
 # Type checking for litellm exceptions
 try:
-    from litellm import RateLimitError  # type: ignore[attr-defined]
+    from litellm import RateLimitError
 except ImportError:
-    RateLimitError = Exception  # type: ignore[misc, assignment]
+    RateLimitError = Exception
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
