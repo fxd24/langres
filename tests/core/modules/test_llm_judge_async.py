@@ -382,9 +382,11 @@ async def test_forward_async_retries_with_exponential_backoff(mock_llm_client, m
 
 
 @pytest.mark.asyncio
-async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response):
-    """Test forward_async() tracks API costs in provenance."""
+async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response, mocker):
+    """Test forward_async() tracks API costs in provenance via litellm pricing."""
     mock_llm_client.acompletion.return_value = mock_llm_response
+
+    mocker.patch("langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.000123)
 
     module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
 
@@ -399,7 +401,7 @@ async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response):
     j = judgements[0]
     assert "cost_usd" in j.provenance
     assert isinstance(j.provenance["cost_usd"], float)
-    assert j.provenance["cost_usd"] > 0
+    assert j.provenance["cost_usd"] == 0.000123
     assert "prompt_tokens" in j.provenance
     assert "completion_tokens" in j.provenance
     assert j.provenance["method"] == "async_batch"

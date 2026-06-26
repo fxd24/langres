@@ -1,4 +1,4 @@
-"""LLMJudgeModule implementation for LLM-based entity matching.
+"""LLMJudge: serializable LLM-based entity-matching Module.
 
 This module uses OpenAI API (or compatible) for match judgments with natural
 language reasoning and calibrated probability scores.
@@ -12,7 +12,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 import litellm
 import numpy as np
@@ -26,17 +26,23 @@ except ImportError:
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
+from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport
 
 logger = logging.getLogger(__name__)
 
-# Default prompt template for LLM judgment
-DEFAULT_PROMPT = """You are an expert at entity resolution. Determine if these two company records refer to the same real-world company.
+# Default prompt template for LLM judgment.
+#
+# Single source of truth for the neutral prompt (Cascade imports this too). It is
+# domain-neutral: ``{entity_noun}`` is woven in at render time so the same
+# template serves companies, products, people, etc. ``{left}`` / ``{right}`` stay
+# unfilled here and are formatted with the two records at judgement time.
+DEFAULT_PROMPT = """You are an expert at entity resolution. Determine if these two {entity_noun} records refer to the same real-world {entity_noun}.
 
-Company A:
+Record A:
 {left}
 
-Company B:
+Record B:
 {right}
 
 Respond in exactly this format:
@@ -44,7 +50,16 @@ MATCH or NO_MATCH
 Score: <probability between 0.0 and 1.0>
 Reasoning: <brief explanation>
 
-The score should be your confidence that these are the same company (1.0 = definitely same, 0.0 = definitely different)."""
+The score should be your confidence that these are the same {entity_noun} (1.0 = definitely same, 0.0 = definitely different)."""
+
+
+def render_default_prompt(entity_noun: str = "entity") -> str:
+    """Render :data:`DEFAULT_PROMPT` for ``entity_noun``, leaving ``{left}``/``{right}``.
+
+    Substitutes only the ``{entity_noun}`` placeholder so the result is still a
+    ``str.format`` template expecting ``left`` and ``right`` at judgement time.
+    """
+    return DEFAULT_PROMPT.replace("{entity_noun}", entity_noun)
 
 
 class _RateLimiter:
@@ -131,85 +146,76 @@ class _RateLimiter:
             self._token_usage.append((time.time(), token_count))
 
 
-class LLMJudgeModule(Module[SchemaT]):
+@register("llm_judge")
+class LLMJudge(Module[SchemaT]):
     """Schema-agnostic LLM-based matching module using LiteLLM.
 
-    This module uses an LLM (like GPT-4) to make match judgments with
-    natural language reasoning. It provides calibrated probability scores
-    and tracks API costs for observability.
+    This module uses an LLM to make match judgments with natural language
+    reasoning. It provides calibrated probability scores and tracks API costs
+    (via LiteLLM's own pricing) for observability.
 
-    The module accepts a pre-configured LiteLLM client, enabling:
+    It is a first-class, serializable Resolver component: it carries a registry
+    ``type_name`` and a pure :attr:`config` (model, temperature, prompt,
+    entity_noun) so a Resolver with an LLM judge in the ``module`` slot can
+    ``save`` / ``load``. The LLM ``client`` is **never** serialized — it is
+    reconstructed from environment at load time via the lazy-client path.
+
+    The client is optional. When omitted, it is lazily built from the
+    environment with ``create_llm_client(Settings())`` on first use, enabling:
     - Automatic Langfuse tracing for observability
     - Support for multiple LLM providers (OpenAI, Azure, etc.)
-    - Proper separation of concerns (client configuration vs. matching logic)
+    - Serialization without persisting any secret
 
     Example:
-        from langres.clients import create_llm_client
-        from langres.clients.settings import Settings
-
-        settings = Settings()
-        llm_client = create_llm_client(settings)
-
-        module = LLMJudgeModule(
-            client=llm_client,
-            model="gpt-4o-mini",
-            temperature=0.0,
-        )
+        # Happy path: build the client from environment.
+        module = LLMJudge.from_env(model="gpt-5-mini")
 
         for judgement in module.forward(candidates):
             print(f"{judgement.left_id} vs {judgement.right_id}: {judgement.score}")
             print(f"Reasoning: {judgement.reasoning}")
             print(f"Cost: ${judgement.provenance['cost_usd']}")
 
-    Note:
-        The module uses gpt-4o-mini by default for cost efficiency. For higher
-        quality, use gpt-4 (but costs ~30x more).
+    Example:
+        # Escape hatch: inject a pre-configured client (e.g. in tests).
+        from langres.clients import create_llm_client, Settings
+
+        module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
-        Cost tracking uses approximate pricing:
-        - gpt-5-mini: $0.150/1M input tokens, $0.600/1M output tokens
-        - gpt-4: $30/1M input tokens, $60/1M output tokens
+        Defaults to ``gpt-5-mini`` at ``temperature=1.0``. Cost tracking is
+        delegated to ``litellm.completion_cost`` so pricing stays honest for
+        whatever model is actually used (no hardcoded table).
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "llm_judge"
 
     def __init__(
         self,
-        client: Any,
+        client: Any = None,
         model: str = "gpt-5-mini",
         temperature: float = 1.0,
         prompt_template: str | None = None,
+        entity_noun: str = "entity",
     ):
-        """Initialize LLMJudgeModule.
+        """Initialize LLMJudge.
 
         Args:
-            client: Pre-configured LLM client (LiteLLM or OpenAI client).
-                   Use langres.clients.create_llm_client() to create a client
-                   with Langfuse tracing enabled.
-            model: Model name (e.g., "gpt-4o-mini", "azure/gpt-5-mini")
+            client: Optional pre-configured LLM client (LiteLLM or OpenAI
+                client). When ``None`` (the default), the client is lazily built
+                from the environment via ``create_llm_client(Settings())`` on
+                first use. Inject a client only as an escape hatch (e.g. tests
+                or a custom client); use :meth:`from_env` for the happy path.
+            model: Model name (e.g., "gpt-5-mini", "azure/gpt-5-mini")
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random)
-            prompt_template: Custom prompt template (uses DEFAULT_PROMPT if None)
+            prompt_template: Custom prompt template (uses the neutral
+                :data:`DEFAULT_PROMPT`, rendered for ``entity_noun``, if None)
+            entity_noun: Domain noun woven into the default prompt (e.g.
+                "company", "product"). Ignored when ``prompt_template`` is given.
 
         Raises:
             ValueError: If temperature out of range
-
-        Example:
-            # Create LiteLLM client with tracing
-            from langres.clients import create_llm_client
-            from langres.clients.settings import Settings
-
-            settings = Settings()
-            llm_client = create_llm_client(settings)
-
-            # Initialize module with client
-            module = LLMJudgeModule(
-                client=llm_client,
-                model="azure/gpt-5-mini",
-                temperature=0.0
-            )
-
-        Note:
-            The client handles all authentication and tracing configuration.
-            Use langres.clients.create_llm_client() to create a properly
-            configured client with Langfuse observability.
         """
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
@@ -217,7 +223,55 @@ class LLMJudgeModule(Module[SchemaT]):
         self.client = client
         self.model = model
         self.temperature = temperature
-        self.prompt_template = prompt_template if prompt_template else DEFAULT_PROMPT
+        self.entity_noun = entity_noun
+        self.prompt_template = (
+            prompt_template if prompt_template else render_default_prompt(entity_noun)
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        model: str = "gpt-5-mini",
+        **kwargs: Any,
+    ) -> "LLMJudge[SchemaT]":
+        """Build an LLMJudge with a client constructed from the environment.
+
+        The documented happy path: reads provider/tracing config from env via
+        ``create_llm_client(Settings())``. ``kwargs`` are forwarded to
+        ``__init__`` (``temperature``, ``prompt_template``, ``entity_noun``).
+        """
+        from langres.clients import Settings, create_llm_client
+
+        return cls(client=create_llm_client(Settings()), model=model, **kwargs)
+
+    def _get_client(self) -> Any:
+        """Return the client, lazily building one from env on first use."""
+        if self.client is None:
+            from langres.clients import Settings, create_llm_client
+
+            self.client = create_llm_client(Settings())
+        return self.client
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Pure, serializable construction config (never the client or secrets)."""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "prompt_template": self.prompt_template,
+            "entity_noun": self.entity_noun,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
+        """Rebuild from :attr:`config` via the lazy-client path (client from env)."""
+        return cls(
+            client=None,
+            model=str(config["model"]),
+            temperature=float(config["temperature"]),  # type: ignore[arg-type]
+            prompt_template=str(config["prompt_template"]),
+            entity_noun=str(config["entity_noun"]),
+        )
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
@@ -248,7 +302,7 @@ class LLMJudgeModule(Module[SchemaT]):
             )
 
             # Call client (works for both LiteLLM and OpenAI)
-            response = self.client.completion(
+            response = self._get_client().completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.temperature,
@@ -455,9 +509,10 @@ class LLMJudgeModule(Module[SchemaT]):
         Note:
             Implements exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s max
         """
+        client = self._get_client()
         for attempt in range(max_retries):
             try:
-                response = await self.client.acompletion(
+                response = await client.acompletion(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
@@ -533,39 +588,24 @@ class LLMJudgeModule(Module[SchemaT]):
         return content
 
     def _calculate_cost(self, response) -> float:  # type: ignore[no-untyped-def]
-        """Calculate API call cost in USD.
+        """Calculate API call cost in USD via LiteLLM's own pricing.
+
+        Delegates to ``litellm.completion_cost`` so pricing stays honest for
+        whatever model is actually used (no hardcoded table). Returns ``0.0`` if
+        the model is unknown to LiteLLM or usage is missing — cost tracking is
+        observability, so it must never raise or flake.
 
         Args:
-            response: OpenAI API response
+            response: LLM API response (LiteLLM/OpenAI shape)
 
         Returns:
-            Cost in USD
-
-        Note:
-            Uses approximate pricing as of 2024:
-            - gpt-4o-mini: $0.150/1M input, $0.600/1M output
-            - gpt-4: $30/1M input, $60/1M output
+            Cost in USD (``0.0`` when unavailable)
         """
-        if not response.usage:
+        try:
+            return float(litellm.completion_cost(completion_response=response))
+        except Exception:  # unknown model / missing usage — never raise/flake
+            logger.warning("completion_cost unavailable for model %s; reporting 0.0", self.model)
             return 0.0
-
-        prompt_tokens = response.usage.prompt_tokens
-        completion_tokens = response.usage.completion_tokens
-
-        # Pricing per 1M tokens (approximate)
-        if "gpt-4o-mini" in self.model:
-            input_price = 0.150
-            output_price = 0.600
-        elif "gpt-4" in self.model:
-            input_price = 30.0
-            output_price = 60.0
-        else:
-            # Default to gpt-4o-mini pricing
-            input_price = 0.150
-            output_price = 0.600
-
-        cost = (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
-        return float(cost)
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
@@ -588,6 +628,11 @@ class LLMJudgeModule(Module[SchemaT]):
             ScoreInspectionReport with statistics, examples, and recommendations
         """
         return _inspect_scores_impl(judgements, sample_size)
+
+
+# Backward-compatible public alias. ``LLMJudge`` is the public name; existing
+# imports of ``LLMJudgeModule`` keep working.
+LLMJudgeModule = LLMJudge
 
 
 def _inspect_scores_impl(
