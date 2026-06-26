@@ -53,10 +53,10 @@ from langres.core.embeddings import (
     FastEmbedSparseEmbedder,
     SentenceTransformerEmbedder,
 )
-from langres.core.hybrid_vector_index import QdrantHybridIndex
+from langres.core.indexes.hybrid_vector_index import QdrantHybridIndex
 from langres.core.metrics import evaluate_blocking_with_ranking, pairs_from_clusters
-from langres.core.reranking_vector_index import QdrantHybridRerankingIndex
-from langres.core.vector_index import FAISSIndex
+from langres.core.indexes.reranking_vector_index import QdrantHybridRerankingIndex
+from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data
 
 # Configure logging

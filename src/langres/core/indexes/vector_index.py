@@ -50,18 +50,28 @@ def inverse_distances_to_similarities(distances: np.ndarray) -> np.ndarray:
 
 
 def clip_scores_to_similarities(scores: np.ndarray) -> np.ndarray:
-    """Clip already-similarity-like scores (higher = more similar) to ``[0, 1]``.
+    """Clip "higher = more similar" scores into ``[0, 1]`` — bounded, but lossy.
 
-    Use when an index returns scores that are *already* monotonic in true
-    similarity (higher = better) and roughly in ``[0, 1]`` — e.g. Qdrant fusion
-    (RRF/DBSF) or late-interaction MaxSim scores. ``NaN`` scores (such as the
-    padding emitted when a query returns fewer than ``k`` results) map to 0.0.
+    Use when an index returns scores that are monotonic in true similarity
+    (higher = better) but **not** already on a ``[0, 1]`` scale — e.g. Qdrant
+    fusion (RRF/DBSF) or late-interaction (ColBERT/ColPali) MaxSim scores.
+    Despite their name these are NOT probabilities and do not sit in ``[0, 1]``:
+    RRF/DBSF fusion scores are typically tiny (~0.01–0.03) and MaxSim scores
+    routinely exceed 1.0. Clipping to ``[0, 1]`` is therefore a **lossy** mapping
+    — most fusion scores collapse toward 0.0 and MaxSim scores saturate at 1.0 —
+    so the resulting per-pair ``similarity_score`` is degenerate and should be
+    treated as **observability only**, never as a calibrated similarity. It does
+    not affect candidate membership: the blocker's candidate set comes from the
+    index's neighbour ranking, which this clip preserves (it is monotonic). For a
+    real score, run a downstream scorer (e.g. a Comparator + judge). ``NaN``
+    scores (such as the padding emitted when a query returns fewer than ``k``
+    results) map to 0.0.
 
     Args:
         scores: Score matrix (any shape), higher = more similar.
 
     Returns:
-        Similarity array of the same shape, values in ``[0, 1]``.
+        Similarity array of the same shape, values clipped into ``[0, 1]``.
     """
     s = np.asarray(scores, dtype=np.float64)
     return np.nan_to_num(np.clip(s, 0.0, 1.0), nan=0.0)

@@ -88,7 +88,13 @@ def _component_spec(obj: object, slot: str) -> ComponentSpec:
     ``slot`` name so :meth:`Resolver.load` can map the spec back self-describingly
     rather than by position or hard-coded ``type_name``.
     """
-    type_name = obj.type_name  # type: ignore[attr-defined]
+    type_name = getattr(obj, "type_name", None)
+    if not isinstance(type_name, str):
+        raise TypeError(
+            f"{type(obj).__name__} is not serializable (no `type_name`/@register). "
+            f"Use a registered component (e.g. LLMJudge, WeightedAverageJudge) in "
+            f"the {slot!r} slot."
+        )
     return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
 
 
@@ -478,11 +484,14 @@ class Resolver:
         """Validate artifact compatibility; raise on an unreadably-new artifact.
 
         ``ARTIFACT_VERSION`` is a monotonic integer-valued string bumped on an
-        incompatible layout change. An artifact at an older-or-equal layout is
-        fine to read; a *strictly newer* (or malformed/non-integer) layout we
-        cannot understand is a hard error. A ``langres_version`` mismatch is
-        logged as a warning, not a failure — configs are forward-compatible
-        within a layout version.
+        incompatible layout change. Each bump breaks the config schema, so only
+        an artifact at the *exact* supported layout is readable: a *newer* layout
+        (this build is too old), an *older* layout (predates an incompatible
+        bump), or a malformed/non-integer layout are all hard errors — without
+        this guard an older artifact would fall through to a raw ``KeyError`` on
+        the changed config. A ``langres_version`` mismatch is logged as a
+        warning, not a failure — configs are forward-compatible *within* a layout
+        version.
         """
         try:
             artifact_v = int(manifest.artifact_version)
@@ -496,6 +505,12 @@ class Resolver:
             raise ValueError(
                 f"Artifact version {manifest.artifact_version!r} is newer than this "
                 f"langres build supports ({ARTIFACT_VERSION!r}); upgrade langres to load it."
+            )
+        if artifact_v < current_v:
+            raise ValueError(
+                f"Artifact version {manifest.artifact_version!r} predates the supported "
+                f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
+                f"schema changed incompatibly); re-save with this langres build."
             )
         if manifest.langres_version != langres.__version__:
             logger.warning(

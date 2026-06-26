@@ -33,9 +33,8 @@ from typing import ClassVar, cast
 from langres.core.feature import ComparisonVector, FeatureSpec, combine_present
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
-from langres.core.modules.llm_judge import _inspect_scores_impl
 from langres.core.registry import register
-from langres.core.reports import ScoreInspectionReport
+from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 
 def _normalized_weights(specs: list[FeatureSpec]) -> dict[str, float]:

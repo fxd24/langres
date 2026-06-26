@@ -15,6 +15,7 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
+from langres.core.indexes.reranking_vector_index import FakeHybridRerankingVectorIndex
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
 
@@ -481,3 +482,34 @@ def test_vector_blocker_with_no_query_prompt():
     mock_index.search_all.assert_called_once()
     call_args = mock_index.search_all.call_args
     assert call_args[1]["query_prompt"] is None
+
+
+def test_stream_with_fake_hybrid_reranking_index_end_to_end():
+    """VectorBlocker drives FakeHybridRerankingVectorIndex.stream() without TypeError.
+
+    VectorBlocker.stream() calls ``search_all(k, query_prompt=...)``; before the
+    fix this fake lacked ``query_prompt`` and raised TypeError. This exercises the
+    full path (search_all + to_similarities) with a query_prompt set.
+    """
+    index = FakeHybridRerankingVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=index,
+        k_neighbors=2,
+        query_prompt="Represent the company name for retrieval:",
+    )
+
+    data = [
+        {"id": "c1", "name": "Apple"},
+        {"id": "c2", "name": "Google"},
+        {"id": "c3", "name": "Microsoft"},
+    ]
+    index.create_index([d["name"] for d in data])
+
+    candidates = list(blocker.stream(data))
+
+    assert len(candidates) > 0
+    # to_similarities mapped fake distances into [0, 1] similarity scores.
+    for candidate in candidates:
+        assert 0.0 <= candidate.similarity_score <= 1.0

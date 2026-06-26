@@ -354,12 +354,16 @@ class QdrantHybridIndex:
         )
 
     def to_similarities(self, distances: np.ndarray) -> np.ndarray:
-        """Convert Qdrant fusion scores to similarities in ``[0, 1]``.
+        """Map Qdrant fusion scores into ``[0, 1]`` — bounded but lossy, observability only.
 
         ``search``/``search_all`` return RRF/DBSF fusion scores (higher = more
-        similar), already similarity-like, plus ``NaN`` padding when a query
-        returns fewer than ``k`` results. Delegates to
-        :func:`clip_scores_to_similarities` (clip to ``[0, 1]``, ``NaN`` → 0.0).
+        similar) plus ``NaN`` padding when a query returns fewer than ``k``
+        results. These fusion scores are **not** in ``[0, 1]`` — they are tiny
+        (~0.01–0.03) — so :func:`clip_scores_to_similarities` (clip to ``[0, 1]``,
+        ``NaN`` → 0.0) is a lossy mapping that collapses most of them toward 0.0.
+        The resulting ``similarity_score`` is therefore for observability only and
+        is degenerate for ranking; candidate membership is unaffected (it comes
+        from the index's neighbour ranking, which the monotonic clip preserves).
         """
         return clip_scores_to_similarities(distances)
 

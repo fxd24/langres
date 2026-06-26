@@ -116,7 +116,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     import langres
 
     manifest = json.loads((tmp_path / "resolver.json").read_text())
-    assert manifest["artifact_version"] == "0"
+    assert manifest["artifact_version"] == "1"
     assert manifest["langres_version"] == langres.__version__
     type_names = [component["type_name"] for component in manifest["components"]]
     assert type_names == [
@@ -237,6 +237,48 @@ def test_resolver_load_rejects_newer_artifact(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="newer than this langres build"):
         Resolver.load(tmp_path)
+
+
+def test_resolver_load_rejects_older_artifact(tmp_path: Path) -> None:
+    """A strictly-older artifact_version is a clean error, not a raw KeyError.
+
+    M0.5 bumped ARTIFACT_VERSION to "1" with an incompatible config schema. An
+    artifact written by pre-M0.5 code (version "0", old configs) must fail with
+    the clean version error rather than falling through to a KeyError when
+    rebuilding components from the changed config.
+    """
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_version"] = "0"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="predates the supported layout"):
+        Resolver.load(tmp_path)
+
+
+def test_resolver_save_rejects_unserializable_component(tmp_path: Path) -> None:
+    """save() raises a clear TypeError naming an unregistered slot component.
+
+    A component without a registry ``type_name`` (e.g. CascadeModule in the
+    module slot) must fail with a readable message instead of an opaque
+    AttributeError from the spec/save path.
+    """
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    resolver = Resolver.from_schema(CompanySchema)
+
+    class _UnregisteredModule:
+        """Stands in for any component lacking `type_name`/@register."""
+
+    resolver.module = _UnregisteredModule()  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="_UnregisteredModule is not serializable"):
+        resolver.save(tmp_path)
 
 
 def test_resolver_load_warns_on_langres_version_skew(

@@ -18,10 +18,9 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
 from langres.core.modules.llm_judge import (
     DEFAULT_PROMPT,
-    _inspect_scores_impl,
     render_default_prompt,
 )
-from langres.core.reports import ScoreInspectionReport
+from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +350,7 @@ class CascadeModule(Module[SchemaT]):
             Cost in USD (``0.0`` when unavailable)
         """
         try:
-            return float(litellm.completion_cost(completion_response=response))  # type: ignore[attr-defined]
+            return float(litellm.completion_cost(completion_response=response))
         except Exception:  # unknown model / missing usage — never raise/flake
             logger.warning(
                 "completion_cost unavailable for model %s; reporting 0.0", self.llm_model

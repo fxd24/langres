@@ -20,7 +20,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 # Bump when the on-disk artifact layout changes incompatibly.
-ARTIFACT_VERSION = "0"
+ARTIFACT_VERSION = "1"
 
 
 @runtime_checkable
