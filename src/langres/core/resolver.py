@@ -79,14 +79,16 @@ def _component_config_dict(obj: object) -> dict[str, object]:
     return dict(config)
 
 
-def _component_spec(obj: object) -> ComponentSpec:
+def _component_spec(obj: object, slot: str) -> ComponentSpec:
     """Serialize any Resolver-slot component into a :class:`ComponentSpec`.
 
     Reads the component's ``type_name`` class attribute (the registry key) and
-    its construction config (via :func:`_component_config_dict`).
+    its construction config (via :func:`_component_config_dict`), and records the
+    ``slot`` name so :meth:`Resolver.load` can map the spec back self-describingly
+    rather than by position or hard-coded ``type_name``.
     """
     type_name = obj.type_name  # type: ignore[attr-defined]
-    return ComponentSpec(type_name=type_name, config=_component_config_dict(obj))
+    return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
 
 
 def _state_owner(component: object) -> SerializableState | None:
@@ -351,7 +353,7 @@ class Resolver:
 
         components: list[ComponentSpec] = []
         for slot_name, component in self._slots():
-            components.append(_component_spec(component))
+            components.append(_component_spec(component, slot=slot_name))
             owner = _state_owner(component)
             if owner is not None:
                 state_dir = out_dir / slot_name
@@ -389,28 +391,43 @@ class Resolver:
         manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
         cls._check_versions(manifest)
 
-        # Map specs back to slots. The comparator slot is present iff a spec has
-        # type_name == "comparator"; everything else is positional.
-        by_type = {spec.type_name: spec for spec in manifest.components}
-        comparator_spec = by_type.get("comparator")
-
-        # Identify the blocker, module, clusterer specs by elimination/order.
-        ordered = list(manifest.components)
-        blocker_spec = ordered[0]
-        clusterer_spec = ordered[-1]
-        module_spec = next(
-            (
-                spec
-                for spec in ordered
-                if spec not in (blocker_spec, clusterer_spec, comparator_spec)
-            ),
-            None,
-        )
-        if module_spec is None:
-            raise ValueError(
-                f"Malformed artifact manifest: cannot identify a module spec among "
-                f"{[c.type_name for c in manifest.components]}"
+        # Map specs back to slots self-describingly. Each spec written by a
+        # current ``save`` carries its ``slot`` name, so a registered subclass
+        # with a custom ``type_name`` (e.g. a "phonetic_comparator" Comparator)
+        # still loads into the right slot. Older/hand-written manifests have no
+        # ``slot``; those fall back to positional + type_name identification.
+        by_slot = {spec.slot: spec for spec in manifest.components if spec.slot}
+        if by_slot:
+            blocker_spec = by_slot.get("blocker")
+            comparator_spec = by_slot.get("comparator")
+            module_spec = by_slot.get("module")
+            clusterer_spec = by_slot.get("clusterer")
+            if blocker_spec is None or module_spec is None or clusterer_spec is None:
+                raise ValueError(
+                    "Malformed artifact manifest: missing required slot among "
+                    f"{[(c.slot, c.type_name) for c in manifest.components]}"
+                )
+        else:
+            # Legacy fallback: the comparator slot is present iff a spec has
+            # type_name == "comparator"; everything else is positional.
+            by_type = {spec.type_name: spec for spec in manifest.components}
+            comparator_spec = by_type.get("comparator")
+            ordered = list(manifest.components)
+            blocker_spec = ordered[0]
+            clusterer_spec = ordered[-1]
+            module_spec = next(
+                (
+                    spec
+                    for spec in ordered
+                    if spec not in (blocker_spec, clusterer_spec, comparator_spec)
+                ),
+                None,
             )
+            if module_spec is None:
+                raise ValueError(
+                    f"Malformed artifact manifest: cannot identify a module spec among "
+                    f"{[c.type_name for c in manifest.components]}"
+                )
 
         blocker = _rebuild_component(blocker_spec, state_dir=in_dir / "blocker")
         comparator = (

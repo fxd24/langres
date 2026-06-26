@@ -395,6 +395,101 @@ def test_resolver_load_rejects_incompatible_string_version(tmp_path: Path) -> No
         Resolver.load(tmp_path)
 
 
+def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
+    tmp_path: Path,
+) -> None:
+    """A registered Comparator subclass whose type_name is NOT "comparator" loads right.
+
+    Regression for slot identification: load() must map specs to slots by the
+    recorded slot name, not by a hard-coded ``type_name == "comparator"``. With
+    positional/type_name identification, a comparator registered as
+    "phonetic_comparator" was misread as the module and the real module was
+    dropped. Here we assert the reloaded comparator IS the subclass AND the
+    module slot is the real WeightedAverageJudge.
+    """
+    from langres.core import (
+        AllPairsBlocker,
+        Clusterer,
+        Comparator,
+        Resolver,
+        WeightedAverageJudge,
+        register,
+    )
+    from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
+    from langres.core.models import CompanySchema
+
+    @register("phonetic_comparator")
+    class PhoneticComparator(Comparator[CompanySchema]):
+        """Trivial Comparator with a custom (non-"comparator") type_name."""
+
+        type_name = "phonetic_comparator"
+
+        def __init__(self, feature_specs: list[FeatureSpec] | None = None) -> None:
+            self._specs = feature_specs or [FeatureSpec(name="name", weight=1.0)]
+
+        @property
+        def feature_specs(self) -> list[FeatureSpec]:
+            return self._specs
+
+        def compare(self, left: CompanySchema, right: CompanySchema) -> ComparisonVector:
+            same = (left.name or "")[:1].lower() == (right.name or "")[:1].lower()
+            return ComparisonVector(
+                levels={"name": ComparisonLevel.PRESENT},
+                similarities={"name": 1.0 if same else 0.0},
+            )
+
+        @property
+        def config(self) -> dict[str, object]:
+            return {"feature_specs": [s.model_dump() for s in self._specs]}
+
+        @classmethod
+        def from_config(cls, config: dict[str, object]) -> "PhoneticComparator":
+            specs = [FeatureSpec.model_validate(s) for s in config["feature_specs"]]  # type: ignore[union-attr]
+            return cls(feature_specs=specs)
+
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=PhoneticComparator(),
+        module=WeightedAverageJudge(),
+        clusterer=Clusterer(threshold=0.5),
+    )
+    resolver.save(tmp_path)
+
+    # Manifest records the slot names self-describingly.
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    slots = {c["slot"]: c["type_name"] for c in manifest["components"]}
+    assert slots == {
+        "blocker": "all_pairs_blocker",
+        "comparator": "phonetic_comparator",
+        "module": "weighted_average_judge",
+        "clusterer": "clusterer",
+    }
+
+    reloaded = Resolver.load(tmp_path)
+    # The comparator slot is the custom subclass, NOT misread as the module.
+    assert isinstance(reloaded.comparator, PhoneticComparator)
+    # The module slot is the real module, NOT the comparator.
+    assert isinstance(reloaded.module, WeightedAverageJudge)
+
+
+def test_resolver_loads_legacy_manifest_without_slot(tmp_path: Path) -> None:
+    """A hand-written/legacy manifest with no ``slot`` still loads (positional fallback)."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Strip the self-describing slot to simulate an older artifact.
+    for component in manifest["components"]:
+        component.pop("slot", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    reloaded = Resolver.load(tmp_path)
+    assert reloaded.clusterer.threshold == 0.7
+    assert reloaded.comparator is not None  # comparator slot recovered by type_name
+
+
 def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> None:
     """A scorer Module that is itself SerializableState round-trips its state.
 
