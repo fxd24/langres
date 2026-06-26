@@ -602,7 +602,7 @@ class LLMJudge(Module[SchemaT]):
             Cost in USD (``0.0`` when unavailable)
         """
         try:
-            return float(litellm.completion_cost(completion_response=response))
+            return float(litellm.completion_cost(completion_response=response))  # type: ignore[attr-defined]
         except Exception:  # unknown model / missing usage — never raise/flake
             logger.warning("completion_cost unavailable for model %s; reporting 0.0", self.model)
             return 0.0

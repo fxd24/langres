@@ -510,7 +510,8 @@ class FAISSIndex:
             sim = 1.0 / (1.0 + np.sqrt(np.maximum(d, 0.0)))
         else:  # cosine: inner products of normalized vectors, in [-1, 1]
             sim = np.clip((d + 1.0) / 2.0, 0.0, 1.0)
-        return np.nan_to_num(sim, nan=0.0)
+        result: np.ndarray = np.nan_to_num(sim, nan=0.0)
+        return result
 
     # ============ OLD API (for backward compatibility during transition) ============
     def build(self, embeddings: np.ndarray) -> None:
