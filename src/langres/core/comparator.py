@@ -74,6 +74,19 @@ class Comparator(ABC, Generic[SchemaT]):
     in Wave 1.
     """
 
+    @property
+    def feature_specs(self) -> list[FeatureSpec]:
+        """FeatureSpecs this comparator scores on; empty for spec-less comparators.
+
+        Part of the Comparator contract: the WeightedAverageJudge reads
+        ``comparator.feature_specs`` to weight the score. The ABC defaults to an
+        empty list so a comparator that scores without declared features (e.g. a
+        self-contained or learned scorer) satisfies the contract without
+        raising. :class:`StringComparator` overrides this to return its declared
+        features.
+        """
+        return []
+
     @abstractmethod
     def compare(self, left: SchemaT, right: SchemaT) -> ComparisonVector:
         """Compare two entities into a :class:`ComparisonVector`.
@@ -168,8 +181,13 @@ class StringComparator(Comparator[SchemaT]):
             )
         if schema is not None:
             self._validate_against_schema(feature_specs, schema)
-        self.feature_specs = feature_specs
+        self._feature_specs = feature_specs
         self.algorithm = algorithm
+
+    @property
+    def feature_specs(self) -> list[FeatureSpec]:
+        """The declared features this comparator scores on (override of the ABC)."""
+        return self._feature_specs
 
     @staticmethod
     def _validate_against_schema(feature_specs: list[FeatureSpec], schema: type[BaseModel]) -> None:

@@ -44,6 +44,20 @@ class TestComparatorABC:
         )
         assert vec.present_features() == {"name"}
 
+    def test_feature_specs_defaults_to_empty(self) -> None:
+        """A Comparator that does not set feature_specs satisfies the contract.
+
+        The ABC exposes a concrete read-only ``feature_specs`` default of ``[]``
+        so spec-less comparators don't raise AttributeError when the
+        WeightedAverageJudge reads ``comparator.feature_specs``.
+        """
+
+        class _SpecLess(Comparator[CompanySchema]):
+            def compare(self, left: CompanySchema, right: CompanySchema) -> ComparisonVector:
+                return ComparisonVector(levels={}, similarities={})
+
+        assert _SpecLess().feature_specs == []
+
 
 class TestComparatorErrors:
     def test_missing_required_field_is_exception(self) -> None:
