@@ -106,8 +106,8 @@ def test_llm_judge_extracts_score_from_response(mock_llm_client):
     assert j.score == 0.15
 
 
-def test_llm_judge_tracks_cost_in_provenance(mock_llm_client):
-    """Test LLMJudgeModule tracks API cost in provenance."""
+def test_llm_judge_tracks_cost_in_provenance(mock_llm_client, mocker):
+    """Test LLMJudgeModule tracks API cost in provenance via litellm pricing."""
     mock_response = Mock()
     mock_response.choices = [Mock()]
     mock_response.choices[0].message.content = "MATCH\nScore: 0.90\nReasoning: Same company."
@@ -115,6 +115,11 @@ def test_llm_judge_tracks_cost_in_provenance(mock_llm_client):
     mock_response.usage.prompt_tokens = 100
     mock_response.usage.completion_tokens = 50
     mock_llm_client.completion.return_value = mock_response
+
+    # litellm.completion_cost owns pricing; stub it so the Mock response prices.
+    completion_cost = mocker.patch(
+        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.000123
+    )
 
     module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
 
@@ -127,10 +132,11 @@ def test_llm_judge_tracks_cost_in_provenance(mock_llm_client):
     judgements = list(module.forward([candidate]))
     j = judgements[0]
 
-    # Should have cost tracking in provenance
+    # Should have cost tracking in provenance, sourced from litellm.completion_cost
     assert "cost_usd" in j.provenance
     assert isinstance(j.provenance["cost_usd"], float)
-    assert j.provenance["cost_usd"] > 0
+    assert j.provenance["cost_usd"] == 0.000123
+    completion_cost.assert_called_once_with(completion_response=mock_response)
     assert "prompt_tokens" in j.provenance
     assert j.provenance["prompt_tokens"] == 100
     assert "completion_tokens" in j.provenance
@@ -261,8 +267,8 @@ def test_llm_judge_reasoning_extraction_fallback():
     assert "similar companies" in judgements[0].reasoning.lower()
 
 
-def test_llm_judge_gpt4_pricing():
-    """Test that GPT-4 pricing is calculated correctly."""
+def test_llm_judge_cost_uses_litellm_completion_cost(mocker):
+    """The reported cost is whatever litellm.completion_cost returns."""
     mock_client = Mock()
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -272,7 +278,11 @@ def test_llm_judge_gpt4_pricing():
     mock_response.usage.completion_tokens = 100
     mock_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(client=mock_client, model="gpt-4")  # Standard GPT-4
+    completion_cost = mocker.patch(
+        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.036
+    )
+
+    module = LLMJudgeModule(client=mock_client, model="gpt-4")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -282,13 +292,12 @@ def test_llm_judge_gpt4_pricing():
 
     judgements = list(module.forward([candidate]))
 
-    # GPT-4: $30/1M input, $60/1M output
-    expected_cost = (1000 * 30.0 + 100 * 60.0) / 1_000_000
-    assert abs(judgements[0].provenance["cost_usd"] - expected_cost) < 0.001
+    assert judgements[0].provenance["cost_usd"] == 0.036
+    completion_cost.assert_called_once_with(completion_response=mock_response)
 
 
-def test_llm_judge_unknown_model_pricing():
-    """Test that unknown models default to gpt-4o-mini pricing."""
+def test_llm_judge_cost_falls_back_to_zero_on_exception(mocker, caplog):
+    """If litellm.completion_cost raises (unknown model/usage), cost is 0.0."""
     mock_client = Mock()
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -298,6 +307,11 @@ def test_llm_judge_unknown_model_pricing():
     mock_response.usage.completion_tokens = 20
     mock_client.completion.return_value = mock_response
 
+    mocker.patch(
+        "langres.core.modules.llm_judge.litellm.completion_cost",
+        side_effect=Exception("unknown model"),
+    )
+
     module = LLMJudgeModule(client=mock_client, model="gpt-future-5")  # Unknown model
 
     candidate = ERCandidate(
@@ -306,11 +320,11 @@ def test_llm_judge_unknown_model_pricing():
         blocker_name="test",
     )
 
-    judgements = list(module.forward([candidate]))
+    with caplog.at_level(logging.WARNING):
+        judgements = list(module.forward([candidate]))
 
-    # Should use default (gpt-4o-mini) pricing
-    expected_cost = (100 * 0.150 + 20 * 0.600) / 1_000_000
-    assert abs(judgements[0].provenance["cost_usd"] - expected_cost) < 0.001
+    assert judgements[0].provenance["cost_usd"] == 0.0
+    assert "completion_cost unavailable" in caplog.text
 
 
 # Client Integration Tests
