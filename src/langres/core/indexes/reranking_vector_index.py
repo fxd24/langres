@@ -34,6 +34,10 @@ from langres.core.embeddings import (
     LateInteractionEmbeddingProvider,
     SparseEmbeddingProvider,
 )
+from langres.core.indexes.vector_index import (
+    clip_scores_to_similarities,
+    inverse_distances_to_similarities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +393,16 @@ class QdrantHybridRerankingIndex:
             _dense_embeddings=self._cached_dense_embeddings,
         )
 
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert late-interaction MaxSim scores to similarities in ``[0, 1]``.
+
+        ``search``/``search_all`` return reranking (ColBERT/ColPali MaxSim) scores
+        (higher = more similar), already similarity-like, plus ``NaN`` padding when
+        a query returns fewer than ``k`` results. Delegates to
+        :func:`clip_scores_to_similarities` (clip to ``[0, 1]``, ``NaN`` → 0.0).
+        """
+        return clip_scores_to_similarities(distances)
+
 
 class FakeHybridRerankingVectorIndex:
     """Test double for hybrid reranking vector index.
@@ -486,3 +500,12 @@ class FakeHybridRerankingVectorIndex:
                 distances[i, j] = j * 0.1
 
         return distances, indices
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        """Convert the fake's synthetic distances (lower = closer) to ``[0, 1]``.
+
+        Uses :func:`inverse_distances_to_similarities` to match the rank-ordered
+        ``j * 0.1`` distances this double emits (nearest neighbor scores highest),
+        keeping its similarity ordering meaningful. ``NaN`` maps to 0.0.
+        """
+        return inverse_distances_to_similarities(distances)

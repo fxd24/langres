@@ -1379,3 +1379,32 @@ class TestQdrantHybridRerankingIndexPrecomputedEmbeddings:
         # Verify results are valid
         assert distances.shape == (4, 3)
         assert indices.shape == (4, 3)
+
+
+class TestRerankingToSimilarities:
+    """Tests for the reranking indexes' distance->similarity conversion."""
+
+    def test_qdrant_reranking_to_similarities_clips_scores(self):
+        """QdrantHybridRerankingIndex: MaxSim scores (higher=better) clipped, NaN -> 0."""
+        index = QdrantHybridRerankingIndex(
+            client=MagicMock(),
+            collection_name="test",
+            dense_embedder=FakeEmbedder(embedding_dim=8),
+            sparse_embedder=FakeSparseEmbedder(),
+            reranking_embedder=FakeLateInteractionEmbedder(embedding_dim=8),
+        )
+        scores = np.array([[1.2, 0.6, np.nan], [0.8, -0.1, 0.0]])
+
+        sims = index.to_similarities(scores)
+
+        np.testing.assert_allclose(sims, [[1.0, 0.6, 0.0], [0.8, 0.0, 0.0]])
+
+    def test_fake_reranking_to_similarities(self):
+        """FakeHybridRerankingVectorIndex: distances (lower=closer) -> 1/(1+d), NaN -> 0."""
+        index = FakeHybridRerankingVectorIndex()
+        distances = np.array([[0.0, 0.1, np.nan]])
+
+        sims = index.to_similarities(distances)
+
+        np.testing.assert_allclose(sims, [[1.0, 1.0 / 1.1, 0.0]])
+        assert sims[0, 0] > sims[0, 1]
