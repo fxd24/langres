@@ -94,7 +94,7 @@ class WeightedAverageJudge(Module[SchemaT]):
                 "WeightedAverageJudge.forward requires a comparator "
                 "(the Resolver supplies it: forward(candidates, comparator=...))."
             )
-        specs = comparator.feature_specs  # type: ignore[attr-defined]
+        specs = comparator.feature_specs
         weights = _normalized_weights(specs)
 
         for candidate in candidates:

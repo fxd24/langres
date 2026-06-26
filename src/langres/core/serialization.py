@@ -51,12 +51,20 @@ class ComponentSpec(BaseModel):
     Attributes:
         type_name: Registry key (see :mod:`langres.core.registry`) used to look
             up the component class at load time.
+        slot: The Resolver slot this component fills (``"blocker"``,
+            ``"comparator"``, ``"module"``, or ``"clusterer"``). Lets
+            :meth:`Resolver.load` map specs back to slots by name rather than by
+            position or by a hard-coded ``type_name``, so a registered subclass
+            with a custom ``type_name`` loads into the right slot. ``None`` for
+            older/hand-written manifests, where load falls back to positional
+            identification.
         config_version: Version of this component's config schema, for
             forward-compatible migration. Defaults to ``"1"``.
         config: The component's serializable construction config (pure data).
     """
 
     type_name: str
+    slot: str | None = None
     config_version: str = "1"
     config: dict[str, object]
 

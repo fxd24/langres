@@ -296,6 +296,45 @@ def test_resolver_builds_vector_index_transparently() -> None:
     assert _wrongly_merged_pairs(clusters, EXPECTED_DUPLICATE_GROUPS) == []
 
 
+def test_resolver_rebuilds_vector_index_on_new_corpus() -> None:
+    """Reusing a Resolver on a DIFFERENT record list rebuilds the index.
+
+    An already-built index must not be reused against a new corpus — that would
+    score the new records against the old corpus (wrong pairs / IndexError). The
+    Resolver compares the new corpus texts to the index's stored ``_corpus_texts``
+    and rebuilds when they differ.
+    """
+    from langres.core.models import CompanySchema
+
+    resolver = _vector_resolver()
+
+    records_a = [
+        {"id": "a1", "name": "Acme Corp"},
+        {"id": "a2", "name": "Acme Corp"},
+        {"id": "a3", "name": "Beta LLC"},
+    ]
+    records_b = [
+        {"id": "b1", "name": "Zenith Inc"},
+        {"id": "b2", "name": "Zenith Inc"},
+        {"id": "b3", "name": "Omega GmbH"},
+    ]
+
+    clusters_a = resolver.resolve(records_a)
+    ids_a = {i for cluster in clusters_a for i in cluster}
+    assert ids_a <= {r["id"] for r in records_a}
+
+    # Reuse the same resolver on a disjoint corpus: must rebuild, no IndexError,
+    # and the result references B's ids — never A's stale corpus.
+    clusters_b = resolver.resolve(records_b)
+    ids_b = {i for cluster in clusters_b for i in cluster}
+    assert ids_b, "expected at least one B cluster"
+    assert ids_b <= {r["id"] for r in records_b}
+    assert ids_b.isdisjoint({r["id"] for r in records_a})
+    # The index now holds B's corpus, not A's.
+    expected_texts_b = [CompanySchema(**r).name for r in records_b]
+    assert resolver.blocker.vector_index._corpus_texts == expected_texts_b  # type: ignore[attr-defined]
+
+
 def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
     """An index-backed Resolver persists + restores its FAISS state (sidecar)."""
     from langres.core import Resolver
@@ -313,6 +352,32 @@ def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
     assert reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
     clusters_after = reloaded.resolve(COMPANY_RECORDS)
     assert _canonical(clusters_before) == _canonical(clusters_after)
+
+
+def test_resolver_save_unbuilt_vector_index_writes_no_sidecar(tmp_path: Path) -> None:
+    """Saving a VectorBlocker Resolver BEFORE the index is built writes no sidecar.
+
+    The FAISS index has no state to persist until ``create_index`` runs, so
+    ``save`` must not leave an empty ``blocker/`` dir behind — otherwise ``load``
+    would try to read a missing ``index.faiss``. Loading the artifact succeeds,
+    and resolve() then builds the index transparently.
+    """
+    from langres.core import Resolver
+
+    resolver = _vector_resolver()
+    # Do NOT resolve() first — the index is unbuilt.
+    assert not resolver.blocker._index_is_built()  # type: ignore[attr-defined]
+
+    resolver.save(tmp_path)
+    # No empty/partial blocker sidecar was written.
+    assert not (tmp_path / "blocker").exists()
+
+    # Load succeeds (no missing-file error) and the reloaded index is unbuilt.
+    reloaded = Resolver.load(tmp_path)
+    assert not reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
+    # resolve() still works — it builds the index transparently.
+    reloaded.resolve(COMPANY_RECORDS)
+    assert reloaded.blocker._index_is_built()  # type: ignore[attr-defined]
 
 
 def test_resolver_without_comparator_uses_plain_module() -> None:
@@ -392,6 +457,139 @@ def test_resolver_load_rejects_incompatible_string_version(tmp_path: Path) -> No
     manifest_path.write_text(json.dumps(manifest))
 
     with pytest.raises(ValueError, match="differs from supported"):
+        Resolver.load(tmp_path)
+
+
+def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
+    tmp_path: Path,
+) -> None:
+    """A registered Comparator subclass whose type_name is NOT "comparator" loads right.
+
+    Regression for slot identification: load() must map specs to slots by the
+    recorded slot name, not by a hard-coded ``type_name == "comparator"``. With
+    positional/type_name identification, a comparator registered as
+    "phonetic_comparator" was misread as the module and the real module was
+    dropped. Here we assert the reloaded comparator IS the subclass AND the
+    module slot is the real WeightedAverageJudge.
+    """
+    from langres.core import (
+        AllPairsBlocker,
+        Clusterer,
+        Comparator,
+        Resolver,
+        WeightedAverageJudge,
+        register,
+    )
+    from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
+    from langres.core.models import CompanySchema
+
+    @register("phonetic_comparator")
+    class PhoneticComparator(Comparator[CompanySchema]):
+        """Trivial Comparator with a custom (non-"comparator") type_name."""
+
+        type_name = "phonetic_comparator"
+
+        def __init__(self, feature_specs: list[FeatureSpec] | None = None) -> None:
+            self._specs = feature_specs or [FeatureSpec(name="name", weight=1.0)]
+
+        @property
+        def feature_specs(self) -> list[FeatureSpec]:
+            return self._specs
+
+        def compare(self, left: CompanySchema, right: CompanySchema) -> ComparisonVector:
+            same = (left.name or "")[:1].lower() == (right.name or "")[:1].lower()
+            return ComparisonVector(
+                levels={"name": ComparisonLevel.PRESENT},
+                similarities={"name": 1.0 if same else 0.0},
+            )
+
+        @property
+        def config(self) -> dict[str, object]:
+            return {"feature_specs": [s.model_dump() for s in self._specs]}
+
+        @classmethod
+        def from_config(cls, config: dict[str, object]) -> "PhoneticComparator":
+            specs = [FeatureSpec.model_validate(s) for s in config["feature_specs"]]  # type: ignore[union-attr]
+            return cls(feature_specs=specs)
+
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=PhoneticComparator(),
+        module=WeightedAverageJudge(),
+        clusterer=Clusterer(threshold=0.5),
+    )
+    resolver.save(tmp_path)
+
+    # Manifest records the slot names self-describingly.
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    slots = {c["slot"]: c["type_name"] for c in manifest["components"]}
+    assert slots == {
+        "blocker": "all_pairs_blocker",
+        "comparator": "phonetic_comparator",
+        "module": "weighted_average_judge",
+        "clusterer": "clusterer",
+    }
+
+    reloaded = Resolver.load(tmp_path)
+    # The comparator slot is the custom subclass, NOT misread as the module.
+    assert isinstance(reloaded.comparator, PhoneticComparator)
+    # The module slot is the real module, NOT the comparator.
+    assert isinstance(reloaded.module, WeightedAverageJudge)
+
+
+def test_resolver_load_rejects_manifest_missing_required_slot(tmp_path: Path) -> None:
+    """A slot-bearing manifest missing a required slot (blocker) is a hard error."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Drop the blocker component entirely, keeping the others' slots intact.
+    manifest["components"] = [c for c in manifest["components"] if c["slot"] != "blocker"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="missing required slot"):
+        Resolver.load(tmp_path)
+
+
+def test_resolver_loads_legacy_manifest_without_slot(tmp_path: Path) -> None:
+    """A hand-written/legacy manifest with no ``slot`` still loads (positional fallback)."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Strip the self-describing slot to simulate an older artifact.
+    for component in manifest["components"]:
+        component.pop("slot", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    reloaded = Resolver.load(tmp_path)
+    assert reloaded.clusterer.threshold == 0.7
+    assert reloaded.comparator is not None  # comparator slot recovered by type_name
+
+
+def test_resolver_load_rejects_legacy_manifest_without_module(tmp_path: Path) -> None:
+    """A legacy (slot-less) manifest with no identifiable module spec is rejected."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Strip slots (legacy path) and keep only blocker + clusterer: with the
+    # comparator and module gone, positional identification finds no module.
+    kept = [
+        c for c in manifest["components"] if c["type_name"] in ("all_pairs_blocker", "clusterer")
+    ]
+    for component in kept:
+        component.pop("slot", None)
+    manifest["components"] = kept
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="cannot identify a module spec"):
         Resolver.load(tmp_path)
 
 
@@ -511,5 +709,11 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
 
     reloaded = Resolver.load(tmp_path)
     assert isinstance(reloaded.blocker, GLinkerAdapter)
-    assert reloaded.blocker.config.model_name == "urchade/gliner_small-v2.1"
-    assert reloaded.blocker.config.threshold == 0.42
+    # config is now a plain dict (convention, matching every other component);
+    # the underlying GLinkerConfig is on _config.
+    assert reloaded.blocker.config == {
+        "model_name": "urchade/gliner_small-v2.1",
+        "threshold": 0.42,
+    }
+    assert reloaded.blocker._config.model_name == "urchade/gliner_small-v2.1"
+    assert reloaded.blocker._config.threshold == 0.42

@@ -60,7 +60,12 @@ class GLinkerAdapter(Blocker[SchemaT], Module[SchemaT], Generic[SchemaT]):
     type_name: ClassVar[str] = "glinker_adapter"
 
     def __init__(self, config: GLinkerConfig | None = None) -> None:
-        self.config: GLinkerConfig = config or GLinkerConfig()
+        self._config: GLinkerConfig = config or GLinkerConfig()
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Serializable construction config as a plain dict (component convention)."""
+        return self._config.model_dump()
 
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "GLinkerAdapter[SchemaT]":
