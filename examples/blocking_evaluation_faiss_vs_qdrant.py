@@ -31,9 +31,9 @@ from qdrant_client import QdrantClient
 from langres.clients.settings import Settings
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FastEmbedSparseEmbedder, SentenceTransformerEmbedder
-from langres.core.hybrid_vector_index import QdrantHybridIndex
+from langres.core.indexes.hybrid_vector_index import QdrantHybridIndex
 from langres.core.metrics import pairs_from_clusters
-from langres.core.vector_index import FAISSIndex
+from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data
 
 # Configure logging

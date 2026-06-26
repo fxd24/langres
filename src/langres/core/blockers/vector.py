@@ -104,7 +104,7 @@ class VectorBlocker(Blocker[SchemaT]):
 
     Example (production with FAISS):
         from langres.core.embeddings import SentenceTransformerEmbedder
-        from langres.core.vector_index import FAISSIndex
+        from langres.core.indexes.vector_index import FAISSIndex
 
         def company_factory(record: dict) -> CompanySchema:
             return CompanySchema(
@@ -141,7 +141,7 @@ class VectorBlocker(Blocker[SchemaT]):
     Example (production with Qdrant hybrid search):
         from qdrant_client import QdrantClient
         from langres.core.embeddings import SentenceTransformerEmbedder, FastEmbedSparseEmbedder
-        from langres.core.hybrid_vector_index import QdrantHybridIndex
+        from langres.core.indexes.hybrid_vector_index import QdrantHybridIndex
 
         client = QdrantClient(url="http://localhost:6333")
         dense_embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
@@ -168,7 +168,7 @@ class VectorBlocker(Blocker[SchemaT]):
         candidates = list(blocker.stream(entities))
 
     Example (testing with fakes):
-        from langres.core.vector_index import FakeVectorIndex
+        from langres.core.indexes.vector_index import FakeVectorIndex
 
         index = FakeVectorIndex()
 

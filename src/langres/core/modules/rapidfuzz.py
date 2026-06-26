@@ -12,8 +12,7 @@ from rapidfuzz import fuzz
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
-from langres.core.modules.llm_judge import _inspect_scores_impl
-from langres.core.reports import ScoreInspectionReport
+from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 # Supported rapidfuzz algorithms
 Algorithm = Literal["ratio", "token_sort_ratio", "token_set_ratio"]

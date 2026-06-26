@@ -438,6 +438,33 @@ class TestLLMJudgeModuleInspection:
             "sampling" in recommendations_text.lower() or "faster" in recommendations_text.lower()
         )
 
+    def test_inspect_scores_medium_sample_no_size_recommendation(self, mock_llm_client) -> None:
+        """Medium sample (50 <= n <= 1000) triggers neither small- nor large-sample advice.
+
+        Covers the fall-through branch in ``_generate_recommendations_impl`` where
+        both the ``< 50`` and ``> 1000`` size guards are false.
+        """
+        judgements = [
+            PairwiseJudgement(
+                left_id=f"left_{i}",
+                right_id=f"right_{i}",
+                score=0.2 + (i % 7) * 0.1,
+                score_type="prob_llm",
+                decision_step="llm_judgment",
+                reasoning="Test",
+                provenance={},
+            )
+            for i in range(60)
+        ]
+
+        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        report = module.inspect_scores(judgements, sample_size=5)
+
+        assert report.total_judgements == 60
+        recommendations_text = " ".join(report.recommendations)
+        assert "Small sample" not in recommendations_text
+        assert "Large sample" not in recommendations_text
+
     def test_inspect_scores_medium_variance_no_special_recommendation(
         self, mock_llm_client
     ) -> None:

@@ -17,8 +17,8 @@ from langres.core.serialization import (
 
 
 class TestArtifactVersion:
-    def test_artifact_version_is_zero(self) -> None:
-        assert ARTIFACT_VERSION == "0"
+    def test_artifact_version_is_one(self) -> None:
+        assert ARTIFACT_VERSION == "1"
 
 
 class TestComponentSpec:
@@ -48,7 +48,7 @@ class TestArtifactManifest:
         )
         restored = ArtifactManifest.model_validate_json(manifest.model_dump_json())
         assert restored == manifest
-        assert restored.artifact_version == "0"
+        assert restored.artifact_version == "1"
         assert len(restored.components) == 2
 
     def test_checksums_optional_default_empty(self) -> None:

@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
-from langres.core.vector_index import FAISSIndex
+from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data
 
 # Configure logging
