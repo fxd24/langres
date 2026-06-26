@@ -537,6 +537,22 @@ def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
     assert isinstance(reloaded.module, WeightedAverageJudge)
 
 
+def test_resolver_load_rejects_manifest_missing_required_slot(tmp_path: Path) -> None:
+    """A slot-bearing manifest missing a required slot (blocker) is a hard error."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Drop the blocker component entirely, keeping the others' slots intact.
+    manifest["components"] = [c for c in manifest["components"] if c["slot"] != "blocker"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="missing required slot"):
+        Resolver.load(tmp_path)
+
+
 def test_resolver_loads_legacy_manifest_without_slot(tmp_path: Path) -> None:
     """A hand-written/legacy manifest with no ``slot`` still loads (positional fallback)."""
     from langres.core import Resolver
@@ -553,6 +569,26 @@ def test_resolver_loads_legacy_manifest_without_slot(tmp_path: Path) -> None:
     reloaded = Resolver.load(tmp_path)
     assert reloaded.clusterer.threshold == 0.7
     assert reloaded.comparator is not None  # comparator slot recovered by type_name
+
+
+def test_resolver_load_rejects_legacy_manifest_without_module(tmp_path: Path) -> None:
+    """A legacy (slot-less) manifest with no identifiable module spec is rejected."""
+    from langres.core import Resolver
+    from langres.core.models import CompanySchema
+
+    Resolver.from_schema(CompanySchema, threshold=0.7).save(tmp_path)
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    # Strip slots (legacy path) and keep only blocker + clusterer: with the
+    # comparator and module gone, positional identification finds no module.
+    kept = [c for c in manifest["components"] if c["type_name"] in ("all_pairs_blocker", "clusterer")]
+    for component in kept:
+        component.pop("slot", None)
+    manifest["components"] = kept
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="cannot identify a module spec"):
+        Resolver.load(tmp_path)
 
 
 def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> None:
