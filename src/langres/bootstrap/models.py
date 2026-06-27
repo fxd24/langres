@@ -41,7 +41,7 @@ class GoldPair(BaseModel):
     right_id: str
     label: bool
     source: GoldPairSource
-    confidence: float | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     reasoning: str | None = None
     provenance: dict[str, object] = Field(default_factory=dict)
 
@@ -65,12 +65,13 @@ class GoldSet(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
     def save(self, path: str | Path) -> None:
-        """Write the gold set to ``path`` as indented JSON.
+        """Write the gold set to ``path`` as indented UTF-8 JSON.
 
         Args:
-            path: Destination file path. Parent directories must already exist.
+            path: Destination file path. Parent directories must already exist,
+                otherwise a :class:`FileNotFoundError` is raised.
         """
-        Path(path).write_text(self.model_dump_json(indent=2))
+        Path(path).write_text(self.model_dump_json(indent=2), encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> "GoldSet":
@@ -82,4 +83,4 @@ class GoldSet(BaseModel):
         Returns:
             The validated :class:`GoldSet`.
         """
-        return cls.model_validate_json(Path(path).read_text())
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))

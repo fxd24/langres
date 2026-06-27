@@ -200,18 +200,18 @@ def sweep_blocking_k(
     embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
     index = FAISSIndex(embedder=embedder, metric="cosine")
     index.create_index([r.embed_text for r in corpus])
-
-    blocker: VectorBlocker[RestaurantSchema] = VectorBlocker(
-        vector_index=index,
-        schema=RestaurantSchema,
-        text_field="embed_text",
-        k_neighbors=max(ks),
-    )
     records = [r.model_dump() for r in corpus]
 
     recalls: dict[int, float] = {}
     for k in ks:
-        blocker.k_neighbors = k
+        # Construct a fresh blocker per k (the pre-built FAISS index is reused,
+        # so this is cheap) rather than mutating k_neighbors in place.
+        blocker: VectorBlocker[RestaurantSchema] = VectorBlocker(
+            vector_index=index,
+            schema=RestaurantSchema,
+            text_field="embed_text",
+            k_neighbors=k,
+        )
         candidates = _cross_source(list(blocker.stream(records)))
         recall = evaluate_blocking(candidates, gold_clusters).candidate_recall
         recalls[k] = recall

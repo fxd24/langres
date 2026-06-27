@@ -39,6 +39,18 @@ def test_gold_pair_rejects_unknown_source() -> None:
         GoldPair(left_id="f1", right_id="z2", label=True, source="oracle")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("bad", [-0.1, 1.5])
+def test_gold_pair_rejects_out_of_range_confidence(bad: float) -> None:
+    with pytest.raises(ValidationError):
+        GoldPair(left_id="f1", right_id="z2", label=True, source="teacher", confidence=bad)
+
+
+@pytest.mark.parametrize("ok", [0.0, 0.5, 1.0])
+def test_gold_pair_accepts_in_range_confidence(ok: float) -> None:
+    pair = GoldPair(left_id="f1", right_id="z2", label=True, source="teacher", confidence=ok)
+    assert pair.confidence == ok
+
+
 def test_gold_pair_provenance_is_independent_per_instance() -> None:
     a = GoldPair(left_id="f1", right_id="z2", label=True, source="teacher")
     b = GoldPair(left_id="f3", right_id="z4", label=False, source="teacher")
