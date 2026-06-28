@@ -22,7 +22,7 @@ from langres.bootstrap.labelers import (
     TeacherLabeler,
 )
 from langres.bootstrap.miners import HardNegativeMiner
-from langres.bootstrap.models import GoldPair, GoldSet
+from langres.bootstrap.models import GoldPair, GoldPairSource, GoldSet
 from langres.bootstrap.report import BootstrapReport
 
 __all__ = [
@@ -31,6 +31,7 @@ __all__ = [
     "Bootstrapper",
     "FakeLabeler",
     "GoldPair",
+    "GoldPairSource",
     "GoldSet",
     "GroundTruthLabeler",
     "HardNegativeMiner",

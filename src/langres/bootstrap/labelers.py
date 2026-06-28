@@ -323,7 +323,7 @@ class TeacherLabeler(Labeler):
         price_per_1m_prompt_tokens: float,
         price_per_1m_completion_tokens: float,
         worst_case_tokens_per_pair: int,
-        model: str = "gpt-5-mini",
+        model: str = "openrouter/z-ai/glm-5.2",
         entity_noun: str = "entity",
         budget_usd: float = 20.0,
         budget_soft_usd: float = 15.0,
@@ -446,6 +446,13 @@ class TeacherLabeler(Labeler):
     def _apply_preflight_cap(self, candidates: list[ERCandidate[Any]]) -> list[ERCandidate[Any]]:
         """Truncate the input so even worst-case spend stays under the soft budget."""
         max_pairs = math.floor(self.budget_soft_usd / self._worst_case_per_pair_cost)
+        if max_pairs == 0:
+            logger.warning(
+                "Pre-flight cap: soft budget $%.4f is below the worst-case "
+                "$%.6f/pair — NO pairs can be labeled (the gold set will be empty)",
+                self.budget_soft_usd,
+                self._worst_case_per_pair_cost,
+            )
         if len(candidates) > max_pairs:
             self.dropped_by_cap_count = len(candidates) - max_pairs
             logger.info(

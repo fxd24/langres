@@ -48,7 +48,15 @@ class Miner(ABC):
 
 
 class Labeler(ABC):
-    """Assigns match / non-match labels to candidate pairs."""
+    """Assigns match / non-match labels to candidate pairs.
+
+    Implementations expose ``total_spent_usd`` (USD spent during the most recent
+    :meth:`label` call) so an orchestrator can record honest cost uniformly. The
+    default is ``0.0`` for zero-spend labelers; cost-incurring labelers overwrite
+    it as they spend.
+    """
+
+    total_spent_usd: float = 0.0
 
     @abstractmethod
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:

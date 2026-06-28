@@ -190,6 +190,50 @@ def test_budget_stop_returns_partial() -> None:
     assert teacher.dropped_by_cap_count == 0
 
 
+def test_single_pair_can_overshoot_budget_by_one_inflight_pair() -> None:
+    # Documented residual (class docstring): the gate projects with the
+    # worst-case ESTIMATE, so when that estimate understates real cost, one
+    # in-flight pair's actual spend can push total_spent above budget_usd. The
+    # overshoot is bounded to a single pair — the next gate check then stops.
+    judge = FakeJudge(prompt_tokens=5_000_000, completion_tokens=0)  # $5 real/pair
+    teacher = _teacher(
+        judge,
+        price_per_1m_prompt_tokens=1.0,
+        price_per_1m_completion_tokens=1.0,
+        worst_case_tokens_per_pair=1000,  # estimate ~ $0.001/pair (far too low)
+        budget_soft_usd=4.9,
+        budget_usd=4.9,
+        batch_size=1,
+    )
+    out = teacher.label([_cand(f"l{i}", f"r{i}") for i in range(10)])
+    assert teacher.labeled_count == 1
+    assert len(out) == 1
+    assert teacher.total_spent_usd == pytest.approx(5.0)
+    assert teacher.total_spent_usd > teacher.budget_usd  # the bounded overshoot
+
+
+def test_preflight_cap_zero_drops_all_and_warns(caplog: pytest.LogCaptureFixture) -> None:
+    # Misconfiguration: soft budget below the worst-case per-pair cost -> the
+    # pre-flight cap keeps 0 pairs. The run must surface a WARNING (not a silent
+    # empty gold set) and label nothing.
+    judge = FakeJudge(prompt_tokens=10, completion_tokens=10)
+    teacher = _teacher(
+        judge,
+        price_per_1m_prompt_tokens=1.0,
+        price_per_1m_completion_tokens=1.0,
+        worst_case_tokens_per_pair=1000,  # ~$0.001/pair
+        budget_soft_usd=0.0001,  # below per-pair cost -> max_pairs == 0
+        budget_usd=0.0001,
+        batch_size=1,
+    )
+    with caplog.at_level("WARNING"):
+        out = teacher.label([_cand("a", "b"), _cand("c", "d")])
+    assert out == []
+    assert teacher.labeled_count == 0
+    assert teacher.dropped_by_cap_count == 2
+    assert "NO pairs can be labeled" in caplog.text
+
+
 def test_budget_stop_holds_within_a_large_batch() -> None:
     # Same over-spend scenario but with the default batch_size=50: the whole run
     # is one batch. The per-pair gate must still stop at the cap rather than

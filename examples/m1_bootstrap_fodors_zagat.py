@@ -140,15 +140,14 @@ def maybe_real_teacher() -> None:
 
     from langres.bootstrap import TeacherLabeler
 
-    # Wave 5 fills the pinned GLM model + prices and runs this for real. The
-    # prices below are positive placeholders (NOT validated rates) so the branch
-    # constructs cleanly; Wave 5 pins them from the provider's published rates
-    # before any real labeling run.
+    # The real paid run lives in examples/run_m1_gold_set.py (which pins prices
+    # from a smoke test). This branch just shows the swap-in; prices here are
+    # illustrative (the glm-5.1 OpenRouter anchor), not a live quote.
     teacher = TeacherLabeler.from_env(
-        price_per_1m_prompt_tokens=1.0,  # TODO(Wave 5): pin real GLM prompt price
-        price_per_1m_completion_tokens=1.0,  # TODO(Wave 5): pin real GLM completion price
-        worst_case_tokens_per_pair=2000,
-        model="gpt-5-mini",  # TODO(Wave 5): pin the GLM model id
+        price_per_1m_prompt_tokens=1.05,
+        price_per_1m_completion_tokens=3.50,
+        worst_case_tokens_per_pair=1500,
+        model="openrouter/z-ai/glm-5.2",
         entity_noun="restaurant",
         budget_usd=5.0,
         budget_soft_usd=4.0,
