@@ -28,6 +28,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypeAlias
 
 import pytest
 
@@ -40,7 +41,7 @@ from langres.data.er_benchmarks import (
 
 # Canonical, order-independent form of a clustering: a sorted tuple of
 # sorted-id tuples. Used on both sides of the in-process vs fresh-process check.
-Canonical = tuple[tuple[str, ...], ...]
+Canonical: TypeAlias = tuple[tuple[str, ...], ...]
 
 
 def _canonical(clusters: list[set[str]]) -> Canonical:
@@ -57,10 +58,12 @@ import langres.data.er_benchmarks  # noqa: F401 — registers RestaurantSchema
 from langres.core.resolver import Resolver
 
 artifact_dir, records_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-records = json.loads(open(records_path).read())
+with open(records_path) as f:
+    records = json.loads(f.read())
 clusters = Resolver.load(artifact_dir).resolve(records)
 canonical = sorted(sorted(c) for c in clusters)
-open(out_path, "w").write(json.dumps(canonical))
+with open(out_path, "w") as f:
+    f.write(json.dumps(canonical))
 """
 
 

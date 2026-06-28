@@ -64,7 +64,9 @@ def test_resolve_record_missing_required_field_raises_naming_field() -> None:
     pydantic ``ValidationError`` whose message names the offending fields.
     """
     resolver = _fast_restaurant_resolver()
-    # Two records so the path reaches schema construction (one record short-circuits).
+    # resolve() reconstructs every record through the schema factory up front (in
+    # the index-build step, before any embedding/blocking), so the first malformed
+    # record raises. A small two-record corpus stands in for a realistic input.
     bad_records = [{"id": "f1"}, {"id": "z1"}]
 
     with pytest.raises(pydantic.ValidationError) as exc_info:
