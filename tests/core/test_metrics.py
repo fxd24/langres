@@ -187,6 +187,65 @@ def test_bcubed_metrics_return_type():
     assert all(0.0 <= v <= 1.0 for v in metrics.values())
 
 
+# --- Partition-safety regression (P1-5): unclustered ids are own singletons -------
+#
+# The Clusterer drops singletons, so a record with no merge is simply ABSENT from
+# the predicted clusters. The metric must treat each absent id as its own
+# singleton cluster, NOT as a shared implicit "None" cluster (which would make two
+# un-merged ids compare equal and inflate the score). These cases are hand-verified
+# below. The fix must be a no-op when the partition is already complete (every id
+# present), so all the tests above stay green.
+
+
+def test_bcubed_recall_unmerged_pair_not_scored_as_recalled():
+    """Hand-verified: an empty prediction must NOT score the {a,b} pair recall 1.0.
+
+    gold = [{a, b}, {c}], predicted = [] (the Clusterer merged nothing, so every
+    record is absent from the predicted clusters).
+
+    Correct per-item recall:
+      a: only a itself shares a's (absent) cluster -> 1/2
+      b: only b itself shares b's (absent) cluster -> 1/2
+      c: c is alone in its gold cluster            -> 1/1
+      mean = (0.5 + 0.5 + 1.0) / 3 = 2/3
+
+    The latent bug mapped every absent id to a single ``None`` cluster, so a and b
+    compared equal and scored 1.0 each -> overall recall 1.0 (wrong).
+    """
+    from langres.core.metrics import calculate_bcubed_recall
+
+    recall = calculate_bcubed_recall([], [{"a", "b"}, {"c"}])
+    assert recall == pytest.approx(2 / 3)
+    assert recall < 1.0
+
+
+def test_bcubed_recall_complete_partition_still_perfect():
+    """The fix is a no-op when nothing is unclustered: a correct prediction is 1.0."""
+    from langres.core.metrics import calculate_bcubed_recall
+
+    recall = calculate_bcubed_recall([{"a", "b"}, {"c"}], [{"a", "b"}, {"c"}])
+    assert recall == 1.0
+
+
+def test_bcubed_precision_absent_from_gold_not_scored_as_pure():
+    """Symmetric guard: ids absent from the gold partition are their own singletons.
+
+    predicted = [{x, y}], gold = [{z}] (x and y are not in any gold cluster).
+
+    Correct per-item precision:
+      x: only x itself shares x's (absent) gold cluster -> 1/2
+      y: only y itself shares y's (absent) gold cluster -> 1/2
+      mean = 0.5
+
+    The latent bug mapped both to a single ``None`` gold cluster -> precision 1.0.
+    """
+    from langres.core.metrics import calculate_bcubed_precision
+
+    precision = calculate_bcubed_precision([{"x", "y"}], [{"z"}])
+    assert precision == pytest.approx(0.5)
+    assert precision < 1.0
+
+
 def test_pairwise_metrics_perfect_clustering():
     """Test pairwise metrics with perfect clustering."""
     from langres.core.metrics import calculate_pairwise_metrics

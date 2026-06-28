@@ -60,9 +60,14 @@ def calculate_bcubed_precision(
     for pred_cluster in predicted_clusters:
         for entity in pred_cluster:
             # Count how many entities in this predicted cluster share
-            # the same gold cluster as this entity
+            # the same gold cluster as this entity. Any entity absent from the
+            # gold partition falls back to its own id as a unique singleton key
+            # (ids are str, gold cluster keys are int, so no collision): two
+            # gold-absent ids must NOT compare equal via a shared ``None``.
             same_cluster_count = sum(
-                1 for other in pred_cluster if gold_lookup.get(entity) == gold_lookup.get(other)
+                1
+                for other in pred_cluster
+                if gold_lookup.get(entity, entity) == gold_lookup.get(other, other)
             )
 
             # Precision for this entity = same_cluster / predicted_cluster_size
@@ -106,10 +111,16 @@ def calculate_bcubed_recall(
 
     for gold_cluster in gold_clusters:
         for entity in gold_cluster:
-            # Count how many entities in this gold cluster are also
-            # in the same predicted cluster as this entity
+            # Count how many entities in this gold cluster are also in the same
+            # predicted cluster as this entity. Any entity absent from all
+            # predicted clusters (the Clusterer drops singletons) falls back to
+            # its own id as a unique singleton key (ids are str, predicted
+            # cluster keys are int, so no collision): two un-merged ids must NOT
+            # compare equal via a shared ``None`` and inflate recall.
             same_cluster_count = sum(
-                1 for other in gold_cluster if pred_lookup.get(entity) == pred_lookup.get(other)
+                1
+                for other in gold_cluster
+                if pred_lookup.get(entity, entity) == pred_lookup.get(other, other)
             )
 
             # Recall for this entity = same_cluster / gold_cluster_size
