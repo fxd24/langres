@@ -120,7 +120,13 @@ class TeacherLabeler(Labeler):
        per-pair worst case is ``worst_case_tokens_per_pair`` priced at the more
        expensive of the two pinned prices. This bounds spend even if every call
        is maximally expensive, with ``budget_soft_usd`` headroom below the hard
-       budget.
+       budget. It is a budget **backstop**, not a sampler: it truncates in input
+       order and does not re-balance strata. Composition contract — the caller
+       (the Wave-4 orchestrator) sizes the upstream miner's ``max_pairs`` to the
+       budget so the stratified set already fits and this cap does not fire as
+       the primary selector. If it does fire (input larger than the budget
+       allows), it prioritizes spend safety over preserving the mix; pre-shuffle
+       upstream if an unbiased truncation is needed.
     2. **Running tally + per-pair budget stop.** Spend is tallied from each
        judgement's actual token counts (priced with the pinned rates,
        cross-checked against the judge's reported ``cost_usd``, taking the max).
