@@ -401,6 +401,10 @@ class TeacherLabeler(Labeler):
         token_cost = self._pair_cost(prompt_tokens, completion_tokens)
         reported_cost = float(prov.get("cost_usd", 0.0) or 0.0)
 
+        # "Both zero" is the blind signal, not key-presence: LLMJudge always sets
+        # prompt_tokens/completion_tokens/cost_usd, defaulting them to 0 exactly
+        # when response.usage is missing. A real call always spends prompt tokens,
+        # so all-zero reliably means "usage was absent" — we cannot track spend.
         if token_cost == 0.0 and reported_cost == 0.0:
             raise BlindCostError(
                 f"Judgement for pair {judgement.left_id}/{judgement.right_id} reported "

@@ -130,8 +130,11 @@ class HardNegativeMiner(Miner):
             The selected candidate pairs, in the input's (deduplicated) order.
 
         Raises:
-            ValueError: If any candidate has ``similarity_score is None``.
+            ValueError: If any candidate has ``similarity_score is None``, or if
+                ``max_pairs`` is negative.
         """
+        if max_pairs is not None and max_pairs < 0:
+            raise ValueError("max_pairs must be non-negative")
         deduped = self._dedup(candidates)
         if not deduped:
             return []

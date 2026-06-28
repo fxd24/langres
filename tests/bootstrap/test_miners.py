@@ -142,6 +142,11 @@ def test_missing_similarity_score_raises() -> None:
         HardNegativeMiner().mine([_cand("a", "b", None)])
 
 
+def test_negative_max_pairs_raises() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        HardNegativeMiner().mine(_spread(10), max_pairs=-1)
+
+
 # --- allocation edge cases --------------------------------------------------
 
 
