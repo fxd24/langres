@@ -91,8 +91,10 @@ def test_m2_artifact_resolve_identity_fresh_process(tmp_path: Path) -> None:
     records_path.write_text(json.dumps(test_dicts))
 
     # 3. Fresh subprocess: import the package, load the artifact, resolve.
+    #    timeout guards CI against a hung embed/load; capture stderr so a
+    #    failure surfaces the subprocess traceback instead of a bare exit code.
     out_path = tmp_path / "clusters_b.json"
-    subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             "-c",
@@ -101,8 +103,15 @@ def test_m2_artifact_resolve_identity_fresh_process(tmp_path: Path) -> None:
             str(records_path),
             str(out_path),
         ],
-        check=True,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"Artifact subprocess failed (exit {result.returncode}):\n{result.stderr}"
+        )
     clusters_b = [set(c) for c in json.loads(out_path.read_text())]
 
     # 4. Identical clusters, compared canonically (order-independent).
