@@ -12,16 +12,22 @@ therefore filters candidate pairs to cross-source ones before measuring recall
 
 import csv
 import logging
+import random
+from collections import defaultdict
 from importlib import resources
 from typing import Literal
 
 from pydantic import BaseModel, computed_field
 
 from langres.core.blockers.vector import VectorBlocker
+from langres.core.clusterer import Clusterer
+from langres.core.comparator import Comparator
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
+from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
+from langres.core.resolver import Resolver
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +193,164 @@ def load_fodors_zagat() -> tuple[list[RestaurantSchema], list[set[str]]]:
         len(singletons),
     )
     return corpus, gold_clusters
+
+
+def build_restaurant_blocker(
+    k_neighbors: int = DEFAULT_BLOCKING_K,
+) -> VectorBlocker[RestaurantSchema]:
+    """Build the shared restaurant VectorBlocker (MiniLM + FAISS-cosine).
+
+    This is the one blocking config used across M1 and M2 — extracted here so
+    the gold-set run, the k-sweep, and the M2 Resolver all wire the *same*
+    candidate generator rather than each re-spelling it. Declarative
+    (``schema=`` + ``text_field=``) so the resulting blocker is
+    config-serializable: it round-trips through a saved Resolver artifact.
+
+    Each call constructs a *fresh* (unbuilt) :class:`FAISSIndex`; embedding only
+    happens when the index is later populated from a corpus (e.g. by
+    ``Resolver.resolve``). :func:`sweep_blocking_k` intentionally does **not**
+    use this factory: it shares one pre-built index across every ``k`` to embed
+    the corpus once, whereas this factory owns its own index per call.
+
+    Args:
+        k_neighbors: Nearest neighbours per record. Defaults to the pinned
+            :data:`DEFAULT_BLOCKING_K` (clears Pair-Completeness >= 0.95).
+
+    Returns:
+        A :class:`VectorBlocker` over ``RestaurantSchema.embed_text``.
+    """
+    return VectorBlocker(
+        vector_index=FAISSIndex(
+            embedder=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
+            metric="cosine",
+        ),
+        schema=RestaurantSchema,
+        text_field="embed_text",
+        k_neighbors=k_neighbors,
+    )
+
+
+def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCKING_K) -> Resolver:
+    """Wire the M2 baseline restaurant Resolver (vector-blocked, zero-spend).
+
+    Composes the shared :func:`build_restaurant_blocker` with the missing-aware
+    :class:`~langres.core.comparator.StringComparator` (auto-derived from
+    ``RestaurantSchema``) and the registered, zero-spend
+    :class:`~langres.core.judges.weighted_average.WeightedAverageJudge` scoring
+    on the same FeatureSpecs, then a connected-components
+    :class:`~langres.core.clusterer.Clusterer` at ``threshold``. Mirrors
+    ``Resolver.from_schema``'s comparator+judge+clusterer wiring but swaps the
+    default all-pairs blocker for the vector blocker.
+
+    ``Comparator.from_schema`` derives one feature per ``str | None`` field and
+    already excludes ``id``, the computed ``embed_text``, and ``source`` (a
+    ``Literal``, not a string). Excluding ``source`` is essential: Fodors-Zagat's
+    true matches are all cross-source, so comparing ``source`` would penalise
+    every positive. The resulting Resolver is fully serializable (every slot is a
+    registered component), so ``save()`` does not raise.
+
+    Args:
+        threshold: Clusterer match threshold (tune on train, score on test).
+        k_neighbors: Blocking neighbours; defaults to :data:`DEFAULT_BLOCKING_K`.
+
+    Returns:
+        A ready-to-run, serializable :class:`Resolver`.
+    """
+    comparator: Comparator[RestaurantSchema] = Comparator.from_schema(RestaurantSchema)
+    return Resolver(
+        blocker=build_restaurant_blocker(k_neighbors),
+        comparator=comparator,
+        # The judge scores on the same FeatureSpecs the comparator compares on,
+        # so the comparison vector and the weights line up.
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=threshold),
+    )
+
+
+def _split_stratum(
+    clusters: list[set[str]], test_size: float, rng: random.Random
+) -> tuple[list[set[str]], list[set[str]]]:
+    """Split one same-size cluster stratum into (train, test) whole clusters.
+
+    Clusters are sorted into a canonical order (by their sorted id tuple) before
+    shuffling so the split is deterministic given ``rng`` regardless of input
+    ordering. At least one cluster always goes to test (mirrors
+    :func:`stratified_dedup_split`).
+    """
+    ordered = sorted(clusters, key=lambda c: tuple(sorted(c)))
+    rng.shuffle(ordered)
+    n_test = max(1, int(len(ordered) * test_size))
+    return ordered[:-n_test], ordered[-n_test:]
+
+
+def split_restaurant_corpus(
+    corpus: list[RestaurantSchema],
+    gold_clusters: list[set[str]],
+    *,
+    test_size: float = 0.3,
+    seed: int = 0,
+) -> tuple[list[RestaurantSchema], list[RestaurantSchema], list[set[str]], list[set[str]]]:
+    """Stratified, leakage-free train/test split over full restaurant records.
+
+    Mirrors :func:`~langres.data.splitting.stratified_dedup_split`'s
+    cluster-size stratification (singletons distributed separately; matched
+    groups split within each size band, whole clusters kept together) but
+    operates on full :class:`RestaurantSchema` records — preserving ``source``
+    and the ``f``/``z`` ids — instead of the ``{id, name}``-only int-cast dicts
+    that function produces (which can't reconstruct ``RestaurantSchema``).
+
+    Because whole gold clusters are assigned to one side, no match pair ever
+    straddles the split (no test-set leakage), and each returned cluster list
+    partitions exactly its split's ids.
+
+    Args:
+        corpus: Records from :func:`load_fodors_zagat` (the complete corpus).
+        gold_clusters: The complete closed-world partition (match sets +
+            singletons) from :func:`load_fodors_zagat`.
+        test_size: Fraction of each stratum assigned to test (in ``(0, 1)``).
+        seed: Seed for the deterministic shuffle.
+
+    Returns:
+        ``(train_records, test_records, train_clusters, test_clusters)``.
+
+    Raises:
+        ValueError: If ``test_size`` is not in the open interval ``(0, 1)``.
+    """
+    if not 0.0 < test_size < 1.0:
+        raise ValueError(f"test_size must be in (0, 1); got {test_size}")
+
+    by_id = {r.id: r for r in corpus}
+    rng = random.Random(seed)
+
+    # Stratify: singletons in their own band, matched groups by cluster size.
+    singletons = [c for c in gold_clusters if len(c) == 1]
+    groups_by_size: dict[int, list[set[str]]] = defaultdict(list)
+    for cluster in gold_clusters:
+        if len(cluster) >= 2:
+            groups_by_size[len(cluster)].append(cluster)
+
+    train_clusters: list[set[str]] = []
+    test_clusters: list[set[str]] = []
+    # Process strata in a fixed order (singletons, then ascending size) so rng
+    # consumption — and thus the split — is reproducible.
+    strata = [singletons] + [groups_by_size[size] for size in sorted(groups_by_size)]
+    for stratum in strata:
+        train_part, test_part = _split_stratum(stratum, test_size, rng)
+        train_clusters.extend(train_part)
+        test_clusters.extend(test_part)
+
+    train_ids = {rid for cluster in train_clusters for rid in cluster}
+    test_ids = {rid for cluster in test_clusters for rid in cluster}
+    train_records = [by_id[rid] for rid in sorted(train_ids)]
+    test_records = [by_id[rid] for rid in sorted(test_ids)]
+    logger.info(
+        "split_restaurant_corpus: %d train records (%d clusters), %d test records (%d clusters)",
+        len(train_records),
+        len(train_clusters),
+        len(test_records),
+        len(test_clusters),
+    )
+    return train_records, test_records, train_clusters, test_clusters
 
 
 def _cross_source(
