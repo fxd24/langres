@@ -628,6 +628,8 @@ def cohens_kappa(y_true: list[bool], y_pred: list[bool]) -> float:
     p_pred_pos = sum(y_pred) / n
     p_expected = p_true_pos * p_pred_pos + (1.0 - p_true_pos) * (1.0 - p_pred_pos)
 
+    # p_expected == 1.0 only when a rater is entirely one class, in which case
+    # both marginal products are 0 or 1 exactly -- the == comparison is safe.
     denominator = 1.0 - p_expected
     if denominator == 0.0:
         # No class variance in at least one rater -> kappa undefined; convention 0.0.
@@ -660,11 +662,19 @@ def matthews_corrcoef(y_true: list[bool], y_pred: list[bool]) -> float:
     """
     _validate_binary(y_true, y_pred)
 
-    tp = sum(1 for t, p in zip(y_true, y_pred, strict=True) if t and p)
-    tn = sum(1 for t, p in zip(y_true, y_pred, strict=True) if not t and not p)
-    fp = sum(1 for t, p in zip(y_true, y_pred, strict=True) if not t and p)
-    fn = sum(1 for t, p in zip(y_true, y_pred, strict=True) if t and not p)
+    tp = tn = fp = fn = 0
+    for t, p in zip(y_true, y_pred, strict=True):
+        if t and p:
+            tp += 1
+        elif not t and not p:
+            tn += 1
+        elif not t and p:
+            fp += 1
+        else:
+            fn += 1
 
+    # The radicand is a product of integer counts, so math.sqrt(0) is exactly
+    # 0.0 -- the == comparison is safe (no floating-point near-zero ambiguity).
     denominator = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
     if denominator == 0.0:
         return 0.0
@@ -745,9 +755,18 @@ def brier_score(confidences: list[float], outcomes: list[bool]) -> float:
 def _bin_indices(confidences: list[float], n_bins: int, strategy: BinStrategy) -> list[list[int]]:
     """Group item indices into bins by confidence; drop empty bins.
 
-    ``"quantile"`` produces equal-mass bins (each holds ~``N / n_bins`` items),
-    robust to the clumping of verbalized LLM confidences that leaves equal-width
-    bins mostly empty. ``"uniform"`` produces equal-width ``[0, 1]`` bins.
+    ``"quantile"`` produces (approximately) equal-mass bins (each holds ~``N /
+    n_bins`` items), robust to the clumping of verbalized LLM confidences that
+    leaves equal-width bins mostly empty. ``"uniform"`` produces equal-width
+    ``[0, 1]`` bins.
+
+    Tied confidences are never split across bins: a bin boundary is extended past
+    any run of equal confidence values. This keeps the result independent of
+    input order (deterministic) and keeps calibration honest -- e.g. all-``0.5``
+    predictions land in one bin, so a model that is right half the time scores
+    ECE ``0.0`` rather than a spurious non-zero from an order-dependent split.
+    As a consequence bins may be unequal in mass and fewer than ``n_bins`` may be
+    returned. Empty bins are dropped.
 
     Raises:
         ValueError: If ``n_bins < 1`` or ``strategy`` is unknown.
@@ -756,16 +775,21 @@ def _bin_indices(confidences: list[float], n_bins: int, strategy: BinStrategy) -
         raise ValueError(f"n_bins must be >= 1, got {n_bins}")
 
     if strategy == "quantile":
-        order = sorted(range(len(confidences)), key=lambda i: confidences[i])
-        base, extra = divmod(len(order), n_bins)
+        n = len(confidences)
+        order = sorted(range(n), key=lambda i: confidences[i])
         groups: list[list[int]] = []
         start = 0
         for b in range(n_bins):
-            size = base + (1 if b < extra else 0)
-            if size == 0:
-                continue
-            groups.append(order[start : start + size])
-            start += size
+            if start >= n:
+                break
+            # Target an even cut, but never split equal confidence values and
+            # always take at least one item so each visited bin is non-empty.
+            cut = max(round((b + 1) * n / n_bins), start + 1)
+            cut = min(cut, n)
+            while cut < n and confidences[order[cut]] == confidences[order[cut - 1]]:
+                cut += 1
+            groups.append(order[start:cut])
+            start = cut
         return groups
 
     if strategy == "uniform":

@@ -166,6 +166,29 @@ def test_ece_quantile_two_bins_hand_computed() -> None:
     assert expected_calibration_error(conf, out, n_bins=2) == pytest.approx(0.1)
 
 
+def test_ece_ties_stay_in_one_bin_and_are_order_independent() -> None:
+    """Equal confidences must not be split across quantile bins (Codex P2).
+
+    Four identical 0.5 predictions that are right half the time are perfectly
+    calibrated -> ECE 0.0, regardless of row order.
+    """
+    conf = [0.5, 0.5, 0.5, 0.5]
+    assert expected_calibration_error(conf, [True, True, False, False], n_bins=2) == 0.0
+    assert expected_calibration_error(conf, [False, True, False, True], n_bins=2) == 0.0
+    bins = reliability_bins(conf, [True, True, False, False], n_bins=2)
+    assert len(bins) == 1
+    assert bins[0].count == 4
+    assert bins[0].mean_confidence == 0.5
+    assert bins[0].observed_frequency == 0.5
+
+
+def test_ece_partial_ties_extend_boundary() -> None:
+    # Sorted confidences [0.3, 0.5, 0.5, 0.9], n_bins=2. The even cut at index 2
+    # would split the tied 0.5s; the boundary extends so both 0.5s share a bin.
+    bins = reliability_bins([0.9, 0.5, 0.5, 0.3], [True, True, False, False], n_bins=2)
+    assert [b.count for b in bins] == [3, 1]  # {0.3, 0.5, 0.5} then {0.9}
+
+
 def test_ece_perfectly_calibrated_is_zero() -> None:
     # Each bin's accuracy equals its confidence.
     assert expected_calibration_error([0.0, 1.0], [False, True], n_bins=2) == 0.0

@@ -42,8 +42,8 @@ from langres.core.metrics import (
 )
 from langres.core.models import ERCandidate
 
+# Metadata/provenance keys searched, in order, for a USD cost figure.
 _COST_KEYS = ("total_cost_usd", "cost_usd", "cost")
-"""Metadata/provenance keys searched, in order, for a USD cost figure."""
 
 
 def _f1(precision: float, recall: float) -> float:
@@ -284,14 +284,19 @@ class BootstrapReport(BaseModel):
         """Compute teacher-vs-truth agreement, or ``None`` if no labeled pair has truth."""
         if not teacher_labels:
             return None
-        tp = sum(1 for t, p in zip(truth_labels, teacher_labels, strict=True) if t and p)
-        fp = sum(1 for t, p in zip(truth_labels, teacher_labels, strict=True) if not t and p)
-        fn = sum(1 for t, p in zip(truth_labels, teacher_labels, strict=True) if t and not p)
+        tp = fp = fn = tn = 0
+        for truth, teacher in zip(truth_labels, teacher_labels, strict=True):
+            if truth and teacher:
+                tp += 1
+            elif not truth and teacher:
+                fp += 1
+            elif truth and not teacher:
+                fn += 1
+            else:
+                tn += 1
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        accuracy = sum(
-            1 for t, p in zip(truth_labels, teacher_labels, strict=True) if t == p
-        ) / len(teacher_labels)
+        accuracy = (tp + tn) / len(teacher_labels)
         return AgreementStats(
             n_evaluated=len(teacher_labels),
             accuracy=accuracy,
@@ -424,7 +429,11 @@ class BootstrapReport(BaseModel):
         return "\n".join(lines)
 
     def render(self) -> str:
-        """Alias for :meth:`to_markdown`."""
+        """Render the report as Markdown.
+
+        Provided alongside :meth:`to_markdown` so callers expecting either the
+        generic ``render()`` name or the format-specific one get the same output.
+        """
         return self.to_markdown()
 
 
