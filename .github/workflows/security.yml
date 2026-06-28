@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # feat/m2-skeleton: temporary M2 integration branch so per-wave PRs into it get
+    # full CI. REVERT this line in the integration->main PR.
+    branches: [main, feat/m2-skeleton]
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: "0 8 * * 1"
