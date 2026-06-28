@@ -742,9 +742,7 @@ def brier_score(confidences: list[float], outcomes: list[bool]) -> float:
     ) / len(confidences)
 
 
-def _bin_indices(
-    confidences: list[float], n_bins: int, strategy: BinStrategy
-) -> list[list[int]]:
+def _bin_indices(confidences: list[float], n_bins: int, strategy: BinStrategy) -> list[list[int]]:
     """Group item indices into bins by confidence; drop empty bins.
 
     ``"quantile"`` produces equal-mass bins (each holds ~``N / n_bins`` items),

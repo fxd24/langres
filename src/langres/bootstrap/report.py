@@ -254,9 +254,15 @@ class BootstrapReport(BaseModel):
         # --- Routing / coverage + honest cost ----------------------------------
         labeled = len(pairs)
         total_candidates = len(candidates)
+        mined_value = metadata.get("mined")
+        mined = (
+            int(mined_value)
+            if isinstance(mined_value, (int, float)) and not isinstance(mined_value, bool)
+            else labeled
+        )
         coverage = CoverageStats(
             total_candidates=total_candidates,
-            mined=int(metadata.get("mined", labeled)),  # type: ignore[arg-type]
+            mined=mined,
             labeled=labeled,
             skipped=max(total_candidates - labeled, 0),
             with_ground_truth=len(teacher_labels),
