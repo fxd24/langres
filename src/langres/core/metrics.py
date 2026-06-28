@@ -3,6 +3,9 @@
 This module provides metrics for evaluating different pipeline stages:
 - Blocking stage: evaluate_blocking(), evaluate_blocking_with_ranking()
 - Clustering stage: evaluate_clustering(), calculate_bcubed_metrics(), calculate_pairwise_metrics()
+- Agreement (rater-vs-rater): cohens_kappa(), matthews_corrcoef()
+- Calibration (confidence-vs-outcome): brier_score(), expected_calibration_error(),
+  reliability_bins()
 
 References:
     Amigó, E., Gonzalo, J., Artiles, J., & Verdejo, F. (2009).
@@ -10,12 +13,17 @@ References:
     Information Retrieval, 12(4), 461-486.
 """
 
-from typing import Any
+import math
+from typing import Any, Literal
 
+from pydantic import BaseModel
 from ranx import Qrels, Run, evaluate  # type: ignore[import-untyped]
 
 from langres.core.debugging import CandidateStats
 from langres.core.models import ERCandidate
+
+BinStrategy = Literal["quantile", "uniform"]
+"""Binning strategy for calibration metrics: equal-mass quantile bins or equal-width bins."""
 
 
 def calculate_bcubed_precision(
@@ -559,3 +567,306 @@ def evaluate_blocking_with_ranking(
         result[f"precision_at_{k}"] = precision_at_k[k]
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agreement metrics (rater-vs-rater)
+# ---------------------------------------------------------------------------
+#
+# These treat two boolean label vectors (e.g. teacher labels vs. ground truth)
+# as a binary classification and quantify *agreement beyond chance*. The
+# positive class is ``True`` (a "match").
+
+
+def _validate_binary(y_true: list[bool], y_pred: list[bool]) -> None:
+    """Validate two boolean label vectors share a non-zero, equal length.
+
+    Raises:
+        ValueError: If the inputs differ in length or are empty.
+    """
+    if len(y_true) != len(y_pred):
+        raise ValueError(
+            f"y_true and y_pred must have equal length, got {len(y_true)} and {len(y_pred)}"
+        )
+    if not y_true:
+        raise ValueError("y_true and y_pred must be non-empty")
+
+
+def cohens_kappa(y_true: list[bool], y_pred: list[bool]) -> float:
+    """Cohen's kappa: chance-corrected agreement between two boolean raters.
+
+    ``kappa = (p_o - p_e) / (1 - p_e)`` where ``p_o`` is observed agreement and
+    ``p_e`` is the agreement expected by chance given each rater's marginal
+    class frequencies.
+
+    Caveat -- the *prevalence paradox*: under the heavily skewed class balance
+    of bootstrap labeling (~2% positives), kappa can be near zero even when raw
+    agreement is very high, because chance agreement ``p_e`` is itself near the
+    observed agreement. Report :func:`matthews_corrcoef` alongside it (W5).
+
+    Args:
+        y_true: Ground-truth boolean labels (positive class is ``True``).
+        y_pred: Predicted boolean labels, aligned with ``y_true``.
+
+    Returns:
+        Kappa in ``[-1.0, 1.0]``. Returns ``0.0`` when chance agreement is
+        perfect (``p_e == 1``, i.e. a rater has no class variance), where kappa
+        is otherwise undefined (``0 / 0``).
+
+    Raises:
+        ValueError: If inputs differ in length or are empty.
+
+    Example:
+        >>> cohens_kappa([True, True, False, False], [True, False, False, False])
+        0.5
+    """
+    _validate_binary(y_true, y_pred)
+    n = len(y_true)
+
+    p_observed = sum(1 for t, p in zip(y_true, y_pred, strict=True) if t == p) / n
+    p_true_pos = sum(y_true) / n
+    p_pred_pos = sum(y_pred) / n
+    p_expected = p_true_pos * p_pred_pos + (1.0 - p_true_pos) * (1.0 - p_pred_pos)
+
+    denominator = 1.0 - p_expected
+    if denominator == 0.0:
+        # No class variance in at least one rater -> kappa undefined; convention 0.0.
+        return 0.0
+    return (p_observed - p_expected) / denominator
+
+
+def matthews_corrcoef(y_true: list[bool], y_pred: list[bool]) -> float:
+    """Matthews correlation coefficient (MCC) for two boolean label vectors.
+
+    ``MCC = (TP*TN - FP*FN) / sqrt((TP+FP)(TP+FN)(TN+FP)(TN+FN))``. MCC is a
+    balanced measure that stays informative under the ~2% positive prevalence of
+    bootstrap labeling, where Cohen's kappa suffers the prevalence paradox (W5).
+
+    Args:
+        y_true: Ground-truth boolean labels (positive class is ``True``).
+        y_pred: Predicted boolean labels, aligned with ``y_true``.
+
+    Returns:
+        MCC in ``[-1.0, 1.0]``. Returns ``0.0`` when the denominator is zero
+        (any of the four marginal sums is empty), where MCC is otherwise
+        undefined.
+
+    Raises:
+        ValueError: If inputs differ in length or are empty.
+
+    Example:
+        >>> matthews_corrcoef([True, True, False, False], [True, False, False, False])
+        0.5773502691896258
+    """
+    _validate_binary(y_true, y_pred)
+
+    tp = sum(1 for t, p in zip(y_true, y_pred, strict=True) if t and p)
+    tn = sum(1 for t, p in zip(y_true, y_pred, strict=True) if not t and not p)
+    fp = sum(1 for t, p in zip(y_true, y_pred, strict=True) if not t and p)
+    fn = sum(1 for t, p in zip(y_true, y_pred, strict=True) if t and not p)
+
+    denominator = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    if denominator == 0.0:
+        return 0.0
+    return (tp * tn - fp * fn) / denominator
+
+
+# ---------------------------------------------------------------------------
+# Calibration metrics (confidence-vs-outcome)
+# ---------------------------------------------------------------------------
+#
+# These assess whether a verbalized confidence in ``[0, 1]`` matches the
+# observed outcome frequency. ``confidences[i]`` is a self-reported probability
+# and ``outcomes[i]`` is whether that prediction was borne out (boolean).
+
+
+class ReliabilityBin(BaseModel):
+    """One bin of a reliability diagram.
+
+    Attributes:
+        mean_confidence: Mean predicted confidence of the items in this bin.
+        observed_frequency: Fraction of items in this bin whose outcome was
+            ``True`` (the empirical accuracy for this confidence level).
+        count: Number of items in this bin.
+    """
+
+    mean_confidence: float
+    observed_frequency: float
+    count: int
+
+
+def _validate_calibration(confidences: list[float], outcomes: list[bool]) -> None:
+    """Validate confidences and outcomes are aligned, non-empty, and in range.
+
+    Raises:
+        ValueError: If lengths differ, inputs are empty, or any confidence lies
+            outside ``[0, 1]``.
+    """
+    if len(confidences) != len(outcomes):
+        raise ValueError(
+            f"confidences and outcomes must have equal length, "
+            f"got {len(confidences)} and {len(outcomes)}"
+        )
+    if not confidences:
+        raise ValueError("confidences and outcomes must be non-empty")
+    for p in confidences:
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"confidences must lie in [0, 1], got {p}")
+
+
+def brier_score(confidences: list[float], outcomes: list[bool]) -> float:
+    """Brier score: ``mean((p - y)^2)`` -- the primary proper calibration score.
+
+    The Brier score is a strictly proper scoring rule, so unlike ECE it needs no
+    binning and cannot be gamed by bin-edge choices (W6). Lower is better;
+    ``0.0`` is perfect, ``0.25`` is the score of a constant ``0.5`` forecaster.
+
+    Args:
+        confidences: Predicted probabilities in ``[0, 1]``.
+        outcomes: Realized boolean outcomes, aligned with ``confidences``.
+
+    Returns:
+        Mean squared error between confidence and outcome in ``[0.0, 1.0]``.
+
+    Raises:
+        ValueError: If inputs differ in length, are empty, or any confidence is
+            outside ``[0, 1]``.
+
+    Example:
+        >>> brier_score([0.9, 0.1], [True, False])
+        0.009999999999999995
+    """
+    _validate_calibration(confidences, outcomes)
+    return sum(
+        (p - (1.0 if y else 0.0)) ** 2 for p, y in zip(confidences, outcomes, strict=True)
+    ) / len(confidences)
+
+
+def _bin_indices(
+    confidences: list[float], n_bins: int, strategy: BinStrategy
+) -> list[list[int]]:
+    """Group item indices into bins by confidence; drop empty bins.
+
+    ``"quantile"`` produces equal-mass bins (each holds ~``N / n_bins`` items),
+    robust to the clumping of verbalized LLM confidences that leaves equal-width
+    bins mostly empty. ``"uniform"`` produces equal-width ``[0, 1]`` bins.
+
+    Raises:
+        ValueError: If ``n_bins < 1`` or ``strategy`` is unknown.
+    """
+    if n_bins < 1:
+        raise ValueError(f"n_bins must be >= 1, got {n_bins}")
+
+    if strategy == "quantile":
+        order = sorted(range(len(confidences)), key=lambda i: confidences[i])
+        base, extra = divmod(len(order), n_bins)
+        groups: list[list[int]] = []
+        start = 0
+        for b in range(n_bins):
+            size = base + (1 if b < extra else 0)
+            if size == 0:
+                continue
+            groups.append(order[start : start + size])
+            start += size
+        return groups
+
+    if strategy == "uniform":
+        buckets: list[list[int]] = [[] for _ in range(n_bins)]
+        for i, p in enumerate(confidences):
+            idx = min(int(p * n_bins), n_bins - 1)
+            buckets[idx].append(i)
+        return [g for g in buckets if g]
+
+    raise ValueError(f"strategy must be 'quantile' or 'uniform', got {strategy!r}")
+
+
+def expected_calibration_error(
+    confidences: list[float],
+    outcomes: list[bool],
+    *,
+    n_bins: int = 8,
+    strategy: BinStrategy = "quantile",
+) -> float:
+    """Expected Calibration Error: count-weighted mean gap between confidence and accuracy.
+
+    ``ECE = sum_b (n_b / N) * |acc_b - conf_b|`` over non-empty bins. The default
+    is **equal-mass / quantile** binning: verbalized LLM confidences clump into a
+    few values, so equal-width bins leave most items in 2-3 bins and understate
+    miscalibration (W6).
+
+    This is a *verbalized-confidence* ECE -- it calibrates self-reported
+    confidence scores, not softmax logits. It is a secondary, binning-dependent
+    diagnostic; prefer :func:`brier_score` as the headline calibration number.
+
+    Args:
+        confidences: Predicted probabilities in ``[0, 1]``.
+        outcomes: Realized boolean outcomes, aligned with ``confidences``.
+        n_bins: Number of bins (``>= 1``).
+        strategy: ``"quantile"`` (equal-mass, default) or ``"uniform"`` (equal-width).
+
+    Returns:
+        ECE in ``[0.0, 1.0]``; ``0.0`` is perfectly calibrated.
+
+    Raises:
+        ValueError: If inputs differ in length, are empty, any confidence is
+            outside ``[0, 1]``, ``n_bins < 1``, or ``strategy`` is unknown.
+
+    Example:
+        >>> expected_calibration_error([0.8, 0.8], [True, False], n_bins=1)
+        0.30000000000000004
+    """
+    _validate_calibration(confidences, outcomes)
+    n = len(confidences)
+    ece = 0.0
+    for group in _bin_indices(confidences, n_bins, strategy):
+        conf_mean = sum(confidences[i] for i in group) / len(group)
+        accuracy = sum(1.0 for i in group if outcomes[i]) / len(group)
+        ece += (len(group) / n) * abs(accuracy - conf_mean)
+    return ece
+
+
+def reliability_bins(
+    confidences: list[float],
+    outcomes: list[bool],
+    *,
+    n_bins: int = 8,
+    strategy: BinStrategy = "quantile",
+) -> list[ReliabilityBin]:
+    """Per-bin (mean_confidence, observed_frequency, count) for a reliability diagram.
+
+    Uses the same binning as :func:`expected_calibration_error`. A well-calibrated
+    model has ``observed_frequency ~= mean_confidence`` in every bin (points on the
+    diagonal). Only non-empty bins are returned.
+
+    Args:
+        confidences: Predicted probabilities in ``[0, 1]``.
+        outcomes: Realized boolean outcomes, aligned with ``confidences``.
+        n_bins: Number of bins (``>= 1``).
+        strategy: ``"quantile"`` (equal-mass, default) or ``"uniform"`` (equal-width).
+
+    Returns:
+        One :class:`ReliabilityBin` per non-empty bin, ordered from lowest to
+        highest confidence.
+
+    Raises:
+        ValueError: If inputs differ in length, are empty, any confidence is
+            outside ``[0, 1]``, ``n_bins < 1``, or ``strategy`` is unknown.
+
+    Example:
+        >>> bins = reliability_bins([0.2, 0.8], [False, True], n_bins=2)
+        >>> [(b.mean_confidence, b.observed_frequency, b.count) for b in bins]
+        [(0.2, 0.0, 1), (0.8, 1.0, 1)]
+    """
+    _validate_calibration(confidences, outcomes)
+    bins: list[ReliabilityBin] = []
+    for group in _bin_indices(confidences, n_bins, strategy):
+        conf_mean = sum(confidences[i] for i in group) / len(group)
+        accuracy = sum(1.0 for i in group if outcomes[i]) / len(group)
+        bins.append(
+            ReliabilityBin(
+                mean_confidence=conf_mean,
+                observed_frequency=accuracy,
+                count=len(group),
+            )
+        )
+    return bins
