@@ -94,11 +94,12 @@ def test_calibration_hand_computed() -> None:
     report = BootstrapReport.build(_scenario_gold(), _scenario_candidates(), _TRUTH, n_bins=2)
     c = report.calibration
     assert c is not None
-    # confidences [0.9,0.8,0.4], correctness [True,True,False]
-    # Brier: (0.01 + 0.04 + 0.16)/3 = 0.07
+    # confidences=P(match) [0.9,0.8,0.4]; is_match outcomes [True,False,True]
+    # (a-b match, a-c non-match, c-d match). Brier calibrates P(match) vs is-match:
+    # ((0.9-1)^2 + (0.8-0)^2 + (0.4-1)^2)/3 = (0.01 + 0.64 + 0.36)/3 = 0.336667
     assert c.n_evaluated == 3
-    assert c.brier == pytest.approx(0.07)
-    # quantile 2 bins: [0.4,0.8] acc .5 conf .6; [0.9] acc 1 conf .9 -> ECE 0.1
+    assert c.brier == pytest.approx(0.336667, abs=1e-6)
+    # quantile 2 bins: [0.4,0.8] is-match .5 conf .6; [0.9] is-match 1 conf .9 -> ECE 0.1
     assert c.ece == pytest.approx(0.1)
     assert c.n_bins == 2
     assert len(c.reliability) == 2
@@ -209,7 +210,7 @@ def test_to_markdown_contains_key_numbers() -> None:
     assert "F1: 0.6667" in md
     assert "Cohen's kappa: 0.4000" in md
     assert "MCC: 0.5000" in md
-    assert "Brier score (primary): 0.0700" in md
+    assert "Brier score (primary): 0.3367" in md
     assert "ECE (equal-mass, 2 bins): 0.1000" in md
     assert "Total cost (USD): 1.2500" in md
     assert "Final F1 @ 3 labels: 0.6667" in md

@@ -35,8 +35,11 @@ class GoldPair(BaseModel):
         label: ``True`` if the pair is a match, ``False`` otherwise.
         source: Provenance of the label (``"teacher"``, ``"ground_truth"``,
             ``"human"``, or ``"fake"``).
-        confidence: Optional label confidence in ``[0, 1]`` (e.g. a teacher
-            model's probability). ``None`` when not applicable.
+        confidence: Optional **P(match)** score in ``[0, 1]`` -- the probability
+            the pair is a match (NOT confidence in the chosen label). ``label`` is
+            the thresholded ``confidence``. All labelers honor this convention so
+            the calibration report can treat it uniformly. ``None`` when not
+            applicable.
         reasoning: Optional free-text rationale for the label (e.g. a teacher
             model's explanation).
         provenance: Free-form metadata about how the label was produced

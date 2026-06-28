@@ -76,7 +76,10 @@ class GroundTruthLabeler(Labeler):
             candidates: Candidate pairs to label.
 
         Returns:
-            One :class:`GoldPair` per candidate, ``source="ground_truth"`` and
+            One :class:`GoldPair` per candidate, ``source="ground_truth"``. Since
+            ``confidence`` is canonically **P(match)**, a known match gets ``1.0``
+            and a known non-match ``0.0`` -- so this perfect labeler also reads as
+            perfectly calibrated, instead of looking miscalibrated under a flat
             ``confidence=1.0``.
         """
         labels: list[GoldPair] = []
@@ -90,7 +93,7 @@ class GroundTruthLabeler(Labeler):
                     right_id=right_id,
                     label=is_match,
                     source="ground_truth",
-                    confidence=1.0,
+                    confidence=1.0 if is_match else 0.0,
                 )
             )
         return labels
@@ -129,17 +132,21 @@ class FakeLabeler(Labeler):
         # ``total_spent_usd`` off whatever labeler it holds).
         self.total_spent_usd: float = 0.0
 
-    def _confidence(self, score: float) -> float:
-        """Deterministic, over-confident self-confidence for one label.
+    def _p_match(self, score: float, is_match: bool) -> float:
+        """Deterministic, over-confident **P(match)** for one label.
 
-        Grows with the margin ``|score - threshold|`` but starts at a ``0.7``
-        floor even for near-threshold pairs, so the labeler is systematically
-        over-confident on the ambiguous band -- a realistic miscalibration that
-        keeps ECE / Brier non-degenerate. The result lies in ``[0.7, 0.99]``
-        (floor ``0.7`` at the threshold, capped at ``0.99``).
+        ``confidence`` is canonically P(match) (matching :class:`TeacherLabeler`).
+        The labeler is over-confident *toward its predicted class*: starting from
+        a ``0.7`` self-confidence floor that grows with the margin
+        ``|score - threshold|`` (capped ``0.99``), P(match) is that confidence for
+        a predicted match and its complement for a predicted non-match. So
+        predicted matches land in ``[0.7, 0.99]`` and predicted non-matches in
+        ``[0.01, 0.3]`` -- inflated on the ambiguous band, keeping Brier/ECE (now
+        P(match)-vs-is-match) non-degenerate.
         """
         margin = abs(score - self.threshold)
-        return round(min(0.99, 0.7 + 0.6 * margin), 4)
+        confidence = min(0.99, 0.7 + 0.6 * margin)
+        return round(confidence if is_match else 1.0 - confidence, 4)
 
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
         """Label each candidate by its similarity score.
@@ -162,13 +169,14 @@ class FakeLabeler(Labeler):
                     "FakeLabeler requires similarity_score on every candidate; "
                     f"pair {cand.left.id}/{cand.right.id} has none"
                 )
+            is_match = score >= self.threshold
             labels.append(
                 GoldPair(
                     left_id=cand.left.id,
                     right_id=cand.right.id,
-                    label=score >= self.threshold,
+                    label=is_match,
                     source="fake",
-                    confidence=self._confidence(score),
+                    confidence=self._p_match(score, is_match),
                 )
             )
         return labels

@@ -100,12 +100,14 @@ class AgreementStats(BaseModel):
 
 
 class CalibrationStats(BaseModel):
-    """Calibration of teacher confidence against label-correctness.
+    """Calibration of the teacher's match-probability against the truth.
 
-    ``confidence`` is the teacher's verbalized self-confidence in its own label;
-    the outcome being calibrated is whether that label was actually correct
-    (``teacher_label == truth_label``). So this answers "when the teacher says it
-    is 80% sure, is it right 80% of the time?".
+    ``confidence`` is the teacher's verbalized P(match) score (the same value
+    that thresholds into its label); the outcome being calibrated is whether the
+    pair is *actually* a match. So this answers "when the teacher scores a pair
+    0.8, is it a true match 80% of the time?". (Calibrating P(match) against
+    label-*correctness* instead would mis-score a confident correct non-match --
+    P(match)~0 yet "correct" -- inflating Brier and inverting the diagram.)
 
     Attributes:
         n_evaluated: Number of teacher pairs with both a confidence and a
@@ -235,7 +237,7 @@ class BootstrapReport(BaseModel):
         teacher_labels: list[bool] = []
         truth_labels: list[bool] = []
         confidences: list[float] = []
-        correctness: list[bool] = []
+        confidence_is_match: list[bool] = []
         for pair in ordered_pairs:
             if pair.left_id not in truth_entities or pair.right_id not in truth_entities:
                 continue  # No ground truth for this pair -> excluded, honestly.
@@ -244,11 +246,16 @@ class BootstrapReport(BaseModel):
             teacher_labels.append(pair.label)
             truth_labels.append(truth_label)
             if pair.confidence is not None:
+                # ``confidence`` is the teacher's P(match) score, so calibration is
+                # against whether the pair is *actually* a match -- not against
+                # label-correctness (that would mis-score a confident correct
+                # non-match, since its P(match) is ~0 while it "happened" to be a
+                # correct non-match, inflating Brier and inverting the diagram).
                 confidences.append(pair.confidence)
-                correctness.append(pair.label == truth_label)
+                confidence_is_match.append(truth_label)
 
         agreement = cls._build_agreement(teacher_labels, truth_labels)
-        calibration = cls._build_calibration(confidences, correctness, n_bins)
+        calibration = cls._build_calibration(confidences, confidence_is_match, n_bins)
         convergence = cls._build_convergence(teacher_labels, truth_labels)
 
         # --- Routing / coverage + honest cost ----------------------------------
@@ -309,21 +316,22 @@ class BootstrapReport(BaseModel):
 
     @staticmethod
     def _build_calibration(
-        confidences: list[float], correctness: list[bool], n_bins: int
+        confidences: list[float], is_match: list[bool], n_bins: int
     ) -> CalibrationStats | None:
-        """Compute confidence calibration, or ``None`` if no pair has confidence + truth."""
+        """Calibrate P(match) scores against the true is-match outcome.
+
+        ``None`` if no pair has both a confidence and a ground-truth label.
+        """
         if not confidences:
             return None
         return CalibrationStats(
             n_evaluated=len(confidences),
-            brier=brier_score(confidences, correctness),
+            brier=brier_score(confidences, is_match),
             ece=expected_calibration_error(
-                confidences, correctness, n_bins=n_bins, strategy="quantile"
+                confidences, is_match, n_bins=n_bins, strategy="quantile"
             ),
             n_bins=n_bins,
-            reliability=reliability_bins(
-                confidences, correctness, n_bins=n_bins, strategy="quantile"
-            ),
+            reliability=reliability_bins(confidences, is_match, n_bins=n_bins, strategy="quantile"),
         )
 
     @staticmethod
@@ -388,7 +396,7 @@ class BootstrapReport(BaseModel):
             ]
         lines.append("")
 
-        lines.append("## Calibration (teacher confidence vs. correctness)")
+        lines.append("## Calibration (P(match) score vs. is-match)")
         if self.calibration is None:
             lines.append("- No labeled pair had both a confidence and a ground-truth label.")
         else:
