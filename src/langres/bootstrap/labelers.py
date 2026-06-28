@@ -304,16 +304,13 @@ class TeacherLabeler(Labeler):
 
         return labeled
 
-    def _apply_preflight_cap(
-        self, candidates: list[ERCandidate[Any]]
-    ) -> list[ERCandidate[Any]]:
+    def _apply_preflight_cap(self, candidates: list[ERCandidate[Any]]) -> list[ERCandidate[Any]]:
         """Truncate the input so even worst-case spend stays under the soft budget."""
         max_pairs = math.floor(self.budget_soft_usd / self._worst_case_per_pair_cost)
         if len(candidates) > max_pairs:
             self.dropped_by_cap_count = len(candidates) - max_pairs
             logger.info(
-                "Pre-flight cap: keeping %d of %d pairs (soft budget $%.2f, "
-                "worst-case $%.6f/pair)",
+                "Pre-flight cap: keeping %d of %d pairs (soft budget $%.2f, worst-case $%.6f/pair)",
                 max_pairs,
                 len(candidates),
                 self.budget_soft_usd,

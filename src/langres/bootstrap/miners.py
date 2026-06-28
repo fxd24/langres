@@ -174,9 +174,7 @@ class HardNegativeMiner(Miner):
                 unique.append(cand)
         return unique
 
-    def _stratify(
-        self, candidates: list[ERCandidate[Any]]
-    ) -> dict[str, list[ERCandidate[Any]]]:
+    def _stratify(self, candidates: list[ERCandidate[Any]]) -> dict[str, list[ERCandidate[Any]]]:
         """Bucket candidates into high/mid/low strata by similarity percentile."""
         scores = sorted(float(c.similarity_score) for c in candidates)  # type: ignore[arg-type]
         t_low = _percentile(scores, self.mid_pct)
@@ -211,9 +209,7 @@ class HardNegativeMiner(Miner):
         ideal = {name: total * weights[name] / wsum for name in _STRATA}
         alloc = {name: min(sizes[name], math.floor(ideal[name])) for name in _STRATA}
 
-        while sum(alloc.values()) < total and any(
-            alloc[name] < sizes[name] for name in _STRATA
-        ):
+        while sum(alloc.values()) < total and any(alloc[name] < sizes[name] for name in _STRATA):
             with_capacity = [name for name in _STRATA if alloc[name] < sizes[name]]
             # Largest fractional remainder first; fixed stratum order breaks ties.
             best = max(
