@@ -18,7 +18,7 @@ from collections.abc import Iterable, Sequence
 from importlib import resources
 from typing import Literal
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 from langres.core.blocker import Blocker
 from langres.core.blockers.vector import VectorBlocker
@@ -457,14 +457,17 @@ class BCubedEvalResult(BaseModel):
             candidates. It caps achievable recall, so it is reported every run.
         sanity_floor_f1: BCubed F1 of the all-singletons prediction (the resolver
             merging *nothing*). A meaningful run must clear this floor; a resolver
-            scoring at it has added no value over "every record is unique".
+            scoring at it has added no value over "every record is unique". On a
+            sparse dataset with many true singletons this floor can be high (e.g.
+            ~0.93 on Fodors-Zagat, which is mostly singletons) — that's expected,
+            not a weak floor; what matters is that ``f1`` clears it.
     """
 
-    precision: float
-    recall: float
-    f1: float
-    pair_completeness: float
-    sanity_floor_f1: float
+    precision: float = Field(ge=0.0, le=1.0)
+    recall: float = Field(ge=0.0, le=1.0)
+    f1: float = Field(ge=0.0, le=1.0)
+    pair_completeness: float = Field(ge=0.0, le=1.0)
+    sanity_floor_f1: float = Field(ge=0.0, le=1.0)
 
 
 def complete_partition(
@@ -573,6 +576,12 @@ def tune_threshold_on_train(
     returns the threshold with the highest train F1. The **test split is never
     touched here** — this is the no-leakage tuning step. Ties keep the first
     (lowest) threshold in ``thresholds`` order.
+
+    Note: each candidate builds a fresh resolver and re-embeds the train corpus,
+    even though only ``Clusterer.threshold`` varies (the embeddings and candidate
+    pairs are identical across sweeps). At POC / Fodors-Zagat scale this is fine;
+    for larger corpora, share one built blocker across thresholds and vary only
+    the Clusterer.
 
     Args:
         train_records: Training records (full ``RestaurantSchema`` objects).

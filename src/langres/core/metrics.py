@@ -47,7 +47,10 @@ def calculate_bcubed_precision(
         gold = [{"e1", "e2"}]
         precision = calculate_bcubed_precision(predicted, gold)  # 1.0
     """
-    # Build gold cluster lookup: entity_id -> cluster_id
+    # Build gold cluster lookup: entity_id (str) -> cluster_id (int). The str/int
+    # key-vs-value type split is load-bearing for the partition-safe fallback
+    # below: ``get(entity, entity)`` yields the str id for gold-absent entities,
+    # which can never equal an int cluster id, so two absent ids stay distinct.
     gold_lookup: dict[str, int] = {}
     for cluster_id, cluster in enumerate(gold_clusters):
         for entity_id in cluster:
@@ -99,7 +102,11 @@ def calculate_bcubed_recall(
         gold = [{"e1", "e2"}]  # Should be together
         recall = calculate_bcubed_recall(predicted, gold)  # 0.5
     """
-    # Build predicted cluster lookup: entity_id -> cluster_id
+    # Build predicted cluster lookup: entity_id (str) -> cluster_id (int). The
+    # str/int key-vs-value type split is load-bearing for the partition-safe
+    # fallback below: ``get(entity, entity)`` yields the str id for un-clustered
+    # entities, which can never equal an int cluster id, so two absent ids stay
+    # distinct (instead of colliding on a shared ``None``).
     pred_lookup: dict[str, int] = {}
     for cluster_id, cluster in enumerate(predicted_clusters):
         for entity_id in cluster:
