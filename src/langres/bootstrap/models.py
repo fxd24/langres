@@ -16,8 +16,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-GoldPairSource = Literal["teacher", "ground_truth", "human"]
-"""Where a gold label came from: a teacher LLM, benchmark ground truth, or a human."""
+GoldPairSource = Literal["teacher", "ground_truth", "human", "fake"]
+"""Where a gold label came from.
+
+``"teacher"`` (a teacher LLM), ``"ground_truth"`` (benchmark ground truth),
+``"human"`` (a reviewer), or ``"fake"`` (a deterministic no-spend stand-in for
+the teacher, e.g. :class:`~langres.bootstrap.labelers.FakeLabeler`, used to
+exercise the bootstrap loop and its calibration report without API spend).
+"""
 
 
 class GoldPair(BaseModel):
@@ -28,7 +34,7 @@ class GoldPair(BaseModel):
         right_id: Globally-unique id of the right record.
         label: ``True`` if the pair is a match, ``False`` otherwise.
         source: Provenance of the label (``"teacher"``, ``"ground_truth"``,
-            or ``"human"``).
+            ``"human"``, or ``"fake"``).
         confidence: Optional label confidence in ``[0, 1]`` (e.g. a teacher
             model's probability). ``None`` when not applicable.
         reasoning: Optional free-text rationale for the label (e.g. a teacher

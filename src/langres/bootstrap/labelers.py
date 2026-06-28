@@ -1,9 +1,12 @@
 """Labelers for cold-start gold-set bootstrapping (M1).
 
-Two concrete labelers, both emitting :class:`~langres.bootstrap.models.GoldPair`:
+Three concrete labelers, all emitting :class:`~langres.bootstrap.models.GoldPair`:
 
 - :class:`GroundTruthLabeler`: deterministic, zero-spend labeling from a known
   positive-pair set. Used to prove the bootstrap loop end-to-end with no cost.
+- :class:`FakeLabeler`: deterministic, zero-spend similarity-threshold stand-in
+  for the teacher, with an over-confident confidence so the calibration report
+  is non-trivial (the CI stand-in for :class:`TeacherLabeler`).
 - :class:`TeacherLabeler`: the real LLM teacher. Wraps an injected
   :class:`~langres.core.modules.llm_judge.LLMJudge` and enforces a hard spend
   cap so a runaway loop can never burn the budget (design-review B1 + B4).
@@ -88,6 +91,83 @@ class GroundTruthLabeler(Labeler):
                     label=is_match,
                     source="ground_truth",
                     confidence=1.0,
+                )
+            )
+        return labels
+
+
+class FakeLabeler(Labeler):
+    """Deterministic, zero-spend stand-in for the real teacher (M1 Wave 4).
+
+    Labels each candidate by thresholding its blocker ``similarity_score`` and
+    emits a deterministic, deliberately **miscalibrated** ``confidence``
+    (over-confident on the ambiguous near-threshold band) so the calibration
+    report has something non-trivial to measure: unlike
+    :class:`GroundTruthLabeler` (whose labels match truth by construction, giving
+    a trivial agreement of 1.0 and a degenerate Brier/ECE), a similarity-threshold
+    labeler disagrees with truth on the hard middle band, and its inflated
+    confidence there makes Brier and ECE meaningful. This is the CI stand-in for
+    :class:`TeacherLabeler` -- fully deterministic, no network, no spend.
+
+    ``source`` is ``"fake"`` so a gold set never mistakes synthetic labels for a
+    real teacher's.
+    """
+
+    def __init__(self, *, threshold: float = 0.5) -> None:
+        """Initialize the fake labeler.
+
+        Args:
+            threshold: ``similarity_score >= threshold`` is labeled a match.
+
+        Raises:
+            ValueError: If ``threshold`` is outside ``[0, 1]``.
+        """
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("threshold must be in [0, 1]")
+        self.threshold = threshold
+        # Zero-spend: exposed so the orchestrator can read it uniformly (it reads
+        # ``total_spent_usd`` off whatever labeler it holds).
+        self.total_spent_usd: float = 0.0
+
+    def _confidence(self, score: float) -> float:
+        """Deterministic, over-confident self-confidence for one label.
+
+        Grows with the margin ``|score - threshold|`` but starts high (``0.7``)
+        even for near-threshold pairs, so the labeler is systematically
+        over-confident on the ambiguous band -- a realistic miscalibration that
+        keeps ECE / Brier non-degenerate. Clamped to ``[0, 0.99]``.
+        """
+        margin = abs(score - self.threshold)
+        return round(min(0.99, 0.7 + 0.6 * margin), 4)
+
+    def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
+        """Label each candidate by its similarity score.
+
+        Args:
+            candidates: Candidate pairs to label. Each must carry a non-``None``
+                ``similarity_score`` (the labeler thresholds on it).
+
+        Returns:
+            One :class:`GoldPair` per candidate, ``source="fake"``.
+
+        Raises:
+            ValueError: If any candidate has ``similarity_score is None``.
+        """
+        labels: list[GoldPair] = []
+        for cand in candidates:
+            score = cand.similarity_score
+            if score is None:
+                raise ValueError(
+                    "FakeLabeler requires similarity_score on every candidate; "
+                    f"pair {cand.left.id}/{cand.right.id} has none"
+                )
+            labels.append(
+                GoldPair(
+                    left_id=cand.left.id,
+                    right_id=cand.right.id,
+                    label=score >= self.threshold,
+                    source="fake",
+                    confidence=self._confidence(score),
                 )
             )
         return labels
