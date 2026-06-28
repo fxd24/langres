@@ -11,6 +11,7 @@ Two concrete labelers, both emitting :class:`~langres.bootstrap.models.GoldPair`
 
 import logging
 import math
+from itertools import combinations
 from typing import Any
 
 from langres.bootstrap._pairs import canonical_pair_key
@@ -58,10 +59,8 @@ class GroundTruthLabeler(Labeler):
         """
         positives: set[tuple[str, str]] = set()
         for cluster in gold_clusters:
-            members = sorted(cluster)
-            for i in range(len(members)):
-                for j in range(i + 1, len(members)):
-                    positives.add(canonical_pair_key(members[i], members[j]))
+            for a, b in combinations(sorted(cluster), 2):
+                positives.add(canonical_pair_key(a, b))
         return cls(positives)
 
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
@@ -97,7 +96,15 @@ class BlindCostError(RuntimeError):
     If a judgement reports neither token counts nor a cost, the running tally
     can no longer be trusted, so the cap is blind. Continuing would risk
     unbounded spend, so :class:`TeacherLabeler` aborts instead.
+
+    The pairs already labeled (and paid for) before the abort are attached as
+    :attr:`partial` (set by :meth:`TeacherLabeler.label`) so a caller can recover
+    them rather than discard paid work.
     """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.partial: list[GoldPair] = []
 
 
 class TeacherLabeler(Labeler):
@@ -167,7 +174,9 @@ class TeacherLabeler(Labeler):
             budget_usd: Hard spend ceiling — the run stops before crossing it.
             budget_soft_usd: Soft ceiling used to size the pre-flight cap, giving
                 headroom below ``budget_usd``.
-            batch_size: Pairs between budget checks (the budget-stop granularity).
+            batch_size: Chunk size for input iteration and progress logging. The
+                budget gate fires before every individual pair regardless of
+                batch boundaries, so this does not affect the cap.
             threshold: ``score >= threshold`` is labeled a match.
 
         Raises:
@@ -197,7 +206,9 @@ class TeacherLabeler(Labeler):
         self.batch_size = batch_size
         self.threshold = threshold
 
-        # Worst-case per-pair cost: all tokens at the more expensive rate.
+        # Worst-case per-pair cost, cached at construction: all tokens at the
+        # more expensive rate. The price / token attributes above are read-only
+        # after __init__ — mutating them would not refresh this cached cost.
         self._worst_case_per_pair_cost = (
             worst_case_tokens_per_pair
             / 1_000_000.0
@@ -284,7 +295,8 @@ class TeacherLabeler(Labeler):
 
         Raises:
             BlindCostError: If a judgement reports neither token counts nor a
-                cost, so spend can no longer be tracked.
+                cost, so spend can no longer be tracked. The pairs labeled before
+                the abort are available on the exception's ``partial`` attribute.
         """
         self.total_spent_usd = 0.0
         self.labeled_count = 0
@@ -312,7 +324,12 @@ class TeacherLabeler(Labeler):
                         len(labeled),
                     )
                     return labeled
-                gold = self._label_one(candidate)
+                try:
+                    gold = self._label_one(candidate)
+                except BlindCostError as exc:
+                    # Recover the already-paid pairs rather than discard them.
+                    exc.partial = labeled
+                    raise
                 if gold is not None:
                     labeled.append(gold)
 

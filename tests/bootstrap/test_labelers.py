@@ -229,10 +229,12 @@ def test_blind_cost_aborts_after_recording_prior_spend() -> None:
     # l0 labels normally; l1 reports neither tokens nor cost -> abort.
     judge = FakeJudge(blind_ids=frozenset({"l1"}))
     teacher = _teacher(judge)
-    with pytest.raises(BlindCostError):
+    with pytest.raises(BlindCostError) as excinfo:
         teacher.label([_cand("l0", "r0"), _cand("l1", "r1")])
     assert teacher.labeled_count == 1
     assert teacher.total_spent_usd == pytest.approx(0.002)
+    # The already-paid pair is recoverable from the exception.
+    assert [p.left_id for p in excinfo.value.partial] == ["l0"]
 
 
 # --- TeacherLabeler: stats reset per call + empty input ----------------------
