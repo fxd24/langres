@@ -11,6 +11,7 @@ import pytest
 
 from langres.bootstrap.labelers import (
     BlindCostError,
+    FakeLabeler,
     GroundTruthLabeler,
     TeacherLabeler,
 )
@@ -307,3 +308,63 @@ def test_from_env_builds_teacher_without_langfuse() -> None:
 def test_invalid_constructor_raises(overrides: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         _teacher(FakeJudge(), **overrides)
+
+
+# --- FakeLabeler ------------------------------------------------------------
+
+
+def _scored(left_id: str, right_id: str, score: float) -> ERCandidate[CompanySchema]:
+    return ERCandidate[CompanySchema](
+        left=CompanySchema(id=left_id, name=left_id),
+        right=CompanySchema(id=right_id, name=right_id),
+        blocker_name="test",
+        similarity_score=score,
+    )
+
+
+def test_fake_labeler_thresholds_on_similarity() -> None:
+    out = FakeLabeler(threshold=0.5).label(
+        [_scored("a", "b", 0.9), _scored("c", "d", 0.5), _scored("e", "f", 0.49)]
+    )
+    assert [p.label for p in out] == [True, True, False]
+    assert all(p.source == "fake" for p in out)
+
+
+def test_fake_labeler_confidence_is_in_range_and_overconfident() -> None:
+    out = FakeLabeler(threshold=0.5).label([_scored("a", "b", 0.5), _scored("c", "d", 1.0)])
+    # Near-threshold pair: floor of 0.7 (over-confident on the ambiguous band).
+    assert out[0].confidence == pytest.approx(0.7)
+    # Far-from-threshold pair: higher, capped at 0.99.
+    assert out[1].confidence == pytest.approx(0.99)
+    assert all(p.confidence is not None and 0.0 <= p.confidence <= 1.0 for p in out)
+
+
+def test_fake_labeler_is_deterministic() -> None:
+    cands = [_scored("a", "b", 0.8), _scored("c", "d", 0.2)]
+    first = FakeLabeler().label(cands)
+    second = FakeLabeler().label(cands)
+    assert [(p.label, p.confidence) for p in first] == [(p.label, p.confidence) for p in second]
+
+
+def test_fake_labeler_zero_spend() -> None:
+    assert FakeLabeler().total_spent_usd == 0.0
+
+
+def test_fake_labeler_empty_returns_empty() -> None:
+    assert FakeLabeler().label([]) == []
+
+
+def test_fake_labeler_requires_similarity_score() -> None:
+    cand = ERCandidate[CompanySchema](
+        left=CompanySchema(id="a", name="a"),
+        right=CompanySchema(id="b", name="b"),
+        blocker_name="test",
+    )
+    with pytest.raises(ValueError, match="similarity_score"):
+        FakeLabeler().label([cand])
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 1.1])
+def test_fake_labeler_rejects_out_of_range_threshold(threshold: float) -> None:
+    with pytest.raises(ValueError, match="threshold"):
+        FakeLabeler(threshold=threshold)
