@@ -104,6 +104,7 @@ class BlindCostError(RuntimeError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+        # Populated by TeacherLabeler.label() (the catcher), not at raise time.
         self.partial: list[GoldPair] = []
 
 
@@ -348,7 +349,8 @@ class TeacherLabeler(Labeler):
                 self._worst_case_per_pair_cost,
             )
             return candidates[:max_pairs]
-        return list(candidates)
+        # No cap fired; _label_one never mutates its input, so return as-is.
+        return candidates
 
     def _label_one(self, candidate: ERCandidate[Any]) -> GoldPair | None:
         """Judge one pair, tally its spend, and map it to a :class:`GoldPair`.

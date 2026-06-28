@@ -9,7 +9,7 @@ strata rather than only the ambiguous middle.
 import logging
 import math
 import random
-from typing import Any
+from typing import Any, cast
 
 from langres.bootstrap._pairs import canonical_pair_key
 from langres.bootstrap.base import Miner
@@ -174,14 +174,19 @@ class HardNegativeMiner(Miner):
         return unique
 
     def _stratify(self, candidates: list[ERCandidate[Any]]) -> dict[str, list[ERCandidate[Any]]]:
-        """Bucket candidates into high/mid/low strata by similarity percentile."""
-        scores = sorted(float(c.similarity_score) for c in candidates)  # type: ignore[arg-type]
+        """Bucket candidates into high/mid/low strata by similarity percentile.
+
+        ``_dedup`` has already guaranteed every ``similarity_score`` is non-None,
+        so the :func:`cast` here is safe (it narrows ``float | None`` to ``float``
+        without a runtime check).
+        """
+        scores = sorted(cast(float, c.similarity_score) for c in candidates)
         t_low = _percentile(scores, self.mid_pct)
         t_high = _percentile(scores, self.high_pct)
 
         strata: dict[str, list[ERCandidate[Any]]] = {name: [] for name in _STRATA}
         for cand in candidates:
-            score = float(cand.similarity_score)  # type: ignore[arg-type]
+            score = cast(float, cand.similarity_score)
             if score >= t_high:
                 strata["high"].append(cand)
             elif score >= t_low:
