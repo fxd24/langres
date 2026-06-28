@@ -331,9 +331,7 @@ class BootstrapReport(BaseModel):
                 confidences, is_match, n_bins=n_bins, strategy="quantile"
             ),
             n_bins=n_bins,
-            reliability=reliability_bins(
-                confidences, is_match, n_bins=n_bins, strategy="quantile"
-            ),
+            reliability=reliability_bins(confidences, is_match, n_bins=n_bins, strategy="quantile"),
         )
 
     @staticmethod
