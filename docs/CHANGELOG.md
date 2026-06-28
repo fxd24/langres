@@ -27,8 +27,17 @@ emits a versioned gold set + coverage/calibration report. Validated on the
 - **`Bootstrapper`** orchestrator wires blocker → cross-source filter → miner → labeler
   → gold set + report; deterministic real-embedding example + slow CI test.
 - **EXIT (real GLM-5.2 teacher run, $1.28)**: 1382-pair gold set committed at
-  `data/gold_sets/fodors_zagat/`; Pair-Completeness 0.9911, teacher-vs-truth (n=213)
-  F1 0.873 / kappa 0.695 / MCC 0.726, calibration Brier 0.147 / ECE 0.136.
+  `data/gold_sets/fodors_zagat/`; Pair-Completeness 0.9911. Teacher-vs-truth over
+  the **full** cross-source band (n=1382, closed-world truth): F1 0.446,
+  precision 0.288, recall 0.991, kappa 0.368, MCC 0.472; calibration Brier 0.194 /
+  ECE 0.195. **Finding**: the raw GLM teacher is high-recall / low-precision and
+  overconfident on this band (its 0.999-confidence bin is only ~27% true matches),
+  so the report does its job — surfacing that raw teacher labels need a
+  precision-raising step (threshold/secondary review) before use as final gold.
+  (An earlier draft scored only the 213 pairs whose records both appeared in a
+  match cluster, which hid the teacher's false positives and inflated F1 to 0.873;
+  the loader now returns the complete closed-world partition so every cross-source
+  pair is evaluated.)
 
 ### Component Inspection Methods (Progressive Pipeline Building)
 

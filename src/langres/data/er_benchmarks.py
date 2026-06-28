@@ -139,33 +139,52 @@ def _record_from_row(
 
 
 def load_fodors_zagat() -> tuple[list[RestaurantSchema], list[set[str]]]:
-    """Load the Fodors-Zagat benchmark as one corpus plus cross-source matches.
+    """Load the Fodors-Zagat benchmark as one corpus plus its complete partition.
 
     Both sources are combined into a single corpus of 864 records with globally
     unique, source-prefixed ids (``f<id>`` for Fodor's, ``z<id>`` for Zagat).
-    Ground truth comes from the explicit ``perfectMapping`` file: each row
-    yields a 2-element set ``{f<fodors_id>, z<zagats_id>}``.
+    Ground truth comes from the explicit ``perfectMapping`` file: each row yields
+    a 2-element match set ``{f<fodors_id>, z<zagats_id>}``.
+
+    The returned ``gold_clusters`` is the **complete closed-world partition** of
+    the corpus: the 2-element match clusters PLUS a singleton ``{id}`` for every
+    record that is not in any match. This matters because Fodors-Zagat is fully
+    labeled -- any cross-source pair absent from the mapping is a *known*
+    non-match, not an unknown. Consumers that score teacher pairs only when both
+    ids appear in some cluster (e.g.
+    :meth:`~langres.bootstrap.report.BootstrapReport.build`) would otherwise drop
+    every pair touching an unmatched record, hiding the teacher's false positives
+    and silently shrinking the evaluation set. Singletons add no positive pairs,
+    so blocking pair-completeness is unaffected.
 
     Returns:
         ``(corpus, gold_clusters)`` where ``corpus`` is the combined record list
-        and ``gold_clusters`` is the list of 2-element cross-source match sets.
+        and ``gold_clusters`` is the complete partition (match sets + singletons).
     """
     corpus: list[RestaurantSchema] = [
         _record_from_row(row, "fodors", "f") for row in _read_csv_rows(_FODORS_FILE)
     ]
     corpus += [_record_from_row(row, "zagat", "z") for row in _read_csv_rows(_ZAGATS_FILE)]
 
-    gold_clusters: list[set[str]] = [
+    match_clusters: list[set[str]] = [
         {f"f{_unquote(row['fodors_id'])}", f"z{_unquote(row['zagats_id'])}"}
         for row in _read_csv_rows(_MAPPING_FILE)
     ]
+    matched_ids = {rid for cluster in match_clusters for rid in cluster}
+    # Closed-world completion: every unmatched record is its own singleton, so
+    # downstream scoring treats it as a known non-match rather than "no truth".
+    singletons: list[set[str]] = [{r.id} for r in corpus if r.id not in matched_ids]
+    gold_clusters = match_clusters + singletons
 
     logger.info(
-        "Loaded Fodors-Zagat: %d records (%d fodors + %d zagat), %d gold pairs",
+        "Loaded Fodors-Zagat: %d records (%d fodors + %d zagat), "
+        "%d gold pairs, %d clusters (%d singletons)",
         len(corpus),
         sum(1 for r in corpus if r.source == "fodors"),
         sum(1 for r in corpus if r.source == "zagat"),
+        len(match_clusters),
         len(gold_clusters),
+        len(singletons),
     )
     return corpus, gold_clusters
 

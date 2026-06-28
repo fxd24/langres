@@ -58,6 +58,17 @@ class Labeler(ABC):
 
     total_spent_usd: float = 0.0
 
+    def max_labelable(self, n_candidates: int) -> int | None:
+        """Max pairs this labeler will actually label out of ``n_candidates``.
+
+        Returns ``None`` (the default) when the labeler imposes no cap. A
+        budget-capped labeler returns its cap so an orchestrator can mine a
+        *representative* subset of that size up front, rather than mining the
+        full pool and letting the labeler truncate it in arbitrary input order
+        (which would bypass a miner's stratified allocation).
+        """
+        return None
+
     @abstractmethod
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
         """Label each candidate pair, returning one :class:`GoldPair` per input.

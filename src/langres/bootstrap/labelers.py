@@ -379,6 +379,17 @@ class TeacherLabeler(Labeler):
             * max(self.price_per_1m_prompt_tokens, self.price_per_1m_completion_tokens)
         )
 
+    def max_labelable(self, n_candidates: int) -> int | None:
+        """The pre-flight budget cap: the most pairs this run can afford to label.
+
+        Mirrors :meth:`_apply_preflight_cap`'s ceiling so an orchestrator can mine
+        a stratified subset of exactly this size *before* labeling, keeping the
+        high/mid/low sampling intact on tight-budget runs (the cap then truncates
+        nothing). ``n_candidates`` is unused: the ceiling is set by the soft
+        budget, not the pool size.
+        """
+        return math.floor(self.budget_soft_usd / self._worst_case_per_pair_cost)
+
     def _pair_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """Cost of one judged pair from its token counts and the pinned prices."""
         return (

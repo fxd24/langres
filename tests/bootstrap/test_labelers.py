@@ -212,6 +212,29 @@ def test_single_pair_can_overshoot_budget_by_one_inflight_pair() -> None:
     assert teacher.total_spent_usd > teacher.budget_usd  # the bounded overshoot
 
 
+def test_max_labelable_is_the_preflight_budget_cap() -> None:
+    # The cap an orchestrator queries == the pre-flight ceiling, independent of
+    # the candidate-pool size: floor(budget_soft / worst_case_per_pair_cost).
+    judge = FakeJudge(prompt_tokens=10, completion_tokens=10)
+    teacher = _teacher(
+        judge,
+        price_per_1m_prompt_tokens=1.0,
+        price_per_1m_completion_tokens=1.0,
+        worst_case_tokens_per_pair=1000,  # -> $0.001/pair
+        budget_soft_usd=15.0,
+        budget_usd=20.0,
+        batch_size=1,
+    )
+    assert teacher.max_labelable(999_999) == 15_000  # floor(15 / 0.001)
+    assert teacher.max_labelable(3) == 15_000  # pool size does not change the cap
+
+
+def test_zero_spend_labelers_are_uncapped() -> None:
+    # The default Labeler contract: no budget cap -> None (mine the whole pool).
+    assert GroundTruthLabeler(set()).max_labelable(100) is None
+    assert FakeLabeler(threshold=0.5).max_labelable(100) is None
+
+
 def test_preflight_cap_zero_drops_all_and_warns(caplog: pytest.LogCaptureFixture) -> None:
     # Misconfiguration: soft budget below the worst-case per-pair cost -> the
     # pre-flight cap keeps 0 pairs. The run must surface a WARNING (not a silent

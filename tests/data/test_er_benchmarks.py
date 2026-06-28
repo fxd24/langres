@@ -16,12 +16,21 @@ from langres.data.er_benchmarks import (
 # --- loader: fast, no embeddings -------------------------------------------------
 
 
-def test_load_returns_full_corpus_and_gold() -> None:
+def test_load_returns_full_corpus_and_complete_partition() -> None:
     corpus, gold = load_fodors_zagat()
     assert len(corpus) == 864
     assert sum(1 for r in corpus if r.source == "fodors") == 533
     assert sum(1 for r in corpus if r.source == "zagat") == 331
-    assert len(gold) == 112
+    # gold_clusters is the COMPLETE closed-world partition: 112 two-element match
+    # clusters + a singleton per unmatched record (864 - 2*112 = 640 of them).
+    match_clusters = [c for c in gold if len(c) == 2]
+    singletons = [c for c in gold if len(c) == 1]
+    assert len(match_clusters) == 112
+    assert len(singletons) == 640
+    assert len(gold) == 752
+    # Every record is covered exactly once (a true partition).
+    covered = [rid for cluster in gold for rid in cluster]
+    assert sorted(covered) == sorted(r.id for r in corpus)
 
 
 def test_corpus_ids_are_globally_unique_and_source_prefixed() -> None:
@@ -32,14 +41,19 @@ def test_corpus_ids_are_globally_unique_and_source_prefixed() -> None:
     assert all(r.id.startswith("z") for r in corpus if r.source == "zagat")
 
 
-def test_gold_clusters_are_cross_source_pairs_present_in_corpus() -> None:
+def test_match_clusters_are_cross_source_pairs_present_in_corpus() -> None:
     corpus, gold = load_fodors_zagat()
     id_to_source = {r.id: r.source for r in corpus}
-    for cluster in gold:
-        assert len(cluster) == 2
+    match_clusters = [c for c in gold if len(c) == 2]
+    assert len(match_clusters) == 112
+    for cluster in match_clusters:
         left, right = sorted(cluster)
         assert left in id_to_source and right in id_to_source
         assert id_to_source[left] != id_to_source[right]
+    # Singletons are valid, in-corpus, non-matched records.
+    for cluster in (c for c in gold if len(c) == 1):
+        (rid,) = tuple(cluster)
+        assert rid in id_to_source
 
 
 def test_loader_strips_quotes_and_unescapes() -> None:

@@ -11,6 +11,7 @@ with honest counts and metadata -- with no embeddings and no LLM.
 from collections.abc import Iterator
 from typing import Any
 
+from langres.bootstrap.base import Labeler
 from langres.bootstrap.bootstrapper import Bootstrapper
 from langres.bootstrap.models import GoldPair, GoldSet
 from langres.bootstrap.report import BootstrapReport
@@ -64,20 +65,26 @@ class _RecordingMiner:
     def __init__(self, returns: list[ERCandidate[Any]]) -> None:
         self._returns = returns
         self.seen: list[ERCandidate[Any]] | None = None
+        self.seen_max_pairs: int | None = None
 
     def mine(
         self, candidates: list[ERCandidate[Any]], *, max_pairs: int | None = None
     ) -> list[ERCandidate[Any]]:
         self.seen = candidates
+        self.seen_max_pairs = max_pairs
         return self._returns
 
 
 class _RecordingLabeler:
     """Records the mined pairs and emits one canned GoldPair each."""
 
-    def __init__(self, *, total_spent_usd: float = 0.0) -> None:
+    def __init__(self, *, total_spent_usd: float = 0.0, cap: int | None = None) -> None:
         self.seen: list[ERCandidate[Any]] | None = None
         self.total_spent_usd = total_spent_usd
+        self._cap = cap
+
+    def max_labelable(self, n_candidates: int) -> int | None:
+        return self._cap
 
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
         self.seen = candidates
@@ -155,6 +162,22 @@ def test_build_without_filter_mines_all_candidates() -> None:
     Bootstrapper(blocker, miner, labeler).build(_CORPUS)  # type: ignore[arg-type]
 
     assert miner.seen == candidates
+    # Uncapped labeler -> miner mines with no max_pairs (stratify the whole pool).
+    assert miner.seen_max_pairs is None
+
+
+def test_build_passes_labeler_cap_to_miner() -> None:
+    """A budget-capped labeler's cap reaches miner.mine so stratification happens
+    BEFORE truncation (not bypassed by input-order labeler truncation)."""
+    candidates = [_cand("a", "b", 0.9), _cand("a", "c", 0.2), _cand("b", "c", 0.5)]
+    blocker = _FakeBlocker(candidates)
+    miner = _RecordingMiner(returns=candidates[:2])
+    labeler = _RecordingLabeler(cap=2)  # e.g. a tight teacher budget
+
+    Bootstrapper(blocker, miner, labeler).build(_CORPUS)  # type: ignore[arg-type]
+
+    # The miner received the labeler's cap, so it stratified down to 2 up front.
+    assert miner.seen_max_pairs == 2
 
 
 def test_build_metadata_records_counts_and_cost() -> None:
@@ -194,10 +217,11 @@ def test_build_without_gold_clusters_still_builds_report() -> None:
     assert report.blocking.total_candidates == 1
 
 
-def test_build_cost_defaults_to_zero_when_labeler_has_no_spend_attr() -> None:
-    """A labeler without total_spent_usd is treated as zero-spend."""
+def test_build_cost_defaults_to_zero_when_labeler_overrides_nothing() -> None:
+    """A Labeler that implements only label() inherits the ABC defaults:
+    zero spend (total_cost_usd 0.0) and no cap (max_labelable -> None)."""
 
-    class _NoSpendLabeler:
+    class _NoSpendLabeler(Labeler):
         def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
             return []
 
@@ -208,6 +232,7 @@ def test_build_cost_defaults_to_zero_when_labeler_has_no_spend_attr() -> None:
     )
     assert gold.metadata["total_cost_usd"] == 0.0
     assert gold.pairs == []
+    assert miner.seen_max_pairs is None  # inherited uncapped default
 
 
 def test_build_with_empty_corpus_produces_empty_gold_set() -> None:

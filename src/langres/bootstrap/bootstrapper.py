@@ -84,8 +84,13 @@ class Bootstrapper:
             else candidates
         )
 
-        # 4. Mine a stratified subset, then 5. label it.
-        mined = self.miner.mine(filtered)
+        # 4. Mine a stratified subset, then 5. label it. If the labeler caps how
+        #    many pairs it can afford (e.g. a budget-capped teacher), pass that cap
+        #    to the miner so the high/mid/low strata are honored UP FRONT -- mining
+        #    the full pool and letting the labeler truncate in input order would
+        #    bypass the stratified allocation on tight-budget runs.
+        cap = self.labeler.max_labelable(len(filtered))
+        mined = self.miner.mine(filtered, max_pairs=cap)
         pairs = self.labeler.label(mined)
 
         logger.info(
