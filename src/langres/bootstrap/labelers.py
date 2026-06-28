@@ -57,8 +57,10 @@ class GroundTruthLabeler(Labeler):
         Returns:
             A labeler whose positive set is every intra-cluster pair.
         """
-        # combinations(sorted(...)) already yields a <= b, and __init__
-        # canonicalizes the whole set, so no per-pair canonicalization is needed.
+        # combinations(sorted(...)) already yields a <= b, so no canonicalization
+        # is needed here; __init__ still canonicalizes (it is shared with the
+        # direct constructor, which may receive unsorted pairs) but only reorders
+        # there, not for these already-sorted pairs.
         positives: set[tuple[str, str]] = set()
         for cluster in gold_clusters:
             positives.update(combinations(sorted(cluster), 2))
@@ -128,7 +130,9 @@ class TeacherLabeler(Labeler):
        budget so the stratified set already fits and this cap does not fire as
        the primary selector. If it does fire (input larger than the budget
        allows), it prioritizes spend safety over preserving the mix; pre-shuffle
-       upstream if an unbiased truncation is needed.
+       upstream if an unbiased truncation is needed. The cap (like the budget
+       stop) is enforced **per** :meth:`label` call — a caller making multiple
+       rounds against one instance must budget across calls itself.
     2. **Running tally + per-pair budget stop.** Spend is tallied from each
        judgement's actual token counts (priced with the pinned rates,
        cross-checked against the judge's reported ``cost_usd``, taking the max).
@@ -179,7 +183,9 @@ class TeacherLabeler(Labeler):
             price_per_1m_completion_tokens: Pinned price per 1M completion
                 tokens (USD).
             worst_case_tokens_per_pair: Worst-case total tokens for one pair,
-                used to size the pre-flight cap.
+                used to size the pre-flight cap. The cap conservatively prices
+                *all* of these tokens at the more expensive of the two rates, so
+                size this knowing the cap may be tighter than the true average.
             budget_usd: Hard spend ceiling — the run stops before crossing it.
             budget_soft_usd: Soft ceiling used to size the pre-flight cap, giving
                 headroom below ``budget_usd``.
@@ -361,7 +367,7 @@ class TeacherLabeler(Labeler):
                 self._worst_case_per_pair_cost,
             )
             return candidates[:max_pairs]
-        # No cap fired; _label_one never mutates its input, so return as-is.
+        # No cap fired; nothing downstream mutates the list, so return as-is.
         return candidates
 
     def _label_one(self, candidate: ERCandidate[Any]) -> GoldPair | None:
