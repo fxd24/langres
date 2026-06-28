@@ -11,6 +11,7 @@ import math
 import random
 from typing import Any
 
+from langres.bootstrap._pairs import canonical_pair_key
 from langres.bootstrap.base import Miner
 from langres.core.models import ERCandidate
 
@@ -154,9 +155,7 @@ class HardNegativeMiner(Miner):
     @staticmethod
     def _key(candidate: ERCandidate[Any]) -> tuple[str, str]:
         """Order-independent identity of a pair (handles (a,b) == (b,a))."""
-        left_id: str = candidate.left.id
-        right_id: str = candidate.right.id
-        return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
+        return canonical_pair_key(candidate.left.id, candidate.right.id)
 
     def _dedup(self, candidates: list[ERCandidate[Any]]) -> list[ERCandidate[Any]]:
         """Drop duplicate pairs (first occurrence wins); validate scores present."""

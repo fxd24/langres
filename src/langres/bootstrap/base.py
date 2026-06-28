@@ -45,7 +45,6 @@ class Miner(ABC):
         Returns:
             A deduplicated list of selected candidate pairs.
         """
-        raise NotImplementedError
 
 
 class Labeler(ABC):
@@ -65,4 +64,3 @@ class Labeler(ABC):
         Returns:
             The labeled pairs.
         """
-        raise NotImplementedError

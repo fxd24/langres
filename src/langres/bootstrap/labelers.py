@@ -13,17 +13,13 @@ import logging
 import math
 from typing import Any
 
+from langres.bootstrap._pairs import canonical_pair_key
 from langres.bootstrap.base import Labeler
 from langres.bootstrap.models import GoldPair
 from langres.core.models import ERCandidate
 from langres.core.modules.llm_judge import LLMJudge
 
 logger = logging.getLogger(__name__)
-
-
-def _pair_key(left_id: str, right_id: str) -> tuple[str, str]:
-    """Order-independent identity of a pair (handles (a,b) == (b,a))."""
-    return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
 
 
 class GroundTruthLabeler(Labeler):
@@ -43,7 +39,7 @@ class GroundTruthLabeler(Labeler):
                 tuples. Use :meth:`from_clusters` to derive these from the
                 benchmark ``gold_clusters`` contract.
         """
-        self._positive_pairs = {_pair_key(a, b) for a, b in positive_pairs}
+        self._positive_pairs = {canonical_pair_key(a, b) for a, b in positive_pairs}
 
     @classmethod
     def from_clusters(cls, gold_clusters: list[set[str]]) -> "GroundTruthLabeler":
@@ -65,7 +61,7 @@ class GroundTruthLabeler(Labeler):
             members = sorted(cluster)
             for i in range(len(members)):
                 for j in range(i + 1, len(members)):
-                    positives.add(_pair_key(members[i], members[j]))
+                    positives.add(canonical_pair_key(members[i], members[j]))
         return cls(positives)
 
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
@@ -82,7 +78,7 @@ class GroundTruthLabeler(Labeler):
         for cand in candidates:
             left_id: str = cand.left.id
             right_id: str = cand.right.id
-            is_match = _pair_key(left_id, right_id) in self._positive_pairs
+            is_match = canonical_pair_key(left_id, right_id) in self._positive_pairs
             labels.append(
                 GoldPair(
                     left_id=left_id,
@@ -117,11 +113,16 @@ class TeacherLabeler(Labeler):
        expensive of the two pinned prices. This bounds spend even if every call
        is maximally expensive, with ``budget_soft_usd`` headroom below the hard
        budget.
-    2. **Running tally + budget stop.** Spend is tallied from each judgement's
-       actual token counts (priced with the pinned rates, cross-checked against
-       the judge's reported ``cost_usd``, taking the max). Before each batch, if
-       the projected spend would exceed ``budget_usd`` the run stops and returns
-       what was labeled so far — a partial gold set is valid.
+    2. **Running tally + per-pair budget stop.** Spend is tallied from each
+       judgement's actual token counts (priced with the pinned rates,
+       cross-checked against the judge's reported ``cost_usd``, taking the max).
+       Before judging *each* pair (not merely each batch), if starting it could
+       push the worst-case spend past ``budget_usd`` the run stops and returns
+       what was labeled so far — a partial gold set is valid. Checking per pair
+       (rather than per batch) keeps the cap hard even when the pinned prices
+       under-estimate the real cost: the only residual overshoot is the actual
+       cost of the single in-flight pair beyond the estimate, which is
+       unavoidable because an LLM's cost is known only after the call returns.
     3. **Per-call resilience.** Each pair is judged in its own ``forward`` call
        wrapped in ``try/except``; one failed call skips that pair and the loop
        continues, so a single error never discards an already-paid batch.
@@ -130,10 +131,15 @@ class TeacherLabeler(Labeler):
     an async ``gather`` over a whole batch cannot be stopped mid-flight once
     dispatched, so it cannot honor the budget cap (design-review B1).
 
+    ``batch_size`` chunks the input for iteration and progress logging; the
+    binding budget gate is per-pair, so it does not affect the cap.
+
     Spend / count attributes are exposed for the run report and are updated live
     (so they remain meaningful even if :class:`BlindCostError` aborts the run):
     :attr:`total_spent_usd`, :attr:`labeled_count`, :attr:`skipped_count`,
-    :attr:`dropped_by_cap_count`.
+    :attr:`dropped_by_cap_count`. They reflect **only the most recent**
+    :meth:`label` call — each call resets them, so a caller invoking
+    :meth:`label` in multiple rounds must accumulate spend externally.
     """
 
     def __init__(
@@ -270,7 +276,11 @@ class TeacherLabeler(Labeler):
         Returns:
             The labeled pairs (``source="teacher"``). May be fewer than the
             input: dropped by the pre-flight cap, skipped on a failed call, or
-            truncated when the budget stop fires.
+            truncated when the per-pair budget stop fires.
+
+        Note:
+            The run statistics attributes are reset at the start of every call,
+            so they describe only this call (see the class docstring).
 
         Raises:
             BlindCostError: If a judgement reports neither token counts nor a
@@ -286,18 +296,22 @@ class TeacherLabeler(Labeler):
 
         for start in range(0, len(capped), self.batch_size):
             batch = capped[start : start + self.batch_size]
-            projected = self.total_spent_usd + len(batch) * self._worst_case_per_pair_cost
-            if projected > self.budget_usd:
-                logger.info(
-                    "Budget stop: spent=$%.4f + est=$%.4f would exceed budget $%.2f; "
-                    "returning %d labeled pairs",
-                    self.total_spent_usd,
-                    len(batch) * self._worst_case_per_pair_cost,
-                    self.budget_usd,
-                    len(labeled),
-                )
-                break
             for candidate in batch:
+                # Hard per-pair gate: never *start* a pair whose worst-case cost
+                # could push us over the budget. Done per pair (not per batch) so
+                # a large batch cannot overshoot the cap when actual cost exceeds
+                # the pinned worst-case estimate.
+                projected = self.total_spent_usd + self._worst_case_per_pair_cost
+                if projected > self.budget_usd:
+                    logger.info(
+                        "Budget stop: spent=$%.4f + next worst-case $%.6f would exceed "
+                        "budget $%.2f; returning %d labeled pairs",
+                        self.total_spent_usd,
+                        self._worst_case_per_pair_cost,
+                        self.budget_usd,
+                        len(labeled),
+                    )
+                    return labeled
                 gold = self._label_one(candidate)
                 if gold is not None:
                     labeled.append(gold)

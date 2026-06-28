@@ -46,6 +46,10 @@ def test_ground_truth_direct_constructor() -> None:
     assert labeler.label([_cand("b", "a")])[0].label is True
 
 
+def test_ground_truth_label_empty_returns_empty() -> None:
+    assert GroundTruthLabeler.from_clusters([{"a", "b"}]).label([]) == []
+
+
 # --- FakeJudge --------------------------------------------------------------
 
 
@@ -148,8 +152,9 @@ def test_cost_uses_max_of_token_and_reported_cost() -> None:
 
 
 def test_preflight_cap_truncates_input() -> None:
-    # worst-case 2000 tok @ max price 2/M = 0.004/pair; soft 0.01 -> floor(0.01/0.004)=2
-    teacher = _teacher(FakeJudge(), budget_soft_usd=0.01, budget_usd=0.01)
+    # worst-case 2000 tok @ max price 2/M = 0.004/pair; the *soft* budget (0.01)
+    # sizes the cap -> floor(0.01/0.004)=2, with headroom below the hard budget.
+    teacher = _teacher(FakeJudge(), budget_soft_usd=0.01, budget_usd=0.02)
     out = teacher.label([_cand(f"l{i}", f"r{i}") for i in range(5)])
     assert teacher.dropped_by_cap_count == 3
     assert teacher.labeled_count == 2
@@ -177,6 +182,25 @@ def test_budget_stop_returns_partial() -> None:
     assert len(out) == 3
     assert teacher.total_spent_usd == pytest.approx(15.0)
     assert teacher.dropped_by_cap_count == 0
+
+
+def test_budget_stop_holds_within_a_large_batch() -> None:
+    # Same over-spend scenario but with the default batch_size=50: the whole run
+    # is one batch. The per-pair gate must still stop at the cap rather than
+    # dispatching all 10 pairs ($50) before re-checking (codex P1 regression).
+    judge = FakeJudge(prompt_tokens=5_000_000, completion_tokens=0)
+    teacher = _teacher(
+        judge,
+        price_per_1m_prompt_tokens=1.0,
+        price_per_1m_completion_tokens=1.0,
+        worst_case_tokens_per_pair=1000,
+        budget_soft_usd=15.0,
+        budget_usd=15.0,
+        batch_size=50,
+    )
+    out = teacher.label([_cand(f"l{i}", f"r{i}") for i in range(10)])
+    assert len(out) == 3
+    assert teacher.total_spent_usd == pytest.approx(15.0)
 
 
 # --- TeacherLabeler: per-call resilience ------------------------------------
@@ -211,6 +235,26 @@ def test_blind_cost_aborts_after_recording_prior_spend() -> None:
     assert teacher.total_spent_usd == pytest.approx(0.002)
 
 
+# --- TeacherLabeler: stats reset per call + empty input ----------------------
+
+
+def test_stats_reset_between_calls() -> None:
+    # Attributes describe only the most recent label() call, not cumulative spend.
+    teacher = _teacher(FakeJudge())
+    teacher.label([_cand("a", "b")])
+    assert teacher.labeled_count == 1
+    assert teacher.total_spent_usd == pytest.approx(0.002)
+    teacher.label([_cand("c", "d"), _cand("e", "f")])
+    assert teacher.labeled_count == 2  # reset to this call, not 3
+    assert teacher.total_spent_usd == pytest.approx(0.004)
+
+
+def test_teacher_label_empty_returns_empty() -> None:
+    teacher = _teacher(FakeJudge())
+    assert teacher.label([]) == []
+    assert teacher.labeled_count == 0
+
+
 # --- TeacherLabeler: from_env (no network, no key) --------------------------
 
 
@@ -223,12 +267,11 @@ def test_from_env_builds_teacher_without_langfuse() -> None:
         budget_usd=10.0,
         budget_soft_usd=8.0,
     )
+    # The point is that construction succeeds without LANGFUSE_* / OPENAI_API_KEY
+    # (enable_langfuse=False); we assert only the public config, not internals.
     assert isinstance(teacher, TeacherLabeler)
     assert teacher.budget_usd == 10.0
     assert teacher.budget_soft_usd == 8.0
-    # A client was constructed (lazy-client path was bypassed).
-    assert teacher._judge.client is not None
-    assert teacher._judge.model == "gpt-5-mini"
 
 
 # --- TeacherLabeler: constructor validation ---------------------------------
