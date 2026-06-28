@@ -132,10 +132,11 @@ class FakeLabeler(Labeler):
     def _confidence(self, score: float) -> float:
         """Deterministic, over-confident self-confidence for one label.
 
-        Grows with the margin ``|score - threshold|`` but starts high (``0.7``)
-        even for near-threshold pairs, so the labeler is systematically
+        Grows with the margin ``|score - threshold|`` but starts at a ``0.7``
+        floor even for near-threshold pairs, so the labeler is systematically
         over-confident on the ambiguous band -- a realistic miscalibration that
-        keeps ECE / Brier non-degenerate. Clamped to ``[0, 0.99]``.
+        keeps ECE / Brier non-degenerate. The result lies in ``[0.7, 0.99]``
+        (floor ``0.7`` at the threshold, capped at ``0.99``).
         """
         margin = abs(score - self.threshold)
         return round(min(0.99, 0.7 + 0.6 * margin), 4)

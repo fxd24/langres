@@ -31,8 +31,10 @@ class _RecordingIndex:
 
     def __init__(self) -> None:
         self.created_with: list[str] | None = None
+        self.create_calls = 0
 
     def create_index(self, texts: list[str]) -> None:
+        self.create_calls += 1
         self.created_with = list(texts)
 
 
@@ -109,8 +111,10 @@ def test_build_wires_steps_in_order_and_builds_index() -> None:
         _CORPUS, gold_clusters=[{"a", "b"}]
     )
 
-    # Index built from the blocker's own text extractor, in corpus order.
+    # Index built EXACTLY once from the blocker's own text extractor, in corpus
+    # order (stream() reads the pre-built index, it never re-builds it).
     assert blocker.vector_index.created_with == ["Acme", "Acme Inc", "Globex"]
+    assert blocker.vector_index.create_calls == 1
     # stream received the raw corpus.
     assert blocker.stream_arg == _CORPUS
     # Miner saw the materialized candidate list (one-shot iterator consumed once).
@@ -204,3 +208,36 @@ def test_build_cost_defaults_to_zero_when_labeler_has_no_spend_attr() -> None:
     )
     assert gold.metadata["total_cost_usd"] == 0.0
     assert gold.pairs == []
+
+
+def test_build_with_empty_corpus_produces_empty_gold_set() -> None:
+    """An empty corpus builds an (empty) index and yields no pairs."""
+    blocker = _FakeBlocker([])
+    miner = _RecordingMiner(returns=[])
+    labeler = _RecordingLabeler()
+
+    gold, report = Bootstrapper(blocker, miner, labeler).build([])  # type: ignore[arg-type]
+
+    assert blocker.vector_index.created_with == []
+    assert blocker.vector_index.create_calls == 1
+    assert gold.pairs == []
+    assert gold.metadata["corpus_size"] == 0
+    assert gold.metadata["total_candidates"] == 0
+    assert report.blocking.total_candidates == 0
+
+
+def test_build_filter_dropping_all_candidates_mines_nothing() -> None:
+    """A filter that rejects everything leaves the miner and labeler with []."""
+    candidates = [_cand("a", "b", 0.9), _cand("a", "c", 0.2)]
+    blocker = _FakeBlocker(candidates)
+    miner = _RecordingMiner(returns=[])
+    labeler = _RecordingLabeler()
+
+    gold, _ = Bootstrapper(blocker, miner, labeler).build(  # type: ignore[arg-type]
+        _CORPUS, candidate_filter=lambda c: False
+    )
+
+    assert miner.seen == []
+    assert labeler.seen == []
+    assert gold.pairs == []
+    assert gold.metadata["filtered_candidates"] == 0

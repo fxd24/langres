@@ -40,6 +40,7 @@ from langres.bootstrap import (
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
+from langres.core.models import ERCandidate
 from langres.data.er_benchmarks import (
     DEFAULT_BLOCKING_K,
     RestaurantSchema,
@@ -47,7 +48,7 @@ from langres.data.er_benchmarks import (
 )
 
 
-def _cross_source(candidate: Any) -> bool:
+def _cross_source(candidate: ERCandidate[RestaurantSchema]) -> bool:
     """Keep only candidate pairs whose two records come from different sources.
 
     The Fodors-Zagat task is a cross-source linkage: intra-source pairs are noise
@@ -154,7 +155,7 @@ def maybe_real_teacher() -> None:
     )
     print(
         "\n[real teacher] Constructed a budget-capped TeacherLabeler "
-        f"(model={teacher._judge.model!r}, budget=${teacher.budget_usd:.2f}). "
+        f"(budget=${teacher.budget_usd:.2f}). "
         "Wave 5 pins the GLM model/prices and runs build() with it for real."
     )
 
