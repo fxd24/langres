@@ -40,10 +40,9 @@ def test_build_restaurant_blocker_defaults() -> None:
     blocker = build_restaurant_blocker()
     assert isinstance(blocker, VectorBlocker)
     assert blocker.k_neighbors == DEFAULT_BLOCKING_K
-    # Declarative (serializable) wiring: schema + text_field, not callables.
-    assert blocker._schema_type_name is not None
-    assert blocker._text_field == "embed_text"
-    # MiniLM + FAISS-cosine — the M1 config, reused.
+    # Declarative (serializable) wiring is asserted via the save() round-trip in
+    # test_build_restaurant_resolver_is_serializable; don't reach into private
+    # attrs here. MiniLM + FAISS-cosine — the M1 config, reused.
     assert isinstance(blocker.vector_index, FAISSIndex)
     assert blocker.vector_index.metric == "cosine"
     assert blocker.vector_index.embedder.model_name == "all-MiniLM-L6-v2"

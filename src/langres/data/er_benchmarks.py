@@ -341,8 +341,14 @@ def split_restaurant_corpus(
 
     train_ids = {rid for cluster in train_clusters for rid in cluster}
     test_ids = {rid for cluster in test_clusters for rid in cluster}
-    train_records = [by_id[rid] for rid in sorted(train_ids)]
-    test_records = [by_id[rid] for rid in sorted(test_ids)]
+
+    # Natural sort (f1, f2, f10 — not f1, f10, f2) so the returned record order
+    # is intuitive for callers; ids are always a source letter + integer.
+    def _natural(rid: str) -> tuple[str, int]:
+        return (rid[0], int(rid[1:]))
+
+    train_records = [by_id[rid] for rid in sorted(train_ids, key=_natural)]
+    test_records = [by_id[rid] for rid in sorted(test_ids, key=_natural)]
     logger.info(
         "split_restaurant_corpus: %d train records (%d clusters), %d test records (%d clusters)",
         len(train_records),
