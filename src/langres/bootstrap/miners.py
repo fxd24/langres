@@ -215,7 +215,10 @@ class HardNegativeMiner(Miner):
 
         while sum(alloc.values()) < total and any(alloc[name] < sizes[name] for name in _STRATA):
             with_capacity = [name for name in _STRATA if alloc[name] < sizes[name]]
-            # Largest fractional remainder first; fixed stratum order breaks ties.
+            # Largest fractional remainder first. On an exact frac tie, the
+            # ``-_STRATA.index`` term favors ``high`` then ``mid`` then ``low``;
+            # this only affects the 1-2 leftover units, since the mid stratum is
+            # already weighted heaviest by its proportion (and thus its frac).
             best = max(
                 with_capacity,
                 key=lambda name: (ideal[name] - math.floor(ideal[name]), -_STRATA.index(name)),

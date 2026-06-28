@@ -83,7 +83,10 @@ class FakeJudge:
             if cid in self.fail_ids:
                 raise RuntimeError("simulated judge failure")
             if cid in self.empty_ids:
-                return  # yield nothing for this pair
+                # Yield nothing for this pair. The teacher always calls forward
+                # with single-item iterators, so stopping the generator here is
+                # equivalent to "no judgement for this one pair".
+                return
             if cid in self.blind_ids:
                 provenance: dict[str, object] = {"model": "fake", "cost_usd": 0.0}
             else:
@@ -255,6 +258,15 @@ def test_teacher_label_empty_returns_empty() -> None:
     teacher = _teacher(FakeJudge())
     assert teacher.label([]) == []
     assert teacher.labeled_count == 0
+
+
+def test_worst_case_cost_reflects_live_attrs() -> None:
+    # Computed live (not cached), so updating a price is reflected immediately.
+    teacher = _teacher(FakeJudge(), worst_case_tokens_per_pair=1000)
+    before = teacher._worst_case_per_pair_cost
+    teacher.price_per_1m_prompt_tokens *= 10
+    teacher.price_per_1m_completion_tokens *= 10
+    assert teacher._worst_case_per_pair_cost == pytest.approx(before * 10)
 
 
 # --- TeacherLabeler: from_env (no network, no key) --------------------------

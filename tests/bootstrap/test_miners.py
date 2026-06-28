@@ -41,6 +41,13 @@ def test_percentile_interpolates() -> None:
     assert _percentile([0.0, 1.0], 50.0) == 0.5
 
 
+def test_percentile_boundaries() -> None:
+    # pct=0 / pct=100 are reachable via mid_pct=0 / high_pct=100.
+    vals = [0.1, 0.4, 0.9]
+    assert _percentile(vals, 0.0) == 0.1
+    assert _percentile(vals, 100.0) == 0.9
+
+
 # --- stratum membership -----------------------------------------------------
 
 

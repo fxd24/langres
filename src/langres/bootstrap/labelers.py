@@ -57,10 +57,11 @@ class GroundTruthLabeler(Labeler):
         Returns:
             A labeler whose positive set is every intra-cluster pair.
         """
+        # combinations(sorted(...)) already yields a <= b, and __init__
+        # canonicalizes the whole set, so no per-pair canonicalization is needed.
         positives: set[tuple[str, str]] = set()
         for cluster in gold_clusters:
-            for a, b in combinations(sorted(cluster), 2):
-                positives.add(canonical_pair_key(a, b))
+            positives.update(combinations(sorted(cluster), 2))
         return cls(positives)
 
     def label(self, candidates: list[ERCandidate[Any]]) -> list[GoldPair]:
@@ -98,8 +99,9 @@ class BlindCostError(RuntimeError):
     unbounded spend, so :class:`TeacherLabeler` aborts instead.
 
     The pairs already labeled (and paid for) before the abort are attached as
-    :attr:`partial` (set by :meth:`TeacherLabeler.label`) so a caller can recover
-    them rather than discard paid work.
+    :attr:`partial` so a caller can recover them rather than discard paid work.
+    :attr:`partial` is populated by :meth:`TeacherLabeler.label` (the catcher)
+    immediately before it re-raises; the raise site does not set it.
     """
 
     def __init__(self, message: str) -> None:
@@ -213,15 +215,6 @@ class TeacherLabeler(Labeler):
         self.batch_size = batch_size
         self.threshold = threshold
 
-        # Worst-case per-pair cost, cached at construction: all tokens at the
-        # more expensive rate. The price / token attributes above are read-only
-        # after __init__ — mutating them would not refresh this cached cost.
-        self._worst_case_per_pair_cost = (
-            worst_case_tokens_per_pair
-            / 1_000_000.0
-            * max(price_per_1m_prompt_tokens, price_per_1m_completion_tokens)
-        )
-
         # Live run statistics (reset at the start of each label() call).
         self.total_spent_usd: float = 0.0
         self.labeled_count: int = 0
@@ -276,6 +269,19 @@ class TeacherLabeler(Labeler):
             budget_soft_usd=budget_soft_usd,
             batch_size=batch_size,
             threshold=threshold,
+        )
+
+    @property
+    def _worst_case_per_pair_cost(self) -> float:
+        """Worst-case cost of one pair: all tokens at the more expensive rate.
+
+        Computed live from the price / token attributes (not cached), so mutating
+        any of them after construction can never leave a stale value behind.
+        """
+        return (
+            self.worst_case_tokens_per_pair
+            / 1_000_000.0
+            * max(self.price_per_1m_prompt_tokens, self.price_per_1m_completion_tokens)
         )
 
     def _pair_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
