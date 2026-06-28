@@ -20,8 +20,9 @@ blind" lesson):
         --worst-case-tokens 1500 --budget 20 --budget-soft 15
 
 The teacher client is built with ``enable_langfuse=False`` (B4), so no Langfuse
-creds are needed. ``OPENROUTER_API_KEY`` is read from ``.env`` via pydantic-settings.
-Run with the sandbox disabled — openrouter.ai is a network call.
+creds are needed. ``OPENROUTER_API_KEY`` is loaded from ``.env`` into the process
+environment (via ``load_dotenv``) so LiteLLM picks it up — it is NOT a declared
+``Settings`` field. Run with the sandbox disabled — openrouter.ai is a network call.
 
 ``print`` is allowed in examples (this is an operator tool, not library code).
 """
@@ -32,6 +33,8 @@ import argparse
 import logging
 from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from langres.bootstrap import Bootstrapper, GoldSet, HardNegativeMiner, TeacherLabeler
 from langres.core.blockers.vector import VectorBlocker
@@ -175,6 +178,10 @@ def run(
 
 
 def main() -> int:
+    # Load .env into the process environment so LiteLLM sees OPENROUTER_API_KEY
+    # (it is not a declared Settings field). Explicit, not reliant on import side
+    # effects.
+    load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("langres").setLevel(logging.INFO)
 

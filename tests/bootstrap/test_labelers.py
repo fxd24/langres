@@ -33,7 +33,9 @@ def test_ground_truth_labels_match_and_non_match() -> None:
     labeler = GroundTruthLabeler.from_clusters([{"a", "b"}, {"c", "d"}])
     out = labeler.label([_cand("a", "b"), _cand("b", "a"), _cand("a", "c")])
     assert [p.label for p in out] == [True, True, False]
-    assert all(p.source == "ground_truth" and p.confidence == 1.0 for p in out)
+    assert all(p.source == "ground_truth" for p in out)
+    # confidence is P(match): 1.0 for known matches, 0.0 for known non-matches.
+    assert [p.confidence for p in out] == [1.0, 1.0, 0.0]
 
 
 def test_ground_truth_from_clusters_expands_multi_member_cluster() -> None:
@@ -330,12 +332,19 @@ def test_fake_labeler_thresholds_on_similarity() -> None:
     assert all(p.source == "fake" for p in out)
 
 
-def test_fake_labeler_confidence_is_in_range_and_overconfident() -> None:
-    out = FakeLabeler(threshold=0.5).label([_scored("a", "b", 0.5), _scored("c", "d", 1.0)])
-    # Near-threshold pair: floor of 0.7 (over-confident on the ambiguous band).
+def test_fake_labeler_confidence_is_p_match_and_overconfident() -> None:
+    # confidence is P(match): high for predicted matches, low (the complement)
+    # for predicted non-matches, over-confident on the near-threshold band.
+    out = FakeLabeler(threshold=0.5).label(
+        [_scored("a", "b", 0.5), _scored("c", "d", 1.0), _scored("e", "f", 0.0)]
+    )
+    # Predicted match at the threshold: floor P(match) of 0.7.
     assert out[0].confidence == pytest.approx(0.7)
-    # Far-from-threshold pair: higher, capped at 0.99.
+    # Far-from-threshold match: higher, capped at 0.99.
     assert out[1].confidence == pytest.approx(0.99)
+    # Confident predicted non-match: low P(match) = 1 - 0.99 = 0.01.
+    assert out[2].label is False
+    assert out[2].confidence == pytest.approx(0.01)
     assert all(p.confidence is not None and 0.0 <= p.confidence <= 1.0 for p in out)
 
 
