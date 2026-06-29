@@ -1,0 +1,452 @@
+{
+  "cell_id": "pipeline_amazon_google_rapidfuzz",
+  "kind": "pipeline",
+  "method": "rapidfuzz",
+  "dataset": "amazon_google",
+  "model": null,
+  "usd_total": 0.0,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "results": [
+    {
+      "method": "RapidfuzzModule",
+      "dataset": "amazon_google",
+      "seed": 0,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.04680365296803653,
+        "recall": 0.09761904761904762,
+        "f1": 0.06327160493827161,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.011617711530030689,
+            "recall": 0.8833333333333333,
+            "f1": 0.022933794893985292,
+            "tp": 371,
+            "fp": 31563,
+            "fn": 49
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.010228971594932725,
+            "recall": 0.6190476190476191,
+            "f1": 0.020125396702531155,
+            "tp": 260,
+            "fp": 25158,
+            "fn": 160
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.007582720588235294,
+            "recall": 0.39285714285714285,
+            "f1": 0.014878268710550044,
+            "tp": 165,
+            "fp": 21595,
+            "fn": 255
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.00944222719750803,
+            "recall": 0.23095238095238096,
+            "f1": 0.018142710184232674,
+            "tp": 97,
+            "fp": 10176,
+            "fn": 323
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.020775193798449613,
+            "recall": 0.1595238095238095,
+            "f1": 0.03676268861454047,
+            "tp": 67,
+            "fp": 3158,
+            "fn": 353
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.04680365296803653,
+            "recall": 0.09761904761904762,
+            "f1": 0.06327160493827161,
+            "tp": 41,
+            "fp": 835,
+            "fn": 379
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.7156072184729387,
+        "bcubed_r": 0.7641921397379926,
+        "bcubed_f1": 0.7391021065963164,
+        "cluster_pairwise_f1": 0.032234957020057305,
+        "delta_above_floor": -0.1154206112027687,
+        "sanity_floor_f1": 0.8545227177990851
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 2.158504760967005e-05,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "RapidfuzzModule",
+      "dataset": "amazon_google",
+      "seed": 1,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.043092522179974654,
+        "recall": 0.08095238095238096,
+        "f1": 0.05624483043837883,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.01117554669566268,
+            "recall": 0.8809523809523809,
+            "f1": 0.022071104748270103,
+            "tp": 370,
+            "fp": 32738,
+            "fn": 50
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.009707650375238025,
+            "recall": 0.6190476190476191,
+            "f1": 0.01911553872734625,
+            "tp": 260,
+            "fp": 26523,
+            "fn": 160
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.007508354672106246,
+            "recall": 0.4119047619047619,
+            "f1": 0.01474787945952858,
+            "tp": 173,
+            "fp": 22868,
+            "fn": 247
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.008793969849246231,
+            "recall": 0.23333333333333334,
+            "f1": 0.01694915254237288,
+            "tp": 98,
+            "fp": 11046,
+            "fn": 322
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.021720491569019718,
+            "recall": 0.18095238095238095,
+            "f1": 0.03878540443990813,
+            "tp": 76,
+            "fp": 3423,
+            "fn": 344
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.043092522179974654,
+            "recall": 0.08095238095238096,
+            "f1": 0.05624483043837883,
+            "tp": 34,
+            "fp": 755,
+            "fn": 386
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.7288319354913239,
+        "bcubed_r": 0.762906356137798,
+        "bcubed_f1": 0.7454799803192095,
+        "cluster_pairwise_f1": 0.023917259211376857,
+        "delta_above_floor": -0.10904273747987558,
+        "sanity_floor_f1": 0.8545227177990851
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 2.2026708755472435e-05,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "RapidfuzzModule",
+      "dataset": "amazon_google",
+      "seed": 2,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.049008168028004666,
+        "recall": 0.1,
+        "f1": 0.06577916992952232,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.011468522891049033,
+            "recall": 0.8904761904761904,
+            "f1": 0.02264539372104992,
+            "tp": 374,
+            "fp": 32237,
+            "fn": 46
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.011035620311825001,
+            "recall": 0.669047619047619,
+            "f1": 0.021713093536297957,
+            "tp": 281,
+            "fp": 25182,
+            "fn": 139
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.00810126582278481,
+            "recall": 0.41904761904761906,
+            "f1": 0.015895235944908558,
+            "tp": 176,
+            "fp": 21549,
+            "fn": 244
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.009687240520343206,
+            "recall": 0.25,
+            "f1": 0.01865174527045031,
+            "tp": 105,
+            "fp": 10734,
+            "fn": 315
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.020551801801801804,
+            "recall": 0.1738095238095238,
+            "f1": 0.036757301107754284,
+            "tp": 73,
+            "fp": 3479,
+            "fn": 347
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.049008168028004666,
+            "recall": 0.1,
+            "f1": 0.06577916992952232,
+            "tp": 42,
+            "fp": 815,
+            "fn": 378
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.720321850234514,
+        "bcubed_r": 0.7656477438136827,
+        "bcubed_f1": 0.7422935188724529,
+        "cluster_pairwise_f1": 0.026263202968883813,
+        "delta_above_floor": -0.11222919892663219,
+        "sanity_floor_f1": 0.8545227177990851
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 2.6512070019279603e-05,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "RapidfuzzModule",
+      "dataset": "amazon_google",
+      "seed": 3,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.04316546762589928,
+        "recall": 0.1,
+        "f1": 0.06030150753768845,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.011131221719457013,
+            "recall": 0.8785714285714286,
+            "f1": 0.02198391420911528,
+            "tp": 369,
+            "fp": 32781,
+            "fn": 51
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.009592773692657982,
+            "recall": 0.611904761904762,
+            "f1": 0.01888941971996619,
+            "tp": 257,
+            "fp": 26534,
+            "fn": 163
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.007501192386072931,
+            "recall": 0.4119047619047619,
+            "f1": 0.014734062939147467,
+            "tp": 173,
+            "fp": 22890,
+            "fn": 247
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.008761381205978355,
+            "recall": 0.24285714285714285,
+            "f1": 0.016912618139612007,
+            "tp": 102,
+            "fp": 11540,
+            "fn": 318
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.017557251908396947,
+            "recall": 0.16428571428571428,
+            "f1": 0.031724137931034485,
+            "tp": 69,
+            "fp": 3861,
+            "fn": 351
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.04316546762589928,
+            "recall": 0.1,
+            "f1": 0.06030150753768845,
+            "tp": 42,
+            "fp": 931,
+            "fn": 378
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.7104525847431611,
+        "bcubed_r": 0.7672246482290155,
+        "bcubed_f1": 0.7377480308289083,
+        "cluster_pairwise_f1": 0.02559508574353724,
+        "delta_above_floor": -0.11677468697017679,
+        "sanity_floor_f1": 0.8545227177990851
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 2.722275490969382e-05,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "RapidfuzzModule",
+      "dataset": "amazon_google",
+      "seed": 4,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.04630650496141125,
+        "recall": 0.1,
+        "f1": 0.06330067822155237,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.011574362165525825,
+            "recall": 0.8857142857142857,
+            "f1": 0.02285012285012285,
+            "tp": 372,
+            "fp": 31768,
+            "fn": 48
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.009966908288685787,
+            "recall": 0.6023809523809524,
+            "f1": 0.019609362889474503,
+            "tp": 253,
+            "fp": 25131,
+            "fn": 167
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.007711132659186406,
+            "recall": 0.3976190476190476,
+            "f1": 0.015128867146804366,
+            "tp": 167,
+            "fp": 21490,
+            "fn": 253
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.00945040829433893,
+            "recall": 0.24523809523809523,
+            "f1": 0.01819948758724269,
+            "tp": 103,
+            "fp": 10796,
+            "fn": 317
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.020839121978327314,
+            "recall": 0.17857142857142858,
+            "f1": 0.03732271709380443,
+            "tp": 75,
+            "fp": 3524,
+            "fn": 345
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.04630650496141125,
+            "recall": 0.1,
+            "f1": 0.06330067822155237,
+            "tp": 42,
+            "fp": 865,
+            "fn": 378
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.703175851062128,
+        "bcubed_r": 0.7678311499272205,
+        "bcubed_f1": 0.7340826005028581,
+        "cluster_pairwise_f1": 0.025322866548493292,
+        "delta_above_floor": -0.12044011729622695,
+        "sanity_floor_f1": 0.8545227177990851
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 2.6576992504436118e-05,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    }
+  ]
+}
