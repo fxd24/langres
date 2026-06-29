@@ -68,7 +68,8 @@ def test_zero_spend_race_populates_every_cell_at_zero_spend(race_table: Benchmar
         # Zero-spend: nothing was charged on any cell.
         assert r.cost.usd_total == 0.0
 
-    # The detailed report renders one row per cell plus a 2-line header.
+    # The detailed report renders one row per cell, plus the +2 Markdown header
+    # lines (column-title row + the `--- | ---` separator row).
     report = format_detailed_report(table)
     assert len(report.splitlines()) == len(table.results) + 2
 

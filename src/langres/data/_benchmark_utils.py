@@ -229,7 +229,9 @@ def stratified_corpus_split(
     test_ids = {rid for cluster in test_clusters for rid in cluster}
 
     # Natural sort (a1, a2, a10 — not a1, a10, a2) so the returned record order is
-    # intuitive for callers; ids are always a source letter + integer.
+    # intuitive for callers. Assumes ids are a single-letter source prefix + a pure
+    # integer (e.g. "f1"/"z42", "a1"/"g123") — the format both benchmarks use; a
+    # different id scheme (e.g. "amazon_1") would raise ValueError on int(rid[1:]).
     def _natural(rid: str) -> tuple[str, int]:
         return (rid[0], int(rid[1:]))
 

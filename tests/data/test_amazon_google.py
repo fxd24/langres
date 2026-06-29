@@ -2,13 +2,17 @@
 
 import pytest
 
+from langres.core.benchmark import gold_pairs_from_clusters
+from langres.core.blockers.vector import VectorBlocker
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.data.amazon_google import (
     ACHIEVED_PC_AT_DEFAULT_K,
     AG_RECALL_GATE,
     DEFAULT_AG_BLOCKING_K,
+    DEFAULT_AG_THRESHOLD_GRID,
     GATE_MET,
+    AmazonGoogleBenchmark,
     ProductSchema,
     _clusters_from_pairs,
     _cross_source,
@@ -269,3 +273,66 @@ def test_pair_completeness_is_computable_via_evaluate_blocking() -> None:
     candidates = _cross_source(list(blocker.stream(records)))
     pc = evaluate_blocking(candidates, gold).candidate_recall
     assert pc == pytest.approx(recalls[DEFAULT_AG_BLOCKING_K], abs=5e-3)
+
+
+# --- AmazonGoogleBenchmark conformer: fast contract tests (no embeddings) --------
+
+
+def test_benchmark_exposes_pinned_config() -> None:
+    """The conformer surfaces the dataset-agnostic + blocking-registry contracts."""
+    bench = AmazonGoogleBenchmark()
+    assert bench.name == "amazon_google"
+    assert bench.threshold_grid == DEFAULT_AG_THRESHOLD_GRID
+    assert bench.schema is ProductSchema
+    assert bench.blocking_k == DEFAULT_AG_BLOCKING_K
+
+
+def test_benchmark_load_matches_loader_with_closure_pairs() -> None:
+    """``load`` returns the corpus/partition plus within-cluster (closure) pairs."""
+    bench = AmazonGoogleBenchmark()
+    corpus, gold_clusters, gold_pairs = bench.load()
+
+    base_corpus, base_clusters, _base_pairs = load_amazon_google()
+    assert [r.id for r in corpus] == [r.id for r in base_corpus]
+    assert gold_clusters == base_clusters
+    # Conformer gold_pairs are the within-cluster closure (mirrors FZ), a superset
+    # of the raw labelled pairs because Amazon-Google is many-to-many.
+    assert gold_pairs == gold_pairs_from_clusters(gold_clusters)
+
+
+def test_benchmark_split_is_leakage_free_and_partitions() -> None:
+    """No gold cluster straddles the split; train/test ids are disjoint + complete."""
+    bench = AmazonGoogleBenchmark()
+    corpus, gold_clusters, _pairs = bench.load()
+    train_recs, test_recs, train_cls, test_cls = bench.split(corpus, gold_clusters, seed=0)
+
+    train_ids = {r.id for r in train_recs}
+    test_ids = {r.id for r in test_recs}
+    # Disjoint splits that together cover the whole corpus.
+    assert train_ids.isdisjoint(test_ids)
+    assert train_ids | test_ids == {r.id for r in corpus}
+    # Every returned cluster lives entirely on its own side (no match pair leaks).
+    assert {rid for c in train_cls for rid in c} == train_ids
+    assert {rid for c in test_cls for rid in c} == test_ids
+    # The full gold partition is split whole (many-to-many clusters kept intact).
+    assert len(train_cls) + len(test_cls) == len(gold_clusters)
+
+
+def test_benchmark_split_is_deterministic() -> None:
+    """Same seed → identical split (deterministic shuffle)."""
+    bench = AmazonGoogleBenchmark()
+    corpus, gold_clusters, _pairs = bench.load()
+    a = bench.split(corpus, gold_clusters, seed=0)
+    b = bench.split(corpus, gold_clusters, seed=0)
+    assert [r.id for r in a[0]] == [r.id for r in b[0]]
+    assert [r.id for r in a[1]] == [r.id for r in b[1]]
+
+
+def test_benchmark_build_blocker_returns_fresh_unbuilt_vector_blocker() -> None:
+    """``build_blocker`` yields a fresh VectorBlocker at the requested k each call."""
+    bench = AmazonGoogleBenchmark()
+    b1 = bench.build_blocker(7)
+    b2 = bench.build_blocker(7)
+    assert isinstance(b1, VectorBlocker)
+    assert b1.k_neighbors == 7
+    assert b1 is not b2  # fresh instance per call (independent index)
