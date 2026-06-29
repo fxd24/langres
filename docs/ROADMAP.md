@@ -215,10 +215,16 @@ coverage report. Produce the brainsquad **People (board-members) gold set**.
   a spot-check sample; blocking **Pair-Completeness reported** (target ≥ 0.95).
 
 ### M2 — Walking skeleton end-to-end + baseline
-Person: feature bag → block → baseline judge (embedding cascade or
-`gliner-linker`) → cluster → eval → **artifact**. brainsquad loads & runs it.
-- **Exit:** **BCubed F1 baseline reported** on held-out gold; artifact runs a
-  brainsquad-style `.link()` / `.resolve()` call end-to-end.
+feature bag → block → baseline judge → cluster → eval → **artifact**. The shipped
+baseline judge is the zero-spend `WeightedAverageJudge` over the feature bag;
+richer judges (embedding cascade, `gliner-linker`, LLM) are raced in M3. Shipped on
+Fodors-Zagat (Person artifact + brainsquad load-and-run is M5, see below).
+- **Exit (SHIPPED):** **BCubed F1 baseline reported** on held-out gold; the saved
+  artifact runs a brainsquad-style **`.resolve()`** call end-to-end in a fresh
+  process (identical clusters). Measured on Fodors-Zagat (seed=0, threshold 0.8):
+  held-out BCubed P/R/F1 = 0.991/0.969/0.980 vs merge-nothing floor 0.932,
+  Pair-Completeness 1.0. The M2 consumption contract is `resolve()`-only;
+  incremental `.link()` / `.stream_against()` are M5 stubs (below).
 
 ### M3 — The seam: multi-method benchmark
 Wrap ≥3 methods (rapidfuzz, embedding cascade, LLM judge, **GLinker**) behind the
