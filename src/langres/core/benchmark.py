@@ -545,6 +545,107 @@ def run_method(
 
 
 # ---------------------------------------------------------------------------
+# Direct pair-level judge evaluation (no blocking, fixed candidate set)
+# ---------------------------------------------------------------------------
+
+
+class JudgePairEval(BaseModel):
+    """Pair-level evaluation of one judge over a *given* candidate set.
+
+    Unlike :func:`run_method` (which loads a benchmark, blocks, tunes a clusterer,
+    and clusters), this is the scorer-isolating eval used when the candidate pairs
+    are fixed up front — e.g. a literature train/valid/test pair split, or a single
+    dataset's blocked band — so the number is directly comparable to pairwise-F1
+    SOTA without any blocking-recall ceiling or clustering amplification.
+
+    Attributes:
+        pair: Pair-level P/R/F1 at the best-F1 threshold over the grid, plus the
+            full PR curve.
+        cost: Spend accounting over the judgements actually produced.
+        latency: Wall-clock per judged pair.
+        n_candidates: Candidate pairs handed to the judge.
+        n_judged: Judgements actually produced (``< n_candidates`` when a budget
+            runner truncates or a call is skipped).
+        best_threshold: The grid threshold maximizing pair-level F1.
+        truncated: ``True`` when fewer pairs were judged than supplied (a budget
+            cap fired or calls were skipped) — the cell is partial.
+    """
+
+    pair: PairTrack
+    cost: CostTrack
+    latency: LatencyTrack
+    n_candidates: int
+    n_judged: int
+    best_threshold: float
+    truncated: bool
+
+
+def evaluate_judge_on_candidates(
+    module: Module[Any],
+    candidates: Sequence[Any],
+    gold_pairs: set[frozenset[str]],
+    grid: Sequence[float],
+    *,
+    runner: "BudgetedModuleRunner | None" = None,
+    price_per_token_or_pair: float = 0.0,
+    cost_track_fn: Callable[[list[PairwiseJudgement]], CostTrack] = _cost_track,
+) -> tuple[JudgePairEval, list[PairwiseJudgement]]:
+    """Score one judge over a fixed candidate set and grade it at the pair level.
+
+    Runs the judge (optionally under a :class:`BudgetedModuleRunner` for paid
+    judges), times it, and grades the resulting judgements against ``gold_pairs``
+    with :func:`~langres.core.metrics.pair_pr_curve` — selecting the best-F1
+    threshold on the grid and keeping the whole curve. Dataset-agnostic and
+    blocking-free: the caller supplies the candidates (fixed pairs or a blocked
+    band) and the order-independent gold match pairs.
+
+    Args:
+        module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
+        candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
+        gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
+        grid: Score thresholds to sweep for the pair-level PR curve.
+        runner: Optional budget runner. When given, the judge runs through it (its
+            ``module`` must be ``module``) so spend is hard-capped; the run may
+            therefore judge fewer pairs than supplied. When ``None``, the judge is
+            run directly (zero-spend path).
+        price_per_token_or_pair: Worst-case price passed to ``runner.run`` (ignored
+            without a runner). Must be ``> 0`` when a runner is given.
+        cost_track_fn: Aggregator from judgements to a :class:`CostTrack`. Defaults
+            to the flat :func:`_cost_track`; pass
+            :func:`~langres.methods.cascade_cost_track` for cascade escalation
+            diagnostics.
+
+    Returns:
+        ``(JudgePairEval, judgements)`` — the graded summary plus the raw
+        judgements (kept in-process for error-map analysis; not part of the
+        summary so a persisted result stays small).
+    """
+    start = time.perf_counter()
+    if runner is not None:
+        judgements = runner.run(candidates, price_per_token_or_pair)
+    else:
+        judgements = list(module.forward(iter(candidates)))
+    elapsed = time.perf_counter() - start
+
+    curve = pair_pr_curve(judgements, gold_pairs, grid)
+    best = max(curve, key=lambda m: m.f1)
+    pair = PairTrack(precision=best.precision, recall=best.recall, f1=best.f1, pr_curve=curve)
+
+    n_judged = len(judgements)
+    latency = LatencyTrack(seconds_per_pair=elapsed / n_judged if n_judged > 0 else 0.0)
+    result = JudgePairEval(
+        pair=pair,
+        cost=cost_track_fn(judgements),
+        latency=latency,
+        n_candidates=len(candidates),
+        n_judged=n_judged,
+        best_threshold=best.threshold,
+        truncated=n_judged < len(candidates),
+    )
+    return result, judgements
+
+
+# ---------------------------------------------------------------------------
 # Budgeted module runner
 # ---------------------------------------------------------------------------
 
