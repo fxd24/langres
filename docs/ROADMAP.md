@@ -215,8 +215,10 @@ coverage report. Produce the brainsquad **People (board-members) gold set**.
   a spot-check sample; blocking **Pair-Completeness reported** (target ≥ 0.95).
 
 ### M2 — Walking skeleton end-to-end + baseline
-Person: feature bag → block → baseline judge (embedding cascade or
-`gliner-linker`) → cluster → eval → **artifact**. brainsquad loads & runs it.
+feature bag → block → baseline judge → cluster → eval → **artifact**. The shipped
+baseline judge is the zero-spend `WeightedAverageJudge` over the feature bag;
+richer judges (embedding cascade, `gliner-linker`, LLM) are raced in M3. Shipped on
+Fodors-Zagat (Person artifact + brainsquad load-and-run is M5, see below).
 - **Exit (SHIPPED):** **BCubed F1 baseline reported** on held-out gold; the saved
   artifact runs a brainsquad-style **`.resolve()`** call end-to-end in a fresh
   process (identical clusters). Measured on Fodors-Zagat (seed=0, threshold 0.8):
