@@ -64,11 +64,14 @@ class BlindCostError(RuntimeError):
     - (For :class:`~langres.bootstrap.labelers.TeacherLabeler`) a judgement
       reports neither token counts nor a cost, so the running tally is untrusted.
 
-    Any results already produced (and paid for) before the abort are attached as
-    :attr:`partial` so a caller can recover them rather than discard paid work.
-    Typed ``list[Any]`` so the same error serves both the bootstrap teacher
-    (``GoldPair`` results) and the core runner (``PairwiseJudgement`` results)
-    without coupling ``core`` to ``bootstrap``.
+    :attr:`partial` carries any results already produced (and paid for) before a
+    *mid-loop* abort, so a caller can recover them rather than discard paid work.
+    It is set by the catcher immediately before re-raising (e.g.
+    :meth:`~langres.bootstrap.labelers.TeacherLabeler.label`), not at the raise
+    site; for a *pre-flight* raise (``BudgetedModuleRunner`` rejecting a ``$0``
+    price before any work) it stays empty. Typed ``list[Any]`` so the same error
+    serves both the bootstrap teacher (``GoldPair`` results) and the core runner
+    (``PairwiseJudgement`` results) without coupling ``core`` to ``bootstrap``.
     """
 
     def __init__(self, message: str) -> None:
@@ -317,6 +320,31 @@ class Benchmark(Protocol[RecordT]):
 # ---------------------------------------------------------------------------
 
 
+def _pipeline_track(
+    predicted: list[set[str]],
+    all_ids: list[str],
+    truth_clusters: list[set[str]],
+) -> PipelineTrack:
+    """Score a predicted clustering into a :class:`PipelineTrack`.
+
+    Shared by :func:`evaluate_resolver_bcubed` (which resolves first) and
+    :func:`run_method` (which reuses an already-timed clustering), so the BCubed +
+    floor + Δ computation lives in one place and cannot drift.
+    """
+    completed = complete_partition(predicted, all_ids)
+    bcubed = calculate_bcubed_metrics(completed, truth_clusters)
+    pairwise = calculate_pairwise_metrics(completed, truth_clusters)
+    floor = calculate_bcubed_metrics([{rid} for rid in all_ids], truth_clusters)
+    return PipelineTrack(
+        bcubed_p=bcubed["precision"],
+        bcubed_r=bcubed["recall"],
+        bcubed_f1=bcubed["f1"],
+        cluster_pairwise_f1=pairwise["f1"],
+        delta_above_floor=bcubed["f1"] - floor["f1"],
+        sanity_floor_f1=floor["f1"],
+    )
+
+
 def evaluate_resolver_bcubed(
     resolver: Resolver,
     test_records: Sequence[_Resolvable],
@@ -340,21 +368,8 @@ def evaluate_resolver_bcubed(
     """
     record_dicts = [r.model_dump() for r in test_records]
     all_ids = [r.id for r in test_records]
-
     predicted = resolver.resolve(record_dicts)
-    completed = complete_partition(predicted, all_ids)
-    bcubed = calculate_bcubed_metrics(completed, test_truth_clusters)
-    pairwise = calculate_pairwise_metrics(completed, test_truth_clusters)
-    floor = calculate_bcubed_metrics([{rid} for rid in all_ids], test_truth_clusters)
-
-    return PipelineTrack(
-        bcubed_p=bcubed["precision"],
-        bcubed_r=bcubed["recall"],
-        bcubed_f1=bcubed["f1"],
-        cluster_pairwise_f1=pairwise["f1"],
-        delta_above_floor=bcubed["f1"] - floor["f1"],
-        sanity_floor_f1=floor["f1"],
-    )
+    return _pipeline_track(predicted, all_ids, test_truth_clusters)
 
 
 def tune_threshold_on_train(
@@ -494,20 +509,9 @@ def run_method(
     predicted = resolver.clusterer.cluster(iter(test_judgements))
     elapsed = time.perf_counter() - start
 
-    # (5a) Pipeline track.
+    # (5a) Pipeline track (reuses the already-timed clustering).
     all_ids = [r.id for r in test_records]
-    completed = complete_partition(predicted, all_ids)
-    bcubed = calculate_bcubed_metrics(completed, test_clusters)
-    pairwise = calculate_pairwise_metrics(completed, test_clusters)
-    floor = calculate_bcubed_metrics([{rid} for rid in all_ids], test_clusters)
-    pipeline = PipelineTrack(
-        bcubed_p=bcubed["precision"],
-        bcubed_r=bcubed["recall"],
-        bcubed_f1=bcubed["f1"],
-        cluster_pairwise_f1=pairwise["f1"],
-        delta_above_floor=bcubed["f1"] - floor["f1"],
-        sanity_floor_f1=floor["f1"],
-    )
+    pipeline = _pipeline_track(predicted, all_ids, test_clusters)
 
     # (5b) Pair track on TEST at the train-tuned pair threshold.
     test_gold_pairs = gold_pairs_from_clusters(test_clusters)
@@ -695,6 +699,11 @@ class BudgetedModuleRunner:
         """
         try:
             produced = list(self._module.forward(iter([candidate])))
+        except BlindCostError:
+            # Untrackable spend must abort the whole run, never be swallowed as a
+            # skip — otherwise the budget cap would keep accruing unknowable cost
+            # (mirrors TeacherLabeler, which re-raises BlindCostError).
+            raise
         except Exception as exc:  # noqa: BLE001 — one bad call must not abort the run
             self.skipped_count += 1
             logger.warning("Module call failed for a candidate: %s; skipping", exc)

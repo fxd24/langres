@@ -20,6 +20,7 @@ from langres.core.benchmark import (
     BudgetedModuleRunner,
     MethodResult,
     PipelineTrack,
+    _cost_track,
     complete_partition,
     gold_pairs_from_clusters,
     run_method,
@@ -52,16 +53,20 @@ class _FakeModule(Module[CompanySchema]):
         cost_key: str = "cost_usd",
         boom_ids: frozenset[str] = frozenset(),
         empty_ids: frozenset[str] = frozenset(),
+        blind_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._cost = cost
         self._cost_key = cost_key
         self._boom_ids = boom_ids
         self._empty_ids = empty_ids
+        self._blind_ids = blind_ids
 
     def forward(
         self, candidates: Iterator[ERCandidate[CompanySchema]]
     ) -> Iterator[PairwiseJudgement]:
         for cand in candidates:
+            if cand.left.id in self._blind_ids:
+                raise BlindCostError(f"untrackable spend for {cand.left.id}")
             if cand.left.id in self._boom_ids:
                 raise RuntimeError(f"boom for {cand.left.id}")
             if cand.left.id in self._empty_ids:
@@ -181,6 +186,18 @@ def test_runner_isolates_per_call_exceptions() -> None:
     assert [j.left_id for j in out] == ["l0", "l2"]
     assert runner.skipped_count == 1
     assert runner.labeled_count == 2
+
+
+def test_runner_propagates_blind_cost_error_from_module() -> None:
+    # A module that signals untrackable spend must abort the run, not be swallowed
+    # as a skip (else the cap keeps accruing unknowable cost).
+    runner = BudgetedModuleRunner(
+        _FakeModule(blind_ids=frozenset({"l1"})),
+        budget_usd=100.0,
+        budget_soft_usd=100.0,
+    )
+    with pytest.raises(BlindCostError, match="untrackable spend"):
+        runner.run(_candidates(3), price_per_token_or_pair=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +368,14 @@ def test_benchmark_table_renders_one_row_per_result() -> None:
 
 def test_benchmark_table_empty_is_header_only() -> None:
     assert BenchmarkTable().to_markdown().count("\n") == 1  # header + separator
+
+
+def test_cost_track_empty_judgements_is_zero() -> None:
+    # No candidates -> no per-pair division; all spend figures fall back to 0.
+    track = _cost_track([])
+    assert track.usd_total == 0.0
+    assert track.usd_per_1k_pairs == 0.0
+    assert track.est_usd_per_100k == 0.0
 
 
 # ---------------------------------------------------------------------------
