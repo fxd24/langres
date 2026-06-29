@@ -10,12 +10,8 @@ therefore filters candidate pairs to cross-source ones before measuring recall
 (intra-source pairs are noise for this task; see DESIGN-REVIEW B2).
 """
 
-import csv
 import logging
-import random
-from collections import defaultdict
 from collections.abc import Sequence
-from importlib import resources
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
@@ -39,6 +35,7 @@ from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.core.resolver import Resolver
+from langres.data import _benchmark_utils as _bu
 
 logger = logging.getLogger(__name__)
 
@@ -164,10 +161,8 @@ def _unquote(value: str) -> str:
 
 
 def _read_csv_rows(filename: str) -> list[dict[str, str]]:
-    """Read a packaged benchmark CSV into a list of header-keyed row dicts."""
-    text = resources.files(_DATASET_PACKAGE).joinpath(filename).read_text(encoding="utf-8")
-    reader = csv.DictReader(text.splitlines())
-    return [dict(row) for row in reader]
+    """Read a packaged Fodors-Zagat CSV into a list of header-keyed row dicts."""
+    return _bu.read_csv_rows(_DATASET_PACKAGE, filename)
 
 
 def _record_from_row(
@@ -313,22 +308,6 @@ def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCK
     )
 
 
-def _split_stratum(
-    clusters: list[set[str]], test_size: float, rng: random.Random
-) -> tuple[list[set[str]], list[set[str]]]:
-    """Split one same-size cluster stratum into (train, test) whole clusters.
-
-    Clusters are sorted into a canonical order (by their sorted id tuple) before
-    shuffling so the split is deterministic given ``rng`` regardless of input
-    ordering. At least one cluster always goes to test (mirrors
-    :func:`stratified_dedup_split`).
-    """
-    ordered = sorted(clusters, key=lambda c: tuple(sorted(c)))
-    rng.shuffle(ordered)
-    n_test = max(1, int(len(ordered) * test_size))
-    return ordered[:-n_test], ordered[-n_test:]
-
-
 def split_restaurant_corpus(
     corpus: list[RestaurantSchema],
     gold_clusters: list[set[str]],
@@ -338,16 +317,13 @@ def split_restaurant_corpus(
 ) -> tuple[list[RestaurantSchema], list[RestaurantSchema], list[set[str]], list[set[str]]]:
     """Stratified, leakage-free train/test split over full restaurant records.
 
-    Mirrors :func:`~langres.data.splitting.stratified_dedup_split`'s
-    cluster-size stratification (singletons distributed separately; matched
-    groups split within each size band, whole clusters kept together) but
-    operates on full :class:`RestaurantSchema` records — preserving ``source``
-    and the ``f``/``z`` ids — instead of the ``{id, name}``-only int-cast dicts
-    that function produces (which can't reconstruct ``RestaurantSchema``).
-
-    Because whole gold clusters are assigned to one side, no match pair ever
-    straddles the split (no test-set leakage), and each returned cluster list
-    partitions exactly its split's ids.
+    Thin restaurant-typed wrapper over the shared
+    :func:`langres.data._benchmark_utils.stratified_corpus_split`: cluster-size
+    stratification (singletons distributed separately; matched groups split within
+    each size band, whole clusters kept together) over full
+    :class:`RestaurantSchema` records — preserving ``source`` and the ``f``/``z``
+    ids. Because whole gold clusters are assigned to one side, no match pair ever
+    straddles the split (no test-set leakage).
 
     Args:
         corpus: Records from :func:`load_fodors_zagat` (the complete corpus).
@@ -362,54 +338,7 @@ def split_restaurant_corpus(
     Raises:
         ValueError: If ``test_size`` is not in the open interval ``(0, 1)``.
     """
-    if not 0.0 < test_size < 1.0:
-        raise ValueError(f"test_size must be in (0, 1); got {test_size}")
-
-    by_id = {r.id: r for r in corpus}
-    rng = random.Random(seed)
-
-    # Stratify: singletons in their own band, matched groups by cluster size.
-    singletons = [c for c in gold_clusters if len(c) == 1]
-    groups_by_size: dict[int, list[set[str]]] = defaultdict(list)
-    for cluster in gold_clusters:
-        if len(cluster) >= 2:
-            groups_by_size[len(cluster)].append(cluster)
-
-    train_clusters: list[set[str]] = []
-    test_clusters: list[set[str]] = []
-    # Process strata in a fixed order (singletons, then ascending size) so rng
-    # consumption — and thus the split — is reproducible.
-    strata = [singletons] + [groups_by_size[size] for size in sorted(groups_by_size)]
-    for stratum in strata:
-        train_part, test_part = _split_stratum(stratum, test_size, rng)
-        train_clusters.extend(train_part)
-        test_clusters.extend(test_part)
-
-    train_ids = {rid for cluster in train_clusters for rid in cluster}
-    test_ids = {rid for cluster in test_clusters for rid in cluster}
-
-    # Natural sort (f1, f2, f10 — not f1, f10, f2) so the returned record order
-    # is intuitive for callers; ids are always a source letter + integer.
-    def _natural(rid: str) -> tuple[str, int]:
-        return (rid[0], int(rid[1:]))
-
-    train_records = [by_id[rid] for rid in sorted(train_ids, key=_natural)]
-    test_records = [by_id[rid] for rid in sorted(test_ids, key=_natural)]
-    logger.info(
-        "split_restaurant_corpus: %d train records (%d clusters), %d test records (%d clusters)",
-        len(train_records),
-        len(train_clusters),
-        len(test_records),
-        len(test_clusters),
-    )
-    return train_records, test_records, train_clusters, test_clusters
-
-
-def _cross_source(
-    candidates: list[ERCandidate[RestaurantSchema]],
-) -> list[ERCandidate[RestaurantSchema]]:
-    """Keep only candidate pairs whose two records come from different sources."""
-    return [c for c in candidates if c.left.source != c.right.source]
+    return _bu.stratified_corpus_split(corpus, gold_clusters, test_size=test_size, seed=seed)
 
 
 def sweep_blocking_k(
@@ -419,10 +348,11 @@ def sweep_blocking_k(
 ) -> dict[int, float]:
     """Measure cross-source Pair-Completeness of vector blocking across ``ks``.
 
-    Builds the FAISS index once over ``embed_text`` and reuses it across all
-    ``k`` (only ``k_neighbors`` changes). For each ``k`` the candidates are
-    filtered to cross-source pairs (DESIGN-REVIEW B2) before recall is measured
-    via :func:`evaluate_blocking`.
+    Restaurant-typed wrapper over the shared
+    :func:`langres.data._benchmark_utils.sweep_blocking_k`, binding
+    ``RestaurantSchema`` + ``embed_text``: builds the FAISS index once and reuses
+    it across all ``k``, filtering to cross-source pairs (DESIGN-REVIEW B2) before
+    measuring recall.
 
     Args:
         corpus: Combined record list from :func:`load_fodors_zagat`.
@@ -432,38 +362,22 @@ def sweep_blocking_k(
     Returns:
         Mapping of ``k`` to cross-source Pair-Completeness (``candidate_recall``).
     """
-    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
-    index = FAISSIndex(embedder=embedder, metric="cosine")
-    index.create_index([r.embed_text for r in corpus])
-    records = [r.model_dump() for r in corpus]
-
-    recalls: dict[int, float] = {}
-    for k in ks:
-        # Construct a fresh blocker per k (the pre-built FAISS index is reused,
-        # so this is cheap) rather than mutating k_neighbors in place.
-        blocker: VectorBlocker[RestaurantSchema] = VectorBlocker(
-            vector_index=index,
-            schema=RestaurantSchema,
-            text_field="embed_text",
-            k_neighbors=k,
-        )
-        candidates = _cross_source(list(blocker.stream(records)))
-        recall = evaluate_blocking(candidates, gold_clusters).candidate_recall
-        recalls[k] = recall
-        logger.info("blocking k=%d -> cross-source recall=%.4f", k, recall)
-    return recalls
+    return _bu.sweep_blocking_k(
+        corpus, gold_clusters, RestaurantSchema, text_field="embed_text", ks=ks
+    )
 
 
 def pick_blocking_k(recalls: dict[int, float], threshold: float = RECALL_GATE) -> int:
-    """Pick the smallest ``k`` whose recall clears ``threshold``.
+    """Pick the smallest ``k`` whose recall clears ``threshold`` (default the FZ gate).
 
-    If no ``k`` reaches ``threshold``, returns the ``k`` with the highest recall
-    (the honest best-effort fallback; callers should document the shortfall
-    rather than fake the gate).
+    Restaurant-typed wrapper over
+    :func:`langres.data._benchmark_utils.pick_blocking_k` that defaults
+    ``threshold`` to the Fodors-Zagat :data:`RECALL_GATE` (0.95). If no ``k``
+    reaches it, returns the ``k`` with the highest recall (honest fallback).
 
     Args:
         recalls: Mapping of ``k`` to recall, e.g. from :func:`sweep_blocking_k`.
-        threshold: Minimum acceptable recall.
+        threshold: Minimum acceptable recall (defaults to :data:`RECALL_GATE`).
 
     Returns:
         The chosen ``k``.
@@ -471,12 +385,7 @@ def pick_blocking_k(recalls: dict[int, float], threshold: float = RECALL_GATE) -
     Raises:
         ValueError: If ``recalls`` is empty.
     """
-    if not recalls:
-        raise ValueError("recalls is empty; nothing to pick from")
-    passing = [k for k in sorted(recalls) if recalls[k] >= threshold]
-    if passing:
-        return passing[0]
-    return max(recalls, key=lambda k: recalls[k])
+    return _bu.pick_blocking_k(recalls, threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +431,7 @@ def _cross_source_pair_completeness(
     against ``truth_clusters``.
     """
     candidates: list[ERCandidate[RestaurantSchema]] = list(blocker.stream(record_dicts))
-    return evaluate_blocking(_cross_source(candidates), truth_clusters).candidate_recall
+    return evaluate_blocking(_bu.cross_source(candidates), truth_clusters).candidate_recall
 
 
 def evaluate_resolver_bcubed(
