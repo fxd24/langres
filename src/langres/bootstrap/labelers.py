@@ -20,10 +20,21 @@ from typing import Any
 from langres.bootstrap._pairs import canonical_pair_key
 from langres.bootstrap.base import Labeler
 from langres.bootstrap.models import GoldPair
+from langres.core.benchmark import BlindCostError
 from langres.core.models import ERCandidate
 from langres.core.modules.llm_judge import LLMJudge
 
 logger = logging.getLogger(__name__)
+
+# ``BlindCostError`` moved to ``langres.core.benchmark`` (shared with the core
+# budgeted runner); imported here so ``langres.bootstrap`` keeps re-exporting it
+# and ``TeacherLabeler`` continues to raise the same type.
+__all__ = [
+    "BlindCostError",
+    "FakeLabeler",
+    "GroundTruthLabeler",
+    "TeacherLabeler",
+]
 
 
 class GroundTruthLabeler(Labeler):
@@ -180,25 +191,6 @@ class FakeLabeler(Labeler):
                 )
             )
         return labels
-
-
-class BlindCostError(RuntimeError):
-    """Raised when the teacher cannot observe its own spend.
-
-    If a judgement reports neither token counts nor a cost, the running tally
-    can no longer be trusted, so the cap is blind. Continuing would risk
-    unbounded spend, so :class:`TeacherLabeler` aborts instead.
-
-    The pairs already labeled (and paid for) before the abort are attached as
-    :attr:`partial` so a caller can recover them rather than discard paid work.
-    :attr:`partial` is populated by :meth:`TeacherLabeler.label` (the catcher)
-    immediately before it re-raises; the raise site does not set it.
-    """
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        # Populated by TeacherLabeler.label() (the catcher), not at raise time.
-        self.partial: list[GoldPair] = []
 
 
 class TeacherLabeler(Labeler):

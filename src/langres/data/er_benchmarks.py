@@ -14,12 +14,23 @@ import csv
 import logging
 import random
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from importlib import resources
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from langres.core.benchmark import (
+    Benchmark,
+    complete_partition,
+    gold_pairs_from_clusters,
+)
+from langres.core.benchmark import (
+    evaluate_resolver_bcubed as _generic_evaluate_resolver_bcubed,
+)
+from langres.core.benchmark import (
+    tune_threshold_on_train as _generic_tune_threshold_on_train,
+)
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
@@ -28,11 +39,32 @@ from langres.core.comparator import Comparator
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.judges.weighted_average import WeightedAverageJudge
-from langres.core.metrics import calculate_bcubed_metrics, evaluate_blocking
+from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.core.resolver import Resolver
 
 logger = logging.getLogger(__name__)
+
+# ``complete_partition`` is re-exported above (it moved to the dataset-agnostic
+# ``langres.core.benchmark`` harness); importers that still do
+# ``from langres.data.er_benchmarks import complete_partition`` keep working.
+__all__ = [
+    "DEFAULT_BLOCKING_K",
+    "DEFAULT_THRESHOLD_GRID",
+    "RECALL_GATE",
+    "BCubedEvalResult",
+    "FodorsZagatBenchmark",
+    "RestaurantSchema",
+    "build_restaurant_blocker",
+    "build_restaurant_resolver",
+    "complete_partition",
+    "evaluate_resolver_bcubed",
+    "load_fodors_zagat",
+    "pick_blocking_k",
+    "split_restaurant_corpus",
+    "sweep_blocking_k",
+    "tune_threshold_on_train",
+]
 
 _DATASET_PACKAGE = "langres.data.datasets.fodors_zagat"
 _FODORS_FILE = "fodors.csv"
@@ -480,32 +512,6 @@ class BCubedEvalResult(BaseModel):
     sanity_floor_f1: float = Field(ge=0.0, le=1.0)
 
 
-def complete_partition(
-    predicted_clusters: list[set[str]], all_ids: Iterable[str]
-) -> list[set[str]]:
-    """Complete a predicted clustering into a full partition over ``all_ids``.
-
-    The :class:`~langres.core.clusterer.Clusterer` drops singletons, so a record
-    that was never merged is simply absent from ``predicted_clusters``. BCubed
-    must average over *every* item, so this appends a singleton ``{id}`` for each
-    id not already in a predicted cluster. Even with the partition-safe metric
-    fix, completing the partition is required so BCubed *precision* averages over
-    all items rather than only the merged ones.
-
-    Args:
-        predicted_clusters: Multi-record clusters from ``Resolver.resolve``.
-        all_ids: Every record id in the split (e.g. ``[r.id for r in records]``).
-
-    Returns:
-        ``predicted_clusters`` followed by one singleton per uncovered id (in
-        ``all_ids`` order, so the result is deterministic).
-    """
-    clustered = {rid for cluster in predicted_clusters for rid in cluster}
-    completed = list(predicted_clusters)
-    completed.extend({rid} for rid in all_ids if rid not in clustered)
-    return completed
-
-
 def _cross_source_pair_completeness(
     blocker: Blocker[RestaurantSchema],
     record_dicts: list[dict[str, object]],
@@ -549,26 +555,22 @@ def evaluate_resolver_bcubed(
         A :class:`BCubedEvalResult` with precision/recall/F1, Pair-Completeness,
         and the sanity floor.
     """
+    # Delegate the dataset-agnostic BCubed + sanity-floor scoring to the core
+    # harness (which runs ``resolver.resolve`` and builds the index), then add the
+    # restaurant-specific cross-source Pair-Completeness by reusing the now-built
+    # ``resolver.blocker`` — keeping the measured blocking identical to resolution.
+    track = _generic_evaluate_resolver_bcubed(resolver, test_records, test_truth_clusters)
     record_dicts = [r.model_dump() for r in test_records]
-    all_ids = [r.id for r in test_records]
-
-    predicted = resolver.resolve(record_dicts)
-    completed = complete_partition(predicted, all_ids)
-    bcubed = calculate_bcubed_metrics(completed, test_truth_clusters)
-
-    # Sanity floor: the resolver merges nothing -> every record is a singleton.
-    floor = calculate_bcubed_metrics([{rid} for rid in all_ids], test_truth_clusters)
-
     pair_completeness = _cross_source_pair_completeness(
         resolver.blocker, record_dicts, test_truth_clusters
     )
 
     return BCubedEvalResult(
-        precision=bcubed["precision"],
-        recall=bcubed["recall"],
-        f1=bcubed["f1"],
+        precision=track.bcubed_p,
+        recall=track.bcubed_r,
+        f1=track.bcubed_f1,
         pair_completeness=pair_completeness,
-        sanity_floor_f1=floor["f1"],
+        sanity_floor_f1=track.sanity_floor_f1,
     )
 
 
@@ -605,16 +607,40 @@ def tune_threshold_on_train(
     Raises:
         ValueError: If ``thresholds`` is empty.
     """
-    if not thresholds:
-        raise ValueError("thresholds is empty; nothing to tune over")
+    # Inject the restaurant resolver builder into the dataset-agnostic core tuner.
+    return _generic_tune_threshold_on_train(
+        lambda threshold: build_restaurant_resolver(threshold, k_neighbors=k_neighbors),
+        train_records,
+        train_clusters,
+        thresholds=thresholds,
+    )
 
-    best_threshold = thresholds[0]
-    best_f1 = -1.0
-    for threshold in thresholds:
-        resolver = build_restaurant_resolver(threshold, k_neighbors=k_neighbors)
-        result = evaluate_resolver_bcubed(resolver, train_records, train_clusters)
-        logger.info("threshold=%.2f -> train BCubed F1=%.4f", threshold, result.f1)
-        if result.f1 > best_f1:
-            best_f1 = result.f1
-            best_threshold = threshold
-    return best_threshold
+
+class FodorsZagatBenchmark(Benchmark[RestaurantSchema]):
+    """Fodors-Zagat as a :class:`~langres.core.benchmark.Benchmark` conformer.
+
+    Adapts the restaurant loaders/splitters to the dataset-agnostic harness so
+    :func:`~langres.core.benchmark.run_method` can run any resolver factory
+    against it: ``load`` returns the corpus, the closed-world gold partition, and
+    the gold match pairs; ``split`` delegates to :func:`split_restaurant_corpus`.
+    The canonical resolver factory is :func:`build_restaurant_resolver`, passed
+    separately to ``run_method``.
+    """
+
+    name = "fodors_zagat"
+    threshold_grid = DEFAULT_THRESHOLD_GRID
+
+    def load(self) -> tuple[list[RestaurantSchema], list[set[str]], set[frozenset[str]]]:
+        """Return ``(corpus, gold_clusters, gold_pairs)`` for Fodors-Zagat."""
+        corpus, gold_clusters = load_fodors_zagat()
+        return corpus, gold_clusters, gold_pairs_from_clusters(gold_clusters)
+
+    def split(
+        self,
+        corpus: list[RestaurantSchema],
+        gold_clusters: list[set[str]],
+        *,
+        seed: int,
+    ) -> tuple[list[RestaurantSchema], list[RestaurantSchema], list[set[str]], list[set[str]]]:
+        """Leakage-free stratified split, delegating to :func:`split_restaurant_corpus`."""
+        return split_restaurant_corpus(corpus, gold_clusters, seed=seed)
