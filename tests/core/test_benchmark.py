@@ -184,16 +184,19 @@ def test_runner_isolates_per_call_exceptions() -> None:
     assert runner.labeled_count == 2
 
 
-def test_runner_propagates_blind_cost_error_from_module() -> None:
+def test_runner_propagates_blind_cost_error_with_partial() -> None:
     # A module that signals untrackable spend must abort the run, not be swallowed
-    # as a skip (else the cap keeps accruing unknowable cost).
+    # as a skip (else the cap keeps accruing unknowable cost) — and the already-paid
+    # judgement(s) must survive on exc.partial.
     runner = BudgetedModuleRunner(
         _FakeModule(blind_ids=frozenset({"l1"})),
         budget_usd=100.0,
         budget_soft_usd=100.0,
     )
-    with pytest.raises(BlindCostError, match="untrackable spend"):
+    with pytest.raises(BlindCostError, match="untrackable spend") as excinfo:
         runner.run(_candidates(3), price_per_token_or_pair=0.001)
+    # l0 was scored (and paid for) before l1 aborted -> recoverable on partial.
+    assert [j.left_id for j in excinfo.value.partial] == ["l0"]
 
 
 # ---------------------------------------------------------------------------

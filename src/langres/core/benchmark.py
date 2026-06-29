@@ -636,8 +636,11 @@ class BudgetedModuleRunner:
             per-pair budget stop fires.
 
         Raises:
-            BlindCostError: If the resolved worst-case per-pair price is ``$0``,
-                so the cap cannot bound spend.
+            BlindCostError: If the resolved worst-case per-pair price is ``$0``
+                (a pre-flight blind cap), or if a wrapped module reports
+                untrackable spend mid-run. In the mid-run case the judgements
+                already produced (and paid for) are attached to the exception's
+                ``partial`` so the caller can recover them.
         """
         self.total_spent_usd = 0.0
         self.labeled_count = 0
@@ -665,7 +668,13 @@ class BudgetedModuleRunner:
                     len(judgements),
                 )
                 break
-            judgement = self._score_one(candidate)
+            try:
+                judgement = self._score_one(candidate)
+            except BlindCostError as exc:
+                # Recover the already-paid judgements rather than discard them
+                # (mirrors TeacherLabeler.label); the catcher sets ``partial``.
+                exc.partial = judgements
+                raise
             if judgement is not None:
                 judgements.append(judgement)
         return judgements
