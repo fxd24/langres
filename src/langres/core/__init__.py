@@ -5,7 +5,7 @@ This module provides the foundational primitives for building custom
 entity resolution pipelines.
 """
 
-from langres.core import metrics, optimizers
+from langres.core import benchmark, metrics, optimizers
 from langres.core.adapters.glinker import GLinkerAdapter
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
@@ -69,6 +69,7 @@ __all__ = [
     "ARTIFACT_VERSION",
     "AllPairsBlocker",
     "ArtifactManifest",
+    "benchmark",
     "Blocker",
     "CandidateStats",
     "ClusterStats",
