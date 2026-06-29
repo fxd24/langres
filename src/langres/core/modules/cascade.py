@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 # The neutral LLM prompt is centralized in ``llm_judge`` (single source of
 # truth). ``DEFAULT_PROMPT`` is re-exported here for backward compatibility;
 # new code should call ``render_default_prompt(entity_noun)``.
-__all__ = ["CascadeModule", "DEFAULT_PROMPT"]
+#
+# Single source of truth for the ``decision_step`` a cascade pair carries once it
+# escalates to the LLM (the uncertain band). Consumers that count escalations
+# (e.g. ``langres.methods.cascade_cost_track``) import this rather than repeating
+# the literal, so a rename can't silently desync escalation accounting.
+CASCADE_LLM_DECISION_STEP = "llm_judgment"
+__all__ = ["CASCADE_LLM_DECISION_STEP", "CascadeModule", "DEFAULT_PROMPT"]
 
 
 class CascadeModule(Module[SchemaT]):
@@ -232,7 +238,7 @@ class CascadeModule(Module[SchemaT]):
                 right_id=candidate.right.id,  # type: ignore[attr-defined]
                 score=llm_score,
                 score_type="prob_llm",
-                decision_step="llm_judgment",
+                decision_step=CASCADE_LLM_DECISION_STEP,
                 reasoning=llm_reasoning,
                 provenance={
                     "embed_score": float(embed_score),
