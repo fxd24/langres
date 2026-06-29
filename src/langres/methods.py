@@ -87,7 +87,16 @@ class BlockingBenchmark(Protocol):
 
 
 def _field_getter(field: str) -> Callable[[Any], str]:
-    """A string extractor for ``field`` (missing / non-str -> empty string)."""
+    """A string extractor for ``field`` (missing / non-str -> empty string).
+
+    The ``-> ""`` for a missing value is RapidfuzzModule's documented convention
+    (``lambda x: x.address or ""``). Note this makes ``rapidfuzz`` score a field
+    that is absent on *both* records as a perfect match (``fuzz.ratio("", "")``
+    is ``100``), so missing data lifts the score — unlike the missing-aware
+    ``weighted_average``, which drops absent features. That asymmetry is an
+    *intrinsic* property of the classical string baseline, not a wiring bug: the
+    race is meant to surface exactly such method differences, so it is left as-is.
+    """
 
     def get(entity: Any) -> str:
         value = getattr(entity, field, None)
@@ -103,7 +112,8 @@ def _rapidfuzz_extractors(
 
     Reuses ``Comparator.from_schema``'s field selection (``str | None`` fields,
     ``id`` excluded) and weights, so ``rapidfuzz`` and ``weighted_average`` score
-    on the *same* fields — the race isolates the scorer, not the field set.
+    on the *same* fields — the race isolates the scorer, not the field set. (They
+    still differ in *missing-field handling*; see :func:`_field_getter`.)
     """
     specs = Comparator.from_schema(schema).feature_specs
     return {spec.name: (_field_getter(spec.name), spec.weight) for spec in specs}
@@ -121,7 +131,9 @@ def _build_cascade_module(
     ``CascadeModule`` requires a non-empty ``llm_api_key`` at construction even
     when no pair escalates. We satisfy that with a placeholder and inject the real
     client (a mock in tests, the live client in W4) so no live key is ever needed
-    at build time.
+    at build time. The injected client must be **OpenAI-shaped** — cascade calls
+    ``client.chat.completions.create(...)``, not the ``completion(...)`` an
+    ``llm_judge`` (LiteLLM) client exposes.
     """
     module: CascadeModule[Any] = CascadeModule(
         llm_model=llm_model,
@@ -193,7 +205,14 @@ def make_resolver_factory(
         benchmark: The dataset adapter (must expose ``schema`` + ``build_blocker``).
         llm_client: Injected LLM client for ``llm_judge`` / ``cascade`` (a mock in
             tests, the real client in W4). Ignored by zero-spend methods. Never a
-            live key requirement at build time.
+            live key requirement at build time. **The two LLM methods expect
+            different client shapes and are not interchangeable:** ``llm_judge``
+            calls ``client.completion(...)`` (LiteLLM-shaped, e.g.
+            ``langres.clients.create_llm_client``) while ``cascade`` calls
+            ``client.chat.completions.create(...)`` (OpenAI-shaped) — a
+            pre-existing ``CascadeModule`` constraint. W4 must pass a separate
+            OpenAI-shaped client for ``cascade`` (do not reuse one client for
+            both).
         llm_model: Model id for the LLM methods (overridden in W4).
         cascade_low: Cascade lower early-exit threshold (below = not a match).
         cascade_high: Cascade upper early-exit threshold (above = a match).
