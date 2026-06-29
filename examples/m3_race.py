@@ -155,8 +155,15 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: Worst-case total tokens per pair, used to size the pre-flight budget cap.
 WORST_CASE_TOKENS_PER_PAIR = 1500
 
-#: Frontier AG fixed-pair subsample size (frontier is pricier — bound it).
-FRONTIER_AG_SUBSAMPLE = 700
+#: AG fixed-pair subsample size for the LLM judges. The full literature test split
+#: is 2293 pairs; at ~3 s/call (GLM-5.2 is a reasoning model) the full sweep is
+#: hours, so we judge a deterministic stratified subsample (same pairs for GLM and
+#: frontier, so the two are directly comparable) and report N alongside the F1.
+AG_LLM_SUBSAMPLE = 600
+
+#: Frontier AG fixed-pair subsample size (frontier is pricier — bound it). Kept ==
+#: AG_LLM_SUBSAMPLE so GLM vs frontier is judged on the identical pair set.
+FRONTIER_AG_SUBSAMPLE = AG_LLM_SUBSAMPLE
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -165,6 +172,10 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 #: a bounded timeout + retries makes a stalled call fail fast and recover.
 LLM_TIMEOUT_S = 60.0
 LLM_NUM_RETRIES = 2
+
+#: Cap on judge completion tokens. The judge only needs its decision + score line,
+#: not long free-text reasoning — capping keeps each sequential call fast and cheap.
+LLM_MAX_TOKENS = 96
 
 
 # ---------------------------------------------------------------------------
@@ -234,42 +245,60 @@ def register_runtime_model_price(model: str) -> str | None:
     return dated
 
 
-class _TimeoutLiteLLM:
-    """Wrap the LiteLLM module so every ``completion`` gets a timeout + retries.
+def _no_keepalive_http_client() -> Any:
+    """An httpx client that never reuses a connection (fresh socket per request).
 
-    ``LLMJudge`` calls ``client.completion(model=, messages=, temperature=)`` with
-    no timeout, and ``litellm.request_timeout`` defaults to 6000s — so a single
-    stalled keep-alive socket hangs the whole sequential run indefinitely (observed
-    in the first paid attempt). This proxy injects a bounded ``timeout`` and
-    ``num_retries`` on every call, so a stalled call fails fast, retries on a fresh
-    connection, and (if it still fails) is skipped by the BudgetedModuleRunner —
-    the run can never wedge on one bad socket. All other attributes pass through.
+    The first paid attempt wedged because litellm/httpx reused ONE keep-alive
+    socket across thousands of sequential calls; when that socket went stale the
+    whole run stalled (~2 KiB / 24 s) even though fresh calls worked instantly.
+    Disabling keep-alive (``max_keepalive_connections=0``) forces a new connection
+    per call, so a dead socket can never persist and stall the run.
+    """
+    import httpx
+
+    return httpx.Client(
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=8),
+        timeout=httpx.Timeout(LLM_TIMEOUT_S),
+    )
+
+
+class _OpenAICompletionClient:
+    """A ``.completion()``-shaped client for ``LLMJudge`` backed by the OpenAI SDK.
+
+    ``LLMJudge`` expects a LiteLLM-shaped ``client.completion(model=, messages=,
+    temperature=)`` returning a response with ``.choices[0].message.content``,
+    ``.usage`` and ``.model``. We satisfy that with the OpenAI SDK pointed at
+    OpenRouter and a **no-keep-alive** http client — bypassing litellm's pooled
+    sync client (the source of the stall) while keeping LLMJudge and
+    ``litellm.completion_cost`` (which reads the OpenAI response) working unchanged.
+    The ``openrouter/`` routing prefix is stripped for the OpenRouter endpoint.
     """
 
-    def __init__(self, inner: Any, *, timeout: float, num_retries: int) -> None:
-        self._inner = inner
-        self._timeout = timeout
-        self._num_retries = num_retries
+    def __init__(self) -> None:
+        from openai import OpenAI
 
-    def completion(self, **kwargs: Any) -> Any:
-        kwargs.setdefault("timeout", self._timeout)
-        kwargs.setdefault("num_retries", self._num_retries)
-        return self._inner.completion(**kwargs)
+        self._client = OpenAI(
+            base_url=OPENROUTER_BASE_URL,
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            timeout=LLM_TIMEOUT_S,
+            max_retries=LLM_NUM_RETRIES,
+            http_client=_no_keepalive_http_client(),
+        )
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+    def completion(self, *, model: str, messages: Any, temperature: float, **_: Any) -> Any:
+        bare = model.split("openrouter/", 1)[-1]
+        return self._client.chat.completions.create(
+            model=bare, messages=messages, temperature=temperature, max_tokens=LLM_MAX_TOKENS
+        )
 
 
 def make_litellm_client() -> Any:
-    """LiteLLM client (for ``llm_judge``), Langfuse off, with a bounded timeout."""
-    from langres.clients import Settings, create_llm_client
-
-    inner = create_llm_client(Settings(), enable_langfuse=False)
-    return _TimeoutLiteLLM(inner, timeout=LLM_TIMEOUT_S, num_retries=LLM_NUM_RETRIES)
+    """Client for ``llm_judge`` — OpenAI SDK adapter, no keep-alive (stall-proof)."""
+    return _OpenAICompletionClient()
 
 
 def make_openai_client() -> Any:
-    """OpenAI-shaped client pointed at OpenRouter (for ``cascade``), bounded timeout."""
+    """OpenAI-shaped client pointed at OpenRouter (for ``cascade``), no keep-alive."""
     from openai import OpenAI
 
     return OpenAI(
@@ -277,6 +306,7 @@ def make_openai_client() -> Any:
         api_key=os.environ["OPENROUTER_API_KEY"],
         timeout=LLM_TIMEOUT_S,
         max_retries=LLM_NUM_RETRIES,
+        http_client=_no_keepalive_http_client(),
     )
 
 
@@ -284,6 +314,37 @@ def per_token_worst_price(model: str) -> float:
     """Worst-case per-token price (the dearer of input/output) for the budget cap."""
     in_per_1m, out_per_1m = PRICES_PER_1M[model]
     return max(in_per_1m, out_per_1m) / 1_000_000.0
+
+
+def make_token_cost_track(model: str) -> Callable[[list[PairwiseJudgement]], CostTrack]:
+    """A cost function that prices judgements from their captured token counts.
+
+    ``litellm.completion_cost`` returns $0 for OpenRouter responses (their
+    ``response.model`` carries a dated id like ``z-ai/glm-5.2-20260616`` with no
+    provider prefix, so litellm raises "LLM Provider NOT provided" and the judge
+    swallows it to $0). The LLM judge does, however, record ``prompt_tokens`` /
+    ``completion_tokens`` in provenance — so we price the run deterministically from
+    those counts against the pinned per-1M rates. This is the honest, source-of-
+    truth cost for the paid cells (and is what the budget ledger reads back).
+    """
+    in_per_1m, out_per_1m = PRICES_PER_1M[model]
+    in_per_tok, out_per_tok = in_per_1m / 1_000_000.0, out_per_1m / 1_000_000.0
+
+    def track(judgements: list[PairwiseJudgement]) -> CostTrack:
+        usd_total = 0.0
+        for j in judgements:
+            prov = j.provenance
+            usd_total += int(prov.get("prompt_tokens", 0) or 0) * in_per_tok
+            usd_total += int(prov.get("completion_tokens", 0) or 0) * out_per_tok
+        n = len(judgements)
+        per_pair = usd_total / n if n > 0 else 0.0
+        return CostTrack(
+            usd_total=usd_total,
+            usd_per_1k_pairs=per_pair * 1_000.0,
+            est_usd_per_100k=per_pair * 100_000.0,
+        )
+
+    return track
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +515,15 @@ def _judge_eval_to_dict(
     }
 
 
+def _cost_fn_for(method: str, model: str | None) -> Callable[[list[PairwiseJudgement]], CostTrack]:
+    """Pick the cost aggregator: cascade diagnostics, token-priced LLM, or free."""
+    if method == "cascade":
+        return cascade_cost_track
+    if model is not None:
+        return make_token_cost_track(model)
+    return _cost_track
+
+
 def run_agfixed_cell(
     method: str,
     *,
@@ -472,9 +542,7 @@ def run_agfixed_cell(
         cands = _attach_comparison(candidates, resolver.comparator)
 
     runner = _budget_runner(resolver.module, model) if model else None
-    cost_fn: Callable[[list[PairwiseJudgement]], CostTrack] = (
-        cascade_cost_track if method == "cascade" else _cost_track
-    )
+    cost_fn = _cost_fn_for(method, model)
     result, _judgements = evaluate_judge_on_candidates(
         resolver.module,
         cands,
@@ -508,9 +576,7 @@ def run_fzband_cell(
         cands = _attach_comparison(band, resolver.comparator)
 
     runner = _budget_runner(resolver.module, model) if model else None
-    cost_fn: Callable[[list[PairwiseJudgement]], CostTrack] = (
-        cascade_cost_track if method == "cascade" else _cost_track
-    )
+    cost_fn = _cost_fn_for(method, model)
     result, judgements = evaluate_judge_on_candidates(
         resolver.module,
         cands,
@@ -741,16 +807,18 @@ def build_cells(glm_model: str, frontier_model: str | None) -> list[Cell]:
             )
         )
 
-    # --- PAID: GLM judges (priority order) ---
-    cells.append(
-        Cell(
-            "agfixed_llm_judge",
-            True,
-            lambda: run_agfixed_cell(
-                "llm_judge", model=glm_model, candidates=ag_fixed()[0], gold=ag_fixed()[1]
-            ),
-        )
-    )
+    # --- PAID: GLM llm_judge (priority order) ---
+    # AG fixed pairs are subsampled (stratified, deterministic) so the full 2293-pair
+    # sweep doesn't run for hours at ~3 s/call; GLM and frontier judge the SAME subset.
+    def _ag_llm(model: str) -> dict[str, Any]:
+        cands, gold = ag_fixed()
+        sub = subsample_stratified(cands, gold, AG_LLM_SUBSAMPLE, seed=0)
+        out = run_agfixed_cell("llm_judge", model=model, candidates=sub, gold=gold)
+        out["subsample_n"] = len(sub)
+        out["subsample_of"] = len(cands)
+        return out
+
+    cells.append(Cell("agfixed_llm_judge", True, lambda: _ag_llm(glm_model)))
     cells.append(
         Cell(
             "fzband_llm_judge",
@@ -765,56 +833,14 @@ def build_cells(glm_model: str, frontier_model: str | None) -> list[Cell]:
             ),
         )
     )
-    cells.append(
-        Cell(
-            "agfixed_cascade",
-            True,
-            lambda: run_agfixed_cell(
-                "cascade", model=glm_model, candidates=ag_fixed()[0], gold=ag_fixed()[1]
-            ),
-        )
-    )
-    cells.append(
-        Cell(
-            "fzband_cascade",
-            True,
-            lambda: run_fzband_cell(
-                "cascade",
-                model=glm_model,
-                band=fz_band()[0],
-                gold=fz_band()[1],
-                test_clusters=fz_band()[2],
-                all_ids=fz_band()[3],
-            ),
-        )
-    )
 
-    # --- PAID: frontier llm_judge (AG subsampled, then FZ band) ---
+    # --- PAID: frontier llm_judge on the IDENTICAL AG subsample (teacher selection) ---
+    # Cascade (cost-quality frontier) and the frontier FZ-band pass are deliberately
+    # DEFERRED: cascade needs a source fix (it neither records token counts nor prices
+    # OpenRouter responses, so its $cost — the whole point of a cascade — reads $0),
+    # which should not be debugged inside a paid run. See the direction memo.
     if frontier_model is not None:
-
-        def _ag_frontier() -> dict[str, Any]:
-            cands, gold = ag_fixed()
-            sub = subsample_stratified(cands, gold, FRONTIER_AG_SUBSAMPLE, seed=0)
-            out = run_agfixed_cell("llm_judge", model=frontier_model, candidates=sub, gold=gold)
-            out["subsample_n"] = len(sub)
-            out["subsample_of"] = len(cands)
-            return out
-
-        cells.append(Cell("agfixed_llm_judge_frontier", True, _ag_frontier))
-        cells.append(
-            Cell(
-                "fzband_llm_judge_frontier",
-                True,
-                lambda: run_fzband_cell(
-                    "llm_judge",
-                    model=frontier_model,
-                    band=fz_band()[0],
-                    gold=fz_band()[1],
-                    test_clusters=fz_band()[2],
-                    all_ids=fz_band()[3],
-                ),
-            )
-        )
+        cells.append(Cell("agfixed_llm_judge_frontier", True, lambda: _ag_llm(frontier_model)))
 
     # --- FREE (slow): zero-spend full pipeline on Amazon-Google, 5 seeds ---
     # Last: each call re-embeds the ~3.2k-record train corpus several times, so
@@ -882,11 +908,13 @@ def main() -> int:
         print("[fatal] OPENROUTER_API_KEY not in environment (.env not loaded?).")
         return 1
 
-    # Backstop the per-call proxy/client timeouts with a bounded global default
-    # (litellm ships a 6000s default that hangs on a stalled socket).
+    # Backstop the per-call client timeouts with a bounded global default and a
+    # no-keep-alive session for litellm's own probe calls (litellm ships a 6000s
+    # default and a pooled client that stalls on a dead socket).
     import litellm
 
     litellm.request_timeout = LLM_TIMEOUT_S
+    litellm.client_session = _no_keepalive_http_client()
 
     if args.smoke:
         return smoke(args.glm_model)
