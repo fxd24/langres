@@ -12,12 +12,14 @@ from collections.abc import Iterator
 
 import pytest
 
+import langres.core.benchmark as benchmark_module
 from langres.core.benchmark import (
     Benchmark,
     BenchmarkTable,
     BlindCostError,
     BudgetedModuleRunner,
     MethodResult,
+    PipelineTrack,
     complete_partition,
     gold_pairs_from_clusters,
     run_method,
@@ -289,6 +291,44 @@ def test_tune_threshold_on_train_empty_grid_raises() -> None:
             [{"c1", "c1b"}],
             thresholds=[],
         )
+
+
+def test_generic_tune_picks_argmax_train_f1(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Map each candidate threshold to a known train F1; the tuner returns the max.
+    f1_by_threshold = {0.3: 0.10, 0.4: 0.50, 0.5: 0.90, 0.6: 0.40}
+
+    def fake_eval(resolver: Resolver, records: object, clusters: object) -> PipelineTrack:
+        f1 = f1_by_threshold[resolver.clusterer.threshold]
+        return PipelineTrack(
+            bcubed_p=0.0,
+            bcubed_r=0.0,
+            bcubed_f1=f1,
+            cluster_pairwise_f1=0.0,
+            delta_above_floor=0.0,
+            sanity_floor_f1=0.0,
+        )
+
+    monkeypatch.setattr(benchmark_module, "evaluate_resolver_bcubed", fake_eval)
+    best = tune_threshold_on_train(
+        _resolver_factory, [], [], thresholds=tuple(f1_by_threshold)
+    )
+    assert best == 0.5
+
+
+def test_generic_tune_breaks_ties_to_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_eval(resolver: Resolver, records: object, clusters: object) -> PipelineTrack:
+        return PipelineTrack(
+            bcubed_p=0.0,
+            bcubed_r=0.0,
+            bcubed_f1=0.5,
+            cluster_pairwise_f1=0.0,
+            delta_above_floor=0.0,
+            sanity_floor_f1=0.0,
+        )
+
+    monkeypatch.setattr(benchmark_module, "evaluate_resolver_bcubed", fake_eval)
+    best = tune_threshold_on_train(_resolver_factory, [], [], thresholds=(0.4, 0.5, 0.6))
+    assert best == 0.4
 
 
 # ---------------------------------------------------------------------------

@@ -28,9 +28,6 @@ from langres.core.benchmark import (
 from langres.core.benchmark import (
     evaluate_resolver_bcubed as _generic_evaluate_resolver_bcubed,
 )
-from langres.core.benchmark import (
-    tune_threshold_on_train as _generic_tune_threshold_on_train,
-)
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
@@ -607,13 +604,25 @@ def tune_threshold_on_train(
     Raises:
         ValueError: If ``thresholds`` is empty.
     """
-    # Inject the restaurant resolver builder into the dataset-agnostic core tuner.
-    return _generic_tune_threshold_on_train(
-        lambda threshold: build_restaurant_resolver(threshold, k_neighbors=k_neighbors),
-        train_records,
-        train_clusters,
-        thresholds=thresholds,
-    )
+    # Restaurant-specific loop (kept thin and self-contained rather than
+    # delegating to the core generic tuner) so it scores via *this* module's
+    # ``evaluate_resolver_bcubed`` — the cross-source-PC-aware wrapper. The
+    # generic resolver-factory tuner lives in ``langres.core.benchmark`` and is
+    # what ``run_method`` uses; the FZ ``run_method`` parity test confirms the two
+    # paths agree on the held-out numbers.
+    if not thresholds:
+        raise ValueError("thresholds is empty; nothing to tune over")
+
+    best_threshold = thresholds[0]
+    best_f1 = -1.0
+    for threshold in thresholds:
+        resolver = build_restaurant_resolver(threshold, k_neighbors=k_neighbors)
+        result = evaluate_resolver_bcubed(resolver, train_records, train_clusters)
+        logger.info("threshold=%.2f -> train BCubed F1=%.4f", threshold, result.f1)
+        if result.f1 > best_f1:
+            best_f1 = result.f1
+            best_threshold = threshold
+    return best_threshold
 
 
 class FodorsZagatBenchmark(Benchmark[RestaurantSchema]):
