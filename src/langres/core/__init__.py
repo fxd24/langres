@@ -35,6 +35,7 @@ from langres.core.indexes import (
     QdrantHybridIndex,
     VectorIndex,
 )
+from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import (
     CompanySchema,
@@ -80,6 +81,7 @@ __all__ = [
     "ComparisonVector",
     "ComponentSpec",
     "EmbeddingProvider",
+    "EmbeddingScoreJudge",
     "EntityProtocol",
     "ERCandidate",
     "ErrorExample",
