@@ -160,8 +160,24 @@ def test_clusters_from_pairs_merges_transitively_and_completes_singletons() -> N
     clusters = _clusters_from_pairs(pairs, ["a1", "a2", "g1", "g2", "g3"])
     match = [c for c in clusters if len(c) >= 2]
     singletons = [c for c in clusters if len(c) == 1]
-    assert match == [{"a1", "g1", "g2"}]
+    # Index rather than compare the whole list: cluster order depends on frozenset
+    # iteration, which isn't guaranteed across Python versions / hash seeds.
+    assert len(match) == 1
+    assert match[0] == {"a1", "g1", "g2"}
     assert sorted(tuple(c)[0] for c in singletons) == ["a2", "g3"]
+
+
+def test_clusters_from_pairs_empty_pairs_yields_all_singletons() -> None:
+    # No matches: every id becomes its own singleton (no components).
+    clusters = _clusters_from_pairs(set(), ["a1", "g1", "g2"])
+    assert sorted(tuple(c)[0] for c in clusters) == ["a1", "g1", "g2"]
+    assert all(len(c) == 1 for c in clusters)
+
+
+def test_clusters_from_pairs_empty_ids_yields_components_only() -> None:
+    # No corpus ids to complete against: only the match component is returned.
+    clusters = _clusters_from_pairs({frozenset({"a1", "g1"})}, [])
+    assert clusters == [{"a1", "g1"}]
 
 
 # --- pick_blocking_k: pure, fast branches ---------------------------------------
@@ -209,6 +225,13 @@ def test_cross_source_filters_intra_source_pairs() -> None:
     cross = ERCandidate(left=a1, right=g1, blocker_name="t")
     same = ERCandidate(left=a1, right=a2, blocker_name="t")
     assert _cross_source([cross, same]) == [cross]
+
+
+def test_cross_source_all_same_source_returns_empty() -> None:
+    a1 = ProductSchema(id="a1", title="x", source="amazon")
+    a2 = ProductSchema(id="a2", title="y", source="amazon")
+    same = ERCandidate(left=a1, right=a2, blocker_name="t")
+    assert _cross_source([same]) == []
 
 
 # --- slow: real embeddings, runs in CI ------------------------------------------

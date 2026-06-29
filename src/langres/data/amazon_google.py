@@ -168,7 +168,9 @@ def _record_from_row(row: dict[str, str], source: ProductSource, prefix: str) ->
 
     The Amazon-Google CSVs are plainly quoted (standard ``csv`` quoting handles
     embedded commas/quotes), so no source-specific unquoting is needed. Empty
-    cells map to ``None`` for the optional fields.
+    cells map to ``None`` for the optional fields; the required ``title`` instead
+    falls back to ``""`` (the real data has no empty titles, but this keeps the
+    field non-optional — mirrors ``er_benchmarks._record_from_row``).
     """
 
     def field(name: str) -> str | None:
@@ -264,9 +266,10 @@ def load_amazon_google() -> tuple[list[ProductSchema], list[set[str]], set[froze
     Both sources are combined into a single corpus with globally-unique,
     source-prefixed ids (``a<id>`` for Amazon ``tableA``, ``g<id>`` for Google
     ``tableB``). Ground truth pools the positive (``label == 1``) rows of all
-    three fixed splits into ``gold_pairs``; ``gold_clusters`` is the connected
-    components of those pairs, singleton-completed over the corpus (a closed-world
-    partition; see :func:`_clusters_from_pairs`).
+    three fixed splits into ``gold_pairs`` (a ``set``, so a pair appearing in more
+    than one split is counted once); ``gold_clusters`` is the connected components
+    of those pairs, singleton-completed over the corpus (a closed-world partition;
+    see :func:`_clusters_from_pairs`).
 
     Returns:
         ``(corpus, gold_clusters, gold_pairs)`` where ``corpus`` is the combined
