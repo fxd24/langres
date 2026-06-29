@@ -47,6 +47,19 @@ from langres.core.models import ERCandidate
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "ACHIEVED_PC_AT_DEFAULT_K",
+    "AG_RECALL_GATE",
+    "DEFAULT_AG_BLOCKING_K",
+    "GATE_MET",
+    "ProductSchema",
+    "build_product_blocker",
+    "load_amazon_google",
+    "load_amazon_google_pair_splits",
+    "pick_blocking_k",
+    "sweep_blocking_k",
+]
+
 _DATASET_PACKAGE = "langres.data.datasets.amazon_google"
 _TABLE_A_FILE = "tableA.csv"  # Amazon records
 _TABLE_B_FILE = "tableB.csv"  # Google records
