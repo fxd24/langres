@@ -634,10 +634,27 @@ class FodorsZagatBenchmark(Benchmark[RestaurantSchema]):
     the gold match pairs; ``split`` delegates to :func:`split_restaurant_corpus`.
     The canonical resolver factory is :func:`build_restaurant_resolver`, passed
     separately to ``run_method``.
+
+    It also conforms to ``langres.methods.BlockingBenchmark`` by exposing its
+    record ``schema`` and pinned blocking config (``blocking_k`` +
+    :meth:`build_blocker`), so the method registry can race *any* of the five
+    methods against it on the identical candidate set.
     """
 
     name = "fodors_zagat"
     threshold_grid = DEFAULT_THRESHOLD_GRID
+    #: Record type, exposed for the method registry's Comparator/rapidfuzz fields.
+    schema = RestaurantSchema
+    #: Pinned blocking neighbour count (blocking held constant across methods).
+    blocking_k = DEFAULT_BLOCKING_K
+
+    def build_blocker(self, k_neighbors: int) -> VectorBlocker[RestaurantSchema]:
+        """Return a fresh restaurant VectorBlocker (MiniLM + FAISS-cosine).
+
+        Delegates to :func:`build_restaurant_blocker` so the race shares the exact
+        blocking config used elsewhere; each call yields a fresh, unbuilt index.
+        """
+        return build_restaurant_blocker(k_neighbors)
 
     def load(self) -> tuple[list[RestaurantSchema], list[set[str]], set[frozenset[str]]]:
         """Return ``(corpus, gold_clusters, gold_pairs)`` for Fodors-Zagat."""
