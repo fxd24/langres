@@ -6,6 +6,44 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### M2: Walking skeleton end-to-end + baseline + artifact (Fodors-Zagat)
+
+Wired the existing M0/M1 primitives into one deterministic, zero-spend Resolver
+pipeline that reports a held-out BCubed baseline and proves the brainsquad
+**artifact consumption contract** end-to-end. This is mechanics + serialization,
+not Person-resolution quality (that is M5).
+
+- **Pipeline (compose, no new components)**: `build_restaurant_resolver` wires
+  the shared `VectorBlocker` (MiniLM + FAISS-cosine, `k=5`) with the missing-aware
+  `Comparator.from_schema(RestaurantSchema)` (auto-excludes `id`, computed
+  `embed_text`, and the `source` Literal — comparing `source` would penalise the
+  all-cross-source true matches), the registered zero-spend `WeightedAverageJudge`,
+  and a connected-components `Clusterer`. `split_restaurant_corpus` is a
+  leakage-free stratified split over full records; the threshold is tuned on TRAIN
+  only and BCubed is scored on the held-out TEST split against the dataset's TRUE
+  `perfectMapping` closed-world partition (NOT the M1 teacher labels). The
+  predicted partition is singleton-completed before scoring.
+- **Measured baseline (seed=0, test_size=0.3, threshold tuned to 0.8)**: held-out
+  TEST BCubed **P/R/F1 = 0.991 / 0.969 / 0.980** vs the merge-nothing sanity floor
+  **F1 = 0.932** (Fodors-Zagat is singleton-dominated, so the floor is high by
+  construction) — i.e. ~5 honest points of signal over "every record is unique".
+  Blocking **Pair-Completeness = 1.0** on the test split (it caps recall). The
+  slow CI gate pins F1 ≥ 0.95 as an informational regression floor, not a quality
+  bar — M3 is what improves the baseline.
+- **Artifact contract = `resolve()`-only**: `resolver.save(<dir>)` writes the
+  artifact **directory** (a `resolver.json` manifest + FAISS sidecar; no pickle,
+  no code execution) and `Resolver.load(<dir>).resolve(records)` is the entire
+  consumer call (`records: list[dict]` → `list[set[str]]` of multi-record
+  clusters). A fresh-process identity test imports `langres.data.er_benchmarks`
+  (which now registers `RestaurantSchema` at import time), reloads the artifact in
+  a subprocess, and asserts clusters identical to the in-process run. Bad-input
+  contract: empty corpus → `[]`; a record missing a required field → pydantic
+  `ValidationError` naming the field (before any embedding). The copy-paste
+  consumption snippet lives in `docs/DX_RESOLVER.md`.
+- **Deferred to M5**: `Resolver.link()` / `Resolver.stream_against()` (incremental
+  linking against a saved corpus) remain `NotImplementedError` stubs and are **not**
+  part of the M2 contract — batch dedup via `resolve()` is.
+
 ### M1: Cold-start gold-set bootstrapping (LLM-teacher)
 
 Reusable, entity-type-agnostic `langres.bootstrap` package that mines hard-negative

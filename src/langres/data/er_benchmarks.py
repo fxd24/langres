@@ -21,6 +21,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, computed_field
 
 from langres.core.blocker import Blocker
+from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
@@ -103,6 +104,15 @@ class RestaurantSchema(BaseModel):
         empty tokens.
         """
         return " ".join(p for p in [self.name, self.city, self.addr] if p)
+
+
+# Register RestaurantSchema at import time so a fresh process that only does
+# ``import langres.data.er_benchmarks`` (e.g. to ``Resolver.load`` a saved
+# artifact and ``resolve``) finds the schema in the registry without first
+# constructing a blocker. The declarative VectorBlocker re-registers idempotently
+# in :func:`build_restaurant_blocker`, so this is the single source of truth for
+# the registry key and round-trips the saved artifact's ``schema_type_name``.
+register_schema_idempotent(RestaurantSchema)
 
 
 def _unquote(value: str) -> str:

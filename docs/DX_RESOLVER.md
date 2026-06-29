@@ -129,3 +129,35 @@ Resolver(
 ```
 
 Runnable end-to-end: [`examples/resolver_company_dedup.py`](../examples/resolver_company_dedup.py).
+
+## Consuming a saved artifact (M2 — this is all brainsquad writes)
+
+The M2 walking skeleton (`examples/m2_walking_skeleton_fodors_zagat.py`) builds,
+tunes, and **saves** a Resolver artifact. The integrator who *consumes* that
+artifact writes none of the build code — only load + resolve:
+
+```python
+import langres.data.er_benchmarks  # registers RestaurantSchema (must precede load)
+from langres.core.resolver import Resolver
+
+# records: list[dict] — raw rows in the saved corpus's schema (e.g. RestaurantSchema).
+clusters = Resolver.load("artifacts/fodors_zagat").resolve(records)
+# -> list[set[str]] of multi-record clusters (singletons are dropped).
+```
+
+That is the entire consumer path: `save(<dir>)` writes the artifact **directory**
+(a human-readable `resolver.json` manifest plus any FAISS sidecar — no pickle, no
+code execution), and `Resolver.load(<dir>).resolve(records)` reconstructs the
+pipeline from the registry and runs it. The import line is load-bearing: a fresh
+process must register the record schema **before** `Resolver.load`, or the
+manifest's `schema_type_name` won't resolve. A fresh-process identity proof
+(`tests/data/test_m2_artifact_slow.py`) asserts the reloaded artifact produces
+clusters identical to the in-process run.
+
+**Two consumption modes, one line each:**
+
+- **Batch dedup of a corpus** (available now, M2): `resolver.resolve(records)` —
+  cluster a record list into entities.
+- **Incremental linking of new records against a saved corpus** (M5, not yet
+  available): `.link()` / `.stream_against()` raise `NotImplementedError` today;
+  the incremental contract lands in M5.
