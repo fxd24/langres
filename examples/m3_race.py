@@ -173,10 +173,6 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_TIMEOUT_S = 60.0
 LLM_NUM_RETRIES = 2
 
-#: Cap on judge completion tokens. The judge only needs its decision + score line,
-#: not long free-text reasoning — capping keeps each sequential call fast and cheap.
-LLM_MAX_TOKENS = 96
-
 
 # ---------------------------------------------------------------------------
 # Pricing patch + clients
@@ -287,8 +283,10 @@ class _OpenAICompletionClient:
 
     def completion(self, *, model: str, messages: Any, temperature: float, **_: Any) -> Any:
         bare = model.split("openrouter/", 1)[-1]
+        # No max_tokens cap: the judge emits its score on the LAST line, so capping
+        # truncates the response before the score and the parser falls back to 0.5.
         return self._client.chat.completions.create(
-            model=bare, messages=messages, temperature=temperature, max_tokens=LLM_MAX_TOKENS
+            model=bare, messages=messages, temperature=temperature
         )
 
 
