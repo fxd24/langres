@@ -304,8 +304,9 @@ def build_product_blocker(
     once. Mirrors ``build_restaurant_blocker``.
 
     Args:
-        k_neighbors: Nearest neighbours per record. Defaults to the pinned
-            :data:`DEFAULT_AG_BLOCKING_K` (clears Pair-Completeness >= 0.90).
+        k_neighbors: Nearest neighbours per record. Defaults to
+            :data:`DEFAULT_AG_BLOCKING_K` (the best-measured ``k``; the 0.90 gate
+            is *not* met — see :data:`ACHIEVED_PC_AT_DEFAULT_K` / :data:`GATE_MET`).
 
     Returns:
         A :class:`VectorBlocker` over ``ProductSchema.embed_text``.
@@ -362,6 +363,9 @@ def sweep_blocking_k(
 
     recalls: dict[int, float] = {}
     for k in ks:
+        # Construct a fresh blocker per k (the pre-built FAISS index is reused, so
+        # this is cheap); only k_neighbors varies. ``k`` lives on the blocker, not
+        # the index, so sharing one index across ks is safe.
         blocker: VectorBlocker[ProductSchema] = VectorBlocker(
             vector_index=index,
             schema=ProductSchema,

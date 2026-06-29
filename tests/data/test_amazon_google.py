@@ -108,6 +108,10 @@ def test_pair_splits_have_three_named_splits_with_prefixed_ids() -> None:
             assert left.startswith("a")
             assert right.startswith("g")
             assert label in (0, 1)
+        # Each split must retain both classes; a loader regression that silently
+        # dropped all negatives (or all positives) would otherwise pass.
+        assert any(label == 0 for _, _, label in rows)
+        assert any(label == 1 for _, _, label in rows)
 
 
 # --- schema / embed_text ---------------------------------------------------------
@@ -174,6 +178,15 @@ def test_pick_blocking_k_falls_back_to_best_when_none_pass() -> None:
 
 def test_pick_blocking_k_custom_threshold() -> None:
     assert pick_blocking_k({5: 0.80, 10: 0.85}, threshold=0.85) == 10
+
+
+def test_pick_blocking_k_single_entry_passing() -> None:
+    assert pick_blocking_k({5: 0.95}) == 5
+
+
+def test_pick_blocking_k_single_entry_failing_falls_back() -> None:
+    # One entry, below the gate: fallback returns it as the best available.
+    assert pick_blocking_k({5: 0.80}) == 5
 
 
 def test_pick_blocking_k_raises_on_empty() -> None:
