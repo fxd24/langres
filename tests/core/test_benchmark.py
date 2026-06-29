@@ -279,7 +279,7 @@ def _cost_resolver_factory(threshold: float) -> Resolver:
 
 
 def test_run_method_raises_when_budget_exceeded() -> None:
-    with pytest.raises(BlindCostError, match="exceeding budget"):
+    with pytest.raises(ValueError, match="exceeding budget"):
         run_method(_FakeBenchmark(), _cost_resolver_factory, seed=0, budget=0.0)
 
 

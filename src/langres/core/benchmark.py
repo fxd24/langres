@@ -454,15 +454,16 @@ def run_method(
         resolver_factory: ``threshold -> Resolver`` for the method under test.
         seed: Split seed.
         budget: Optional hard ceiling on measured spend; if set and the run's
-            ``usd_total`` exceeds it, raises :class:`BlindCostError`. Zero-spend
-            methods (W1) pass ``budget=None`` (no spend to bound) or ``0.0`` to
-            assert they truly spent nothing.
+            ``usd_total`` exceeds it, raises ``ValueError``. Zero-spend methods
+            (W1) pass ``budget=None`` (no spend to bound) or ``0.0`` to assert
+            they truly spent nothing. Per-pair *enforcement* of a budget is the
+            job of :class:`BudgetedModuleRunner`; this is a post-run guard.
 
     Returns:
         A populated :class:`MethodResult`.
 
     Raises:
-        BlindCostError: If ``budget`` is set and measured ``usd_total`` exceeds it.
+        ValueError: If ``budget`` is set and measured ``usd_total`` exceeds it.
     """
     corpus, gold_clusters, _gold_pairs = benchmark.load()
     train_records, test_records, train_clusters, test_clusters = benchmark.split(
@@ -525,7 +526,7 @@ def run_method(
     latency = LatencyTrack(seconds_per_pair=elapsed / n_pairs if n_pairs > 0 else 0.0)
 
     if budget is not None and cost.usd_total > budget:
-        raise BlindCostError(
+        raise ValueError(
             f"run_method spent ${cost.usd_total:.4f}, exceeding budget ${budget:.4f}"
         )
 
