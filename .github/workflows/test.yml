@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/m3-benchmark]
   pull_request:
-    branches: [main]
+    branches: [main, feat/m3-benchmark]
 
 jobs:
   test:
