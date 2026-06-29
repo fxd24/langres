@@ -18,7 +18,6 @@ skipif, so ``--cov`` stays green without a live key.
 """
 
 import os
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -128,12 +127,16 @@ def _fake_response(content: str) -> SimpleNamespace:
 class _MockLiteLLMClient:
     """LiteLLM-shaped client for ``LLMJudge`` (``client.completion(...)``)."""
 
-    def __init__(self, content: str = "MATCH\nScore: 0.90\nReasoning: same", boom_on_call: int | None = None) -> None:
+    def __init__(
+        self, content: str = "MATCH\nScore: 0.90\nReasoning: same", boom_on_call: int | None = None
+    ) -> None:
         self._content = content
         self._boom_on_call = boom_on_call
         self.calls = 0
 
-    def completion(self, *, model: str, messages: list[dict[str, str]], temperature: float) -> SimpleNamespace:
+    def completion(
+        self, *, model: str, messages: list[dict[str, str]], temperature: float
+    ) -> SimpleNamespace:
         self.calls += 1
         if self._boom_on_call is not None and self.calls == self._boom_on_call:
             raise RuntimeError("simulated LLM failure")
@@ -148,7 +151,9 @@ class _MockOpenAIClient:
         self.calls = 0
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
-    def _create(self, *, model: str, messages: list[dict[str, str]], temperature: float) -> SimpleNamespace:
+    def _create(
+        self, *, model: str, messages: list[dict[str, str]], temperature: float
+    ) -> SimpleNamespace:
         self.calls += 1
         return _fake_response(self._content)
 
@@ -218,22 +223,23 @@ def test_unknown_method_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    ("method", "module_type", "needs_comparator"),
+    ("method", "module_type", "needs_comparator", "client"),
     [
-        ("rapidfuzz", RapidfuzzModule, False),
-        ("weighted_average", WeightedAverageJudge, True),
-        ("embedding_cosine", EmbeddingScoreJudge, False),
-        ("llm_judge", LLMJudge, False),
-        ("cascade", CascadeModule, False),
+        ("rapidfuzz", RapidfuzzModule, False, None),
+        ("weighted_average", WeightedAverageJudge, True, None),
+        ("embedding_cosine", EmbeddingScoreJudge, False, None),
+        # The injected client must match each scorer's call shape: LLMJudge calls
+        # ``client.completion(...)`` (LiteLLM-shaped); CascadeModule calls
+        # ``client.chat.completions.create(...)`` (OpenAI-shaped).
+        ("llm_judge", LLMJudge, False, _MockLiteLLMClient()),
+        ("cascade", CascadeModule, False, _MockOpenAIClient()),
     ],
 )
 def test_factory_builds_valid_resolver(
-    method: str, module_type: type, needs_comparator: bool
+    method: str, module_type: type, needs_comparator: bool, client: object
 ) -> None:
     """Each method builds a Resolver with the right scorer + comparator wiring."""
-    factory = make_resolver_factory(
-        method, _FakeBlockingBenchmark(), llm_client=_MockLiteLLMClient()
-    )
+    factory = make_resolver_factory(method, _FakeBlockingBenchmark(), llm_client=client)
     resolver = factory(0.6)
 
     assert isinstance(resolver, Resolver)
@@ -241,6 +247,18 @@ def test_factory_builds_valid_resolver(
     assert isinstance(resolver.module, module_type)
     assert resolver.clusterer.threshold == pytest.approx(0.6)
     assert (resolver.comparator is not None) is needs_comparator
+
+
+def test_cascade_factory_without_client_does_not_require_live_key() -> None:
+    """Building the cascade resolver with no injected client still succeeds.
+
+    The placeholder key satisfies CascadeModule's constructor; the real client is
+    injected later (W4) — never a live-key requirement at build time. Here no
+    client is injected, so the module's client stays unset.
+    """
+    resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
+    assert isinstance(resolver.module, CascadeModule)
+    assert resolver.module._llm_client is None
 
 
 def test_factory_yields_fresh_independent_blockers() -> None:
@@ -276,8 +294,7 @@ def test_deterministic_method_runs_end_to_end(method: str) -> None:
     assert all(isinstance(j, PairwiseJudgement) for j in judgements)
     # Zero-spend: no cost recorded in provenance.
     assert all(
-        "cost_usd" not in j.provenance and "llm_cost_usd" not in j.provenance
-        for j in judgements
+        "cost_usd" not in j.provenance and "llm_cost_usd" not in j.provenance for j in judgements
     )
 
 

@@ -33,6 +33,10 @@ imports no dataset (no ``langres.data``), so it stays free of the
 from collections.abc import Callable
 from typing import Any, Protocol
 
+# ``_cost_track`` is the harness's spend aggregator. We deliberately reuse it
+# (rather than re-implement its cost-key fallback math) so cascade spend totals
+# stay identical to every other method's; it is a stable same-package internal
+# that the harness's own tests also import directly.
 from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
@@ -41,7 +45,7 @@ from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import PairwiseJudgement
 from langres.core.module import Module
-from langres.core.modules.cascade import CascadeModule
+from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP, CascadeModule
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 from langres.core.resolver import Resolver
@@ -240,8 +244,6 @@ def cascade_cost_track(judgements: list[PairwiseJudgement]) -> CostTrack:
     """
     base = _cost_track(judgements)
     n_pairs = len(judgements)
-    escalated = sum(1 for j in judgements if j.decision_step == "llm_judgment")
+    escalated = sum(1 for j in judgements if j.decision_step == CASCADE_LLM_DECISION_STEP)
     rate = escalated / n_pairs if n_pairs > 0 else 0.0
-    return base.model_copy(
-        update={"escalation_rate": rate, "llm_calls_per_candidate": rate}
-    )
+    return base.model_copy(update={"escalation_rate": rate, "llm_calls_per_candidate": rate})
