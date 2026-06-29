@@ -80,7 +80,9 @@ class BlindCostError(RuntimeError):
         self.partial: list[Any] = []
 
 
-def complete_partition(predicted_clusters: list[set[str]], all_ids: Sequence[str]) -> list[set[str]]:
+def complete_partition(
+    predicted_clusters: list[set[str]], all_ids: Sequence[str]
+) -> list[set[str]]:
     """Complete a predicted clustering into a full partition over ``all_ids``.
 
     The :class:`~langres.core.clusterer.Clusterer` drops singletons, so a record
@@ -495,9 +497,7 @@ def run_method(
     # (3) Pair threshold on TRAIN. The clusterer threshold is irrelevant to the
     # raw judgement scores, so any factory threshold yields the same judgements.
     train_gold_pairs = gold_pairs_from_clusters(train_clusters)
-    train_judgements = resolver_factory(threshold).predict(
-        [r.model_dump() for r in train_records]
-    )
+    train_judgements = resolver_factory(threshold).predict([r.model_dump() for r in train_records])
     train_curve = pair_pr_curve(train_judgements, train_gold_pairs, grid)
     best_pair = max(train_curve, key=lambda m: m.f1)
 
@@ -530,9 +530,7 @@ def run_method(
     latency = LatencyTrack(seconds_per_pair=elapsed / n_pairs if n_pairs > 0 else 0.0)
 
     if budget is not None and cost.usd_total > budget:
-        raise ValueError(
-            f"run_method spent ${cost.usd_total:.4f}, exceeding budget ${budget:.4f}"
-        )
+        raise ValueError(f"run_method spent ${cost.usd_total:.4f}, exceeding budget ${budget:.4f}")
 
     return MethodResult(
         method=getattr(resolver.module, "type_name", type(resolver.module).__name__),
@@ -672,16 +670,13 @@ class BudgetedModuleRunner:
                 judgements.append(judgement)
         return judgements
 
-    def _apply_preflight_cap(
-        self, candidates: list[Any], worst_case_per_pair: float
-    ) -> list[Any]:
+    def _apply_preflight_cap(self, candidates: list[Any], worst_case_per_pair: float) -> list[Any]:
         """Truncate the input so even worst-case spend stays under the soft budget."""
         max_pairs = math.floor(self.budget_soft_usd / worst_case_per_pair)
         if len(candidates) > max_pairs:
             self.dropped_by_cap_count = len(candidates) - max_pairs
             logger.info(
-                "Pre-flight cap: keeping %d of %d pairs (soft budget $%.2f, "
-                "worst-case $%.6f/pair)",
+                "Pre-flight cap: keeping %d of %d pairs (soft budget $%.2f, worst-case $%.6f/pair)",
                 max_pairs,
                 len(candidates),
                 self.budget_soft_usd,

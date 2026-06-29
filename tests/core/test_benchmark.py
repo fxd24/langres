@@ -120,9 +120,7 @@ def test_runner_blind_cost_error_on_zero_price() -> None:
 
 def test_runner_preflight_cap_truncates_in_input_order() -> None:
     # worst_case_per_pair = 1 * 0.5 = 0.5; floor(1.0 / 0.5) = 2 pairs kept.
-    runner = BudgetedModuleRunner(
-        _FakeModule(cost=0.0), budget_usd=1.0, budget_soft_usd=1.0
-    )
+    runner = BudgetedModuleRunner(_FakeModule(cost=0.0), budget_usd=1.0, budget_soft_usd=1.0)
     out = runner.run(_candidates(5), price_per_token_or_pair=0.5)
     assert len(out) == 2
     assert runner.dropped_by_cap_count == 3
@@ -132,9 +130,7 @@ def test_runner_preflight_cap_truncates_in_input_order() -> None:
 def test_runner_budget_stop_returns_paid_work_before_crossing() -> None:
     # Preflight keeps floor(0.9/0.3)=3; actual cost 0.5/pair exceeds the 0.3
     # worst-case estimate, so the per-pair gate stops after 2 pairs.
-    runner = BudgetedModuleRunner(
-        _FakeModule(cost=0.5), budget_usd=1.0, budget_soft_usd=0.9
-    )
+    runner = BudgetedModuleRunner(_FakeModule(cost=0.5), budget_usd=1.0, budget_soft_usd=0.9)
     out = runner.run(_candidates(4), price_per_token_or_pair=0.3)
     assert len(out) == 2
     assert runner.total_spent_usd == pytest.approx(1.0)
@@ -222,8 +218,10 @@ class _FakeBenchmark(Benchmark[CompanySchema]):
     _GOLD = [{"c1", "c1b"}, {"c2"}, {"c3", "c3b"}, {"c4"}]
 
     def load(self) -> tuple[list[CompanySchema], list[set[str]], set[frozenset[str]]]:
-        return list(self._CORPUS), [set(c) for c in self._GOLD], gold_pairs_from_clusters(
-            [set(c) for c in self._GOLD]
+        return (
+            list(self._CORPUS),
+            [set(c) for c in self._GOLD],
+            gold_pairs_from_clusters([set(c) for c in self._GOLD]),
         )
 
     def split(
@@ -326,9 +324,7 @@ def test_generic_tune_picks_argmax_train_f1(monkeypatch: pytest.MonkeyPatch) -> 
         )
 
     monkeypatch.setattr(benchmark_module, "evaluate_resolver_bcubed", fake_eval)
-    best = tune_threshold_on_train(
-        _resolver_factory, [], [], thresholds=tuple(f1_by_threshold)
-    )
+    best = tune_threshold_on_train(_resolver_factory, [], [], thresholds=tuple(f1_by_threshold))
     assert best == 0.5
 
 
@@ -400,9 +396,7 @@ def test_core_benchmark_does_not_import_langres_data() -> None:
         "bad = [m for m in sys.modules if m.startswith('langres.data')]; "
         "assert not bad, bad; print('ok')"
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     assert "ok" in proc.stdout
 
