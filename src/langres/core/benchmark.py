@@ -627,7 +627,16 @@ def evaluate_judge_on_candidates(
         judgements = list(module.forward(iter(candidates)))
     elapsed = time.perf_counter() - start
 
-    curve = pair_pr_curve(judgements, gold_pairs, grid)
+    # Grade the judge only on pairs it was actually given. When ``candidates`` is a
+    # subsample of a larger fixed-pair set, gold pairs whose candidate was not
+    # sampled are blocking-style misses, not judge errors — counting them would cap
+    # recall artificially (e.g. a 600-pair subsample holding 61 of 234 gold pairs
+    # caps recall at 61/234≈0.26 for *every* method). Restricting gold to
+    # candidate-realizable pairs keeps this a pure judge metric, and is a no-op when
+    # the candidates already cover all of ``gold_pairs``.
+    candidate_pairs = {frozenset((cand.left.id, cand.right.id)) for cand in candidates}
+    gold_in_scope = gold_pairs & candidate_pairs
+    curve = pair_pr_curve(judgements, gold_in_scope, grid)
     best = max(curve, key=lambda m: m.f1)
     pair = PairTrack(precision=best.precision, recall=best.recall, f1=best.f1, pr_curve=curve)
 

@@ -483,6 +483,33 @@ def test_evaluate_judge_on_candidates_custom_cost_track() -> None:
     assert result.cost.usd_total == 99.0
 
 
+def test_evaluate_judge_on_candidates_handles_empty_candidates() -> None:
+    # No candidates -> no judgements -> latency falls back to 0.0 (no div-by-zero).
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule({}), [], set(), grid=(0.5,)
+    )
+    assert judgements == []
+    assert result.n_judged == 0
+    assert result.latency.seconds_per_pair == 0.0
+    assert not result.truncated
+
+
+def test_evaluate_judge_on_candidates_ignores_gold_outside_candidates() -> None:
+    # A gold pair whose candidate was never supplied (a subsample/blocking miss)
+    # must not count against the judge: recall is graded only over in-scope pairs.
+    # Without this, a 600-pair subsample holding 61 of 234 gold pairs would cap
+    # recall at ~0.26 for every method.
+    scores = {"p0": 0.9, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)  # gold = {frozenset(p0, r_p0)}
+    gold_plus_unseen = gold | {frozenset({"ghost", "r_ghost"})}
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold_plus_unseen, grid=(0.5,)
+    )
+    # Only p0 is in scope; it is caught and n0 excluded -> perfect, ghost ignored.
+    assert result.pair.recall == pytest.approx(1.0)
+    assert result.pair.f1 == pytest.approx(1.0)
+
+
 # ---------------------------------------------------------------------------
 # complete_partition (re-homed to core)
 # ---------------------------------------------------------------------------
