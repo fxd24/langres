@@ -227,13 +227,24 @@ Fodors-Zagat (Person artifact + brainsquad load-and-run is M5, see below).
   incremental `.link()` / `.stream_against()` are M5 stubs (below).
 
 ### M3 — The seam: multi-method benchmark
-Wrap ≥3 methods (rapidfuzz, embedding cascade, LLM judge, **GLinker**) behind the
-interfaces; benchmark harness emits BCubed / recall / cost / latency table on the
+**First task (carried from the M2 post-merge audit):** extract the general
+evaluation/split/threshold-tuning machinery (`evaluate_resolver_bcubed`,
+`BCubedEvalResult`, `complete_partition`, `tune_threshold_on_train`) out of the
+dataset-specific `data/er_benchmarks.py` (now a ~620-line god-module) into a
+reusable `core` benchmark/eval module, and collapse `split_restaurant_corpus`
+back onto a generalised `data/splitting.py`. The harness is a first-class
+component (§2.2), not benchmark glue — extract-then-extend so each new dataset
+reuses it instead of re-duplicating. Also report **pairwise F1 on true matches**
+alongside BCubed (BCubed is inflated on singleton-heavy corpora — see the M2
+sanity-floor caveat).
+
+Then wrap ≥3 methods (rapidfuzz, embedding cascade, LLM judge, **GLinker**) behind
+the interfaces; the harness emits BCubed / recall / cost / latency on the
 Person gold set (+ ≥1 standard benchmark dataset). These method families *are* the
 three `POC.md` approaches — 1 (classical/rapidfuzz), 2 (embedding ANN), 3 (hybrid
 LLM) — now raced head-to-head behind one interface instead of run in sequence.
-- **Exit:** a reproducible **method-comparison table**; a winner selected with
-  evidence.
+- **Exit:** a reproducible **method-comparison table** (Δ-above-floor reported
+  next to absolute BCubed); a winner selected with evidence.
 
 ### M4 — DSPy-distilled cheap judge (the differentiator)
 Compile a teacher→student judge (MIPROv2) against the gold set; the cheap student
@@ -252,6 +263,15 @@ golden record** (§2.4 flagship loop).
   incremental `.link(new_record)` returns the correct existing entity or "new";
   **a sparse new mention correctly links to a feature-rich golden record, and the
   golden record gains the mention's new features** (enrichment verified).
+- **Exit (north-star measurability — carried from the M2 audit):** **Person
+  resolution is *measurable*.** M0–M2 validate the machinery on Fodors-Zagat
+  restaurants because brainsquad Persons have ~0 duplicates and no ground truth;
+  M1's chartered Person gold set shipped as a restaurant one. Before M6 can gate
+  on "Person BCubed ≥ 0.85," M5 must establish an evaluable Person target —
+  either a real (even small) Person gold set via the bootstrapper, or a formally
+  defined measurable proxy (e.g. synthetic name-variant linking). Until this
+  exit is met, "validated on Fodors-Zagat" is explicitly *not* "validated on
+  Person."
 
 ### M6 — Hardening (post-proof)
 Blocking-funnel optimisation (recall-first Optuna objective), score calibration,

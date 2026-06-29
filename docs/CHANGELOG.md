@@ -27,9 +27,15 @@ not Person-resolution quality (that is M5).
   TEST BCubed **P/R/F1 = 0.991 / 0.969 / 0.980** vs the merge-nothing sanity floor
   **F1 = 0.932** (Fodors-Zagat is singleton-dominated, so the floor is high by
   construction) — i.e. ~5 honest points of signal over "every record is unique".
-  Blocking **Pair-Completeness = 1.0** on the test split (it caps recall). The
-  slow CI gate pins F1 ≥ 0.95 as an informational regression floor, not a quality
-  bar — M3 is what improves the baseline.
+  Blocking **Pair-Completeness = 1.0** on the test split (it caps recall) — but
+  this is **seed-dependent**, not a system property: the blocker's full-corpus
+  Pair-Completeness is **0.9911** (one structurally-missed pair, `f640`/`z325`,
+  identical `embed_text` in both sources), and with `seed=0` that pair lands in
+  the *train* split, so the *test* split sees 1.0. A different seed would show
+  ~0.971 on test. The slow CI gate pins F1 ≥ 0.95 as an informational regression
+  floor, not a quality bar — M3 is what improves the baseline. NOTE: BCubed on a
+  singleton-heavy corpus over-weights trivially-correct singletons; M3 reports
+  **pairwise F1 on true matches** as the honest complement.
 - **Artifact contract = `resolve()`-only**: `resolver.save(<dir>)` writes the
   artifact **directory** (a `resolver.json` manifest + FAISS sidecar; no pickle,
   no code execution) and `Resolver.load(<dir>).resolve(records)` is the entire
