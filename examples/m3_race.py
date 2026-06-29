@@ -190,6 +190,44 @@ def patch_litellm_prices(model: str) -> None:
     litellm.model_cost[bare] = entry
 
 
+def register_runtime_model_price(model: str) -> str | None:
+    """Probe ``model`` once and register its DATED response id into ``model_cost``.
+
+    OpenRouter returns a *dated* model id (e.g. ``z-ai/glm-5.2-20260616``) in
+    ``response.model``, and ``litellm.completion_cost(completion_response=r)`` (the
+    no-override call both ``LLMJudge`` and ``CascadeModule`` make) resolves the
+    price against that dated id — which is absent from litellm's table, so cost
+    silently reports ``$0``. We make ONE cheap call, read the dated id, and pin the
+    published price under it so both cost paths become honest. Returns the dated id
+    (or ``None`` if the probe failed — the caller then tries a fallback model).
+    """
+    import litellm
+
+    if model not in PRICES_PER_1M:
+        return None
+    patch_litellm_prices(model)
+    try:
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=1,
+        )
+    except Exception as exc:  # noqa: BLE001 — probe; caller falls back on None
+        print(f"[price] probe failed for {model}: {type(exc).__name__}: {exc}")
+        return None
+    dated = str(resp.model)
+    in_per_1m, out_per_1m = PRICES_PER_1M[model]
+    litellm.model_cost[dated] = {
+        "input_cost_per_token": in_per_1m / 1_000_000.0,
+        "output_cost_per_token": out_per_1m / 1_000_000.0,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+    }
+    print(f"[price] {model}: registered dated id {dated!r} at ${in_per_1m}/${out_per_1m} per 1M")
+    return dated
+
+
 def make_litellm_client() -> Any:
     """LiteLLM client (for ``llm_judge``), Langfuse disabled (no creds needed)."""
     from langres.clients import Settings, create_llm_client
@@ -517,7 +555,7 @@ def smoke(glm_model: str) -> int:
     client = make_litellm_client()
 
     def _one(model: str) -> float | None:
-        patch_litellm_prices(model)
+        register_runtime_model_price(model)
         judge: LLMJudge[Any] = LLMJudge(client=client, model=model, entity_noun="product")
         try:
             js = list(judge.forward(iter([candidate])))
@@ -628,7 +666,7 @@ def build_cells(glm_model: str, frontier_model: str | None) -> list[Cell]:
 
     cells: list[Cell] = []
 
-    # --- FREE: zero-spend full pipeline, 5 seeds, both datasets ---
+    # --- FREE (fast): zero-spend full pipeline on Fodors-Zagat, 5 seeds ---
     for method in ZERO_SPEND_METHODS:
         cells.append(
             Cell(
@@ -637,16 +675,8 @@ def build_cells(glm_model: str, frontier_model: str | None) -> list[Cell]:
                 lambda m=method: run_pipeline_cell(m, fz, "fodors_zagat"),
             )
         )
-    for method in ZERO_SPEND_METHODS:
-        cells.append(
-            Cell(
-                f"pipeline_amazon_google_{method}",
-                False,
-                lambda m=method: run_pipeline_cell(m, ag, "amazon_google"),
-            )
-        )
 
-    # --- FREE: zero-spend pair-level on the AG fixed pairs + FZ band ---
+    # --- FREE (fast): zero-spend pair-level on the AG fixed pairs + FZ band ---
     for method in ZERO_SPEND_METHODS:
         cells.append(
             Cell(
@@ -748,6 +778,18 @@ def build_cells(glm_model: str, frontier_model: str | None) -> list[Cell]:
             )
         )
 
+    # --- FREE (slow): zero-spend full pipeline on Amazon-Google, 5 seeds ---
+    # Last: each call re-embeds the ~3.2k-record train corpus several times, so
+    # this is the slow tail — it must not delay the paid cells above.
+    for method in ZERO_SPEND_METHODS:
+        cells.append(
+            Cell(
+                f"pipeline_amazon_google_{method}",
+                False,
+                lambda m=method: run_pipeline_cell(m, ag, "amazon_google"),
+            )
+        )
+
     return cells
 
 
@@ -805,10 +847,15 @@ def main() -> int:
     if args.smoke:
         return smoke(args.glm_model)
 
-    # Patch prices for every model that may be charged so cost stays honest.
-    for model in {args.glm_model, GLM_MODEL_FALLBACK, *FRONTIER_CANDIDATES}:
-        if model in PRICES_PER_1M:
-            patch_litellm_prices(model)
+    # Register the GLM model (probe + dated-id price patch) so cost is honest; fall
+    # back to glm-4.6 if the primary id does not respond.
+    glm_model = args.glm_model
+    if register_runtime_model_price(glm_model) is None:
+        print(f"[price] {glm_model} unavailable; falling back to {GLM_MODEL_FALLBACK}")
+        glm_model = GLM_MODEL_FALLBACK
+        if register_runtime_model_price(glm_model) is None:
+            print("[fatal] no GLM model responded.")
+            return 1
 
     frontier = args.frontier_model
     if frontier is None:
@@ -817,11 +864,11 @@ def main() -> int:
         g = next(r for r in corpus if r.source == "google")
         probe: ERCandidate[ProductSchema] = ERCandidate(left=a, right=g, blocker_name="probe")
         frontier = pick_frontier(make_litellm_client(), probe)
-    if frontier is not None and frontier in PRICES_PER_1M:
-        patch_litellm_prices(frontier)
+    if frontier is not None:
+        register_runtime_model_price(frontier)
 
     only = set(args.only.split(",")) if args.only else None
-    return run_race(args.glm_model, frontier, only)
+    return run_race(glm_model, frontier, only)
 
 
 if __name__ == "__main__":
