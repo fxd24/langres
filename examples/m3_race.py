@@ -160,6 +160,12 @@ FRONTIER_AG_SUBSAMPLE = 700
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+#: Per-call timeout (s) and retry count for the LLM clients. litellm defaults to a
+#: 6000s timeout, so a stalled keep-alive socket can hang the whole sequential run;
+#: a bounded timeout + retries makes a stalled call fail fast and recover.
+LLM_TIMEOUT_S = 60.0
+LLM_NUM_RETRIES = 2
+
 
 # ---------------------------------------------------------------------------
 # Pricing patch + clients
@@ -228,18 +234,50 @@ def register_runtime_model_price(model: str) -> str | None:
     return dated
 
 
+class _TimeoutLiteLLM:
+    """Wrap the LiteLLM module so every ``completion`` gets a timeout + retries.
+
+    ``LLMJudge`` calls ``client.completion(model=, messages=, temperature=)`` with
+    no timeout, and ``litellm.request_timeout`` defaults to 6000s — so a single
+    stalled keep-alive socket hangs the whole sequential run indefinitely (observed
+    in the first paid attempt). This proxy injects a bounded ``timeout`` and
+    ``num_retries`` on every call, so a stalled call fails fast, retries on a fresh
+    connection, and (if it still fails) is skipped by the BudgetedModuleRunner —
+    the run can never wedge on one bad socket. All other attributes pass through.
+    """
+
+    def __init__(self, inner: Any, *, timeout: float, num_retries: int) -> None:
+        self._inner = inner
+        self._timeout = timeout
+        self._num_retries = num_retries
+
+    def completion(self, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", self._timeout)
+        kwargs.setdefault("num_retries", self._num_retries)
+        return self._inner.completion(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 def make_litellm_client() -> Any:
-    """LiteLLM client (for ``llm_judge``), Langfuse disabled (no creds needed)."""
+    """LiteLLM client (for ``llm_judge``), Langfuse off, with a bounded timeout."""
     from langres.clients import Settings, create_llm_client
 
-    return create_llm_client(Settings(), enable_langfuse=False)
+    inner = create_llm_client(Settings(), enable_langfuse=False)
+    return _TimeoutLiteLLM(inner, timeout=LLM_TIMEOUT_S, num_retries=LLM_NUM_RETRIES)
 
 
 def make_openai_client() -> Any:
-    """OpenAI-shaped client pointed at OpenRouter (for ``cascade``)."""
+    """OpenAI-shaped client pointed at OpenRouter (for ``cascade``), bounded timeout."""
     from openai import OpenAI
 
-    return OpenAI(base_url=OPENROUTER_BASE_URL, api_key=os.environ["OPENROUTER_API_KEY"])
+    return OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout=LLM_TIMEOUT_S,
+        max_retries=LLM_NUM_RETRIES,
+    )
 
 
 def per_token_worst_price(model: str) -> float:
@@ -843,6 +881,12 @@ def main() -> int:
     if "OPENROUTER_API_KEY" not in os.environ:
         print("[fatal] OPENROUTER_API_KEY not in environment (.env not loaded?).")
         return 1
+
+    # Backstop the per-call proxy/client timeouts with a bounded global default
+    # (litellm ships a 6000s default that hangs on a stalled socket).
+    import litellm
+
+    litellm.request_timeout = LLM_TIMEOUT_S
 
     if args.smoke:
         return smoke(args.glm_model)
