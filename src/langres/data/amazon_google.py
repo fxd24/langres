@@ -22,28 +22,32 @@ two records, not just cross-source pairs.
 
 This module deliberately mirrors the Fodors-Zagat adapter's patterns (schema with
 a ``@computed_field embed_text``, idempotent schema registration at import, a
-combined source-prefixed corpus, a vector blocking k-sweep) in a *separate* file
-so the two benchmarks stay decoupled.
+combined source-prefixed corpus, a vector blocking k-sweep). The genuinely-shared
+mechanics (CSV reading, the cross-source filter, the k-sweep/picker, and the
+stratified split) live once in :mod:`langres.data._benchmark_utils`; this module
+keeps the Amazon-Google-specific schema, pinned constants, and public wrappers.
 
-# TODO(W3/W4): wrap as Benchmark protocol once core.benchmark lands (integration
-# adds the thin protocol adapter; intentionally out of scope for this module).
+:class:`AmazonGoogleBenchmark` adapts this loader to the dataset-agnostic
+:class:`~langres.core.benchmark.Benchmark` protocol so
+:func:`~langres.core.benchmark.run_method` can race any resolver factory against
+it (it also conforms to ``langres.methods.BlockingBenchmark`` by exposing its
+``schema`` + pinned blocking config), mirroring ``FodorsZagatBenchmark``.
 """
 
-import csv
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
-from importlib import resources
 from typing import Literal
 
 from pydantic import BaseModel, computed_field
 
+from langres.core.benchmark import Benchmark, gold_pairs_from_clusters
 from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
-from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
+from langres.data import _benchmark_utils as _bu
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,9 @@ __all__ = [
     "ACHIEVED_PC_AT_DEFAULT_K",
     "AG_RECALL_GATE",
     "DEFAULT_AG_BLOCKING_K",
+    "DEFAULT_AG_THRESHOLD_GRID",
     "GATE_MET",
+    "AmazonGoogleBenchmark",
     "ProductSchema",
     "build_product_blocker",
     "load_amazon_google",
@@ -112,6 +118,13 @@ ACHIEVED_PC_AT_DEFAULT_K = 0.8388
 #: hidden.
 GATE_MET = ACHIEVED_PC_AT_DEFAULT_K >= AG_RECALL_GATE
 
+#: Candidate Clusterer thresholds swept by ``run_method`` when racing methods on
+#: Amazon-Google. Mirrors Fodors-Zagat's ``DEFAULT_THRESHOLD_GRID``: the zero-spend
+#: judges score in ``[0, 1]``, and this small grid brackets the useful range
+#: (tuned on TRAIN only). Amazon-Google is harder, so the best train threshold
+#: typically lands lower than on Fodors-Zagat, but the same grid covers it.
+DEFAULT_AG_THRESHOLD_GRID: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+
 
 class ProductSchema(BaseModel):
     """A single product record from the Amazon-Google benchmark.
@@ -157,10 +170,8 @@ register_schema_idempotent(ProductSchema)
 
 
 def _read_csv_rows(filename: str) -> list[dict[str, str]]:
-    """Read a packaged benchmark CSV into a list of header-keyed row dicts."""
-    text = resources.files(_DATASET_PACKAGE).joinpath(filename).read_text(encoding="utf-8")
-    reader = csv.DictReader(text.splitlines())
-    return [dict(row) for row in reader]
+    """Read a packaged Amazon-Google CSV into a list of header-keyed row dicts."""
+    return _bu.read_csv_rows(_DATASET_PACKAGE, filename)
 
 
 def _record_from_row(row: dict[str, str], source: ProductSource, prefix: str) -> ProductSchema:
@@ -341,8 +352,11 @@ def build_product_blocker(
 def _cross_source(
     candidates: list[ERCandidate[ProductSchema]],
 ) -> list[ERCandidate[ProductSchema]]:
-    """Keep only candidate pairs whose two records come from different sources."""
-    return [c for c in candidates if c.left.source != c.right.source]
+    """Keep only candidate pairs whose two records come from different sources.
+
+    Product-typed wrapper over :func:`langres.data._benchmark_utils.cross_source`.
+    """
+    return _bu.cross_source(candidates)
 
 
 def sweep_blocking_k(
@@ -352,17 +366,12 @@ def sweep_blocking_k(
 ) -> dict[int, float]:
     """Measure cross-source Pair-Completeness of vector blocking across ``ks``.
 
-    Builds the FAISS index once over ``embed_text`` and reuses it across all
-    ``k`` (only ``k_neighbors`` changes). For each ``k`` the candidates are
-    filtered to cross-source pairs before recall is measured via
-    :func:`~langres.core.metrics.evaluate_blocking`. Mirrors the Fodors-Zagat
-    sweep.
-
-    ``candidate_recall`` from :func:`evaluate_blocking` *is* Pair-Completeness
-    (fraction of gold match pairs surfaced as candidates), which is the quantity
-    the gate is defined on — so this uses ``evaluate_blocking`` rather than
-    ``evaluate_blocking_with_ranking`` (the latter reports truncated Recall@K and
-    requires per-candidate ``similarity_score``).
+    Product-typed wrapper over
+    :func:`langres.data._benchmark_utils.sweep_blocking_k`, binding
+    ``ProductSchema`` + ``embed_text``: builds the FAISS index once and reuses it
+    across all ``k``, filtering to cross-source pairs before measuring recall.
+    ``candidate_recall`` *is* Pair-Completeness (fraction of gold match pairs
+    surfaced as candidates), the quantity the gate is defined on.
 
     Args:
         corpus: Combined record list from :func:`load_amazon_google`.
@@ -372,39 +381,23 @@ def sweep_blocking_k(
     Returns:
         Mapping of ``k`` to cross-source Pair-Completeness (``candidate_recall``).
     """
-    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
-    index = FAISSIndex(embedder=embedder, metric="cosine")
-    index.create_index([r.embed_text for r in corpus])
-    records = [r.model_dump() for r in corpus]
-
-    recalls: dict[int, float] = {}
-    for k in ks:
-        # Construct a fresh blocker per k (the pre-built FAISS index is reused, so
-        # this is cheap); only k_neighbors varies. ``k`` lives on the blocker, not
-        # the index, so sharing one index across ks is safe.
-        blocker: VectorBlocker[ProductSchema] = VectorBlocker(
-            vector_index=index,
-            schema=ProductSchema,
-            text_field="embed_text",
-            k_neighbors=k,
-        )
-        candidates = _cross_source(list(blocker.stream(records)))
-        recall = evaluate_blocking(candidates, gold_clusters).candidate_recall
-        recalls[k] = recall
-        logger.info("blocking k=%d -> cross-source recall=%.4f", k, recall)
-    return recalls
+    return _bu.sweep_blocking_k(
+        corpus, gold_clusters, ProductSchema, text_field="embed_text", ks=ks
+    )
 
 
 def pick_blocking_k(recalls: dict[int, float], threshold: float = AG_RECALL_GATE) -> int:
-    """Pick the smallest ``k`` whose recall clears ``threshold``.
+    """Pick the smallest ``k`` whose recall clears ``threshold`` (default the AG gate).
 
-    If no ``k`` reaches ``threshold``, returns the ``k`` with the highest recall
-    (the honest best-effort fallback; callers should document the shortfall
-    rather than fake the gate). Mirrors the Fodors-Zagat picker.
+    Product-typed wrapper over
+    :func:`langres.data._benchmark_utils.pick_blocking_k` defaulting ``threshold``
+    to the Amazon-Google :data:`AG_RECALL_GATE` (0.90). If no ``k`` reaches it,
+    returns the ``k`` with the highest recall (honest fallback — see the sweep
+    note above; the gate is not met within ``k<=50``).
 
     Args:
         recalls: Mapping of ``k`` to recall, e.g. from :func:`sweep_blocking_k`.
-        threshold: Minimum acceptable recall.
+        threshold: Minimum acceptable recall (defaults to :data:`AG_RECALL_GATE`).
 
     Returns:
         The chosen ``k``.
@@ -412,9 +405,60 @@ def pick_blocking_k(recalls: dict[int, float], threshold: float = AG_RECALL_GATE
     Raises:
         ValueError: If ``recalls`` is empty.
     """
-    if not recalls:
-        raise ValueError("recalls is empty; nothing to pick from")
-    passing = [k for k in sorted(recalls) if recalls[k] >= threshold]
-    if passing:
-        return passing[0]
-    return max(recalls, key=lambda k: recalls[k])
+    return _bu.pick_blocking_k(recalls, threshold)
+
+
+class AmazonGoogleBenchmark(Benchmark[ProductSchema]):
+    """Amazon-Google as a :class:`~langres.core.benchmark.Benchmark` conformer.
+
+    Adapts the product loader/splitter to the dataset-agnostic harness so
+    :func:`~langres.core.benchmark.run_method` can run any resolver factory
+    against it: ``load`` returns the corpus, the closed-world gold partition, and
+    the within-cluster gold match pairs; ``split`` delegates to the shared
+    stratified split. Mirrors ``FodorsZagatBenchmark`` exactly, swapping the
+    restaurant schema/loaders for the product ones.
+
+    It also conforms to ``langres.methods.BlockingBenchmark`` by exposing its
+    record ``schema`` and pinned blocking config (``blocking_k`` +
+    :meth:`build_blocker`), so the method registry can race *any* of the five
+    methods against it on the identical candidate set. Blocking is pinned to the
+    honest best ``k`` (:data:`DEFAULT_AG_BLOCKING_K`); the 0.90 Pair-Completeness
+    gate is *not* met (see :data:`ACHIEVED_PC_AT_DEFAULT_K` / :data:`GATE_MET`),
+    so end-to-end recall is ceiling-limited at ~0.84 here.
+    """
+
+    name = "amazon_google"
+    threshold_grid = DEFAULT_AG_THRESHOLD_GRID
+    #: Record type, exposed for the method registry's Comparator/rapidfuzz fields.
+    schema = ProductSchema
+    #: Pinned blocking neighbour count (blocking held constant across methods).
+    blocking_k = DEFAULT_AG_BLOCKING_K
+
+    def build_blocker(self, k_neighbors: int) -> VectorBlocker[ProductSchema]:
+        """Return a fresh product VectorBlocker (MiniLM + FAISS-cosine).
+
+        Delegates to :func:`build_product_blocker` so the race shares the exact
+        blocking config used elsewhere; each call yields a fresh, unbuilt index.
+        """
+        return build_product_blocker(k_neighbors)
+
+    def load(self) -> tuple[list[ProductSchema], list[set[str]], set[frozenset[str]]]:
+        """Return ``(corpus, gold_clusters, gold_pairs)`` for Amazon-Google.
+
+        ``gold_pairs`` is derived from the gold partition (every within-cluster
+        pair, including the transitive closure of the many-to-many matches) so the
+        protocol's pair semantics match Fodors-Zagat and what ``run_method``
+        recomputes per split.
+        """
+        corpus, gold_clusters, _gold_pairs = load_amazon_google()
+        return corpus, gold_clusters, gold_pairs_from_clusters(gold_clusters)
+
+    def split(
+        self,
+        corpus: list[ProductSchema],
+        gold_clusters: list[set[str]],
+        *,
+        seed: int,
+    ) -> tuple[list[ProductSchema], list[ProductSchema], list[set[str]], list[set[str]]]:
+        """Leakage-free stratified split via the shared ``stratified_corpus_split``."""
+        return _bu.stratified_corpus_split(corpus, gold_clusters, seed=seed)
