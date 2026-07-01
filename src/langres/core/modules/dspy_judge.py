@@ -40,7 +40,7 @@ from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 logger = logging.getLogger(__name__)
 
 
-class PairwiseMatchSignature(dspy.Signature):
+class PairwiseMatchSignature(dspy.Signature):  # type: ignore[misc]  # dspy is untyped (Any)
     """Decide whether two {entity_noun} records refer to the same real-world {entity_noun}.
 
     Weigh the concrete evidence in both records, not surface overlap. A different
@@ -58,7 +58,7 @@ class PairwiseMatchSignature(dspy.Signature):
     reasoning: str = dspy.OutputField(desc="Brief justification for the decision")
 
 
-def _signature_for(entity_noun: str) -> type[dspy.Signature]:
+def _signature_for(entity_noun: str) -> Any:
     """Return :class:`PairwiseMatchSignature` with ``entity_noun`` woven into its instructions.
 
     The signature's docstring is the optimizable instruction (with ``{entity_noun}``
