@@ -6,6 +6,36 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### M4: langres is the seam — DSPy experimentation foundation (zero-spend, in progress)
+
+Reframed from a distillation-metric chase to **building the composable scorer seam we're
+happy to use** — the plumbing to fix M3's cheap-judge precision collapse data-drivenly.
+KISS: the smallest seam that proves the plumbing and yields a first honest signal.
+
+- **`DSPyJudge`** — import-safe (`import langres.core` never imports `dspy`),
+  `compile(bootstrap|mipro)`, honest per-pair cost, serializable — behind the `Module`
+  contract. (`src/langres/core/modules/dspy_judge.py`.)
+- **`derive_threshold(scores, labels)`** (Youden / percentile) — data-driven thresholds
+  replacing hand-set magic constants; demo lifts held-out AG pair-F1 +0.16 over 0.5.
+- **`run_methods(...) -> BenchmarkTable`** experiment facade (`.best()` / `.rank()`) +
+  **`langres.clients.openrouter`** (price-pinning, `SpendMonitor` cumulative-spend guard,
+  extracted from `examples/m3_race.py`).
+- **Proven end-to-end at $0** (DummyLM): a compiled `DSPyJudge` → `compile` →
+  `evaluate_judge_on_candidates` (judged-once, pairwise-F1, SOTA-comparable) — the right
+  surface for a compiled/paid judge; `run_methods` is the cheap-method race. Getting
+  started: `docs/EXPERIMENTS.md`, `examples/m4_experiment_loop.py`.
+- **Review fixes on the seam:** Youden `+inf` ROC-sentinel guard, held-out train/test
+  calibration split, `run_methods` stamps the requested registry method name, DSPy
+  `temperature` forwarded to the LM, `load_state` restores the real compiled flag,
+  parse-error branch marks the call billed-but-untrackable.
+- **Research-driven direction:** ER SOTA seam audit tracked in
+  `docs/research/20260701_er_seam_audit.md` + issue #55; two adjustments — a
+  frontier-zero-shot null-baseline gate before paid distillation (C7), and promoting the
+  set-wise judgement contract (S1) to M4.5.
+- **Deferred to M4.5:** set-wise contract (S1), blocking pair-set algebra + embedder
+  sweep, `fit()`-hook trained-judge family (S2). Paid first-light + small compile on
+  Amazon-Google (monitored ≤$5) pending.
+
 ### M3: The seam — multi-method benchmark race (real-money EXIT)
 
 Raced free scorers (`rapidfuzz`, `weighted_average`, `embedding_cosine`) against an

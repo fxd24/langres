@@ -257,15 +257,61 @@ LLM) — now raced head-to-head behind one interface instead of run in sequence.
   embedding-score distribution, distill frontier-quality labels, stronger embedder),
   not "bolt on a judge." Cascade + frontier-FZ deferred (memo §6).
 
-### M4 — DSPy-distilled cheap judge (the differentiator)
-Compile a teacher→student judge (MIPROv2) against the gold set; the cheap student
-becomes part of the artifact. **M3 sharpens the target:** the frontier judge (gpt-4o,
-precision 0.54) is the default teacher; GLM-5.2 (precision 0.26) is a teacher only
-behind a precision gate — re-evaluate after prompt optimization (memo §5).
-- **Exit:** distilled student within a stated margin of teacher **BCubed at ≥N×
-  lower cost/latency** (analogue of the Overture Maps DSPy distillation case
-  study — Drew Breunig, Databricks Data+AI Summit 2025: a small model went
-  60.7% → 82% accuracy after MIPRO prompt compilation — measured on our data).
+### M4 — langres is the seam: a working DSPy experimentation foundation
+**Reframed (2026-07-01) from a distillation-metric chase to "build the seam we're
+happy to use."** M3 showed the cheap OSS judge's *precision* collapses (GLM-5.2 0.409
+pair-F1 on AG, *below* free embedding) — the signature of a generic prompt + hand-set
+thresholds. M4's job is the **plumbing** that lets us fix that data-drivenly: a clean,
+composable scorer seam (DSPy judge, learned thresholds, an experiment facade, honest
+cost) that serves experimentation now and deployment later (`Resolver.save/load` is
+the bridge). **KISS is a first-class constraint** — the smallest seam that proves the
+plumbing and yields a first honest signal; composability is *earned* by real reuse,
+not accreted up front.
+
+**Delivered (all validated zero-spend):**
+- `DSPyJudge` — import-safe (`import langres.core` never imports `dspy`),
+  `compile(bootstrap|mipro)`, honest per-pair cost, serializable — behind the `Module`
+  contract.
+- `derive_threshold(scores, labels)` (Youden / percentile) — kills the "thresholds
+  set by hand, not from the data" sin (M3's cascade `0.3/0.9`).
+- `run_methods(...) -> BenchmarkTable` experiment facade + `langres.clients.openrouter`
+  (price-pinning + `SpendMonitor` cumulative-spend guard).
+- **Proven end-to-end at $0** (DummyLM): a *compiled* DSPyJudge runs through
+  `evaluate_judge_on_candidates` (judged-once, pairwise-F1, SOTA-comparable — the right
+  surface for a compiled/paid judge; `run_methods` is the cheap-method race). See
+  [`docs/EXPERIMENTS.md`](EXPERIMENTS.md), `examples/m4_experiment_loop.py`.
+
+**Paid first signal (monitored, ≤$5):** a manual precision probe + one small MIPROv2
+compile on Amazon-Google — **gated behind a frontier-zero-shot null baseline
+(delta C7):** if a compiled cheap student can't beat "just call the frontier model" on
+cost at equal quality, *cut it*. This de-risks a measured caveat — on OpenSanctions
+Pairs, DSPy MIPROv2 lifted only ~1–2 F1 and in-context examples were
+neutral-to-negative — so the distillation upside on messy multilingual data is
+**uncertain and must be measured, not assumed**.
+- **Exit:** the DSPy experimentation loop is real and reproducible (compile → evaluate
+  → serialize), a first honest paid signal on AG is recorded with its F1/$ frontier,
+  and we have a read on the DX. **Not** a fixed "student ≥ margin of teacher BCubed"
+  metric — that target is pursued only if the C7 gate clears.
+
+*(Research input: [`docs/research/20260701_er_seam_audit.md`](research/20260701_er_seam_audit.md);
+delta backlog tracked in issue #55.)*
+
+### M4.5 — restore "any combination" against SOTA (research-driven)
+The seam fully expresses the pairwise pretrained/prompted family, but the ER field has
+moved to two shapes it does **not** yet express. Deferred here — each additive,
+backward-compatible, and *earned* by a real experiment (not built speculatively):
+- **S1 (highest-leverage): a set-wise judgement contract** — `SetJudgement` /
+  `ERCandidateGroup` + a groupwise judge that still yields `PairwiseJudgement`
+  (downstream untouched). Unlocks ComEM Select (+16 F1 at ~⅓ cost) and in-context
+  clustering — the field's biggest cost *and* quality lever.
+- **Blocking pair-set algebra** — `KeyBlocker` + `CompositeBlocker`
+  (union / intersection / difference) + embedder sweep; recall-first composition.
+- **S2: a `fit()` / `fit_unlabeled()` Module hook** + a `compile(student, trainset,
+  metric) → Module` Optimizer shape — homes the trained-judge family (Magellan RF,
+  Fellegi–Sunter EM, ZeroER, Snorkel, DSPy) the current forward-only Module can't
+  express.
+- Value-frequency-aware `FSJudge`; merge-resistant clusterer default. (Full
+  C / S / B delta table in the research doc + #55.)
 
 ### M5 — Generalise + incremental + golden-record loop
 Program/Project via **config-only** change; Geography via external authority
@@ -314,4 +360,12 @@ model/version registry, production/operability guidance, cannot-link clustering.
 - **GLinker fit** — is `gliner-linker` competitive on *record↔record* (it was
   trained on mention↔description)? Answer empirically in M3, don't assume.
 - **DSPy distillation cost/quality** on our messy multilingual Person data vs.
-  the clean POI case in the Overture talk. Validate in M4.
+  the clean POI case in the Overture talk. **Partial answer (research, 2026-07-01):**
+  on OpenSanctions Pairs, MIPROv2 lifted only ~1–2 F1 and in-context examples were
+  neutral-to-negative — so the upside is *uncertain*. M4 therefore measures it behind
+  a frontier-zero-shot null-baseline gate (delta C7) rather than assuming it. See
+  [`docs/research/20260701_er_seam_audit.md`](research/20260701_er_seam_audit.md).
+- **Set-wise vs pairwise judging** — the field's strongest *and* cheapest LLM methods
+  (ComEM Select, LLM-CER) score an anchor against a candidate *set*, which the current
+  `pair → PairwiseJudgement` contract cannot receive. How much of the cost/quality
+  frontier does the set-wise contract (M4.5 · S1) actually recover on our data?
