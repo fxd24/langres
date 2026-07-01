@@ -5,7 +5,7 @@ This module provides the foundational primitives for building custom
 entity resolution pipelines.
 """
 
-from langres.core import metrics, optimizers
+from langres.core import benchmark, metrics, optimizers
 from langres.core.adapters.glinker import GLinkerAdapter
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
@@ -35,6 +35,7 @@ from langres.core.indexes import (
     QdrantHybridIndex,
     VectorIndex,
 )
+from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import (
     CompanySchema,
@@ -69,6 +70,7 @@ __all__ = [
     "ARTIFACT_VERSION",
     "AllPairsBlocker",
     "ArtifactManifest",
+    "benchmark",
     "Blocker",
     "CandidateStats",
     "ClusterStats",
@@ -79,6 +81,7 @@ __all__ = [
     "ComparisonVector",
     "ComponentSpec",
     "EmbeddingProvider",
+    "EmbeddingScoreJudge",
     "EntityProtocol",
     "ERCandidate",
     "ErrorExample",

@@ -14,13 +14,14 @@ References:
 """
 
 import math
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel
 from ranx import Qrels, Run, evaluate  # type: ignore[import-untyped]
 
 from langres.core.debugging import CandidateStats
-from langres.core.models import ERCandidate
+from langres.core.models import ERCandidate, PairwiseJudgement
 
 BinStrategy = Literal["quantile", "uniform"]
 """Binning strategy for calibration metrics: equal-mass quantile bins or equal-width bins."""
@@ -243,6 +244,109 @@ def pairs_from_clusters(clusters: list[set[str]]) -> set[tuple[str, str]]:
         [('e1', 'e2'), ('e1', 'e3'), ('e2', 'e3'), ('e4', 'e5')]
     """
     return _clusters_to_pairs(clusters)
+
+
+class PairMetrics(BaseModel):
+    """Pair-level (pre-clustering) classification metrics for one threshold.
+
+    Unlike :func:`calculate_pairwise_metrics` (which scores pairs *after*
+    clustering, so transitive closure can chain one false-positive edge into many
+    false-positive pairs), these metrics classify each candidate
+    :class:`~langres.core.models.PairwiseJudgement` directly against the gold
+    match pairs at a fixed score threshold. This isolates the *scorer's* quality
+    from the clusterer's amplification, giving an unbiased ranking signal across
+    judges of differing recall.
+
+    Attributes:
+        threshold: Score threshold applied; a judgement is a predicted match iff
+            ``score >= threshold``.
+        precision: ``tp / (tp + fp)`` (0.0 when nothing is predicted).
+        recall: ``tp / (tp + fn)`` (0.0 when there are no gold pairs).
+        f1: Harmonic mean of precision and recall (0.0 when both are 0).
+        tp: Predicted-match pairs that are gold matches.
+        fp: Predicted-match pairs that are not gold matches.
+        fn: Gold match pairs not predicted (missed by the blocker or rejected by
+            the threshold).
+    """
+
+    threshold: float
+    precision: float
+    recall: float
+    f1: float
+    tp: int
+    fp: int
+    fn: int
+
+
+def classify_pairs(
+    judgements: list[PairwiseJudgement],
+    gold_pairs: set[frozenset[str]],
+    threshold: float,
+) -> PairMetrics:
+    """Classify candidate judgements against gold match pairs at one threshold.
+
+    Each judgement is a predicted match iff ``score >= threshold``. A judgement's
+    pair is identified order-independently by ``frozenset({left_id, right_id})``,
+    so candidate ordering never affects the counts. ``fn`` counts gold pairs that
+    were *not* predicted — covering both pairs the blocker never surfaced as a
+    judgement and pairs scored below ``threshold`` — because ``gold_pairs - {predicted}``
+    is exactly the set of unrecovered true matches.
+
+    Args:
+        judgements: Candidate judgements from a scorer (pre-clustering).
+        gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
+        threshold: Match cut-off applied to each judgement's ``score``.
+
+    Returns:
+        A :class:`PairMetrics` for this threshold.
+    """
+    predicted: set[frozenset[str]] = {
+        frozenset({j.left_id, j.right_id}) for j in judgements if j.score >= threshold
+    }
+    tp = len(predicted & gold_pairs)
+    fp = len(predicted - gold_pairs)
+    fn = len(gold_pairs - predicted)
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return PairMetrics(
+        threshold=threshold,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        tp=tp,
+        fp=fp,
+        fn=fn,
+    )
+
+
+def pair_pr_curve(
+    judgements: list[PairwiseJudgement],
+    gold_pairs: set[frozenset[str]],
+    grid: Sequence[float],
+) -> list[PairMetrics]:
+    """Pair-level precision/recall/F1 across a grid of thresholds.
+
+    Calls :func:`classify_pairs` once per threshold in ``grid`` (preserving its
+    order), so callers can pick the threshold maximizing pair-level F1 or trace
+    the precision/recall trade-off without re-clustering.
+
+    Args:
+        judgements: Candidate judgements from a scorer (pre-clustering).
+        gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
+        grid: Thresholds to evaluate.
+
+    Returns:
+        One :class:`PairMetrics` per threshold, in ``grid`` order.
+
+    Raises:
+        ValueError: If ``grid`` is empty.
+    """
+    if not grid:
+        raise ValueError("grid is empty; nothing to sweep over")
+    return [classify_pairs(judgements, gold_pairs, t) for t in grid]
 
 
 def _clusters_to_pairs(clusters: list[set[str]]) -> set[tuple[str, str]]:

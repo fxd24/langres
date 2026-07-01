@@ -1,0 +1,452 @@
+{
+  "cell_id": "pipeline_fodors_zagat_weighted_average",
+  "kind": "pipeline",
+  "method": "weighted_average",
+  "dataset": "fodors_zagat",
+  "model": null,
+  "usd_total": 0.0,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "results": [
+    {
+      "method": "weighted_average_judge",
+      "dataset": "fodors_zagat",
+      "seed": 0,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.6944444444444444,
+        "recall": 0.7575757575757576,
+        "f1": 0.7246376811594203,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03540772532188841,
+            "recall": 1.0,
+            "f1": 0.06839378238341969,
+            "tp": 33,
+            "fp": 899,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.04219948849104859,
+            "recall": 1.0,
+            "f1": 0.08098159509202453,
+            "tp": 33,
+            "fp": 749,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.06496062992125984,
+            "recall": 1.0,
+            "f1": 0.12199630314232902,
+            "tp": 33,
+            "fp": 475,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.17032967032967034,
+            "recall": 0.9393939393939394,
+            "f1": 0.28837209302325584,
+            "tp": 31,
+            "fp": 151,
+            "fn": 2
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.4393939393939394,
+            "recall": 0.8787878787878788,
+            "f1": 0.5858585858585859,
+            "tp": 29,
+            "fp": 37,
+            "fn": 4
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.6944444444444444,
+            "recall": 0.7575757575757576,
+            "f1": 0.7246376811594203,
+            "tp": 25,
+            "fp": 11,
+            "fn": 8
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.9909560723514212,
+        "bcubed_r": 0.9689922480620154,
+        "bcubed_f1": 0.9798510932940881,
+        "cluster_pairwise_f1": 0.819672131147541,
+        "delta_above_floor": 0.048174074660547794,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.00468633333330324,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "weighted_average_judge",
+      "dataset": "fodors_zagat",
+      "seed": 1,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.7333333333333333,
+        "recall": 0.6666666666666666,
+        "f1": 0.6984126984126984,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03419689119170984,
+            "recall": 1.0,
+            "f1": 0.06613226452905811,
+            "tp": 33,
+            "fp": 932,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.04024390243902439,
+            "recall": 1.0,
+            "f1": 0.07737397420867527,
+            "tp": 33,
+            "fp": 787,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.060218978102189784,
+            "recall": 1.0,
+            "f1": 0.11359724612736662,
+            "tp": 33,
+            "fp": 515,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.17032967032967034,
+            "recall": 0.9393939393939394,
+            "f1": 0.28837209302325584,
+            "tp": 31,
+            "fp": 151,
+            "fn": 2
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.4918032786885246,
+            "recall": 0.9090909090909091,
+            "f1": 0.6382978723404255,
+            "tp": 30,
+            "fp": 31,
+            "fn": 3
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.7333333333333333,
+            "recall": 0.6666666666666666,
+            "f1": 0.6984126984126984,
+            "tp": 22,
+            "fp": 8,
+            "fn": 11
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.9961240310077519,
+        "bcubed_r": 0.9573643410852714,
+        "bcubed_f1": 0.9763596653131537,
+        "cluster_pairwise_f1": 0.7857142857142856,
+        "delta_above_floor": 0.0446826466796133,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.005761348046399248,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "weighted_average_judge",
+      "dataset": "fodors_zagat",
+      "seed": 2,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.7096774193548387,
+        "recall": 0.6666666666666666,
+        "f1": 0.6875,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03477344573234984,
+            "recall": 1.0,
+            "f1": 0.06720977596741344,
+            "tp": 33,
+            "fp": 916,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.03933253873659118,
+            "recall": 1.0,
+            "f1": 0.0756880733944954,
+            "tp": 33,
+            "fp": 806,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.060218978102189784,
+            "recall": 1.0,
+            "f1": 0.11359724612736662,
+            "tp": 33,
+            "fp": 515,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.15763546798029557,
+            "recall": 0.9696969696969697,
+            "f1": 0.2711864406779661,
+            "tp": 32,
+            "fp": 171,
+            "fn": 1
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.4393939393939394,
+            "recall": 0.8787878787878788,
+            "f1": 0.5858585858585859,
+            "tp": 29,
+            "fp": 37,
+            "fn": 4
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.7096774193548387,
+            "recall": 0.6666666666666666,
+            "f1": 0.6875,
+            "tp": 22,
+            "fp": 9,
+            "fn": 11
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.9961240310077519,
+        "bcubed_r": 0.9573643410852714,
+        "bcubed_f1": 0.9763596653131537,
+        "cluster_pairwise_f1": 0.7857142857142856,
+        "delta_above_floor": 0.0446826466796133,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.01798262884864007,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "weighted_average_judge",
+      "dataset": "fodors_zagat",
+      "seed": 3,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.7428571428571429,
+        "recall": 0.7878787878787878,
+        "f1": 0.7647058823529412,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.034055727554179564,
+            "recall": 1.0,
+            "f1": 0.06586826347305388,
+            "tp": 33,
+            "fp": 936,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.0410958904109589,
+            "recall": 1.0,
+            "f1": 0.07894736842105263,
+            "tp": 33,
+            "fp": 770,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.06346153846153846,
+            "recall": 1.0,
+            "f1": 0.11934900542495479,
+            "tp": 33,
+            "fp": 487,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.17486338797814208,
+            "recall": 0.9696969696969697,
+            "f1": 0.2962962962962963,
+            "tp": 32,
+            "fp": 151,
+            "fn": 1
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.49230769230769234,
+            "recall": 0.9696969696969697,
+            "f1": 0.653061224489796,
+            "tp": 32,
+            "fp": 33,
+            "fn": 1
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.7428571428571429,
+            "recall": 0.7878787878787878,
+            "f1": 0.7647058823529412,
+            "tp": 26,
+            "fp": 9,
+            "fn": 7
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 1.0,
+        "bcubed_r": 0.9728682170542635,
+        "bcubed_f1": 0.9862475442043221,
+        "cluster_pairwise_f1": 0.8813559322033898,
+        "delta_above_floor": 0.05457052557078179,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.003499712048472057,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "weighted_average_judge",
+      "dataset": "fodors_zagat",
+      "seed": 4,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.6666666666666666,
+        "recall": 0.7272727272727273,
+        "f1": 0.6956521739130435,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03444676409185804,
+            "recall": 1.0,
+            "f1": 0.06659939455095863,
+            "tp": 33,
+            "fp": 925,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.039711191335740074,
+            "recall": 1.0,
+            "f1": 0.0763888888888889,
+            "tp": 33,
+            "fp": 798,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.054455445544554455,
+            "recall": 1.0,
+            "f1": 0.10328638497652581,
+            "tp": 33,
+            "fp": 573,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.12890625,
+            "recall": 1.0,
+            "f1": 0.22837370242214533,
+            "tp": 33,
+            "fp": 223,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.39285714285714285,
+            "recall": 1.0,
+            "f1": 0.5641025641025641,
+            "tp": 33,
+            "fp": 51,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.6666666666666666,
+            "recall": 0.7272727272727273,
+            "f1": 0.6956521739130435,
+            "tp": 24,
+            "fp": 12,
+            "fn": 9
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.9961240310077519,
+        "bcubed_r": 0.9651162790697675,
+        "bcubed_f1": 0.98037503447008,
+        "cluster_pairwise_f1": 0.8275862068965517,
+        "delta_above_floor": 0.048698015836539654,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.0034523315971166577,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    }
+  ]
+}
