@@ -82,6 +82,13 @@ from langres.data.amazon_google import (  # noqa: E402
     load_amazon_google_pair_splits,
 )
 from langres.data.er_benchmarks import FodorsZagatBenchmark, RestaurantSchema  # noqa: E402
+from langres.clients.openrouter import (  # noqa: E402
+    make_token_cost_track,
+    no_keepalive_http_client,
+    patch_litellm_prices,
+    per_token_worst_price,
+    register_runtime_model_price,
+)
 from langres.methods import (  # noqa: E402
     ZERO_SPEND_METHODS,
     cascade_cost_track,
@@ -140,18 +147,6 @@ FRONTIER_CANDIDATES: tuple[str, ...] = (
     "openrouter/google/gemini-2.0-flash-001",
 )
 
-#: Published per-1M-token (input, output) USD prices, pinned so cost is honest
-#: even when litellm prices a model at $0. GLM rates are the M1-pinned OpenRouter
-#: anchors; frontier rates are each provider's published list price.
-PRICES_PER_1M: dict[str, tuple[float, float]] = {
-    "openrouter/z-ai/glm-5.2": (0.95, 3.00),
-    "openrouter/z-ai/glm-4.6": (0.60, 2.20),
-    "openrouter/openai/gpt-4o": (2.50, 10.00),
-    "openrouter/anthropic/claude-3.7-sonnet": (3.00, 15.00),
-    "openrouter/anthropic/claude-3.5-sonnet": (3.00, 15.00),
-    "openrouter/google/gemini-2.0-flash-001": (0.10, 0.40),
-}
-
 #: Worst-case total tokens per pair, used to size the pre-flight budget cap.
 WORST_CASE_TOKENS_PER_PAIR = 1500
 
@@ -175,87 +170,8 @@ LLM_NUM_RETRIES = 2
 
 
 # ---------------------------------------------------------------------------
-# Pricing patch + clients
+# Clients
 # ---------------------------------------------------------------------------
-
-
-def patch_litellm_prices(model: str) -> None:
-    """Patch ``litellm.model_cost`` so ``completion_cost`` is honest for ``model``.
-
-    litellm prices many OpenRouter models at $0 (unknown), which would silently
-    report $0 spend and (for the budget tally) hide real cost. We write the pinned
-    per-token price under both the litellm-routing key (``openrouter/...``) and the
-    bare provider key (``z-ai/glm-5.2``) that an OpenAI/OpenRouter response carries
-    in ``response.model``, so both the LiteLLM (llm_judge) and OpenAI-client
-    (cascade) cost paths resolve.
-    """
-    import litellm
-
-    in_per_1m, out_per_1m = PRICES_PER_1M[model]
-    entry = {
-        "input_cost_per_token": in_per_1m / 1_000_000.0,
-        "output_cost_per_token": out_per_1m / 1_000_000.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat",
-    }
-    litellm.model_cost[model] = entry
-    bare = model.split("/", 1)[1] if "/" in model else model
-    litellm.model_cost[bare] = entry
-
-
-def register_runtime_model_price(model: str) -> str | None:
-    """Probe ``model`` once and register its DATED response id into ``model_cost``.
-
-    OpenRouter returns a *dated* model id (e.g. ``z-ai/glm-5.2-20260616``) in
-    ``response.model``, and ``litellm.completion_cost(completion_response=r)`` (the
-    no-override call both ``LLMJudge`` and ``CascadeModule`` make) resolves the
-    price against that dated id — which is absent from litellm's table, so cost
-    silently reports ``$0``. We make ONE cheap call, read the dated id, and pin the
-    published price under it so both cost paths become honest. Returns the dated id
-    (or ``None`` if the probe failed — the caller then tries a fallback model).
-    """
-    import litellm
-
-    if model not in PRICES_PER_1M:
-        return None
-    patch_litellm_prices(model)
-    try:
-        resp = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            temperature=0,
-            max_tokens=1,
-        )
-    except Exception as exc:  # noqa: BLE001 — probe; caller falls back on None
-        print(f"[price] probe failed for {model}: {type(exc).__name__}: {exc}")
-        return None
-    dated = str(resp.model)
-    in_per_1m, out_per_1m = PRICES_PER_1M[model]
-    litellm.model_cost[dated] = {
-        "input_cost_per_token": in_per_1m / 1_000_000.0,
-        "output_cost_per_token": out_per_1m / 1_000_000.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat",
-    }
-    print(f"[price] {model}: registered dated id {dated!r} at ${in_per_1m}/${out_per_1m} per 1M")
-    return dated
-
-
-def _no_keepalive_http_client() -> Any:
-    """An httpx client that never reuses a connection (fresh socket per request).
-
-    The first paid attempt wedged because litellm/httpx reused ONE keep-alive
-    socket across thousands of sequential calls; when that socket went stale the
-    whole run stalled (~2 KiB / 24 s) even though fresh calls worked instantly.
-    Disabling keep-alive (``max_keepalive_connections=0``) forces a new connection
-    per call, so a dead socket can never persist and stall the run.
-    """
-    import httpx
-
-    return httpx.Client(
-        limits=httpx.Limits(max_keepalive_connections=0, max_connections=8),
-        timeout=httpx.Timeout(LLM_TIMEOUT_S),
-    )
 
 
 class _OpenAICompletionClient:
@@ -278,7 +194,7 @@ class _OpenAICompletionClient:
             api_key=os.environ["OPENROUTER_API_KEY"],
             timeout=LLM_TIMEOUT_S,
             max_retries=LLM_NUM_RETRIES,
-            http_client=_no_keepalive_http_client(),
+            http_client=no_keepalive_http_client(LLM_TIMEOUT_S),
         )
 
     def completion(self, *, model: str, messages: Any, temperature: float, **_: Any) -> Any:
@@ -304,45 +220,8 @@ def make_openai_client() -> Any:
         api_key=os.environ["OPENROUTER_API_KEY"],
         timeout=LLM_TIMEOUT_S,
         max_retries=LLM_NUM_RETRIES,
-        http_client=_no_keepalive_http_client(),
+        http_client=no_keepalive_http_client(LLM_TIMEOUT_S),
     )
-
-
-def per_token_worst_price(model: str) -> float:
-    """Worst-case per-token price (the dearer of input/output) for the budget cap."""
-    in_per_1m, out_per_1m = PRICES_PER_1M[model]
-    return max(in_per_1m, out_per_1m) / 1_000_000.0
-
-
-def make_token_cost_track(model: str) -> Callable[[list[PairwiseJudgement]], CostTrack]:
-    """A cost function that prices judgements from their captured token counts.
-
-    ``litellm.completion_cost`` returns $0 for OpenRouter responses (their
-    ``response.model`` carries a dated id like ``z-ai/glm-5.2-20260616`` with no
-    provider prefix, so litellm raises "LLM Provider NOT provided" and the judge
-    swallows it to $0). The LLM judge does, however, record ``prompt_tokens`` /
-    ``completion_tokens`` in provenance — so we price the run deterministically from
-    those counts against the pinned per-1M rates. This is the honest, source-of-
-    truth cost for the paid cells (and is what the budget ledger reads back).
-    """
-    in_per_1m, out_per_1m = PRICES_PER_1M[model]
-    in_per_tok, out_per_tok = in_per_1m / 1_000_000.0, out_per_1m / 1_000_000.0
-
-    def track(judgements: list[PairwiseJudgement]) -> CostTrack:
-        usd_total = 0.0
-        for j in judgements:
-            prov = j.provenance
-            usd_total += int(prov.get("prompt_tokens", 0) or 0) * in_per_tok
-            usd_total += int(prov.get("completion_tokens", 0) or 0) * out_per_tok
-        n = len(judgements)
-        per_pair = usd_total / n if n > 0 else 0.0
-        return CostTrack(
-            usd_total=usd_total,
-            usd_per_1k_pairs=per_pair * 1_000.0,
-            est_usd_per_100k=per_pair * 100_000.0,
-        )
-
-    return track
 
 
 # ---------------------------------------------------------------------------
@@ -917,7 +796,7 @@ def main() -> int:
     import litellm
 
     litellm.request_timeout = LLM_TIMEOUT_S
-    litellm.client_session = _no_keepalive_http_client()
+    litellm.client_session = no_keepalive_http_client(LLM_TIMEOUT_S)
 
     if args.smoke:
         return smoke(args.glm_model)
