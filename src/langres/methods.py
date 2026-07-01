@@ -22,6 +22,9 @@ is held constant per dataset so the race compares judges, not blockers:
   hard import-time requirement.
 - ``cascade`` — VectorBlocker -> ``CascadeModule`` (embedding early-exit, LLM only
   on the uncertain band) -> Clusterer. Its OpenAI client is injected the same way.
+- ``dspy_judge`` — VectorBlocker -> ``DSPyJudge`` (a compilable DSPy
+  ``ChainOfThought``) -> Clusterer (M4). Its injected client is a **DSPy LM**
+  (``dspy.LM`` / ``DummyLM``), distinct from the LiteLLM/OpenAI clients above.
 
 A dataset participates by conforming to :class:`BlockingBenchmark` — exposing its
 record ``schema`` plus a pinned blocking config (``blocking_k`` and a
@@ -54,7 +57,10 @@ from langres.core.resolver import Resolver
 ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embedding_cosine")
 
 #: Methods whose scorer calls an LLM — they take an injected client (mock/real).
-LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade")
+#: ``dspy_judge`` is LLM-backed too, but its injected client is a **DSPy LM**
+#: (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI client the others take —
+#: see :func:`_make_module_builder`.
+LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge")
 
 #: Every method the registry can build, in race order.
 ALL_METHODS: tuple[str, ...] = ZERO_SPEND_METHODS + LLM_METHODS
@@ -171,6 +177,15 @@ def _make_module_builder(
         return (lambda: EmbeddingScoreJudge()), None
     if method == "llm_judge":
         return (lambda: LLMJudge(client=llm_client, model=llm_model)), None
+    if method == "dspy_judge":
+        # ``dspy_judge`` takes a **DSPy LM** as its injected client — a
+        # ``dspy.LM(...)`` for real runs or a ``dspy.utils.dummies.DummyLM`` in
+        # tests — NOT the LiteLLM ``client.completion(...)`` shape ``llm_judge``
+        # expects. Imported lazily so building any other method's factory (and
+        # plain ``import langres.methods``) never imports ``dspy``.
+        from langres.core.modules.dspy_judge import DSPyJudge
+
+        return (lambda: DSPyJudge(lm=llm_client, model=llm_model)), None
     if method == "cascade":
         return (
             lambda: _build_cascade_module(
