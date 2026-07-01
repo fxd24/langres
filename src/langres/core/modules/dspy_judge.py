@@ -168,6 +168,11 @@ class DSPyJudge(Module[SchemaT]):
         return self._lm
 
     @property
+    def compiled(self) -> bool:
+        """Whether the program has been tuned by :meth:`compile` (public read-only)."""
+        return self._compiled
+
+    @property
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the LM, program, or secrets)."""
         return {

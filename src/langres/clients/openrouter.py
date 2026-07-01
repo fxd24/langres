@@ -261,6 +261,11 @@ class SpendMonitor:
         self._spent += cost_usd
 
     @property
+    def budget_usd(self) -> float:
+        """The configured total spend budget (USD)."""
+        return self._budget_usd
+
+    @property
     def spent(self) -> float:
         """Cumulative spend recorded so far (USD)."""
         return self._spent

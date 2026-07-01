@@ -189,3 +189,9 @@ class TestSpendMonitor:
     def test_defaults(self) -> None:
         monitor = SpendMonitor()
         assert monitor.remaining == pytest.approx(5.0)
+
+    def test_budget_usd_exposes_configured_budget(self) -> None:
+        monitor = SpendMonitor(budget_usd=7.5)
+        monitor.add(2.0)
+        assert monitor.budget_usd == pytest.approx(7.5)  # constant across spend
+        assert SpendMonitor().budget_usd == pytest.approx(5.0)  # default budget
