@@ -878,7 +878,12 @@ def run_race(glm_model: str, frontier_model: str | None, only: set[str] | None) 
             print(f"[run] {cell.cell_id} (free)")
         t0 = time.perf_counter()
         result = cell.run()
-        path.write_text(json.dumps(result, indent=2))
+        # Atomic write: a kill mid-write must not leave a truncated JSON at the
+        # cell's final path (which resume would skip as "already committed" or
+        # crash spent_so_far()). Write to a sibling temp file, then os.replace().
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(result, indent=2))
+        os.replace(tmp, path)
         print(
             f"[done] {cell.cell_id} in {time.perf_counter() - t0:.1f}s "
             f"(cell cost ${float(result.get('usd_total', 0.0)):.4f}, "

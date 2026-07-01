@@ -2,9 +2,9 @@ name: Security
 
 on:
   push:
-    branches: [main, feat/m3-benchmark]
+    branches: [main]
   pull_request:
-    branches: [main, feat/m3-benchmark]
+    branches: [main]
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: "0 8 * * 1"
