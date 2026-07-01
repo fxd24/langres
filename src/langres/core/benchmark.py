@@ -29,7 +29,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -227,13 +227,35 @@ class MethodResult(BaseModel):
     latency: LatencyTrack
 
 
+#: Ranking metrics :meth:`BenchmarkTable.best` / :meth:`~BenchmarkTable.rank`
+#: accept — the decision-relevant headline scores (higher is better for all
+#: three), each a trivial accessor over an existing :class:`MethodResult` field.
+_RANKABLE_METRICS: dict[str, Callable[["MethodResult"], float]] = {
+    "pair_f1": lambda r: r.pair.f1,
+    "bcubed_f1": lambda r: r.pipeline.bcubed_f1,
+    "delta_above_floor": lambda r: r.pipeline.delta_above_floor,
+}
+
+
+def _rank_accessor(by: str) -> Callable[["MethodResult"], float]:
+    """Resolve a ranking-metric name to its accessor, or raise on an unknown one."""
+    try:
+        return _RANKABLE_METRICS[by]
+    except KeyError:
+        raise ValueError(
+            f"unknown ranking metric {by!r}; choose one of {sorted(_RANKABLE_METRICS)}"
+        ) from None
+
+
 class BenchmarkTable(BaseModel):
     """Collects :class:`MethodResult`s and renders a method×dataset×seed table.
 
     A thin, serializable accumulator: append results as runs complete, then call
     :meth:`to_markdown` for a compact headline view (BCubed F1, pair F1, cost,
-    latency). Kept deliberately small — richer reporting (per-track breakdowns,
-    plots) composes on top of the stored ``results`` rather than bloating this.
+    latency), or :meth:`best` / :meth:`rank` for a structured winner an agent
+    driving experiments can read directly. Kept deliberately small — richer
+    reporting (per-track breakdowns, plots) composes on top of the stored
+    ``results`` rather than bloating this.
     """
 
     results: list[MethodResult] = Field(default_factory=list)
@@ -241,6 +263,45 @@ class BenchmarkTable(BaseModel):
     def add(self, result: MethodResult) -> None:
         """Append one method result."""
         self.results.append(result)
+
+    def rank(self, *, by: str = "pair_f1") -> list[MethodResult]:
+        """Return the results sorted by ``by``, best (highest) first.
+
+        The structured counterpart to :meth:`to_markdown`: instead of a rendered
+        string, a list an experiment driver can index. The sort is stable, so ties
+        keep insertion order. An empty table returns ``[]``.
+
+        Args:
+            by: A metric name in :data:`_RANKABLE_METRICS` (``"pair_f1"`` — the
+                scorer-isolating default — ``"bcubed_f1"``, or
+                ``"delta_above_floor"``).
+
+        Returns:
+            The stored results, highest ``by`` first.
+
+        Raises:
+            ValueError: If ``by`` is not a known ranking metric.
+        """
+        accessor = _rank_accessor(by)
+        return sorted(self.results, key=accessor, reverse=True)
+
+    def best(self, *, by: str = "pair_f1") -> MethodResult | None:
+        """Return the single top result by ``by``, or ``None`` for an empty table.
+
+        Args:
+            by: A metric name in :data:`_RANKABLE_METRICS` (default ``"pair_f1"``).
+
+        Returns:
+            The highest-``by`` :class:`MethodResult` (first-added wins ties), or
+            ``None`` when no results have been added.
+
+        Raises:
+            ValueError: If ``by`` is not a known ranking metric.
+        """
+        accessor = _rank_accessor(by)
+        if not self.results:
+            return None
+        return max(self.results, key=accessor)
 
     def to_markdown(self) -> str:
         """Render the collected results as a Markdown table.
@@ -315,6 +376,27 @@ class Benchmark(Protocol[RecordT]):
     ) -> tuple[list[RecordT], list[RecordT], list[set[str]], list[set[str]]]:
         """Split into ``(train_records, test_records, train_clusters, test_clusters)``."""
         ...  # pragma: no cover
+
+
+if TYPE_CHECKING:
+    # ``run_methods`` builds each method's factory via
+    # ``langres.methods.make_resolver_factory``, which needs the *registry*
+    # contract (``BlockingBenchmark``: ``schema`` + ``blocking_k`` +
+    # ``build_blocker``) on top of the harness ``Benchmark`` contract. The two
+    # cannot be a single runtime import here without closing the
+    # ``core.benchmark -> methods -> core.benchmark`` cycle, so the combined
+    # contract is expressed for the type checker only — the annotation is a
+    # forward reference (quoted) and never evaluated at runtime.
+    from langres.methods import BlockingBenchmark
+
+    class _RunnableBenchmark(Benchmark[RecordT], BlockingBenchmark, Protocol):
+        """A benchmark satisfying BOTH the harness and the registry contracts.
+
+        The intersection ``run_methods`` requires — the same shape the two dataset
+        conformers and the test fakes already expose. Mirrors the example's
+        ``_RaceBenchmark`` so one benchmark can drive ``run_method`` (needs
+        ``Benchmark``) and ``make_resolver_factory`` (needs ``BlockingBenchmark``).
+        """
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +624,62 @@ def run_method(
         cost=cost,
         latency=latency,
     )
+
+
+def run_methods(
+    benchmark: "_RunnableBenchmark[RecordT]",
+    methods: Sequence[str],
+    *,
+    seed: int = 0,
+    budget: float | None = None,
+    **factory_kwargs: Any,
+) -> BenchmarkTable:
+    """Race several named methods on one benchmark into a :class:`BenchmarkTable`.
+
+    The library-level experiment facade: the double loop
+    ``examples/m3_zero_spend_race.py`` hand-coded (``for method: build factory ->
+    run_method -> table.add``) becomes one call. For each name it builds a
+    resolver factory via
+    :func:`~langres.methods.make_resolver_factory(method, benchmark,
+    **factory_kwargs)` and runs it through the existing :func:`run_method`,
+    appending each :class:`MethodResult` in ``methods`` order. A thin orchestration
+    wrapper: it owns no evaluation logic of its own, so both tracks, cost, and
+    latency stay defined in exactly one place (``run_method``).
+
+    ``make_resolver_factory`` lives in :mod:`langres.methods`, which imports
+    ``CostTrack`` / ``_cost_track`` from *this* module. Importing it at module
+    scope would close a ``core.benchmark -> methods -> core.benchmark`` cycle, so
+    it is imported lazily inside the call. ``import langres.core.benchmark`` thus
+    stays free of the method registry (and of ``langres.data``), preserving the
+    harness's dataset-agnostic import graph; the method registry is pulled in only
+    when an experiment is actually run.
+
+    Args:
+        benchmark: A conformer of BOTH the harness :class:`Benchmark` contract and
+            the registry ``BlockingBenchmark`` contract (``schema`` +
+            ``blocking_k`` + ``build_blocker``). The two dataset conformers and the
+            test fakes already satisfy this intersection.
+        methods: Method names to race (e.g. ``("rapidfuzz", "embedding_cosine")``);
+            each must be a name :func:`~langres.methods.make_resolver_factory`
+            accepts (raises ``ValueError`` otherwise).
+        seed: Split seed shared by every method (identical leakage-free split).
+        budget: Per-method spend ceiling forwarded to :func:`run_method`. ``0.0``
+            asserts genuine zero spend (raises if any method is charged); ``None``
+            bounds nothing.
+        **factory_kwargs: Forwarded verbatim to ``make_resolver_factory`` (e.g.
+            ``llm_client``, ``llm_model``) — ignored by the zero-spend methods.
+
+    Returns:
+        A :class:`BenchmarkTable` with one :class:`MethodResult` per method (in
+        ``methods`` order).
+    """
+    from langres.methods import make_resolver_factory
+
+    table = BenchmarkTable()
+    for method in methods:
+        factory = make_resolver_factory(method, benchmark, **factory_kwargs)
+        table.add(run_method(benchmark, factory, seed=seed, budget=budget))
+    return table
 
 
 # ---------------------------------------------------------------------------
