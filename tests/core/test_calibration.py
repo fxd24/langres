@@ -60,6 +60,36 @@ def test_youden_ties_all_equal_scores_stays_in_range() -> None:
     assert thr == 0.5
 
 
+def test_youden_inversely_correlated_does_not_misclassify_top_non_match() -> None:
+    """An anti-correlated scorer must not clamp the +inf sentinel onto the top non-match.
+
+    With ``scores=[0.9, 0.1]`` and ``labels=[False, True]`` the highest score is a
+    NON-match, so no ``score >= threshold`` cut carries positive Youden's J. The
+    old code let ``argmax`` pick roc_curve's leading ``+inf`` sentinel and clamped
+    it down to ``max(scores)=0.9`` — turning "classify nothing" into "classify the
+    top non-match (0.9) as a match". The threshold must instead sit strictly above
+    the top non-match so it is predicted a non-match.
+    """
+    scores = [0.9, 0.1]
+    labels = [False, True]
+
+    thr = derive_threshold(scores, labels, method="youden")
+
+    top_non_match = 0.9  # highest-scoring negative
+    assert top_non_match < thr, f"top non-match {top_non_match} must not be a match at {thr}"
+
+
+def test_youden_inversely_correlated_multi_point_classifies_nothing() -> None:
+    """A larger anti-correlated set also abstains (no negative predicted a match)."""
+    scores = [0.9, 0.8, 0.2, 0.1]
+    labels = [False, False, True, True]  # high score => non-match
+
+    thr = derive_threshold(scores, labels, method="youden")
+
+    # Every negative (the two high scores) sits below the threshold => non-match.
+    assert all(s < thr for s, y in zip(scores, labels, strict=True) if not y)
+
+
 def test_percentile_returns_the_requested_cut() -> None:
     """``percentile`` returns the numpy percentile of the score distribution."""
     scores = [0.0, 0.25, 0.5, 0.75, 1.0]

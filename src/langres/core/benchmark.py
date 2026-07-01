@@ -678,7 +678,13 @@ def run_methods(
     table = BenchmarkTable()
     for method in methods:
         factory = make_resolver_factory(method, benchmark, **factory_kwargs)
-        table.add(run_method(benchmark, factory, seed=seed, budget=budget))
+        result = run_method(benchmark, factory, seed=seed, budget=budget)
+        # ``run_method`` stamps ``MethodResult.method`` from the module's
+        # ``type_name`` (e.g. ``weighted_average_judge``), but callers race by the
+        # *registry* key (``weighted_average``) and expect ``best().method`` to be
+        # a name ``make_resolver_factory`` accepts. Overwrite it with the requested
+        # key so the winner is directly re-runnable.
+        table.add(result.model_copy(update={"method": method}))
     return table
 
 

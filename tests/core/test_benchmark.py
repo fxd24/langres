@@ -606,14 +606,35 @@ def test_run_methods_budget_zero_asserts_zero_spend() -> None:
     assert all(r.cost.usd_total == 0.0 for r in table.results)
 
 
+def test_run_methods_stamps_the_requested_registry_method_name() -> None:
+    """Each row's ``method`` is the registry key passed in, not the module ``type_name``.
+
+    ``run_method`` labels a result from the module's ``type_name`` (e.g.
+    ``weighted_average_judge``), but the caller races by the registry key
+    (``weighted_average``). ``run_methods`` overwrites the label so
+    ``best().method`` is a name ``make_resolver_factory`` accepts and can re-run.
+    """
+    from langres.methods import make_resolver_factory
+
+    bench = _FakeBlockingBenchmark()
+    table = run_methods(bench, ["embedding_cosine", "weighted_average"], seed=0)
+
+    # Rows carry the exact registry keys, in order.
+    assert [r.method for r in table.results] == ["embedding_cosine", "weighted_average"]
+
+    # And the winner's label round-trips through the registry (no ValueError).
+    best = table.best()
+    assert best is not None
+    assert best.method in ("embedding_cosine", "weighted_average")
+    make_resolver_factory(best.method, bench)  # accepted registry key -> no raise
+
+
 # ---------------------------------------------------------------------------
 # BenchmarkTable.best / rank (structured accessors)
 # ---------------------------------------------------------------------------
 
 
-def _result(
-    method: str, *, pair_f1: float, bcubed_f1: float, delta: float = 0.0
-) -> MethodResult:
+def _result(method: str, *, pair_f1: float, bcubed_f1: float, delta: float = 0.0) -> MethodResult:
     """A minimal MethodResult carrying only the fields best/rank read."""
     return MethodResult(
         method=method,

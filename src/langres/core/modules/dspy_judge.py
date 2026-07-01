@@ -75,6 +75,23 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _salvage_usage(lm: Any) -> tuple[int, int]:
+    """Best-effort ``(prompt_tokens, completion_tokens)`` for a call that WAS billed.
+
+    On an :class:`AdapterParseError` there is no ``Prediction`` to call
+    ``get_lm_usage`` on, yet the underlying LM completion already ran (and was
+    billed). DSPy records every call in ``lm.history``, so read the last entry's
+    usage to cost the failed call instead of silently treating it as free.
+    Returns ``(0, 0)`` when no usage is recoverable (e.g. a stub LM with no
+    history), which keeps the honest-cost math a no-op rather than crashing.
+    """
+    history = getattr(lm, "history", None)
+    if not history:
+        return 0, 0
+    usage = history[-1].get("usage") or {}
+    return int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
+
+
 def _pair_metric(example: dspy.Example, prediction: Any, trace: Any = None) -> bool:
     """Compilation metric: the predicted ``match`` bool equals the gold ``match`` bool.
 
@@ -128,8 +145,8 @@ class DSPyJudge(Module[SchemaT]):
         self.temperature = temperature
         self.entity_noun = entity_noun
         self._lm = lm
-        self._program: Any = program if program is not None else dspy.ChainOfThought(
-            _signature_for(entity_noun)
+        self._program: Any = (
+            program if program is not None else dspy.ChainOfThought(_signature_for(entity_noun))
         )
         # A program is "compiled" once :meth:`compile` has tuned it; a bare
         # ``ChainOfThought`` (or a ``from_config`` rebuild) starts uncompiled and
@@ -147,7 +164,7 @@ class DSPyJudge(Module[SchemaT]):
     def _get_lm(self) -> Any:
         """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use."""
         if self._lm is None:
-            self._lm = dspy.LM(self.model, cache=False)
+            self._lm = dspy.LM(self.model, cache=False, temperature=self.temperature)
         return self._lm
 
     @property
@@ -207,6 +224,11 @@ class DSPyJudge(Module[SchemaT]):
                     prediction = self._program(left=left, right=right)
             except AdapterParseError as error:
                 logger.warning("DSPyJudge parse failure for %s vs %s: %s", left_id, right_id, error)
+                # The LM completion WAS billed even though parsing failed. Salvage
+                # whatever token counts DSPy recorded and flag the cost as
+                # untrackable (``cost_untracked``) so downstream accounting does not
+                # silently undercount once a real price is wired to the token seam.
+                err_prompt_tokens, err_completion_tokens = _salvage_usage(lm)
                 yield PairwiseJudgement(
                     left_id=left_id,
                     right_id=right_id,
@@ -216,9 +238,10 @@ class DSPyJudge(Module[SchemaT]):
                     reasoning=None,
                     provenance={
                         "model": self.model,
-                        "cost_usd": 0.0,
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
+                        "cost_usd": self._cost_usd(err_prompt_tokens, err_completion_tokens),
+                        "prompt_tokens": err_prompt_tokens,
+                        "completion_tokens": err_completion_tokens,
+                        "cost_untracked": True,
                         "error": str(error),
                     },
                 )
@@ -281,24 +304,34 @@ class DSPyJudge(Module[SchemaT]):
                     **kwargs,
                 )
             else:
-                raise ValueError(
-                    f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'"
-                )
+                raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
         self._compiled = True
         return self
 
+    #: Sidecar file recording whether the saved program was compiled, so a reload
+    #: restores the real compiled flag instead of assuming a saved judge is tuned.
+    _COMPILED_MARKER: ClassVar[str] = "compiled"
+
     def save_state(self, state_dir: Path) -> None:
-        """Persist the DSPy program (demos + instructions) to ``program.json``."""
+        """Persist the DSPy program (``program.json``) plus the compiled marker."""
         self._program.save(state_dir / "program.json", save_program=False)
+        (state_dir / self._COMPILED_MARKER).write_text("true" if self._compiled else "false")
 
     def load_state(self, state_dir: Path) -> None:
         """Restore the DSPy program from ``program.json`` written by :meth:`save_state`.
 
-        A saved program carries its compiled state; treat a loaded program as
-        compiled so ``forward`` does not warn on a restored, tuned judge.
+        The compiled flag is restored from the sidecar marker so it reflects
+        reality: a judge saved BEFORE :meth:`compile` reloads as *uncompiled* (and
+        ``forward`` still warns), not silently marked tuned. Older artifacts
+        without the marker fall back to inferring compilation from whether the
+        reloaded program carries bootstrapped demos.
         """
         self._program.load(state_dir / "program.json")
-        self._compiled = True
+        marker = state_dir / self._COMPILED_MARKER
+        if marker.exists():
+            self._compiled = marker.read_text().strip() == "true"
+        else:
+            self._compiled = any(len(p.demos) > 0 for _, p in self._program.named_predictors())
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10

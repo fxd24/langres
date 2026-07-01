@@ -277,9 +277,7 @@ class SpendMonitor:
             BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
         """
         if self._spent > self._budget_usd:
-            raise BudgetExceeded(
-                f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}"
-            )
+            raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
         if self._spent >= self._warn_frac * self._budget_usd:
             logger.warning(
                 "spend $%.4f has passed %.0f%% of the $%.2f budget (remaining $%.4f)",

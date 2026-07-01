@@ -163,3 +163,12 @@ follow_imports = "skip"
 module = ["dspy.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# scikit-learn ships partial type info that flips typed↔untyped across installs,
+# so an inline `# type: ignore[import-untyped]` on `from sklearn.metrics import
+# roc_curve` alternates between "needed" and "unused" (the latter fails strict
+# `warn_unused_ignores`). Silencing the missing-import check here is stable
+# across both — mirroring the faiss/litellm/dspy blocks above.
+module = ["sklearn.*"]
+ignore_missing_imports = true

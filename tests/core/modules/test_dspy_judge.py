@@ -18,7 +18,12 @@ import pytest
 from dspy.utils.dummies import DummyLM
 
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.dspy_judge import DSPyJudge, _clamp01, _pair_metric
+from langres.core.modules.dspy_judge import (
+    DSPyJudge,
+    _clamp01,
+    _pair_metric,
+    _salvage_usage,
+)
 from langres.core.registry import get_component
 
 
@@ -160,6 +165,9 @@ def test_forward_parse_failure_emits_low_confidence_judgement(
     assert judgement.decision_step == "dspy_parse_error"
     assert judgement.reasoning is None
     assert "error" in judgement.provenance
+    # The billed-but-unparseable call is flagged so cost tracking never silently
+    # undercounts it (tokens salvaged from history are 0 under DummyLM => $0).
+    assert judgement.provenance["cost_untracked"] is True
     assert judgement.provenance["cost_usd"] == 0.0
     assert any("parse failure" in r.message for r in caplog.records)
 
@@ -177,7 +185,15 @@ def test_get_lm_builds_dspy_lm_lazily(mocker) -> None:  # type: ignore[no-untype
     assert judge._lm is None  # not built at construction
     assert judge._get_lm() is sentinel
     assert judge._get_lm() is sentinel  # cached
-    build.assert_called_once_with("openrouter/z-ai/glm-5.2", cache=False)
+    build.assert_called_once_with("openrouter/z-ai/glm-5.2", cache=False, temperature=0.0)
+
+
+def test_get_lm_forwards_temperature(mocker) -> None:  # type: ignore[no-untyped-def]
+    """A non-default temperature reaches the lazily-constructed ``dspy.LM``."""
+    build = mocker.patch("dspy.LM", return_value=object())
+    judge: DSPyJudge[CompanySchema] = DSPyJudge(model="openrouter/z-ai/glm-5.2", temperature=0.7)
+    judge._get_lm()
+    build.assert_called_once_with("openrouter/z-ai/glm-5.2", cache=False, temperature=0.7)
 
 
 def test_injected_lm_is_used_and_never_rebuilt(mocker) -> None:  # type: ignore[no-untyped-def]
@@ -206,6 +222,30 @@ def test_clamp01_bounds() -> None:
     assert _clamp01(-0.5) == 0.0
     assert _clamp01(0.4) == 0.4
     assert _clamp01(2.0) == 1.0
+
+
+class _StubLM:
+    """Minimal LM stub carrying only a DSPy-shaped ``history`` for usage salvage."""
+
+    def __init__(self, history: list[dict[str, object]]) -> None:
+        self.history = history
+
+
+def test_salvage_usage_reads_last_history_entry() -> None:
+    """When the LM recorded a billed call, its token counts are salvaged."""
+    lm = _StubLM([{"usage": {"prompt_tokens": 12, "completion_tokens": 3}}])
+    assert _salvage_usage(lm) == (12, 3)
+
+
+def test_salvage_usage_returns_zeros_without_history() -> None:
+    """A stub LM with no history yields ``(0, 0)`` — a $0 no-op, never a crash."""
+    assert _salvage_usage(object()) == (0, 0)
+    assert _salvage_usage(_StubLM([])) == (0, 0)
+
+
+def test_salvage_usage_handles_missing_usage_key() -> None:
+    """A history entry without a ``usage`` key is treated as zero tokens."""
+    assert _salvage_usage(_StubLM([{"model": "x"}])) == (0, 0)
 
 
 def test_pair_metric_compares_match_bool() -> None:
@@ -269,6 +309,47 @@ def test_save_state_load_state_restores_compiled_program(tmp_path: Path) -> None
     assert fresh._compiled is True  # a loaded program is a tuned program
     restored_demos = sum(len(p.demos) for _, p in fresh._program.named_predictors())
     assert restored_demos == trained_demos
+
+
+def test_save_before_compile_reloads_as_uncompiled(tmp_path: Path) -> None:
+    """A judge saved BEFORE compile must reload UNCOMPILED (flag reflects reality).
+
+    Regression: ``load_state`` used to hard-set ``_compiled = True``, so a judge
+    persisted before ``compile`` was wrongly marked tuned on reload — suppressing
+    the "uncompiled judge" warning. The sidecar marker now restores the real flag.
+    """
+    judge = _dummy_judge(_answers(10))
+    assert judge._compiled is False  # never compiled
+    judge.save_state(tmp_path)
+    assert (tmp_path / "compiled").read_text() == "false"
+
+    fresh = DSPyJudge.from_config(judge.config)
+    fresh.load_state(tmp_path)
+    assert fresh._compiled is False  # stays uncompiled — the marker said so
+
+
+def test_save_after_compile_reloads_as_compiled(tmp_path: Path) -> None:
+    """A judge saved AFTER compile reloads compiled (marker says ``true``)."""
+    judge = _dummy_judge(_answers(50))
+    judge.compile(_trainset(), optimizer="bootstrap")
+    judge.save_state(tmp_path)
+    assert (tmp_path / "compiled").read_text() == "true"
+
+    fresh = DSPyJudge.from_config(judge.config)
+    fresh.load_state(tmp_path)
+    assert fresh._compiled is True
+
+
+def test_load_state_without_marker_infers_from_demos(tmp_path: Path) -> None:
+    """An older artifact (no marker) infers compilation from bootstrapped demos."""
+    judge = _dummy_judge(_answers(50))
+    judge.compile(_trainset(), optimizer="bootstrap")
+    judge.save_state(tmp_path)
+    (tmp_path / "compiled").unlink()  # simulate a pre-marker artifact
+
+    fresh = DSPyJudge.from_config(judge.config)
+    fresh.load_state(tmp_path)
+    assert fresh._compiled is True  # inferred from the restored demos
 
 
 def test_resolver_with_dspy_judge_saves_and_loads(tmp_path: Path) -> None:

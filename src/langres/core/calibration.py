@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
-from sklearn.metrics import roc_curve  # type: ignore[import-untyped]
+from sklearn.metrics import roc_curve
 
 ThresholdMethod = Literal["youden", "percentile"]
 """How to derive the threshold from the score distribution.
@@ -43,7 +43,9 @@ def derive_threshold(
     Args:
         scores: Per-pair scores (e.g. embedding cosine similarities). Any real
             range is accepted; the returned threshold is clamped to
-            ``[min(scores), max(scores)]`` so it is always a usable cut.
+            ``[min(scores), max(scores)]`` so it is always a usable cut -- except
+            for the anti-correlated degenerate below, where ``"youden"`` returns a
+            cut just above ``max(scores)`` ("classify nothing").
         labels: Gold match/non-match labels aligned with ``scores``.
         method: ``"youden"`` (default) maximizes Youden's J via
             :func:`sklearn.metrics.roc_curve`; ``"percentile"`` returns the
@@ -53,7 +55,9 @@ def derive_threshold(
 
     Returns:
         The derived threshold as a plain ``float`` within the observed score
-        range.
+        range (for ``"youden"`` on an inversely-correlated scorer where no real
+        cut has positive Youden's J, a value just above ``max(scores)`` so nothing
+        is classified as a match).
 
     Raises:
         ValueError: If ``scores`` and ``labels`` differ in length or are empty;
@@ -84,10 +88,27 @@ def derive_threshold(
                 "and one non-match); got a single class"
             )
         _fpr, tpr, thresholds = roc_curve(label_array, score_array)
-        best = int(np.argmax(tpr - _fpr))
-        # roc_curve prepends a +inf sentinel threshold ("classify nothing as a
-        # match"); clamp into the observed range so the result is always usable.
-        return float(np.clip(thresholds[best], low, high))
+        # roc_curve prepends a +inf sentinel threshold meaning "classify nothing
+        # as a match". It must be excluded before argmax: for an inversely
+        # correlated scorer no real cut has positive Youden's J, so argmax would
+        # otherwise pick that sentinel and -- once clamped down to max(scores) --
+        # silently turn "classify nothing" into "classify the top non-match as a
+        # match".
+        finite = np.isfinite(thresholds)
+        youden = (tpr - _fpr)[finite]
+        finite_thresholds = thresholds[finite]
+        if youden.size == 0:  # pragma: no cover - defensive; both classes present
+            # Degenerate: only the +inf sentinel survived (unreachable while both
+            # classes are present, which is validated above) — abstain safely.
+            return high
+        best = int(np.argmax(youden))
+        if youden[best] <= 0.0 and low < high:
+            # No finite cut carries positive signal on a scorer whose scores span
+            # a range: the honest operating point is "classify nothing" -- a
+            # threshold strictly above every score, so the top non-match is never
+            # called a match (rather than clamping the sentinel down onto it).
+            return float(np.nextafter(high, np.inf))
+        return float(np.clip(finite_thresholds[best], low, high))
 
     if method == "percentile":
         if percentile is None:

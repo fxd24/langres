@@ -85,7 +85,9 @@ def build_ag_smoke_candidates(
     return candidates, gold
 
 
-def _trainset(candidates: list[ERCandidate[ProductSchema]], gold: set[frozenset[str]]) -> list[Example]:
+def _trainset(
+    candidates: list[ERCandidate[ProductSchema]], gold: set[frozenset[str]]
+) -> list[Example]:
     """Turn candidates into labeled DSPy examples (rendered like ``forward``)."""
     examples: list[Example] = []
     for candidate in candidates:
