@@ -283,6 +283,20 @@ def test_compile_bootstrap_populates_demos_and_sets_flag() -> None:
     assert demos > 0
 
 
+def test_compiled_property_reflects_state_across_build_compile_and_reload(tmp_path: Path) -> None:
+    """The public ``compiled`` flag mirrors ``_compiled`` through build -> compile -> reload."""
+    judge = _dummy_judge(_answers(50))
+    assert judge.compiled is False  # a fresh program is uncompiled
+    judge.compile(_trainset(), optimizer="bootstrap")
+    assert judge.compiled is True  # compile tunes it
+
+    judge.save_state(tmp_path)
+    fresh = DSPyJudge.from_config(judge.config)
+    assert fresh.compiled is False  # a fresh rebuild is uncompiled
+    fresh.load_state(tmp_path)
+    assert fresh.compiled is True  # the reloaded (compiled) program restores the flag
+
+
 def test_compile_unknown_optimizer_raises() -> None:
     judge = _dummy_judge(_answers(10))
     with pytest.raises(ValueError, match="unknown optimizer"):

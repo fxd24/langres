@@ -33,7 +33,8 @@ print(table.to_markdown())          # BCubed-F1 + pair-F1 + cost per method
   and **re-judges** the candidates.
 - **When to use:** **cheap, zero-spend** methods (`rapidfuzz`, `embedding_cosine`,
   `weighted_average`, …) where rebuild-and-re-judge-per-threshold is free.
-- **`budget=0.0`** asserts genuine zero spend — it raises if any method is charged.
+- **`budget=0.0`** asserts genuine zero spend — a **post-hoc** guard that raises
+  *after* a method runs if its measured spend was charged, not a pre-flight block.
 
 ### (b) `evaluate_judge_on_candidates` — pairwise-F1 for a compiled/paid judge, judged once
 

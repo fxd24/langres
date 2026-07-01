@@ -138,7 +138,7 @@ def main() -> None:
     )
     judge.compile(to_trainset(train_candidates, train_gold), optimizer="bootstrap")
     print("\n## 2. DSPyJudge compiled")
-    print(f"- optimizer=bootstrap  compiled={judge._compiled}  (DummyLM => $0)")
+    print(f"- optimizer=bootstrap  compiled={judge.compiled}  (DummyLM => $0)")
 
     # --- 3) Evaluate the COMPILED judge on the test band — judged ONCE. ---------
     #     This is the SOTA-comparable, blocking-free judge surface. A paid judge
@@ -165,11 +165,10 @@ def main() -> None:
     print(f"- derived threshold:  {derived:.3f}  (Youden's J off the judge's own scores)")
 
     # --- 5) Report the budget seam — $0.00 cumulative on the zero-spend path. ---
-    budget_total = monitor.remaining + monitor.spent
     print("\n## 5. SpendMonitor (paid-path seam, exercised at $0)")
     print(
         f"- cumulative spend: ${monitor.spent:.2f}  "
-        f"(budget ${budget_total:.2f}, remaining ${monitor.remaining:.2f})"
+        f"(budget ${monitor.budget_usd:.2f}, remaining ${monitor.remaining:.2f})"
     )
 
     # --- 6) Race cheap zero-spend methods — the full-pipeline race surface. -----
