@@ -270,7 +270,10 @@ class DSPyJudge(Module[SchemaT]):
                 self._program = dspy.BootstrapFewShot(metric=_pair_metric).compile(
                     self._program, trainset=list(trainset), **kwargs
                 )
-            elif optimizer == "mipro":
+            elif optimizer == "mipro":  # pragma: no cover - paid, non-deterministic path
+                # Exercised only by the paid example (MIPROv2 proposes+evaluates
+                # instructions via real LM calls; it is not deterministic under
+                # DummyLM, so it is kept out of the zero-spend unit suite).
                 self._program = dspy.MIPROv2(metric=_pair_metric, auto="light").compile(
                     self._program,
                     trainset=list(trainset),

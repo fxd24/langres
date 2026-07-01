@@ -36,6 +36,7 @@ from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.cascade import CascadeModule
+from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 from langres.core.resolver import Resolver
@@ -158,6 +159,13 @@ class _MockOpenAIClient:
         return _fake_response(self._content)
 
 
+def _dummy_lm() -> Any:
+    """A DSPy ``DummyLM`` for ``dspy_judge`` — the factory injects it as the LM (no spend)."""
+    from dspy.utils.dummies import DummyLM
+
+    return DummyLM([{"reasoning": "same", "match": "True", "match_probability": "0.9"}] * 20)
+
+
 class _ScriptedEmbeddingModel:
     """Cascade embedding double: pops a preset ``[left_vec, right_vec]`` per encode.
 
@@ -233,6 +241,9 @@ def test_unknown_method_raises() -> None:
         # ``client.chat.completions.create(...)`` (OpenAI-shaped).
         ("llm_judge", LLMJudge, False, _MockLiteLLMClient()),
         ("cascade", CascadeModule, False, _MockOpenAIClient()),
+        # ``dspy_judge`` takes a DSPy LM as its injected client (a ``DummyLM``
+        # here), distinct from the LiteLLM/OpenAI clients above.
+        ("dspy_judge", DSPyJudge, False, _dummy_lm()),
     ],
 )
 def test_factory_builds_valid_resolver(
