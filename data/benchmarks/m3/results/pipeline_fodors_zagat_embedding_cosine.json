@@ -1,0 +1,452 @@
+{
+  "cell_id": "pipeline_fodors_zagat_embedding_cosine",
+  "kind": "pipeline",
+  "method": "embedding_cosine",
+  "dataset": "fodors_zagat",
+  "model": null,
+  "usd_total": 0.0,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "results": [
+    {
+      "method": "embedding_score_judge",
+      "dataset": "fodors_zagat",
+      "seed": 0,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.05536912751677853,
+        "recall": 1.0,
+        "f1": 0.10492845786963435,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03225806451612903,
+            "recall": 1.0,
+            "f1": 0.0625,
+            "tp": 33,
+            "fp": 990,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.03225806451612903,
+            "recall": 1.0,
+            "f1": 0.0625,
+            "tp": 33,
+            "fp": 990,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.03225806451612903,
+            "recall": 1.0,
+            "f1": 0.0625,
+            "tp": 33,
+            "fp": 990,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.03225806451612903,
+            "recall": 1.0,
+            "f1": 0.0625,
+            "tp": 33,
+            "fp": 990,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.03225806451612903,
+            "recall": 1.0,
+            "f1": 0.0625,
+            "tp": 33,
+            "fp": 990,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.05536912751677853,
+            "recall": 1.0,
+            "f1": 0.10492845786963435,
+            "tp": 33,
+            "fp": 563,
+            "fn": 0
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.19878183831672205,
+        "bcubed_r": 1.0,
+        "bcubed_f1": 0.3316397228637413,
+        "cluster_pairwise_f1": 0.003436426116838488,
+        "delta_above_floor": -0.600037295769799,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.0003063838386349198,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "embedding_score_judge",
+      "dataset": "fodors_zagat",
+      "seed": 1,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.05660377358490566,
+        "recall": 1.0,
+        "f1": 0.10714285714285715,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.032640949554896145,
+            "recall": 1.0,
+            "f1": 0.06321839080459771,
+            "tp": 33,
+            "fp": 978,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.032640949554896145,
+            "recall": 1.0,
+            "f1": 0.06321839080459771,
+            "tp": 33,
+            "fp": 978,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.032640949554896145,
+            "recall": 1.0,
+            "f1": 0.06321839080459771,
+            "tp": 33,
+            "fp": 978,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.032640949554896145,
+            "recall": 1.0,
+            "f1": 0.06321839080459771,
+            "tp": 33,
+            "fp": 978,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.032640949554896145,
+            "recall": 1.0,
+            "f1": 0.06321839080459771,
+            "tp": 33,
+            "fp": 978,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.05660377358490566,
+            "recall": 1.0,
+            "f1": 0.10714285714285715,
+            "tp": 33,
+            "fp": 550,
+            "fn": 0
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.19744123022625576,
+        "bcubed_r": 1.0,
+        "bcubed_f1": 0.3297718923357088,
+        "cluster_pairwise_f1": 0.0031499069345678424,
+        "delta_above_floor": -0.6019051262978315,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.00024119774192851682,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "embedding_score_judge",
+      "dataset": "fodors_zagat",
+      "seed": 2,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.052969502407704656,
+        "recall": 1.0,
+        "f1": 0.10060975609756098,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03350253807106599,
+            "recall": 1.0,
+            "f1": 0.06483300589390963,
+            "tp": 33,
+            "fp": 952,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.03350253807106599,
+            "recall": 1.0,
+            "f1": 0.06483300589390963,
+            "tp": 33,
+            "fp": 952,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.03350253807106599,
+            "recall": 1.0,
+            "f1": 0.06483300589390963,
+            "tp": 33,
+            "fp": 952,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.03350253807106599,
+            "recall": 1.0,
+            "f1": 0.06483300589390963,
+            "tp": 33,
+            "fp": 952,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.03350253807106599,
+            "recall": 1.0,
+            "f1": 0.06483300589390963,
+            "tp": 33,
+            "fp": 952,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.052969502407704656,
+            "recall": 1.0,
+            "f1": 0.10060975609756098,
+            "tp": 33,
+            "fp": 590,
+            "fn": 0
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.14961003247753835,
+        "bcubed_r": 1.0,
+        "bcubed_f1": 0.2602796222213057,
+        "cluster_pairwise_f1": 0.0027855153203342614,
+        "delta_above_floor": -0.6713973964122346,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.00023904458577106446,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "embedding_score_judge",
+      "dataset": "fodors_zagat",
+      "seed": 3,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.05660377358490566,
+        "recall": 1.0,
+        "f1": 0.10714285714285715,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03197674418604651,
+            "recall": 1.0,
+            "f1": 0.061971830985915494,
+            "tp": 33,
+            "fp": 999,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.03197674418604651,
+            "recall": 1.0,
+            "f1": 0.061971830985915494,
+            "tp": 33,
+            "fp": 999,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.03197674418604651,
+            "recall": 1.0,
+            "f1": 0.061971830985915494,
+            "tp": 33,
+            "fp": 999,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.03197674418604651,
+            "recall": 1.0,
+            "f1": 0.061971830985915494,
+            "tp": 33,
+            "fp": 999,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.03197674418604651,
+            "recall": 1.0,
+            "f1": 0.061971830985915494,
+            "tp": 33,
+            "fp": 999,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.05660377358490566,
+            "recall": 1.0,
+            "f1": 0.10714285714285715,
+            "tp": 33,
+            "fp": 550,
+            "fn": 0
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.20265237878096976,
+        "bcubed_r": 1.0,
+        "bcubed_f1": 0.33700906821700527,
+        "cluster_pairwise_f1": 0.003181336161187699,
+        "delta_above_floor": -0.5946679504165351,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.0002499226017768473,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    },
+    {
+      "method": "embedding_score_judge",
+      "dataset": "fodors_zagat",
+      "seed": 4,
+      "threshold": 0.8,
+      "pair": {
+        "precision": 0.047895500725689405,
+        "recall": 1.0,
+        "f1": 0.09141274238227147,
+        "pr_curve": [
+          {
+            "threshold": 0.3,
+            "precision": 0.03273809523809524,
+            "recall": 1.0,
+            "f1": 0.06340057636887608,
+            "tp": 33,
+            "fp": 975,
+            "fn": 0
+          },
+          {
+            "threshold": 0.4,
+            "precision": 0.03273809523809524,
+            "recall": 1.0,
+            "f1": 0.06340057636887608,
+            "tp": 33,
+            "fp": 975,
+            "fn": 0
+          },
+          {
+            "threshold": 0.5,
+            "precision": 0.03273809523809524,
+            "recall": 1.0,
+            "f1": 0.06340057636887608,
+            "tp": 33,
+            "fp": 975,
+            "fn": 0
+          },
+          {
+            "threshold": 0.6,
+            "precision": 0.03273809523809524,
+            "recall": 1.0,
+            "f1": 0.06340057636887608,
+            "tp": 33,
+            "fp": 975,
+            "fn": 0
+          },
+          {
+            "threshold": 0.7,
+            "precision": 0.032803180914512925,
+            "recall": 1.0,
+            "f1": 0.06352261790182868,
+            "tp": 33,
+            "fp": 973,
+            "fn": 0
+          },
+          {
+            "threshold": 0.8,
+            "precision": 0.047895500725689405,
+            "recall": 1.0,
+            "f1": 0.09141274238227147,
+            "tp": 33,
+            "fp": 656,
+            "fn": 0
+          }
+        ]
+      },
+      "pipeline": {
+        "bcubed_p": 0.13676633444075303,
+        "bcubed_r": 1.0,
+        "bcubed_f1": 0.24062347783731122,
+        "cluster_pairwise_f1": 0.002638944422231107,
+        "delta_above_floor": -0.6910535407962292,
+        "sanity_floor_f1": 0.9316770186335404
+      },
+      "cost": {
+        "usd_total": 0.0,
+        "usd_per_1k_pairs": 0.0,
+        "est_usd_per_100k": 0.0,
+        "escalation_rate": null,
+        "llm_calls_per_candidate": null
+      },
+      "latency": {
+        "seconds_per_pair": 0.0002890188491345191,
+        "throttle_seconds": null,
+        "embed_cache_hit_rate": null
+      }
+    }
+  ]
+}

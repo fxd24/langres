@@ -6,6 +6,32 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### M3: The seam — multi-method benchmark race (real-money EXIT)
+
+Raced free scorers (`rapidfuzz`, `weighted_average`, `embedding_cosine`) against an
+open-source (**GLM-5.2**) and a frontier (**gpt-4o**) `llm_judge` over an *easy*
+(Fodors-Zagat) and a *hard* (Amazon-Google) dataset, under a hard **$15** budget cap.
+Pair-level F1 (widened 0.05–0.99 grid) is the primary judge-ranking metric.
+
+- **Total measured spend: $2.1778** / $15.00 cap. Cost is priced from provenance token
+  counts (litellm `completion_cost` returns $0 for OpenRouter's provider-less dated
+  model ids). Score-extraction failures across all paid calls: **0**.
+- **Headline (Amazon-Google hard, pair-F1, 600-pair subsample):** gpt-4o `llm_judge`
+  **0.667** (P 0.54 / R 0.87 — SOTA band, beats free) > `embedding_cosine` 0.471 >
+  GLM-5.2 `llm_judge` 0.409 (P 0.26 / R 0.90 — high-recall/low-precision, below free) >
+  `weighted_average` 0.288 > `rapidfuzz` 0.271. On easy Fodors-Zagat, free embedding
+  wins (pair-F1 0.816; pipeline BCubed 0.980 via `weighted_average`) and the GLM judge
+  degenerates (0.233, P 0.13 / R 1.0).
+- **Reusable primitive:** `evaluate_judge_on_candidates` + `JudgePairEval` in
+  `core/benchmark.py` (blocking-free pair-level judge eval). Fixed a grading bug — it now
+  restricts gold to candidate-realizable pairs so a subsample isn't penalised for gold
+  pairs it never contained (was capping subsample recall artificially).
+- **Deferred (M4):** the cascade/hybrid (needs a token-cost source fix + threshold
+  calibration to the embedding-score distribution) and the frontier FZ pass.
+- Harness `examples/m3_race.py` (resumable, per-cell-committed, budget-capped); results
+  `data/benchmarks/m3/M3_RESULTS.md`; decision `docs/M3_DIRECTION_MEMO.md`. The finding
+  reshapes M4 toward *making a precise judge cheap* rather than bolting on an LLM.
+
 ### M2: Walking skeleton end-to-end + baseline + artifact (Fodors-Zagat)
 
 Wired the existing M0/M1 primitives into one deterministic, zero-spend Resolver

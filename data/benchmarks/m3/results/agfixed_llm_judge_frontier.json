@@ -1,0 +1,222 @@
+{
+  "cell_id": "agfixed_llm_judge_frontier",
+  "kind": "agfixed",
+  "method": "llm_judge",
+  "dataset": "amazon_google",
+  "model": "openrouter/openai/gpt-4o",
+  "usd_total": 0.9113975000000001,
+  "eval": {
+    "pair": {
+      "precision": 0.5408163265306123,
+      "recall": 0.8688524590163934,
+      "f1": 0.6666666666666667,
+      "pr_curve": [
+        {
+          "threshold": 0.05,
+          "precision": 0.10627177700348432,
+          "recall": 1.0,
+          "f1": 0.19212598425196853,
+          "tp": 61,
+          "fp": 513,
+          "fn": 0
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.108348134991119,
+          "recall": 1.0,
+          "f1": 0.1955128205128205,
+          "tp": 61,
+          "fp": 502,
+          "fn": 0
+        },
+        {
+          "threshold": 0.15,
+          "precision": 0.16666666666666666,
+          "recall": 1.0,
+          "f1": 0.2857142857142857,
+          "tp": 61,
+          "fp": 305,
+          "fn": 0
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.1685082872928177,
+          "recall": 1.0,
+          "f1": 0.28841607565011823,
+          "tp": 61,
+          "fp": 301,
+          "fn": 0
+        },
+        {
+          "threshold": 0.25,
+          "precision": 0.23076923076923078,
+          "recall": 0.9836065573770492,
+          "f1": 0.37383177570093457,
+          "tp": 60,
+          "fp": 200,
+          "fn": 1
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.234375,
+          "recall": 0.9836065573770492,
+          "f1": 0.3785488958990536,
+          "tp": 60,
+          "fp": 196,
+          "fn": 1
+        },
+        {
+          "threshold": 0.35,
+          "precision": 0.3973509933774834,
+          "recall": 0.9836065573770492,
+          "f1": 0.5660377358490566,
+          "tp": 60,
+          "fp": 91,
+          "fn": 1
+        },
+        {
+          "threshold": 0.4,
+          "precision": 0.40268456375838924,
+          "recall": 0.9836065573770492,
+          "f1": 0.5714285714285713,
+          "tp": 60,
+          "fp": 89,
+          "fn": 1
+        },
+        {
+          "threshold": 0.45,
+          "precision": 0.4573643410852713,
+          "recall": 0.9672131147540983,
+          "f1": 0.6210526315789474,
+          "tp": 59,
+          "fp": 70,
+          "fn": 2
+        },
+        {
+          "threshold": 0.5,
+          "precision": 0.4573643410852713,
+          "recall": 0.9672131147540983,
+          "f1": 0.6210526315789474,
+          "tp": 59,
+          "fp": 70,
+          "fn": 2
+        },
+        {
+          "threshold": 0.55,
+          "precision": 0.4573643410852713,
+          "recall": 0.9672131147540983,
+          "f1": 0.6210526315789474,
+          "tp": 59,
+          "fp": 70,
+          "fn": 2
+        },
+        {
+          "threshold": 0.6,
+          "precision": 0.4573643410852713,
+          "recall": 0.9672131147540983,
+          "f1": 0.6210526315789474,
+          "tp": 59,
+          "fp": 70,
+          "fn": 2
+        },
+        {
+          "threshold": 0.65,
+          "precision": 0.4915254237288136,
+          "recall": 0.9508196721311475,
+          "f1": 0.6480446927374302,
+          "tp": 58,
+          "fp": 60,
+          "fn": 3
+        },
+        {
+          "threshold": 0.7,
+          "precision": 0.49137931034482757,
+          "recall": 0.9344262295081968,
+          "f1": 0.6440677966101694,
+          "tp": 57,
+          "fp": 59,
+          "fn": 4
+        },
+        {
+          "threshold": 0.75,
+          "precision": 0.4956521739130435,
+          "recall": 0.9344262295081968,
+          "f1": 0.6477272727272727,
+          "tp": 57,
+          "fp": 58,
+          "fn": 4
+        },
+        {
+          "threshold": 0.8,
+          "precision": 0.5142857142857142,
+          "recall": 0.8852459016393442,
+          "f1": 0.6506024096385541,
+          "tp": 54,
+          "fp": 51,
+          "fn": 7
+        },
+        {
+          "threshold": 0.85,
+          "precision": 0.5408163265306123,
+          "recall": 0.8688524590163934,
+          "f1": 0.6666666666666667,
+          "tp": 53,
+          "fp": 45,
+          "fn": 8
+        },
+        {
+          "threshold": 0.9,
+          "precision": 0.6666666666666666,
+          "recall": 0.22950819672131148,
+          "f1": 0.34146341463414637,
+          "tp": 14,
+          "fp": 7,
+          "fn": 47
+        },
+        {
+          "threshold": 0.95,
+          "precision": 0.625,
+          "recall": 0.08196721311475409,
+          "f1": 0.14492753623188404,
+          "tp": 5,
+          "fp": 3,
+          "fn": 56
+        },
+        {
+          "threshold": 0.99,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 61
+        }
+      ]
+    },
+    "cost": {
+      "usd_total": 0.9113975000000001,
+      "usd_per_1k_pairs": 1.5189958333333335,
+      "est_usd_per_100k": 151.89958333333334,
+      "escalation_rate": null,
+      "llm_calls_per_candidate": null
+    },
+    "latency": {
+      "seconds_per_pair": 1.7693247045832685,
+      "throttle_seconds": null,
+      "embed_cache_hit_rate": null
+    },
+    "n_candidates": 600,
+    "n_judged": 600,
+    "best_threshold": 0.85,
+    "truncated": false
+  },
+  "subsample_n": 600,
+  "subsample_of": 2293,
+  "regrade": {
+    "reason": "restrict gold to in-scope (candidate-realizable) pairs",
+    "n_positive_in_subsample": 61,
+    "n_positive_full": 234,
+    "f1_before": 0.32954545454545453,
+    "f1_after": 0.6666666666666667
+  }
+}

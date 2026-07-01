@@ -18,6 +18,7 @@ from langres.core.benchmark import (
     BenchmarkTable,
     BlindCostError,
     BudgetedModuleRunner,
+    CostTrack,
     MethodResult,
     PipelineTrack,
     _cost_track,
@@ -375,6 +376,138 @@ def test_cost_track_empty_judgements_is_zero() -> None:
     assert track.usd_total == 0.0
     assert track.usd_per_1k_pairs == 0.0
     assert track.est_usd_per_100k == 0.0
+
+
+# ---------------------------------------------------------------------------
+# evaluate_judge_on_candidates (direct pair-level judge eval, no blocking)
+# ---------------------------------------------------------------------------
+
+
+class _ScoreModule(Module[CompanySchema]):
+    """Yields one judgement per candidate whose score is read from a per-id map.
+
+    Lets a test drive the pair-level threshold sweep deterministically: the score
+    map keys on ``left.id`` so each candidate gets a chosen score. ``cost`` is
+    written to ``provenance['cost_usd']`` so the cost track is exercised too.
+    """
+
+    def __init__(self, scores: dict[str, float], *, cost: float = 0.0) -> None:
+        self._scores = scores
+        self._cost = cost
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for cand in candidates:
+            yield PairwiseJudgement(
+                left_id=cand.left.id,
+                right_id=cand.right.id,
+                score=self._scores[cand.left.id],
+                score_type="prob_llm",
+                decision_step="fake",
+                provenance={"cost_usd": self._cost},
+            )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError  # pragma: no cover — unused here
+
+
+def _labeled_candidates(
+    scores: dict[str, float],
+) -> tuple[list[ERCandidate[CompanySchema]], set[frozenset[str]]]:
+    """Build candidates keyed by id; positive gold pairs are ids starting with 'p'."""
+    cands = [
+        ERCandidate(
+            left=CompanySchema(id=lid, name=lid),
+            right=CompanySchema(id=f"r_{lid}", name=lid),
+            blocker_name="test",
+        )
+        for lid in scores
+    ]
+    gold = {frozenset({lid, f"r_{lid}"}) for lid in scores if lid.startswith("p")}
+    return cands, gold
+
+
+def test_evaluate_judge_on_candidates_picks_best_threshold_and_curve() -> None:
+    # Two true matches (p0,p1) scored high; one non-match (n0) scored low.
+    scores = {"p0": 0.9, "p1": 0.8, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold, grid=(0.5, 0.85)
+    )
+    assert len(judgements) == 3
+    assert result.n_candidates == 3
+    assert result.n_judged == 3
+    # At threshold 0.5 both matches are caught and the non-match excluded: F1 = 1.0.
+    assert result.pair.f1 == pytest.approx(1.0)
+    assert result.best_threshold == 0.5
+    assert result.pair.pr_curve is not None and len(result.pair.pr_curve) == 2
+    assert result.cost.usd_total == 0.0
+    assert not result.truncated
+
+
+def test_evaluate_judge_on_candidates_runs_under_budget_runner() -> None:
+    scores = {f"p{i}": 0.9 for i in range(5)}
+    cands, gold = _labeled_candidates(scores)
+    # worst-case 1 unit * $0.4 = $0.4/pair; floor(0.9/0.4)=2 pairs kept (truncated).
+    runner = BudgetedModuleRunner(
+        _ScoreModule(scores, cost=0.1), budget_usd=1.0, budget_soft_usd=0.9
+    )
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores, cost=0.1),
+        cands,
+        gold,
+        grid=(0.5,),
+        runner=runner,
+        price_per_token_or_pair=0.4,
+    )
+    assert result.n_candidates == 5
+    assert result.n_judged == 2  # preflight cap kept 2
+    assert result.truncated
+    assert result.cost.usd_total == pytest.approx(0.2)
+
+
+def test_evaluate_judge_on_candidates_custom_cost_track() -> None:
+    # A custom cost_track_fn (e.g. cascade's) is honored.
+    scores = {"p0": 0.9}
+    cands, gold = _labeled_candidates(scores)
+
+    def _double_cost(js: list[PairwiseJudgement]) -> CostTrack:
+        return CostTrack(usd_total=99.0)
+
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores, cost=1.0), cands, gold, grid=(0.5,), cost_track_fn=_double_cost
+    )
+    assert result.cost.usd_total == 99.0
+
+
+def test_evaluate_judge_on_candidates_handles_empty_candidates() -> None:
+    # No candidates -> no judgements -> latency falls back to 0.0 (no div-by-zero).
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule({}), [], set(), grid=(0.5,)
+    )
+    assert judgements == []
+    assert result.n_judged == 0
+    assert result.latency.seconds_per_pair == 0.0
+    assert not result.truncated
+
+
+def test_evaluate_judge_on_candidates_ignores_gold_outside_candidates() -> None:
+    # A gold pair whose candidate was never supplied (a subsample/blocking miss)
+    # must not count against the judge: recall is graded only over in-scope pairs.
+    # Without this, a 600-pair subsample holding 61 of 234 gold pairs would cap
+    # recall at ~0.26 for every method.
+    scores = {"p0": 0.9, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)  # gold = {frozenset(p0, r_p0)}
+    gold_plus_unseen = gold | {frozenset({"ghost", "r_ghost"})}
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold_plus_unseen, grid=(0.5,)
+    )
+    # Only p0 is in scope; it is caught and n0 excluded -> perfect, ghost ignored.
+    assert result.pair.recall == pytest.approx(1.0)
+    assert result.pair.f1 == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

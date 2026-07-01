@@ -243,12 +243,25 @@ the interfaces; the harness emits BCubed / recall / cost / latency on the
 Person gold set (+ ≥1 standard benchmark dataset). These method families *are* the
 three `POC.md` approaches — 1 (classical/rapidfuzz), 2 (embedding ANN), 3 (hybrid
 LLM) — now raced head-to-head behind one interface instead of run in sequence.
-- **Exit:** a reproducible **method-comparison table** (Δ-above-floor reported
-  next to absolute BCubed); a winner selected with evidence.
+- **Exit (SHIPPED):** a reproducible **method-comparison table** with a real-money
+  race (total **$2.18** / $15 cap) over an *easy* (Fodors-Zagat) and a *hard*
+  (Amazon-Google) dataset. Full results
+  [`data/benchmarks/m3/M3_RESULTS.md`](../data/benchmarks/m3/M3_RESULTS.md);
+  decision [`docs/M3_DIRECTION_MEMO.md`](M3_DIRECTION_MEMO.md). Headline (AG hard,
+  pair-F1): **gpt-4o `llm_judge` 0.667** (SOTA band, beats free embedding 0.471) >
+  embedding 0.471 > **GLM-5.2 `llm_judge` 0.409** (high-recall/low-precision,
+  *below* free) > weighted 0.288 > rapidfuzz 0.271. On easy FZ, free embedding wins
+  (0.816) and the GLM judge degenerates. **The finding reshapes M4:** the LLM judges
+  are high-recall but the cheap OSS one over-accepts — so M4 is *make a precise judge
+  cheap* (prompt-optimize, calibrate+tune the deferred cascade against the real
+  embedding-score distribution, distill frontier-quality labels, stronger embedder),
+  not "bolt on a judge." Cascade + frontier-FZ deferred (memo §6).
 
 ### M4 — DSPy-distilled cheap judge (the differentiator)
 Compile a teacher→student judge (MIPROv2) against the gold set; the cheap student
-becomes part of the artifact.
+becomes part of the artifact. **M3 sharpens the target:** the frontier judge (gpt-4o,
+precision 0.54) is the default teacher; GLM-5.2 (precision 0.26) is a teacher only
+behind a precision gate — re-evaluate after prompt optimization (memo §5).
 - **Exit:** distilled student within a stated margin of teacher **BCubed at ≥N×
   lower cost/latency** (analogue of the Overture Maps DSPy distillation case
   study — Drew Breunig, Databricks Data+AI Summit 2025: a small model went
