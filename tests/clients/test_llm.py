@@ -35,7 +35,7 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
@@ -73,7 +73,7 @@ class TestCreateLLMClient:
         ):
             with (
                 patch("langres.clients.llm.litellm") as mock_litellm,
-                patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+                patch("langfuse.Langfuse") as mock_langfuse_class,
             ):
                 mock_langfuse_instance = MagicMock()
                 mock_langfuse_instance.auth_check.return_value = True
@@ -102,7 +102,7 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
@@ -141,7 +141,7 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
@@ -208,7 +208,7 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
@@ -233,7 +233,7 @@ class TestCreateLLMClient:
             langfuse_secret_key="sk-lf-test",
         )
 
-        with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
+        with patch("langfuse.Langfuse") as mock_langfuse_class:
             # Simulate Langfuse initialization failure
             mock_langfuse_class.side_effect = Exception("Connection failed")
 
@@ -247,7 +247,7 @@ class TestCreateLLMClient:
             langfuse_secret_key="sk-lf-test",
         )
 
-        with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
+        with patch("langfuse.Langfuse") as mock_langfuse_class:
             mock_langfuse_instance = MagicMock()
             # auth_check returns False -> invalid credentials/host
             mock_langfuse_instance.auth_check.return_value = False

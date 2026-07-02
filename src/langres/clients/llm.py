@@ -4,7 +4,6 @@ import logging
 from typing import Any
 
 import litellm
-from langfuse import Langfuse
 
 from langres.clients.settings import Settings
 
@@ -69,6 +68,12 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
 
     # Configure Langfuse callbacks if enabled
     if enable_langfuse:
+        # W0.4: langfuse moved to the dev dependency group (experiment-tracking
+        # tooling, not part of the [llm] extra's install promise) -- imported
+        # here, lazily, so `create_llm_client(enable_langfuse=False)` works
+        # with just [llm] installed and no langfuse present.
+        from langfuse import Langfuse
+
         # Validate Langfuse env vars are present
         if not settings.langfuse_public_key:
             raise ValueError(
