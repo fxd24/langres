@@ -22,6 +22,9 @@ is held constant per dataset so the race compares judges, not blockers:
   hard import-time requirement.
 - ``cascade`` — VectorBlocker -> ``CascadeModule`` (embedding early-exit, LLM only
   on the uncertain band) -> Clusterer. Its OpenAI client is injected the same way.
+- ``dspy_judge`` — VectorBlocker -> ``DSPyJudge`` (a compilable DSPy
+  ``ChainOfThought``) -> Clusterer (M4). Its injected client is a **DSPy LM**
+  (``dspy.LM`` / ``DummyLM``), distinct from the LiteLLM/OpenAI clients above.
 
 A dataset participates by conforming to :class:`BlockingBenchmark` — exposing its
 record ``schema`` plus a pinned blocking config (``blocking_k`` and a
@@ -54,7 +57,10 @@ from langres.core.resolver import Resolver
 ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embedding_cosine")
 
 #: Methods whose scorer calls an LLM — they take an injected client (mock/real).
-LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade")
+#: ``dspy_judge`` is LLM-backed too, but its injected client is a **DSPy LM**
+#: (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI client the others take —
+#: see :func:`_make_module_builder`.
+LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge")
 
 #: Every method the registry can build, in race order.
 ALL_METHODS: tuple[str, ...] = ZERO_SPEND_METHODS + LLM_METHODS
@@ -146,6 +152,27 @@ def _build_cascade_module(
     return module
 
 
+def _dspy_price_per_1k(model: str) -> float:
+    """Per-1k-token price for ``model`` from the pinned OpenRouter table (0.0 if unknown).
+
+    ``DSPyJudge`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` — a single
+    blended per-1k rate over ``prompt + completion`` tokens — so we take the worst-case
+    (dearer of input/output) per-token price and scale it to per-1k. Worst-case is the
+    same price basis :class:`~langres.core.benchmark.BudgetedModuleRunner` uses for its
+    cap, so the judge's self-reported cost and the live budget-stop agree.
+
+    Unknown models keep ``0.0`` (zero-spend/test runs stay free and never crash),
+    mirroring ``register_runtime_model_price`` returning ``None`` for unknown ids —
+    rather than guessing a price. ``langres.clients.openrouter`` is dspy-free, so this
+    lookup never pulls ``dspy`` into ``import langres.methods``.
+    """
+    from langres.clients.openrouter import PRICES_PER_1M, per_token_worst_price
+
+    if model not in PRICES_PER_1M:
+        return 0.0
+    return per_token_worst_price(model) * 1_000.0
+
+
 def _make_module_builder(
     method: str,
     schema: type[Any],
@@ -171,6 +198,28 @@ def _make_module_builder(
         return (lambda: EmbeddingScoreJudge()), None
     if method == "llm_judge":
         return (lambda: LLMJudge(client=llm_client, model=llm_model)), None
+    if method == "dspy_judge":
+        # ``dspy_judge`` takes a **DSPy LM** as its injected client — a
+        # ``dspy.LM(...)`` for real runs or a ``dspy.utils.dummies.DummyLM`` in
+        # tests — NOT the LiteLLM ``client.completion(...)`` shape ``llm_judge``
+        # expects. Imported lazily so building any other method's factory (and
+        # plain ``import langres.methods``) never imports ``dspy``.
+        from langres.core.modules.dspy_judge import DSPyJudge
+
+        # Wire the honest-cost seam: DSPyJudge prices each pair as
+        # ``tokens/1000 * price_per_1k_tokens`` into ``provenance["cost_usd"]`` that
+        # the DEFAULT ``_cost_track`` reads — but its price defaults to $0, so a real
+        # paid run would report $0 and the live budget-stop would never fire. Pin the
+        # per-1k price from the OpenRouter table so cost is honest with no custom
+        # ``cost_track_fn`` (unknown models keep $0; see ``_dspy_price_per_1k``).
+        price_per_1k = _dspy_price_per_1k(llm_model)
+
+        def build_dspy_judge() -> Module[Any]:
+            judge: DSPyJudge[Any] = DSPyJudge(lm=llm_client, model=llm_model)
+            judge.price_per_1k_tokens = price_per_1k
+            return judge
+
+        return build_dspy_judge, None
     if method == "cascade":
         return (
             lambda: _build_cascade_module(

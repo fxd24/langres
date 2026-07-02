@@ -153,3 +153,22 @@ ignore_missing_imports = true
 module = ["litellm.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# dspy (dspy-ai) ships partial/optional type info that flips typed↔untyped across
+# installs, so an inline ignore on an attribute like `dspy.LM` alternates between
+# "needed" and "unused" (the latter fails strict `warn_unused_ignores`). Treat
+# dspy as untyped uniformly and skip following its imports — the DSPyJudge already
+# annotates its own public surface and holds the program as `Any`.
+module = ["dspy.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# scikit-learn ships partial type info that flips typed↔untyped across installs,
+# so an inline `# type: ignore[import-untyped]` on `from sklearn.metrics import
+# roc_curve` alternates between "needed" and "unused" (the latter fails strict
+# `warn_unused_ignores`). Silencing the missing-import check here is stable
+# across both — mirroring the faiss/litellm/dspy blocks above.
+module = ["sklearn.*"]
+ignore_missing_imports = true

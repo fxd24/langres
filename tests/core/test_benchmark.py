@@ -3,12 +3,15 @@
 Covers the budgeted module runner (preflight cap, budget stop, blind-cost guard,
 per-call isolation, both cost-key paths), the generic ``run_method`` orchestration
 on a fully-deterministic fake benchmark (no embeddings, no LLM), ``BenchmarkTable``
-rendering, and the import-cycle guard (core must not import ``langres.data``).
+rendering, the ``run_methods`` experiment facade + ``BenchmarkTable.best``/``rank``
+structured accessors, and the import-cycle guard (core must not import
+``langres.data``).
 """
 
 import subprocess
 import sys
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -19,20 +22,26 @@ from langres.core.benchmark import (
     BlindCostError,
     BudgetedModuleRunner,
     CostTrack,
+    LatencyTrack,
     MethodResult,
+    PairTrack,
     PipelineTrack,
     _cost_track,
     complete_partition,
     gold_pairs_from_clusters,
     run_method,
+    run_methods,
     tune_threshold_on_train,
 )
 from langres.core.blockers.all_pairs import AllPairsBlocker
+from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
+from langres.methods import ZERO_SPEND_METHODS
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -545,3 +554,152 @@ def test_import_langres_succeeds() -> None:
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# run_methods experiment facade
+# ---------------------------------------------------------------------------
+
+
+def _company_factory(record: dict[str, Any]) -> CompanySchema:
+    return CompanySchema(**{f: record.get(f) for f in CompanySchema.model_fields})
+
+
+class _FakeBlockingBenchmark(_FakeBenchmark):
+    """``_FakeBenchmark`` + the registry ``BlockingBenchmark`` contract.
+
+    Adds ``schema`` + ``blocking_k`` + ``build_blocker`` (a ``FakeVectorIndex``
+    blocker — no real embeddings) so ``make_resolver_factory`` can build the
+    zero-spend methods on the same tiny corpus. This is exactly the intersection
+    ``run_methods`` requires, mirroring the fake in ``tests/test_methods.py``.
+    """
+
+    schema = CompanySchema
+    blocking_k = 2
+
+    def build_blocker(self, k_neighbors: int) -> VectorBlocker[CompanySchema]:
+        return VectorBlocker(
+            schema_factory=_company_factory,
+            text_field_extractor=lambda e: e.name,
+            vector_index=FakeVectorIndex(),
+            k_neighbors=k_neighbors,
+        )
+
+
+def test_run_methods_races_zero_spend_methods_one_row_each() -> None:
+    table = run_methods(_FakeBlockingBenchmark(), ZERO_SPEND_METHODS, seed=0)
+
+    assert isinstance(table, BenchmarkTable)
+    # One populated row per method, all on the same dataset, distinct scorers.
+    assert len(table.results) == len(ZERO_SPEND_METHODS)
+    assert {r.dataset for r in table.results} == {"fake"}
+    assert len({r.method for r in table.results}) == len(ZERO_SPEND_METHODS)
+    # Both tracks populate on every row.
+    assert all(r.pair.pr_curve is not None for r in table.results)
+    assert all(0.0 <= r.pipeline.bcubed_f1 <= 1.0 for r in table.results)
+    assert all(r.seed == 0 for r in table.results)
+
+
+def test_run_methods_budget_zero_asserts_zero_spend() -> None:
+    # budget=0.0 is a hard assertion these methods truly spend nothing.
+    table = run_methods(_FakeBlockingBenchmark(), ZERO_SPEND_METHODS, seed=0, budget=0.0)
+    assert all(r.cost.usd_total == 0.0 for r in table.results)
+
+
+def test_run_methods_stamps_the_requested_registry_method_name() -> None:
+    """Each row's ``method`` is the registry key passed in, not the module ``type_name``.
+
+    ``run_method`` labels a result from the module's ``type_name`` (e.g.
+    ``weighted_average_judge``), but the caller races by the registry key
+    (``weighted_average``). ``run_methods`` overwrites the label so
+    ``best().method`` is a name ``make_resolver_factory`` accepts and can re-run.
+    """
+    from langres.methods import make_resolver_factory
+
+    bench = _FakeBlockingBenchmark()
+    table = run_methods(bench, ["embedding_cosine", "weighted_average"], seed=0)
+
+    # Rows carry the exact registry keys, in order.
+    assert [r.method for r in table.results] == ["embedding_cosine", "weighted_average"]
+
+    # And the winner's label round-trips through the registry (no ValueError).
+    best = table.best()
+    assert best is not None
+    assert best.method in ("embedding_cosine", "weighted_average")
+    make_resolver_factory(best.method, bench)  # accepted registry key -> no raise
+
+
+# ---------------------------------------------------------------------------
+# BenchmarkTable.best / rank (structured accessors)
+# ---------------------------------------------------------------------------
+
+
+def _result(method: str, *, pair_f1: float, bcubed_f1: float, delta: float = 0.0) -> MethodResult:
+    """A minimal MethodResult carrying only the fields best/rank read."""
+    return MethodResult(
+        method=method,
+        dataset="fake",
+        seed=0,
+        threshold=0.5,
+        pair=PairTrack(precision=pair_f1, recall=pair_f1, f1=pair_f1),
+        pipeline=PipelineTrack(
+            bcubed_p=bcubed_f1,
+            bcubed_r=bcubed_f1,
+            bcubed_f1=bcubed_f1,
+            cluster_pairwise_f1=bcubed_f1,
+            delta_above_floor=delta,
+            sanity_floor_f1=0.0,
+        ),
+        latency=LatencyTrack(seconds_per_pair=0.0),
+    )
+
+
+def _table_with_three() -> BenchmarkTable:
+    # pair_f1 winner is 'b'; bcubed_f1 winner is 'a' — orderings differ so `by` matters.
+    table = BenchmarkTable()
+    table.add(_result("a", pair_f1=0.5, bcubed_f1=0.9))
+    table.add(_result("b", pair_f1=0.8, bcubed_f1=0.4))
+    table.add(_result("c", pair_f1=0.6, bcubed_f1=0.6))
+    return table
+
+
+def test_best_returns_highest_pair_f1_row_by_default() -> None:
+    best = _table_with_three().best()
+    assert best is not None
+    assert best.method == "b"
+
+
+def test_best_by_alternate_metric_switches_winner() -> None:
+    best = _table_with_three().best(by="bcubed_f1")
+    assert best is not None
+    assert best.method == "a"
+
+
+def test_best_by_delta_above_floor() -> None:
+    table = BenchmarkTable()
+    table.add(_result("a", pair_f1=0.1, bcubed_f1=0.1, delta=0.9))
+    table.add(_result("b", pair_f1=0.9, bcubed_f1=0.9, delta=0.1))
+    best = table.best(by="delta_above_floor")
+    assert best is not None
+    assert best.method == "a"
+
+
+def test_best_empty_table_returns_none() -> None:
+    assert BenchmarkTable().best() is None
+
+
+def test_rank_orders_by_metric_best_first() -> None:
+    ranked = _table_with_three().rank(by="pair_f1")
+    assert [r.method for r in ranked] == ["b", "c", "a"]
+
+
+def test_rank_empty_table_is_empty_list() -> None:
+    assert BenchmarkTable().rank() == []
+
+
+def test_best_and_rank_reject_unknown_metric() -> None:
+    table = _table_with_three()
+    with pytest.raises(ValueError, match="unknown ranking metric"):
+        table.best(by="nope")
+    with pytest.raises(ValueError, match="unknown ranking metric"):
+        table.rank(by="nope")

@@ -28,6 +28,7 @@ from langres.core.benchmark import (
     BlindCostError,
     BudgetedModuleRunner,
     MethodResult,
+    _cost_track,
     gold_pairs_from_clusters,
     run_method,
 )
@@ -36,6 +37,7 @@ from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.cascade import CascadeModule
+from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 from langres.core.resolver import Resolver
@@ -158,6 +160,13 @@ class _MockOpenAIClient:
         return _fake_response(self._content)
 
 
+def _dummy_lm() -> Any:
+    """A DSPy ``DummyLM`` for ``dspy_judge`` — the factory injects it as the LM (no spend)."""
+    from dspy.utils.dummies import DummyLM
+
+    return DummyLM([{"reasoning": "same", "match": "True", "match_probability": "0.9"}] * 20)
+
+
 class _ScriptedEmbeddingModel:
     """Cascade embedding double: pops a preset ``[left_vec, right_vec]`` per encode.
 
@@ -233,6 +242,9 @@ def test_unknown_method_raises() -> None:
         # ``client.chat.completions.create(...)`` (OpenAI-shaped).
         ("llm_judge", LLMJudge, False, _MockLiteLLMClient()),
         ("cascade", CascadeModule, False, _MockOpenAIClient()),
+        # ``dspy_judge`` takes a DSPy LM as its injected client (a ``DummyLM``
+        # here), distinct from the LiteLLM/OpenAI clients above.
+        ("dspy_judge", DSPyJudge, False, _dummy_lm()),
     ],
 )
 def test_factory_builds_valid_resolver(
@@ -259,6 +271,69 @@ def test_cascade_factory_without_client_does_not_require_live_key() -> None:
     resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
     assert isinstance(resolver.module, CascadeModule)
     assert resolver.module._llm_client is None
+
+
+def test_dspy_judge_factory_prices_from_pinned_table() -> None:
+    """The ``dspy_judge`` factory wires ``price_per_1k_tokens`` from the pinned table.
+
+    Closes the $0-spend gap: on a KNOWN paid model the factory-built judge carries
+    the worst-case per-1k price (dearer of input/output), so its per-pair
+    ``provenance["cost_usd"]`` is real — and flows through the DEFAULT ``_cost_track``
+    surface (no custom ``cost_track_fn``) that ``run_method`` uses.
+    """
+    from langres.clients.openrouter import per_token_worst_price
+
+    model = "openrouter/z-ai/glm-5.2"
+    factory = make_resolver_factory(
+        "dspy_judge", _FakeBlockingBenchmark(), llm_client=_dummy_lm(), llm_model=model
+    )
+    judge = factory(0.5).module
+    assert isinstance(judge, DSPyJudge)
+    expected = per_token_worst_price(model) * 1_000.0
+    assert judge.price_per_1k_tokens == pytest.approx(expected)
+    assert judge.price_per_1k_tokens > 0.0
+
+    # Fake token counts (as a real paid call would carry) now cost real money, and
+    # that honest cost lands in the ``cost_usd`` key the default ``_cost_track`` reads.
+    cost = judge._cost_usd(1000, 500)
+    assert cost > 0.0
+    priced = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="dspy_judgment",
+        provenance={"cost_usd": cost, "prompt_tokens": 1000, "completion_tokens": 500},
+    )
+    assert _cost_track([priced]).usd_total == pytest.approx(cost)
+    assert _cost_track([priced]).usd_total > 0.0
+
+
+def test_dspy_judge_factory_unknown_model_keeps_zero_price() -> None:
+    """An unknown model id keeps ``price_per_1k_tokens = 0.0`` (zero-spend/test runs).
+
+    Mirrors ``register_runtime_model_price`` returning ``None`` for unknown ids: no
+    crash, cost stays $0 rather than guessing a price.
+    """
+    factory = make_resolver_factory(
+        "dspy_judge",
+        _FakeBlockingBenchmark(),
+        llm_client=_dummy_lm(),
+        llm_model="unknown/model-not-in-table",
+    )
+    judge = factory(0.5).module
+    assert isinstance(judge, DSPyJudge)
+    assert judge.price_per_1k_tokens == 0.0
+
+
+def test_dspy_price_per_1k_known_and_unknown() -> None:
+    """``_dspy_price_per_1k`` maps a known model to its worst-case per-1k, unknown to 0.0."""
+    from langres.clients.openrouter import per_token_worst_price
+    from langres.methods import _dspy_price_per_1k
+
+    model = "openrouter/z-ai/glm-5.2"
+    assert _dspy_price_per_1k(model) == pytest.approx(per_token_worst_price(model) * 1_000.0)
+    assert _dspy_price_per_1k("unknown/model-not-in-table") == 0.0
 
 
 def test_factory_yields_fresh_independent_blockers() -> None:

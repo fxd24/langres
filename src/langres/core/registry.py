@@ -16,6 +16,7 @@ No abstract base classes live here — only registration, lookup, and errors.
 """
 
 import difflib
+import importlib
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -25,6 +26,19 @@ T = TypeVar("T")
 
 _COMPONENT_REGISTRY: dict[str, type] = {}
 _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
+
+# Lazy-registration map: ``type_name -> module path``. A component listed here is
+# NOT eager-imported by ``langres.core`` — importing it would pull a heavy or
+# side-effectful optional dependency into plain ``import langres.core``. Instead
+# its module is imported on demand the first time :func:`get_component` is asked
+# for that ``type_name`` (the import fires the module's ``@register`` decorator),
+# so a fresh process doing ``Resolver.load`` on such an artifact still resolves
+# the type. Keep in sync with any module kept off the eager-import path — e.g.
+# ``dspy_judge``, which would otherwise import ``dspy`` (and open its disk cache)
+# on plain ``import langres.core``.
+_LAZY_COMPONENT_MODULES: dict[str, str] = {
+    "dspy_judge": "langres.core.modules.dspy_judge",
+}
 
 
 class UnknownComponentType(KeyError):
@@ -68,6 +82,11 @@ def get_component(type_name: str) -> type:
         UnknownComponentType: If ``type_name`` is not registered. The message
             lists available types and a did-you-mean suggestion.
     """
+    if type_name not in _COMPONENT_REGISTRY and type_name in _LAZY_COMPONENT_MODULES:
+        # Import the owning module on demand — its ``@register`` populates the
+        # registry — so an optional-dependency component (e.g. ``dspy_judge``)
+        # resolves without being eager-imported by ``langres.core``.
+        importlib.import_module(_LAZY_COMPONENT_MODULES[type_name])
     if type_name not in _COMPONENT_REGISTRY:
         available = sorted(_COMPONENT_REGISTRY)
         suggestions = difflib.get_close_matches(type_name, available, n=3)
