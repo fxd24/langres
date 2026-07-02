@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
-from langres.core.judges.fellegi_sunter import _GUARD_EPS, FellegiSunterJudge
+from langres.core.judges.fellegi_sunter import _GUARD_EPS, _PROB_EPS, FellegiSunterJudge
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.registry import get_component
 
@@ -330,6 +330,62 @@ class TestEMFallbackGuard:
         # Agreeing on "name" must never be evidence AGAINST a match.
         assert math.log(judge.m_prob["name"] / judge.u_prob["name"]) >= 0.0
         assert judgement.score_type == "prob_fs"
+
+
+class TestUProbClampLeavesGuardMargin:
+    """Regression: u_prob estimation must leave headroom for the m>=u margin.
+
+    Review finding (claude-review, low severity, found on this PR's own P2 fix
+    commit): ``_estimate_u_probs`` clamps its raw Laplace-smoothed estimate to
+    ``[_PROB_EPS, 1 - _PROB_EPS]`` -- the same ceiling the *final* guarded ``m``
+    is clamped to. For an extremely low-entropy feature (every sampled random
+    pair "agrees"), enough pairs push the raw estimate arbitrarily close to
+    that same ceiling (Laplace smoothing never reaches exactly 1.0, but gets
+    arbitrarily close as the sample grows). When ``u_prob[name] + _GUARD_EPS``
+    then exceeds the ceiling, the trailing ``_clamp()`` on ``m`` silently pulls
+    it back down toward ``u`` -- ``m`` stays ``>= u`` (never inverted, so this
+    is not the P2 class of bug), but the *margin* the guard promises
+    (``_GUARD_EPS``) is shaved, in the limit to zero.
+    """
+
+    def test_estimate_u_probs_leaves_headroom_for_guard_margin(self) -> None:
+        comparator = _company_comparator()
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+
+        # Every pair "agrees" on every feature (identical name/address) --
+        # with enough pairs, Laplace smoothing pushes the raw estimate
+        # arbitrarily close to 1.0 (2001/2002 ~= 0.9995 for 2000 pairs).
+        pairs = [
+            (
+                _company(f"L{i}", "Acme Corp", "1 Main St"),
+                _company(f"R{i}", "Acme Corp", "1 Main St"),
+            )
+            for i in range(2000)
+        ]
+        u_prob = judge._estimate_u_probs(pairs)
+
+        for u in u_prob.values():
+            assert u <= 1.0 - _PROB_EPS - _GUARD_EPS + 1e-9
+
+    def test_fallback_preserves_full_guard_margin_at_extreme_u(self) -> None:
+        """End-to-end: even at the extreme, the fallback m keeps the FULL margin."""
+        comparator = _company_comparator()
+        candidates = [
+            _compared(
+                comparator,
+                _company(f"m{i}L", "Acme Corp", "1 Main St"),
+                _company(f"m{i}R", "Acme Corp", "1 Main St"),
+            )
+            for i in range(70)
+        ]
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+            comparator=comparator, max_em_iter=0, random_state=0, n_random_pairs=2000
+        )
+        judge.fit_unlabeled(iter(candidates))
+
+        assert judge.u_prob is not None and judge.m_prob is not None
+        for name in judge.u_prob:
+            assert judge.m_prob[name] - judge.u_prob[name] >= _GUARD_EPS - 1e-9
 
 
 # ---------------------------------------------------------------------------
