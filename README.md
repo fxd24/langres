@@ -104,6 +104,39 @@ pip install langres
 
 ---
 
+## Quickstart: `link()` and `dedupe()`
+
+Unlike the rest of this README, this section is **working code today**. The
+three-verb DX layer (`langres.link`, `langres.dedupe`) dedupes a batch of
+records with zero labels in a handful of lines, no schema required:
+
+```python
+from langres import dedupe
+
+records = [
+    {"id": "1", "name": "Acme Corporation", "city": "New York"},
+    {"id": "2", "name": "Acme Corp", "city": "New York"},
+    {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
+]
+
+result = dedupe(records, judge="string", threshold=0.6)
+# -> [{'1', '2'}], result.judge_used == "string"
+# (singletons like "3" are dropped -- only multi-record clusters are returned)
+```
+
+By default `judge="auto"` picks a real LLM judge when `OPENROUTER_API_KEY` or
+`OPENAI_API_KEY` is set (else it falls back to the zero-spend `"string"`
+judge above), and every judge -- including the free ones -- runs under a
+default $1 spend cap (override with `budget_usd=`). See
+[`examples/quickstart_verbs.py`](examples/quickstart_verbs.py) for a runnable,
+fully offline walkthrough (`uv run python examples/quickstart_verbs.py`), and
+note that threshold semantics differ across judges (a string-similarity
+`"heuristic"` score and an LLM `"prob_llm"` score are not comparable on the
+same 0..1 cut) -- `threshold=None`, the default, resolves to a sane per-judge
+default.
+
+---
+
 ## Planned Usage
 
 The examples below show the intended API design. **These are not yet functional.**

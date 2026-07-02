@@ -65,9 +65,7 @@ class _FakeCostlyModule(Module[object]):
         self._n = n
         self._cost_each = cost_each
 
-    def forward(
-        self, candidates: Iterator[ERCandidate[object]]
-    ) -> Iterator[PairwiseJudgement]:
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
         list(candidates)  # drain (content unused)
         for i in range(self._n):
             yield PairwiseJudgement(
@@ -342,7 +340,12 @@ class TestBuildResolver:
 
     def test_threshold_defaults_per_judge_when_none(self) -> None:
         resolved = build_resolver(
-            PresetCompany, judge="embedding", model=None, entity_noun="e", threshold=None, n_records=2
+            PresetCompany,
+            judge="embedding",
+            model=None,
+            entity_noun="e",
+            threshold=None,
+            n_records=2,
         )
         assert resolved.resolver.clusterer.threshold == 0.5
 
@@ -366,14 +369,24 @@ class TestBuildResolver:
     def test_string_judge_emits_no_notice(self) -> None:
         with warnings_none():
             build_resolver(
-                PresetCompany, judge="string", model=None, entity_noun="e", threshold=None, n_records=4
+                PresetCompany,
+                judge="string",
+                model=None,
+                entity_noun="e",
+                threshold=None,
+                n_records=4,
             )
 
     def test_custom_module_uses_n_based_blocker_rule_and_no_notice(self) -> None:
         injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
         with warnings_none():
             resolved = build_resolver(
-                PresetCompany, judge=injected, model=None, entity_noun="e", threshold=None, n_records=4
+                PresetCompany,
+                judge=injected,
+                model=None,
+                entity_noun="e",
+                threshold=None,
+                n_records=4,
             )
         assert resolved.judge_used == "custom"
         assert isinstance(resolved.resolver.blocker, AllPairsBlocker)

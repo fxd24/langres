@@ -95,12 +95,21 @@ def _dummy_judge(match: bool = True, prob: float = 0.9) -> DSPyJudge[VerbCompany
 class TestLinkVerdict:
     def test_bool_reflects_match(self) -> None:
         judgement = PairwiseJudgement(
-            left_id="a", right_id="b", score=0.9, score_type="heuristic",
-            decision_step="x", provenance={},
+            left_id="a",
+            right_id="b",
+            score=0.9,
+            score_type="heuristic",
+            decision_step="x",
+            provenance={},
         )
         verdict = LinkVerdict(
-            match=True, score=0.9, reasoning=None, judge_used="string",
-            score_type="heuristic", fallback_reason=None, judgement=judgement,
+            match=True,
+            score=0.9,
+            reasoning=None,
+            judge_used="string",
+            score_type="heuristic",
+            fallback_reason=None,
+            judgement=judgement,
         )
         assert bool(verdict) is True
         assert verdict
@@ -110,12 +119,21 @@ class TestLinkVerdict:
 
     def test_repr_is_friendly(self) -> None:
         judgement = PairwiseJudgement(
-            left_id="a", right_id="b", score=0.42, score_type="heuristic",
-            decision_step="x", provenance={},
+            left_id="a",
+            right_id="b",
+            score=0.42,
+            score_type="heuristic",
+            decision_step="x",
+            provenance={},
         )
         verdict = LinkVerdict(
-            match=False, score=0.42, reasoning=None, judge_used="string",
-            score_type="heuristic", fallback_reason=None, judgement=judgement,
+            match=False,
+            score=0.42,
+            reasoning=None,
+            judge_used="string",
+            score_type="heuristic",
+            fallback_reason=None,
+            judgement=judgement,
         )
         text = repr(verdict)
         assert "NO MATCH" in text
@@ -363,9 +381,7 @@ class TestLink:
         assert verdict.match is True
 
     def test_default_threshold_used_when_none(self) -> None:
-        verdict = link(
-            {"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string"
-        )
+        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string")
         assert verdict.score >= 0.0  # threshold resolved without raising
 
     def test_no_judgement_produced_raises_runtime_error(self) -> None:
@@ -435,9 +451,7 @@ def test_infer_10k_record_fuzz_with_mixed_types() -> None:
     schema, coerced = _infer(records)
     assert len(coerced) == 10_000
     assert all(isinstance(record["n"], str) for record in coerced)
-    assert all(
-        record["maybe_nan"] is None or record["maybe_nan"] == "ok" for record in coerced
-    )
+    assert all(record["maybe_nan"] is None or record["maybe_nan"] == "ok" for record in coerced)
     # every coerced record round-trips through the inferred schema
     schema(**coerced[0])
     schema(**coerced[-1])

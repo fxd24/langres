@@ -154,14 +154,14 @@ def choose_auto_judge(settings: Settings) -> tuple[JudgeName, str | None, str | 
 
     if model is None:
         reason = (
-            "judge=\"auto\": no OPENROUTER_API_KEY or OPENAI_API_KEY is set, so "
+            'judge="auto": no OPENROUTER_API_KEY or OPENAI_API_KEY is set, so '
             "falling back to the zero-spend 'string' judge. Set one of those "
             "env vars to use an LLM judge, and calibrate its threshold with "
             "langres.core.calibration.derive_threshold once you have labels."
         )
     else:
         reason = (
-            f"judge=\"auto\": the selected model {model!r} has no pinned price in "
+            f'judge="auto": the selected model {model!r} has no pinned price in '
             "langres.clients.openrouter.PRICES_PER_1M, so its spend cap would be "
             "blind; falling back to the zero-spend 'string' judge. Pass "
             "judge='zero_shot_llm' explicitly to use it anyway, or pin a price."
@@ -202,7 +202,7 @@ def build_judge(
     if isinstance(judge, Module):
         return judge
     if judge == "string":
-        comparator = Comparator.from_schema(schema)
+        comparator: Comparator[Any] = Comparator.from_schema(schema)
         return WeightedAverageJudge(feature_specs=comparator.feature_specs)
     if judge == "embedding":
         return EmbeddingScoreJudge()
@@ -255,9 +255,7 @@ class _SpendCappedModule(Module[Any]):
                 raise
             yield judgement
 
-    def inspect_scores(
-        self, judgements: list[PairwiseJudgement], sample_size: int = 10
-    ) -> Any:
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
         return self._module.inspect_scores(judgements, sample_size)
 
 
@@ -431,7 +429,9 @@ def build_resolver(
     blocker: Blocker[Any] = (
         _build_vector_blocker(schema) if use_vector else AllPairsBlocker(schema=schema)
     )
-    comparator = Comparator.from_schema(schema) if resolved.judge_used == "string" else None
+    comparator: Comparator[Any] | None = (
+        Comparator.from_schema(schema) if resolved.judge_used == "string" else None
+    )
 
     if resolved.judge_used == "zero_shot_llm" and resolved.model is not None:
         n_pairs_est = _estimate_n_pairs(n_records, use_vector=use_vector)

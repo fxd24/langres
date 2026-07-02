@@ -40,7 +40,9 @@ class TestFromSchemaJudgeOptions:
         assert isinstance(resolver.module, EmbeddingScoreJudge)
 
     def test_zero_shot_llm_judge_default_model_and_pinned_price(self) -> None:
-        resolver = Resolver.from_schema(ResolverJudgeCo, judge="zero_shot_llm", entity_noun="company")
+        resolver = Resolver.from_schema(
+            ResolverJudgeCo, judge="zero_shot_llm", entity_noun="company"
+        )
         assert isinstance(resolver.module, DSPyJudge)
         assert resolver.module.model == "openrouter/openai/gpt-4o-mini"
         assert resolver.module.entity_noun == "company"

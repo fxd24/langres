@@ -138,7 +138,7 @@ def _infer_schema(field_names: frozenset[str]) -> type[BaseModel]:
     fields: dict[str, Any] = {"id": (str, ...)}
     for name in sorted(field_names):
         fields[name] = (str | None, None)
-    schema: type[BaseModel] = create_model(_inferred_schema_name(field_names), **fields)  # type: ignore[call-overload]
+    schema: type[BaseModel] = create_model(_inferred_schema_name(field_names), **fields)
     _INFERRED_SCHEMA_CACHE[field_names] = schema
     return schema
 
@@ -219,7 +219,9 @@ def _check_no_duplicate_ids(ids: Sequence[str]) -> None:
         if i in seen:
             dupes.add(i)
         seen.add(i)
-    raise ValueError(f"duplicate ids in input: {sorted(dupes)}; every record must have a unique id.")
+    raise ValueError(
+        f"duplicate ids in input: {sorted(dupes)}; every record must have a unique id."
+    )
 
 
 def _resolved_threshold(judge_used: str, threshold: float | None) -> float:
@@ -289,7 +291,7 @@ def link(
         right_entity = factory(right_record)
         candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="link")
         if judge_used == "string":
-            comparator = Comparator.from_schema(resolved_schema)
+            comparator: Comparator[Any] = Comparator.from_schema(resolved_schema)
             candidate = candidate.model_copy(
                 update={"comparison": comparator.compare(left_entity, right_entity)}
             )
