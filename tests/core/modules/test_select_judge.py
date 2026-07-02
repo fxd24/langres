@@ -230,8 +230,14 @@ def test_forward_groups_select_error_on_multiple_selected() -> None:
 
 
 def test_forward_groups_select_error_does_not_raise_and_continues_to_next_group() -> None:
-    """A select_error on one group does not stop the stream -- later groups still score."""
-    judge = _judge([{"unexpected": "shape"}, _answer('["n1"]')])
+    """A select_error on one group does not stop the stream -- later groups still score.
+
+    Uses the unknown-candidate-id sub-case (not the malformed-response one): a
+    successfully-parsed-but-semantically-invalid answer never triggers DSPy's
+    internal parse-retry, so it consumes exactly one canned answer -- keeping
+    this test's expectations independent of DSPy's (undocumented) retry count.
+    """
+    judge = _judge([_answer('["ghost"]'), _answer('["n1"]')])
     groups = [_group("a", ["m1"]), _group("b", ["n1"])]
 
     judgements = list(judge.forward_groups(iter(groups)))
