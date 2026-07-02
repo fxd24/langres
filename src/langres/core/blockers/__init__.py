@@ -23,5 +23,6 @@ def __getattr__(name: str) -> Any:
     if name == "VectorBlocker":
         from langres.core.blockers.vector import VectorBlocker
 
+        globals()[name] = VectorBlocker  # cache: subsequent access skips __getattr__
         return VectorBlocker
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

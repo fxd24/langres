@@ -245,6 +245,9 @@ class TestBlockersPackageLazyGetattr:
         from langres.core.blockers.vector import VectorBlocker
 
         assert blockers.VectorBlocker is VectorBlocker
+        # Cached on the module namespace -- a second access must not re-hit
+        # __getattr__ (matches core/clients/modules' lazy loaders).
+        assert blockers.__dict__["VectorBlocker"] is VectorBlocker
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
         import langres.core.blockers as blockers
