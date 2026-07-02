@@ -1,0 +1,33 @@
+{
+  "artifact_version": "1",
+  "langres_version": "0.1.0",
+  "components": [
+    {
+      "type_name": "all_pairs_blocker",
+      "slot": "blocker",
+      "config_version": "1",
+      "config": {
+        "schema_type_name": "ProductSchema"
+      }
+    },
+    {
+      "type_name": "dspy_judge",
+      "slot": "module",
+      "config_version": "1",
+      "config": {
+        "model": "openrouter/z-ai/glm-5.2",
+        "temperature": 0.0,
+        "entity_noun": "product"
+      }
+    },
+    {
+      "type_name": "clusterer",
+      "slot": "clusterer",
+      "config_version": "1",
+      "config": {
+        "threshold": 0.75
+      }
+    }
+  ],
+  "checksums": {}
+}

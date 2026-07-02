@@ -288,10 +288,17 @@ cost at equal quality, *cut it*. This de-risks a measured caveat — on OpenSanc
 Pairs, DSPy MIPROv2 lifted only ~1–2 F1 and in-context examples were
 neutral-to-negative — so the distillation upside on messy multilingual data is
 **uncertain and must be measured, not assumed**.
-- **Exit:** the DSPy experimentation loop is real and reproducible (compile → evaluate
-  → serialize), a first honest paid signal on AG is recorded with its F1/$ frontier,
-  and we have a read on the DX. **Not** a fixed "student ≥ margin of teacher BCubed"
-  metric — that target is pursued only if the C7 gate clears.
+
+**Paid result (2026-07-02, $2.31/$5 on the 600-pair AG band — `data/benchmarks/m4/M4_RESULTS.md`):**
+a precision-tuned DSPy **signature** lifts the cheap GLM-5.2 judge from pair-F1 **0.409
+→ 0.757** (precision 0.264 → 0.671), **beating the frontier gpt-4o ceiling (0.667) at
+lower cost — uncompiled**. **MIPROv2 compilation did *not* help** (0.757 → 0.746 for
++$1.63): it overfit its 40-example bootstrap metric, confirming the OpenSanctions caveat
+on our data. **C7 verdict: the lever is the signature, not compilation — cut distillation.**
+- **Exit (met):** the DSPy experimentation loop is real and reproducible (compile →
+  evaluate → serialize; compiled `Resolver` artifact saved), a first honest paid signal
+  on AG is recorded with its F1/$ frontier, and we have a read on the DX. **Not** a fixed
+  "student ≥ margin of teacher BCubed" metric — the C7 gate said don't chase the compile.
 
 *(Research input: [`docs/research/20260701_er_seam_audit.md`](research/20260701_er_seam_audit.md);
 delta backlog tracked in issue #55.)*
