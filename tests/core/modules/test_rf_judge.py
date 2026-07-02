@@ -107,9 +107,7 @@ class TestFit:
             judge.fit(iter(candidates), [True, False])  # 4 candidates, 2 labels
 
     def test_fit_raises_without_comparison_vector(self) -> None:
-        judge: RFJudge[CompanySchema] = RFJudge(
-            feature_specs=[FeatureSpec(name="name")]
-        )
+        judge: RFJudge[CompanySchema] = RFJudge(feature_specs=[FeatureSpec(name="name")])
         bare = _candidate(_company("a", "Acme"), _company("b", "Acme Inc"), comparison=None)
         with pytest.raises(ValueError, match="comparison vector"):
             judge.fit(iter([bare]), [True])
@@ -175,7 +173,9 @@ class TestFit:
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
         # A candidate with an entirely empty comparison vector (all MISSING).
         empty = _candidate(
-            _company("x", "X"), _company("y", "Y"), comparison=ComparisonVector(levels={}, similarities={})
+            _company("x", "X"),
+            _company("y", "Y"),
+            comparison=ComparisonVector(levels={}, similarities={}),
         )
         judge: RFJudge[CompanySchema] = RFJudge(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
@@ -276,7 +276,11 @@ class TestSerialization:
         assert rebuilt.n_estimators == 9
         assert rebuilt.random_state == 2
         with pytest.raises(ValueError, match="fit"):
-            list(rebuilt.forward(iter([_compared(comparator, _company("a", "X"), _company("b", "Y"))])))
+            list(
+                rebuilt.forward(
+                    iter([_compared(comparator, _company("a", "X"), _company("b", "Y"))])
+                )
+            )
 
     def test_save_state_before_fit_writes_nothing(self, tmp_path: Path) -> None:
         judge: RFJudge[CompanySchema] = RFJudge(feature_specs=[FeatureSpec(name="name")])
@@ -384,8 +388,8 @@ class TestSerialization:
                     "from langres.core import Resolver; "
                     f"r = Resolver.load(r'{tmp_path}'); "
                     "assert type(r.module).__name__ == 'RFJudge'; "
-                    "j = list(r.module.forward(r.blocker.stream([{'id': 'a', 'name': 'Acme'}, "
-                    "{'id': 'b', 'name': 'Acme Inc'}]))); "
+                    "j = r.predict([{'id': 'a', 'name': 'Acme'}, {'id': 'b', 'name': 'Acme Inc'}]); "
+                    "assert len(j) == 1 and j[0].score_type == 'prob_rf'; "
                     "print('OK')"
                 ),
             ],
@@ -399,9 +403,27 @@ class TestSerialization:
         assert "UnknownComponentType" not in result.stderr
 
     def test_never_imports_pickle_or_joblib(self) -> None:
-        """Hard guard: the module must not use pickle/joblib anywhere (no-pickle artifact contract)."""
+        """Hard guard: the module must not IMPORT pickle/joblib (no-pickle artifact contract).
+
+        Checks actual import statements (not the docstring's prose explaining
+        *why* it avoids them — a plain substring check would false-positive on
+        that explanation).
+        """
+        import ast
+
         import langres.core.modules.rf_judge as module
 
-        source = Path(module.__file__).read_text()
-        assert "pickle" not in source
-        assert "joblib" not in source
+        source = Path(str(module.__file__)).read_text()
+        tree = ast.parse(source)
+        imported_names = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert "pickle" not in imported_names
+        assert "joblib" not in imported_names
