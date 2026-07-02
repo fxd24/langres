@@ -1,0 +1,40 @@
+{
+  "predict": {
+    "traces": [],
+    "train": [],
+    "demos": [],
+    "signature": {
+      "instructions": "Analyze two product records from different sources to determine if they represent the exact same real-world product.\n\nFocus on the core product identity rather than superficial string overlap. Be highly vigilant of 'near-miss' pairs: two records are only a match if they refer to the exact same product configuration. A different model, version, edition (e.g., Standard vs. Premium), platform (e.g., Mac vs. PC), or upgrade/upsell path means they are different products, even if the titles look highly similar. \n\nAdditionally, account for formatting inconsistencies: product titles may be noisy (containing SKUs or seller names) and manufacturer fields may be missing or inconsistent across sources. Infer the true product details from the available evidence.\n\nProvide a concise justification detailing your comparison, especially noting any version or variant differences. Finally, output a boolean `match` value (True if the same product, False otherwise) and a calibrated `match_probability` score between 0.0 and 1.0 (where 1.0 is absolute certainty of a match, and 0.0 is absolute certainty of a non-match).",
+      "fields": [
+        {
+          "prefix": "Left:",
+          "description": "First record (rendered fields)"
+        },
+        {
+          "prefix": "Right:",
+          "description": "Second record (rendered fields)"
+        },
+        {
+          "prefix": "Reasoning:",
+          "description": "Brief justification for the decision"
+        },
+        {
+          "prefix": "Match:",
+          "description": "True if the two records are the same entity"
+        },
+        {
+          "prefix": "Match Probability:",
+          "description": "Probability in [0, 1] they are the same"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.13",
+      "dspy": "3.2.1",
+      "cloudpickle": "3.1"
+    }
+  }
+}
