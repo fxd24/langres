@@ -42,6 +42,7 @@ from langres.core.indexes import (
 )
 from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import (
     CompanySchema,
@@ -102,6 +103,7 @@ __all__ = [
     "FakeVectorIndex",
     "FastEmbedSparseEmbedder",
     "FeatureSpec",
+    "FellegiSunterJudge",
     "get_component",
     "get_schema",
     "GLinkerAdapter",

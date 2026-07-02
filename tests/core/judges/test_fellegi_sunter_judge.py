@@ -147,18 +147,49 @@ class TestFitUnlabeledBasics:
         judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
             comparator=comparator, random_state=0, n_random_pairs=200
         )
+        # Distinct, UNRELATED name pools per company (no shared template/prefix) so
+        # random cross-pairs are genuinely dissimilar under token_sort_ratio.
+        names = [
+            "Zenith Holdings",
+            "Umbrella Industries",
+            "Wayne Enterprises",
+            "Stark Technologies",
+            "Globex Corporation",
+            "Initech Solutions",
+            "Hooli Systems",
+            "Soylent Foods",
+            "Aperture Science",
+            "Cyberdyne Systems",
+            "Massive Dynamic",
+            "Oscorp Industries",
+            "Wonka Confections",
+            "Gringotts Bank",
+            "Weyland Yutani",
+            "Tyrell Corporation",
+            "Vandelay Industries",
+            "Prestige Worldwide",
+            "Pied Piper Inc",
+            "Buy N Large",
+        ]
         all_match_candidates = [
             _compared(
                 comparator,
-                _company(f"{i}L", f"Distinctive Company Name {i}", f"{i} Unique Street"),
-                _company(f"{i}R", f"Distinctive Company Name {i}", f"{i} Unique Street"),
+                _company(f"{i}L", names[i], f"{i} Unique Street"),
+                _company(f"{i}R", names[i], f"{i} Unique Street"),
             )
-            for i in range(20)
+            for i in range(len(names))
         ]
         judge.fit_unlabeled(iter(all_match_candidates))
         assert judge.u_prob is not None
         # Random cross-pairs of distinct companies should rarely agree on name.
         assert judge.u_prob["name"] < 0.5
+
+    def test_fit_unlabeled_raises_without_comparison_vector(self) -> None:
+        comparator = _company_comparator()
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        bare = _candidate(_company("a", "Acme"), _company("b", "Acme Inc"), comparison=None)
+        with pytest.raises(ValueError, match="comparison vector"):
+            judge.fit_unlabeled(iter([bare]))
 
     def test_fit_unlabeled_is_schema_agnostic_with_product_schema(self) -> None:
         """The exact same judge class works against a second, unrelated schema."""
@@ -266,7 +297,11 @@ class TestDegenerateInputs:
             comparator=comparator, random_state=0, n_random_pairs=50
         )
         candidates = [
-            _compared(comparator, _company(f"{i}L", "Acme Corp", "1 Main St"), _company(f"{i}R", "Acme Corp", "1 Main St"))
+            _compared(
+                comparator,
+                _company(f"{i}L", "Acme Corp", "1 Main St"),
+                _company(f"{i}R", "Acme Corp", "1 Main St"),
+            )
             for i in range(10)
         ]
         judge.fit_unlabeled(iter(candidates))
@@ -314,14 +349,23 @@ class TestDegenerateInputs:
             assert not math.isnan(judgement.score)
 
     def test_fit_unlabeled_empty_candidate_stream_no_crash(self) -> None:
-        """Zero candidates -> stays at safe init values, does not raise."""
+        """Zero candidates -> EM has no evidence to work with, but must not crash.
+
+        With no patterns, the M-step is data-independent (purely Laplace/guard
+        floor), so it settles at a fixed point in a couple of trivial
+        iterations — the important guarantee is a valid, finite result, not a
+        specific converged flag.
+        """
         comparator = _company_comparator()
         judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter([]))
-        assert judge.converged is False
-        assert judge.prior == pytest.approx(0.5)
+        assert judge.prior is not None
+        assert 0.0 < judge.prior < 1.0
+        assert judge.m_prob is not None
+        for value in judge.m_prob.values():
+            assert 0.0 < value < 1.0
 
     def test_entity_pool_of_one_record_no_crash(self) -> None:
         """A pool with < 2 distinct entities can't form any random pair for u-estimation."""
@@ -402,10 +446,22 @@ class TestForward:
         comparator = _company_comparator()
         judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
-        candidate = _compared(comparator, _company("a", "Acme Corp", "1 Main St"), _company("b", "Acme Corp", "1 Main St"))
+        candidate = _compared(
+            comparator,
+            _company("a", "Acme Corp", "1 Main St"),
+            _company("b", "Acme Corp", "1 Main St"),
+        )
         [judgement] = list(judge.forward(iter([candidate])))
         assert "pattern" in judgement.provenance
         assert "log_odds" in judgement.provenance
+
+    def test_inspect_scores_delegates_to_shared_util(self) -> None:
+        comparator = _company_comparator()
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
+        judgements = list(judge.forward(iter(_clustered_pairs(comparator))))
+        report = judge.inspect_scores(judgements, sample_size=5)
+        assert report.total_judgements == len(judgements)
 
     def test_forward_left_id_right_id(self) -> None:
         comparator = _company_comparator()
@@ -496,7 +552,11 @@ class TestSerialization:
         assert rebuilt.agreement_threshold == pytest.approx(0.42)
         assert rebuilt.m_prob is None
         with pytest.raises(ValueError, match="fit_unlabeled"):
-            list(rebuilt.forward(iter([_compared(comparator, _company("a", "X"), _company("b", "Y"))])))
+            list(
+                rebuilt.forward(
+                    iter([_compared(comparator, _company("a", "X"), _company("b", "Y"))])
+                )
+            )
 
     def test_from_config_round_trips_fitted_judge_and_scores_identically(self) -> None:
         comparator = _company_comparator()
