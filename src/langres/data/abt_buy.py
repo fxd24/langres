@@ -73,7 +73,7 @@ AbtBuySource = Literal["abt", "buy"]
 # VectorBlocker over SentenceTransformer("all-MiniLM-L6-v2") cosine similarity
 # on ``embed_text`` (name + description). Sweep (k -> Pair-Completeness):
 # 5=0.6983, 10=0.8218, 20=0.9301, 30=0.9511, 50=0.9780 -- see
-# ``sweep_blocking_k`` / ``docs/research/w1_trained_family_results.md``.
+# ``sweep_blocking_k`` / ``docs/research/20260702_w1_trained_family_results.md``.
 DEFAULT_ABT_BUY_BLOCKING_K = 20
 
 #: Pair-Completeness gate the blocking k-sweep aims to clear (mirrors

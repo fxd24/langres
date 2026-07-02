@@ -67,6 +67,64 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
 > judge that throws away your compilation; for a paid judge it multiplies spend by
 > the grid size for an identical set of judgements. Use
 > `evaluate_judge_on_candidates` (judged **once**) for anything compiled or paid.
+>
+> The same warning applies to the **trained family** (`fellegi_sunter` /
+> `random_forest`, W1.2): `run_methods`/`run_method` rebuild an *unfit* module
+> per grid threshold, and both judges raise `ValueError` from `forward()` until
+> fit — so racing them through `run_methods` always crashes. That is exactly why
+> neither name is in `ZERO_SPEND_METHODS`/`ALL_METHODS`; see "The fit seam"
+> below.
+
+## The fit seam: judges that need `Resolver.fit(...)` before scoring
+
+Some judges are *learned*, not just configured — they need to see data before
+`forward()` can score anything. `Resolver.fit(records, labels=...)` is the one
+seam for this, and it dispatches on which of two runtime-checkable protocols
+(`langres.core.fit`) the judge implements:
+
+- **`UnsupervisedFitMixin.fit_unlabeled(candidates)`** — learns with **no**
+  labels. `FellegiSunterJudge` (classical Fellegi-Sunter EM) is the first
+  example: it binarizes each `ComparisonVector`'s similarities into
+  agree/disagree itself (never asking the comparator to emit `MISMATCH` — that
+  would change `combine_present` scoring for every other judge), estimates
+  u-probabilities from **random pairs** of the entities it saw (not the
+  blocked candidates themselves, which are match-enriched and would bias u
+  upward), and learns m-probabilities + the match prior via log-space EM.
+  Called with `resolver.fit(records)` — no `labels=`.
+- **`SupervisedFitMixin.fit(candidates, labels)`** — learns **with** labels.
+  `RFJudge` (a Magellan-style sklearn `RandomForestClassifier` over
+  `ComparisonVector.similarities`) is the example: `resolver.fit(records,
+  labels=[...])`, positionally aligned with the blocked candidates. Omitting
+  `labels=` raises — a trainable module that silently never trains is exactly
+  the footgun this hook exists to prevent.
+
+```python
+from langres.core.resolver import Resolver
+from langres.methods import make_resolver_factory
+
+# fellegi_sunter: unsupervised (no labels)
+resolver = make_resolver_factory("fellegi_sunter", benchmark)(0.5)
+resolver.fit(train_records)                     # fit_unlabeled under the hood
+judgements = resolver.predict(test_records)      # score_type="prob_fs"
+
+# random_forest: supervised (labels positionally aligned with candidates)
+resolver = make_resolver_factory("random_forest", benchmark)(0.5)
+candidates = list(resolver._candidates(train_records))
+labels = [is_match(c) for c in candidates]       # your gold lookup
+resolver.fit(train_records, labels=labels)        # fit under the hood
+judgements = resolver.predict(test_records)      # score_type="prob_rf"
+```
+
+Once fit, evaluate either judge the same way as a compiled DSPy judge — judged
+**once** via `evaluate_judge_on_candidates(resolver.module, candidates,
+gold_pairs, grid)` — never via `run_methods`.
+
+RF's fitted forest is **not pickled**: `Resolver.save` persists it as a strict
+per-tree JSON array representation (an sklearn-version guard refuses to load
+across a minor-version boundary). FS's fitted state (`prior`/`m_prob`/`u_prob`)
+is plain JSON floats — no sidecar file needed. Both round-trip through a
+fresh-process `Resolver.load` (see `tests/core/judges/test_fellegi_sunter_judge.py`
+/ `tests/core/modules/test_rf_judge.py`).
 
 ## The DSPy loop: build → compile → evaluate
 
