@@ -1,13 +1,32 @@
 # langres: Use Case Taxonomy & Development Roadmap
 
-> **Note (2026-06-25):** Several components named below — `tasks.*`
+> **⚠️ Reality check (2026-07-02).** This document is a **taxonomy + roadmap**,
+> not an API reference. Several component names used below never existed as
+> code and were doc fiction: the whole `langres.tasks.*` layer
 > (`DeduplicationTask`, `EntityLinkingTask`, `RecordLinkageTask`),
-> `core.Canonicalizer`, `data.ReviewQueue`, `data.SyntheticGenerator`, and
-> `Blocker.stream_against` — are **not yet implemented**; they describe the
-> intended API. See **[ROADMAP.md](ROADMAP.md)** for the delivery timeline
-> (the golden-record / canonicalization loop lands in M5; the cold-start
-> data generator in M1). The "Status" column below predates the roadmap; the
-> roadmap's use-case compass (§2.5) is the current source of truth.
+> `langres.flows.*` / `blockers.*` (`CompanyFlow`, `DedupeBlocker`,
+> `LinkingBlocker`), `core.Canonicalizer`, `core.Optimizer`,
+> `data.ReviewQueue`, `data.SyntheticGenerator`, `Clusterer(constraints=...)`,
+> and `Blocker.stream_against` / `Resolver.link` **as working code**.
+>
+> **What actually ships today** for the use cases below is the three-verb DX
+> layer + `Resolver` + `langres.core` primitives:
+>
+> - **Deduplication (UC1):** ✅ `langres.dedupe(records)` or
+>   `Resolver.from_schema(schema).resolve(records)`.
+> - **Pairwise match:** ✅ `langres.link(left, right)` → `LinkVerdict`.
+> - **Entity Linking / cross-source / incremental (UC2, UC3, UC10):** 🚧
+>   `Resolver.link()` and `Resolver.stream_against()` exist only as
+>   `NotImplementedError` stubs reserved for **M5**.
+> - **Master Data / golden records (UC4):** 🚧 no `Canonicalizer` yet — **M5**.
+> - **Negative constraints (UC9):** 🚧 `Clusterer` takes only a `threshold`;
+>   no cannot-link support today.
+>
+> Below, "langres Implementation" blocks describe the **intended** design and
+> are kept for the taxonomy; treat the API names as roadmap unless listed as
+> shipping above. See **[ROADMAP.md](ROADMAP.md)** (§2 use-case compass) for the
+> milestone-accurate source of truth and **[../README.md](../README.md)** for the
+> real API. The Status column in §3 has been corrected to match the code.
 
 ## 1. Introduction
 
@@ -44,12 +63,15 @@ To formally distinguish use cases, we specify five key properties:
 - **Authority Model:** No pre-existing authority; clusters discover latent entities.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation (V1 Core):**
+**langres Implementation — ✅ ships today:**
 
 This is the primary "hello world" use case for langres.
 
-- **High-Level API:** `langres.tasks.DeduplicationTask`
-- **Core Components:** `blockers.DedupeBlocker` (using `stream(data)`), any Flow (e.g., `flows.CompanyFlow`), `core.Clusterer`.
+- **DX layer:** `langres.dedupe(records)` (schema-optional, zero-label,
+  spend-capped).
+- **Core path:** `Resolver.from_schema(schema).resolve(records)`, composing an
+  `AllPairsBlocker`/`VectorBlocker`, a `StringComparator` + judge (`Module`),
+  and a `core.Clusterer`.
 
 ### Use Case 2: Entity Linking (Asymmetric Resolution)
 
@@ -61,12 +83,14 @@ This is the primary "hello world" use case for langres.
 - **Authority Model:** The target dataset T is the fixed "source of truth."
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation (V1 Core):**
+**langres Implementation — 🚧 roadmap (M5):**
 
-This is the second core use case, supported out-of-the-box.
-
-- **High-Level API:** `langres.tasks.EntityLinkingTask`
-- **Core Components:** `blockers.LinkingBlocker` (using `stream_against(source, target)` and handling schema mapping), any Flow. The Task orchestrator handles the 1:1 mapping logic (instead of clustering) and NIL thresholding.
+Cross-source, asymmetric linking is **not yet built**. `Resolver.link(left,
+right)` and `Resolver.stream_against(records)` exist only as
+`NotImplementedError` stubs reserved for M5 (incremental assignment against an
+entity store). For a *pairwise* match decision today, use
+`langres.link(left, right)` → `LinkVerdict`; for single-source clustering, use
+`dedupe` / `Resolver.resolve` (UC1).
 
 ### Use Case 10: Fuzzy Foreign Key Resolution
 
@@ -80,9 +104,10 @@ A specialized sub-type of Entity Linking (Use Case 2).
 - **Authority Model:** Target table T is the authority.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation (V1 Core):**
+**langres Implementation — 🚧 roadmap (M5):**
 
-Handled identically to Use Case 2 by the `langres.tasks.EntityLinkingTask`.
+A special case of Entity Linking (UC2); it lands with the same M5
+`Resolver.link` / `stream_against` work. Not available today.
 
 ### Use Case 3: Record Linkage (Multi-Source Symmetric Resolution)
 
@@ -94,12 +119,12 @@ Handled identically to Use Case 2 by the `langres.tasks.EntityLinkingTask`.
 - **Authority Model:** All datasets are equal peers; no single source of truth.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation (V1.1 Extension):**
+**langres Implementation — 🚧 roadmap (post-M5):**
 
-This is a natural extension of our core architecture.
-
-- **High-Level API:** `langres.tasks.RecordLinkageTask`
-- **Core Components:** Requires a Blocker that can use `stream(datasets: List[...])` to find pairs across all datasets. The `core.Clusterer` already supports this.
+A natural extension of the core architecture, but **not built**. It would need a
+multi-source blocker; `core.Clusterer` already produces clusters from whatever
+pairs it is given. Tracked as post-M5/config work in
+[ROADMAP.md](ROADMAP.md).
 
 ### Use Case 4: Master Data Creation (Consolidation)
 
@@ -111,11 +136,11 @@ This is a natural extension of our core architecture.
 - **Authority Model:** The new master dataset M becomes the authoritative source.
 - **Temporal Aspect:** Static (creates a new snapshot).
 
-**langres Implementation (V1.1 Extension):**
+**langres Implementation — 🚧 roadmap (M5):**
 
-This is the "last mile" of ER, which we support as a distinct architectural pillar.
-
-- **Core Components:** `langres.core.Canonicalizer`. This V1.1 module will provide survivorship rules (e.g., "most_recent", "most_frequent", "merge_unique") to build the master records from the clusters.
+The "last mile" of ER. A `Canonicalizer` (survivorship rules — e.g.
+"most_recent", "most_frequent", "merge_unique") is **planned but does not exist
+yet**; ROADMAP promotes the golden-record / progressive-enrichment loop to M5.
 
 ### Use Case 9: Negative Constraints (Constrained Clustering)
 
@@ -127,11 +152,11 @@ This is the "last mile" of ER, which we support as a distinct architectural pill
 - **Authority Model:** The constraints are an additional, definitive authority.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation (V1 Core):**
+**langres Implementation — 🚧 roadmap:**
 
-This is a critical, production-ready feature.
-
-- **Core Components:** `langres.core.Clusterer` has a `constraints` parameter (`cluster(..., constraints=N)`) that will enforce these rules during clustering.
+**Not built.** `core.Clusterer` today takes only a `threshold`; there is no
+`constraints` / cannot-link parameter. Constrained clustering is a planned
+extension.
 
 ### Use Case 8: Privacy-Preserving Record Linkage (PPRL)
 
@@ -175,7 +200,10 @@ This is architecturally different. Our `core.Module` is stateless and pairwise. 
 
 This is a fundamentally different (online, low-latency, stateful) architecture. langres is a batch-oriented framework.
 
-**How langres helps:** You can use langres to train and compile the Flow (the "brain") that a streaming application (built on Flink, Spark Streaming, etc.) would then import and use for its real-time scoring logic. langres provides the brain, not the real-time body.
+**How langres helps:** the intended role is to build and calibrate the matching
+**judge** (the "brain") that a streaming application (built on Flink, Spark
+Streaming, etc.) would then import and reuse for its real-time scoring logic.
+langres provides the brain, not the real-time body.
 
 ### Use Case 6: Temporal Evolution
 
@@ -195,20 +223,28 @@ This is a temporal graph problem, not a standard clustering problem. Our cluster
 
 This table outlines our development priorities, clearly separating the initial, core release from planned extensions.
 
+The "langres Component(s)" column lists the **real, shipping** API where one
+exists, and the intended (not-yet-built) design otherwise.
+
 | Use Case | langres Component(s) | Status |
 |----------|---------------------|--------|
-| 1. Deduplication | `tasks.DeduplicationTask`, `core.Clusterer` | V1 Core |
-| 2. Entity Linking | `tasks.EntityLinkingTask`, `blockers.LinkingBlocker` | V1 Core |
-| 10. Fuzzy FK Resolution | (Covered by `tasks.EntityLinkingTask`) | V1 Core |
-| 9. Negative Constraints | `core.Clusterer(constraints=...)` | V1 Core |
-| Human-in-the-Loop | `data.ReviewQueue`, `langres.ui` | V1 Core |
-| Optimization | `core.Optimizer` (Optuna, DSPy) | V1 Core |
-| Data Generation | `data.SyntheticGenerator` | V1 Core |
-| 3. Record Linkage | `tasks.RecordLinkageTask`, `Blocker.stream(datasets=...)` | V1.1 Extension |
-| 4. Master Data Creation | `core.Canonicalizer` (Survivorship) | V1.1 Extension |
-| 8. Privacy-Preserving (PPRL) | Custom PPRLFlow and PPRLBlocker | Future Scope |
-| 7. Collective (Graph) | (Requires new GraphClusterer) | Out of Scope |
-| 5. Streaming Resolution | (Architectural Mismatch - See Note) | Out of Scope |
-| 6. Temporal Evolution | (Architectural Mismatch) | Out of Scope |
+| 1. Deduplication | `dedupe(records)` / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
+| Pairwise match verdict | `link(left, right)` → `LinkVerdict` | ✅ **Shipping** |
+| Optimization / calibration | `core.calibration.derive_threshold`, `core.optimizers.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
+| 2. Entity Linking | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap (M5) |
+| 10. Fuzzy FK Resolution | (special case of UC2) | 🚧 Roadmap (M5) |
+| 4. Master Data Creation | `Canonicalizer` (survivorship) — not built | 🚧 Roadmap (M5) |
+| Set-wise / trained judge families | SelectJudge, Fellegi–Sunter, RandomForest — not built | 🚧 Roadmap (M4.5) |
+| 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |
+| Human-in-the-Loop | review-queue / correction-harvest contract — not built | 🚧 Roadmap (M5 flywheel) |
+| Data Generation | synthetic generator — not built | 🚧 Roadmap |
+| 3. Record Linkage | multi-source blocker — not built | 🚧 Roadmap (post-M5) |
+| 8. Privacy-Preserving (PPRL) | custom PPRL blocker + judge | ⚪ Future / out of scope |
+| 7. Collective (Graph) | graph-native clusterer | ⚪ Out of scope |
+| 5. Streaming Resolution | (architectural mismatch — see note) | ⚪ Out of scope |
+| 6. Temporal Evolution | (architectural mismatch) | ⚪ Out of scope |
 
-**Note on "Out of Scope":** langres is not designed to be a streaming or temporal engine itself. However, its core purpose is to train and compile the `core.Module` ("Flow") which can then be exported and used by an external streaming/temporal system.
+**Note on "Out of Scope":** langres is a **batch** framework, not a streaming or
+temporal engine. Its intended role there is to build and calibrate the matching
+**judge** (the "brain") that an external streaming/temporal system can then reuse
+for its own real-time scoring.
