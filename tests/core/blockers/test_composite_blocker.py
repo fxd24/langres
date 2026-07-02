@@ -9,6 +9,8 @@ Schema-agnostic: exercised with both ``CompanySchema`` and a local
 ``ProductSchema``.
 """
 
+from typing import Any
+
 import pytest
 from pydantic import BaseModel
 
@@ -17,7 +19,7 @@ from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.blockers.key import KeyBlocker
 from langres.core.groups import ERCandidateGroup
-from langres.core.models import CompanySchema
+from langres.core.models import CompanySchema, ERCandidate
 from langres.core.registry import get_component
 from tests.conftest import pairs_from_candidates, pairs_from_groups
 
@@ -115,6 +117,27 @@ def test_composite_blocker_union_dedups_pair_found_by_multiple_children() -> Non
     # (also produced by key_blocker).
     assert len(candidates) == 6
     assert len(pairs_from_candidates(candidates)) == 6
+
+
+def test_composite_blocker_dedups_a_single_child_emitting_the_same_pair_twice() -> None:
+    """Defensive dedup: a child that itself yields one pair twice still counts once."""
+
+    class _DuplicateEmittingBlocker(Blocker[CompanySchema]):
+        def stream(self, data):  # type: ignore[no-untyped-def]
+            left = CompanySchema(id="a", name="Acme")
+            right = CompanySchema(id="b", name="Acme Corp")
+            yield ERCandidate(left=left, right=right, blocker_name="dup")
+            yield ERCandidate(left=left, right=right, blocker_name="dup")
+
+        def inspect_candidates(self, candidates, entities, sample_size=10):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+    composite = CompositeBlocker(
+        children=[_DuplicateEmittingBlocker(), _all_pairs_blocker()], op="union"
+    )
+    candidates = list(composite.stream(COMPANY_DATA))
+
+    assert len({(c.left.id, c.right.id) for c in candidates}) == len(candidates)
 
 
 def test_composite_blocker_union_is_recall_maximizing() -> None:
@@ -218,7 +241,7 @@ def test_composite_blocker_empty_data() -> None:
     for op in ("union", "intersection", "difference"):
         composite = CompositeBlocker(
             children=[_key_blocker(), _all_pairs_blocker()],
-            op=op,  # type: ignore[arg-type]
+            op=op,
         )
         assert list(composite.stream([])) == []
 
@@ -226,7 +249,7 @@ def test_composite_blocker_empty_data() -> None:
 def test_composite_blocker_is_schema_agnostic_with_product_schema() -> None:
     """The same CompositeBlocker class works with a completely different schema."""
 
-    def product_factory(record: dict) -> ProductSchema:
+    def product_factory(record: dict[str, Any]) -> ProductSchema:
         return ProductSchema(
             id=record["id"], title=record["title"], manufacturer=record.get("manufacturer")
         )
@@ -273,7 +296,7 @@ def test_composite_blocker_registered_under_type_name() -> None:
 def test_composite_blocker_config_round_trips_simple_children() -> None:
     """config/from_config round-trip for children with plain (non-state) config."""
     original = CompositeBlocker(children=[_key_blocker(), _all_pairs_blocker()], op="intersection")
-    rebuilt = CompositeBlocker.from_config(original.config)
+    rebuilt: CompositeBlocker[CompanySchema] = CompositeBlocker.from_config(original.config)
 
     assert list(rebuilt.stream(COMPANY_DATA)) == list(original.stream(COMPANY_DATA))
     assert rebuilt.op == "intersection"
@@ -302,6 +325,62 @@ def test_composite_blocker_config_raises_for_child_without_type_name() -> None:
 
     with pytest.raises(ValueError, match="type_name"):
         _ = composite.config
+
+
+# ---------------------------------------------------------------------------
+# inspect_candidates
+# ---------------------------------------------------------------------------
+
+
+def test_composite_blocker_inspect_candidates_union_basic_shape() -> None:
+    """inspect_candidates reports totals, distribution, examples, recommendations."""
+    composite = CompositeBlocker(children=[_key_blocker(), _all_pairs_blocker()], op="union")
+    entities = [
+        CompanySchema(id=r["id"], name=r["name"], address=r.get("address")) for r in COMPANY_DATA
+    ]
+    candidates = list(composite.stream(COMPANY_DATA))
+
+    report = composite.inspect_candidates(candidates, entities, sample_size=3)
+
+    assert report.total_candidates == len(candidates)
+    assert len(report.examples) == 3
+    assert "union" in report.recommendations[0]
+
+
+def test_composite_blocker_inspect_candidates_intersection_recommendation() -> None:
+    """Non-union ops get a precision/recall trade-off warning."""
+    composite = CompositeBlocker(children=[_key_blocker(), _all_pairs_blocker()], op="intersection")
+    entities = [
+        CompanySchema(id=r["id"], name=r["name"], address=r.get("address")) for r in COMPANY_DATA
+    ]
+    candidates = list(composite.stream(COMPANY_DATA))
+
+    report = composite.inspect_candidates(candidates, entities)
+
+    assert "Pair-Completeness" in report.recommendations[0]
+
+
+def test_composite_blocker_inspect_candidates_falls_back_to_repr_without_name_field() -> None:
+    """A schema with no 'name' attribute falls back to str(entity) for example text."""
+
+    def product_factory(record: dict[str, Any]) -> ProductSchema:
+        return ProductSchema(
+            id=record["id"], title=record["title"], manufacturer=record.get("manufacturer")
+        )
+
+    data = [
+        {"id": "p1", "title": "iPhone 15", "manufacturer": "Apple"},
+        {"id": "p2", "title": "iPhone 15 Pro", "manufacturer": "Apple"},
+    ]
+    key_blocker = KeyBlocker(schema_factory=product_factory, key_field="manufacturer")
+    all_pairs = AllPairsBlocker(schema_factory=product_factory)
+    composite = CompositeBlocker(children=[key_blocker, all_pairs], op="union")
+    entities = [product_factory(r) for r in data]
+    candidates = list(composite.stream(data))
+
+    report = composite.inspect_candidates(candidates, entities)
+
+    assert report.examples[0]["left_text"] == str(entities[0])
 
 
 # ---------------------------------------------------------------------------
