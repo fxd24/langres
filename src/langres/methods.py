@@ -25,6 +25,10 @@ is held constant per dataset so the race compares judges, not blockers:
 - ``dspy_judge`` — VectorBlocker -> ``DSPyJudge`` (a compilable DSPy
   ``ChainOfThought``) -> Clusterer (M4). Its injected client is a **DSPy LM**
   (``dspy.LM`` / ``DummyLM``), distinct from the LiteLLM/OpenAI clients above.
+- ``select_judge`` — VectorBlocker -> ``SelectJudge`` (a ComEM-style set-wise
+  judge: ONE LLM call per anchor group instead of one call per pair) ->
+  Clusterer (W1.1). Its injected client is a **DSPy LM**, same shape as
+  ``dspy_judge``.
 
 A dataset participates by conforming to :class:`BlockingBenchmark` — exposing its
 record ``schema`` plus a pinned blocking config (``blocking_k`` and a
@@ -62,10 +66,13 @@ from langres.core.resolver import Resolver
 ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embedding_cosine")
 
 #: Methods whose scorer calls an LLM — they take an injected client (mock/real).
-#: ``dspy_judge`` is LLM-backed too, but its injected client is a **DSPy LM**
-#: (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI client the others take —
-#: see :func:`_make_module_builder`.
-LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge")
+#: ``dspy_judge`` and ``select_judge`` are LLM-backed too, but their injected
+#: client is a **DSPy LM** (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI
+#: client the others take — see :func:`_make_module_builder`. ``select_judge``
+#: (W1.1, ComEM-style set-wise) additionally makes ONE LLM call per anchor
+#: GROUP instead of one call per pair — see
+#: :class:`~langres.core.modules.select_judge.SelectJudge`.
+LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge", "select_judge")
 
 #: Every method the registry can build, in race order.
 ALL_METHODS: tuple[str, ...] = ZERO_SPEND_METHODS + LLM_METHODS
@@ -204,6 +211,21 @@ def _make_module_builder(
             return judge
 
         return build_dspy_judge, None
+    if method == "select_judge":
+        # ComEM-style set-wise judge (W1.1): same DSPy-LM injection contract as
+        # ``dspy_judge`` (a ``dspy.LM(...)`` / ``DummyLM``), lazily imported for
+        # the same import-safety reason, and priced from the same table — it
+        # differs only in scoring a whole anchor GROUP per call, not one pair.
+        from langres.core.modules.select_judge import SelectJudge
+
+        select_price_per_1k = _dspy_price_per_1k(llm_model)
+
+        def build_select_judge() -> Module[Any]:
+            judge: SelectJudge[Any] = SelectJudge(lm=llm_client, model=llm_model)
+            judge.price_per_1k_tokens = select_price_per_1k
+            return judge
+
+        return build_select_judge, None
     if method == "cascade":
         return (
             lambda: _build_cascade_module(
