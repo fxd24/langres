@@ -2,9 +2,13 @@ name: Lint
 
 on:
   push:
-    branches: [main, feat/m4-foundation]
+    branches: [main]
   pull_request:
     branches: [main, feat/m4-foundation]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:

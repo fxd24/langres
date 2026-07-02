@@ -2,13 +2,17 @@ name: Security
 
 on:
   push:
-    branches: [main, feat/m4-foundation]
+    branches: [main]
   pull_request:
     branches: [main, feat/m4-foundation]
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: "0 8 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   security:
