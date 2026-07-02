@@ -39,6 +39,17 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     "openrouter/z-ai/glm-5.2": (0.95, 3.00),
     "openrouter/z-ai/glm-4.6": (0.60, 2.20),
     "openrouter/openai/gpt-4o": (2.50, 10.00),
+    # OpenRouter path for judge="auto" (OPENROUTER_API_KEY set) — see
+    # langres.core.presets.choose_auto_judge. OpenRouter's own listing for this
+    # route isn't in LiteLLM's pricing table; conservative-high over OpenAI's
+    # published $0.15/$0.60 per-1M list price (litellm model_prices_and_context_
+    # window.json, "gpt-4o-mini", checked 2026-07) to absorb any provider markup.
+    "openrouter/openai/gpt-4o-mini": (0.20, 0.80),
+    # Direct-OpenAI path for judge="auto" (OPENAI_API_KEY set, no OPENROUTER_API_KEY)
+    # — see choose_auto_judge. Matches OpenAI's published gpt-5-mini list price
+    # exactly (litellm model_prices_and_context_window.json, "gpt-5-mini" and
+    # "openrouter/openai/gpt-5-mini" agree: $0.25/$2.00 per 1M, checked 2026-07).
+    "openai/gpt-5-mini": (0.25, 2.00),
     "openrouter/anthropic/claude-3.7-sonnet": (3.00, 15.00),
     "openrouter/anthropic/claude-3.5-sonnet": (3.00, 15.00),
     "openrouter/google/gemini-2.0-flash-001": (0.10, 0.40),
@@ -48,6 +59,13 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: ships a 6000s default, so a stalled keep-alive socket can hang a whole
 #: sequential run; a bounded timeout makes a stalled call fail fast and recover.
 DEFAULT_TIMEOUT_S = 60.0
+
+#: The OpenRouter route ``judge="auto"``/``judge="zero_shot_llm"`` default to
+#: when no model id is given -- ``core.presets.choose_auto_judge`` and
+#: ``Resolver.from_schema`` both need this literal. Defined once here (the
+#: dspy-free, cycle-safe layer both of those sit above) so the two call sites
+#: can't drift on the string.
+DEFAULT_OPENROUTER_MODEL = "openrouter/openai/gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +186,41 @@ def per_token_worst_price(
     return max(in_per_1m, out_per_1m) / 1_000_000.0
 
 
+def dspy_price_per_1k(
+    model: str, prices: Mapping[str, tuple[float, float]] = PRICES_PER_1M
+) -> float:
+    """Per-1k-token price for ``model`` from ``prices`` (0.0 if unknown).
+
+    ``DSPyJudge`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` -- a
+    single blended per-1k rate over ``prompt + completion`` tokens -- so this
+    takes the worst-case (dearer of input/output) per-token price and scales it
+    to per-1k. Worst-case is the same price basis
+    :class:`~langres.core.benchmark.BudgetedModuleRunner` uses for its cap, so a
+    judge's self-reported cost and a live budget-stop agree.
+
+    Unknown models keep ``0.0`` (zero-spend/test runs stay free and never
+    crash), mirroring :func:`register_runtime_model_price` returning ``None``
+    for unknown ids -- rather than guessing a price.
+
+    This function lives here (not in ``langres.methods``, where it started) so
+    both ``langres.methods`` and ``langres.core.presets`` can import it without
+    creating a ``core -> methods -> core`` cycle -- this module is dspy-free and
+    layer-neutral, sitting below both.
+
+    Args:
+        model: The routing model id.
+        prices: Per-1M-token ``(input, output)`` price table. Defaults to
+            :data:`PRICES_PER_1M`.
+
+    Returns:
+        The worst-case per-1k-token price in USD, or ``0.0`` if ``model`` is
+        unknown to ``prices``.
+    """
+    if model not in prices:
+        return 0.0
+    return per_token_worst_price(model, prices) * 1_000.0
+
+
 def make_token_cost_track(
     model: str, prices: Mapping[str, tuple[float, float]] = PRICES_PER_1M
 ) -> Callable[[list[PairwiseJudgement]], CostTrack]:
@@ -244,7 +297,19 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 
 
 class BudgetExceeded(RuntimeError):
-    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget."""
+    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget.
+
+    ``partial_judgements`` carries every judgement already produced (and paid
+    for) before the cap tripped (E9) -- populated by the catcher, not here
+    (see :class:`~langres.core.presets._SpendCappedModule`). Declared with a
+    default empty list so any future raiser is safe even if it never sets it,
+    and callers/mypy see the attribute without an ad hoc
+    ``# type: ignore[attr-defined]`` at the one call site that populates it.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)
+        self.partial_judgements: list[PairwiseJudgement] = []
 
 
 class SpendMonitor:

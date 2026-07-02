@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     Environment variables:
         OPENAI_API_KEY: OpenAI API key
+        OPENROUTER_API_KEY: OpenRouter API key (drives judge="auto" model
+            selection; see langres.core.presets.choose_auto_judge)
         WANDB_API_KEY: Weights & Biases API key
         WANDB_PROJECT: W&B project name (default: "langres")
         WANDB_ENTITY: W&B entity/team name (optional)
@@ -50,6 +52,7 @@ class Settings(BaseSettings):
 
     # OpenAI / LLM
     openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
 
     # wandb (experiment tracking)
     wandb_api_key: str | None = None

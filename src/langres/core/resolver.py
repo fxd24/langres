@@ -34,9 +34,10 @@ the helpers normalize the dict-vs-model and property-vs-method differences.
 
 import inspect
 import logging
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Self, TypeGuard
+from typing import Any, Literal, Self, TypeGuard
 
 from pydantic import BaseModel
 
@@ -60,6 +61,99 @@ logger = logging.getLogger(__name__)
 
 # Slot names used as sidecar subdirectory names and for manifest ordering.
 _MANIFEST_FILENAME = "resolver.json"
+
+#: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
+#: than ``langres.core.presets.JudgeName`` -- no ``"auto"``, since resolving
+#: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
+#: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
+#: constructor argument.
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm"]
+
+
+def _build_module_for_judge(
+    judge: "_FromSchemaJudge | Module[Any]",
+    comparator: Comparator[Any],
+    *,
+    model: str | None,
+    entity_noun: str,
+) -> Module[Any]:
+    """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
+
+    A small, deliberately self-contained switch: ``langres.core.presets``
+    (which builds on top of ``Resolver``) is NOT imported here, since that
+    would create a ``Resolver -> presets -> Resolver`` cycle -- see the
+    dependency diagram in this module's docstring. The three branches below
+    duplicate a little of ``presets.build_judge``'s logic; that duplication is
+    the price of keeping the layering one-directional (``verbs -> presets ->
+    Resolver``), not an oversight.
+    """
+    if isinstance(judge, Module):
+        return judge
+    if judge == "string":
+        return WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    if judge == "embedding":
+        from langres.core.judges.embedding_score import EmbeddingScoreJudge
+
+        return EmbeddingScoreJudge()
+    if judge == "zero_shot_llm":
+        # Lazy: dspy must stay out of sys.modules unless this judge is chosen.
+        from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
+        from langres.core.modules.dspy_judge import DSPyJudge
+
+        resolved_model = model or DEFAULT_OPENROUTER_MODEL
+        dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
+        price = dspy_price_per_1k(resolved_model)
+        if price == 0.0:
+            # An unpinned model self-reports $0/pair -- honest, not reassuring
+            # (mirrors core.presets.notice_pre_scoring_cost's identical check;
+            # duplicated here for the same layering reason as the rest of this
+            # function). Resolver.from_schema has no spend cap at all (see its
+            # judge= docstring), so this is strictly worse than the verbs'
+            # blind-cap case: nothing would ever stop a runaway bill.
+            warnings.warn(
+                f"model {resolved_model!r} has no pinned price in "
+                "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
+                "$0/pair cost. Resolver.from_schema builds an UNCAPPED pipeline "
+                "(no spend cap at all) -- pin its price in PRICES_PER_1M, or use "
+                "langres.link/langres.dedupe for the built-in spend cap.",
+                stacklevel=3,
+            )
+        dspy_module.price_per_1k_tokens = price
+        return dspy_module
+    raise ValueError(
+        f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
+        "'string', 'embedding', 'zero_shot_llm', or pass a Module instance. "
+        "'auto' key-based resolution is a verbs-layer feature -- use "
+        "langres.link/langres.dedupe for that."
+    )
+
+
+def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
+    """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
+
+    ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
+    ``EmbeddingScoreJudge`` requires to score -- ``judge="embedding"`` must
+    always be paired with a ``VectorBlocker``, mirroring the identical rule
+    ``core.presets.build_resolver`` applies for the verb layer (same model,
+    same k, same cosine metric). Duplicated here rather than imported from
+    ``core.presets`` for the same layering reason as
+    :func:`_build_module_for_judge`: ``core.presets`` sits ABOVE ``Resolver``
+    and must not be imported back into it.
+    """
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+
+    def extract(entity: Any) -> str:
+        parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
+        return " ".join(parts)
+
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    index = FAISSIndex(embedder=embedder, metric="cosine")
+    return VectorBlocker(
+        vector_index=index, schema=schema, text_field_extractor=extract, k_neighbors=10
+    )
 
 
 def _component_config_dict(obj: object) -> dict[str, object]:
@@ -214,13 +308,19 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
+        judge: "_FromSchemaJudge | Module[Any]" = "string",
+        model: str | None = None,
+        entity_noun: str = "entity",
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
         Defaults to an ``AllPairsBlocker`` over the schema, a missing-aware
         ``StringComparator`` auto-derived from the schema's string fields (with
         ``id`` excluded), a ``WeightedAverageJudge`` scorer, and a ``Clusterer``
-        at ``threshold``.
+        at ``threshold``. ``judge="embedding"`` is the one exception to the
+        ``AllPairsBlocker`` default: it wires a ``VectorBlocker`` instead,
+        since ``EmbeddingScoreJudge`` scores off the blocker's
+        ``similarity_score``, which only a ``VectorBlocker`` attaches.
 
         Args:
             schema: The Pydantic entity schema to resolve.
@@ -232,6 +332,19 @@ class Resolver:
                 floor.
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
+            judge: ``"string"`` (default -- identical to pre-existing
+                behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
+                above), ``"zero_shot_llm"``, or a ``Module`` instance. This is
+                the low-level, explicit switch (no ``"auto"`` key-based
+                resolution and no spend cap -- that magic lives in
+                ``langres.link``/``langres.dedupe``). **Caution**:
+                ``judge="zero_shot_llm"`` (or any other paid ``Module``) built
+                here runs UNCAPPED -- there is no ``budget_usd`` on this
+                method and nothing stops a runaway bill. Use
+                ``langres.link``/``langres.dedupe`` for the built-in
+                ``SpendMonitor`` cap.
+            model: Model id override for ``judge="zero_shot_llm"``.
+            entity_noun: Domain noun woven into the LLM judge's prompt.
 
         Returns:
             A ready-to-run Resolver.
@@ -241,12 +354,16 @@ class Resolver:
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
+        module = _build_module_for_judge(judge, comparator, model=model, entity_noun=entity_noun)
+        blocker: Blocker[Any] = (
+            _build_embedding_blocker(schema)
+            if judge == "embedding"
+            else AllPairsBlocker(schema=schema)
+        )
         return cls(
-            blocker=AllPairsBlocker(schema=schema),
+            blocker=blocker,
             comparator=comparator,
-            # The judge scores on the same FeatureSpecs (weights) the comparator
-            # compares on, so the comparison vector and the weights line up.
-            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+            module=module,
             clusterer=Clusterer(threshold=threshold),
         )
 

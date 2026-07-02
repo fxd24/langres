@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation]
+    branches: [main, feat/m4-foundation, feat/m5-foundation]
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: "0 8 * * 1"

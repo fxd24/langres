@@ -40,6 +40,11 @@ from typing import Any, Protocol
 # (rather than re-implement its cost-key fallback math) so cascade spend totals
 # stay identical to every other method's; it is a stable same-package internal
 # that the harness's own tests also import directly.
+# Relocated to ``langres.clients.openrouter.dspy_price_per_1k`` (dspy-free,
+# layer-neutral) so both this module and ``langres.core.presets`` can share it
+# without a ``core -> methods -> core`` import cycle. Aliased to the old
+# private name since existing call sites in this module reference it.
+from langres.clients.openrouter import dspy_price_per_1k as _dspy_price_per_1k
 from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
@@ -150,27 +155,6 @@ def _build_cascade_module(
     if llm_client is not None:
         module._llm_client = llm_client
     return module
-
-
-def _dspy_price_per_1k(model: str) -> float:
-    """Per-1k-token price for ``model`` from the pinned OpenRouter table (0.0 if unknown).
-
-    ``DSPyJudge`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` — a single
-    blended per-1k rate over ``prompt + completion`` tokens — so we take the worst-case
-    (dearer of input/output) per-token price and scale it to per-1k. Worst-case is the
-    same price basis :class:`~langres.core.benchmark.BudgetedModuleRunner` uses for its
-    cap, so the judge's self-reported cost and the live budget-stop agree.
-
-    Unknown models keep ``0.0`` (zero-spend/test runs stay free and never crash),
-    mirroring ``register_runtime_model_price`` returning ``None`` for unknown ids —
-    rather than guessing a price. ``langres.clients.openrouter`` is dspy-free, so this
-    lookup never pulls ``dspy`` into ``import langres.methods``.
-    """
-    from langres.clients.openrouter import PRICES_PER_1M, per_token_worst_price
-
-    if model not in PRICES_PER_1M:
-        return 0.0
-    return per_token_worst_price(model) * 1_000.0
 
 
 def _make_module_builder(
