@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
-from langres.core.judges.fellegi_sunter import FellegiSunterJudge
+from langres.core.judges.fellegi_sunter import _GUARD_EPS, FellegiSunterJudge
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.registry import get_component
 
@@ -260,6 +260,76 @@ class TestEMConvergence:
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         assert judge.converged is True
+
+
+class TestEMFallbackGuard:
+    """Regression: the non-convergence fallback must not violate the m>=u guard.
+
+    Bug found in W1.2 PR review (Codex, P2): ``_run_em``'s fallback branch
+    returned the raw ``init_m=0.9`` for every feature WITHOUT clamping against
+    the (separately-estimated) ``u_prob`` -- unlike the converged path, whose
+    ``_m_step`` always floors ``m`` at ``u_prob[name] + _GUARD_EPS``. For any
+    low-entropy feature whose random-pair ``u_prob`` exceeds the fixed 0.9
+    (common — e.g. a field that is near-constant across the corpus), the
+    fallback would silently invert evidence: ``forward()`` computes
+    ``log(m/u)`` per agreeing feature, and ``log(m/u) < 0`` when ``m < u``
+    means AGREEING on that feature lowers the match score instead of raising
+    it. The fallback is not a corner case here — the W1.2 replication
+    (``docs/research/20260702_w1_trained_family_results.md``) shows it fires
+    on every real benchmark dataset at the class-default ``max_em_iter=20``.
+    """
+
+    def test_fallback_m_respects_m_geq_u_guard_directly(self) -> None:
+        """Unit-level: ``_run_em``'s fallback clamps m against a high u_prob."""
+        comparator = _company_comparator()
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+            comparator=comparator, max_em_iter=0
+        )
+        # "name"'s u_prob (0.95) exceeds the raw fallback init_m (0.9) --
+        # exactly the scenario that inverts evidence without the guard.
+        u_prob = {"name": 0.95, "address": 0.2, "phone": 0.2, "website": 0.2}
+
+        prior, m_prob, converged = judge._run_em(patterns=[], u_prob=u_prob)
+
+        assert converged is False
+        assert prior == pytest.approx(0.5)  # the fallback prior is untouched
+        for name, u in u_prob.items():
+            assert m_prob[name] >= u + _GUARD_EPS - 1e-9
+
+    def test_fallback_never_inverts_evidence_for_low_entropy_feature(self) -> None:
+        """End-to-end (fit_unlabeled -> forward): agreement is never anti-evidence.
+
+        "name" is identical across the whole entity pool, so every random pair
+        "agrees" on it -> u_prob["name"] lands well above 0.9. max_em_iter=0
+        forces the fallback path unconditionally.
+        """
+        comparator = _company_comparator()
+        candidates = [
+            _compared(
+                comparator,
+                _company(f"m{i}L", "Acme Corp", f"{i} Main St"),
+                _company(f"m{i}R", "Acme Corp", f"{i} Main St"),
+            )
+            for i in range(10)
+        ]
+        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+            comparator=comparator, max_em_iter=0, random_state=0
+        )
+        judge.fit_unlabeled(iter(candidates))
+
+        assert judge.converged is False
+        assert judge.u_prob is not None and judge.m_prob is not None
+        assert judge.u_prob["name"] > 0.9  # confirms the low-entropy setup
+        assert judge.m_prob["name"] >= judge.u_prob["name"]  # the guard holds
+
+        left = _company("x", "Acme Corp", "1 Test Ave")
+        right = _company("y", "Acme Corp", "1 Test Ave")
+        vector = comparator.compare(left, right)
+        [judgement] = list(judge.forward(iter([_candidate(left, right, vector)])))
+
+        # Agreeing on "name" must never be evidence AGAINST a match.
+        assert math.log(judge.m_prob["name"] / judge.u_prob["name"]) >= 0.0
+        assert judgement.score_type == "prob_fs"
 
 
 # ---------------------------------------------------------------------------
