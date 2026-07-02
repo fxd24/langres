@@ -286,7 +286,15 @@ class FellegiSunterJudge(Module[SchemaT]):
                 init_prior,
                 0.9,
             )
-            return init_prior, init_m, False
+            # Apply the SAME m>=u guard the converged path gets from _m_step
+            # (E4/Codex P2 regression): a raw, unclamped init_m=0.9 can sit
+            # BELOW a low-entropy feature's u_prob (e.g. a near-constant
+            # field), which would invert forward()'s per-feature evidence --
+            # agreement would lower the match score instead of raising it.
+            safe_m = {
+                name: _clamp(max(init_m[name], u_prob[name] + _GUARD_EPS)) for name in feature_names
+            }
+            return init_prior, safe_m, False
         return prior, m_prob, True
 
     def _e_step(

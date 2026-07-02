@@ -89,7 +89,7 @@ value-frequency (TF) adjustment, and no multi-start/init diversity to escape a
 degenerate "everything agrees enough to match" local optimum). The
 max-iteration safety fallback is doing its documented job (never returning a
 diverged partial result) — it is the honest *default* result that is weak,
-not a bug in the fallback itself.
+not a design flaw in having a fallback at all.
 
 **Implication for the roadmap:** this is exactly the C3/S2 gap the seam audit
 already flagged (`docs/research/20260701_er_seam_audit.md` rows C3/S2) —
@@ -97,6 +97,30 @@ value-frequency-aware FS (Splink-style per-value TF adjustment) and/or a
 possible-match band are the standard production fixes, not deeper iteration.
 Tracked, not fixed, in this branch (out of scope for W1.2's "does the fit seam
 work end-to-end" proof).
+
+### Fix: the fallback itself DID have a real bug (Codex P2, fixed)
+
+PR review caught a genuine correctness bug in the fallback path above: it
+returned the raw `init_m=0.9` for every feature **without** applying the same
+`m >= u` guard the converged path always gets from `_m_step`. For any feature
+whose random-pair `u_prob` exceeds the fixed 0.9 — plausible for a low-entropy
+field (e.g. a near-constant category column) — `forward()`'s
+`log(m_prob[name] / u_prob[name])` goes negative, so *agreeing* on that
+feature would lower the match score instead of raising it (inverted
+evidence). Since the fallback fires on every dataset in this replication (see
+above), this was a live path, not a corner case.
+
+Fixed by clamping the fallback's `m` against `u_prob` the same way `_m_step`
+does (`tests/core/judges/test_fellegi_sunter_judge.py::TestEMFallbackGuard`
+has the regression tests — both fail against the pre-fix code with a
+constructed low-entropy feature). **Re-running this replication after the fix
+produced byte-identical numbers to the table above**: none of the three real
+datasets' features happen to have a `u_prob` above 0.9 (checked directly —
+max observed `u_prob` was 0.376 on Amazon-Google's `price` field), so the
+guard was a latent bug on these particular benchmarks, not one that changed
+the reported precision/recall/F1 here. It is a correctness fix for the
+general case (any schema, any feature distribution), not a benchmark-number
+change.
 
 ## What this replication does prove
 
