@@ -250,7 +250,11 @@ def _judgement(left_id: str, right_id: str) -> PairwiseJudgement:
 
 def test_stamp_group_cost_puts_full_cost_on_first_judgement_only() -> None:
     """First judgement carries the full call cost; siblings carry $0."""
-    judgements = [_judgement("anchor", "m1"), _judgement("anchor", "m2"), _judgement("anchor", "m3")]
+    judgements = [
+        _judgement("anchor", "m1"),
+        _judgement("anchor", "m2"),
+        _judgement("anchor", "m3"),
+    ]
 
     stamped = stamp_group_cost(judgements, call_cost_usd=0.03, group_id="anchor")
 

@@ -21,6 +21,7 @@ from langres.core.blockers.all_pairs import (
     register_schema_idempotent,
     schema_to_factory,
 )
+from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import VectorIndex
 from langres.core.models import ERCandidate
 from langres.core.registry import (
@@ -499,6 +500,75 @@ class VectorBlocker(Blocker[SchemaT]):
                         blocker_name="vector_blocker",
                         similarity_score=float(similarity),
                     )
+
+    def stream_groups(self, data: list[Any]) -> Iterator[ERCandidateGroup[SchemaT]]:
+        """Generate anchor + k-nearest-neighbor groups natively (W1.0, E3).
+
+        Unlike the base ``Blocker.stream_groups()`` default (which derives
+        groups from a pairwise stream and is anchor-skewed), this is a NATIVE
+        implementation: VectorBlocker's kNN search is already per-anchor, so
+        each entity's own search result IS its group -- no derivation, no
+        skew. One group is yielded per entity, with its k nearest neighbors
+        (excluding itself) as members.
+
+        Args:
+            data: List of raw data items (typically dicts). The schema_factory
+                transforms these into SchemaT objects.
+
+        Yields:
+            ERCandidateGroup[SchemaT] objects containing:
+            - anchor: One entity from ``data``
+            - members: Its k nearest neighbors (excluding itself)
+            - group_id: The anchor's ``id``
+
+        Raises:
+            RuntimeError: If index has not been built via create_index().
+
+        Note:
+            You must call vector_index.create_index(texts) before calling
+            this method, exactly as for stream().
+
+        Note:
+            Empty datasets or single-entity datasets produce no groups.
+
+        Note:
+            The pairs recoverable by flattening these groups back to
+            (anchor, member) edges are exactly the pairs stream() would
+            yield -- no dupes, no losses (CEO #14; verified by property test,
+            see tests/core/blockers/test_vector.py). This holds because
+            stream()'s per-pair dedup only ever *suppresses* a duplicate
+            direction of an edge already covered by some entity's neighbor
+            search -- it never adds an edge no entity's search produced.
+        """
+        if not self._index_is_built():
+            raise RuntimeError(
+                "Index not built. Call vector_index.create_index(texts) "
+                "before blocker.stream_groups(data).\n\n"
+                "Example:\n"
+                "    texts = [record['name'] for record in data]\n"
+                "    blocker.vector_index.create_index(texts)\n"
+                "    groups = list(blocker.stream_groups(data))"
+            )
+
+        if len(data) == 0:
+            return
+
+        entities = [self.schema_factory(record) for record in data]
+
+        if len(entities) <= 1:
+            return
+
+        k = min(self.k_neighbors + 1, len(entities))
+        _distances, indices = self.vector_index.search_all(k, query_prompt=self.query_prompt)
+
+        for i in range(len(entities)):
+            neighbor_indices = indices[i][1:]  # Skip index 0 (self)
+            members = [entities[int(j)] for j in neighbor_indices]
+            yield ERCandidateGroup(
+                anchor=entities[i],
+                members=members,
+                group_id=entities[i].id,  # type: ignore[attr-defined]
+            )
 
     def inspect_candidates(
         self,

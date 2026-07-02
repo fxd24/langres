@@ -433,7 +433,132 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `left_id: str`
 - `right_id: str`
 - `score: float`: The combined score (0.0 to 1.0).
-- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", ...]`: What kind of score is this? Critical for calibration and clustering.
+- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Critical for calibration and clustering. `prob_fs`/`prob_rf`/`prob_group_llm` (added W1.0) are reserved for a Fellegi-Sunter judge, an sklearn RandomForest judge, and a set-wise (group) judge respectively — none are implemented in core yet, but the literal is open for the branches that add them.
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
+
+## 8. Group + Fit Contracts (W1.0)
+
+W1.0 froze two interfaces that later branches (a set-wise `SelectJudge`, a
+`FellegiSunterJudge`, an `RFJudge`) build against, without shipping any of
+those judges themselves: this section documents the contracts, not a method.
+
+### ERCandidateGroup[SchemaT] (`langres.core.groups`)
+
+The set-wise counterpart to `ERCandidate`: "one anchor + K candidate
+members" instead of one pair.
+
+- `anchor: SchemaT`
+- `members: list[SchemaT]`
+- `group_id: str`
+
+`derive_groups_from_pairs(candidates)` derives groups from an existing
+pairwise `ERCandidate` stream by grouping on each pair's `left` entity. It is
+**buffered and anchor-skewed**: an entity that never appears as `left` (e.g.
+because an upstream blocker canonicalizes pair order by id) never becomes an
+anchor. It is lossless over *pairs* despite the skew (flattening the derived
+groups back to canonical pairs recovers exactly the input pair set — no
+dupes, no losses), but it is **not** representative of a blocker's true
+candidate structure, so it must not be used to benchmark a set-wise judge.
+
+### Blocker.stream_groups() (`langres.core.blocker`)
+
+- **Default** (inherited by every `Blocker` subclass): derives groups from
+  `self.stream(data)` via `derive_groups_from_pairs` — buffered/skew-prone,
+  as above. Exists so every blocker gets a working `stream_groups()` for
+  free; not for benchmark use.
+- **`VectorBlocker.stream_groups()`** overrides this natively: its kNN search
+  is already per-anchor, so each entity's own search result IS its group —
+  one group per entity, its k nearest neighbors (excluding itself) as
+  members, no derivation, no skew. This is the implementation a set-wise
+  judge should be benchmarked against.
+
+Both forms satisfy the same pairs-equivalence property: the pairs
+recoverable from `stream_groups()` equal the pairs from `stream()`, with no
+duplicates and no losses.
+
+### GroupwiseModule (`langres.core.module`)
+
+`GroupwiseModule` **is a `Module`** — it does not introduce a parallel
+execution path. Its concrete `forward()` derives groups internally from
+whatever pairwise `ERCandidate` stream it receives (via
+`derive_groups_from_pairs`, the same buffered default as above — `forward()`
+only ever sees a flat pairwise stream, never the blocker object, so it
+cannot reach a blocker's native grouping) and dispatches to the abstract
+`forward_groups()`, decomposing the result back to `Iterator[PairwiseJudgement]`.
+Concrete set-wise judges implement only `forward_groups()` and
+`inspect_scores()`. Because the group structure never leaves `forward()`,
+the Resolver execution spine (`Resolver._judgements` → `module.forward`),
+`inspect_scores`, the JudgementLog boundary, and benchmark dispatch
+(`BudgetedModuleRunner`, `run_method`) all work unchanged.
+
+```python
+class SelectJudge(GroupwiseModule[MySchema]):
+    def forward_groups(self, groups: Iterator[ERCandidateGroup[MySchema]]) -> Iterator[PairwiseJudgement]:
+        for group in groups:
+            # One LLM call per group: "which of these K candidates match the anchor?"
+            selected_ids = self._call_llm(group)
+            judgements = [
+                PairwiseJudgement(
+                    left_id=group.anchor.id,
+                    right_id=member.id,
+                    score=1.0 if member.id in selected_ids else 0.0,
+                    score_type="prob_group_llm",
+                    decision_step="select_judge",
+                    provenance={},
+                )
+                for member in group.members
+            ]
+            yield from stamp_group_cost(judgements, call_cost_usd=self._last_call_cost, group_id=group.group_id)
+
+    def inspect_scores(self, judgements, sample_size=10):
+        ...
+```
+
+### Group-call cost convention (E5)
+
+One LLM call scores a whole group (K pairs). Pricing each of the K resulting
+judgements at the call's full cost would silently overcount total spend by a
+factor of K. `stamp_group_cost(judgements, call_cost_usd, group_id)`
+(`langres.core.module`) applies the fix: the full `call_cost_usd` goes on the
+**first** judgement's `provenance["cost_usd"]`, every sibling gets `$0`, and
+`provenance["group_id"]` is set on all of them. Existing cost aggregation
+(`_judgement_cost`/`_cost_track` in `langres.core.benchmark`, which already
+read `provenance["cost_usd"]`) then sums a group to exactly one call's cost
+with no changes on their end.
+
+**Atomicity caveat:** `BudgetedModuleRunner` scores exactly one `ERCandidate`
+per `module.forward()` call. A `GroupwiseModule` run through it today derives
+a single, trivial, size-1 group per call — so a group is never *split*
+mid-call (there is never more than one pair per call to split), but a real
+multi-pair group is also not yet *batched* into one priced call: no cost
+amortization happens through the runner yet. Extending the runner (or adding
+a group-aware variant) to pre-flight and price whole groups atomically is
+deferred to the branch that lands the first concrete `GroupwiseModule`.
+
+### Fit hooks (`langres.core.fit`)
+
+Two runtime-checkable, structural `Protocol`s — **not** abstract methods on
+`Module` (that would break every existing, non-learnable module):
+
+- `SupervisedFitMixin.fit(candidates: Iterator[ERCandidate[SchemaT]], labels: Sequence[bool]) -> None`
+- `UnsupervisedFitMixin.fit_unlabeled(candidates: Iterator[ERCandidate[SchemaT]]) -> None`
+
+A module opts in by implementing the method with the matching name — no
+subclassing required. `Resolver.fit(data, labels=None)` detects this with
+`isinstance(module, SupervisedFitMixin)` / `isinstance(module, UnsupervisedFitMixin)`:
+
+- Module implements `SupervisedFitMixin`: `labels` is required; omitting it
+  **raises** (a genuinely trainable module silently not being trained is the
+  exact footgun this hook exists to prevent).
+- Module implements `UnsupervisedFitMixin`: `fit_unlabeled` is called
+  unconditionally; passing `labels` to it raises (they would otherwise be
+  silently ignored).
+- Module implements **neither** hook (e.g. `WeightedAverageJudge`): `fit()`
+  is a no-op returning `self` — the original sklearn-style symmetry is
+  preserved for non-learnable pipelines — unless `labels` was passed, which
+  raises rather than silently discarding them.
+
+No concrete judge implements either hook yet; `FellegiSunterJudge` and
+`RFJudge` (a later branch) are the first.

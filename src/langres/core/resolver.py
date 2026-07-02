@@ -35,7 +35,7 @@ the helpers normalize the dict-vs-model and property-vs-method differences.
 import inspect
 import logging
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, Self, TypeGuard
 
@@ -46,8 +46,9 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.judges.weighted_average import WeightedAverageJudge
-from langres.core.models import PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.registry import get_component
 from langres.core.serialization import (
@@ -371,23 +372,77 @@ class Resolver:
     # Running the pipeline
     # ------------------------------------------------------------------
 
-    def fit(self, data: list[Any]) -> Self:
-        """No-op fit for sklearn-style symmetry; returns self.
+    def fit(self, data: list[Any], labels: Sequence[bool] | None = None) -> Self:
+        """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
-        M0 components are not learned — the heuristic scorer and thresholds are
-        fixed. Optimization (Optuna over thresholds/weights, DSPy over prompts)
-        lands in M3+, at which point ``fit`` will tune the pipeline on labeled
-        data. It exists now so callers can write ``resolver.fit(data).resolve(data)``
-        without branching on whether the pipeline is learnable.
+        Delegates to the module's fit hook when it implements one of the two
+        runtime-checkable Protocols in :mod:`langres.core.fit` (W1.0, E6):
+
+        - :class:`~langres.core.fit.UnsupervisedFitMixin`
+          (``fit_unlabeled(candidates)``): called unconditionally with the
+          blocked (and, if a comparator is configured, comparison-attached)
+          candidate stream. ``labels`` is not used by this path.
+        - :class:`~langres.core.fit.SupervisedFitMixin`
+          (``fit(candidates, labels)``): called with ``labels`` when given;
+          **raises** rather than silently skipping training when ``labels``
+          is omitted -- a genuinely trainable module that never gets
+          trained is exactly the silent-no-op footgun this hook exists to
+          prevent.
+
+        When the module implements **neither** hook, this is a no-op that
+        returns ``self`` -- unchanged sklearn-style symmetry so callers can
+        write ``resolver.fit(data).resolve(data)`` for non-learnable
+        pipelines (e.g. ``WeightedAverageJudge``) without branching -- UNLESS
+        ``labels`` was passed, in which case it raises rather than silently
+        discarding them.
+
+        Args:
+            data: Raw records (dicts) in a stable list order, same shape as
+                ``resolve()``/``predict()`` accept.
+            labels: Gold match/non-match labels, positionally aligned with the
+                blocked candidates. Required (and only used) when the module
+                implements ``SupervisedFitMixin``.
+
+        Returns:
+            ``self``, so ``resolver.fit(data).resolve(data)`` chains.
+
+        Raises:
+            ValueError: If the module implements ``SupervisedFitMixin`` and
+                ``labels`` is omitted, or if ``labels`` is given but the
+                module implements neither fit hook.
         """
+        if isinstance(self.module, SupervisedFitMixin):
+            if labels is None:
+                raise ValueError(
+                    f"{type(self.module).__name__} requires labeled data: pass "
+                    "labels=<Sequence[bool] aligned with the blocked candidates> "
+                    "to fit()."
+                )
+            self.module.fit(self._candidates(data), labels)
+            return self
+        if isinstance(self.module, UnsupervisedFitMixin):
+            if labels is not None:
+                raise ValueError(
+                    f"{type(self.module).__name__} does not support fit(labels=...): "
+                    "it implements UnsupervisedFitMixin, which trains without labels "
+                    "(fit_unlabeled) -- drop the labels= argument."
+                )
+            self.module.fit_unlabeled(self._candidates(data))
+            return self
+        if labels is not None:
+            raise ValueError(
+                f"{type(self.module).__name__} does not support fit(labels=...): "
+                "it implements neither SupervisedFitMixin nor UnsupervisedFitMixin."
+            )
         return self
 
-    def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
-        """Block records into candidates and score them into judgements.
+    def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
+        """Block records into candidates, attaching comparisons if configured.
 
         Builds an index-backed blocker's index transparently before streaming,
         so callers never call ``create_index`` themselves. Records are fed in
-        the caller's stable list order.
+        the caller's stable list order. Shared by ``_judgements`` (scoring)
+        and ``fit`` (training) -- both need the same candidate stream.
         """
         self._ensure_index_built(records)
         candidates = self.blocker.stream(records)
@@ -397,7 +452,11 @@ class Resolver:
                 c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
                 for c in candidates
             )
-        return self.module.forward(candidates)
+        return candidates
+
+    def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
+        """Block records into candidates and score them into judgements."""
+        return self.module.forward(self._candidates(records))
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.

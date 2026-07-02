@@ -61,9 +61,7 @@ class _SupervisedModule(Module[CompanySchema]):
     ) -> ScoreInspectionReport:
         raise NotImplementedError
 
-    def fit(
-        self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]
-    ) -> None:
+    def fit(self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]) -> None:
         self.fit_calls.append((len(list(candidates)), labels))
 
 
@@ -87,7 +85,7 @@ class _UnsupervisedModule(Module[CompanySchema]):
         self.fit_unlabeled_calls.append(len(list(candidates)))
 
 
-class ProductSchema(BaseModel):
+class WidgetSchema(BaseModel):
     """Second schema for schema-agnostic verification."""
 
     id: str
@@ -167,14 +165,14 @@ def test_fit_raises_when_labels_given_to_unsupervised_module() -> None:
 
 
 def test_fit_is_schema_agnostic_with_product_schema() -> None:
-    """The fit() delegation logic works identically for a ProductSchema pipeline."""
+    """The fit() delegation logic works identically for a WidgetSchema pipeline."""
 
-    class _ProductUnsupervisedModule(Module[ProductSchema]):
+    class _ProductUnsupervisedModule(Module[WidgetSchema]):
         def __init__(self) -> None:
             self.called = False
 
         def forward(
-            self, candidates: Iterator[ERCandidate[ProductSchema]]
+            self, candidates: Iterator[ERCandidate[WidgetSchema]]
         ) -> Iterator[PairwiseJudgement]:
             yield from ()
 
@@ -183,13 +181,13 @@ def test_fit_is_schema_agnostic_with_product_schema() -> None:
         ) -> ScoreInspectionReport:
             raise NotImplementedError
 
-        def fit_unlabeled(self, candidates: Iterator[ERCandidate[ProductSchema]]) -> None:
+        def fit_unlabeled(self, candidates: Iterator[ERCandidate[WidgetSchema]]) -> None:
             self.called = True
             list(candidates)
 
     module = _ProductUnsupervisedModule()
     resolver = Resolver(
-        blocker=AllPairsBlocker(schema=ProductSchema),
+        blocker=AllPairsBlocker(schema=WidgetSchema),
         comparator=None,
         module=module,
         clusterer=Clusterer(threshold=0.5),

@@ -20,11 +20,7 @@ def pairs_from_groups(groups: Iterable[Any]) -> set[frozenset[str]]:
     Flattens each group into (anchor, member) edges. Used opposite
     :func:`pairs_from_candidates` in the pairs-equivalence property tests.
     """
-    return {
-        frozenset([group.anchor.id, member.id])
-        for group in groups
-        for member in group.members
-    }
+    return {frozenset([group.anchor.id, member.id]) for group in groups for member in group.members}
 
 
 # Add shared fixtures here as needed

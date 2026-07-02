@@ -830,6 +830,20 @@ class BudgetedModuleRunner:
     Live run statistics are reset at the start of every :meth:`run` call and so
     describe only the most recent call: :attr:`total_spent_usd`,
     :attr:`labeled_count`, :attr:`skipped_count`, :attr:`dropped_by_cap_count`.
+
+    Group-call atomicity (W1.0, E5): :meth:`run` scores exactly ONE candidate
+    per ``module.forward()`` call (see point 3 above). A
+    :class:`~langres.core.module.GroupwiseModule` given a single candidate
+    derives a single, trivial, size-1 group from it -- so under this runner
+    a group is NEVER split mid-call (there is never more than one pair per
+    call to split), but a real multi-pair group is also never batched into
+    one priced call: no cost amortization happens yet. See
+    ``tests/core/test_benchmark.py::test_runner_never_splits_a_group_mid_call_but_also_never_batches_one``
+    for the pinned-down behavior. Extending this runner (or adding a
+    group-aware variant) to pre-flight and price whole groups atomically is
+    deferred to W1.1, the branch that lands the first concrete
+    ``GroupwiseModule`` (``SelectJudge``) and can measure the real call-count
+    reduction this is for.
     """
 
     def __init__(

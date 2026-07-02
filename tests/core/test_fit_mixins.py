@@ -62,9 +62,7 @@ class _SupervisedModule(Module[CompanySchema]):
     ) -> ScoreInspectionReport:
         raise NotImplementedError
 
-    def fit(
-        self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]
-    ) -> None:
+    def fit(self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]) -> None:
         self.fit_calls.append((list(candidates), labels))
 
 
