@@ -381,6 +381,112 @@ def test_resolver_rebuilds_vector_index_on_new_corpus() -> None:
     assert resolver.blocker.vector_index._corpus_texts == expected_texts_b  # type: ignore[attr-defined]
 
 
+def _composite_vector_resolver(op: str = "union") -> "object":
+    """Build a Resolver whose top-level blocker is a CompositeBlocker wrapping a
+    KeyBlocker and a VectorBlocker (FakeEmbedder, fast). Mirrors the flagship
+    "recall-first key + vector union" pattern documented in the blocking-algebra
+    example and TECHNICAL_OVERVIEW.
+    """
+    from langres.core import (
+        Clusterer,
+        Comparator,
+        CompositeBlocker,
+        FAISSIndex,
+        FakeEmbedder,
+        KeyBlocker,
+        Resolver,
+        VectorBlocker,
+        WeightedAverageJudge,
+    )
+    from langres.core.models import CompanySchema
+
+    index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
+    vector_blocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=index,
+        schema=CompanySchema,
+        text_field="name",
+        k_neighbors=5,
+    )
+    key_blocker: KeyBlocker[CompanySchema] = KeyBlocker(
+        schema=CompanySchema,
+        key_field="address",
+    )
+    composite: CompositeBlocker[CompanySchema] = CompositeBlocker(
+        children=[key_blocker, vector_blocker],
+        op=op,  # type: ignore[arg-type]
+    )
+    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    return Resolver(
+        blocker=composite,
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.7),
+    )
+
+
+@pytest.mark.parametrize("op", ["union", "intersection", "difference"])
+def test_resolver_builds_nested_vector_index_inside_composite_blocker(op: str) -> None:
+    """resolve() must build a VectorBlocker's index even when it is nested inside
+    a CompositeBlocker used as the top-level Resolver.blocker.
+
+    Regression for a reviewer-caught bug: ``_ensure_index_built`` only checked
+    ``isinstance(self.blocker, VectorBlocker)`` at the top level, so a composed
+    ``CompositeBlocker(children=[KeyBlocker(...), VectorBlocker(...)])`` crashed
+    with ``RuntimeError: Index not built...`` on first ``resolve()`` -- breaking
+    this PR's own flagship documented pattern. Covers all three composite ops,
+    since the fix must not depend on which algebra op is selected.
+    """
+    resolver = _composite_vector_resolver(op=op)
+    nested_vector_blocker = resolver.blocker.children[1]  # type: ignore[attr-defined]
+    assert not nested_vector_blocker._index_is_built()
+    clusters = resolver.resolve(COMPANY_RECORDS)
+    assert nested_vector_blocker._index_is_built()
+    assert isinstance(clusters, list)
+
+
+def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blockers() -> None:
+    """The index-build traversal recurses through nested CompositeBlockers, not
+    just one level -- a CompositeBlocker may itself wrap another CompositeBlocker
+    (e.g. union of two intersections).
+    """
+    from langres.core import (
+        Clusterer,
+        Comparator,
+        CompositeBlocker,
+        FAISSIndex,
+        FakeEmbedder,
+        KeyBlocker,
+        Resolver,
+        VectorBlocker,
+        WeightedAverageJudge,
+    )
+    from langres.core.models import CompanySchema
+
+    index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
+    vector_blocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=index,
+        schema=CompanySchema,
+        text_field="name",
+        k_neighbors=5,
+    )
+    key_blocker_a: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="address")
+    key_blocker_b: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="phone")
+    inner = CompositeBlocker(children=[key_blocker_a, vector_blocker], op="union")
+    outer = CompositeBlocker(children=[inner, key_blocker_b], op="union")
+
+    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    resolver = Resolver(
+        blocker=outer,
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.7),
+    )
+
+    assert not vector_blocker._index_is_built()
+    resolver.resolve(COMPANY_RECORDS)
+    assert vector_blocker._index_is_built()
+
+
 def test_resolver_roundtrip_with_faiss_state(tmp_path: Path) -> None:
     """An index-backed Resolver persists + restores its FAISS state (sidecar)."""
     from langres.core import Resolver

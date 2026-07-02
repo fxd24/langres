@@ -36,8 +36,18 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # the type. Keep in sync with any module kept off the eager-import path — e.g.
 # ``dspy_judge``, which would otherwise import ``dspy`` (and open its disk cache)
 # on plain ``import langres.core``.
+#
+# ``key_blocker``/``composite_blocker``/``correlation_clusterer`` are ALSO
+# eager-imported today (``core/__init__.py``, mirroring ``AllPairsBlocker``/
+# ``VectorBlocker``/``LLMJudge``), so this entry is currently redundant for
+# them -- it exists so a saved artifact referencing these types keeps resolving
+# once those eager imports are trimmed (planned packaging-dx work), the same
+# safety net ``select_judge``/``dspy_judge`` already rely on.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
+    "composite_blocker": "langres.core.blockers.composite",
+    "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.modules.dspy_judge",
+    "key_blocker": "langres.core.blockers.key",
     "select_judge": "langres.core.modules.select_judge",
 }
 

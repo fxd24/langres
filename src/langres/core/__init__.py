@@ -9,8 +9,11 @@ from langres.core import benchmark, metrics, optimizers
 from langres.core.adapters.glinker import GLinkerAdapter
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
+from langres.core.blockers.composite import CompositeBlocker
+from langres.core.blockers.key import KeyBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.comparator import Comparator, StringComparator
 from langres.core.debugging import (
     CandidateStats,
@@ -83,6 +86,8 @@ __all__ = [
     "ComparisonLevel",
     "ComparisonVector",
     "ComponentSpec",
+    "CompositeBlocker",
+    "CorrelationClusterer",
     "derive_groups_from_pairs",
     "EmbeddingProvider",
     "EmbeddingScoreJudge",
@@ -102,6 +107,7 @@ __all__ = [
     "GLinkerAdapter",
     "GroupwiseModule",
     "JudgementLog",
+    "KeyBlocker",
     "LLMJudge",
     "LoggingModule",
     "metrics",
