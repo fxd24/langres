@@ -38,6 +38,7 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # on plain ``import langres.core``.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "dspy_judge": "langres.core.modules.dspy_judge",
+    "select_judge": "langres.core.modules.select_judge",
 }
 
 

@@ -438,11 +438,14 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
 
-## 8. Group + Fit Contracts (W1.0)
+## 8. Group + Fit Contracts (W1.0) + SelectJudge (W1.1)
 
-W1.0 froze two interfaces that later branches (a set-wise `SelectJudge`, a
-`FellegiSunterJudge`, an `RFJudge`) build against, without shipping any of
-those judges themselves: this section documents the contracts, not a method.
+W1.0 froze two interfaces that later branches build against: this section
+documents the contracts. W1.1 shipped the first concrete `GroupwiseModule` —
+`SelectJudge` (`langres.core.modules.select_judge`) — proving the contract
+against a real set-wise judge; `FellegiSunterJudge` / `RFJudge` (trained
+judges over `ComparisonVector`, a later branch) still build against the
+contracts below without shipping yet.
 
 ### ERCandidateGroup[SchemaT] (`langres.core.groups`)
 
@@ -507,6 +510,9 @@ the Resolver execution spine (`Resolver._judgements` → `module.forward`),
 (`BudgetedModuleRunner`, `run_method`) all work unchanged.
 
 ```python
+# Illustrative pseudocode predating the shipped implementation below --
+# `self._call_llm` / `self._last_call_cost` are placeholders, not real
+# SelectJudge attributes (see the real cost/call plumbing in select_judge.py).
 class SelectJudge(GroupwiseModule[MySchema]):
     def forward_groups(self, groups: Iterator[ERCandidateGroup[MySchema]]) -> Iterator[PairwiseJudgement]:
         for group in groups:
@@ -528,6 +534,21 @@ class SelectJudge(GroupwiseModule[MySchema]):
     def inspect_scores(self, judgements, sample_size=10):
         ...
 ```
+
+**Shipped (W1.1):** `langres.core.modules.select_judge.SelectJudge` is the
+real implementation of the skeleton above — a DSPy `ChainOfThought` over a
+`SelectSignature` asking the LLM to select **at most one** matching candidate
+id per group (mirroring ComEM's own "selecting" strategy: Wang et al., COLING
+2025, choosing "the" single most-likely match, not an arbitrary subset). A
+malformed response, a selection naming a candidate outside the group, or a
+selection of more than one candidate (`select_error`, CEO #12) all map to
+whole-group "no match" judgements carrying `provenance["select_error"]` —
+never a raised exception. Selectable by name as `"select_judge"` in
+`langres.methods` (the benchmark/method-registry dispatch site only — not
+wired into `Resolver.from_schema(judge=...)` or the verbs' `judge="auto"`
+dispatch, since it is not yet part of the zero-label default path). See
+`data/benchmarks/w1/W1_RESULTS.md` for the measured call-count/cost reduction
+(35.56x on Amazon-Google) and group-size distribution.
 
 ### Group-call cost convention (E5)
 
