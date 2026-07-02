@@ -30,7 +30,11 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        # --all-extras: the full non-integration suite exercises VectorBlocker/
+        # LLMJudge/RFJudge/etc. (the [semantic]/[llm]/[trained] extras), which
+        # W0.4 made optional at runtime but which CI still needs installed to
+        # run those tests.
+        run: uv sync --all-extras
 
       - name: Run unit tests and collect coverage
         run: uv run pytest -m "not integration"

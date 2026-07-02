@@ -30,7 +30,9 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        # --all-extras: scan the [semantic]/[llm] extras' dependencies (torch,
+        # litellm, faiss, ...) too, not just the core-only dependency set.
+        run: uv sync --all-extras
 
       # pip-audit and guarddog are ADVISORY signals, not merge gates. The hard
       # supply-chain controls are the exclude-newer 7-day quarantine (pyproject)
