@@ -17,9 +17,10 @@ usable/swappable/tunable by anyone.
 
 ## ⚠️ Project Status — early POC, moving fast
 
-This is an **early proof-of-concept**, not a stable release. The three-verb DX
-layer (`link` / `dedupe`) and the `Resolver` core are **real and runnable
-today**; much of the surrounding vision is still roadmap. This README documents
+This is an **early proof-of-concept**, not a stable release. The verb DX layer
+(`link` / `dedupe` — two verbs today; a third, incremental one lands with M5)
+and the `Resolver` core are **real and runnable today**; much of the surrounding
+vision is still roadmap. This README documents
 **only what runs today**, and clearly labels what is roadmap. For the direction,
 see [docs/ROADMAP.md](docs/ROADMAP.md); for current scope, [docs/POC.md](docs/POC.md).
 
@@ -65,8 +66,8 @@ uv run python examples/quickstart_verbs.py
 
 ## Quickstart: `dedupe()` and `link()`
 
-The three-verb DX layer resolves records with **zero labels**, **offline by
-default**, in a handful of lines — no schema, no API key, no model download
+The two verbs (`link`, `dedupe`) resolve records with **zero labels**, **offline
+by default**, in a handful of lines — no schema, no API key, no model download
 required (the toy input below stays on the free `"string"` judge):
 
 ```python

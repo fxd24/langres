@@ -9,8 +9,9 @@
 > `data.ReviewQueue`, `data.SyntheticGenerator`, `Clusterer(constraints=...)`,
 > and `Blocker.stream_against` / `Resolver.link` **as working code**.
 >
-> **What actually ships today** for the use cases below is the three-verb DX
-> layer + `Resolver` + `langres.core` primitives:
+> **What actually ships today** for the use cases below is the verb DX layer
+> (`link` / `dedupe` — two verbs; a third, incremental one is roadmap for M5) +
+> `Resolver` + `langres.core` primitives:
 >
 > - **Deduplication (UC1):** ✅ `langres.dedupe(records)` or
 >   `Resolver.from_schema(schema).resolve(records)`.

@@ -12,7 +12,7 @@
 
 ## Project Overview
 
-**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a two-layer API (high-level tasks and low-level core components).
+**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: user-facing **verbs** (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over low-level **`langres.core`** primitives. (Note: there is no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
 
 **Current Stage**: We are at the **initial POC (Proof of Concept) stage**. Before building the full framework, we are validating the core architecture through three progressively sophisticated approaches:
 1. Classical string matching (rapidfuzz baseline)
@@ -35,28 +35,39 @@ load only when you read/edit a file matching their `paths:`.
 
 **Path-scoped:**
 - `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
-- `component-design.md` *(`src/**`)* — two-layer API, design principles, lightweight & composable / SRP, common patterns, adding components.
+- `component-design.md` *(`src/**`)* — the layered API (verbs → Resolver → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the three judge-dispatch sites).
 - `testing.md` *(`tests/**`)* — 100% coverage, markers, human-like dev-iteration loop.
 - `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
 ## Skills
 
-- `prompting-claude-4` — expert guidance for prompting Claude 4.x models (XML patterns, behavioral fixes, extended thinking). Use when writing system prompts for the LLM judge / flows, or any agent definition.
+- `prompting-claude-4` — expert guidance for prompting Claude 4.x models (XML patterns, behavioral fixes, extended thinking). Use when writing system prompts for the LLM judge / matching modules, or any agent definition.
 
 ## Project Structure
 
 ```
 langres/
 ├── src/langres/
-│   ├── core/           # Low-level API (Module, Blocker, Optimizer, Clusterer, Canonicalizer)
-│   ├── tasks/          # High-level API (DeduplicationTask, EntityLinkingTask)
-│   ├── flows/          # Pre-built matching logic (CompanyFlow, ProductFlow)
-│   ├── blockers/       # Candidate generation (DedupeBlocker, LinkingBlocker)
-│   └── data/           # Synthetic data generation
+│   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── core/           # Low-level primitives + the Resolver
+│   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
+│   │   ├── presets.py      # judge presets ("auto"/string/embedding/zero_shot_llm), spend cap
+│   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
+│   │   ├── comparator.py           # StringComparator, ComparisonVector
+│   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, etc.
+│   │   ├── clusterer.py            # Clusterer (transitive closure)
+│   │   ├── calibration.py          # derive_threshold
+│   │   └── optimizers/             # BlockerOptimizer (Optuna)
+│   ├── methods.py      # method registry / _make_module_builder (benchmark path)
+│   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 ├── tests/              # Test suite
-├── examples/           # Usage examples
+├── examples/           # Usage examples (quickstart_verbs.py is the offline quickstart)
 └── docs/               # Documentation
 ```
+
+**Not built yet** (roadmap — do not reference as existing): `tasks`/`flows`
+modules, `Canonicalizer`, a general `Optimizer`, a synthetic data generator.
 
 ## Dependencies
 
@@ -86,7 +97,6 @@ The `.agent/` folder contains external expert analyses of the langres project:
 
 - **`docs/ROADMAP.md`** ⭐ **DIRECTION** — the post-POC vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones M0–M6. Read alongside `POC.md` before planning new work.
 - **`docs/POC.md`** ⭐ **START HERE** — current development stage and priorities; the three approaches; success criteria; what's in scope NOW vs. later. Read before any implementation work.
-- **`docs/PROJECT_OVERVIEW.md`** — architecture and philosophy; the "why" behind design decisions; component relationships; the two-layer API.
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.

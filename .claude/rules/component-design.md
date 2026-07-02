@@ -120,9 +120,17 @@ Extract when you see:
 1. **Blockers**: Must implement candidate generation (`stream`) and schema
    normalization.
 2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
-   Register a new method by adding one branch in
-   `methods.py:_make_module_builder` so `Resolver.from_schema` / the verbs can
-   select it.
+   There is **no single registration seam yet** — a new *public, name-selectable*
+   judge must be wired into **all three** dispatch sites, or it will be rejected
+   by whichever path doesn't know it:
+   - `methods.py:_make_module_builder` — the benchmark / method-registry path.
+   - `core/resolver.py:_build_module_for_judge` — what `Resolver.from_schema(judge=...)`
+     dispatches on.
+   - `core/presets.py:build_judge` — what the verbs (`link` / `dedupe`, incl.
+     `"auto"`) dispatch on.
+   (A single public method-registration API that collapses these is deferred to
+   issue #55; see `TODOS.md`.) A judge you only ever pass as a `Module` instance
+   — `dedupe(records, judge=MyJudge(...))` — needs none of this wiring.
 3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
    blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
    the user-facing sugar over it.
