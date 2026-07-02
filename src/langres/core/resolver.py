@@ -36,7 +36,7 @@ import inspect
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Self, TypeGuard
+from typing import Any, Literal, Self, TypeGuard
 
 from pydantic import BaseModel
 
@@ -60,6 +60,55 @@ logger = logging.getLogger(__name__)
 
 # Slot names used as sidecar subdirectory names and for manifest ordering.
 _MANIFEST_FILENAME = "resolver.json"
+
+#: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
+#: than ``langres.core.presets.JudgeName`` -- no ``"auto"``, since resolving
+#: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
+#: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
+#: constructor argument.
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm"]
+
+
+def _build_module_for_judge(
+    judge: "_FromSchemaJudge | Module[Any]",
+    comparator: Comparator[Any],
+    *,
+    model: str | None,
+    entity_noun: str,
+) -> Module[Any]:
+    """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
+
+    A small, deliberately self-contained switch: ``langres.core.presets``
+    (which builds on top of ``Resolver``) is NOT imported here, since that
+    would create a ``Resolver -> presets -> Resolver`` cycle -- see the
+    dependency diagram in this module's docstring. The three branches below
+    duplicate a little of ``presets.build_judge``'s logic; that duplication is
+    the price of keeping the layering one-directional (``verbs -> presets ->
+    Resolver``), not an oversight.
+    """
+    if isinstance(judge, Module):
+        return judge
+    if judge == "string":
+        return WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    if judge == "embedding":
+        from langres.core.judges.embedding_score import EmbeddingScoreJudge
+
+        return EmbeddingScoreJudge()
+    if judge == "zero_shot_llm":
+        # Lazy: dspy must stay out of sys.modules unless this judge is chosen.
+        from langres.clients.openrouter import dspy_price_per_1k
+        from langres.core.modules.dspy_judge import DSPyJudge
+
+        resolved_model = model or "openrouter/openai/gpt-4o-mini"
+        dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
+        dspy_module.price_per_1k_tokens = dspy_price_per_1k(resolved_model)
+        return dspy_module
+    raise ValueError(
+        f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
+        "'string', 'embedding', 'zero_shot_llm', or pass a Module instance. "
+        "'auto' key-based resolution is a verbs-layer feature -- use "
+        "langres.link/langres.dedupe for that."
+    )
 
 
 def _component_config_dict(obj: object) -> dict[str, object]:
@@ -214,6 +263,9 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
+        judge: "_FromSchemaJudge | Module[Any]" = "string",
+        model: str | None = None,
+        entity_noun: str = "entity",
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
@@ -232,6 +284,13 @@ class Resolver:
                 floor.
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
+            judge: ``"string"`` (default -- identical to pre-existing
+                behavior), ``"embedding"``, ``"zero_shot_llm"``, or a
+                ``Module`` instance. This is the low-level, explicit switch
+                (no ``"auto"`` key-based resolution and no spend cap -- that
+                magic lives in ``langres.link``/``langres.dedupe``).
+            model: Model id override for ``judge="zero_shot_llm"``.
+            entity_noun: Domain noun woven into the LLM judge's prompt.
 
         Returns:
             A ready-to-run Resolver.
@@ -241,12 +300,11 @@ class Resolver:
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
+        module = _build_module_for_judge(judge, comparator, model=model, entity_noun=entity_noun)
         return cls(
             blocker=AllPairsBlocker(schema=schema),
             comparator=comparator,
-            # The judge scores on the same FeatureSpecs (weights) the comparator
-            # compares on, so the comparison vector and the weights line up.
-            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+            module=module,
             clusterer=Clusterer(threshold=threshold),
         )
 
