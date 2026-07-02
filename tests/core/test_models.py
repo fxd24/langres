@@ -297,6 +297,26 @@ class TestPairwiseJudgement:
             )
             assert judgement.score_type == score_type
 
+    def test_pairwise_judgement_accepts_w1_score_types(self):
+        """PairwiseJudgement accepts the W1.0-added score_type literals (E11).
+
+        prob_fs (Fellegi-Sunter), prob_rf (RandomForest), and prob_group_llm
+        (set-wise judges, e.g. SelectJudge) are additive: existing literals are
+        unaffected (see test_pairwise_judgement_all_score_types above).
+        """
+        from langres.core.models import PairwiseJudgement
+
+        for score_type in ["prob_fs", "prob_rf", "prob_group_llm"]:
+            judgement = PairwiseJudgement(
+                left_id="c1",
+                right_id="c2",
+                score=0.5,
+                score_type=score_type,
+                decision_step="test",
+                provenance={},
+            )
+            assert judgement.score_type == score_type
+
     def test_pairwise_judgement_invalid_score_type(self):
         """PairwiseJudgement should reject invalid score_type values."""
         from langres.core.models import PairwiseJudgement

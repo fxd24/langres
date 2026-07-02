@@ -107,7 +107,15 @@ class PairwiseJudgement(BaseModel):
     left_id: str
     right_id: str
     score: float = Field(..., ge=0.0, le=1.0)
-    score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob"]
+    score_type: Literal[
+        "sim_cos",
+        "prob_llm",
+        "heuristic",
+        "calibrated_prob",
+        "prob_fs",
+        "prob_rf",
+        "prob_group_llm",
+    ]
     decision_step: str
     reasoning: str | None = None
     provenance: dict[str, Any]

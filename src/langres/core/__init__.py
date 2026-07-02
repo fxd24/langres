@@ -28,6 +28,8 @@ from langres.core.embeddings import (
     SparseEmbeddingProvider,
 )
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
+from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
+from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
 from langres.core.indexes import (
     FAISSIndex,
     FakeHybridVectorIndex,
@@ -43,7 +45,7 @@ from langres.core.models import (
     ERCandidate,
     PairwiseJudgement,
 )
-from langres.core.module import Module
+from langres.core.module import GroupwiseModule, Module, stamp_group_cost
 
 # Importing LLMJudge here ensures its ``@register("llm_judge")`` runs on plain
 # ``import langres.core`` — so a fresh process doing ``Resolver.load(path)`` on
@@ -80,10 +82,12 @@ __all__ = [
     "ComparisonLevel",
     "ComparisonVector",
     "ComponentSpec",
+    "derive_groups_from_pairs",
     "EmbeddingProvider",
     "EmbeddingScoreJudge",
     "EntityProtocol",
     "ERCandidate",
+    "ERCandidateGroup",
     "ErrorExample",
     "FAISSIndex",
     "FakeEmbedder",
@@ -95,6 +99,7 @@ __all__ = [
     "get_component",
     "get_schema",
     "GLinkerAdapter",
+    "GroupwiseModule",
     "LLMJudge",
     "metrics",
     "Module",
@@ -110,8 +115,11 @@ __all__ = [
     "SentenceTransformerEmbedder",
     "SerializableState",
     "SparseEmbeddingProvider",
+    "stamp_group_cost",
     "StringComparator",
+    "SupervisedFitMixin",
     "UnknownComponentType",
+    "UnsupervisedFitMixin",
     "VectorBlocker",
     "VectorIndex",
     "WeightedAverageJudge",

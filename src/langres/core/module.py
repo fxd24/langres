@@ -11,6 +11,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.reports import ScoreInspectionReport
 
@@ -178,3 +179,122 @@ class Module(ABC, Generic[SchemaT]):
             ScoreInspectionReport with statistics, examples, and recommendations
         """
         pass  # pragma: no cover
+
+
+class GroupwiseModule(Module[SchemaT], ABC):
+    """A Module whose scoring logic naturally operates on GROUPS, not pairs (W1.0, E2).
+
+    GroupwiseModule **IS-A** Module: its concrete :meth:`forward` derives
+    ``ERCandidateGroup`` groups internally from the pairwise ``ERCandidate``
+    stream it receives (via :func:`~langres.core.groups.derive_groups_from_pairs`)
+    and dispatches to the abstract :meth:`forward_groups`, decomposing its
+    output back to a flat ``Iterator[PairwiseJudgement]``. This is a
+    deliberate design choice, not an accident: it means the existing Resolver
+    execution spine (``Resolver._judgements`` -> ``module.forward``),
+    :meth:`Module.inspect_scores`, the JudgementLog boundary, and benchmark
+    dispatch (``BudgetedModuleRunner``, ``run_method``) all keep working with
+    **zero changes** -- there is no parallel, group-aware execution path.
+
+    Concrete set-wise judges (e.g. a future ComEM-style ``SelectJudge`` that
+    asks one LLM call "which of these K candidates match the anchor?" instead
+    of K separate pairwise calls) implement only :meth:`forward_groups` and
+    :meth:`Module.inspect_scores`. Set-wise IN, pairwise OUT: the group
+    structure never leaks past this class's boundary, so the clusterer, the
+    metrics harness, and every other pairwise-only downstream consumer needs
+    no changes either.
+
+    Note:
+        The default grouping this class applies to its ``forward()`` input is
+        the same buffered/skew-prone derivation documented on
+        ``Blocker.stream_groups()`` / ``derive_groups_from_pairs`` -- because
+        ``forward()`` only ever sees a flat pairwise stream (whatever the
+        Resolver's blocker produced via ``stream()``), never the blocker
+        object itself, so it cannot reach a blocker's *native* per-anchor
+        grouping (e.g. ``VectorBlocker.stream_groups()``). Benchmarking a
+        set-wise judge against a blocker's true group structure requires
+        driving it via that blocker's ``stream_groups()`` directly, not
+        through this class's derived default.
+    """
+
+    def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
+        """Group the pairwise stream internally, then dispatch to forward_groups().
+
+        Args:
+            candidates: Stream of normalized entity pairs, e.g. from a
+                Blocker's ``stream()``.
+
+        Yields:
+            PairwiseJudgement objects, exactly as any other Module -- the
+            set-wise grouping is an internal implementation detail invisible
+            to callers of ``forward()``.
+        """
+        groups = derive_groups_from_pairs(candidates)
+        yield from self.forward_groups(groups)
+
+    @abstractmethod
+    def forward_groups(
+        self, groups: Iterator[ERCandidateGroup[SchemaT]]
+    ) -> Iterator[PairwiseJudgement]:
+        """Compare each group's anchor against its members and yield judgements.
+
+        This is the set-wise counterpart to :meth:`Module.forward`. Concrete
+        implementations should yield one ``PairwiseJudgement`` per
+        (anchor, member) pair evaluated -- typically all members of a group,
+        so the output covers the same pairs the input groups covered.
+
+        Args:
+            groups: Stream of anchor + K-candidate-member groups.
+
+        Yields:
+            PairwiseJudgement objects with scores and full provenance, same
+            contract as :meth:`Module.forward`. When a single call produces
+            judgements for a whole group, use
+            :func:`stamp_group_cost` to apply the group-call cost convention.
+        """
+        pass  # pragma: no cover
+
+
+def stamp_group_cost(
+    judgements: list[PairwiseJudgement],
+    call_cost_usd: float,
+    group_id: str,
+) -> list[PairwiseJudgement]:
+    """Apply the group-call cost convention to one group's judgements (E5).
+
+    One LLM call spans a whole group (K pairs); naively pricing each of the K
+    resulting judgements at the call's full cost would silently overcount
+    total spend by a factor of K. This convention avoids that: the FULL
+    ``call_cost_usd`` is stamped onto the FIRST judgement's
+    ``provenance["cost_usd"]``, every sibling gets ``$0``, and
+    ``provenance["group_id"]`` is set on ALL of them (so results stay
+    traceable back to their source call regardless of cost placement).
+    Existing cost aggregation (``langres.core.benchmark._judgement_cost`` /
+    ``_cost_track``, which already read ``provenance["cost_usd"]``) then sums
+    a group to exactly one call's cost with no changes on their end.
+
+    Args:
+        judgements: The judgements produced from ONE call spanning ONE group,
+            in any order. Must be non-empty.
+        call_cost_usd: The measured (or priced) cost of the single call that
+            produced all of these judgements.
+        group_id: Identifier of the source group, e.g. the group's
+            ``ERCandidateGroup.group_id``.
+
+    Returns:
+        New ``PairwiseJudgement`` objects (the originals are not mutated)
+        with ``provenance["cost_usd"]``/``provenance["group_id"]`` set per the
+        convention above; all other provenance keys are preserved.
+
+    Raises:
+        ValueError: If ``judgements`` is empty (there is no "first" judgement
+            to carry the cost).
+    """
+    if not judgements:
+        raise ValueError("stamp_group_cost requires at least one judgement")
+
+    stamped = []
+    for index, judgement in enumerate(judgements):
+        cost = call_cost_usd if index == 0 else 0.0
+        new_provenance = {**judgement.provenance, "cost_usd": cost, "group_id": group_id}
+        stamped.append(judgement.model_copy(update={"provenance": new_provenance}))
+    return stamped

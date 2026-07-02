@@ -21,6 +21,7 @@ from langres.core.blockers.all_pairs import (
     register_schema_idempotent,
     schema_to_factory,
 )
+from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import VectorIndex
 from langres.core.models import ERCandidate
 from langres.core.registry import (
@@ -499,6 +500,92 @@ class VectorBlocker(Blocker[SchemaT]):
                         blocker_name="vector_blocker",
                         similarity_score=float(similarity),
                     )
+
+    def stream_groups(self, data: list[Any]) -> Iterator[ERCandidateGroup[SchemaT]]:
+        """Generate anchor + k-nearest-neighbor groups natively (W1.0, E3).
+
+        Unlike the base ``Blocker.stream_groups()`` default (which derives
+        groups from a pairwise stream and is anchor-skewed), this is a NATIVE
+        implementation: VectorBlocker's kNN search is already per-anchor, so
+        each entity's own search result IS its group -- no derivation, no
+        skew. One group is yielded per entity, with its (deduplicated) k
+        nearest neighbors as members.
+
+        Args:
+            data: List of raw data items (typically dicts). The schema_factory
+                transforms these into SchemaT objects.
+
+        Yields:
+            ERCandidateGroup[SchemaT] objects containing:
+            - anchor: One entity from ``data``
+            - members: Its nearest neighbors not already claimed by an
+              earlier anchor's group (see the dedup note below)
+            - group_id: The anchor's ``id``
+
+        Raises:
+            RuntimeError: If index has not been built via create_index().
+
+        Note:
+            You must call vector_index.create_index(texts) before calling
+            this method, exactly as for stream().
+
+        Note:
+            Empty datasets or single-entity datasets produce no groups.
+
+        Note:
+            Cross-anchor dedup, matching stream()'s semantics exactly: a
+            single ``seen_pairs`` set is threaded across all entities (same
+            iteration order, same first-seen-wins rule stream() uses), so
+            each undirected pair is assigned to exactly ONE group -- whichever
+            anchor is processed first. Without this, two mutual nearest
+            neighbors (A's nearest neighbor is B AND B's nearest neighbor is
+            A -- common with real ANN indexes on near-duplicate records) would
+            otherwise appear as a member edge in BOTH groups, and a consumer
+            issuing one call per group (e.g. a future SelectJudge) would
+            emit and charge for the same undirected pair twice.
+
+            The pairs recoverable by flattening these groups back to
+            (anchor, member) edges are therefore exactly the pairs stream()
+            would yield, with NO duplicates and NO losses (CEO #14 + E5;
+            verified by property test, see tests/core/blockers/test_vector.py).
+        """
+        if not self._index_is_built():
+            raise RuntimeError(
+                "Index not built. Call vector_index.create_index(texts) "
+                "before blocker.stream_groups(data).\n\n"
+                "Example:\n"
+                "    texts = [record['name'] for record in data]\n"
+                "    blocker.vector_index.create_index(texts)\n"
+                "    groups = list(blocker.stream_groups(data))"
+            )
+
+        if len(data) == 0:
+            return
+
+        entities = [self.schema_factory(record) for record in data]
+
+        if len(entities) <= 1:
+            return
+
+        k = min(self.k_neighbors + 1, len(entities))
+        _distances, indices = self.vector_index.search_all(k, query_prompt=self.query_prompt)
+
+        seen_pairs: set[frozenset[str]] = set()
+        for i in range(len(entities)):
+            neighbor_indices = indices[i][1:]  # Skip index 0 (self)
+            members = []
+            for j in neighbor_indices:
+                j = int(j)  # Convert numpy.int64 to int
+                pair_key = frozenset([entities[i].id, entities[j].id])  # type: ignore[attr-defined]
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                members.append(entities[j])
+            yield ERCandidateGroup(
+                anchor=entities[i],
+                members=members,
+                group_id=entities[i].id,  # type: ignore[attr-defined]
+            )
 
     def inspect_candidates(
         self,
