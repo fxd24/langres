@@ -7,10 +7,12 @@ judge="auto" against a real key, and never past construction for a bare
 "zero_shot_llm" string).
 """
 
+import inspect
 import math
 import subprocess
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +20,7 @@ from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
 from langres.clients.openrouter import BudgetExceeded
+from langres.core.judgement_log import JudgementLog
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.modules.dspy_judge import DSPyJudge
@@ -26,6 +29,7 @@ from langres.verbs import (
     DedupeResult,
     LinkVerdict,
     _check_no_duplicate_ids,
+    _coerce_log,
     _coerce_scalar,
     _field_union,
     _infer,
@@ -467,6 +471,122 @@ class TestLinkEmbeddingJudge:
         assert verdict.score > 0.99
         assert verdict.score_type == "sim_cos"
         assert verdict.judge_used == "embedding"
+
+
+# ---------------------------------------------------------------------------
+# log= (W0.2 JudgementLog signal seam): opt-in, kwarg-only, zero overhead when
+# omitted (E10 boundary-component wrapper -- see langres.core.judgement_log).
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceLog:
+    def test_none_stays_none(self) -> None:
+        assert _coerce_log(None) is None
+
+    def test_judgementlog_instance_passes_through(self, tmp_path: Path) -> None:
+        log = JudgementLog(tmp_path / "log.jsonl")
+        assert _coerce_log(log) is log
+
+    def test_path_or_str_is_wrapped_in_a_judgementlog(self, tmp_path: Path) -> None:
+        coerced = _coerce_log(tmp_path / "log.jsonl")
+        assert isinstance(coerced, JudgementLog)
+        assert coerced.path == tmp_path / "log.jsonl"
+
+
+class TestDedupeWithLog:
+    def test_writes_a_jsonl_log_that_round_trips(self, tmp_path: Path) -> None:
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corporation"},
+            {"id": "3", "name": "Totally Unrelated Restaurant"},
+        ]
+        log_path = tmp_path / "run.jsonl"
+        result = dedupe(records, judge="string", threshold=0.5, log=log_path)
+
+        rows = JudgementLog(log_path).read()
+        assert len(rows) == 3  # C(3,2) all-pairs candidates
+        assert all(row["v"] == 1 for row in rows)
+        assert {"1", "2"} in result
+
+    def test_accepts_a_judgementlog_instance_directly(self, tmp_path: Path) -> None:
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corporation"},
+        ]
+        log = JudgementLog(tmp_path / "run.jsonl")
+        dedupe(records, judge="string", threshold=0.5, log=log)
+        assert len(log.read()) == 1
+
+    def test_verdict_agrees_with_the_resolved_threshold(self, tmp_path: Path) -> None:
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corporation"},
+            {"id": "3", "name": "Totally Unrelated Restaurant"},
+        ]
+        log = JudgementLog(tmp_path / "run.jsonl")
+        dedupe(records, judge="string", threshold=0.5, log=log)
+        rows = {(row["left_id"], row["right_id"]): row for row in log.read()}
+        assert rows[("1", "2")]["verdict"] is True
+        assert rows[("1", "3")]["verdict"] is False
+
+    def test_features_true_includes_the_judge_provenance(self, tmp_path: Path) -> None:
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corporation"},
+        ]
+        log = JudgementLog(tmp_path / "run.jsonl", features=True)
+        dedupe(records, judge="string", threshold=0.5, log=log)
+        row = log.read()[0]
+        assert "similarities" in row["provenance"]
+
+    def test_empty_input_never_touches_the_log(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "run.jsonl"
+        dedupe([], log=log_path)
+        assert not log_path.exists()
+
+    def test_log_omitted_is_identical_to_log_none(self) -> None:
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corporation"},
+            {"id": "3", "name": "Totally Unrelated Restaurant"},
+        ]
+        without_kwarg = dedupe(records, judge="string", threshold=0.5)
+        with_none = dedupe(records, judge="string", threshold=0.5, log=None)
+        assert list(without_kwarg) == list(with_none)
+        assert without_kwarg.judge_used == with_none.judge_used
+        assert without_kwarg.score_type == with_none.score_type
+
+
+class TestLinkWithLog:
+    def test_writes_one_row_matching_the_verdict(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "run.jsonl"
+        verdict = link(
+            {"id": "a", "name": "Acme Corporation"},
+            {"id": "b", "name": "Acme Corporation"},
+            judge="string",
+            threshold=0.5,
+            log=log_path,
+        )
+        rows = JudgementLog(log_path).read()
+        assert len(rows) == 1
+        assert rows[0]["left_id"] == "a"
+        assert rows[0]["right_id"] == "b"
+        assert rows[0]["verdict"] == verdict.match
+
+    def test_log_omitted_is_identical_to_log_none(self) -> None:
+        a = {"id": "a", "name": "Acme Corporation"}
+        b = {"id": "b", "name": "Acme Corporation"}
+        without_kwarg = link(a, b, judge="string", threshold=0.5)
+        with_none = link(a, b, judge="string", threshold=0.5, log=None)
+        assert without_kwarg.match == with_none.match
+        assert without_kwarg.score == pytest.approx(with_none.score)
+
+
+def test_log_param_is_keyword_only_on_both_verbs() -> None:
+    for fn in (link, dedupe):
+        params = inspect.signature(fn).parameters
+        assert "log" in params
+        assert params["log"].kind == inspect.Parameter.KEYWORD_ONLY
 
 
 # ---------------------------------------------------------------------------
