@@ -66,9 +66,7 @@ def test_lazy_component_modules_includes_new_w1_3_components() -> None:
 
     assert _LAZY_COMPONENT_MODULES["key_blocker"] == "langres.core.blockers.key"
     assert _LAZY_COMPONENT_MODULES["composite_blocker"] == "langres.core.blockers.composite"
-    assert (
-        _LAZY_COMPONENT_MODULES["correlation_clusterer"] == "langres.core.clusterers.correlation"
-    )
+    assert _LAZY_COMPONENT_MODULES["correlation_clusterer"] == "langres.core.clusterers.correlation"
 
 
 @pytest.mark.slow
