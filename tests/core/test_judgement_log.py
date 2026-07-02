@@ -130,6 +130,11 @@ class TestJudgementLogAppend:
         row = log.read()[0]
         datetime.fromisoformat(row["timestamp"])  # raises if malformed
 
+    def test_append_creates_missing_parent_directories(self, tmp_path: Path) -> None:
+        log = JudgementLog(tmp_path / "nested" / "run" / "log.jsonl")
+        log.append(_judgement(), verdict=True)
+        assert len(log.read()) == 1
+
     def test_append_default_excludes_reasoning_and_provenance(self, tmp_path: Path) -> None:
         log = JudgementLog(tmp_path / "log.jsonl")
         log.append(

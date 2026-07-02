@@ -37,6 +37,7 @@ from langres.core.indexes import (
     QdrantHybridIndex,
     VectorIndex,
 )
+from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import (
@@ -100,7 +101,9 @@ __all__ = [
     "get_schema",
     "GLinkerAdapter",
     "GroupwiseModule",
+    "JudgementLog",
     "LLMJudge",
+    "LoggingModule",
     "metrics",
     "Module",
     "optimizers",
