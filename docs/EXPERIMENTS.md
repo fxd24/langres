@@ -130,9 +130,46 @@ it does not throttle the LM. For a hard pre-flight cap on the run itself, wrap t
 judge in a `BudgetedModuleRunner` and pass it to `evaluate_judge_on_candidates`. On
 the zero-spend `DummyLM` path both report **$0.00**.
 
+## Signal log — the flywheel inlet (`JudgementLog`)
+
+`link()`/`dedupe()` take an opt-in, keyword-only `log=` (a
+`langres.JudgementLog` or a path — `None` by default, zero overhead):
+
+```python
+from langres import JudgementLog, dedupe
+
+log = JudgementLog("runs/judgements.jsonl")
+result = dedupe(records, judge="string", threshold=0.6, log=log)
+
+rows = log.read()  # round-trips every line written
+```
+
+Every judge call appends one JSON line: pair ids, `score`, `verdict`
+(`score >= threshold`, the same cutoff the verb itself used), `model`,
+`cost_usd`, `decision_step`, `timestamp`, and a schema-version field `"v": 1`
+(so a future format change can branch on it). Record content is **off by
+default** — pass `JudgementLog(path, features=True)` to additionally log
+`reasoning` and the judge's raw `provenance` (comparison levels,
+similarities, token counts, ...): this may contain PII (the record content a
+judge reasoned over), and JSONL is plaintext on disk.
+
+Implementation note: `JudgementLog` is a plain file sink, not a `Module`.
+`log=` wraps the resolved judge in a `LoggingModule` — a small boundary
+component (the same pattern `_SpendCappedModule` uses) that logs each
+`PairwiseJudgement` as it streams past without materializing the whole
+judgement stream. It is intentionally excluded from `Resolver` artifacts —
+`link()`/`dedupe()` never persist their internal resolver, so this isn't a
+durability gap in practice.
+
+This is the flywheel's inlet: a future milestone (W2.4) harvests these logs
+(plus a `corrections.jsonl` contract) into labeled pairs feeding
+`derive_threshold` and `fit()` — see `examples/judgement_log_demo.py` for the
+runnable write-then-read walkthrough.
+
 ## See also
 
 - `examples/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
 - `examples/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
 - `examples/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
+- `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
 - `examples/m3_race.py` / `examples/m3_zero_spend_race.py` — multi-method races.

@@ -28,6 +28,12 @@ Both verbs share one small contract:
   resolves to a sane per-judge default; pass ``threshold=`` explicitly to
   override, or derive one from labels with
   :func:`~langres.core.calibration.derive_threshold`.
+- ``log=`` (opt-in, ``None`` by default -- zero overhead) records every judge
+  call to a JSONL file via :class:`~langres.core.judgement_log.JudgementLog`
+  -- the flywheel inlet later harvested (W2.4) into training pairs for
+  :func:`~langres.core.calibration.derive_threshold` and ``fit()``. See
+  :mod:`langres.core.judgement_log` for the record shape and the
+  ``features=True`` opt-in (PII note).
 
 Known limitation: an *inferred* schema is ephemeral (a dynamically created
 class, not importable by name) -- a ``dedupe()``/``link()`` call built on one
@@ -41,12 +47,14 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
 from langres.core.blockers.all_pairs import schema_to_factory
 from langres.core.comparator import Comparator
+from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.presets import (
@@ -241,6 +249,17 @@ def _resolved_threshold(judge_used: str, threshold: float | None) -> float:
     return _THRESHOLDS.get(judge_used, 0.5) if threshold is None else threshold
 
 
+def _coerce_log(log: JudgementLog | str | Path | None) -> JudgementLog | None:
+    """Normalize ``log=`` to a :class:`JudgementLog` (W0.2): ``None`` stays
+    ``None`` (zero overhead -- no wrap); a path is wrapped in a fresh,
+    default (``features=False``) :class:`JudgementLog`; an existing
+    :class:`JudgementLog` (e.g. constructed with ``features=True``) passes
+    through unchanged."""
+    if log is None or isinstance(log, JudgementLog):
+        return log
+    return JudgementLog(log)
+
+
 # ---------------------------------------------------------------------------
 # link()
 # ---------------------------------------------------------------------------
@@ -256,6 +275,7 @@ def link(
     entity_noun: str = "entity",
     threshold: float | None = None,
     budget_usd: float | None = None,
+    log: JudgementLog | str | Path | None = None,
 ) -> LinkVerdict:
     """Decide whether two records refer to the same real-world entity.
 
@@ -274,6 +294,9 @@ def link(
         threshold: Match cutoff; ``None`` resolves to the judge's default.
         budget_usd: Spend cap override (default $1; see
             :mod:`langres.core.presets`).
+        log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
+            or a path (wrapped in a default one). ``None`` (default): no
+            logging, zero overhead. See :mod:`langres.core.judgement_log`.
 
     Returns:
         A :class:`LinkVerdict`.
@@ -309,7 +332,13 @@ def link(
                 update={"comparison": comparator.compare(left_entity, right_entity)}
             )
 
-    judgements = list(module.forward(iter([candidate])))
+    resolved_threshold = _resolved_threshold(judge_used, threshold)
+    log_sink = _coerce_log(log)
+    scorer_module: Module[Any] = module
+    if log_sink is not None:
+        scorer_module = LoggingModule(module, log=log_sink, threshold=resolved_threshold)
+
+    judgements = list(scorer_module.forward(iter([candidate])))
     if not judgements:
         raise RuntimeError(
             f"the {judge_used!r} judge produced no judgement for this pair; every "
@@ -319,7 +348,7 @@ def link(
     judgement = judgements[0]
 
     return LinkVerdict(
-        match=judgement.score >= _resolved_threshold(judge_used, threshold),
+        match=judgement.score >= resolved_threshold,
         score=judgement.score,
         reasoning=judgement.reasoning,
         judge_used=judge_used,
@@ -343,6 +372,7 @@ def dedupe(
     entity_noun: str = "entity",
     threshold: float | None = None,
     budget_usd: float | None = None,
+    log: JudgementLog | str | Path | None = None,
 ) -> DedupeResult:
     """Group a batch of records into entity clusters.
 
@@ -360,6 +390,9 @@ def dedupe(
         threshold: Clusterer threshold; ``None`` resolves to the judge's
             default.
         budget_usd: Spend cap override (default $1).
+        log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
+            or a path (wrapped in a default one). ``None`` (default): no
+            logging, zero overhead. See :mod:`langres.core.judgement_log`.
 
     Returns:
         A :class:`DedupeResult` (a ``list[set[str]]`` of entity-id clusters).
@@ -389,6 +422,13 @@ def dedupe(
         n_records=len(resolved_records),
         budget_usd=budget_usd,
     )
+    log_sink = _coerce_log(log)
+    if log_sink is not None:
+        resolved.resolver.module = LoggingModule(
+            resolved.resolver.module,
+            log=log_sink,
+            threshold=resolved.resolver.clusterer.threshold,
+        )
     judgements = resolved.resolver.predict(resolved_records)
     clusters = resolved.resolver.clusterer.cluster(judgements)
     score_type = judgements[0].score_type if judgements else resolved.score_type
