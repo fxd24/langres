@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.reports import ScoreInspectionReport
@@ -117,6 +118,17 @@ class LoggingModule(Module[Any]):
     match cutoff the calling verb (``link``/``dedupe``) already resolved for
     its own ``score >= threshold`` decision, so the logged verdict always
     agrees with what the caller acted on.
+
+    Wrapping a spend-capped module (e.g.
+    :class:`~langres.core.presets._SpendCappedModule`, as ``link``/``dedupe``
+    do): the judgement that trips the cap is recorded on the raised
+    ``BudgetExceeded.partial_judgements`` but never yielded (the cap raises
+    *before* yielding it -- E9's "set by the catcher, not at raise time"
+    pattern). A ``LoggingModule`` sitting outside that cap would otherwise
+    silently drop exactly the paid call the flywheel most needs. ``forward``
+    catches ``BudgetExceeded`` and logs any trailing ``partial_judgements``
+    entries not already logged (tracked by count, so nothing is logged
+    twice) before re-raising the exception unmodified.
     """
 
     def __init__(self, module: Module[Any], *, log: JudgementLog, threshold: float) -> None:
@@ -125,9 +137,16 @@ class LoggingModule(Module[Any]):
         self._threshold = threshold
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
-        for judgement in self._module.forward(candidates):
-            self._log.append(judgement, verdict=judgement.score >= self._threshold)
-            yield judgement
+        logged = 0
+        try:
+            for judgement in self._module.forward(candidates):
+                self._log.append(judgement, verdict=judgement.score >= self._threshold)
+                logged += 1
+                yield judgement
+        except BudgetExceeded as exc:
+            for judgement in exc.partial_judgements[logged:]:
+                self._log.append(judgement, verdict=judgement.score >= self._threshold)
+            raise
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10

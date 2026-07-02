@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from langres.clients.openrouter import BudgetExceeded
 from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
@@ -58,6 +59,30 @@ class _CountingModule(Module[object]):
         for judgement in self._judgements:
             self.pulled += 1
             yield judgement
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError
+
+
+class _BudgetBreachingModule(Module[object]):
+    """Yields ``yielded``, then raises ``BudgetExceeded`` whose
+    ``partial_judgements`` also carries ``tripping`` -- the judgement that
+    was produced (and paid for) but never yielded, mirroring
+    ``core.presets._SpendCappedModule``'s raise-before-yield behavior on the
+    call that crosses the cap."""
+
+    def __init__(self, yielded: list[PairwiseJudgement], tripping: PairwiseJudgement) -> None:
+        self._yielded = yielded
+        self._tripping = tripping
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        list(candidates)
+        yield from self._yielded
+        exc = BudgetExceeded("budget exceeded")
+        exc.partial_judgements = [*self._yielded, self._tripping]
+        raise exc
 
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
@@ -259,3 +284,54 @@ class TestLoggingModule:
         report = wrapped.inspect_scores([_judgement()], sample_size=3)
 
         assert report.total_judgements == 1
+
+
+class TestLoggingModuleBudgetExceeded:
+    """Regression (codex review, PR #62): a paid judgement that trips a
+    ``_SpendCappedModule``'s budget is recorded on ``BudgetExceeded.
+    partial_judgements`` but never yielded (the cap raises before yielding
+    it) -- so a ``LoggingModule`` wrapping the cap must not silently drop it
+    from the log. Every judgement that was actually produced, including the
+    tripping one, must appear in the JSONL exactly once."""
+
+    def test_tripping_judgement_is_logged_before_reraising(self, tmp_path: Path) -> None:
+        yielded = [_judgement("a", "b", 0.9)]
+        tripping = _judgement("c", "d", 0.95)
+        inner = _BudgetBreachingModule(yielded, tripping)
+        log = JudgementLog(tmp_path / "log.jsonl")
+        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+
+        with pytest.raises(BudgetExceeded):
+            list(wrapped.forward(iter([])))
+
+        rows = log.read()
+        assert [(r["left_id"], r["right_id"]) for r in rows] == [("a", "b"), ("c", "d")]
+
+    def test_the_exception_still_carries_partial_judgements_unmodified(
+        self, tmp_path: Path
+    ) -> None:
+        yielded = [_judgement("a", "b", 0.9)]
+        tripping = _judgement("c", "d", 0.95)
+        inner = _BudgetBreachingModule(yielded, tripping)
+        log = JudgementLog(tmp_path / "log.jsonl")
+        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+
+        with pytest.raises(BudgetExceeded) as excinfo:
+            list(wrapped.forward(iter([])))
+
+        assert excinfo.value.partial_judgements == [yielded[0], tripping]
+
+    def test_no_duplicate_rows_when_nothing_was_yielded_before_the_breach(
+        self, tmp_path: Path
+    ) -> None:
+        tripping = _judgement("c", "d", 0.95)
+        inner = _BudgetBreachingModule([], tripping)
+        log = JudgementLog(tmp_path / "log.jsonl")
+        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+
+        with pytest.raises(BudgetExceeded):
+            list(wrapped.forward(iter([])))
+
+        rows = log.read()
+        assert len(rows) == 1
+        assert (rows[0]["left_id"], rows[0]["right_id"]) == ("c", "d")

@@ -556,6 +556,22 @@ class TestDedupeWithLog:
         assert without_kwarg.judge_used == with_none.judge_used
         assert without_kwarg.score_type == with_none.score_type
 
+    def test_budget_breach_still_logs_the_tripping_judgement(self, tmp_path: Path) -> None:
+        """Regression (codex review, PR #62): LoggingModule wraps the
+        already spend-capped module, so without this fix the paid judgement
+        that trips the cap -- recorded on BudgetExceeded.partial_judgements
+        but never yielded -- would be silently missing from the JSONL."""
+        records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
+        log = JudgementLog(tmp_path / "run.jsonl")
+        with pytest.raises(BudgetExceeded) as excinfo:
+            dedupe(records, judge=_CostlyModule(6, 0.5), budget_usd=0.9, log=log)
+        partial = excinfo.value.partial_judgements
+        rows = log.read()
+        assert len(rows) == len(partial) == 2
+        assert [(r["left_id"], r["right_id"]) for r in rows] == [
+            (j.left_id, j.right_id) for j in partial
+        ]
+
 
 class TestLinkWithLog:
     def test_writes_one_row_matching_the_verdict(self, tmp_path: Path) -> None:
@@ -580,6 +596,25 @@ class TestLinkWithLog:
         with_none = link(a, b, judge="string", threshold=0.5, log=None)
         assert without_kwarg.match == with_none.match
         assert without_kwarg.score == pytest.approx(with_none.score)
+
+    def test_budget_breach_still_logs_the_tripping_judgement(self, tmp_path: Path) -> None:
+        """Regression (codex review, PR #62) -- see the matching dedupe() test."""
+        log = JudgementLog(tmp_path / "run.jsonl")
+        with pytest.raises(BudgetExceeded) as excinfo:
+            link(
+                {"id": "a", "name": "X"},
+                {"id": "b", "name": "Y"},
+                judge=_CostlyModule(1, 5.0),
+                budget_usd=1.0,
+                log=log,
+            )
+        partial = excinfo.value.partial_judgements
+        rows = log.read()
+        assert len(rows) == len(partial) == 1
+        assert (rows[0]["left_id"], rows[0]["right_id"]) == (
+            partial[0].left_id,
+            partial[0].right_id,
+        )
 
 
 def test_log_param_is_keyword_only_on_both_verbs() -> None:
