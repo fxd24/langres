@@ -6,7 +6,7 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
-### M4: langres is the seam — DSPy experimentation foundation (zero-spend, in progress)
+### M4: langres is the seam — DSPy experimentation foundation + first paid signal
 
 Reframed from a distillation-metric chase to **building the composable scorer seam we're
 happy to use** — the plumbing to fix M3's cheap-judge precision collapse data-drivenly.
@@ -32,9 +32,16 @@ KISS: the smallest seam that proves the plumbing and yields a first honest signa
   `docs/research/20260701_er_seam_audit.md` + issue #55; two adjustments — a
   frontier-zero-shot null-baseline gate before paid distillation (C7), and promoting the
   set-wise judgement contract (S1) to M4.5.
+- **First paid signal ($2.31/$5 on the 600-pair AG band — `data/benchmarks/m4/M4_RESULTS.md`):**
+  a precision-tuned DSPy **signature** lifts the cheap GLM-5.2 judge from pair-F1
+  **0.409 → 0.757** (precision 0.264 → 0.671), **beating frontier gpt-4o (0.667) at lower
+  cost — uncompiled**. **MIPROv2 compilation did *not* help** (0.757 → 0.746, +$1.63): it
+  overfit its 40-example bootstrap metric, confirming the OpenSanctions caveat. **C7
+  verdict: the lever is the signature, not compilation — cut distillation.** Honest
+  per-pair cost recorded; compiled `Resolver` artifact serialized. Harness
+  `examples/m4_race.py` (resumable, per-cell-committed, budget-capped).
 - **Deferred to M4.5:** set-wise contract (S1), blocking pair-set algebra + embedder
-  sweep, `fit()`-hook trained-judge family (S2). Paid first-light + small compile on
-  Amazon-Google (monitored ≤$5) pending.
+  sweep, `fit()`-hook trained-judge family (S2).
 
 ### M3: The seam — multi-method benchmark race (real-money EXIT)
 

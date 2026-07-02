@@ -24,6 +24,25 @@ The falsifiable M4 question: can a **precision-tuned / compiled cheap judge** (G
 
 - Cheap-judge **precision**: zero-shot 0.264 (M3) -> precision-tuned DSPy baseline **0.671** (Δ +0.407); frontier ceiling 0.541 (gap -0.130).
 
+## Verdict
+
+1. **The lever is the precision-tuned DSPy *signature*, not compilation.** A hand-written,
+   hard-negative signature (via `ChainOfThought`) lifts the cheap GLM-5.2 judge from
+   F1 **0.409 → 0.757** (precision 0.264 → 0.671) and **beats the frontier gpt-4o
+   zero-shot ceiling (0.667) at lower cost** ($0.68 vs $0.91 on this band) — **uncompiled**.
+   The M3 precision collapse was a prompt/signature problem, and the DSPy seam fixes it.
+2. **MIPROv2 compilation did NOT help** — it slightly regressed the uncompiled baseline
+   (0.757 → **0.746**) for an extra **$1.63**. MIPRO scored 100% on its 40-example
+   bootstrap metric but held-out pairwise-F1 went *down* — overfitting the compile metric
+   on a small ER trainset. This **empirically confirms the OpenSanctions caveat**
+   (`docs/research/20260701_er_seam_audit.md`: MIPRO ~1–2 F1, in-context examples
+   neutral-to-negative) on our data. **The C7 gate's deeper answer: distillation/compilation
+   is not the lever here — cut it; invest in the signature.**
+3. **The plumbing works end-to-end paid:** honest per-pair cost is recorded (compile cell
+   $1.6313 from 1,028,300 prompt + 218,123 completion tokens), the compiled `Resolver`
+   artifact serializes to `data/benchmarks/m4/compiled_resolver/`, and the whole run
+   stayed resumable + per-cell-committed under the $5 cap.
+
 ## Spend
 
 - Cumulative committed spend: **$2.3100 / $5.00**.
