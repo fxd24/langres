@@ -38,12 +38,21 @@ call's cost.
 
 **Import-safety:** not eager-imported by ``langres.core`` (mirrors
 ``DSPyJudge`` -- importing ``dspy`` opens a disk cache on import).
+
+**Serialization:** registered under ``"select_judge"`` (lazily -- see
+``langres.core.registry._LAZY_COMPONENT_MODULES``) with a pure ``config``
+(``model``/``temperature``/``entity_noun``, never the DSPy LM), mirroring
+``DSPyJudge``'s no-pickle config-registry contract exactly. Unlike
+``DSPyJudge``, there is no ``compile()``/out-of-band program state here (no
+``save_state``/``load_state``): ``from_config`` alone rebuilds an equivalent,
+uncompiled judge, the same as any other stateless judge (``LLMJudge``,
+``WeightedAverageJudge``).
 """
 
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 import dspy
 from dspy.utils.exceptions import AdapterParseError
@@ -52,6 +61,7 @@ from langres.core.groups import ERCandidateGroup
 from langres.core.models import PairwiseJudgement
 from langres.core.module import GroupwiseModule, SchemaT, stamp_group_cost
 from langres.core.modules.dspy_judge import _salvage_usage
+from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 logger = logging.getLogger(__name__)
@@ -84,6 +94,7 @@ def _signature_for(entity_noun: str) -> Any:
     return SelectSignature.with_instructions(instructions)
 
 
+@register("select_judge")
 class SelectJudge(GroupwiseModule[SchemaT]):
     """ComEM-style set-wise judge: one LLM call per group, not per pair.
 
@@ -95,6 +106,10 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         for j in judge.forward_groups(blocker.stream_groups(records)):
             print(j.score, j.reasoning, j.provenance["cost_usd"])
     """
+
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "select_judge"
 
     def __init__(
         self,
@@ -122,6 +137,25 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         # default (zero-spend tests), pinned by the ``select_judge`` builder in
         # ``langres.methods`` from the OpenRouter price table for real runs.
         self.price_per_1k_tokens = 0.0
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Pure, serializable construction config (never the LM or secrets)."""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "entity_noun": self.entity_noun,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "SelectJudge[SchemaT]":
+        """Rebuild a fresh judge from :attr:`config` (no injected LM; built lazily)."""
+        return cls(
+            lm=None,
+            model=str(config["model"]),
+            temperature=float(config["temperature"]),  # type: ignore[arg-type]
+            entity_noun=str(config["entity_noun"]),
+        )
 
     def _get_lm(self) -> Any:
         """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use."""
