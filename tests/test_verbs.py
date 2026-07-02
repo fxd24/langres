@@ -435,6 +435,29 @@ class TestLink:
         assert verdict.judge_used == "zero_shot_llm"
         assert verdict.score == pytest.approx(0.8)
 
+    def test_zero_shot_llm_unpinned_model_warns_blind_cap_via_link(self) -> None:
+        """M1 regression: link()'s own notice_pre_scoring_cost call site must
+        forward the effective budget too, so an explicit unpinned paid model
+        warns about the blind cap instead of the reassuring $0.0000 estimate
+        (same DummyLM-backed / patched resolve_judge zero-spend seam as
+        test_zero_shot_llm_emits_pre_scoring_notice above)."""
+        fake_resolved = ResolvedModule(
+            _SpendCappedModule(_dummy_judge(match=True, prob=0.8), budget_usd=2.0),
+            "zero_shot_llm",
+            "unknown/model-not-in-table",
+            None,
+        )
+        with (
+            patch("langres.verbs.resolve_judge", return_value=fake_resolved),
+            pytest.warns(UserWarning, match="CANNOT enforce a limit") as record,
+        ):
+            verdict = link(
+                {"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge="auto", budget_usd=2.0
+            )
+        assert "est. cost $0.0000" not in str(record[0].message)
+        assert "$2.00" in str(record[0].message)
+        assert verdict.judge_used == "zero_shot_llm"
+
 
 @pytest.mark.slow
 class TestLinkEmbeddingJudge:

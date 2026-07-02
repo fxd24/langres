@@ -79,6 +79,18 @@ class TestFromSchemaJudgeOptions:
         assert isinstance(resolver.module, DSPyJudge)
         assert resolver.module.model == "openai/gpt-5-mini"
 
+    def test_zero_shot_llm_unpinned_model_warns_blind_cap(self) -> None:
+        """M1 regression: Resolver.from_schema builds an UNCAPPED pipeline
+        (see the judge= docstring caution) -- an unpinned model must not
+        silently self-report $0/pair without any warning, since nothing here
+        would ever stop a runaway bill. Construction only (zero-spend)."""
+        with pytest.warns(UserWarning, match="UNCAPPED pipeline"):
+            resolver = Resolver.from_schema(
+                ResolverJudgeCo, judge="zero_shot_llm", model="unknown/model-not-in-table"
+            )
+        assert isinstance(resolver.module, DSPyJudge)
+        assert resolver.module.price_per_1k_tokens == 0.0
+
     def test_injected_module_instance_used_verbatim(self) -> None:
         injected: DSPyJudge[ResolverJudgeCo] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
         resolver = Resolver.from_schema(ResolverJudgeCo, judge=injected)

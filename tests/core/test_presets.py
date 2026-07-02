@@ -9,6 +9,7 @@ MiniLM model (no API key, no paid call) and are marked ``@pytest.mark.slow``.
 """
 
 from collections.abc import Iterator
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -79,6 +80,37 @@ class _FakeCostlyModule(Module[object]):
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
         raise NotImplementedError
+
+
+class _FakeVectorIndex:
+    """No-op stand-in for a real FAISS index -- create_index does nothing."""
+
+    def create_index(self, texts: list[str]) -> None:
+        pass
+
+
+class _FakeEmptyStreamBlocker:
+    """A fake VectorBlocker whose stream() yields no candidates (L2 test seam).
+
+    Exercises build_embedding_candidate's defensive "no candidate" guard
+    without needing a real, genuinely-broken VectorBlocker -- that case
+    "should never happen" for a real 2-record stream, so it's only reachable
+    by substituting a blocker built this way.
+    """
+
+    vector_index = _FakeVectorIndex()
+
+    @staticmethod
+    def schema_factory(record: dict[str, Any]) -> dict[str, Any]:
+        return record
+
+    @staticmethod
+    def text_field_extractor(entity: dict[str, Any]) -> str:
+        return str(entity)
+
+    @staticmethod
+    def stream(records: list[dict[str, Any]]) -> Iterator[ERCandidate[Any]]:
+        return iter(())
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +315,20 @@ class TestNoticeAndEstimate:
         with pytest.warns(UserWarning, match=r"scoring ~10 pairs with '.*', est\. cost \$"):
             notice_pre_scoring_cost(_OPENROUTER_MODEL, 10)
 
-    def test_unpriced_model_estimates_zero_cost(self) -> None:
-        with pytest.warns(UserWarning, match=r"est\. cost \$0\.0000"):
+    def test_unpinned_model_warns_blind_cap_not_reassuring_zero(self) -> None:
+        """M1 regression: an unpinned paid model must never print the
+        reassuring (and false) "est. cost $0.0000" -- the spend cap tallies
+        that same $0 and can never trip, so it's silently blind while
+        OpenRouter still bills. The notice must say so honestly."""
+        with pytest.warns(UserWarning, match=r"CANNOT enforce a limit") as record:
+            notice_pre_scoring_cost("unknown/model-not-in-table", 10, budget_usd=2.5)
+        message = str(record[0].message)
+        assert "est. cost $0.0000" not in message
+        assert "unknown/model-not-in-table" in message
+        assert "$2.50" in message
+
+    def test_unpinned_model_defaults_budget_in_message_when_omitted(self) -> None:
+        with pytest.warns(UserWarning, match=rf"\${DEFAULT_BUDGET_USD:.2f}"):
             notice_pre_scoring_cost("unknown/model-not-in-table", 10)
 
     def test_estimate_all_pairs(self) -> None:
@@ -366,6 +410,25 @@ class TestBuildResolver:
                 n_records=4,
             )
 
+    def test_zero_shot_llm_explicit_unpinned_model_warns_blind_cap(self) -> None:
+        """M1 regression: an explicit judge="zero_shot_llm" with an unpinned
+        model= must warn that the spend cap is blind (construction only --
+        DummyLM-equivalent zero-spend, DSPyJudge is never .forward()ed here),
+        not silently proceed under a reassuring but false $0.0000 estimate."""
+        with pytest.warns(UserWarning, match="CANNOT enforce a limit") as record:
+            build_resolver(
+                PresetCompany,
+                judge="zero_shot_llm",
+                model="unknown/model-not-in-table",
+                entity_noun="e",
+                threshold=None,
+                n_records=4,
+                budget_usd=3.0,
+            )
+        message = str(record[0].message)
+        assert "est. cost $0.0000" not in message
+        assert "$3.00" in message
+
     def test_string_judge_emits_no_notice(self) -> None:
         with warnings_none():
             build_resolver(
@@ -435,3 +498,15 @@ class TestVectorBlockerAndEmbedding:
         candidate = build_embedding_candidate(PresetCompany, left, right)
         assert candidate.similarity_score is not None
         assert candidate.similarity_score < 0.99
+
+
+class TestBuildEmbeddingCandidateNoCandidateGuard:
+    """L2 regression: a bare StopIteration must never leak from next()."""
+
+    def test_empty_blocker_stream_raises_clear_runtime_error(self) -> None:
+        fake_blocker = _FakeEmptyStreamBlocker()
+        with patch("langres.core.presets._build_vector_blocker", return_value=fake_blocker):
+            with pytest.raises(RuntimeError, match="produced no candidate"):
+                build_embedding_candidate(
+                    PresetCompany, {"id": "a", "name": "X"}, {"id": "b", "name": "Y"}
+                )

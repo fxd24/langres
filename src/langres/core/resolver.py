@@ -34,6 +34,7 @@ the helpers normalize the dict-vs-model and property-vs-method differences.
 
 import inspect
 import logging
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal, Self, TypeGuard
@@ -101,7 +102,23 @@ def _build_module_for_judge(
 
         resolved_model = model or DEFAULT_OPENROUTER_MODEL
         dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
-        dspy_module.price_per_1k_tokens = dspy_price_per_1k(resolved_model)
+        price = dspy_price_per_1k(resolved_model)
+        if price == 0.0:
+            # An unpinned model self-reports $0/pair -- honest, not reassuring
+            # (mirrors core.presets.notice_pre_scoring_cost's identical check;
+            # duplicated here for the same layering reason as the rest of this
+            # function). Resolver.from_schema has no spend cap at all (see its
+            # judge= docstring), so this is strictly worse than the verbs'
+            # blind-cap case: nothing would ever stop a runaway bill.
+            warnings.warn(
+                f"model {resolved_model!r} has no pinned price in "
+                "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
+                "$0/pair cost. Resolver.from_schema builds an UNCAPPED pipeline "
+                "(no spend cap at all) -- pin its price in PRICES_PER_1M, or use "
+                "langres.link/langres.dedupe for the built-in spend cap.",
+                stacklevel=3,
+            )
+        dspy_module.price_per_1k_tokens = price
         return dspy_module
     raise ValueError(
         f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
@@ -320,7 +337,12 @@ class Resolver:
                 above), ``"zero_shot_llm"``, or a ``Module`` instance. This is
                 the low-level, explicit switch (no ``"auto"`` key-based
                 resolution and no spend cap -- that magic lives in
-                ``langres.link``/``langres.dedupe``).
+                ``langres.link``/``langres.dedupe``). **Caution**:
+                ``judge="zero_shot_llm"`` (or any other paid ``Module``) built
+                here runs UNCAPPED -- there is no ``budget_usd`` on this
+                method and nothing stops a runaway bill. Use
+                ``langres.link``/``langres.dedupe`` for the built-in
+                ``SpendMonitor`` cap.
             model: Model id override for ``judge="zero_shot_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
 

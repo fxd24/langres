@@ -130,6 +130,11 @@ def _notice(message: str) -> None:
     warnings.warn(message, stacklevel=3)
 
 
+def _effective_budget(budget_usd: float | None) -> float:
+    """Resolve a caller's ``budget_usd=None`` to :data:`DEFAULT_BUDGET_USD` (DRY)."""
+    return DEFAULT_BUDGET_USD if budget_usd is None else budget_usd
+
+
 def choose_auto_judge(settings: Settings) -> tuple[JudgeName, str | None, str | None]:
     """Resolve ``judge="auto"`` from available API keys.
 
@@ -318,7 +323,7 @@ def resolve_judge(
         resolved_model = _OPENROUTER_MODEL
 
     built = build_judge(judge_kind, schema, model=resolved_model, entity_noun=entity_noun)
-    capped_budget = DEFAULT_BUDGET_USD if budget_usd is None else budget_usd
+    capped_budget = _effective_budget(budget_usd)
     capped = _SpendCappedModule(built, budget_usd=capped_budget)
     return ResolvedModule(capped, judge_used, resolved_model, fallback_reason)
 
@@ -361,12 +366,26 @@ def build_embedding_candidate(
     embeds both records' blocking text and attaches the cosine similarity via
     the same ``VectorBlocker``/FAISS path :func:`build_resolver` uses for
     ``dedupe()``, so the two verbs score embeddings identically.
+
+    Raises:
+        RuntimeError: If the blocker yields no candidate for the pair (should
+            never happen for a two-record ``VectorBlocker.stream()`` call --
+            guarded explicitly rather than letting a bare ``StopIteration``
+            leak out of ``next()``, mirroring ``link()``'s identical
+            no-judgement guard for the string/LLM path).
     """
     blocker = _build_vector_blocker(schema)
     entities = [blocker.schema_factory(record) for record in (left, right)]
     texts = [blocker.text_field_extractor(entity) for entity in entities]
     blocker.vector_index.create_index(texts)
-    return next(blocker.stream([left, right]))
+    candidates = list(blocker.stream([left, right]))
+    if not candidates:
+        raise RuntimeError(
+            "the embedding blocker produced no candidate for this pair; a "
+            "VectorBlocker over exactly two records must always yield one. "
+            "This indicates a bug in the vector index/blocker construction."
+        )
+    return candidates[0]
 
 
 def _estimate_n_pairs(n_records: int, *, use_vector: bool) -> int:
@@ -376,15 +395,33 @@ def _estimate_n_pairs(n_records: int, *, use_vector: bool) -> int:
     return n_records * (n_records - 1) // 2
 
 
-def notice_pre_scoring_cost(model: str, n_pairs: int) -> None:
+def notice_pre_scoring_cost(
+    model: str, n_pairs: int, *, budget_usd: float = DEFAULT_BUDGET_USD
+) -> None:
     """Emit the "about to spend money" notice before any paid scoring (D2).
 
     ``est_cost`` is a rough, worst-case-biased estimate
     (:data:`_ESTIMATED_TOKENS_PER_PAIR`) -- the spend cap
     (:class:`_SpendCappedModule`) meters and enforces the REAL cost live, per
     pair, as scoring happens.
+
+    If ``model`` has no pinned price in :data:`PRICES_PER_1M`, DSPyJudge
+    self-reports ``$0`` per pair -- printing "est. cost $0.0000" here would be
+    actively misleading: the spend cap tallies that same ``$0`` and can NEVER
+    trip, so an unpinned model that OpenRouter really bills for would run
+    uncapped in practice while looking capped. Warn honestly about the blind
+    cap instead of the reassuring (and false) zero estimate.
     """
     price_per_1k = dspy_price_per_1k(model)
+    if price_per_1k == 0.0:
+        _notice(
+            f"model {model!r} has no pinned price in "
+            "langres.clients.openrouter.PRICES_PER_1M, so it self-reports $0/pair "
+            f"cost -- the ${budget_usd:.2f} spend cap CANNOT enforce a limit for it "
+            "and will not stop a runaway bill. Pin its price in PRICES_PER_1M, or "
+            "use a model that already is, to get real spend-cap protection."
+        )
+        return
     est_cost = n_pairs * (_ESTIMATED_TOKENS_PER_PAIR / 1000.0) * price_per_1k
     _notice(f"scoring ~{n_pairs} pairs with {model!r}, est. cost ${est_cost:.4f}")
 
@@ -443,7 +480,9 @@ def build_resolver(
 
     if resolved.judge_used == "zero_shot_llm" and resolved.model is not None:
         n_pairs_est = _estimate_n_pairs(n_records, use_vector=use_vector)
-        notice_pre_scoring_cost(resolved.model, n_pairs_est)
+        notice_pre_scoring_cost(
+            resolved.model, n_pairs_est, budget_usd=_effective_budget(budget_usd)
+        )
 
     resolved_threshold = (
         _DEFAULT_THRESHOLDS.get(resolved.judge_used, 0.5) if threshold is None else threshold

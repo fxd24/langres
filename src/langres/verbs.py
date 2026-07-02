@@ -57,6 +57,7 @@ from langres.core.presets import (
     resolve_judge,
 )
 from langres.core.presets import _DEFAULT_THRESHOLDS as _THRESHOLDS
+from langres.core.presets import _effective_budget
 
 __all__ = ["DedupeResult", "LinkVerdict", "dedupe", "link"]
 
@@ -292,7 +293,7 @@ def link(
     )
 
     if judge_used == "zero_shot_llm" and resolved_model is not None:
-        notice_pre_scoring_cost(resolved_model, 1)
+        notice_pre_scoring_cost(resolved_model, 1, budget_usd=_effective_budget(budget_usd))
 
     candidate: ERCandidate[Any]
     if judge_used == "embedding":
