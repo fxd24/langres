@@ -238,9 +238,17 @@ class FellegiSunterJudge(Module[SchemaT]):
                 if sim >= self.agreement_threshold:
                     agree_counts[name] += 1
 
+        # Leave headroom for the m>=u guard's margin (E4/review finding): clamp
+        # u BELOW 1 - _PROB_EPS - _GUARD_EPS, not just 1 - _PROB_EPS. Otherwise
+        # an extremely low-entropy feature (Laplace smoothing can push the raw
+        # estimate arbitrarily close to 1.0 given enough agreeing pairs) makes
+        # ``u_prob[name] + _GUARD_EPS`` exceed the guarded m's own clamp
+        # ceiling in _m_step / the EM fallback, which silently shaves (in the
+        # limit, erases) the guard's promised margin without ever inverting it.
         return {
             name: _clamp(
-                (agree_counts[name] + _LAPLACE_ALPHA) / (total_counts[name] + 2 * _LAPLACE_ALPHA)
+                (agree_counts[name] + _LAPLACE_ALPHA) / (total_counts[name] + 2 * _LAPLACE_ALPHA),
+                high=1.0 - _PROB_EPS - _GUARD_EPS,
             )
             for name in feature_names
         }

@@ -785,8 +785,14 @@ class TestComparatorSemanticsUnchanged:
         assert set(vector.levels.values()) <= {ComparisonLevel.PRESENT, ComparisonLevel.MISSING}
         assert ComparisonLevel.MISMATCH not in vector.levels.values()
 
-    def test_weighted_average_judge_score_byte_identical_to_pre_fs_baseline(self) -> None:
-        """Pin WeightedAverageJudge's score on a fixed fixture (unaffected by this branch)."""
+    def test_weighted_average_judge_score_matches_pre_fs_baseline(self) -> None:
+        """Pin WeightedAverageJudge's score on a fixed fixture (unaffected by this branch).
+
+        Asserted via ``pytest.approx`` against the same expected value as the
+        pre-existing pinned fixture below -- not a literal byte-for-byte
+        comparison of two runs (nit from review: earlier PR-description
+        wording said "byte-identical", which overstated what this checks).
+        """
         from langres.core.judges.weighted_average import WeightedAverageJudge
 
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
