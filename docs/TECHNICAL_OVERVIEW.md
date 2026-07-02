@@ -510,6 +510,9 @@ the Resolver execution spine (`Resolver._judgements` → `module.forward`),
 (`BudgetedModuleRunner`, `run_method`) all work unchanged.
 
 ```python
+# Illustrative pseudocode predating the shipped implementation below --
+# `self._call_llm` / `self._last_call_cost` are placeholders, not real
+# SelectJudge attributes (see the real cost/call plumbing in select_judge.py).
 class SelectJudge(GroupwiseModule[MySchema]):
     def forward_groups(self, groups: Iterator[ERCandidateGroup[MySchema]]) -> Iterator[PairwiseJudgement]:
         for group in groups:

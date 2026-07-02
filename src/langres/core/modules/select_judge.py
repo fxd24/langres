@@ -206,6 +206,10 @@ class SelectJudge(GroupwiseModule[SchemaT]):
             cost = self._cost_usd(prompt_tokens, completion_tokens)
 
             selected_ids = list(prediction.selected_ids)
+            # Unknown-id is checked before the multi-select count: a response with
+            # BOTH an out-of-group id and >1 selection is still exactly one error,
+            # and "not in group" is the more specific, more actionable diagnosis of
+            # the two (it points at which id is wrong, not just how many).
             unknown_ids = [sid for sid in selected_ids if sid not in member_ids]
             if unknown_ids:
                 yield from self._select_error_judgements(
