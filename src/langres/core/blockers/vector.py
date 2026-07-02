@@ -508,8 +508,8 @@ class VectorBlocker(Blocker[SchemaT]):
         groups from a pairwise stream and is anchor-skewed), this is a NATIVE
         implementation: VectorBlocker's kNN search is already per-anchor, so
         each entity's own search result IS its group -- no derivation, no
-        skew. One group is yielded per entity, with its k nearest neighbors
-        (excluding itself) as members.
+        skew. One group is yielded per entity, with its (deduplicated) k
+        nearest neighbors as members.
 
         Args:
             data: List of raw data items (typically dicts). The schema_factory
@@ -518,7 +518,8 @@ class VectorBlocker(Blocker[SchemaT]):
         Yields:
             ERCandidateGroup[SchemaT] objects containing:
             - anchor: One entity from ``data``
-            - members: Its k nearest neighbors (excluding itself)
+            - members: Its nearest neighbors not already claimed by an
+              earlier anchor's group (see the dedup note below)
             - group_id: The anchor's ``id``
 
         Raises:
@@ -532,28 +533,21 @@ class VectorBlocker(Blocker[SchemaT]):
             Empty datasets or single-entity datasets produce no groups.
 
         Note:
-            The SET of pairs recoverable by flattening these groups back to
-            canonical (anchor, member) edges equals the SET of pairs stream()
-            would yield -- no losses (CEO #14; verified by property test, see
-            tests/core/blockers/test_vector.py). This holds because stream()'s
-            per-pair dedup only ever *suppresses* a duplicate direction of an
-            edge already covered by some entity's neighbor search -- it never
-            adds an edge no entity's search produced.
+            Cross-anchor dedup, matching stream()'s semantics exactly: a
+            single ``seen_pairs`` set is threaded across all entities (same
+            iteration order, same first-seen-wins rule stream() uses), so
+            each undirected pair is assigned to exactly ONE group -- whichever
+            anchor is processed first. Without this, two mutual nearest
+            neighbors (A's nearest neighbor is B AND B's nearest neighbor is
+            A -- common with real ANN indexes on near-duplicate records) would
+            otherwise appear as a member edge in BOTH groups, and a consumer
+            issuing one call per group (e.g. a future SelectJudge) would
+            emit and charge for the same undirected pair twice.
 
-            This does NOT mean each pair is covered by exactly one group,
-            though: unlike stream() (which dedups across ALL entities via a
-            single ``seen_pairs`` set), stream_groups() has no cross-anchor
-            state -- each group is one entity's own, true, un-truncated
-            neighbor list. When two entities are mutual nearest neighbors
-            (common with real ANN indexes on near-duplicate records), the
-            same undirected pair appears as a member edge in BOTH of their
-            groups. This is deliberate: truncating a later group to enforce
-            global pair-uniqueness would mean that group no longer represents
-            its anchor's real candidate set. A consumer that treats each
-            group as an independent unit of work (e.g. one LLM call per
-            group) must dedupe by canonical pair across groups if it wants to
-            process/cost each undirected pair exactly once -- see
-            ``test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs``.
+            The pairs recoverable by flattening these groups back to
+            (anchor, member) edges are therefore exactly the pairs stream()
+            would yield, with NO duplicates and NO losses (CEO #14 + E5;
+            verified by property test, see tests/core/blockers/test_vector.py).
         """
         if not self._index_is_built():
             raise RuntimeError(
@@ -576,9 +570,17 @@ class VectorBlocker(Blocker[SchemaT]):
         k = min(self.k_neighbors + 1, len(entities))
         _distances, indices = self.vector_index.search_all(k, query_prompt=self.query_prompt)
 
+        seen_pairs: set[frozenset[str]] = set()
         for i in range(len(entities)):
             neighbor_indices = indices[i][1:]  # Skip index 0 (self)
-            members = [entities[int(j)] for j in neighbor_indices]
+            members = []
+            for j in neighbor_indices:
+                j = int(j)  # Convert numpy.int64 to int
+                pair_key = frozenset([entities[i].id, entities[j].id])  # type: ignore[attr-defined]
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                members.append(entities[j])
             yield ERCandidateGroup(
                 anchor=entities[i],
                 members=members,

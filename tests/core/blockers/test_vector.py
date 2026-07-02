@@ -19,7 +19,7 @@ from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.reranking_vector_index import FakeHybridRerankingVectorIndex
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
-from tests.conftest import pairs_from_candidates, pairs_from_groups
+from tests.conftest import edge_list_from_groups, pairs_from_candidates, pairs_from_groups
 
 logger = logging.getLogger(__name__)
 
@@ -545,14 +545,22 @@ def test_vector_blocker_stream_groups_yields_one_group_per_anchor():
     assert all(isinstance(g, ERCandidateGroup) for g in groups)
     by_anchor = {g.group_id: g for g in groups}
     assert set(by_anchor) == {"c0", "c1", "c2", "c3"}
-    # FakeVectorIndex.search_all: entity i's neighbors (after skipping self) are
-    # [(i+1) % N, (i+2) % N] for k_neighbors=2.
+    # FakeVectorIndex.search_all: entity i's RAW neighbors (after skipping self)
+    # are [(i+1) % N, (i+2) % N] for k_neighbors=2. Cross-anchor dedup (first
+    # anchor to reach a pair claims it, same as stream()) then removes an edge
+    # from a later anchor's group once an earlier anchor already claimed it:
+    # c0 claims {c0,c1} and {c0,c2}; c1 claims {c1,c2} and {c1,c3}; c2's raw
+    # {c2,c0} was already claimed by c0, so c2 keeps only {c2,c3}; c3's raw
+    # {c3,c1} was already claimed by c1, so c3 keeps only {c3,c0}.
     assert {m.id for m in by_anchor["c0"].members} == {"c1", "c2"}
     assert {m.id for m in by_anchor["c1"].members} == {"c2", "c3"}
-    assert {m.id for m in by_anchor["c2"].members} == {"c3", "c0"}
-    assert {m.id for m in by_anchor["c3"].members} == {"c0", "c1"}
+    assert {m.id for m in by_anchor["c2"].members} == {"c3"}
+    assert {m.id for m in by_anchor["c3"].members} == {"c0"}
     # No self-pairs: an anchor never lists itself as a member.
     assert all(g.anchor.id not in {m.id for m in g.members} for g in groups)
+    # Every undirected pair is covered by exactly one group -- no duplicates.
+    edges = edge_list_from_groups(groups)
+    assert len(edges) == len(set(edges)) == 6  # C(4, 2): full coverage, no dupes
 
 
 def test_vector_blocker_stream_groups_raises_if_index_not_built():
@@ -615,14 +623,15 @@ def test_vector_blocker_stream_groups_is_schema_agnostic_with_product_schema():
     [(3, 1), (4, 2), (5, 2), (6, 3), (8, 4)],
 )
 def test_vector_blocker_stream_groups_pairs_equivalence_property(n_entities, k_neighbors):
-    """Property (CEO #14): the SET of pairs from stream_groups() == the SET from stream().
+    """Property (CEO #14 + E5): pairs from stream_groups() == pairs from stream().
 
-    No losses (every pair stream() would yield is covered by at least one
-    group) across several (N, k) shapes, including k_neighbors close to and
-    below N-1 (dense) and small k (sparse). This is a SET-level equivalence:
-    it does not claim each pair is covered by EXACTLY one group -- see
-    ``test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs``
-    for the documented case where it's covered by two.
+    COUNT-based, not just set-based: every pair stream() would yield is
+    covered by EXACTLY one group -- no losses AND no duplicates -- across
+    several (N, k) shapes, including k_neighbors close to and below N-1
+    (dense) and small k (sparse). A set-only comparison would silently mask a
+    pair being emitted by two different groups (see
+    ``test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs`` for
+    the targeted regression on that exact failure mode).
     """
     data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(n_entities)]
     texts = [d["name"] for d in data]
@@ -633,30 +642,30 @@ def test_vector_blocker_stream_groups_pairs_equivalence_property(n_entities, k_n
 
     groups_blocker = create_fake_blocker(k_neighbors=k_neighbors)
     groups_blocker.vector_index.create_index(texts)
-    group_pairs = pairs_from_groups(groups_blocker.stream_groups(data))
+    groups = list(groups_blocker.stream_groups(data))
+    group_edges = edge_list_from_groups(groups)
 
-    assert group_pairs == stream_pairs
+    assert len(group_edges) == len(set(group_edges))  # no duplicate edges across groups
+    assert set(group_edges) == stream_pairs  # same set covered
+    assert pairs_from_groups(groups) == stream_pairs  # sanity: set helper agrees
 
 
-def test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs():
-    """Documents a real caveat (raised in review): unlike stream(), stream_groups()
-    does NOT dedupe an edge across groups.
+def test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs():
+    """Regression: mutual nearest neighbors are covered by exactly ONE group.
 
     stream() maintains a single ``seen_pairs`` set across all entities, so a
     mutual-nearest-neighbor pair (A's nearest neighbor is B AND B's nearest
     neighbor is A -- common with real ANN indexes on near-duplicate records)
-    is yielded exactly once. stream_groups() has no such cross-anchor state:
-    each group is *anchor A's own, true, un-truncated neighbor list*, so if A
-    and B are mutual neighbors, the undirected pair {A, B} appears as a member
-    edge in BOTH A's group and B's group.
+    is yielded exactly once. stream_groups() now mirrors that exact dedup
+    semantics (same iteration order, same first-seen-wins rule, threaded
+    across ALL anchors via one ``seen_pairs`` set) -- so a mutual pair is
+    assigned to whichever anchor is processed first (c0, here) and does NOT
+    also appear in the other anchor's group (c1's group ends up empty).
 
-    This is a deliberate trade-off, not an oversight: truncating a later
-    group to preserve global pair-uniqueness would mean that group no longer
-    represents the anchor's real candidate set (see the class docstring on
-    ``stream_groups()``). A consumer that treats each group as an independent
-    unit of work -- e.g. a future SelectJudge issuing one LLM call per group,
-    or counting/costing calls -- must dedupe by canonical pair across groups
-    if it wants to process (and charge for) each undirected pair once.
+    Without the fix, a consumer issuing one LLM call per group (e.g. a future
+    SelectJudge) would emit and charge for the same undirected pair twice --
+    this test fails against that pre-fix behavior (which asserted the pair
+    appeared in BOTH groups) and passes against the fix.
     """
     from unittest.mock import MagicMock
 
@@ -687,13 +696,15 @@ def test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs():
     groups = list(blocker.stream_groups(data))
 
     by_anchor = {g.group_id: g for g in groups}
+    # c0 is processed first -> claims the mutual pair {c0, c1}.
     assert {m.id for m in by_anchor["c0"].members} == {"c1"}
-    assert {m.id for m in by_anchor["c1"].members} == {"c0"}  # mutual -> reciprocated
+    # c1's own reciprocal edge back to c0 was already claimed -> empty group.
+    assert {m.id for m in by_anchor["c1"].members} == set()
+    assert {m.id for m in by_anchor["c2"].members} == {"c0"}
 
-    edges = [
-        frozenset([group.anchor.id, member.id]) for group in groups for member in group.members
-    ]
-    # {c0, c1} is a member edge in BOTH c0's and c1's group -- covered twice.
-    assert edges.count(frozenset({"c0", "c1"})) == 2
-    # {c0, c2} is one-directional (only c2 -> c0) -- covered once.
+    edges = edge_list_from_groups(groups)
+    assert len(edges) == len(set(edges))  # no duplicate edges anywhere
+    # {c0, c1} (mutual) and {c0, c2} (one-directional) are each covered ONCE.
+    assert edges.count(frozenset({"c0", "c1"})) == 1
     assert edges.count(frozenset({"c0", "c2"})) == 1
+    assert len(edges) == 2

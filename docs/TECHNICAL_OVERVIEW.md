@@ -470,23 +470,26 @@ candidate structure, so it must not be used to benchmark a set-wise judge.
   free; not for benchmark use.
 - **`VectorBlocker.stream_groups()`** overrides this natively: its kNN search
   is already per-anchor, so each entity's own search result IS its group —
-  one group per entity, its k nearest neighbors (excluding itself) as
-  members, no derivation, no skew. This is the implementation a set-wise
-  judge should be benchmarked against.
+  one group per entity, its (deduplicated) k nearest neighbors as members, no
+  derivation, no skew. This is the implementation a set-wise judge should be
+  benchmarked against.
 
-Both forms satisfy the same pairs-equivalence property at the SET level: the
-SET of pairs recoverable from `stream_groups()` equals the SET of pairs from
-`stream()` — no losses. This does **not** mean each pair is covered by
-exactly one group: `VectorBlocker.stream_groups()` has no cross-anchor dedup
-state (unlike `stream()`'s single `seen_pairs` set), so when two entities are
-mutual nearest neighbors, the same undirected pair appears as a member edge
-in *both* of their groups — a deliberate trade-off (truncating a group would
-mean it no longer represents its anchor's real candidate set). A consumer
-that treats each group as an independent unit of work (e.g. one LLM call per
-group, for cost accounting) must dedupe by canonical pair across groups if it
-wants to process each undirected pair exactly once — see
-`VectorBlocker.stream_groups()`'s docstring and
-`test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs`.
+Both forms satisfy the same pairs-equivalence property EXACTLY, not just at
+the SET level: the pairs recoverable from `stream_groups()` equal the pairs
+from `stream()` — no losses AND no duplicates. `VectorBlocker.stream_groups()`
+threads a single `seen_pairs` set across all entities (same iteration order,
+same first-seen-wins rule `stream()` uses), so each undirected pair is
+assigned to exactly one group — whichever anchor is processed first. Without
+this cross-anchor dedup, two mutual nearest neighbors (A's nearest neighbor is
+B AND B's nearest neighbor is A — common with real ANN indexes on
+near-duplicate records) would appear as a member edge in *both* groups, and a
+consumer that treats each group as an independent unit of work (e.g. a
+set-wise judge issuing one LLM call per group, for cost accounting) would
+emit and charge for the same undirected pair twice. See
+`VectorBlocker.stream_groups()`'s docstring and the count-based
+regression/property tests in `tests/core/blockers/test_vector.py`
+(`test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs`,
+`test_vector_blocker_stream_groups_pairs_equivalence_property`).
 
 ### GroupwiseModule (`langres.core.module`)
 
