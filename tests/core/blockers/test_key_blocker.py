@@ -29,15 +29,15 @@ class ProductSchema(BaseModel):
 
 
 COMPANY_DATA = [
-    {"id": "a", "name": "Acme", "city": "Zurich"},
-    {"id": "b", "name": "Acme Corp", "city": "  ZURICH  "},
-    {"id": "c", "name": "Beta", "city": "Geneva"},
-    {"id": "d", "name": "Gamma", "city": None},
+    {"id": "a", "name": "Acme", "address": "Zurich"},
+    {"id": "b", "name": "Acme Corp", "address": "  ZURICH  "},
+    {"id": "c", "name": "Beta", "address": "Geneva"},
+    {"id": "d", "name": "Gamma", "address": None},
 ]
 
 
 def _company_factory(record: dict) -> CompanySchema:
-    return CompanySchema(id=record["id"], name=record["name"], address=record.get("city"))
+    return CompanySchema(id=record["id"], name=record["name"], address=record.get("address"))
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def test_key_blocker_pairs_only_within_matching_key() -> None:
     pairs = pairs_from_candidates(candidates)
 
     # "a"/"b" share the "zurich" key (after normalization); "c" is alone in
-    # "geneva"; "d" has no key (city=None) and is excluded entirely.
+    # "geneva"; "d" has no key (address=None) and is excluded entirely.
     assert pairs == {frozenset({"a", "b"})}
 
 
@@ -108,9 +108,9 @@ def test_key_blocker_single_record() -> None:
 def test_key_blocker_bucket_larger_than_two() -> None:
     """A 3-record bucket yields C(3,2) = 3 pairs."""
     data = [
-        {"id": "1", "name": "A", "city": "Bern"},
-        {"id": "2", "name": "B", "city": "Bern"},
-        {"id": "3", "name": "C", "city": "Bern"},
+        {"id": "1", "name": "A", "address": "Bern"},
+        {"id": "2", "name": "B", "address": "Bern"},
+        {"id": "3", "name": "C", "address": "Bern"},
     ]
     blocker = KeyBlocker(schema=CompanySchema, key_field="address")
     candidates = list(blocker.stream(data))
@@ -256,12 +256,33 @@ def test_key_blocker_inspect_candidates_basic_shape() -> None:
     assert report.recommendations
 
 
+def test_key_blocker_inspect_candidates_falls_back_to_repr_without_name_field() -> None:
+    """A schema with no 'name' attribute falls back to str(entity) for example text."""
+
+    def product_factory(record: dict) -> ProductSchema:
+        return ProductSchema(
+            id=record["id"], title=record["title"], manufacturer=record.get("manufacturer")
+        )
+
+    data = [
+        {"id": "p1", "title": "iPhone 15", "manufacturer": "Apple"},
+        {"id": "p2", "title": "iPhone 15 Pro", "manufacturer": "Apple"},
+    ]
+    blocker = KeyBlocker(schema_factory=product_factory, key_field="manufacturer")
+    entities = [product_factory(r) for r in data]
+    candidates = list(blocker.stream(data))
+
+    report = blocker.inspect_candidates(candidates, entities)
+
+    assert report.examples[0]["left_text"] == str(entities[0])
+
+
 def test_key_blocker_inspect_candidates_handles_zero_candidates() -> None:
     """No candidates (e.g. all keys unique) still produces a valid report."""
     blocker = KeyBlocker(schema=CompanySchema, key_field="address")
     data = [
-        {"id": "1", "name": "A", "city": "Bern"},
-        {"id": "2", "name": "B", "city": "Chur"},
+        {"id": "1", "name": "A", "address": "Bern"},
+        {"id": "2", "name": "B", "address": "Chur"},
     ]
     entities = [_company_factory(r) for r in data]
     candidates = list(blocker.stream(data))
@@ -290,10 +311,10 @@ def test_key_blocker_stream_groups_is_a_concrete_iterator() -> None:
 def test_key_blocker_stream_groups_pairs_equivalence_property() -> None:
     """Property (CEO #14): pairs from stream_groups() == pairs from stream()."""
     data = [
-        {"id": "1", "name": "A", "city": "Bern"},
-        {"id": "2", "name": "B", "city": "Bern"},
-        {"id": "3", "name": "C", "city": "Bern"},
-        {"id": "4", "name": "D", "city": "Chur"},
+        {"id": "1", "name": "A", "address": "Bern"},
+        {"id": "2", "name": "B", "address": "Bern"},
+        {"id": "3", "name": "C", "address": "Bern"},
+        {"id": "4", "name": "D", "address": "Chur"},
     ]
     blocker = KeyBlocker(schema=CompanySchema, key_field="address")
 
@@ -304,6 +325,8 @@ def test_key_blocker_stream_groups_pairs_equivalence_property() -> None:
     assert len(stream_pairs) == 3  # C(3,2) within the "bern" bucket
 
 
-def _typecheck_stream_return(blocker: KeyBlocker[CompanySchema]) -> Iterator[ERCandidate[CompanySchema]]:
+def _typecheck_stream_return(
+    blocker: KeyBlocker[CompanySchema],
+) -> Iterator[ERCandidate[CompanySchema]]:
     """mypy-only helper: confirms KeyBlocker.stream's declared return type."""
     return blocker.stream([])
