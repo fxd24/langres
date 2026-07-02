@@ -13,14 +13,23 @@ instead of K separate pairwise calls. These tests pin down:
   candidate -- all three map to whole-group "no match" + provenance
   ["select_error"], never a raised exception;
 - the empty-group short-circuit (no members -> no LLM call, no judgements);
-- inspect_scores() delegating to the shared, label-free report helper.
+- inspect_scores() delegating to the shared, label-free report helper;
+- serialization: SelectJudge is registered (type_name/@register), has a pure
+  config (no lm/program), and a Resolver holding one in its module slot
+  round-trips through save()/load() -- including in a FRESH PROCESS, so the
+  no-pickle config-registry artifact contract (the same one DSPyJudge
+  satisfies) holds for SelectJudge too.
 
 DummyLM-driven throughout: $0, no network, matching the project's zero-spend
 LLM test convention (see tests/core/modules/test_dspy_judge.py).
 """
 
+import json
 import logging
+import subprocess
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from dspy.utils.dummies import DummyLM
@@ -364,3 +373,126 @@ def test_injected_lm_is_used_and_never_rebuilt(mocker) -> None:  # type: ignore[
     judge: SelectJudge[CompanySchema] = SelectJudge(lm=lm)
     assert judge._get_lm() is lm
     build.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Serialization: SelectJudge must satisfy the Resolver's no-pickle
+# config-registry artifact contract, exactly like its DSPyJudge sibling.
+# ---------------------------------------------------------------------------
+
+
+def test_registered_under_select_judge_via_lazy_lookup() -> None:
+    """get_component("select_judge") resolves SelectJudge via the lazy registry."""
+    from langres.core.registry import get_component
+
+    assert get_component("select_judge") is SelectJudge
+
+
+def test_config_is_pure_and_excludes_lm() -> None:
+    """config is a plain, JSON-able dict -- never the injected DSPy LM."""
+    judge: SelectJudge[CompanySchema] = SelectJudge(
+        model="openrouter/z-ai/glm-5.2", temperature=0.3, entity_noun="product"
+    )
+    config = judge.config
+    assert config == {
+        "model": "openrouter/z-ai/glm-5.2",
+        "temperature": 0.3,
+        "entity_noun": "product",
+    }
+    assert "lm" not in config
+
+
+def test_from_config_builds_fresh_uncompiled_judge() -> None:
+    """from_config rebuilds a judge with no injected LM (built lazily on first use)."""
+    config: dict[str, object] = {
+        "model": "openrouter/z-ai/glm-5.2",
+        "temperature": 0.3,
+        "entity_noun": "product",
+    }
+    judge = SelectJudge.from_config(config)
+    assert judge.model == "openrouter/z-ai/glm-5.2"
+    assert judge.temperature == 0.3
+    assert judge.entity_noun == "product"
+    assert judge._lm is None
+
+
+def test_resolver_with_select_judge_saves_and_loads(tmp_path: Path) -> None:
+    """A Resolver with a SelectJudge in the module slot round-trips in-process."""
+    from langres.core import AllPairsBlocker, Clusterer, Resolver
+
+    judge = _judge([_answer('["b"]')])
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=judge,
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.save(tmp_path)
+
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    module_spec = next(c for c in manifest["components"] if c["slot"] == "module")
+    assert module_spec["type_name"] == "select_judge"
+    assert "lm" not in module_spec["config"]
+
+    reloaded = Resolver.load(tmp_path)
+    assert isinstance(reloaded.module, SelectJudge)
+    assert reloaded.module.config == judge.config
+
+
+@pytest.mark.slow
+def test_resolver_load_select_judge_in_fresh_process_and_scores_a_group(tmp_path: Path) -> None:
+    """A clean process can Resolver.load a select_judge artifact and score a group.
+
+    Regression for the lazy-registration path (mirrors
+    test_resolver_load_dspy_judge_in_fresh_process): ``@register("select_judge")``
+    only fires when ``langres.core.modules.select_judge`` is imported, and
+    ``langres.core`` deliberately does not import it (that would import
+    ``dspy``). ``get_component`` imports it on demand, so a fresh process that
+    only does ``from langres.core import Resolver`` still resolves the type --
+    and the reloaded judge is actually exercised (forward_groups on a real
+    group, DummyLM-injected), not just type-checked.
+    """
+    from langres.core import AllPairsBlocker, Clusterer, Resolver
+
+    judge = _judge([_answer('["b"]')])
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        module=judge,
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.save(tmp_path)
+
+    script = f"""
+import sys
+from dspy.utils.dummies import DummyLM
+from langres.core import Resolver
+from langres.core.groups import ERCandidateGroup
+from langres.core.models import CompanySchema
+
+r = Resolver.load(r"{tmp_path}")
+assert type(r.module).__name__ == "SelectJudge", type(r.module).__name__
+
+r.module._lm = DummyLM([{{"reasoning": "match", "selected_ids": '["b"]'}}])
+group = ERCandidateGroup(
+    anchor=CompanySchema(id="a", name="Acme"),
+    members=[CompanySchema(id="b", name="Acme Inc")],
+    group_id="a",
+)
+judgements = list(r.module.forward_groups(iter([group])))
+assert len(judgements) == 1, judgements
+assert judgements[0].score == 1.0, judgements[0]
+assert judgements[0].score_type == "prob_group_llm"
+print("OK")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "fresh-process Resolver.load failed for a select_judge artifact.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "UnknownComponentType" not in result.stderr
+    assert "OK" in result.stdout
