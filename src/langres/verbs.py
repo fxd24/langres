@@ -1,0 +1,385 @@
+"""The three-verb DX layer: ``link``, ``dedupe``, and their result types.
+
+``link(left, right)`` and ``dedupe(records)`` are the thin, schema-optional
+convenience layer on top of :mod:`langres.core.presets` (judge resolution +
+spend cap) and :class:`~langres.core.resolver.Resolver` (blocking + scoring +
+clustering). Schema-optional: pass ``schema=<YourModel>`` for a durable,
+type-checked entity, or omit it and let :func:`dedupe`/:func:`link` infer an
+ephemeral one from the records' own keys.
+
+Both verbs share one small contract:
+
+- ``judge="auto"`` (default) picks an LLM judge when an API key is set
+  (``OPENROUTER_API_KEY``/``OPENAI_API_KEY``), else falls back to the
+  zero-spend ``"string"`` judge with one notice -- see
+  :func:`~langres.core.presets.choose_auto_judge`.
+- Every judge, including the free ones, runs under a default $1 spend cap
+  (override with ``budget_usd=``); a cap breach raises
+  :class:`~langres.clients.openrouter.BudgetExceeded` carrying every
+  judgement already produced on ``.partial_judgements`` (E9) -- see
+  :mod:`langres.core.presets`'s module docstring for the resume recipe.
+- Results are self-describing (D2): every verb reports which judge actually
+  ran (``judge_used``), what its raw score means (``score_type`` -- see the
+  threshold-semantics note below), and why it fell back, if it did
+  (``fallback_reason``).
+- Threshold semantics differ across ``score_type`` scales (E12): a
+  ``"heuristic"`` score, a cosine ``"sim_cos"``, and an LLM ``"prob_llm"`` are
+  not comparable on the same 0..1 cut. ``threshold=None`` (the default)
+  resolves to a sane per-judge default; pass ``threshold=`` explicitly to
+  override, or derive one from labels with
+  :func:`~langres.core.calibration.derive_threshold`.
+
+Known limitation: an *inferred* schema is ephemeral (a dynamically created
+class, not importable by name) -- a ``dedupe()``/``link()`` call built on one
+works fine in-process, but reloading a saved artifact referencing it in a
+FRESH process raises the registry's existing ``SchemaNotRegistered`` error.
+Pass ``schema=<YourModel>`` explicitly for anything you intend to persist.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable, Sequence
+from hashlib import sha256
+from typing import Any
+
+from pydantic import BaseModel, Field, create_model
+
+from langres.core.blockers.all_pairs import schema_to_factory
+from langres.core.comparator import Comparator
+from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.module import Module
+from langres.core.presets import (
+    JudgeName,
+    build_embedding_candidate,
+    build_resolver,
+    notice_pre_scoring_cost,
+    resolve_judge,
+)
+from langres.core.presets import _DEFAULT_THRESHOLDS as _THRESHOLDS
+
+__all__ = ["DedupeResult", "LinkVerdict", "dedupe", "link"]
+
+
+class LinkVerdict(BaseModel):
+    """The result of :func:`link`: a match decision with full provenance.
+
+    Truthy iff ``match`` (``if link(a, b): ...``); ``repr`` shows the verdict,
+    score, and judge for a friendly REPL/notebook experience (D2/D10).
+    """
+
+    match: bool
+    score: float = Field(..., ge=0.0, le=1.0)
+    reasoning: str | None = None
+    judge_used: str
+    score_type: str
+    fallback_reason: str | None = None
+    judgement: PairwiseJudgement
+
+    def __bool__(self) -> bool:
+        return self.match
+
+    def __repr__(self) -> str:
+        verdict = "MATCH" if self.match else "NO MATCH"
+        return f"LinkVerdict({verdict}, score={self.score:.3f}, judge={self.judge_used!r})"
+
+
+class DedupeResult(list[set[str]]):
+    """The clusters :func:`dedupe` returns -- a plain ``list[set[str]]``, self-describing.
+
+    Behaves exactly like the list :meth:`~langres.core.resolver.Resolver.resolve`
+    returns; additionally carries ``judge_used``, ``score_type``, and
+    ``fallback_reason`` (D2) so a caller can inspect what actually ran without
+    a separate call.
+    """
+
+    def __init__(
+        self,
+        clusters: Iterable[set[str]],
+        *,
+        judge_used: str,
+        score_type: str,
+        fallback_reason: str | None,
+    ) -> None:
+        super().__init__(clusters)
+        self.judge_used = judge_used
+        self.score_type = score_type
+        self.fallback_reason = fallback_reason
+
+    def __repr__(self) -> str:
+        return (
+            f"DedupeResult({list.__repr__(self)}, judge_used={self.judge_used!r}, "
+            f"score_type={self.score_type!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Schema-optional inference (E8, D11)
+# ---------------------------------------------------------------------------
+
+_INFERRED_SCHEMA_CACHE: dict[frozenset[str], type[BaseModel]] = {}
+
+
+def _inferred_schema_name(field_names: frozenset[str]) -> str:
+    """Deterministic ``Inferred_<sha8>`` name from a field-set (memoization key)."""
+    digest = sha256("|".join(sorted(field_names)).encode()).hexdigest()[:8]
+    return f"Inferred_{digest}"
+
+
+def _infer_schema(field_names: frozenset[str]) -> type[BaseModel]:
+    """Build (or reuse) an ephemeral all-``str | None`` schema for ``field_names``.
+
+    Memoized by field-set so repeated ``dedupe()``/``link()`` calls over the
+    same record shape reuse one class instead of minting a new one each time.
+    """
+    cached = _INFERRED_SCHEMA_CACHE.get(field_names)
+    if cached is not None:
+        return cached
+    fields: dict[str, Any] = {"id": (str, ...)}
+    for name in sorted(field_names):
+        fields[name] = (str | None, None)
+    schema: type[BaseModel] = create_model(_inferred_schema_name(field_names), **fields)  # type: ignore[call-overload]
+    _INFERRED_SCHEMA_CACHE[field_names] = schema
+    return schema
+
+
+def _coerce_scalar(value: Any) -> str | None:
+    """Coerce one raw field value for an inferred (all-``str | None``) schema.
+
+    ``None`` and ``float('nan')`` both become ``None`` -- never the string
+    ``"nan"``, which would silently poison string-similarity scoring (D11). A
+    nested ``list``/``dict`` value cannot be represented by a flat inferred
+    field, so it raises with guidance rather than being silently stringified
+    (E8).
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, (list, dict)):
+        raise ValueError(
+            f"cannot infer a schema field from a nested {type(value).__name__} "
+            f"value ({value!r}). Pass schema=<YourModel> explicitly to control "
+            "how nested fields are compared."
+        )
+    return str(value)
+
+
+def _field_union(records: Sequence[dict[str, Any]]) -> frozenset[str]:
+    """Every key across ``records`` except ``"id"`` (handled separately)."""
+    fields: set[str] = set()
+    for record in records:
+        fields.update(key for key in record if key != "id")
+    return frozenset(fields)
+
+
+def _resolve_ids(records: Sequence[dict[str, Any]]) -> list[str]:
+    """Per-record id: explicit ``"id"`` key if EVERY record has one, else positional.
+
+    Raises:
+        ValueError: If some records have an ``"id"`` key and others don't
+            (ambiguous -- which source should win?).
+    """
+    has_id = ["id" in record for record in records]
+    if all(has_id):
+        return [str(record["id"]) for record in records]
+    if not any(has_id):
+        return [str(i) for i in range(len(records))]
+    raise ValueError(
+        "some records have an 'id' key and some don't -- schema inference "
+        "needs consistent id presence across all records. Add 'id' to every "
+        "record (or none), or pass schema=<YourModel> explicitly."
+    )
+
+
+def _infer(records: Sequence[dict[str, Any]]) -> tuple[type[BaseModel], list[dict[str, Any]]]:
+    """Infer an ephemeral schema + coerced records for ``records``.
+
+    No id-uniqueness check here -- ``link(a, a)`` (comparing an entity to
+    itself) is well-defined and must not raise; :func:`dedupe` enforces
+    uniqueness itself via :func:`_check_no_duplicate_ids`.
+    """
+    field_names = _field_union(records)
+    ids = _resolve_ids(records)
+    schema = _infer_schema(field_names)
+    coerced = [
+        {"id": rid, **{name: _coerce_scalar(record.get(name)) for name in field_names}}
+        for record, rid in zip(records, ids, strict=True)
+    ]
+    return schema, coerced
+
+
+def _check_no_duplicate_ids(ids: Sequence[str]) -> None:
+    """Raise if ``ids`` contains a repeat (dedupe()'s batch-uniqueness contract)."""
+    if len(set(ids)) == len(ids):
+        return
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    for i in ids:
+        if i in seen:
+            dupes.add(i)
+        seen.add(i)
+    raise ValueError(f"duplicate ids in input: {sorted(dupes)}; every record must have a unique id.")
+
+
+def _resolved_threshold(judge_used: str, threshold: float | None) -> float:
+    return _THRESHOLDS.get(judge_used, 0.5) if threshold is None else threshold
+
+
+# ---------------------------------------------------------------------------
+# link()
+# ---------------------------------------------------------------------------
+
+
+def link(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    judge: JudgeName | Module[Any] = "auto",
+    schema: type[BaseModel] | None = None,
+    model: str | None = None,
+    entity_noun: str = "entity",
+    threshold: float | None = None,
+    budget_usd: float | None = None,
+) -> LinkVerdict:
+    """Decide whether two records refer to the same real-world entity.
+
+    Args:
+        left: The first record (a plain dict).
+        right: The second record. ``link(a, a)`` (the same record twice) is
+            well-defined -- it scores the entity against itself.
+        judge: ``"auto"`` (default; picks an LLM judge if a key is set, else
+            falls back to ``"string"``), ``"zero_shot_llm"``, ``"embedding"``,
+            ``"string"``, or a ``Module`` instance (e.g. an injected
+            ``DSPyJudge(lm=DummyLM(...))`` for a zero-spend test).
+        schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
+            one from ``left``/``right``'s own keys.
+        model: Model id override for ``"zero_shot_llm"``.
+        entity_noun: Domain noun woven into the LLM judge's prompt.
+        threshold: Match cutoff; ``None`` resolves to the judge's default.
+        budget_usd: Spend cap override (default $1; see
+            :mod:`langres.core.presets`).
+
+    Returns:
+        A :class:`LinkVerdict`.
+
+    Raises:
+        ValueError: On schema-inference errors (nested values, inconsistent
+            id presence).
+        BudgetExceeded: If scoring this pair would cross the spend cap.
+    """
+    if schema is None:
+        resolved_schema, (left_record, right_record) = _infer([left, right])
+    else:
+        resolved_schema, left_record, right_record = schema, left, right
+
+    module, judge_used, resolved_model, fallback_reason = resolve_judge(
+        judge, resolved_schema, model=model, entity_noun=entity_noun, budget_usd=budget_usd
+    )
+
+    if judge_used == "zero_shot_llm" and resolved_model is not None:
+        notice_pre_scoring_cost(resolved_model, 1)
+
+    candidate: ERCandidate[Any]
+    if judge_used == "embedding":
+        candidate = build_embedding_candidate(resolved_schema, left_record, right_record)
+    else:
+        factory = schema_to_factory(resolved_schema)
+        left_entity = factory(left_record)
+        right_entity = factory(right_record)
+        candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="link")
+        if judge_used == "string":
+            comparator = Comparator.from_schema(resolved_schema)
+            candidate = candidate.model_copy(
+                update={"comparison": comparator.compare(left_entity, right_entity)}
+            )
+
+    judgements = list(module.forward(iter([candidate])))
+    if not judgements:
+        raise RuntimeError(
+            f"the {judge_used!r} judge produced no judgement for this pair; every "
+            "candidate must yield exactly one PairwiseJudgement. This indicates a "
+            "bug in an injected judge= Module."
+        )
+    judgement = judgements[0]
+
+    return LinkVerdict(
+        match=judgement.score >= _resolved_threshold(judge_used, threshold),
+        score=judgement.score,
+        reasoning=judgement.reasoning,
+        judge_used=judge_used,
+        score_type=judgement.score_type,
+        fallback_reason=fallback_reason,
+        judgement=judgement,
+    )
+
+
+# ---------------------------------------------------------------------------
+# dedupe()
+# ---------------------------------------------------------------------------
+
+
+def dedupe(
+    records: list[dict[str, Any]],
+    *,
+    judge: JudgeName | Module[Any] = "auto",
+    schema: type[BaseModel] | None = None,
+    model: str | None = None,
+    entity_noun: str = "entity",
+    threshold: float | None = None,
+    budget_usd: float | None = None,
+) -> DedupeResult:
+    """Group a batch of records into entity clusters.
+
+    Args:
+        records: The records to dedupe (plain dicts). ``[]`` -> ``[]``; a
+            single record -> ``[]`` (no pair possible). Every record must
+            have a unique ``"id"`` (or none at all -- positional ids are
+            assigned); a duplicate ``"id"`` raises.
+        judge: ``"auto"`` (default), ``"zero_shot_llm"``, ``"embedding"``,
+            ``"string"``, or a ``Module`` instance.
+        schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
+            one from the records' own keys.
+        model: Model id override for ``"zero_shot_llm"``.
+        entity_noun: Domain noun woven into the LLM judge's prompt.
+        threshold: Clusterer threshold; ``None`` resolves to the judge's
+            default.
+        budget_usd: Spend cap override (default $1).
+
+    Returns:
+        A :class:`DedupeResult` (a ``list[set[str]]`` of entity-id clusters).
+
+    Raises:
+        ValueError: Duplicate ids, inconsistent id presence, or a nested
+            value under schema inference.
+        BudgetExceeded: If scoring would cross the spend cap; the exception
+            carries the judgements already produced on ``.partial_judgements``.
+    """
+    if not records:
+        return DedupeResult([], judge_used="none", score_type="none", fallback_reason=None)
+
+    if schema is None:
+        resolved_schema, resolved_records = _infer(records)
+    else:
+        resolved_schema, resolved_records = schema, records
+
+    _check_no_duplicate_ids([str(record.get("id")) for record in resolved_records])
+
+    resolved = build_resolver(
+        resolved_schema,
+        judge=judge,
+        model=model,
+        entity_noun=entity_noun,
+        threshold=threshold,
+        n_records=len(resolved_records),
+        budget_usd=budget_usd,
+    )
+    judgements = resolved.resolver.predict(resolved_records)
+    clusters = resolved.resolver.clusterer.cluster(judgements)
+    score_type = judgements[0].score_type if judgements else resolved.score_type
+    return DedupeResult(
+        clusters,
+        judge_used=resolved.judge_used,
+        score_type=score_type,
+        fallback_reason=resolved.fallback_reason,
+    )
