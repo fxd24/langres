@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 import langres
 from langres.core.blocker import Blocker
+from langres.core.blockers.composite import CompositeBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
@@ -155,6 +156,24 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     return VectorBlocker(
         vector_index=index, schema=schema, text_field_extractor=extract, k_neighbors=10
     )
+
+
+def _iter_vector_blockers(blocker: object) -> Iterator[VectorBlocker[Any]]:
+    """Yield every ``VectorBlocker`` reachable from ``blocker``.
+
+    A plain ``VectorBlocker`` yields itself. A ``CompositeBlocker`` (the
+    blocking-algebra union/intersection/difference of child blockers) recurses
+    into ``children`` at arbitrary depth, so a composite wrapping another
+    composite still surfaces every nested ``VectorBlocker`` -- e.g. the
+    recall-first pattern ``CompositeBlocker([KeyBlocker(...), VectorBlocker(...)],
+    op="union")``. Index-free blockers (``AllPairsBlocker``, ``KeyBlocker``,
+    ``GLinkerAdapter``) contribute nothing.
+    """
+    if isinstance(blocker, VectorBlocker):
+        yield blocker
+    elif isinstance(blocker, CompositeBlocker):
+        for child in blocker.children:
+            yield from _iter_vector_blockers(child)
 
 
 def _component_config_dict(obj: object) -> dict[str, object]:
@@ -482,29 +501,30 @@ class Resolver:
         return self.clusterer.cluster(self._judgements(records))
 
     def _ensure_index_built(self, records: list[Any]) -> None:
-        """Build/populate a ``VectorBlocker``'s index from ``records``.
+        """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
 
-        Embeds the records' text field and creates the index in place when it is
-        not yet built. For a blocker with no index (AllPairs, GLinker), this is a
-        no-op. When the index *is* already built (e.g. a freshly loaded FAISS
-        index, or a Resolver reused on the same records), the would-be corpus is
-        compared to the index's stored ``_corpus_texts``: identical -> reuse
-        (never re-embed, so restore + same-records round-trips are cheap);
-        different -> rebuild (so reusing the Resolver on a new record list scores
+        Embeds the records' text field and creates the index in place for each
+        index-backed blocker discovered via :func:`_iter_vector_blockers` --
+        whether ``self.blocker`` is a ``VectorBlocker`` directly, or one is
+        nested (at any depth) inside a ``CompositeBlocker``. A blocker with no
+        index (AllPairs, GLinker, KeyBlocker) contributes nothing. When an
+        index *is* already built (e.g. a freshly loaded FAISS index, or a
+        Resolver reused on the same records), the would-be corpus is compared
+        to the index's stored ``_corpus_texts``: identical -> reuse (never
+        re-embed, so restore + same-records round-trips are cheap); different
+        -> rebuild (so reusing the Resolver on a new record list scores
         against the right corpus rather than a stale one).
         """
-        if not isinstance(self.blocker, VectorBlocker):
-            return  # AllPairs, GLinker, and other index-free blockers.
+        for vector_blocker in _iter_vector_blockers(self.blocker):
+            entities = [vector_blocker.schema_factory(record) for record in records]
+            texts = [vector_blocker.text_field_extractor(entity) for entity in entities]
 
-        entities = [self.blocker.schema_factory(record) for record in records]
-        texts = [self.blocker.text_field_extractor(entity) for entity in entities]
+            index = vector_blocker.vector_index
+            if vector_blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
+                continue  # Same corpus already indexed -> reuse, never re-embed.
 
-        index = self.blocker.vector_index
-        if self.blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
-            return  # Same corpus already indexed -> reuse, never re-embed.
-
-        logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
-        index.create_index(texts)
+            logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
+            index.create_index(texts)
 
     # ------------------------------------------------------------------
     # Linking / streaming (M5)

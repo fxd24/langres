@@ -412,7 +412,8 @@ def _composite_vector_resolver(op: str = "union") -> "object":
         key_field="address",
     )
     composite: CompositeBlocker[CompanySchema] = CompositeBlocker(
-        children=[key_blocker, vector_blocker], op=op  # type: ignore[arg-type]
+        children=[key_blocker, vector_blocker],
+        op=op,  # type: ignore[arg-type]
     )
     comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     return Resolver(
@@ -468,12 +469,8 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
         text_field="name",
         k_neighbors=5,
     )
-    key_blocker_a: KeyBlocker[CompanySchema] = KeyBlocker(
-        schema=CompanySchema, key_field="address"
-    )
-    key_blocker_b: KeyBlocker[CompanySchema] = KeyBlocker(
-        schema=CompanySchema, key_field="phone"
-    )
+    key_blocker_a: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="address")
+    key_blocker_b: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="phone")
     inner = CompositeBlocker(children=[key_blocker_a, vector_blocker], op="union")
     outer = CompositeBlocker(children=[inner, key_blocker_b], op="union")
 
