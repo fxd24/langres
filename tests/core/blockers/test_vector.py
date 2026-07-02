@@ -15,9 +15,11 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
+from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.reranking_vector_index import FakeHybridRerankingVectorIndex
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
+from tests.conftest import pairs_from_candidates, pairs_from_groups
 
 logger = logging.getLogger(__name__)
 
@@ -513,3 +515,120 @@ def test_stream_with_fake_hybrid_reranking_index_end_to_end():
     # to_similarities mapped fake distances into [0, 1] similarity scores.
     for candidate in candidates:
         assert 0.0 <= candidate.similarity_score <= 1.0
+
+
+# ============================================================================
+# stream_groups(): VectorBlocker's NATIVE per-anchor implementation (E3).
+#
+# Unlike the base Blocker's buffered/skew-prone default (which derives groups
+# from the pairwise stream() and so under-represents entities that never land
+# on the "left" side), VectorBlocker's kNN search is already per-anchor: one
+# group per entity, with its k nearest neighbors as members, straight from the
+# index -- no derivation, no skew.
+# ============================================================================
+
+
+def test_vector_blocker_stream_groups_yields_one_group_per_anchor():
+    """stream_groups() yields one ERCandidateGroup per entity, from its own kNN search."""
+    data = [
+        {"id": "c0", "name": "A"},
+        {"id": "c1", "name": "B"},
+        {"id": "c2", "name": "C"},
+        {"id": "c3", "name": "D"},
+    ]
+    blocker = create_fake_blocker(k_neighbors=2)
+    blocker.vector_index.create_index([d["name"] for d in data])
+
+    groups = list(blocker.stream_groups(data))
+
+    assert len(groups) == 4
+    assert all(isinstance(g, ERCandidateGroup) for g in groups)
+    by_anchor = {g.group_id: g for g in groups}
+    assert set(by_anchor) == {"c0", "c1", "c2", "c3"}
+    # FakeVectorIndex.search_all: entity i's neighbors (after skipping self) are
+    # [(i+1) % N, (i+2) % N] for k_neighbors=2.
+    assert {m.id for m in by_anchor["c0"].members} == {"c1", "c2"}
+    assert {m.id for m in by_anchor["c1"].members} == {"c2", "c3"}
+    assert {m.id for m in by_anchor["c2"].members} == {"c3", "c0"}
+    assert {m.id for m in by_anchor["c3"].members} == {"c0", "c1"}
+    # No self-pairs: an anchor never lists itself as a member.
+    assert all(g.anchor.id not in {m.id for m in g.members} for g in groups)
+
+
+def test_vector_blocker_stream_groups_raises_if_index_not_built():
+    """stream_groups() enforces the same explicit-index-build contract as stream()."""
+    blocker = create_fake_blocker(k_neighbors=2)
+    data = [{"id": "c1", "name": "Apple"}, {"id": "c2", "name": "Google"}]
+
+    with pytest.raises(RuntimeError, match="Index not built"):
+        list(blocker.stream_groups(data))
+
+
+def test_vector_blocker_stream_groups_handles_empty_dataset():
+    """Empty input -> no groups."""
+    blocker = create_fake_blocker(k_neighbors=2)
+    blocker.vector_index.create_index([])
+    assert list(blocker.stream_groups([])) == []
+
+
+def test_vector_blocker_stream_groups_handles_single_entity():
+    """A single entity has no neighbors -> no groups."""
+    data = [{"id": "c1", "name": "Only Company"}]
+    blocker = create_fake_blocker(k_neighbors=5)
+    blocker.vector_index.create_index([d["name"] for d in data])
+
+    assert list(blocker.stream_groups(data)) == []
+
+
+def test_vector_blocker_stream_groups_is_schema_agnostic_with_product_schema():
+    """stream_groups() works with a second, unrelated schema (ProductSchema)."""
+    from pydantic import BaseModel
+
+    class ProductSchema(BaseModel):
+        id: str
+        title: str
+
+    def product_factory(record: dict) -> ProductSchema:
+        return ProductSchema(id=record["id"], title=record["title"])
+
+    data = [
+        {"id": "p1", "title": "iPhone"},
+        {"id": "p2", "title": "iPhone Pro"},
+        {"id": "p3", "title": "Galaxy"},
+    ]
+    blocker = VectorBlocker(
+        schema_factory=product_factory,
+        text_field_extractor=lambda x: x.title,
+        vector_index=FakeVectorIndex(),
+        k_neighbors=2,
+    )
+    blocker.vector_index.create_index([d["title"] for d in data])
+
+    groups = list(blocker.stream_groups(data))
+
+    assert len(groups) == 3
+    assert all(isinstance(g.anchor, ProductSchema) for g in groups)
+
+
+@pytest.mark.parametrize(
+    ("n_entities", "k_neighbors"),
+    [(3, 1), (4, 2), (5, 2), (6, 3), (8, 4)],
+)
+def test_vector_blocker_stream_groups_pairs_equivalence_property(n_entities, k_neighbors):
+    """Property (CEO #14): pairs from stream_groups() == pairs from stream().
+
+    No dupes, no losses -- across several (N, k) shapes, including
+    k_neighbors close to and below N-1 (dense) and small k (sparse).
+    """
+    data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(n_entities)]
+    texts = [d["name"] for d in data]
+
+    stream_blocker = create_fake_blocker(k_neighbors=k_neighbors)
+    stream_blocker.vector_index.create_index(texts)
+    stream_pairs = pairs_from_candidates(stream_blocker.stream(data))
+
+    groups_blocker = create_fake_blocker(k_neighbors=k_neighbors)
+    groups_blocker.vector_index.create_index(texts)
+    group_pairs = pairs_from_groups(groups_blocker.stream_groups(data))
+
+    assert group_pairs == stream_pairs
