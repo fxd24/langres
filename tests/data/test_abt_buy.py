@@ -4,10 +4,14 @@ import pytest
 
 from langres.core.benchmark import gold_pairs_from_clusters
 from langres.core.blockers.vector import VectorBlocker
+from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.data.abt_buy import (
+    ABT_BUY_RECALL_GATE,
     ABT_BUY_THRESHOLD_GRID,
+    ACHIEVED_PC_AT_DEFAULT_K,
     DEFAULT_ABT_BUY_BLOCKING_K,
+    GATE_MET,
     AbtBuyBenchmark,
     AbtBuySchema,
     _cross_source,
@@ -15,6 +19,8 @@ from langres.data.abt_buy import (
     build_abt_buy_blocker,
     load_abt_buy,
     load_abt_buy_pair_splits,
+    pick_blocking_k,
+    sweep_blocking_k,
 )
 
 # Deterministic ground-truth counts for the vendored benchmark (verified against
@@ -213,6 +219,34 @@ def test_benchmark_build_blocker_returns_fresh_unbuilt_vector_blocker() -> None:
     assert b1 is not b2
 
 
+# --- pick_blocking_k: pure, fast branches ---------------------------------------
+
+
+def test_pick_blocking_k_returns_min_passing() -> None:
+    assert pick_blocking_k({5: 0.85, 10: 0.91, 20: 0.95}) == 10
+
+
+def test_pick_blocking_k_falls_back_to_best_when_none_pass() -> None:
+    assert pick_blocking_k({5: 0.76, 10: 0.81, 30: 0.84}) == 30
+
+
+def test_pick_blocking_k_custom_threshold() -> None:
+    assert pick_blocking_k({5: 0.80, 10: 0.85}, threshold=0.85) == 10
+
+
+def test_pick_blocking_k_raises_on_empty() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        pick_blocking_k({})
+
+
+def test_default_blocking_k_is_pinned_with_honest_gate_outcome() -> None:
+    assert DEFAULT_ABT_BUY_BLOCKING_K == 20
+    assert ABT_BUY_RECALL_GATE == 0.90
+    # Unlike Amazon-Google, the Abt-Buy k-sweep clears the 0.90 gate at k=20.
+    assert ACHIEVED_PC_AT_DEFAULT_K == pytest.approx(0.9301, abs=1e-4)
+    assert GATE_MET is True
+
+
 # --- slow: real embeddings, runs in CI --------------------------------------------
 
 
@@ -220,3 +254,35 @@ def test_benchmark_build_blocker_returns_fresh_unbuilt_vector_blocker() -> None:
 def test_build_abt_buy_blocker_returns_default_k() -> None:
     blocker = build_abt_buy_blocker()
     assert blocker.k_neighbors == DEFAULT_ABT_BUY_BLOCKING_K
+
+
+@pytest.mark.slow
+def test_sweep_blocking_k_pins_documented_pair_completeness() -> None:
+    corpus, gold, _pairs = load_abt_buy()
+    ks = (5, 10, 20, 30, 50)
+    recalls = sweep_blocking_k(corpus, gold, ks=ks)
+
+    assert set(recalls) == set(ks)
+    assert all(0.0 <= v <= 1.0 for v in recalls.values())
+
+    chosen = pick_blocking_k(recalls, ABT_BUY_RECALL_GATE)
+    assert chosen == DEFAULT_ABT_BUY_BLOCKING_K
+    assert recalls[chosen] == pytest.approx(ACHIEVED_PC_AT_DEFAULT_K, abs=5e-3)
+    # The gate is honestly met: the chosen k is the smallest one clearing it.
+    assert recalls[chosen] >= ABT_BUY_RECALL_GATE
+
+
+@pytest.mark.slow
+def test_pair_completeness_is_computable_via_evaluate_blocking() -> None:
+    corpus, gold, _pairs = load_abt_buy()
+    recalls = sweep_blocking_k(corpus, gold, ks=(DEFAULT_ABT_BUY_BLOCKING_K,))
+    # The shared build_abt_buy_blocker factory must measure the same
+    # Pair-Completeness as the sweep. Its FAISSIndex ships unbuilt (embedding is
+    # deferred to resolve-time), so build it here, then measure PC directly via
+    # evaluate_blocking -- confirming PC is a plain candidate_recall measurement.
+    blocker = build_abt_buy_blocker(DEFAULT_ABT_BUY_BLOCKING_K)
+    records = [r.model_dump() for r in corpus]
+    blocker.vector_index.create_index([r.embed_text for r in corpus])
+    candidates = _cross_source(list(blocker.stream(records)))
+    pc = evaluate_blocking(candidates, gold).candidate_recall
+    assert pc == pytest.approx(recalls[DEFAULT_ABT_BUY_BLOCKING_K], abs=1e-6)
