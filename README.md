@@ -95,7 +95,7 @@ verdict = link(
     judge="string",
 )
 if verdict:                       # LinkVerdict is truthy iff it's a match
-    print(verdict.score, verdict.judge_used)   # e.g. 0.83 "string"
+    print(verdict.score, verdict.judge_used)   # e.g. 0.86 "string"
 ```
 
 **`judge="auto"` (the default)** picks a real LLM judge when `OPENROUTER_API_KEY`
@@ -195,7 +195,6 @@ are tracked in [TODOS.md](TODOS.md).
 
 ## Documentation
 
-- [Project Overview](docs/PROJECT_OVERVIEW.md) — philosophy and architecture
 - [Roadmap](docs/ROADMAP.md) — the composable-seam vision and milestones M0–M6
 - [POC Plan](docs/POC.md) — current stage, scope, success criteria
 - [Technical Overview](docs/TECHNICAL_OVERVIEW.md) — API reference and data contracts

@@ -5,20 +5,39 @@ paths:
 
 # Architecture & Component Design
 
-**The two-layer API, the design principles, and what "lightweight & composable"
+**The layered API, the design principles, and what "lightweight & composable"
 means in practice.** Read before adding or refactoring a component under `src/`.
 
-## The Two-Layer API
+## The Layered API (verbs → Resolver → core)
 
-1. **High-Level (`langres.tasks`)**: Pre-built task runners for common use cases
-   - Target: 80% of users
-   - Examples: `DeduplicationTask`, `EntityLinkingTask`
-   - Philosophy: Like scikit-learn's Pipeline
+langres exposes three layers, each a thin shell over the one below. (Note: there
+is **no** `langres.tasks` or `langres.flows` module — those names were never
+built. The real layering is:)
 
-2. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines
-   - Target: 20% of users (advanced use cases)
-   - Components: `Module`, `Blocker`, `Optimizer`, `Clusterer`, `Canonicalizer`
-   - Philosophy: Like PyTorch's primitives
+1. **Verbs (`langres.link` / `langres.dedupe`)** — the top DX layer.
+   - Target: most users. Schema-optional, zero-label, `judge="auto"` with a
+     default spend cap.
+   - Returns self-describing results (`LinkVerdict`; a `dedupe` result carrying
+     `judge_used` / `score_type` / `fallback_reason`).
+   - Philosophy: the one-liner front door. Thin sugar over `Resolver`.
+
+2. **`langres.Resolver`** — the declarative mid-layer.
+   - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
+     (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
+     `.save`/`.load` serialize it via the config-registry (no pickle).
+   - `Resolver.link` / `stream_against` are reserved `NotImplementedError` stubs
+     (M5 incremental/cross-source work) — do not document them as working.
+
+3. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines.
+   - Target: advanced users building bespoke pipelines.
+   - Real components: `Module` (judge), `Blocker` (`AllPairsBlocker`,
+     `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
+     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`, …) and
+     `core.calibration.derive_threshold`.
+   - Philosophy: Like PyTorch's primitives.
+   - **Not yet built** (roadmap, don't reference as existing): `Canonicalizer`,
+     a general `Optimizer` (only `optimizers.BlockerOptimizer` exists),
+     constrained `Clusterer`, set-wise / trained judge families.
 
 ## Key Design Principles
 
@@ -98,45 +117,47 @@ Extract when you see:
 
 ## When Adding New Components
 
-1. **Blockers**: Must implement candidate generation and schema normalization
-2. **Flows (Modules)**: Must yield `PairwiseJudgement` objects
-3. **Tasks**: Should compose Blocker + Flow + optional Optimizer
-4. **All Components**: Should support both `.run()` and `.compile()` methods where appropriate
+1. **Blockers**: Must implement candidate generation (`stream`) and schema
+   normalization.
+2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
+   Register a new method by adding one branch in
+   `methods.py:_make_module_builder` so `Resolver.from_schema` / the verbs can
+   select it.
+3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
+   blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
+   the user-facing sugar over it.
 
 Add docstrings to all public methods, and include a usage example in `examples/`
-for any new component.
+for any new user-facing component.
 
 ## Common Patterns
 
-### Task Implementation
+### Judge (Module) Implementation
 
 ```python
-class SomeTask:
-    def __init__(self, flow: Module, blocker: Blocker):
-        self.flow = flow
-        self.blocker = blocker
-
-    def compile(self, gold_data, metric: str):
-        """Optimize hyperparameters on gold data"""
-        pass
-
-    def run(self, data):
-        """Execute the task on input data"""
-        pass
-```
-
-### Flow (Module) Implementation
-
-```python
-class SomeFlow(Module):
+class SomeJudge(Module):
     def forward(self, candidates):
-        """Yield PairwiseJudgement for each candidate pair"""
+        """Yield a PairwiseJudgement for each candidate pair."""
         for pair in candidates:
             score = self._compute_similarity(pair)
             yield PairwiseJudgement(
                 left_id=pair.left.id,
                 right_id=pair.right.id,
                 score=score,
-                score_type="calibrated_prob"
+                score_type="calibrated_prob",  # one of the models.py literals
+                decision_step="some_judge",
+                provenance={},
             )
+```
+
+### Wiring it into a pipeline
+
+```python
+# Low-level: build a Resolver from a schema, pick the judge, run it.
+resolver = Resolver.from_schema(MySchema, judge="string")
+clusters = resolver.resolve(records)   # -> list[set[str]]
+
+# High-level: the verbs do the same thing with schema inference + spend cap.
+from langres import dedupe
+result = dedupe(records)               # judge="auto" by default
 ```
