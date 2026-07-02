@@ -157,9 +157,7 @@ def pick_blocking_k(recalls: dict[int, float], threshold: float) -> int:
     return max(recalls, key=lambda k: recalls[k])
 
 
-def clusters_from_pairs(
-    gold_pairs: set[frozenset[str]], all_ids: Iterable[str]
-) -> list[set[str]]:
+def clusters_from_pairs(gold_pairs: set[frozenset[str]], all_ids: Iterable[str]) -> list[set[str]]:
     """Connected components of the match graph, singleton-completed over ``all_ids``.
 
     Shared by every many-to-many linkage benchmark (Amazon-Google, Abt-Buy): the
