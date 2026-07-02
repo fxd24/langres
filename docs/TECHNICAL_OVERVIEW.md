@@ -474,9 +474,19 @@ candidate structure, so it must not be used to benchmark a set-wise judge.
   members, no derivation, no skew. This is the implementation a set-wise
   judge should be benchmarked against.
 
-Both forms satisfy the same pairs-equivalence property: the pairs
-recoverable from `stream_groups()` equal the pairs from `stream()`, with no
-duplicates and no losses.
+Both forms satisfy the same pairs-equivalence property at the SET level: the
+SET of pairs recoverable from `stream_groups()` equals the SET of pairs from
+`stream()` — no losses. This does **not** mean each pair is covered by
+exactly one group: `VectorBlocker.stream_groups()` has no cross-anchor dedup
+state (unlike `stream()`'s single `seen_pairs` set), so when two entities are
+mutual nearest neighbors, the same undirected pair appears as a member edge
+in *both* of their groups — a deliberate trade-off (truncating a group would
+mean it no longer represents its anchor's real candidate set). A consumer
+that treats each group as an independent unit of work (e.g. one LLM call per
+group, for cost accounting) must dedupe by canonical pair across groups if it
+wants to process each undirected pair exactly once — see
+`VectorBlocker.stream_groups()`'s docstring and
+`test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs`.
 
 ### GroupwiseModule (`langres.core.module`)
 

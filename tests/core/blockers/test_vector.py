@@ -615,10 +615,14 @@ def test_vector_blocker_stream_groups_is_schema_agnostic_with_product_schema():
     [(3, 1), (4, 2), (5, 2), (6, 3), (8, 4)],
 )
 def test_vector_blocker_stream_groups_pairs_equivalence_property(n_entities, k_neighbors):
-    """Property (CEO #14): pairs from stream_groups() == pairs from stream().
+    """Property (CEO #14): the SET of pairs from stream_groups() == the SET from stream().
 
-    No dupes, no losses -- across several (N, k) shapes, including
-    k_neighbors close to and below N-1 (dense) and small k (sparse).
+    No losses (every pair stream() would yield is covered by at least one
+    group) across several (N, k) shapes, including k_neighbors close to and
+    below N-1 (dense) and small k (sparse). This is a SET-level equivalence:
+    it does not claim each pair is covered by EXACTLY one group -- see
+    ``test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs``
+    for the documented case where it's covered by two.
     """
     data = [{"id": f"c{i}", "name": f"Company {i}"} for i in range(n_entities)]
     texts = [d["name"] for d in data]
@@ -632,3 +636,64 @@ def test_vector_blocker_stream_groups_pairs_equivalence_property(n_entities, k_n
     group_pairs = pairs_from_groups(groups_blocker.stream_groups(data))
 
     assert group_pairs == stream_pairs
+
+
+def test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs():
+    """Documents a real caveat (raised in review): unlike stream(), stream_groups()
+    does NOT dedupe an edge across groups.
+
+    stream() maintains a single ``seen_pairs`` set across all entities, so a
+    mutual-nearest-neighbor pair (A's nearest neighbor is B AND B's nearest
+    neighbor is A -- common with real ANN indexes on near-duplicate records)
+    is yielded exactly once. stream_groups() has no such cross-anchor state:
+    each group is *anchor A's own, true, un-truncated neighbor list*, so if A
+    and B are mutual neighbors, the undirected pair {A, B} appears as a member
+    edge in BOTH A's group and B's group.
+
+    This is a deliberate trade-off, not an oversight: truncating a later
+    group to preserve global pair-uniqueness would mean that group no longer
+    represents the anchor's real candidate set (see the class docstring on
+    ``stream_groups()``). A consumer that treats each group as an independent
+    unit of work -- e.g. a future SelectJudge issuing one LLM call per group,
+    or counting/costing calls -- must dedupe by canonical pair across groups
+    if it wants to process (and charge for) each undirected pair once.
+    """
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    mock_index = MagicMock()
+    mock_index._index = object()  # _index_is_built() -> True
+    # 3 entities, k_neighbors=1 (k=2 incl. self): c0 and c1 are MUTUAL nearest
+    # neighbors; c2's nearest neighbor is c0 (one-directional).
+    mock_index.search_all = MagicMock(
+        return_value=(
+            np.array([[0.0, 0.1], [0.0, 0.1], [0.0, 0.2]], dtype=np.float32),
+            np.array([[0, 1], [1, 0], [2, 0]], dtype=np.int64),
+        )
+    )
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=mock_index,
+        k_neighbors=1,
+    )
+    data = [
+        {"id": "c0", "name": "Acme"},
+        {"id": "c1", "name": "Acme Corp"},
+        {"id": "c2", "name": "Other Co"},
+    ]
+
+    groups = list(blocker.stream_groups(data))
+
+    by_anchor = {g.group_id: g for g in groups}
+    assert {m.id for m in by_anchor["c0"].members} == {"c1"}
+    assert {m.id for m in by_anchor["c1"].members} == {"c0"}  # mutual -> reciprocated
+
+    edges = [
+        frozenset([group.anchor.id, member.id]) for group in groups for member in group.members
+    ]
+    # {c0, c1} is a member edge in BOTH c0's and c1's group -- covered twice.
+    assert edges.count(frozenset({"c0", "c1"})) == 2
+    # {c0, c2} is one-directional (only c2 -> c0) -- covered once.
+    assert edges.count(frozenset({"c0", "c2"})) == 1

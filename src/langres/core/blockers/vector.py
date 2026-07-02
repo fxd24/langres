@@ -532,13 +532,28 @@ class VectorBlocker(Blocker[SchemaT]):
             Empty datasets or single-entity datasets produce no groups.
 
         Note:
-            The pairs recoverable by flattening these groups back to
-            (anchor, member) edges are exactly the pairs stream() would
-            yield -- no dupes, no losses (CEO #14; verified by property test,
-            see tests/core/blockers/test_vector.py). This holds because
-            stream()'s per-pair dedup only ever *suppresses* a duplicate
-            direction of an edge already covered by some entity's neighbor
-            search -- it never adds an edge no entity's search produced.
+            The SET of pairs recoverable by flattening these groups back to
+            canonical (anchor, member) edges equals the SET of pairs stream()
+            would yield -- no losses (CEO #14; verified by property test, see
+            tests/core/blockers/test_vector.py). This holds because stream()'s
+            per-pair dedup only ever *suppresses* a duplicate direction of an
+            edge already covered by some entity's neighbor search -- it never
+            adds an edge no entity's search produced.
+
+            This does NOT mean each pair is covered by exactly one group,
+            though: unlike stream() (which dedups across ALL entities via a
+            single ``seen_pairs`` set), stream_groups() has no cross-anchor
+            state -- each group is one entity's own, true, un-truncated
+            neighbor list. When two entities are mutual nearest neighbors
+            (common with real ANN indexes on near-duplicate records), the
+            same undirected pair appears as a member edge in BOTH of their
+            groups. This is deliberate: truncating a later group to enforce
+            global pair-uniqueness would mean that group no longer represents
+            its anchor's real candidate set. A consumer that treats each
+            group as an independent unit of work (e.g. one LLM call per
+            group) must dedupe by canonical pair across groups if it wants to
+            process/cost each undirected pair exactly once -- see
+            ``test_vector_blocker_stream_groups_may_duplicate_mutual_neighbor_pairs``.
         """
         if not self._index_is_built():
             raise RuntimeError(
