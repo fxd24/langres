@@ -154,11 +154,11 @@ class DSPyJudge(Module[SchemaT]):
         self._compiled = False
         # Cost seam: honest per-pair cost = tokens * price. OpenRouter is priced at
         # $0 by litellm, so we never trust ``completion_cost``; instead we multiply
-        # real token counts by a pinned price. Default 0.0 keeps zero-spend runs at
-        # $0; the real pinned price is injected here by ``langres.clients.openrouter``
-        # (sibling branch) — set ``judge.price_per_1k_tokens`` after construction.
-        # TODO(M4 openrouter helper): wire ``price_per_1k_tokens`` from the pinned
-        # OpenRouter price table once ``langres.clients.openrouter`` merges.
+        # real token counts by a pinned price. Default 0.0 keeps zero-spend runs
+        # (e.g. a ``DummyLM`` in tests) at $0; the real pinned price is set after
+        # construction — the ``dspy_judge`` builder in ``langres.methods`` wires it
+        # from the ``langres.clients.openrouter`` price table (unknown models stay
+        # $0), or a caller may set ``judge.price_per_1k_tokens`` directly.
         self.price_per_1k_tokens = 0.0
 
     def _get_lm(self) -> Any:

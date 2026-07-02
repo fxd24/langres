@@ -101,6 +101,22 @@ class TestPerTokenWorstPrice:
         assert per_token_worst_price("m", {"m": (5.0, 2.0)}) == 5.0 / 1_000_000.0
 
 
+class TestUnknownModelError:
+    """Price lookups raise a descriptive KeyError (unknown id + the known ids)."""
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(lambda: patch_litellm_prices("nope/model"), id="patch_litellm_prices"),
+            pytest.param(lambda: per_token_worst_price("nope/model"), id="per_token_worst_price"),
+            pytest.param(lambda: make_token_cost_track("nope/model"), id="make_token_cost_track"),
+        ],
+    )
+    def test_descriptive_keyerror(self, call: object) -> None:
+        with pytest.raises(KeyError, match=r"unknown model .*nope/model.*known"):
+            call()  # type: ignore[operator]
+
+
 class TestMakeTokenCostTrack:
     """make_token_cost_track prices judgements from their provenance token counts."""
 

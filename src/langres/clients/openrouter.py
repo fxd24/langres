@@ -55,6 +55,18 @@ DEFAULT_TIMEOUT_S = 60.0
 # ---------------------------------------------------------------------------
 
 
+def _price_for(model: str, prices: Mapping[str, tuple[float, float]]) -> tuple[float, float]:
+    """Look up ``model``'s ``(input, output)`` per-1M price, with a descriptive error.
+
+    A bare ``prices[model]`` raises ``KeyError(model)`` — unhelpful on a typo'd or
+    unpinned id. This names the offending id and the known ones so the fix is obvious.
+    """
+    try:
+        return prices[model]
+    except KeyError:
+        raise KeyError(f"unknown model {model!r}; known: {sorted(prices)}") from None
+
+
 def patch_litellm_prices(
     model: str, prices: Mapping[str, tuple[float, float]] = PRICES_PER_1M
 ) -> None:
@@ -75,7 +87,7 @@ def patch_litellm_prices(
     """
     import litellm
 
-    in_per_1m, out_per_1m = prices[model]
+    in_per_1m, out_per_1m = _price_for(model, prices)
     entry = {
         "input_cost_per_token": in_per_1m / 1_000_000.0,
         "output_cost_per_token": out_per_1m / 1_000_000.0,
@@ -124,7 +136,7 @@ def register_runtime_model_price(
         logger.warning("price probe failed for %s: %s: %s", model, type(exc).__name__, exc)
         return None
     dated = str(resp.model)
-    in_per_1m, out_per_1m = prices[model]
+    in_per_1m, out_per_1m = _price_for(model, prices)
     litellm.model_cost[dated] = {
         "input_cost_per_token": in_per_1m / 1_000_000.0,
         "output_cost_per_token": out_per_1m / 1_000_000.0,
@@ -152,7 +164,7 @@ def per_token_worst_price(
         prices: Per-1M-token ``(input, output)`` price table. Defaults to
             :data:`PRICES_PER_1M`.
     """
-    in_per_1m, out_per_1m = prices[model]
+    in_per_1m, out_per_1m = _price_for(model, prices)
     return max(in_per_1m, out_per_1m) / 1_000_000.0
 
 
@@ -178,7 +190,7 @@ def make_token_cost_track(
     """
     from langres.core.benchmark import CostTrack
 
-    in_per_1m, out_per_1m = prices[model]
+    in_per_1m, out_per_1m = _price_for(model, prices)
     in_per_tok, out_per_tok = in_per_1m / 1_000_000.0, out_per_1m / 1_000_000.0
 
     def track(judgements: list[PairwiseJudgement]) -> CostTrack:
