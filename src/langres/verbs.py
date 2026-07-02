@@ -209,6 +209,18 @@ def _infer(records: Sequence[dict[str, Any]]) -> tuple[type[BaseModel], list[dic
     return schema, coerced
 
 
+def _with_resolved_ids(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a resolved ``"id"`` to each record, via the same rule ``_infer``
+    uses (:func:`_resolve_ids`): every record already has one -> keep it
+    (normalized to ``str``); none do -> assign positional ids; a mix ->
+    raises. Used by ``dedupe()``'s explicit-``schema=`` path so it can't
+    mistake "no id" for "duplicate id" (``str(record.get("id"))`` on two
+    id-less records both reads as the string ``"None"`` -- a false collision).
+    """
+    ids = _resolve_ids(records)
+    return [{**record, "id": rid} for record, rid in zip(records, ids, strict=True)]
+
+
 def _check_no_duplicate_ids(ids: Sequence[str]) -> None:
     """Raise if ``ids`` contains a repeat (dedupe()'s batch-uniqueness contract)."""
     if len(set(ids)) == len(ids):
@@ -363,9 +375,9 @@ def dedupe(
     if schema is None:
         resolved_schema, resolved_records = _infer(records)
     else:
-        resolved_schema, resolved_records = schema, records
+        resolved_schema, resolved_records = schema, _with_resolved_ids(records)
 
-    _check_no_duplicate_ids([str(record.get("id")) for record in resolved_records])
+    _check_no_duplicate_ids([record["id"] for record in resolved_records])
 
     resolved = build_resolver(
         resolved_schema,

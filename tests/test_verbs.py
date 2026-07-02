@@ -294,6 +294,21 @@ class TestDedupe:
         result = dedupe(records, judge="string", schema=VerbCompany, threshold=0.5)
         assert {"1", "2"} in result
 
+    def test_explicit_schema_no_id_key_uses_positional_ids(self) -> None:
+        """BUG regression: id-less records under an explicit schema= must not
+        be mis-flagged as duplicates. The old code skipped _resolve_ids() on
+        the explicit-schema path and did str(record.get("id")) for every
+        record -- two id-less records both read as the string "None", a
+        false "duplicate ids" collision even though nothing was duplicated.
+        Explicit-schema and inferred-schema must behave identically here:
+        positional ids when none are present."""
+        records = [
+            {"name": "Acme Corporation", "address": "1 Main St"},
+            {"name": "Acme Corporation", "address": "1 Main St"},
+        ]
+        result = dedupe(records, judge="string", schema=VerbCompany, threshold=0.5)
+        assert {"0", "1"} in result
+
     def test_dummy_lm_e2e_at_zero_cost(self) -> None:
         """Hostile-test requirement: judge=DSPyJudge(lm=DummyLM(...)) through dedupe()."""
         records = [
@@ -308,7 +323,7 @@ class TestDedupe:
         records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
         with pytest.raises(BudgetExceeded) as excinfo:
             dedupe(records, judge=_CostlyModule(6, 0.5), budget_usd=0.9)
-        partial = excinfo.value.partial_judgements  # type: ignore[attr-defined]
+        partial = excinfo.value.partial_judgements
         assert len(partial) == 2
 
     def test_no_key_falls_back_to_string_with_fallback_reason(self) -> None:
@@ -396,7 +411,7 @@ class TestLink:
                 judge=_CostlyModule(1, 5.0),
                 budget_usd=1.0,
             )
-        partial = excinfo.value.partial_judgements  # type: ignore[attr-defined]
+        partial = excinfo.value.partial_judgements
         assert len(partial) == 1
 
     def test_zero_shot_llm_emits_pre_scoring_notice(self) -> None:

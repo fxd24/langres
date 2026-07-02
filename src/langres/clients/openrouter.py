@@ -60,6 +60,13 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: sequential run; a bounded timeout makes a stalled call fail fast and recover.
 DEFAULT_TIMEOUT_S = 60.0
 
+#: The OpenRouter route ``judge="auto"``/``judge="zero_shot_llm"`` default to
+#: when no model id is given -- ``core.presets.choose_auto_judge`` and
+#: ``Resolver.from_schema`` both need this literal. Defined once here (the
+#: dspy-free, cycle-safe layer both of those sit above) so the two call sites
+#: can't drift on the string.
+DEFAULT_OPENROUTER_MODEL = "openrouter/openai/gpt-4o-mini"
+
 
 # ---------------------------------------------------------------------------
 # Price pinning
@@ -290,7 +297,19 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 
 
 class BudgetExceeded(RuntimeError):
-    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget."""
+    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget.
+
+    ``partial_judgements`` carries every judgement already produced (and paid
+    for) before the cap tripped (E9) -- populated by the catcher, not here
+    (see :class:`~langres.core.presets._SpendCappedModule`). Declared with a
+    default empty list so any future raiser is safe even if it never sets it,
+    and callers/mypy see the attribute without an ad hoc
+    ``# type: ignore[attr-defined]`` at the one call site that populates it.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)
+        self.partial_judgements: list[PairwiseJudgement] = []
 
 
 class SpendMonitor:

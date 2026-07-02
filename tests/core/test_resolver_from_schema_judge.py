@@ -39,6 +39,30 @@ class TestFromSchemaJudgeOptions:
         resolver = Resolver.from_schema(ResolverJudgeCo, judge="embedding")
         assert isinstance(resolver.module, EmbeddingScoreJudge)
 
+    def test_embedding_judge_wires_vector_blocker_not_all_pairs(self) -> None:
+        """BUG regression: the default AllPairsBlocker's candidates never
+        carry similarity_score, which EmbeddingScoreJudge requires -- so
+        judge="embedding" must wire a VectorBlocker instead, exactly like
+        core.presets.build_resolver does for the verb layer."""
+        from langres.core.blockers.vector import VectorBlocker
+
+        resolver = Resolver.from_schema(ResolverJudgeCo, judge="embedding")
+        assert isinstance(resolver.blocker, VectorBlocker)
+
+    @pytest.mark.slow
+    def test_embedding_judge_resolves_without_similarity_score_error(self) -> None:
+        """End-to-end: resolve() must not raise the ValueError an
+        AllPairsBlocker + EmbeddingScoreJudge pairing would produce (real
+        local MiniLM embed -- $0, no API key, just slow)."""
+        records = [
+            {"id": "1", "name": "Acme Corporation"},
+            {"id": "2", "name": "Acme Corp"},
+            {"id": "3", "name": "Totally Unrelated Restaurant"},
+        ]
+        resolver = Resolver.from_schema(ResolverJudgeCo, judge="embedding", threshold=0.5)
+        clusters = resolver.resolve(records)
+        assert isinstance(clusters, list)
+
     def test_zero_shot_llm_judge_default_model_and_pinned_price(self) -> None:
         resolver = Resolver.from_schema(
             ResolverJudgeCo, judge="zero_shot_llm", entity_noun="company"

@@ -210,7 +210,7 @@ class TestSpendCappedModule:
         candidates = iter([_candidate(str(i)) for i in range(5)])
         with pytest.raises(BudgetExceeded) as excinfo:
             list(module.forward(candidates))
-        partial = excinfo.value.partial_judgements  # type: ignore[attr-defined]
+        partial = excinfo.value.partial_judgements
         # 0.5 -> ok, 1.0 -> breaches $0.9 cap: exactly 2 judgements were paid for.
         assert len(partial) == 2
         assert all(isinstance(j, PairwiseJudgement) for j in partial)

@@ -96,10 +96,10 @@ def _build_module_for_judge(
         return EmbeddingScoreJudge()
     if judge == "zero_shot_llm":
         # Lazy: dspy must stay out of sys.modules unless this judge is chosen.
-        from langres.clients.openrouter import dspy_price_per_1k
+        from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
         from langres.core.modules.dspy_judge import DSPyJudge
 
-        resolved_model = model or "openrouter/openai/gpt-4o-mini"
+        resolved_model = model or DEFAULT_OPENROUTER_MODEL
         dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
         dspy_module.price_per_1k_tokens = dspy_price_per_1k(resolved_model)
         return dspy_module
@@ -108,6 +108,34 @@ def _build_module_for_judge(
         "'string', 'embedding', 'zero_shot_llm', or pass a Module instance. "
         "'auto' key-based resolution is a verbs-layer feature -- use "
         "langres.link/langres.dedupe for that."
+    )
+
+
+def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
+    """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
+
+    ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
+    ``EmbeddingScoreJudge`` requires to score -- ``judge="embedding"`` must
+    always be paired with a ``VectorBlocker``, mirroring the identical rule
+    ``core.presets.build_resolver`` applies for the verb layer (same model,
+    same k, same cosine metric). Duplicated here rather than imported from
+    ``core.presets`` for the same layering reason as
+    :func:`_build_module_for_judge`: ``core.presets`` sits ABOVE ``Resolver``
+    and must not be imported back into it.
+    """
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+
+    def extract(entity: Any) -> str:
+        parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
+        return " ".join(parts)
+
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    index = FAISSIndex(embedder=embedder, metric="cosine")
+    return VectorBlocker(
+        vector_index=index, schema=schema, text_field_extractor=extract, k_neighbors=10
     )
 
 
@@ -272,7 +300,10 @@ class Resolver:
         Defaults to an ``AllPairsBlocker`` over the schema, a missing-aware
         ``StringComparator`` auto-derived from the schema's string fields (with
         ``id`` excluded), a ``WeightedAverageJudge`` scorer, and a ``Clusterer``
-        at ``threshold``.
+        at ``threshold``. ``judge="embedding"`` is the one exception to the
+        ``AllPairsBlocker`` default: it wires a ``VectorBlocker`` instead,
+        since ``EmbeddingScoreJudge`` scores off the blocker's
+        ``similarity_score``, which only a ``VectorBlocker`` attaches.
 
         Args:
             schema: The Pydantic entity schema to resolve.
@@ -285,10 +316,11 @@ class Resolver:
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
             judge: ``"string"`` (default -- identical to pre-existing
-                behavior), ``"embedding"``, ``"zero_shot_llm"``, or a
-                ``Module`` instance. This is the low-level, explicit switch
-                (no ``"auto"`` key-based resolution and no spend cap -- that
-                magic lives in ``langres.link``/``langres.dedupe``).
+                behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
+                above), ``"zero_shot_llm"``, or a ``Module`` instance. This is
+                the low-level, explicit switch (no ``"auto"`` key-based
+                resolution and no spend cap -- that magic lives in
+                ``langres.link``/``langres.dedupe``).
             model: Model id override for ``judge="zero_shot_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
 
@@ -301,8 +333,13 @@ class Resolver:
             schema, exclude=exclude, weights=weights
         )
         module = _build_module_for_judge(judge, comparator, model=model, entity_noun=entity_noun)
+        blocker: Blocker[Any] = (
+            _build_embedding_blocker(schema)
+            if judge == "embedding"
+            else AllPairsBlocker(schema=schema)
+        )
         return cls(
-            blocker=AllPairsBlocker(schema=schema),
+            blocker=blocker,
             comparator=comparator,
             module=module,
             clusterer=Clusterer(threshold=threshold),

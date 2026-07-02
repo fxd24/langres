@@ -48,7 +48,12 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pydantic import BaseModel
 
-from langres.clients.openrouter import BudgetExceeded, SpendMonitor, dspy_price_per_1k
+from langres.clients.openrouter import (
+    DEFAULT_OPENROUTER_MODEL,
+    BudgetExceeded,
+    SpendMonitor,
+    dspy_price_per_1k,
+)
 from langres.clients.settings import Settings
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
@@ -93,7 +98,10 @@ _VECTOR_K_NEIGHBORS = 10
 _VECTOR_MODEL_NAME = "all-MiniLM-L6-v2"
 
 #: judge="auto" model ids, keyed by which API key is present (choose_auto_judge).
-_OPENROUTER_MODEL = "openrouter/openai/gpt-4o-mini"
+#: ``_OPENROUTER_MODEL`` aliases the shared constant (defined once in
+#: ``clients.openrouter`` -- also used by ``Resolver.from_schema``) so the two
+#: layers can't drift on the literal.
+_OPENROUTER_MODEL = DEFAULT_OPENROUTER_MODEL
 _OPENAI_MODEL = "openai/gpt-5-mini"
 
 #: Static ``PairwiseJudgement.score_type`` each judge kind emits -- used as a
@@ -251,7 +259,7 @@ class _SpendCappedModule(Module[Any]):
             try:
                 monitor.check()
             except BudgetExceeded as exc:
-                exc.partial_judgements = list(produced)  # type: ignore[attr-defined]
+                exc.partial_judgements = list(produced)
                 raise
             yield judgement
 
