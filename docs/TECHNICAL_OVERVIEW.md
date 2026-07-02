@@ -596,3 +596,68 @@ subclassing required. `Resolver.fit(data, labels=None)` detects this with
 
 No concrete judge implements either hook yet; `FellegiSunterJudge` and
 `RFJudge` (a later branch) are the first.
+
+## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
+
+### KeyBlocker (`langres.core.blockers.key`)
+
+Buckets records by a configurable key and emits all pairs within each bucket.
+Mirrors `AllPairsBlocker`'s declarative/callable split: `key_field=` (a schema
+attribute name, serializable) or `key_fn=` (full callable control, not
+serializable), same mutual-exclusion rule as `schema=`/`schema_factory=`.
+`normalize=True` (default) lowercases + strips non-`None` keys before
+bucketing. A record whose key extracts to `None` gets no candidates from this
+blocker — trading recall for precision/speed, by design; compose with a
+recall-oriented blocker (e.g. `VectorBlocker`) via `CompositeBlocker` to
+recover it.
+
+### CompositeBlocker (`langres.core.blockers.composite`)
+
+Set algebra over 2+ child `Blocker`s: `op="union"` (default,
+recall-maximizing — a pairs-superset of every child), `"intersection"`
+(pairs in every child), or `"difference"` (`children[0]` minus the rest).
+Dedups by the canonical undirected pair key with first-seen semantics (the
+same guarantee every base blocker already gives). `blocker_name` on each
+surviving candidate is rewritten to
+`"composite_{op}(label1+label2+...)"`, naming exactly which child(ren)
+produced *that* pair — real per-pair provenance, not just "this came from a
+composite." Necessarily buffers every child in full (set membership must be
+known across all children before a pair can be kept or dropped) — like
+`derive_groups_from_pairs`, this trades the streaming-first contract for
+correctness. Relies on the inherited `Blocker.stream_groups()` default
+(no native per-anchor override): composite pair sets, especially under
+intersection/difference across heterogeneous children, have no natural
+single-anchor structure the way `VectorBlocker`'s kNN search does.
+Registered (`"composite_blocker"`) and config-serializable as long as every
+child is too (a child with out-of-band state, e.g. a built `VectorBlocker`
+index, is not preserved through a composite's `config`/`from_config`
+round-trip — persist such a pipeline via the `Resolver` artifact instead).
+
+Measured on Fodors-Zagat + Amazon-Google (Pair-Completeness / Reduction-Ratio,
+composite vs. each dataset's pinned `VectorBlocker` alone):
+`examples/w1_blocking_algebra_output.md`.
+
+### CorrelationClusterer (`langres.core.clusterers.correlation`, "C6")
+
+A `Clusterer` subclass (drop-in for the `clusterer=` slot; inherits
+`config`/`from_config`/`evaluate`/`inspect_clusters` unchanged, overrides only
+`cluster()`). The base `Clusterer` builds a graph from edges `>= threshold`
+and takes connected components — full transitive closure, so a chain of
+edges (A-B, B-C) with no direct A-C edge still merges all three (the
+documented M3 −0.63 BCubed over-merge failure mode). `CorrelationClusterer`
+implements the *pivot algorithm* for correlation clustering (Ailon, Charikar
+& Newman, JACM 2008): process nodes highest-confidence-edge-first
+(deterministic, ties broken by id); each pivot's cluster is itself plus only
+its *direct* neighbours `>= threshold`. A node with only an indirect path to
+a cluster is never pulled in by transitivity alone — merge-resistant relative
+to the base `Clusterer` — while a genuinely well-connected clique (every pair
+directly compared and matched) still merges fully under both.
+
+**Not the default.** Benchmarked head-to-head against the base `Clusterer` on
+Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
+clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
+on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
+see `examples/w1_blocking_algebra_output.md` for the full tables and the
+default-flip decision (kept opt-in; recommended for harder/messier
+entity-resolution problems, not flipped globally on a single hard-dataset
+win).
