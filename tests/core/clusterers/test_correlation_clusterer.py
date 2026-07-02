@@ -121,6 +121,14 @@ def test_correlation_clusterer_keeps_max_score_for_duplicate_pair_judgements() -
     assert clusterer.cluster(judgements) == [{"A", "B"}]
 
 
+def test_correlation_clusterer_a_later_weaker_duplicate_does_not_downgrade_the_edge() -> None:
+    """A weaker (but still >= threshold) duplicate seen AFTER the strong one is a no-op."""
+    judgements = [_j("A", "B", 0.9), _j("A", "B", 0.6)]
+    clusterer = CorrelationClusterer(threshold=0.5)
+
+    assert clusterer.cluster(judgements) == [{"A", "B"}]
+
+
 def test_correlation_clusterer_ignores_self_pairs() -> None:
     """A left_id == right_id judgement contributes no edge."""
     judgements = [_j("A", "A", 0.99)]
