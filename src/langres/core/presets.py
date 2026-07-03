@@ -247,7 +247,10 @@ class _SpendCappedModule(Module[Any]):
     :class:`~langres.clients.openrouter.BudgetExceeded` with every judgement
     already produced (and paid for) attached as ``.partial_judgements`` (E9;
     mirrors :class:`~langres.core.benchmark.BlindCostError`'s "set by the
-    catcher, not at raise time" pattern).
+    catcher, not at raise time" pattern). For a group-wise module
+    (``SelectJudge``), a group is never split across the cap boundary: the
+    already-paid-for siblings of a tripping judgement are drained in too (see
+    ``forward``'s ``provenance["group_end"]`` handling).
 
     Deliberately NOT :class:`~langres.core.benchmark.BudgetedModuleRunner`:
     that runner *silently truncates* past its soft cap (correct for the

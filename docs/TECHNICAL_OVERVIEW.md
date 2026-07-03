@@ -562,6 +562,15 @@ factor of K. `stamp_group_cost(judgements, call_cost_usd, group_id)`
 read `provenance["cost_usd"]`) then sums a group to exactly one call's cost
 with no changes on their end.
 
+`stamp_group_cost` also sets `provenance["group_end"] = True` on (only) the
+**last** judgement of the group — a boundary marker that lets a consumer
+draining a whole group from a lazy stream (`_SpendCappedModule.forward` in
+`langres.core.presets`, the hard spend cap the verb layer wraps every judge
+in) know exactly when to stop pulling, without peeking at the next
+judgement's `group_id` — which for a real `GroupwiseModule` would resume the
+generator into (and pay for) the next group before there's anything to
+compare against.
+
 **Atomicity caveat:** `BudgetedModuleRunner` scores exactly one `ERCandidate`
 per `module.forward()` call. A `GroupwiseModule` run through it today derives
 a single, trivial, size-1 group per call — so a group is never *split*
