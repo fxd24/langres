@@ -1,11 +1,11 @@
 # M3 zero-spend race — reference output
 
-Reference run of `examples/m3_zero_spend_race.py` (seed=0, real MiniLM
+Reference run of `examples/research/m3_zero_spend_race.py` (seed=0, real MiniLM
 embeddings, **zero LLM spend**). Captured so the numbers survive without
 re-embedding. Reproduce with:
 
 ```
-uv run python examples/m3_zero_spend_race.py
+uv run python examples/research/m3_zero_spend_race.py
 ```
 
 The three zero-spend scorers (`rapidfuzz`, `weighted_average`,
