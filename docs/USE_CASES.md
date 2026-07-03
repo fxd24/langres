@@ -16,9 +16,13 @@
 > - **Deduplication (UC1):** ✅ `langres.dedupe(records)` or
 >   `Resolver.from_schema(schema).resolve(records)`.
 > - **Pairwise match:** ✅ `langres.link(left, right)` → `LinkVerdict`.
-> - **Entity Linking / cross-source / incremental (UC2, UC3, UC10):** 🚧
->   `Resolver.link()` and `Resolver.stream_against()` exist only as
->   `NotImplementedError` stubs reserved for **M5**.
+> - **Incremental single-record assignment (UC10):** ✅ (M5/W2.2)
+>   `resolver.build_anchor_store(records)` then `resolver.assign(new_record)`
+>   → `ClusterDelta` (`link` to a stable entity id, or `new`); the
+>   serializable `AnchorStore` persists it. See `examples/incremental_assign.py`.
+> - **Cross-source entity linking (UC2, UC3):** 🚧 `Resolver.link()` and
+>   `Resolver.stream_against()` remain `NotImplementedError` stubs reserved for
+>   later **M5** waves (distinct from the single-record `assign` above).
 > - **Master Data / golden records (UC4):** 🚧 no `Canonicalizer` yet — **M5**.
 > - **Negative constraints (UC9):** 🚧 `Clusterer` takes only a `threshold`;
 >   no cannot-link support today.
@@ -88,10 +92,12 @@ This is the primary "hello world" use case for langres.
 
 Cross-source, asymmetric linking is **not yet built**. `Resolver.link(left,
 right)` and `Resolver.stream_against(records)` exist only as
-`NotImplementedError` stubs reserved for M5 (incremental assignment against an
-entity store). For a *pairwise* match decision today, use
-`langres.link(left, right)` → `LinkVerdict`; for single-source clustering, use
-`dedupe` / `Resolver.resolve` (UC1).
+`NotImplementedError` stubs reserved for later M5 waves. What *does* ship (M5/
+W2.2) is **single-record incremental assignment against an anchor store**:
+`resolver.build_anchor_store(target_records)` then `resolver.assign(new_record)`
+→ `ClusterDelta` (`link` to a stable entity id in T, or `new`). For a *pairwise*
+match decision today, use `langres.link(left, right)` → `LinkVerdict`; for
+single-source clustering, use `dedupe` / `Resolver.resolve` (UC1).
 
 ### Use Case 10: Fuzzy Foreign Key Resolution
 
