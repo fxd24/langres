@@ -43,6 +43,13 @@ from langres.core.debugging import (
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
+from langres.core.harvest import (
+    Correction,
+    CorrectionLog,
+    LabeledPair,
+    derive_threshold_from_pairs,
+    harvest_labeled_pairs,
+)
 from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.fellegi_sunter import FellegiSunterJudge
@@ -111,8 +118,11 @@ __all__ = [
     "ComparisonVector",
     "ComponentSpec",
     "CompositeBlocker",
+    "Correction",
+    "CorrectionLog",
     "CorrelationClusterer",
     "derive_groups_from_pairs",
+    "derive_threshold_from_pairs",
     "EmbeddingProvider",
     "EmbeddingScoreJudge",
     "EntityProtocol",
@@ -131,8 +141,10 @@ __all__ = [
     "get_schema",
     "GLinkerAdapter",
     "GroupwiseModule",
+    "harvest_labeled_pairs",
     "JudgementLog",
     "KeyBlocker",
+    "LabeledPair",
     "LLMJudge",
     "LoggingModule",
     "metrics",

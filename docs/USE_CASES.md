@@ -243,7 +243,7 @@ exists, and the intended (not-yet-built) design otherwise.
 | 4. Master Data Creation | `Canonicalizer` (survivorship) — not built | 🚧 Roadmap (M5) |
 | Set-wise / trained judge families | SelectJudge, Fellegi–Sunter, RandomForest — not built | 🚧 Roadmap (M4.5) |
 | 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |
-| Human-in-the-Loop | review-queue / correction-harvest contract — not built | 🚧 Roadmap (M5 flywheel) |
+| Human-in-the-Loop | correction-harvest contract (`Correction`/`CorrectionLog`) + `harvest_labeled_pairs` → `derive_threshold`; review-queue UX stays downstream | 🟡 **Harvest shipping** (M5/W2.4); `fit()` wiring next |
 | Data Generation | synthetic generator — not built | 🚧 Roadmap |
 | 3. Record Linkage | multi-source blocker — not built | 🚧 Roadmap (post-M5) |
 | 8. Privacy-Preserving (PPRL) | custom PPRL blocker + judge | ⚪ Future / out of scope |
