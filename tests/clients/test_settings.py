@@ -11,6 +11,21 @@ from langres.clients.settings import Settings
 class TestSettings:
     """Tests for Settings class."""
 
+    def test_settings_openrouter_api_key_from_env(self):
+        """OPENROUTER_API_KEY loads into settings.openrouter_api_key (judge="auto" seam)."""
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "or-test123"}, clear=True):
+            settings = Settings()
+            assert settings.openrouter_api_key == "or-test123"
+
+    def test_settings_openrouter_api_key_defaults_to_none(self):
+        """Absent OPENROUTER_API_KEY leaves the field None (judge="auto" falls back)."""
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
+        ):
+            settings = Settings()
+            assert settings.openrouter_api_key is None
+
     def test_settings_with_all_required_fields(self):
         """Test Settings initialization with all required fields."""
         with patch.dict(

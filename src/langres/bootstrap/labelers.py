@@ -324,10 +324,11 @@ class TeacherLabeler(Labeler):
     ) -> "TeacherLabeler":
         """Build a teacher with an LLM judge constructed from the environment.
 
-        The judge's client is built with ``enable_langfuse=False`` so the
-        teacher never depends on Langfuse credentials (design-review B4): the
-        usual ``LLMJudge.from_env`` enables Langfuse by default, which raises
-        without ``LANGFUSE_*`` env vars.
+        The judge's client is built with ``enable_langfuse=False`` (explicit,
+        though it's also ``create_llm_client``'s default since W0.4 -- see
+        design-review B4) so the teacher never depends on Langfuse
+        credentials or the langfuse package (dev-group only, not part of the
+        ``[llm]`` extra).
 
         Args:
             price_per_1m_prompt_tokens: See :meth:`__init__`.

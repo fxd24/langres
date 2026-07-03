@@ -25,6 +25,27 @@ is held constant per dataset so the race compares judges, not blockers:
 - ``dspy_judge`` — VectorBlocker -> ``DSPyJudge`` (a compilable DSPy
   ``ChainOfThought``) -> Clusterer (M4). Its injected client is a **DSPy LM**
   (``dspy.LM`` / ``DummyLM``), distinct from the LiteLLM/OpenAI clients above.
+- ``select_judge`` — VectorBlocker -> ``SelectJudge`` (a ComEM-style set-wise
+  judge: ONE LLM call per anchor group instead of one call per pair) ->
+  Clusterer (W1.1). Its injected client is a **DSPy LM**, same shape as
+  ``dspy_judge``.
+
+Two more methods are dispatchable by name (:func:`_make_module_builder`
+recognizes them) but are deliberately **not** members of
+``ZERO_SPEND_METHODS``/``ALL_METHODS`` — the trained family (W1.2) needs an
+explicit fit step before scoring, which ``run_methods``/``run_method`` cannot
+provide (they rebuild the module fresh, unfit, per grid threshold). Build
++ fit + evaluate them via ``Resolver.fit(...)`` and
+``evaluate_judge_on_candidates`` instead — see ``docs/EXPERIMENTS.md``.
+
+- ``fellegi_sunter`` — VectorBlocker -> ``Comparator.from_schema`` ->
+  ``FellegiSunterJudge`` -> Clusterer. Learns m/u/prior via EM with **no
+  labels** (``UnsupervisedFitMixin.fit_unlabeled``, i.e.
+  ``resolver.fit(records)``).
+- ``random_forest`` — VectorBlocker -> ``Comparator.from_schema`` ->
+  ``RFJudge`` -> Clusterer. sklearn RandomForest over comparator similarities,
+  supervised (``SupervisedFitMixin.fit``, i.e.
+  ``resolver.fit(records, labels=...)``).
 
 A dataset participates by conforming to :class:`BlockingBenchmark` — exposing its
 record ``schema`` plus a pinned blocking config (``blocking_k`` and a
@@ -40,27 +61,37 @@ from typing import Any, Protocol
 # (rather than re-implement its cost-key fallback math) so cascade spend totals
 # stay identical to every other method's; it is a stable same-package internal
 # that the harness's own tests also import directly.
+# Relocated to ``langres.clients.openrouter.dspy_price_per_1k`` (dspy-free,
+# layer-neutral) so both this module and ``langres.core.presets`` can share it
+# without a ``core -> methods -> core`` import cycle. Aliased to the old
+# private name since existing call sites in this module reference it.
+from langres.clients.openrouter import dspy_price_per_1k as _dspy_price_per_1k
 from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.comparator import Comparator
+from langres.core.comparator import Comparator, StringComparator
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import PairwiseJudgement
 from langres.core.module import Module
 from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP, CascadeModule
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.modules.rf_judge import RFJudge
 from langres.core.resolver import Resolver
 
 #: Methods whose scorer makes no API call — fully deterministic and zero-spend.
 ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embedding_cosine")
 
 #: Methods whose scorer calls an LLM — they take an injected client (mock/real).
-#: ``dspy_judge`` is LLM-backed too, but its injected client is a **DSPy LM**
-#: (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI client the others take —
-#: see :func:`_make_module_builder`.
-LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge")
+#: ``dspy_judge`` and ``select_judge`` are LLM-backed too, but their injected
+#: client is a **DSPy LM** (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI
+#: client the others take — see :func:`_make_module_builder`. ``select_judge``
+#: (W1.1, ComEM-style set-wise) additionally makes ONE LLM call per anchor
+#: GROUP instead of one call per pair — see
+#: :class:`~langres.core.modules.select_judge.SelectJudge`.
+LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge", "select_judge")
 
 #: Every method the registry can build, in race order.
 ALL_METHODS: tuple[str, ...] = ZERO_SPEND_METHODS + LLM_METHODS
@@ -152,27 +183,6 @@ def _build_cascade_module(
     return module
 
 
-def _dspy_price_per_1k(model: str) -> float:
-    """Per-1k-token price for ``model`` from the pinned OpenRouter table (0.0 if unknown).
-
-    ``DSPyJudge`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` — a single
-    blended per-1k rate over ``prompt + completion`` tokens — so we take the worst-case
-    (dearer of input/output) per-token price and scale it to per-1k. Worst-case is the
-    same price basis :class:`~langres.core.benchmark.BudgetedModuleRunner` uses for its
-    cap, so the judge's self-reported cost and the live budget-stop agree.
-
-    Unknown models keep ``0.0`` (zero-spend/test runs stay free and never crash),
-    mirroring ``register_runtime_model_price`` returning ``None`` for unknown ids —
-    rather than guessing a price. ``langres.clients.openrouter`` is dspy-free, so this
-    lookup never pulls ``dspy`` into ``import langres.methods``.
-    """
-    from langres.clients.openrouter import PRICES_PER_1M, per_token_worst_price
-
-    if model not in PRICES_PER_1M:
-        return 0.0
-    return per_token_worst_price(model) * 1_000.0
-
-
 def _make_module_builder(
     method: str,
     schema: type[Any],
@@ -220,6 +230,21 @@ def _make_module_builder(
             return judge
 
         return build_dspy_judge, None
+    if method == "select_judge":
+        # ComEM-style set-wise judge (W1.1): same DSPy-LM injection contract as
+        # ``dspy_judge`` (a ``dspy.LM(...)`` / ``DummyLM``), lazily imported for
+        # the same import-safety reason, and priced from the same table — it
+        # differs only in scoring a whole anchor GROUP per call, not one pair.
+        from langres.core.modules.select_judge import SelectJudge
+
+        select_price_per_1k = _dspy_price_per_1k(llm_model)
+
+        def build_select_judge() -> Module[Any]:
+            judge: SelectJudge[Any] = SelectJudge(lm=llm_client, model=llm_model)
+            judge.price_per_1k_tokens = select_price_per_1k
+            return judge
+
+        return build_select_judge, None
     if method == "cascade":
         return (
             lambda: _build_cascade_module(
@@ -229,7 +254,16 @@ def _make_module_builder(
                 high_threshold=cascade_high,
             )
         ), None
-    raise ValueError(f"unknown method {method!r}; choose one of {ALL_METHODS}")
+    if method == "fellegi_sunter":
+        fs_comparator: StringComparator[Any] = Comparator.from_schema(schema)
+        return (lambda: FellegiSunterJudge(comparator=fs_comparator)), fs_comparator
+    if method == "random_forest":
+        rf_comparator: StringComparator[Any] = Comparator.from_schema(schema)
+        return (lambda: RFJudge(feature_specs=rf_comparator.feature_specs)), rf_comparator
+    raise ValueError(
+        f"unknown method {method!r}; choose one of "
+        f"{ALL_METHODS + ('fellegi_sunter', 'random_forest')}"
+    )
 
 
 def make_resolver_factory(

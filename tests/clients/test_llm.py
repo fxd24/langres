@@ -1,6 +1,7 @@
 """Tests for langres.clients.llm module."""
 
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,7 +23,7 @@ class TestCreateLLMClient:
     """Tests for create_llm_client factory function."""
 
     def test_create_llm_client_with_settings(self):
-        """Test create_llm_client configures litellm with Langfuse."""
+        """Test create_llm_client configures litellm with Langfuse (explicit opt-in)."""
         settings = Settings(
             openai_api_key="sk-test",
             wandb_api_key="wb-test",
@@ -35,13 +36,13 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
-            client = create_llm_client(settings)
+            client = create_llm_client(settings, enable_langfuse=True)
 
             # Verify Langfuse client was initialized
             mock_langfuse_class.assert_called_once_with(
@@ -58,7 +59,7 @@ class TestCreateLLMClient:
             assert client is mock_litellm
 
     def test_create_llm_client_without_settings_loads_from_env(self):
-        """Test create_llm_client without settings loads from env vars."""
+        """Test create_llm_client without settings loads from env vars (Langfuse opt-in)."""
         with patch.dict(
             os.environ,
             {
@@ -73,13 +74,13 @@ class TestCreateLLMClient:
         ):
             with (
                 patch("langres.clients.llm.litellm") as mock_litellm,
-                patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+                patch("langfuse.Langfuse") as mock_langfuse_class,
             ):
                 mock_langfuse_instance = MagicMock()
                 mock_langfuse_instance.auth_check.return_value = True
                 mock_langfuse_class.return_value = mock_langfuse_instance
 
-                client = create_llm_client()
+                client = create_llm_client(enable_langfuse=True)
 
                 # Verify Langfuse initialized with env vars
                 mock_langfuse_class.assert_called_once()
@@ -102,13 +103,13 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
-            client = create_llm_client(settings)
+            client = create_llm_client(settings, enable_langfuse=True)
 
             # Verify Langfuse initialized with default host
             mock_langfuse_class.assert_called_once_with(
@@ -141,13 +142,13 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
-            client = create_llm_client(settings)
+            client = create_llm_client(settings, enable_langfuse=True)
 
             # Verify Langfuse initialized
             mock_langfuse_class.assert_called_once()
@@ -165,7 +166,7 @@ class TestCreateLLMClient:
             assert client is mock_litellm
 
     def test_create_llm_client_without_langfuse(self):
-        """Test create_llm_client with Langfuse disabled."""
+        """Test create_llm_client with Langfuse explicitly disabled."""
         with patch("langres.clients.llm.litellm") as mock_litellm:
             client = create_llm_client(enable_langfuse=False)
 
@@ -174,6 +175,45 @@ class TestCreateLLMClient:
 
             # Verify litellm module is returned
             assert client is mock_litellm
+
+    def test_create_llm_client_default_does_not_require_langfuse_installed(self, monkeypatch):
+        """The [llm]-only contract: enable_langfuse now defaults to False, so
+        create_llm_client(Settings()) -- exactly what LLMJudge.from_env()/
+        LLMJudge._get_client() call internally -- must succeed even when
+        langfuse isn't installed (it's dev-group only, not part of [llm]).
+
+        Simulates absence by making ``langfuse`` unimportable (the standard
+        "set sys.modules[name] = None" trick forces the next `import`/`from
+        ... import` to raise ImportError), since langfuse IS installed in
+        this dev environment and can't be genuinely uninstalled for the test.
+        """
+        monkeypatch.setitem(sys.modules, "langfuse", None)
+        with patch("langres.clients.llm.litellm") as mock_litellm:
+            client = create_llm_client(Settings())
+
+            assert client is mock_litellm
+            assert mock_litellm.callbacks != ["langfuse_otel"]
+
+    def test_create_llm_client_no_args_default_does_not_require_langfuse_installed(
+        self, monkeypatch
+    ):
+        """Same contract as above, but via the no-Settings call LLMJudge's
+        ``forward_async`` path (langres/core/modules/llm_judge.py:370) uses."""
+        monkeypatch.setitem(sys.modules, "langfuse", None)
+        with patch("langres.clients.llm.litellm") as mock_litellm:
+            client = create_llm_client()
+
+            assert client is mock_litellm
+            assert mock_litellm.callbacks != ["langfuse_otel"]
+
+    def test_create_llm_client_enable_langfuse_raises_actionable_import_error_when_absent(
+        self, monkeypatch
+    ):
+        """Explicitly requesting tracing without langfuse installed must raise
+        a helpful ImportError (what/why/fix), not a raw ModuleNotFoundError."""
+        monkeypatch.setitem(sys.modules, "langfuse", None)
+        with pytest.raises(ImportError, match=r"langres\[dev\]"):
+            create_llm_client(Settings(), enable_langfuse=True)
 
     def test_create_llm_client_raises_error_if_langfuse_keys_missing(self):
         """Test create_llm_client raises ValueError if Langfuse keys missing."""
@@ -208,13 +248,13 @@ class TestCreateLLMClient:
 
         with (
             patch("langres.clients.llm.litellm") as mock_litellm,
-            patch("langres.clients.llm.Langfuse") as mock_langfuse_class,
+            patch("langfuse.Langfuse") as mock_langfuse_class,
         ):
             mock_langfuse_instance = MagicMock()
             mock_langfuse_instance.auth_check.return_value = True
             mock_langfuse_class.return_value = mock_langfuse_instance
 
-            client = create_llm_client(settings)
+            client = create_llm_client(settings, enable_langfuse=True)
 
             # Verify Langfuse initialized
             mock_langfuse_class.assert_called_once()
@@ -233,7 +273,7 @@ class TestCreateLLMClient:
             langfuse_secret_key="sk-lf-test",
         )
 
-        with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
+        with patch("langfuse.Langfuse") as mock_langfuse_class:
             # Simulate Langfuse initialization failure
             mock_langfuse_class.side_effect = Exception("Connection failed")
 
@@ -247,7 +287,7 @@ class TestCreateLLMClient:
             langfuse_secret_key="sk-lf-test",
         )
 
-        with patch("langres.clients.llm.Langfuse") as mock_langfuse_class:
+        with patch("langfuse.Langfuse") as mock_langfuse_class:
             mock_langfuse_instance = MagicMock()
             # auth_check returns False -> invalid credentials/host
             mock_langfuse_instance.auth_check.return_value = False

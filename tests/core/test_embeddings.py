@@ -10,8 +10,24 @@ from langres.core.embeddings import (
     FakeEmbedder,
     SentenceTransformerEmbedder,
 )
+from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
+
+
+def test_registered_under_sentence_transformer_embedder_via_lazy_lookup() -> None:
+    """``get_component(...)`` lazily imports+registers the class.
+
+    (W0.4: sentence-transformers is optional, so these joined
+    ``_LAZY_COMPONENT_MODULES`` alongside ``dspy_judge``.)
+    """
+    assert get_component("sentence_transformer_embedder") is SentenceTransformerEmbedder
+    assert SentenceTransformerEmbedder.type_name == "sentence_transformer_embedder"
+
+
+def test_registered_under_fake_embedder_via_lazy_lookup() -> None:
+    assert get_component("fake_embedder") is FakeEmbedder
+    assert FakeEmbedder.type_name == "fake_embedder"
 
 
 class TestSentenceTransformerEmbedder:

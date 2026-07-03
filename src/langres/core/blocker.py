@@ -11,6 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
 from langres.core.models import ERCandidate
 from langres.core.reports import BlockerEvaluationReport, CandidateInspectionReport
 
@@ -147,6 +148,40 @@ class Blocker(ABC, Generic[SchemaT]):
             - LSH (Locality-Sensitive Hashing)
         """
         pass  # pragma: no cover
+
+    def stream_groups(self, data: list[Any]) -> Iterator[ERCandidateGroup[SchemaT]]:
+        """Generate anchor + K-candidate-member groups from input data (W1.0, E3).
+
+        Default implementation: fully buffers ``self.stream(data)`` and
+        derives groups from it via
+        :func:`~langres.core.groups.derive_groups_from_pairs` (grouped by each
+        pair's ``left`` entity). This default is **buffered and skew-prone**
+        -- an entity that never appears as ``left`` in the pairwise stream
+        (e.g. because pair order is canonicalized by id) never becomes its
+        own anchor, so group *sizes* are not representative of the blocker's
+        real candidate structure. **Do not use this default for benchmarking**
+        set-wise judges; it exists so every ``Blocker`` subclass gets a
+        working (if non-optimal) ``stream_groups()`` for free.
+
+        A blocker whose candidate-generation structure is naturally
+        per-anchor (e.g. ``VectorBlocker``'s kNN search, where each entity's
+        neighbors ARE its group) should override this method with a native
+        implementation instead of relying on the derived default.
+
+        Args:
+            data: List of raw data items, same as ``stream()`` accepts.
+
+        Yields:
+            ERCandidateGroup[SchemaT] objects, one per unique anchor entity.
+
+        Note:
+            Despite the skew, this default is *lossless* over pairs: the pairs
+            recoverable by flattening its groups back to (anchor, member)
+            edges are exactly the pairs ``stream()`` would yield -- no dupes,
+            no losses (verified by property test; see
+            ``tests/core/test_blocker.py``).
+        """
+        yield from derive_groups_from_pairs(self.stream(data))
 
     @abstractmethod
     def inspect_candidates(

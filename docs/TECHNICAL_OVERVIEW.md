@@ -433,7 +433,240 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `left_id: str`
 - `right_id: str`
 - `score: float`: The combined score (0.0 to 1.0).
-- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", ...]`: What kind of score is this? Critical for calibration and clustering.
+- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Critical for calibration and clustering. `prob_fs`/`prob_rf`/`prob_group_llm` (added W1.0) are reserved for a Fellegi-Sunter judge, an sklearn RandomForest judge, and a set-wise (group) judge respectively — none are implemented in core yet, but the literal is open for the branches that add them.
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
+
+## 8. Group + Fit Contracts (W1.0) + SelectJudge (W1.1)
+
+W1.0 froze two interfaces that later branches build against: this section
+documents the contracts. W1.1 shipped the first concrete `GroupwiseModule` —
+`SelectJudge` (`langres.core.modules.select_judge`) — proving the contract
+against a real set-wise judge; `FellegiSunterJudge` / `RFJudge` (trained
+judges over `ComparisonVector`, a later branch) still build against the
+contracts below without shipping yet.
+
+### ERCandidateGroup[SchemaT] (`langres.core.groups`)
+
+The set-wise counterpart to `ERCandidate`: "one anchor + K candidate
+members" instead of one pair.
+
+- `anchor: SchemaT`
+- `members: list[SchemaT]`
+- `group_id: str`
+
+`derive_groups_from_pairs(candidates)` derives groups from an existing
+pairwise `ERCandidate` stream by grouping on each pair's `left` entity. It is
+**buffered and anchor-skewed**: an entity that never appears as `left` (e.g.
+because an upstream blocker canonicalizes pair order by id) never becomes an
+anchor. It is lossless over *pairs* despite the skew (flattening the derived
+groups back to canonical pairs recovers exactly the input pair set — no
+dupes, no losses), but it is **not** representative of a blocker's true
+candidate structure, so it must not be used to benchmark a set-wise judge.
+
+### Blocker.stream_groups() (`langres.core.blocker`)
+
+- **Default** (inherited by every `Blocker` subclass): derives groups from
+  `self.stream(data)` via `derive_groups_from_pairs` — buffered/skew-prone,
+  as above. Exists so every blocker gets a working `stream_groups()` for
+  free; not for benchmark use.
+- **`VectorBlocker.stream_groups()`** overrides this natively: its kNN search
+  is already per-anchor, so each entity's own search result IS its group —
+  one group per entity, its (deduplicated) k nearest neighbors as members, no
+  derivation, no skew. This is the implementation a set-wise judge should be
+  benchmarked against.
+
+Both forms satisfy the same pairs-equivalence property EXACTLY, not just at
+the SET level: the pairs recoverable from `stream_groups()` equal the pairs
+from `stream()` — no losses AND no duplicates. `VectorBlocker.stream_groups()`
+threads a single `seen_pairs` set across all entities (same iteration order,
+same first-seen-wins rule `stream()` uses), so each undirected pair is
+assigned to exactly one group — whichever anchor is processed first. Without
+this cross-anchor dedup, two mutual nearest neighbors (A's nearest neighbor is
+B AND B's nearest neighbor is A — common with real ANN indexes on
+near-duplicate records) would appear as a member edge in *both* groups, and a
+consumer that treats each group as an independent unit of work (e.g. a
+set-wise judge issuing one LLM call per group, for cost accounting) would
+emit and charge for the same undirected pair twice. See
+`VectorBlocker.stream_groups()`'s docstring and the count-based
+regression/property tests in `tests/core/blockers/test_vector.py`
+(`test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs`,
+`test_vector_blocker_stream_groups_pairs_equivalence_property`).
+
+### GroupwiseModule (`langres.core.module`)
+
+`GroupwiseModule` **is a `Module`** — it does not introduce a parallel
+execution path. Its concrete `forward()` derives groups internally from
+whatever pairwise `ERCandidate` stream it receives (via
+`derive_groups_from_pairs`, the same buffered default as above — `forward()`
+only ever sees a flat pairwise stream, never the blocker object, so it
+cannot reach a blocker's native grouping) and dispatches to the abstract
+`forward_groups()`, decomposing the result back to `Iterator[PairwiseJudgement]`.
+Concrete set-wise judges implement only `forward_groups()` and
+`inspect_scores()`. Because the group structure never leaves `forward()`,
+the Resolver execution spine (`Resolver._judgements` → `module.forward`),
+`inspect_scores`, the JudgementLog boundary, and benchmark dispatch
+(`BudgetedModuleRunner`, `run_method`) all work unchanged.
+
+```python
+# Illustrative pseudocode predating the shipped implementation below --
+# `self._call_llm` / `self._last_call_cost` are placeholders, not real
+# SelectJudge attributes (see the real cost/call plumbing in select_judge.py).
+class SelectJudge(GroupwiseModule[MySchema]):
+    def forward_groups(self, groups: Iterator[ERCandidateGroup[MySchema]]) -> Iterator[PairwiseJudgement]:
+        for group in groups:
+            # One LLM call per group: "which of these K candidates match the anchor?"
+            selected_ids = self._call_llm(group)
+            judgements = [
+                PairwiseJudgement(
+                    left_id=group.anchor.id,
+                    right_id=member.id,
+                    score=1.0 if member.id in selected_ids else 0.0,
+                    score_type="prob_group_llm",
+                    decision_step="select_judge",
+                    provenance={},
+                )
+                for member in group.members
+            ]
+            yield from stamp_group_cost(judgements, call_cost_usd=self._last_call_cost, group_id=group.group_id)
+
+    def inspect_scores(self, judgements, sample_size=10):
+        ...
+```
+
+**Shipped (W1.1):** `langres.core.modules.select_judge.SelectJudge` is the
+real implementation of the skeleton above — a DSPy `ChainOfThought` over a
+`SelectSignature` asking the LLM to select **at most one** matching candidate
+id per group (mirroring ComEM's own "selecting" strategy: Wang et al., COLING
+2025, choosing "the" single most-likely match, not an arbitrary subset). A
+malformed response, a selection naming a candidate outside the group, or a
+selection of more than one candidate (`select_error`, CEO #12) all map to
+whole-group "no match" judgements carrying `provenance["select_error"]` —
+never a raised exception. Selectable by name as `"select_judge"` in
+`langres.methods` (the benchmark/method-registry dispatch site only — not
+wired into `Resolver.from_schema(judge=...)` or the verbs' `judge="auto"`
+dispatch, since it is not yet part of the zero-label default path). See
+`data/benchmarks/w1/W1_RESULTS.md` for the measured call-count/cost reduction
+(35.56x on Amazon-Google) and group-size distribution.
+
+### Group-call cost convention (E5)
+
+One LLM call scores a whole group (K pairs). Pricing each of the K resulting
+judgements at the call's full cost would silently overcount total spend by a
+factor of K. `stamp_group_cost(judgements, call_cost_usd, group_id)`
+(`langres.core.module`) applies the fix: the full `call_cost_usd` goes on the
+**first** judgement's `provenance["cost_usd"]`, every sibling gets `$0`, and
+`provenance["group_id"]` is set on all of them. Existing cost aggregation
+(`_judgement_cost`/`_cost_track` in `langres.core.benchmark`, which already
+read `provenance["cost_usd"]`) then sums a group to exactly one call's cost
+with no changes on their end.
+
+`stamp_group_cost` also sets `provenance["group_end"] = True` on (only) the
+**last** judgement of the group — a boundary marker that lets a consumer
+draining a whole group from a lazy stream (`_SpendCappedModule.forward` in
+`langres.core.presets`, the hard spend cap the verb layer wraps every judge
+in) know exactly when to stop pulling, without peeking at the next
+judgement's `group_id` — which for a real `GroupwiseModule` would resume the
+generator into (and pay for) the next group before there's anything to
+compare against.
+
+**Atomicity caveat:** `BudgetedModuleRunner` scores exactly one `ERCandidate`
+per `module.forward()` call. A `GroupwiseModule` run through it today derives
+a single, trivial, size-1 group per call — so a group is never *split*
+mid-call (there is never more than one pair per call to split), but a real
+multi-pair group is also not yet *batched* into one priced call: no cost
+amortization happens through the runner yet. Extending the runner (or adding
+a group-aware variant) to pre-flight and price whole groups atomically is
+deferred to the branch that lands the first concrete `GroupwiseModule`.
+
+### Fit hooks (`langres.core.fit`)
+
+Two runtime-checkable, structural `Protocol`s — **not** abstract methods on
+`Module` (that would break every existing, non-learnable module):
+
+- `SupervisedFitMixin.fit(candidates: Iterator[ERCandidate[SchemaT]], labels: Sequence[bool]) -> None`
+- `UnsupervisedFitMixin.fit_unlabeled(candidates: Iterator[ERCandidate[SchemaT]]) -> None`
+
+A module opts in by implementing the method with the matching name — no
+subclassing required. `Resolver.fit(data, labels=None)` detects this with
+`isinstance(module, SupervisedFitMixin)` / `isinstance(module, UnsupervisedFitMixin)`:
+
+- Module implements `SupervisedFitMixin`: `labels` is required; omitting it
+  **raises** (a genuinely trainable module silently not being trained is the
+  exact footgun this hook exists to prevent).
+- Module implements `UnsupervisedFitMixin`: `fit_unlabeled` is called
+  unconditionally; passing `labels` to it raises (they would otherwise be
+  silently ignored).
+- Module implements **neither** hook (e.g. `WeightedAverageJudge`): `fit()`
+  is a no-op returning `self` — the original sklearn-style symmetry is
+  preserved for non-learnable pipelines — unless `labels` was passed, which
+  raises rather than silently discarding them.
+
+No concrete judge implements either hook yet; `FellegiSunterJudge` and
+`RFJudge` (a later branch) are the first.
+
+## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
+
+### KeyBlocker (`langres.core.blockers.key`)
+
+Buckets records by a configurable key and emits all pairs within each bucket.
+Mirrors `AllPairsBlocker`'s declarative/callable split: `key_field=` (a schema
+attribute name, serializable) or `key_fn=` (full callable control, not
+serializable), same mutual-exclusion rule as `schema=`/`schema_factory=`.
+`normalize=True` (default) lowercases + strips non-`None` keys before
+bucketing. A record whose key extracts to `None` gets no candidates from this
+blocker — trading recall for precision/speed, by design; compose with a
+recall-oriented blocker (e.g. `VectorBlocker`) via `CompositeBlocker` to
+recover it.
+
+### CompositeBlocker (`langres.core.blockers.composite`)
+
+Set algebra over 2+ child `Blocker`s: `op="union"` (default,
+recall-maximizing — a pairs-superset of every child), `"intersection"`
+(pairs in every child), or `"difference"` (`children[0]` minus the rest).
+Dedups by the canonical undirected pair key with first-seen semantics (the
+same guarantee every base blocker already gives). `blocker_name` on each
+surviving candidate is rewritten to
+`"composite_{op}(label1+label2+...)"`, naming exactly which child(ren)
+produced *that* pair — real per-pair provenance, not just "this came from a
+composite." Necessarily buffers every child in full (set membership must be
+known across all children before a pair can be kept or dropped) — like
+`derive_groups_from_pairs`, this trades the streaming-first contract for
+correctness. Relies on the inherited `Blocker.stream_groups()` default
+(no native per-anchor override): composite pair sets, especially under
+intersection/difference across heterogeneous children, have no natural
+single-anchor structure the way `VectorBlocker`'s kNN search does.
+Registered (`"composite_blocker"`) and config-serializable as long as every
+child is too (a child with out-of-band state, e.g. a built `VectorBlocker`
+index, is not preserved through a composite's `config`/`from_config`
+round-trip — persist such a pipeline via the `Resolver` artifact instead).
+
+Measured on Fodors-Zagat + Amazon-Google (Pair-Completeness / Reduction-Ratio,
+composite vs. each dataset's pinned `VectorBlocker` alone):
+`examples/w1_blocking_algebra_output.md`.
+
+### CorrelationClusterer (`langres.core.clusterers.correlation`, "C6")
+
+A `Clusterer` subclass (drop-in for the `clusterer=` slot; inherits
+`config`/`from_config`/`evaluate`/`inspect_clusters` unchanged, overrides only
+`cluster()`). The base `Clusterer` builds a graph from edges `>= threshold`
+and takes connected components — full transitive closure, so a chain of
+edges (A-B, B-C) with no direct A-C edge still merges all three (the
+documented M3 −0.63 BCubed over-merge failure mode). `CorrelationClusterer`
+implements the *pivot algorithm* for correlation clustering (Ailon, Charikar
+& Newman, JACM 2008): process nodes highest-confidence-edge-first
+(deterministic, ties broken by id); each pivot's cluster is itself plus only
+its *direct* neighbours `>= threshold`. A node with only an indirect path to
+a cluster is never pulled in by transitivity alone — merge-resistant relative
+to the base `Clusterer` — while a genuinely well-connected clique (every pair
+directly compared and matched) still merges fully under both.
+
+**Not the default.** Benchmarked head-to-head against the base `Clusterer` on
+Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
+clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
+on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
+see `examples/w1_blocking_algebra_output.md` for the full tables and the
+default-flip decision (kept opt-in; recommended for harder/messier
+entity-resolution problems, not flipped globally on a single hard-dataset
+win).

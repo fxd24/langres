@@ -36,9 +36,10 @@ from langres.core.benchmark import (
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.module import GroupwiseModule, Module
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
 from langres.methods import ZERO_SPEND_METHODS
@@ -207,6 +208,81 @@ def test_runner_propagates_blind_cost_error_with_partial() -> None:
         runner.run(_candidates(3), price_per_token_or_pair=0.001)
     # l0 was scored (and paid for) before l1 aborted -> recoverable on partial.
     assert [j.left_id for j in excinfo.value.partial] == ["l0"]
+
+
+# ---------------------------------------------------------------------------
+# BudgetedModuleRunner + GroupwiseModule: documented group-atomicity (E5).
+#
+# BudgetedModuleRunner._score_one() calls ``module.forward(iter([candidate]))``
+# ONE candidate at a time (by design -- see its docstring's "per-call
+# resilience" point). A GroupwiseModule's forward() derives groups from
+# whatever pairwise stream it's given, so under the runner each call sees
+# exactly one candidate -> one trivial, size-1 group. This means the
+# atomicity guarantee ("never split a group mid-call") holds TRIVIALLY today
+# -- there is never more than one pair per call, so there is nothing to
+# split -- but it also means the runner does NOT yet amortize a real multi-
+# pair group into a single priced call. That cost-saving integration is
+# deferred to W1.1 (the first concrete GroupwiseModule, SelectJudge), which
+# will extend the runner (or add a group-aware runner) to pre-flight whole
+# groups. This test pins down and documents the current, correct-but-not-
+# yet-optimized behavior so a future change is a deliberate, measured one.
+# ---------------------------------------------------------------------------
+
+
+class _CountingGroupwiseModule(GroupwiseModule[CompanySchema]):
+    """Records every forward_groups() call's groups, for atomicity inspection."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[ERCandidateGroup[CompanySchema]]] = []
+
+    def forward_groups(
+        self, groups: Iterator[ERCandidateGroup[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        materialized = list(groups)
+        self.calls.append(materialized)
+        for group in materialized:
+            for member in group.members:
+                yield PairwiseJudgement(
+                    left_id=group.anchor.id,
+                    right_id=member.id,
+                    score=1.0,
+                    score_type="prob_group_llm",
+                    decision_step="test",
+                    provenance={"cost_usd": 0.01},
+                )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError  # pragma: no cover — unused by the runner
+
+
+def test_runner_never_splits_a_group_mid_call_but_also_never_batches_one() -> None:
+    """Documents E5's atomicity guarantee under today's per-candidate runner loop.
+
+    Three candidates share the same left.id (would form ONE group of size 3
+    if handed to forward() together) but the runner isolates each candidate
+    into its own call -> forward_groups() is invoked 3 times, each with a
+    single size-1 group. No group is ever split across calls (each call's
+    group is already maximal for what it was given), but no batching happens
+    either -- see the module docstring above for why, and the deferral.
+    """
+    module = _CountingGroupwiseModule()
+    runner = BudgetedModuleRunner(module, budget_usd=100.0, budget_soft_usd=100.0)
+    candidates = [
+        ERCandidate(
+            left=CompanySchema(id="anchor", name="Anchor"),
+            right=CompanySchema(id=f"m{i}", name=f"Member {i}"),
+            blocker_name="test",
+        )
+        for i in range(3)
+    ]
+
+    out = runner.run(candidates, price_per_token_or_pair=0.01)
+
+    assert len(out) == 3
+    assert len(module.calls) == 3  # one call per candidate, not one call for the group
+    assert all(len(call) == 1 and len(call[0].members) == 1 for call in module.calls)
 
 
 # ---------------------------------------------------------------------------

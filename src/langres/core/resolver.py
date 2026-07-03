@@ -34,19 +34,21 @@ the helpers normalize the dict-vs-model and property-vs-method differences.
 
 import inspect
 import logging
-from collections.abc import Iterator
+import warnings
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, Self, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
 import langres
 from langres.core.blocker import Blocker
-from langres.core.blockers.vector import VectorBlocker
+from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.judges.weighted_average import WeightedAverageJudge
-from langres.core.models import PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.registry import get_component
 from langres.core.serialization import (
@@ -56,10 +58,138 @@ from langres.core.serialization import (
     SerializableState,
 )
 
+if TYPE_CHECKING:
+    # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
+    # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
+    # core-only `import langres` never pulls faiss/torch in for a Resolver
+    # that never uses judge="embedding".
+    from langres.core.blockers.vector import VectorBlocker
+
 logger = logging.getLogger(__name__)
 
 # Slot names used as sidecar subdirectory names and for manifest ordering.
 _MANIFEST_FILENAME = "resolver.json"
+
+#: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
+#: than ``langres.core.presets.JudgeName`` -- no ``"auto"``, since resolving
+#: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
+#: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
+#: constructor argument.
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm"]
+
+
+def _build_module_for_judge(
+    judge: "_FromSchemaJudge | Module[Any]",
+    comparator: Comparator[Any],
+    *,
+    model: str | None,
+    entity_noun: str,
+) -> Module[Any]:
+    """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
+
+    A small, deliberately self-contained switch: ``langres.core.presets``
+    (which builds on top of ``Resolver``) is NOT imported here, since that
+    would create a ``Resolver -> presets -> Resolver`` cycle -- see the
+    dependency diagram in this module's docstring. The three branches below
+    duplicate a little of ``presets.build_judge``'s logic; that duplication is
+    the price of keeping the layering one-directional (``verbs -> presets ->
+    Resolver``), not an oversight.
+    """
+    if isinstance(judge, Module):
+        return judge
+    if judge == "string":
+        return WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    if judge == "embedding":
+        from langres.core.judges.embedding_score import EmbeddingScoreJudge
+
+        return EmbeddingScoreJudge()
+    if judge == "zero_shot_llm":
+        # Lazy: dspy must stay out of sys.modules unless this judge is chosen.
+        from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
+        from langres.core.modules.dspy_judge import DSPyJudge
+
+        resolved_model = model or DEFAULT_OPENROUTER_MODEL
+        dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
+        price = dspy_price_per_1k(resolved_model)
+        if price == 0.0:
+            # An unpinned model self-reports $0/pair -- honest, not reassuring
+            # (mirrors core.presets.notice_pre_scoring_cost's identical check;
+            # duplicated here for the same layering reason as the rest of this
+            # function). Resolver.from_schema has no spend cap at all (see its
+            # judge= docstring), so this is strictly worse than the verbs'
+            # blind-cap case: nothing would ever stop a runaway bill.
+            warnings.warn(
+                f"model {resolved_model!r} has no pinned price in "
+                "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
+                "$0/pair cost. Resolver.from_schema builds an UNCAPPED pipeline "
+                "(no spend cap at all) -- pin its price in PRICES_PER_1M, or use "
+                "langres.link/langres.dedupe for the built-in spend cap.",
+                stacklevel=3,
+            )
+        dspy_module.price_per_1k_tokens = price
+        return dspy_module
+    raise ValueError(
+        f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
+        "'string', 'embedding', 'zero_shot_llm', or pass a Module instance. "
+        "'auto' key-based resolution is a verbs-layer feature -- use "
+        "langres.link/langres.dedupe for that."
+    )
+
+
+def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
+    """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
+
+    ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
+    ``EmbeddingScoreJudge`` requires to score -- ``judge="embedding"`` must
+    always be paired with a ``VectorBlocker``, mirroring the identical rule
+    ``core.presets.build_resolver`` applies for the verb layer (same model,
+    same k, same cosine metric). Duplicated here rather than imported from
+    ``core.presets`` for the same layering reason as
+    :func:`_build_module_for_judge`: ``core.presets`` sits ABOVE ``Resolver``
+    and must not be imported back into it.
+    """
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+
+    def extract(entity: Any) -> str:
+        parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
+        return " ".join(parts)
+
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    index = FAISSIndex(embedder=embedder, metric="cosine")
+    return VectorBlocker(
+        vector_index=index, schema=schema, text_field_extractor=extract, k_neighbors=10
+    )
+
+
+def _iter_vector_blockers(blocker: object) -> "Iterator[VectorBlocker[Any]]":
+    """Yield every ``VectorBlocker`` reachable from ``blocker``.
+
+    A plain ``VectorBlocker`` yields itself. A ``CompositeBlocker`` (the
+    blocking-algebra union/intersection/difference of child blockers) recurses
+    into ``children`` at arbitrary depth, so a composite wrapping another
+    composite still surfaces every nested ``VectorBlocker`` -- e.g. the
+    recall-first pattern ``CompositeBlocker([KeyBlocker(...), VectorBlocker(...)],
+    op="union")``. Index-free blockers (``AllPairsBlocker``, ``KeyBlocker``,
+    ``GLinkerAdapter``) contribute nothing.
+
+    Checks ``type_name`` rather than ``isinstance(blocker, VectorBlocker)``
+    deliberately (W0.4, mirrors :meth:`Resolver._ensure_index_built`'s own
+    docstring): this walks the blocker tree on every ``resolve()``/
+    ``predict()`` call, so an ``isinstance`` check would need ``VectorBlocker``
+    imported unconditionally, pulling faiss/sentence-transformers (the
+    ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
+    pipeline. ``CompositeBlocker`` itself has no heavy dependency, so it's
+    safe to ``isinstance``-check directly.
+    """
+    if getattr(blocker, "type_name", None) == "vector_blocker":
+        yield cast("VectorBlocker[Any]", blocker)
+    elif isinstance(blocker, CompositeBlocker):
+        for child in blocker.children:
+            yield from _iter_vector_blockers(child)
 
 
 def _component_config_dict(obj: object) -> dict[str, object]:
@@ -214,13 +344,19 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
+        judge: "_FromSchemaJudge | Module[Any]" = "string",
+        model: str | None = None,
+        entity_noun: str = "entity",
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
         Defaults to an ``AllPairsBlocker`` over the schema, a missing-aware
         ``StringComparator`` auto-derived from the schema's string fields (with
         ``id`` excluded), a ``WeightedAverageJudge`` scorer, and a ``Clusterer``
-        at ``threshold``.
+        at ``threshold``. ``judge="embedding"`` is the one exception to the
+        ``AllPairsBlocker`` default: it wires a ``VectorBlocker`` instead,
+        since ``EmbeddingScoreJudge`` scores off the blocker's
+        ``similarity_score``, which only a ``VectorBlocker`` attaches.
 
         Args:
             schema: The Pydantic entity schema to resolve.
@@ -232,6 +368,19 @@ class Resolver:
                 floor.
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
+            judge: ``"string"`` (default -- identical to pre-existing
+                behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
+                above), ``"zero_shot_llm"``, or a ``Module`` instance. This is
+                the low-level, explicit switch (no ``"auto"`` key-based
+                resolution and no spend cap -- that magic lives in
+                ``langres.link``/``langres.dedupe``). **Caution**:
+                ``judge="zero_shot_llm"`` (or any other paid ``Module``) built
+                here runs UNCAPPED -- there is no ``budget_usd`` on this
+                method and nothing stops a runaway bill. Use
+                ``langres.link``/``langres.dedupe`` for the built-in
+                ``SpendMonitor`` cap.
+            model: Model id override for ``judge="zero_shot_llm"``.
+            entity_noun: Domain noun woven into the LLM judge's prompt.
 
         Returns:
             A ready-to-run Resolver.
@@ -241,12 +390,16 @@ class Resolver:
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
+        module = _build_module_for_judge(judge, comparator, model=model, entity_noun=entity_noun)
+        blocker: Blocker[Any] = (
+            _build_embedding_blocker(schema)
+            if judge == "embedding"
+            else AllPairsBlocker(schema=schema)
+        )
         return cls(
-            blocker=AllPairsBlocker(schema=schema),
+            blocker=blocker,
             comparator=comparator,
-            # The judge scores on the same FeatureSpecs (weights) the comparator
-            # compares on, so the comparison vector and the weights line up.
-            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+            module=module,
             clusterer=Clusterer(threshold=threshold),
         )
 
@@ -254,23 +407,77 @@ class Resolver:
     # Running the pipeline
     # ------------------------------------------------------------------
 
-    def fit(self, data: list[Any]) -> Self:
-        """No-op fit for sklearn-style symmetry; returns self.
+    def fit(self, data: list[Any], labels: Sequence[bool] | None = None) -> Self:
+        """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
-        M0 components are not learned — the heuristic scorer and thresholds are
-        fixed. Optimization (Optuna over thresholds/weights, DSPy over prompts)
-        lands in M3+, at which point ``fit`` will tune the pipeline on labeled
-        data. It exists now so callers can write ``resolver.fit(data).resolve(data)``
-        without branching on whether the pipeline is learnable.
+        Delegates to the module's fit hook when it implements one of the two
+        runtime-checkable Protocols in :mod:`langres.core.fit` (W1.0, E6):
+
+        - :class:`~langres.core.fit.UnsupervisedFitMixin`
+          (``fit_unlabeled(candidates)``): called unconditionally with the
+          blocked (and, if a comparator is configured, comparison-attached)
+          candidate stream. ``labels`` is not used by this path.
+        - :class:`~langres.core.fit.SupervisedFitMixin`
+          (``fit(candidates, labels)``): called with ``labels`` when given;
+          **raises** rather than silently skipping training when ``labels``
+          is omitted -- a genuinely trainable module that never gets
+          trained is exactly the silent-no-op footgun this hook exists to
+          prevent.
+
+        When the module implements **neither** hook, this is a no-op that
+        returns ``self`` -- unchanged sklearn-style symmetry so callers can
+        write ``resolver.fit(data).resolve(data)`` for non-learnable
+        pipelines (e.g. ``WeightedAverageJudge``) without branching -- UNLESS
+        ``labels`` was passed, in which case it raises rather than silently
+        discarding them.
+
+        Args:
+            data: Raw records (dicts) in a stable list order, same shape as
+                ``resolve()``/``predict()`` accept.
+            labels: Gold match/non-match labels, positionally aligned with the
+                blocked candidates. Required (and only used) when the module
+                implements ``SupervisedFitMixin``.
+
+        Returns:
+            ``self``, so ``resolver.fit(data).resolve(data)`` chains.
+
+        Raises:
+            ValueError: If the module implements ``SupervisedFitMixin`` and
+                ``labels`` is omitted, or if ``labels`` is given but the
+                module implements neither fit hook.
         """
+        if isinstance(self.module, SupervisedFitMixin):
+            if labels is None:
+                raise ValueError(
+                    f"{type(self.module).__name__} requires labeled data: pass "
+                    "labels=<Sequence[bool] aligned with the blocked candidates> "
+                    "to fit()."
+                )
+            self.module.fit(self._candidates(data), labels)
+            return self
+        if isinstance(self.module, UnsupervisedFitMixin):
+            if labels is not None:
+                raise ValueError(
+                    f"{type(self.module).__name__} does not support fit(labels=...): "
+                    "it implements UnsupervisedFitMixin, which trains without labels "
+                    "(fit_unlabeled) -- drop the labels= argument."
+                )
+            self.module.fit_unlabeled(self._candidates(data))
+            return self
+        if labels is not None:
+            raise ValueError(
+                f"{type(self.module).__name__} does not support fit(labels=...): "
+                "it implements neither SupervisedFitMixin nor UnsupervisedFitMixin."
+            )
         return self
 
-    def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
-        """Block records into candidates and score them into judgements.
+    def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
+        """Block records into candidates, attaching comparisons if configured.
 
         Builds an index-backed blocker's index transparently before streaming,
         so callers never call ``create_index`` themselves. Records are fed in
-        the caller's stable list order.
+        the caller's stable list order. Shared by ``_judgements`` (scoring)
+        and ``fit`` (training) -- both need the same candidate stream.
         """
         self._ensure_index_built(records)
         candidates = self.blocker.stream(records)
@@ -280,7 +487,11 @@ class Resolver:
                 c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
                 for c in candidates
             )
-        return self.module.forward(candidates)
+        return candidates
+
+    def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
+        """Block records into candidates and score them into judgements."""
+        return self.module.forward(self._candidates(records))
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.
@@ -306,29 +517,38 @@ class Resolver:
         return self.clusterer.cluster(self._judgements(records))
 
     def _ensure_index_built(self, records: list[Any]) -> None:
-        """Build/populate a ``VectorBlocker``'s index from ``records``.
+        """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
 
-        Embeds the records' text field and creates the index in place when it is
-        not yet built. For a blocker with no index (AllPairs, GLinker), this is a
-        no-op. When the index *is* already built (e.g. a freshly loaded FAISS
-        index, or a Resolver reused on the same records), the would-be corpus is
-        compared to the index's stored ``_corpus_texts``: identical -> reuse
-        (never re-embed, so restore + same-records round-trips are cheap);
-        different -> rebuild (so reusing the Resolver on a new record list scores
+        Embeds the records' text field and creates the index in place for each
+        index-backed blocker discovered via :func:`_iter_vector_blockers` --
+        whether ``self.blocker`` is a ``VectorBlocker`` directly, or one is
+        nested (at any depth) inside a ``CompositeBlocker``. A blocker with no
+        index (AllPairs, GLinker, KeyBlocker) contributes nothing. When an
+        index *is* already built (e.g. a freshly loaded FAISS index, or a
+        Resolver reused on the same records), the would-be corpus is compared
+        to the index's stored ``_corpus_texts``: identical -> reuse (never
+        re-embed, so restore + same-records round-trips are cheap); different
+        -> rebuild (so reusing the Resolver on a new record list scores
         against the right corpus rather than a stale one).
+
+        No ``isinstance(..., VectorBlocker)`` anywhere in this walk (W0.4): see
+        :func:`_iter_vector_blockers`'s docstring for why -- this method runs
+        on every ``resolve()``/``predict()`` call regardless of blocker, so an
+        ``isinstance`` check would need ``VectorBlocker`` imported
+        unconditionally, pulling faiss/sentence-transformers (the
+        ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
+        pipeline.
         """
-        if not isinstance(self.blocker, VectorBlocker):
-            return  # AllPairs, GLinker, and other index-free blockers.
+        for vector_blocker in _iter_vector_blockers(self.blocker):
+            entities = [vector_blocker.schema_factory(record) for record in records]
+            texts = [vector_blocker.text_field_extractor(entity) for entity in entities]
 
-        entities = [self.blocker.schema_factory(record) for record in records]
-        texts = [self.blocker.text_field_extractor(entity) for entity in entities]
+            index = vector_blocker.vector_index
+            if vector_blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
+                continue  # Same corpus already indexed -> reuse, never re-embed.
 
-        index = self.blocker.vector_index
-        if self.blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
-            return  # Same corpus already indexed -> reuse, never re-embed.
-
-        logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
-        index.create_index(texts)
+            logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
+            index.create_index(texts)
 
     # ------------------------------------------------------------------
     # Linking / streaming (M5)

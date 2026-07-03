@@ -3,6 +3,8 @@ name = "langres"
 version = "0.1.0"
 description = "A two-layer entity resolution framework with optimization, blocking, and human-in-the-loop capabilities"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "David Graf", email = "david@raisesquad.com" }
 ]
@@ -11,27 +13,13 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dspy-ai>=3.0.3",
-    "faiss-cpu>=1.12.0",
-    "fastembed>=0.7.3",
-    "langfuse>=4,<5",
-    "litellm>=1.79.0",
     "networkx>=3.5",
-    "onnxruntime>=1.23.2",
-    "openai>=2.6.1",
-    "optimum[onnxruntime]>=2.0.0",
-    "optuna>=4.5.0",
-    "optuna-integration[wandb]>=4.5.0",
+    "numpy>=2.4.6",
     "pydantic>=2.12.3",
     "pydantic-settings>=2.11.0",
-    "qdrant-client>=1.15.1",
-    "ranx>=0.3.21",
     "rapidfuzz>=3.14.1",
-    "scikit-learn>=1.7.2",
-    "sentence-transformers>=5.1.2",
-    "tenacity>=9.1.2",
-    "wandb>=0.22.3",
 ]
+
 keywords = [
     "entity-resolution",
     "record-linkage",
@@ -58,23 +46,64 @@ Repository = "https://github.com/raisesquad/langres"
 Issues = "https://github.com/raisesquad/langres/issues"
 Changelog = "https://github.com/raisesquad/langres/blob/main/CHANGELOG.md"
 
+[project.optional-dependencies]
+# The embedding/vector stack -- VectorBlocker, embeddings.py, indexes.py
+# (FAISS + Qdrant). Required for judge="embedding" and the VectorBlocker
+# scaling path (dedupe() above ~100 records).
+semantic = [
+    "faiss-cpu>=1.12.0",
+    "fastembed>=0.7.3",
+    "onnxruntime>=1.23.2",
+    "optimum[onnxruntime]>=2.0.0",
+    "qdrant-client>=1.15.1",
+    "sentence-transformers>=5.1.2",
+    "torch>=2.12.1",
+]
+# The LLM/judge stack -- LLMJudge, DSPyJudge, CascadeModule's OpenAI client.
+# Required for judge="zero_shot_llm" / judge="auto" with a key set.
+llm = [
+    "dspy-ai>=3.0.3",
+    "litellm>=1.79.0",
+    "openai>=2.6.1",
+]
+# The trained-judge stack -- RFJudge (W1.2's sklearn RandomForest judge) and
+# core.calibration.derive_threshold (sklearn.metrics.roc_curve). Also present
+# in the dev group below (unrelated eval tooling depends on it too, and the
+# repo's own test suite needs it without requiring --all-extras locally).
+trained = [
+    "scikit-learn>=1.7.2",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    # Experimentation/eval tooling (BCubed harness via ranx, hyperparameter
+    # tuning via optuna) plus experiment-tracking integrations (wandb,
+    # langfuse) -- not needed by the production link()/dedupe() path, so they
+    # live in the dev group (not a pip-installable extra) rather than core
+    # `dependencies`. scikit-learn is also duplicated in the `[trained]`
+    # extra above (RFJudge, core.calibration) -- kept here too so the repo's
+    # own test suite doesn't need --all-extras for a bare `uv sync`.
     "guarddog>=1.3.0",
+    "langfuse>=4,<5",
     "mypy>=1.18.2",
+    "optuna>=4.5.0",
+    "optuna-integration[wandb]>=4.5.0",
     "pip-audit>=2.9.0",
     "pre-commit>=4.3.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
+    "ranx>=0.3.21",
     "ruff>=0.15.2",
+    "scikit-learn>=1.7.2",
     "testcontainers[qdrant]>=4.13.2",
     "types-networkx>=3.5.0.20251001",
+    "wandb>=0.22.3",
 ]
 
 [tool.uv]
@@ -87,7 +116,7 @@ exclude-newer = "2026-06-18"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=95"
+addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=95 -m 'not integration'"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [

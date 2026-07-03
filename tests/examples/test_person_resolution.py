@@ -11,8 +11,6 @@ The live path (one real OpenRouter call) is gated behind ``OPENROUTER_API_KEY``.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from examples.person_resolution import (
@@ -27,6 +25,7 @@ from examples.person_resolution import (
 from langres.core import Resolver
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.metrics import evaluate_blocking
+from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
 
 
 def _canonical(clusters: list[set[str]]) -> frozenset[frozenset[str]]:
@@ -118,10 +117,7 @@ def test_serialized_blocker_recovers_blocking(tmp_path) -> None:  # type: ignore
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not os.getenv("OPENROUTER_API_KEY"),
-    reason="requires OPENROUTER_API_KEY for a real LLM call",
-)
+@pytest.mark.skipif(not PAID_TESTS_ENABLED, reason=PAID_TEST_SKIP_REASON)
 def test_live_smoke_single_pair() -> None:
     """One real OpenRouter pair returns a usable judgement (gated on a key)."""
     from langres.core.models import ERCandidate

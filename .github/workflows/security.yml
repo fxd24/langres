@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation]
+    branches: [main, feat/m4-foundation, feat/m5-foundation]
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: "0 8 * * 1"
@@ -30,7 +30,9 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        # --all-extras: scan the [semantic]/[llm] extras' dependencies (torch,
+        # litellm, faiss, ...) too, not just the core-only dependency set.
+        run: uv sync --all-extras
 
       # pip-audit and guarddog are ADVISORY signals, not merge gates. The hard
       # supply-chain controls are the exclude-newer 7-day quarantine (pyproject)

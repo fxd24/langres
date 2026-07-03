@@ -17,7 +17,6 @@ The un-fakeable real-network LLM glue lives behind an ``OPENROUTER_API_KEY``
 skipif, so ``--cov`` stays green without a live key.
 """
 
-import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,20 +33,25 @@ from langres.core.benchmark import (
 )
 from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.cascade import CascadeModule
 from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.modules.rf_judge import RFJudge
+from langres.core.modules.select_judge import SelectJudge
 from langres.core.resolver import Resolver
 from langres.methods import (
     ALL_METHODS,
+    LLM_METHODS,
     ZERO_SPEND_METHODS,
     cascade_cost_track,
     make_resolver_factory,
 )
 from langres.core.blockers.vector import VectorBlocker
+from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
 
 # ---------------------------------------------------------------------------
 # Synthetic, embedding-free benchmark (FakeVectorIndex) for fast tests
@@ -245,6 +249,15 @@ def test_unknown_method_raises() -> None:
         # ``dspy_judge`` takes a DSPy LM as its injected client (a ``DummyLM``
         # here), distinct from the LiteLLM/OpenAI clients above.
         ("dspy_judge", DSPyJudge, False, _dummy_lm()),
+        # ``select_judge`` (W1.1, ComEM-style set-wise) also takes a DSPy LM.
+        ("select_judge", SelectJudge, False, _dummy_lm()),
+        # ``fellegi_sunter``/``random_forest`` are the W1.2 trained family: both
+        # need a comparator, and both are UNFIT immediately after the factory
+        # (they must be fit via resolver.fit(...) before predict() works — see
+        # the dedicated fit/predict tests below). Not raced through
+        # ZERO_SPEND_METHODS/ALL_METHODS for that reason (see methods.py).
+        ("fellegi_sunter", FellegiSunterJudge, True, None),
+        ("random_forest", RFJudge, True, None),
     ],
 )
 def test_factory_builds_valid_resolver(
@@ -326,6 +339,46 @@ def test_dspy_judge_factory_unknown_model_keeps_zero_price() -> None:
     assert judge.price_per_1k_tokens == 0.0
 
 
+def test_select_judge_factory_prices_from_pinned_table() -> None:
+    """The ``select_judge`` factory wires ``price_per_1k_tokens`` from the pinned table.
+
+    Mirrors ``test_dspy_judge_factory_prices_from_pinned_table``: SelectJudge reuses
+    the same honest-cost seam (``price_per_1k_tokens`` / ``_cost_usd``), just priced
+    per GROUP call instead of per pair.
+    """
+    from langres.clients.openrouter import per_token_worst_price
+
+    model = "openrouter/z-ai/glm-5.2"
+    factory = make_resolver_factory(
+        "select_judge", _FakeBlockingBenchmark(), llm_client=_dummy_lm(), llm_model=model
+    )
+    judge = factory(0.5).module
+    assert isinstance(judge, SelectJudge)
+    expected = per_token_worst_price(model) * 1_000.0
+    assert judge.price_per_1k_tokens == pytest.approx(expected)
+    assert judge.price_per_1k_tokens > 0.0
+    assert judge._cost_usd(1000, 500) > 0.0
+
+
+def test_select_judge_factory_unknown_model_keeps_zero_price() -> None:
+    """An unknown model id keeps ``price_per_1k_tokens = 0.0`` (zero-spend/test runs)."""
+    factory = make_resolver_factory(
+        "select_judge",
+        _FakeBlockingBenchmark(),
+        llm_client=_dummy_lm(),
+        llm_model="unknown/model-not-in-table",
+    )
+    judge = factory(0.5).module
+    assert isinstance(judge, SelectJudge)
+    assert judge.price_per_1k_tokens == 0.0
+
+
+def test_select_judge_registered_in_llm_methods() -> None:
+    """select_judge (W1.1, ComEM-style set-wise) is a name-selectable LLM-backed method."""
+    assert "select_judge" in LLM_METHODS
+    assert "select_judge" in ALL_METHODS
+
+
 def test_dspy_price_per_1k_known_and_unknown() -> None:
     """``_dspy_price_per_1k`` maps a known model to its worst-case per-1k, unknown to 0.0."""
     from langres.clients.openrouter import per_token_worst_price
@@ -382,6 +435,64 @@ def test_rapidfuzz_and_weighted_average_score_the_same_fields() -> None:
     comparator_fields = {s.name for s in Comparator.from_schema(CompanySchema).feature_specs}
     assert set(extractors) == comparator_fields
     assert "id" not in extractors  # id is excluded from comparison
+
+
+# ---------------------------------------------------------------------------
+# Trained family (fellegi_sunter / random_forest): fit seam via Resolver.fit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["fellegi_sunter", "random_forest"])
+def test_trained_method_predict_before_fit_raises(method: str) -> None:
+    """An UNFIT factory-built resolver's predict() raises, naming the fit hook.
+
+    Both trained judges must be fit via ``resolver.fit(...)`` before they can
+    score — this is exactly why neither is in ZERO_SPEND_METHODS/ALL_METHODS
+    (run_methods rebuilds an unfit module per grid threshold, which would
+    always hit this raise).
+    """
+    resolver = make_resolver_factory(method, _FakeBlockingBenchmark())(0.5)
+    with pytest.raises(ValueError, match="fit"):
+        resolver.predict(_records())
+
+
+def test_fellegi_sunter_end_to_end_via_resolver_fit_unlabeled() -> None:
+    """resolver.fit(records) (no labels) fits FS via UnsupervisedFitMixin, then predicts."""
+    resolver = make_resolver_factory("fellegi_sunter", _FakeBlockingBenchmark())(0.5)
+
+    resolver.fit(_records())
+    judgements = resolver.predict(_records())
+
+    assert judgements
+    assert all(j.score_type == "prob_fs" for j in judgements)
+    assert all(0.0 <= j.score <= 1.0 for j in judgements)
+    assert isinstance(resolver.module, FellegiSunterJudge)
+    assert resolver.module.prior is not None  # fit populated the learned state
+
+
+def test_random_forest_end_to_end_via_resolver_fit_labels() -> None:
+    """resolver.fit(records, labels=...) fits RF via SupervisedFitMixin, then predicts."""
+    bench = _FakeBlockingBenchmark()
+    resolver = make_resolver_factory("random_forest", bench)(0.5)
+
+    candidates = list(resolver._candidates(_records()))
+    gold = {frozenset(c) for c in bench._GOLD}
+    labels = [frozenset({c.left.id, c.right.id}) in gold for c in candidates]  # type: ignore[attr-defined]
+
+    resolver.fit(_records(), labels=labels)
+    judgements = resolver.predict(_records())
+
+    assert judgements
+    assert all(j.score_type == "prob_rf" for j in judgements)
+    assert all(0.0 <= j.score <= 1.0 for j in judgements)
+    assert isinstance(resolver.module, RFJudge)
+
+
+def test_random_forest_fit_requires_labels() -> None:
+    """resolver.fit(records) with no labels raises for a SupervisedFitMixin module."""
+    resolver = make_resolver_factory("random_forest", _FakeBlockingBenchmark())(0.5)
+    with pytest.raises(ValueError, match="labels"):
+        resolver.fit(_records())
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +631,30 @@ def test_fast_run_method_race_populates_both_tracks(method: str) -> None:
     assert result.cost.usd_total == 0.0
 
 
+def test_select_judge_run_method_race_through_harness() -> None:
+    """select_judge (W1.1, ComEM-style set-wise) runs through run_method like any other method.
+
+    Proves the EXIT criterion "SelectJudge runs through the same harness with
+    DummyLM": GroupwiseModule.forward() derives groups from the pairwise stream
+    run_method feeds it (via the buffered default, not the native
+    VectorBlocker.stream_groups() -- see the W1.1 results doc for the honest
+    call-count measurement, which drives forward_groups() directly instead).
+    """
+    from dspy.utils.dummies import DummyLM
+
+    bench = _FakeBlockingBenchmark()
+    dummy_lm = DummyLM([{"reasoning": "no match", "selected_ids": "[]"}] * 20)
+    factory = make_resolver_factory("select_judge", bench, llm_client=dummy_lm)
+    result = run_method(bench, factory, seed=0)
+
+    assert isinstance(result, MethodResult)
+    assert result.dataset == "fake"
+    assert 0.0 <= result.pair.f1 <= 1.0
+    assert result.pair.pr_curve is not None
+    assert 0.0 <= result.pipeline.bcubed_f1 <= 1.0
+    assert result.cost.usd_total == 0.0  # DummyLM reports 0 tokens -> $0 regardless of price
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("method", ZERO_SPEND_METHODS)
 def test_slow_fodors_zagat_race(method: str) -> None:
@@ -542,10 +677,7 @@ def test_slow_fodors_zagat_race(method: str) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not os.getenv("OPENROUTER_API_KEY"),
-    reason="needs OPENROUTER_API_KEY for a real LLM call",
-)
+@pytest.mark.skipif(not PAID_TESTS_ENABLED, reason=PAID_TEST_SKIP_REASON)
 def test_llm_judge_real_network_smoke() -> None:  # pragma: no cover - requires live key
     """A single real LLM judgement via the injected env client (W4 path)."""
     from langres.clients import Settings, create_llm_client

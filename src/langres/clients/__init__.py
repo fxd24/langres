@@ -4,14 +4,44 @@ langres.clients: Client configuration and factories for external services.
 This module provides centralized configuration and client factories for:
 - LLM providers (OpenAI, LiteLLM with Langfuse tracing)
 - Experiment tracking (wandb)
+
+W0.4: ``create_llm_client``/``create_wandb_tracker`` are resolved lazily (PEP
+562) -- ``langres.clients.llm`` imports ``litellm`` at module level, and
+litellm's own import runs ``load_dotenv()`` as a side effect, silently
+populating ``OPENROUTER_API_KEY``/etc. from any ``.env`` on the path (the
+SPEND-SAFETY footgun this branch closes). Eager-importing it here (a side
+effect of importing ANY submodule of this package, e.g.
+``langres.clients.settings``) meant plain ``import langres`` triggered that
+side effect unconditionally. ``create_wandb_tracker`` (``wandb``, dev-only)
+gets the same treatment for consistency and import weight. ``Settings`` stays
+eager -- it's pydantic-settings only.
 """
 
-from langres.clients.llm import create_llm_client
+import importlib
+from typing import TYPE_CHECKING, Any
+
 from langres.clients.settings import Settings
-from langres.clients.tracking import create_wandb_tracker
+
+if TYPE_CHECKING:
+    from langres.clients.llm import create_llm_client
+    from langres.clients.tracking import create_wandb_tracker
 
 __all__ = [
     "Settings",
     "create_llm_client",
     "create_wandb_tracker",
 ]
+
+_LAZY: dict[str, str] = {
+    "create_llm_client": "langres.clients.llm",
+    "create_wandb_tracker": "langres.clients.tracking",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_path = _LAZY.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module_path), name)
+    globals()[name] = value  # cache: subsequent access skips __getattr__
+    return value
