@@ -30,6 +30,7 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.blockers.key import KeyBlocker
+from langres.core.canonicalizer import Canonicalizer
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.comparator import Comparator, StringComparator
@@ -102,6 +103,7 @@ __all__ = [
     "benchmark",
     "Blocker",
     "CandidateStats",
+    "Canonicalizer",
     "ClusterDelta",
     "ClusterStats",
     "Clusterer",
