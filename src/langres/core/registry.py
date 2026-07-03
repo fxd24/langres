@@ -47,7 +47,9 @@ _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.modules.dspy_judge",
+    "fellegi_sunter_judge": "langres.core.judges.fellegi_sunter",
     "key_blocker": "langres.core.blockers.key",
+    "rf_judge": "langres.core.modules.rf_judge",
     "select_judge": "langres.core.modules.select_judge",
 }
 
