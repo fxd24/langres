@@ -5,7 +5,7 @@
 > code and were doc fiction: the whole `langres.tasks.*` layer
 > (`DeduplicationTask`, `EntityLinkingTask`, `RecordLinkageTask`),
 > `langres.flows.*` / `blockers.*` (`CompanyFlow`, `DedupeBlocker`,
-> `LinkingBlocker`), `core.Canonicalizer`, `core.Optimizer`,
+> `LinkingBlocker`), `core.Optimizer`,
 > `data.ReviewQueue`, `data.SyntheticGenerator`, `Clusterer(constraints=...)`,
 > and `Blocker.stream_against` / `Resolver.link` **as working code**.
 >
@@ -23,7 +23,11 @@
 > - **Cross-source entity linking (UC2, UC3):** 🚧 `Resolver.link()` and
 >   `Resolver.stream_against()` remain `NotImplementedError` stubs reserved for
 >   later **M5** waves (distinct from the single-record `assign` above).
-> - **Master Data / golden records (UC4):** 🚧 no `Canonicalizer` yet — **M5**.
+> - **Master Data / golden records (UC4):** ✅ (M5/W2.3)
+>   `core.Canonicalizer` merges an entity's records into one golden record via
+>   named survivorship strategies (`most_complete` default + per-field
+>   overrides); `enrich(golden, mention)` is the sparse-mention → golden-record
+>   enrichment loop over `assign`. See `examples/canonicalizer_enrichment.py`.
 > - **Negative constraints (UC9):** 🚧 `Clusterer` takes only a `threshold`;
 >   no cannot-link support today.
 >
@@ -143,11 +147,19 @@ pairs it is given. Tracked as post-M5/config work in
 - **Authority Model:** The new master dataset M becomes the authoritative source.
 - **Temporal Aspect:** Static (creates a new snapshot).
 
-**langres Implementation — 🚧 roadmap (M5):**
+**langres Implementation — ✅ ships today (M5/W2.3):**
 
-The "last mile" of ER. A `Canonicalizer` (survivorship rules — e.g.
-"most_recent", "most_frequent", "merge_unique") is **planned but does not exist
-yet**; ROADMAP promotes the golden-record / progressive-enrichment loop to M5.
+The "last mile" of ER. `core.Canonicalizer` merges a group of records (a
+`resolve` cluster, an `AnchorStore` entity, or any `list[dict]`) into one golden
+record by resolving each field independently with a named survivorship strategy:
+`most_complete` (the default — prefer the value from the richest source record),
+`longest`, `most_frequent`, `most_recent` (needs a designated `timestamp_field`),
+and `first`/`source_priority`, all per-field overridable. `enrich(golden,
+mention)` folds a newly-linked mention into an existing golden record via the
+*same* survivorship path — the progressive-enrichment loop over `Resolver.assign`
+(a sparse mention fills fields the golden record lacked). The policy round-trips
+through the config-registry artifact seam (no pickle). See
+`examples/canonicalizer_enrichment.py`.
 
 ### Use Case 9: Negative Constraints (Constrained Clustering)
 
@@ -240,7 +252,7 @@ exists, and the intended (not-yet-built) design otherwise.
 | Optimization / calibration | `core.calibration.derive_threshold`, `core.optimizers.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
 | 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap (M5) |
 | 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** (M5/W2.2) |
-| 4. Master Data Creation | `Canonicalizer` (survivorship) — not built | 🚧 Roadmap (M5) |
+| 4. Master Data Creation | `core.Canonicalizer` (survivorship + `enrich` loop) | ✅ **Shipping** (M5/W2.3) |
 | Set-wise / trained judge families | SelectJudge, Fellegi–Sunter, RandomForest — not built | 🚧 Roadmap (M4.5) |
 | 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |
 | Human-in-the-Loop | correction-harvest contract (`Correction`/`CorrectionLog`) + `harvest_labeled_pairs` → `derive_threshold`; review-queue UX stays downstream | 🟡 **Harvest shipping** (M5/W2.4); `fit()` wiring next |

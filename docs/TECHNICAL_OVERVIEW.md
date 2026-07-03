@@ -325,32 +325,56 @@ compiled_flow = optimizer.compile(trained_flow, gold_data)
 # compiled_flow now contains the trained model AND the best HPs
 ```
 
-### core.Canonicalizer (Base Class)
+### core.Canonicalizer (`langres.core.canonicalizer`, M5/W2.3) — ✅ ships today
 
-**Definition:** The "last mile" module for Master Data Creation (Use Case 4). It turns a list of cluster IDs into a single, merged, "golden" master dataset.
+**Definition:** The "last mile" of Master Data Creation (Use Case 4): merge one
+entity's records into a single **golden record** via field-by-field
+*survivorship* rules. Dict-in / dict-out — it consumes the same raw record dicts
+`resolve`/`assign`/`AnchorStore` pass around and emits one golden dict of the
+same schema shape. It owns only the survivorship policy and knows nothing about
+how the group was formed, so it composes with any grouping.
 
-**Key Methods:**
+**Key methods:**
 
-- `canonicalize(self, clusters: List[Set[str]], all_data: Dict[str, Any]) -> List[PydanticBaseModel]`
+- `canonicalize(records: list[dict], *, entity_id: str | None = None) -> dict` —
+  merge a whole group. Each attribute field is resolved by its configured
+  strategy over the group; a field only *some* records carry is still filled
+  (the rest count as missing for it). The golden record's `id` is `entity_id`
+  when given, else the first record's id. A single-record group returns a copy of
+  that record.
+- `enrich(golden: dict, mention: dict, *, entity_id: str | None = None) -> dict`
+  — the **enrichment loop**: fold a newly-linked mention into an existing golden
+  record. It is exactly `canonicalize([golden, mention])` with `golden`'s id
+  preserved — the *same* survivorship path, not a parallel one — so a sparse
+  mention from `Resolver.assign` fills fields the golden record lacked.
+- `save(path)` / `load(path)` — round-trip the policy through a pickle-free
+  `canonicalizer.json` (config-registry seam; `type_name = "canonicalizer"`).
 
-**Features:** You configure it with a list of "survivorship rules" per field.
+**Survivorship strategies** (named, per-field overridable; default `most_complete`):
+
+| Name | Winner |
+|------|--------|
+| `most_complete` (default) | Value from the record with the most non-missing fields overall (trust the richest source); present beats absent. |
+| `longest` | The longest non-missing string value. |
+| `most_frequent` | The most common non-missing value (mode). |
+| `most_recent` | Value from the record with the greatest `timestamp_field` (must be configured). |
+| `first` / `source_priority` | First non-missing value in group order. |
+
+All ties break deterministically to the **first-seen** value; `None` / empty
+strings are "missing" while `0` / `False` are present values. `id` is stamped as
+the master id, never survivorship'd.
 
 **Example:**
 
 ```python
 from langres.core import Canonicalizer
 
-# Define survivorship logic
-rules = {
-    "name": "most_frequent",
-    "address": "most_recent", # Assumes 'all_data' has timestamps
-    "phone_numbers": "merge_unique"
-}
-
-canonicalizer = Canonicalizer(rules=rules, output_schema=Company)
-
-# 'all_data' is a simple dict lookup: {id -> raw_record}
-master_dataset = canonicalizer.canonicalize(clusters, all_data)
+canon = Canonicalizer(
+    default_strategy="most_complete",
+    field_strategies={"name": "longest", "phone": "most_frequent"},
+)
+golden = canon.canonicalize(entity_records)      # merge a whole cluster/entity
+golden = canon.enrich(golden, new_mention)       # fold in a linked sparse mention
 ```
 
 ## 6. Core API: langres.data

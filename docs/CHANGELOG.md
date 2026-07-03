@@ -6,6 +6,31 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### M5 (W2.3): golden records — `Canonicalizer` (survivorship + the enrichment loop)
+
+The Master Data Creation exit (UC4): merge one entity's records into a single
+**golden record**, and enrich it as new mentions link in.
+
+- **`Canonicalizer`** (`src/langres/core/canonicalizer.py`) — a thin, composable,
+  config-serializable unit. `canonicalize(records) -> golden dict` resolves each
+  field independently with a named **survivorship strategy**: `most_complete`
+  (default — value from the richest source record), `longest`, `most_frequent`,
+  `most_recent` (needs a `timestamp_field`), `first`/`source_priority`, all
+  per-field overridable. Dict-in/dict-out (the shape `resolve`/`assign`/
+  `AnchorStore` already use); `id` is stamped as the master id, never merged; ties
+  break deterministically first-seen; `0`/`False` are present, `None`/`""` missing.
+- **`enrich(golden, mention)`** — the enrichment loop: fold a newly-linked sparse
+  mention (from `Resolver.assign`) into an existing golden record via the *same*
+  survivorship path, filling fields the golden record lacked. Not a parallel code
+  path — it is `canonicalize([golden, mention])` with the master id preserved.
+- **`save`/`load`** via the config-registry artifact seam (no pickle):
+  `canonicalizer.json` carries version + `type_name` + the strategy config.
+- End-to-end example (`examples/canonicalizer_enrichment.py`) + tests: a sparse
+  mention (name + website) links to an anchored entity, then canonicalization
+  fills the `website` the rich anchors never had (golden completeness 3 → 4).
+  Per-strategy correctness, edge cases, and a fresh-subprocess config round-trip;
+  100% coverage.
+
 ### M5 (W2.4): the data flywheel's harvest — verdicts + corrections → labeled pairs → threshold
 
 The harvest half of the flywheel. `JudgementLog` (W0.2) is the inlet; this turns its

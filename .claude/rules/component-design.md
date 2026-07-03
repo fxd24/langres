@@ -35,9 +35,8 @@ built. The real layering is:)
      judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`, …) and
      `core.calibration.derive_threshold`.
    - Philosophy: Like PyTorch's primitives.
-   - **Not yet built** (roadmap, don't reference as existing): `Canonicalizer`,
-     a general `Optimizer` (only `optimizers.BlockerOptimizer` exists),
-     constrained `Clusterer`, set-wise / trained judge families.
+   - **Not yet built** (roadmap, don't reference as existing): a general
+     `Optimizer` (only `optimizers.BlockerOptimizer` exists).
 
 ## Key Design Principles
 
