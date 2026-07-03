@@ -150,7 +150,7 @@ explorer  # Shows rich HTML table with top-10 failures, filter controls, charts
 
 **Phase 4: Documentation** (3-5 days)
 - Create `docs/DIAGNOSTICS.md` with examples
-- Add to `examples/compare_embedders_for_funders.py`
+- Add to `examples/research/compare_embedders_for_funders.py`
 - Video tutorial showing interactive exploration
 
 ### Success Criteria

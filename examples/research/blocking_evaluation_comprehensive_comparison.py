@@ -32,7 +32,7 @@ Expected findings:
 - Best trade-off: Hybrid-Qwen3-NoInst (approach 4, good quality without reranking)
 
 Usage:
-    python examples/blocking_evaluation_comprehensive_comparison.py
+    python examples/research/blocking_evaluation_comprehensive_comparison.py
 """
 
 import json
@@ -533,7 +533,7 @@ def save_results(
         },
     }
 
-    output_path = Path("examples/blocking_evaluation_results_comprehensive.json")
+    output_path = Path("examples/research/blocking_evaluation_results_comprehensive.json")
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 

@@ -30,7 +30,7 @@ Trade-off analysis:
 - Reranking: Best precision/recall via token-level similarity, highest cost
 
 Usage:
-    python examples/blocking_evaluation_with_reranking.py
+    python examples/research/blocking_evaluation_with_reranking.py
 """
 
 import json
@@ -868,7 +868,7 @@ def save_results(
         },
     }
 
-    output_path = Path("examples/blocking_evaluation_results_reranking.json")
+    output_path = Path("examples/research/blocking_evaluation_results_reranking.json")
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 

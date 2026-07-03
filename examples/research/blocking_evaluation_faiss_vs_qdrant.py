@@ -16,7 +16,7 @@ Metrics evaluated:
 - Performance: Indexing time and average query latency
 
 Usage:
-    python examples/blocking_evaluation_faiss_vs_qdrant.py
+    python examples/research/blocking_evaluation_faiss_vs_qdrant.py
 """
 
 import json
@@ -338,7 +338,7 @@ def save_results(
         },
     }
 
-    output_path = Path("examples/blocking_evaluation_results.json")
+    output_path = Path("examples/research/blocking_evaluation_results.json")
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 

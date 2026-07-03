@@ -85,7 +85,7 @@ report = blocker.evaluate(candidates, gold_clusters, k_values=[1, 5, 10, 20, 50,
 
 **Recommendation**:
 
-For **model comparison** (e.g., `examples/compare_embedders_for_funders.py`):
+For **model comparison** (e.g., `examples/research/compare_embedders_for_funders.py`):
 - Use `k_neighbors=100` or higher to get a complete picture
 - This ensures optimal_k calculations are accurate
 - The extra cost is worth it for proper model selection
@@ -95,7 +95,7 @@ For **production deployment**:
 - No need to retrieve extra candidates beyond what you'll use
 
 **Related Files**:
-- `examples/compare_embedders_for_funders.py`: Multi-model comparison example
+- `examples/research/compare_embedders_for_funders.py`: Multi-model comparison example
 - `src/langres/core/analysis.py`: `_compute_recall_curve()` function (lines 309-394)
 - `src/langres/core/blockers/vector.py`: `VectorBlocker` implementation
 

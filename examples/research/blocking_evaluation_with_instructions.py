@@ -39,7 +39,7 @@ Performance improvements:
 - ONNX backend: Additional 2-3x speedup for inference
 
 Usage:
-    python examples/blocking_evaluation_with_instructions.py
+    python examples/research/blocking_evaluation_with_instructions.py
 """
 
 import json
@@ -730,7 +730,7 @@ def save_results(
         },
     }
 
-    output_path = Path("examples/blocking_evaluation_results_with_instructions.json")
+    output_path = Path("examples/research/blocking_evaluation_results_with_instructions.json")
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 

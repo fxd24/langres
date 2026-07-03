@@ -1,6 +1,6 @@
 """Deterministic proof that the M1 bootstrap pipeline runs end-to-end (real embeddings).
 
-Drives the importable core of ``examples/m1_bootstrap_fodors_zagat.py``
+Drives the importable core of ``examples/research/m1_bootstrap_fodors_zagat.py``
 (``run_bootstrap``) over the real Fodors-Zagat corpus with real sentence-transformer
 embeddings and the zero-spend :class:`FakeLabeler`. Asserts the M1-critical
 blocking signal (cross-source Pair-Completeness >= 0.95), that a non-empty gold set
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from examples.m1_bootstrap_fodors_zagat import run_bootstrap
+from examples.research.m1_bootstrap_fodors_zagat import run_bootstrap
 from langres.bootstrap.models import GoldSet
 from langres.bootstrap.report import BootstrapReport
 

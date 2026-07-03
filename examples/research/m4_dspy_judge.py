@@ -10,7 +10,7 @@ of Amazon-Google test pairs — the plumbing a programmer using langres would dr
    candidates identically — proving the compiled program round-trips.
 
 Run:
-    uv run python examples/m4_dspy_judge.py --smoke   # default; $0, DummyLM
+    uv run python examples/research/m4_dspy_judge.py --smoke   # default; $0, DummyLM
 
 The ``DummyLM`` returns canned answers, so the printed JudgePairEval is illustrative
 of the *plumbing*, not a real quality signal — the paid first-light (a real model

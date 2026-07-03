@@ -9,12 +9,12 @@ blind" lesson):
     # 1. Smoke-test: ONE real call. Prints the model id, token usage, and the
     #    cost litellm/OpenRouter reports, so we can pin honest prices + a safe
     #    worst-case token count. Costs a fraction of a cent.
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/run_m1_gold_set.py \
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/research/run_m1_gold_set.py \
         --smoke --model openrouter/z-ai/glm-5.2
 
     # 2. Full run: labels the whole cross-source band under a hard $20 cap, using
     #    the prices pinned from step 1, and writes data/gold_sets/fodors_zagat/.
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/run_m1_gold_set.py \
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/research/run_m1_gold_set.py \
         --model openrouter/z-ai/glm-5.2 \
         --price-prompt 0.95 --price-completion 3.00 \
         --worst-case-tokens 1500 --budget 20 --budget-soft 15

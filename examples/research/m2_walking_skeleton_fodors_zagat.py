@@ -15,7 +15,7 @@ the test-split cross-source blocking Pair-Completeness (which caps recall).
 
 Run:
     OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 \\
-        uv run python examples/m2_walking_skeleton_fodors_zagat.py
+        uv run python examples/research/m2_walking_skeleton_fodors_zagat.py
 """
 
 from langres.data.er_benchmarks import (

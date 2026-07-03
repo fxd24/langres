@@ -679,7 +679,7 @@ round-trip — persist such a pipeline via the `Resolver` artifact instead).
 
 Measured on Fodors-Zagat + Amazon-Google (Pair-Completeness / Reduction-Ratio,
 composite vs. each dataset's pinned `VectorBlocker` alone):
-`examples/w1_blocking_algebra_output.md`.
+`examples/research/w1_blocking_algebra_output.md`.
 
 ### CorrelationClusterer (`langres.core.clusterers.correlation`, "C6")
 
@@ -701,7 +701,7 @@ directly compared and matched) still merges fully under both.
 Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
 clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
 on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
-see `examples/w1_blocking_algebra_output.md` for the full tables and the
+see `examples/research/w1_blocking_algebra_output.md` for the full tables and the
 default-flip decision (kept opt-in; recommended for harder/messier
 entity-resolution problems, not flipped globally on a single hard-dataset
 win).

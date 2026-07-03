@@ -18,11 +18,11 @@ scoring is WeightedAverageJudge. Two independent measurements:
    P/R/F1 on the SAME blocking + judge pipeline for both -- only the
    clusterer differs -- to isolate the over-merge fix's effect. The threshold
    (0.80) reuses the value already tuned for WeightedAverageJudge in
-   ``examples/m3_zero_spend_race_output.md``, so the base-Clusterer row here
+   ``examples/research/m3_zero_spend_race_output.md``, so the base-Clusterer row here
    should reproduce those numbers.
 
 Reproduce with:
-    uv run python examples/w1_blocking_algebra.py
+    uv run python examples/research/w1_blocking_algebra.py
 """
 
 import logging
@@ -58,7 +58,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 # Reused, not re-tuned: the WeightedAverageJudge threshold already established
-# in examples/m3_zero_spend_race_output.md (both FZ and AG).
+# in examples/research/m3_zero_spend_race_output.md (both FZ and AG).
 THRESHOLD = 0.80
 
 

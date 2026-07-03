@@ -14,7 +14,7 @@ count is recovered by rebuilding the deterministic (seed-0) stratified subsample
 
 Idempotent: cells already carrying ``regrade`` metadata are skipped.
 
-Run: ``uv run python examples/m3_regrade_subsample.py``
+Run: ``uv run python examples/research/m3_regrade_subsample.py``
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from examples.m3_race import (  # noqa: E402
+from examples.research.m3_race import (  # noqa: E402
     AG_LLM_SUBSAMPLE,
     build_ag_fixed_candidates,
     subsample_stratified,

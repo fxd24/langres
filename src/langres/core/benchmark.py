@@ -637,7 +637,7 @@ def run_methods(
     """Race several named methods on one benchmark into a :class:`BenchmarkTable`.
 
     The library-level experiment facade: the double loop
-    ``examples/m3_zero_spend_race.py`` hand-coded (``for method: build factory ->
+    ``examples/research/m3_zero_spend_race.py`` hand-coded (``for method: build factory ->
     run_method -> table.add``) becomes one call. For each name it builds a
     resolver factory via
     :func:`~langres.methods.make_resolver_factory(method, benchmark,

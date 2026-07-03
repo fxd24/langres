@@ -18,9 +18,9 @@ sanity floor, and Δ above that floor. Real MiniLM embeddings drive blocking; th
 scorers make no API call, so the whole run is deterministic and costs $0.
 
 Run:
-    uv run python examples/m3_zero_spend_race.py
+    uv run python examples/research/m3_zero_spend_race.py
 
-The committed ``examples/m3_zero_spend_race_output.md`` captures a reference run
+The committed ``examples/research/m3_zero_spend_race_output.md`` captures a reference run
 so the numbers survive without re-embedding.
 """
 

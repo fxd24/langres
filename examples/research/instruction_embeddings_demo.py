@@ -20,7 +20,7 @@ encoding with embedding models, specifically showing:
 Dataset: 1,741 real-world funder organization names
 
 Usage:
-    python examples/instruction_embeddings_demo.py
+    python examples/research/instruction_embeddings_demo.py
 """
 
 import logging

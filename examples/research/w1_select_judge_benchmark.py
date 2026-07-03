@@ -30,7 +30,7 @@ Both halves run on the IDENTICAL test split (``AmazonGoogleBenchmark``,
 seed 0) so the two numbers describe the same population.
 
 Run:
-    uv run python examples/w1_select_judge_benchmark.py
+    uv run python examples/research/w1_select_judge_benchmark.py
 """
 
 import argparse

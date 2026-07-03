@@ -1,7 +1,7 @@
 """Render the M3 race comparison table from the committed per-cell JSON results.
 
 Reads every ``data/benchmarks/m3/results/*.json`` cell written by
-``examples/m3_race.py`` and renders ``data/benchmarks/m3/M3_RESULTS.md``: the
+``examples/research/m3_race.py`` and renders ``data/benchmarks/m3/M3_RESULTS.md``: the
 5-method × {Fodors-Zagat, Amazon-Google} comparison with pair-level P/R/F1
 (primary; AG labelled literature-comparable on the fixed test pairs), the
 zero-spend pipeline BCubed / cluster-F1 / Δ-floor (mean ± std over 5 seeds), the
@@ -12,7 +12,7 @@ calls a model or spends.
 
 Usage::
 
-    uv run python examples/m3_report.py
+    uv run python examples/research/m3_report.py
 """
 
 from __future__ import annotations

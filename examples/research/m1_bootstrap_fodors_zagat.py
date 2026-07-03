@@ -19,7 +19,7 @@ when ``OPENROUTER_API_KEY`` is set and never costs anything otherwise.
 
 Run it::
 
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/m1_bootstrap_fodors_zagat.py
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=1 uv run python examples/research/m1_bootstrap_fodors_zagat.py
 
 ``print`` is allowed in examples (this is demonstration, not library code).
 """
@@ -140,7 +140,7 @@ def maybe_real_teacher() -> None:
 
     from langres.bootstrap import TeacherLabeler
 
-    # The real paid run lives in examples/run_m1_gold_set.py (which pins prices
+    # The real paid run lives in examples/research/run_m1_gold_set.py (which pins prices
     # from a smoke test). This branch just shows the swap-in; prices here are
     # illustrative (the glm-5.1 OpenRouter anchor), not a live quote.
     teacher = TeacherLabeler.from_env(

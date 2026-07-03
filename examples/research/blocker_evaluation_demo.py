@@ -8,7 +8,7 @@ This example shows:
 4. Understanding the new API structure
 
 Note: For real evaluation with VectorBlocker or other similarity-based blockers,
-see examples/blocker_evaluation_comprehensive.py
+see examples/research/blocker_evaluation_comprehensive.py
 """
 
 import logging

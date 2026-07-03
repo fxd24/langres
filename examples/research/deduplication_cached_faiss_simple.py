@@ -16,7 +16,7 @@ Quality metrics remain identical, proving cache correctness while dramatically
 improving performance.
 
 Usage:
-    python examples/deduplication_cached_faiss_simple.py
+    python examples/research/deduplication_cached_faiss_simple.py
 """
 
 import json
@@ -405,7 +405,7 @@ def save_results(
         },
     }
 
-    output_path = Path("examples/deduplication_cached_results.json")
+    output_path = Path("examples/research/deduplication_cached_results.json")
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
