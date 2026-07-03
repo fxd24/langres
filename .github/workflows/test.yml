@@ -14,10 +14,11 @@ concurrency:
 
 jobs:
   test:
-    # Kept at 4-vCPU (unlike the other jobs): with pytest-xdist `-n auto`
-    # (pyproject addopts) the suite now uses all 4 cores, so the runner is
-    # justified -- parallelizing cuts wall-time ~proportionally, making the
-    # bigger runner roughly cost-neutral but much faster.
+    # 4-vCPU (unlike the other jobs, which are 2-vCPU): the suite is dominated
+    # by ~76 slow embedding/ML tests whose torch inference already parallelizes
+    # across all 4 cores via torch's intra-op threading -- so the cores are
+    # genuinely used here. (Note: pytest-xdist `-n auto` was tried and REVERTED
+    # -- 4 workers x ~4 torch threads oversubscribes 4 cores and runs *slower*.)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       matrix:
