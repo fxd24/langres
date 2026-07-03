@@ -47,6 +47,28 @@ logger = logging.getLogger(__name__)
 #: Bump when the ``anchor_store.json`` layout changes incompatibly.
 ANCHOR_STORE_VERSION = "1"
 
+
+def _schema_factory(blocker: Any) -> Any:
+    """Return a blocker's ``schema_factory``, or raise a clear unsupported error.
+
+    ``AnchorStore`` normalizes raw records through the resolver blocker's
+    ``schema_factory``. ``AllPairsBlocker`` and ``VectorBlocker`` expose one, but
+    a ``CompositeBlocker`` (blocking-algebra union/intersection of children) owns
+    no schema of its own — assigning against a composite-blocked resolver is not
+    supported yet, so surface that as an actionable error rather than a cryptic
+    ``AttributeError`` deep in ``build``/``assign``.
+    """
+    factory = getattr(blocker, "schema_factory", None)
+    if factory is None:
+        raise NotImplementedError(
+            f"AnchorStore does not support a {type(blocker).__name__} "
+            "(it exposes no `schema_factory`): incremental assign requires a "
+            "blocker that normalizes records itself (AllPairsBlocker / "
+            "VectorBlocker). Composite/hybrid-blocked resolvers are a later wave."
+        )
+    return factory
+
+
 _MANIFEST_FILENAME = "anchor_store.json"
 _RESOLVER_SUBDIR = "resolver"
 
@@ -202,7 +224,7 @@ class AnchorStore:
         """
         clusters = resolver.resolve(records)
 
-        factory = resolver.blocker.schema_factory  # type: ignore[attr-defined]
+        factory = _schema_factory(resolver.blocker)
         anchor_ids: list[str] = [factory(record).id for record in records]
         records_by_id = dict(zip(anchor_ids, records))
 
@@ -259,6 +281,13 @@ class AnchorStore:
         recorded (append-only), so assigning a record whose id is already known
         returns its existing entity id unchanged (idempotent, never renumbered).
 
+        W2.2 boundary: assign matches against the anchor set fixed at
+        :meth:`build` time. A newly-assigned record extends the id map (so its
+        own id is idempotent) but is **not** added to the searchable corpus/
+        index — two distinct new ids that duplicate each other will each mint a
+        ``new`` entity. Growing the searchable set across assigns (so later
+        arrivals match earlier ones) is reserved for a later wave.
+
         Args:
             record: A raw record dict, same shape as :meth:`build` / ``resolve``.
 
@@ -266,7 +295,7 @@ class AnchorStore:
             A :class:`ClusterDelta` with a stable ``entity_id`` and the delta
             ``type`` (``"link"`` or ``"new"``).
         """
-        entity = self._resolver.blocker.schema_factory(record)  # type: ignore[attr-defined]
+        entity = _schema_factory(self._resolver.blocker)(record)
         record_id: str = entity.id
 
         # Idempotent on record id: a record we have already assigned keeps its
@@ -331,6 +360,11 @@ class AnchorStore:
         return self._assignments.get(record_id)
 
     @property
+    def assignments(self) -> dict[str, str]:
+        """A copy of the full ``record_id -> entity_id`` map (read-only)."""
+        return dict(self._assignments)
+
+    @property
     def entity_ids(self) -> set[str]:
         """The set of distinct entity ids currently known to the store."""
         return set(self._assignments.values())
@@ -349,15 +383,18 @@ class AnchorStore:
             return list(self._anchor_ids)
 
         text = blocker.text_field_extractor(entity)  # type: ignore[attr-defined]
-        # k <= ntotal, so a flat index returns exactly k valid neighbours (no
-        # -1 padding); the new record is not in the corpus, so no self-hit to skip.
         k = min(blocker.k_neighbors, len(self._anchor_ids))  # type: ignore[attr-defined]
         _distances, indices = blocker.vector_index.search(text, k)  # type: ignore[attr-defined]
-        return [self._anchor_ids[int(i)] for i in indices.tolist()]
+        # Skip -1 padding: a fusion/hybrid index (e.g. QdrantHybridIndex) pads
+        # short result sets with -1 even when k <= ntotal. Indexing a bare list
+        # with -1 would silently wrap to the last anchor -> a phantom match.
+        return [
+            self._anchor_ids[index] for index in (int(i) for i in indices.tolist()) if index >= 0
+        ]
 
     def _candidate(self, entity: Any, anchor_id: str) -> ERCandidate[Any]:
         """Build a ``(new_record, anchor)`` candidate pair for the judge."""
-        anchor_entity = self._resolver.blocker.schema_factory(self._records[anchor_id])  # type: ignore[attr-defined]
+        anchor_entity = _schema_factory(self._resolver.blocker)(self._records[anchor_id])
         return ERCandidate(left=entity, right=anchor_entity, blocker_name="anchor_store")
 
     def _judge(self, candidates: list[ERCandidate[Any]]) -> list[PairwiseJudgement]:

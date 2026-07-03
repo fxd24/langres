@@ -55,7 +55,7 @@ def main() -> None:
     #    including the singletons a batch resolve() would have dropped.
     store = resolver.build_anchor_store(BATCH)
     print("Anchored entities (record_id -> entity_id):")
-    for record_id, entity_id in sorted(store._assignments.items()):
+    for record_id, entity_id in sorted(store.assignments.items()):
         print(f"  record {record_id} -> {entity_id}")
 
     # 2. A new mention of an existing company -> LINK to its stable entity id.

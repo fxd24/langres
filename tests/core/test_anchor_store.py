@@ -15,21 +15,26 @@ is cleared (a single present feature scores 0 as ``below_evidence_floor``).
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pytest
 
 from langres.core import (
+    AllPairsBlocker,
     AnchorStore,
     Clusterer,
     ClusterDelta,
     CompanySchema,
     Comparator,
+    CompositeBlocker,
     ERCandidate,
     Module,
     PairwiseJudgement,
     Resolver,
     WeightedAverageJudge,
 )
+from langres.core.anchor_store import _schema_factory
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FakeEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
@@ -355,3 +360,80 @@ def test_cluster_delta_reserves_future_types() -> None:
     for reserved in ("merge", "split", "reject"):
         delta = ClusterDelta(type=reserved, record_id="x", entity_id="e0")  # type: ignore[arg-type]
         assert delta.type == reserved
+
+
+def test_assignments_property_is_a_read_only_copy() -> None:
+    store = AnchorStore.build(_string_resolver(), RECORDS)
+    snapshot = store.assignments
+    assert snapshot == {"1": "e0", "2": "e0", "3": "e1", "4": "e2"}
+    snapshot["1"] = "TAMPERED"  # mutating the copy must not touch the store
+    assert store.entity_id_of("1") == "e0"
+
+
+# --- Review fixes: unsupported blocker, -1 padding, documented boundary ------
+
+
+def test_unsupported_blocker_without_schema_factory_raises() -> None:
+    """A CompositeBlocker exposes no schema_factory -> a clear, actionable error."""
+    composite = CompositeBlocker(
+        [AllPairsBlocker(schema=CompanySchema), AllPairsBlocker(schema=CompanySchema)],
+        op="union",
+    )
+    with pytest.raises(NotImplementedError, match="schema_factory"):
+        _schema_factory(composite)
+
+
+class _MinusOnePaddingIndex:
+    """Fake vector index whose ``search`` pads with -1, like a Qdrant fusion query."""
+
+    type_name = "faiss_index"
+
+    def __init__(self) -> None:
+        self._corpus_texts: list[str] | None = None
+
+    def create_index(self, texts: list[str]) -> None:
+        self._corpus_texts = list(texts)
+
+    def search(
+        self, query_texts: Any, k: int, query_prompt: str | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        # First slot is -1 padding; second points at anchor position 0.
+        return np.array([0.9, 0.1]), np.array([-1, 0])
+
+
+def test_vector_search_skips_minus_one_padding() -> None:
+    """-1 padding must be skipped, not wrapped to the last anchor (Qdrant safety)."""
+    anchor_a = {"id": "a", "name": "Globex", "address": "1 A St", "phone": "1"}
+    anchor_b = {"id": "b", "name": "Initech", "address": "2 B St", "phone": "2"}
+    blocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=_MinusOnePaddingIndex(),  # type: ignore[arg-type]
+        schema=CompanySchema,
+        text_field="name",
+        k_neighbors=2,
+    )
+    resolver = Resolver(
+        blocker=blocker, comparator=None, module=_NameJudge(), clusterer=Clusterer(threshold=0.6)
+    )
+    store = AnchorStore(
+        resolver=resolver,
+        records={"a": anchor_a, "b": anchor_b},
+        assignments={"a": "e0", "b": "e1"},
+        anchor_ids=["a", "b"],
+        next_ordinal=2,
+    )
+    # Query name matches anchor "a" (position 0); the -1 slot must be dropped,
+    # NOT wrapped to anchor_ids[-1] == "b".
+    delta = store.assign({"id": "c", "name": "Globex", "address": "x", "phone": "9"})
+    assert delta.type == "link"
+    assert delta.matched_anchor_ids == ["a"]
+    assert delta.entity_id == "e0"
+
+
+def test_new_records_are_not_added_to_the_searchable_set() -> None:
+    """Documented W2.2 boundary: two distinct new ids that duplicate each other
+    each mint a NEW entity (assign matches only the build-time anchor set)."""
+    store = AnchorStore.build(_string_resolver(), RECORDS)
+    first = store.assign(dict(NOVEL, id="dup-1"))
+    second = store.assign(dict(NOVEL, id="dup-2"))  # same content, different id
+    assert first.type == second.type == "new"
+    assert first.entity_id != second.entity_id
