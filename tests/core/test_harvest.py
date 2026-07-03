@@ -107,7 +107,7 @@ def test_correction_log_read_skips_blank_lines(tmp_path: Path) -> None:
     path.write_text(
         '{"v": 1, "left_id": "a", "right_id": "b", "label": true}\n'
         "\n"
-        '   \n'
+        "   \n"
         '{"v": 1, "left_id": "c", "right_id": "d", "label": false}\n',
         encoding="utf-8",
     )
@@ -216,9 +216,9 @@ def test_derive_threshold_from_pairs_percentile_passthrough() -> None:
         LabeledPair(left_id="a", right_id="b", score=0.0, label=False, source="verdict"),
         LabeledPair(left_id="c", right_id="d", score=1.0, label=True, source="verdict"),
     ]
-    assert derive_threshold_from_pairs(pairs, method="percentile", percentile=50.0) == pytest.approx(
-        0.5
-    )
+    assert derive_threshold_from_pairs(
+        pairs, method="percentile", percentile=50.0
+    ) == pytest.approx(0.5)
 
 
 def test_derive_threshold_from_pairs_propagates_single_class_error() -> None:

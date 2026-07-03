@@ -201,10 +201,10 @@ def harvest_labeled_pairs(
         left_id = str(row["left_id"])
         right_id = str(row["right_id"])
         key = frozenset({left_id, right_id})
-        correction = corrections_by_pair.get(key)
-        if correction is not None:
+        override = corrections_by_pair.get(key)
+        if override is not None:
             matched.add(key)
-            label = correction.label
+            label = override.label
             source: Literal["verdict", "correction"] = "correction"
         else:
             label = bool(row["verdict"])
