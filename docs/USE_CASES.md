@@ -238,8 +238,8 @@ exists, and the intended (not-yet-built) design otherwise.
 | 1. Deduplication | `dedupe(records)` / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
 | Pairwise match verdict | `link(left, right)` → `LinkVerdict` | ✅ **Shipping** |
 | Optimization / calibration | `core.calibration.derive_threshold`, `core.optimizers.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
-| 2. Entity Linking | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap (M5) |
-| 10. Fuzzy FK Resolution | (special case of UC2) | 🚧 Roadmap (M5) |
+| 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap (M5) |
+| 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** (M5/W2.2) |
 | 4. Master Data Creation | `Canonicalizer` (survivorship) — not built | 🚧 Roadmap (M5) |
 | Set-wise / trained judge families | SelectJudge, Fellegi–Sunter, RandomForest — not built | 🚧 Roadmap (M4.5) |
 | 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |

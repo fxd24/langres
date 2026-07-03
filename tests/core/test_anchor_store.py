@@ -28,7 +28,9 @@ from langres.core import (
     CompanySchema,
     Comparator,
     CompositeBlocker,
+    EmbeddingScoreJudge,
     ERCandidate,
+    KeyBlocker,
     Module,
     PairwiseJudgement,
     Resolver,
@@ -240,6 +242,9 @@ def test_assign_same_record_twice_is_stable() -> None:
     assert first.entity_id == second.entity_id
     assert second.type == "link"
     assert second.reasoning == "record id already assigned"
+    # The idempotent path returns no fresh evidence (documented contract).
+    assert second.matched_anchor_ids == []
+    assert second.score is None
 
 
 def test_interleaved_assigns_never_renumber_prior_ids() -> None:
@@ -373,14 +378,77 @@ def test_assignments_property_is_a_read_only_copy() -> None:
 # --- Review fixes: unsupported blocker, -1 padding, documented boundary ------
 
 
-def test_unsupported_blocker_without_schema_factory_raises() -> None:
-    """A CompositeBlocker exposes no schema_factory -> a clear, actionable error."""
-    composite = CompositeBlocker(
-        [AllPairsBlocker(schema=CompanySchema), AllPairsBlocker(schema=CompanySchema)],
+def test_schema_factory_unreachable_raises() -> None:
+    """A blocker with neither a schema_factory nor schema-bearing children errors."""
+
+    class _NoFactoryBlocker:
+        type_name = "no_factory"
+
+    with pytest.raises(NotImplementedError, match="schema_factory"):
+        _schema_factory(_NoFactoryBlocker())
+
+
+def test_schema_factory_skips_children_without_factory() -> None:
+    """Recursion skips a factory-less child and returns a later child's factory."""
+
+    class _Stub:
+        pass
+
+    good = AllPairsBlocker(schema=CompanySchema)
+
+    class _FakeComposite:
+        children = [_Stub(), good]
+
+    assert _schema_factory(_FakeComposite()) is good.schema_factory
+
+
+def test_composite_blocker_reaches_child_schema_factory() -> None:
+    """Recall-first CompositeBlocker (KeyBlocker union AllPairs) works via a child."""
+    composite: CompositeBlocker[CompanySchema] = CompositeBlocker(
+        [
+            KeyBlocker(schema=CompanySchema, key_field="phone"),
+            AllPairsBlocker(schema=CompanySchema),
+        ],
         op="union",
     )
-    with pytest.raises(NotImplementedError, match="schema_factory"):
-        _schema_factory(composite)
+    comparator = Comparator.from_schema(CompanySchema)
+    resolver = Resolver(
+        blocker=composite,
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.6),
+    )
+    store = resolver.build_anchor_store(RECORDS)
+    assert set(store.assignments) == {"1", "2", "3", "4"}
+    assert resolver.assign(APPLE_NEW).type == "link"
+
+
+def test_embedding_judge_assign_gets_similarity_score() -> None:
+    """assign() must attach similarity_score so EmbeddingScoreJudge can score."""
+    anchors = [
+        {"id": "1", "name": "Apple", "address": "a", "phone": "1"},
+        {"id": "2", "name": "Microsoft", "address": "b", "phone": "2"},
+        {"id": "3", "name": "Umbrella", "address": "c", "phone": "3"},
+    ]
+    index = FAISSIndex(embedder=FakeEmbedder(), metric="cosine")
+    blocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=index, schema=CompanySchema, text_field="name", k_neighbors=10
+    )
+    # EmbeddingScoreJudge scores purely off similarity_score (no comparator).
+    resolver = Resolver(
+        blocker=blocker,
+        comparator=None,
+        module=EmbeddingScoreJudge(threshold=0.9),
+        clusterer=Clusterer(threshold=0.9),
+    )
+    store = resolver.build_anchor_store(anchors)
+    # Same text as anchor "1" -> FakeEmbedder yields an identical vector ->
+    # cosine similarity 1.0 -> links (would raise ValueError if score were None).
+    delta = resolver.assign({"id": "9", "name": "Apple", "address": "z", "phone": "9"})
+    assert delta.type == "link"
+    assert delta.matched_anchor_ids == ["1"]
+    assert delta.entity_id == store.entity_id_of("1")
+    assert delta.score is not None and delta.score >= 0.9
 
 
 class _MinusOnePaddingIndex:
@@ -399,6 +467,9 @@ class _MinusOnePaddingIndex:
     ) -> tuple[np.ndarray, np.ndarray]:
         # First slot is -1 padding; second points at anchor position 0.
         return np.array([0.9, 0.1]), np.array([-1, 0])
+
+    def to_similarities(self, distances: np.ndarray) -> np.ndarray:
+        return np.clip(distances, 0.0, 1.0)
 
 
 def test_vector_search_skips_minus_one_padding() -> None:
@@ -427,6 +498,25 @@ def test_vector_search_skips_minus_one_padding() -> None:
     assert delta.type == "link"
     assert delta.matched_anchor_ids == ["a"]
     assert delta.entity_id == "e0"
+
+
+def test_build_rejects_duplicate_ids() -> None:
+    dup = [APPLE_1, dict(APPLE_2, id="1")]  # both id "1"
+    with pytest.raises(ValueError, match="unique record ids"):
+        AnchorStore.build(_string_resolver(), dup)
+
+
+def test_load_rejects_incompatible_store_version(tmp_path: Path) -> None:
+    import json
+
+    path = tmp_path / "anchors"
+    AnchorStore.build(_string_resolver(), RECORDS).save(path)
+    manifest_path = path / "anchor_store.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["store_version"] = "999"
+    manifest_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="version"):
+        AnchorStore.load(path)
 
 
 def test_new_records_are_not_added_to_the_searchable_set() -> None:

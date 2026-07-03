@@ -14,8 +14,9 @@ prior batch (:meth:`AnchorStore.build`) that:
 - runs the resolver once (which also builds any vector index in place), then
 - enumerates **every** input record — including the ones the clusterer dropped
   as singletons — and mints each a **stable, monotonic entity id** from an
-  append-only allocator (ids are minted by the store, never derived from list
-  position, since ``resolve()``'s order is non-deterministic).
+  append-only allocator. Minting walks the caller's input-list order (stable);
+  what it deliberately avoids is keying ids off ``resolve()``'s set/graph output,
+  whose iteration order is non-deterministic.
 
 :meth:`AnchorStore.assign` then answers the incremental question for one new
 record by reusing the resolver's *existing* seams — the vector index's
@@ -49,24 +50,30 @@ ANCHOR_STORE_VERSION = "1"
 
 
 def _schema_factory(blocker: Any) -> Any:
-    """Return a blocker's ``schema_factory``, or raise a clear unsupported error.
+    """Return a record->entity factory reachable from ``blocker``.
 
-    ``AnchorStore`` normalizes raw records through the resolver blocker's
-    ``schema_factory``. ``AllPairsBlocker`` and ``VectorBlocker`` expose one, but
-    a ``CompositeBlocker`` (blocking-algebra union/intersection of children) owns
-    no schema of its own — assigning against a composite-blocked resolver is not
-    supported yet, so surface that as an actionable error rather than a cryptic
-    ``AttributeError`` deep in ``build``/``assign``.
+    ``AnchorStore`` normalizes raw records through the blocker's
+    ``schema_factory``. ``AllPairsBlocker``/``VectorBlocker`` expose one directly.
+    A ``CompositeBlocker`` (blocking-algebra union/intersection) owns no schema of
+    its own but its children all share one — so recurse into ``children`` and use
+    the first reachable factory (the recall-first ``KeyBlocker`` union
+    ``VectorBlocker`` pattern therefore works). Only a blocker that neither
+    exposes nor contains a ``schema_factory`` (e.g. a ``GLinkerAdapter``) raises
+    an actionable error rather than a cryptic ``AttributeError`` in build/assign.
     """
     factory = getattr(blocker, "schema_factory", None)
-    if factory is None:
-        raise NotImplementedError(
-            f"AnchorStore does not support a {type(blocker).__name__} "
-            "(it exposes no `schema_factory`): incremental assign requires a "
-            "blocker that normalizes records itself (AllPairsBlocker / "
-            "VectorBlocker). Composite/hybrid-blocked resolvers are a later wave."
-        )
-    return factory
+    if factory is not None:
+        return factory
+    for child in getattr(blocker, "children", []):
+        child_factory = getattr(child, "schema_factory", None)
+        if child_factory is not None:
+            return child_factory
+    raise NotImplementedError(
+        f"AnchorStore cannot normalize records via a {type(blocker).__name__}: "
+        "no `schema_factory` on it or its children. Incremental assign needs a "
+        "blocker (or composite of blockers) that reconstructs entities itself "
+        "(AllPairsBlocker / VectorBlocker / a CompositeBlocker of them)."
+    )
 
 
 _MANIFEST_FILENAME = "anchor_store.json"
@@ -98,8 +105,12 @@ class ClusterDelta(BaseModel):
             the evidence behind a ``link`` (empty for ``new``). More than one
             *distinct* entity among these is a merge signal; W2.2 links to the
             lowest-ordinal entity and leaves ``merge`` to a later milestone.
+            **Also empty on the idempotent already-assigned-id ``link``** (that
+            path returns the stored entity without re-judging, so it carries no
+            fresh evidence and ``score`` is ``None``).
         score: The best matching score observed across the judged candidates
-            (observability only); ``None`` when there were no candidates.
+            (observability only); ``None`` when there were no candidates (or on
+            the idempotent already-assigned-id path).
         reasoning: Optional human-readable note about the decision.
     """
 
@@ -221,11 +232,22 @@ class AnchorStore:
 
         Returns:
             An :class:`AnchorStore` with one stable entity id per input record.
+
+        Raises:
+            NotImplementedError: If the resolver's blocker exposes no
+                ``schema_factory`` (e.g. a ``CompositeBlocker``).
+            ValueError: If ``records`` contains duplicate ids.
         """
         clusters = resolver.resolve(records)
 
         factory = _schema_factory(resolver.blocker)
         anchor_ids: list[str] = [factory(record).id for record in records]
+        if len(set(anchor_ids)) != len(anchor_ids):
+            raise ValueError(
+                "AnchorStore.build requires unique record ids; the input batch "
+                "has duplicates (a repeated id would silently overwrite an "
+                "assignment and burn an entity-id ordinal)."
+            )
         records_by_id = dict(zip(anchor_ids, records))
 
         id_to_cluster: dict[str, frozenset[str]] = {}
@@ -288,18 +310,32 @@ class AnchorStore:
         ``new`` entity. Growing the searchable set across assigns (so later
         arrivals match earlier ones) is reserved for a later wave.
 
+        Cost: with no vector index (e.g. an ``AllPairsBlocker`` pipeline) assign
+        judges the record against **every** anchor — O(n) judge calls per record.
+        With a *paid* judge (``judge="zero_shot_llm"``/any paid ``Module``) that
+        is O(n) paid calls per assign, uncapped; prefer a ``VectorBlocker`` (kNN
+        candidates) or a cheap judge for incremental assignment at scale.
+
+        This method mutates the store in place (it registers the record's
+        assignment); a shared instance is not safe for concurrent ``assign``.
+
         Args:
             record: A raw record dict, same shape as :meth:`build` / ``resolve``.
 
         Returns:
             A :class:`ClusterDelta` with a stable ``entity_id`` and the delta
-            ``type`` (``"link"`` or ``"new"``).
+            ``type`` (``"link"`` or ``"new"``). On the idempotent
+            already-assigned-id path the ``link`` carries empty
+            ``matched_anchor_ids`` and ``score=None`` (no re-judging is done).
         """
-        entity = _schema_factory(self._resolver.blocker)(record)
+        factory = _schema_factory(self._resolver.blocker)
+        entity = factory(record)
         record_id: str = entity.id
 
         # Idempotent on record id: a record we have already assigned keeps its
         # entity id (append-only allocator never renumbers a prior assignment).
+        # The record's CONTENT is not re-judged here — same id ⇒ same entity, by
+        # contract; feed a genuinely-updated record under a fresh id to re-match.
         if record_id in self._assignments:
             return ClusterDelta(
                 type="link",
@@ -308,8 +344,10 @@ class AnchorStore:
                 reasoning="record id already assigned",
             )
 
-        anchor_ids = self._candidate_anchor_ids(entity)
-        candidates = [self._candidate(entity, anchor_id) for anchor_id in anchor_ids]
+        candidates = [
+            self._candidate(factory, entity, anchor_id, similarity)
+            for anchor_id, similarity in self._candidate_anchors(entity)
+        ]
         judgements = self._judge(candidates)
 
         threshold = self._resolver.clusterer.threshold
@@ -369,33 +407,52 @@ class AnchorStore:
         """The set of distinct entity ids currently known to the store."""
         return set(self._assignments.values())
 
-    def _candidate_anchor_ids(self, entity: Any) -> list[str]:
-        """Anchor ids to judge ``entity`` against: kNN when indexed, else all.
+    def _candidate_anchors(self, entity: Any) -> list[tuple[str, float | None]]:
+        """``(anchor_id, similarity)`` pairs to judge ``entity`` against.
 
         Reuses the vector index's single-record ``search`` (the thin
         new-record-against-built-corpus path) when the resolver blocks on a
-        vector index; falls back to every anchor when there is no index (e.g. an
-        ``AllPairsBlocker``), which is the correct all-pairs behaviour for one
-        new record against the anchor set.
+        vector index — attaching the same distance->similarity the batch path
+        computes, so an ``EmbeddingScoreJudge`` (which scores off
+        ``similarity_score``) works incrementally. Falls back to every anchor
+        (``similarity`` ``None``) when there is no index (e.g. an
+        ``AllPairsBlocker``), the correct all-pairs behaviour for one new record.
         """
         blocker = self._resolver.blocker
         if getattr(blocker, "type_name", None) != "vector_blocker" or not self._anchor_ids:
-            return list(self._anchor_ids)
+            return [(anchor_id, None) for anchor_id in self._anchor_ids]
 
         text = blocker.text_field_extractor(entity)  # type: ignore[attr-defined]
         k = min(blocker.k_neighbors, len(self._anchor_ids))  # type: ignore[attr-defined]
-        _distances, indices = blocker.vector_index.search(text, k)  # type: ignore[attr-defined]
+        # Pass the blocker's query_prompt so an asymmetric/instructional embedder
+        # encodes the assign query exactly as the batch path does (vector.py).
+        distances, indices = blocker.vector_index.search(  # type: ignore[attr-defined]
+            text,
+            k,
+            query_prompt=blocker.query_prompt,  # type: ignore[attr-defined]
+        )
+        similarities = blocker.vector_index.to_similarities(distances)  # type: ignore[attr-defined]
         # Skip -1 padding: a fusion/hybrid index (e.g. QdrantHybridIndex) pads
         # short result sets with -1 even when k <= ntotal. Indexing a bare list
         # with -1 would silently wrap to the last anchor -> a phantom match.
-        return [
-            self._anchor_ids[index] for index in (int(i) for i in indices.tolist()) if index >= 0
-        ]
+        pairs: list[tuple[str, float | None]] = []
+        for raw_index, similarity in zip(indices.tolist(), similarities.tolist()):
+            index = int(raw_index)
+            if index >= 0:
+                pairs.append((self._anchor_ids[index], float(similarity)))
+        return pairs
 
-    def _candidate(self, entity: Any, anchor_id: str) -> ERCandidate[Any]:
+    def _candidate(
+        self, factory: Any, entity: Any, anchor_id: str, similarity: float | None
+    ) -> ERCandidate[Any]:
         """Build a ``(new_record, anchor)`` candidate pair for the judge."""
-        anchor_entity = _schema_factory(self._resolver.blocker)(self._records[anchor_id])
-        return ERCandidate(left=entity, right=anchor_entity, blocker_name="anchor_store")
+        anchor_entity = factory(self._records[anchor_id])
+        return ERCandidate(
+            left=entity,
+            right=anchor_entity,
+            blocker_name="anchor_store",
+            similarity_score=similarity,
+        )
 
     def _judge(self, candidates: list[ERCandidate[Any]]) -> list[PairwiseJudgement]:
         """Score candidates with the resolver's SAME comparator + module judge."""
@@ -461,6 +518,11 @@ class AnchorStore:
 
         Returns:
             An :class:`AnchorStore` equivalent to the one that was saved.
+
+        Raises:
+            ValueError: If the artifact's ``store_version`` differs from the
+                supported :data:`ANCHOR_STORE_VERSION` (an incompatible layout),
+                mirroring ``Resolver.load``'s own version guard.
         """
         from langres.core.resolver import Resolver
 
@@ -468,6 +530,11 @@ class AnchorStore:
         manifest = AnchorStoreManifest.model_validate_json(
             (in_dir / _MANIFEST_FILENAME).read_text()
         )
+        if manifest.store_version != ANCHOR_STORE_VERSION:
+            raise ValueError(
+                f"AnchorStore artifact version {manifest.store_version!r} differs from "
+                f"supported {ANCHOR_STORE_VERSION!r}; cannot load."
+            )
         resolver = Resolver.load(in_dir / _RESOLVER_SUBDIR)
         return cls(
             resolver=resolver,

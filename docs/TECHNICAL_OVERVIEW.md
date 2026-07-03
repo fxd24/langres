@@ -438,6 +438,17 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
 
+### ClusterDelta (`langres.core`, M5/W2.2)
+
+The result of one incremental `Resolver.assign(record)` / `AnchorStore.assign(record)` — the outcome of assigning a single new record against a prior batch's anchor set.
+
+- `type: Literal["new", "link", "merge", "split", "reject"]`: `new` (a fresh entity was minted) or `link` (attached to an existing entity). `merge`/`split`/`reject` are **reserved** for the wider entity-maintenance surface (W2.4/M6) so the contract stays stable; W2.2 only ever emits `new`/`link`.
+- `record_id: str`: The assigned record's id.
+- `entity_id: str`: The **stable** entity id the record now belongs to (freshly minted for `new`, existing for `link`). Never changes on later assigns (append-only allocator).
+- `matched_anchor_ids: list[str]`: Anchor record ids that cleared the threshold (evidence for a `link`; empty for `new` and for the idempotent already-assigned-id `link`).
+- `score: Optional[float]`: Best matching score across judged candidates (observability); `None` when there were no candidates or on the idempotent path.
+- `reasoning: Optional[str]`: Human-readable note about the decision.
+
 ## 8. Group + Fit Contracts (W1.0) + SelectJudge (W1.1)
 
 W1.0 froze two interfaces that later branches build against: this section

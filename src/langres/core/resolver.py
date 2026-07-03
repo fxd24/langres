@@ -333,7 +333,8 @@ class Resolver:
         self.module = module
         self.clusterer = clusterer
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
-        self._anchor_store: AnchorStore | None = None
+        # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
+        self._anchor_store: "AnchorStore | None" = None
 
     # ------------------------------------------------------------------
     # Construction convenience

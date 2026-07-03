@@ -6,6 +6,26 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### M5 (W2.2): incremental single-record assignment — `AnchorStore` + `Resolver.assign`
+
+The incremental-linking exit (S6): after a batch `resolve()`, answer "here is one NEW
+record — which existing entity, or new?" with a **stable** entity id.
+
+- **`AnchorStore`** (`src/langres/core/anchor_store.py`) — a serializable, composable unit
+  around a `Resolver`. `AnchorStore.build(resolver, records)` runs a dedicated pass that
+  mints a stable, monotonic entity id for **every** record, including the singletons
+  `resolve()` drops (clusterer-agnostic). `save`/`load` via the config-registry artifact
+  seam (no pickle), delegating the pipeline to `Resolver.save`/`load`.
+- **`Resolver.build_anchor_store(records)` + `Resolver.assign(record) -> ClusterDelta`** —
+  thin sugar; the reserved cross-source `link`/`stream_against` stubs stay untouched.
+  `assign` reuses the vector index single-record kNN (with `similarity_score` + `query_prompt`,
+  so `EmbeddingScoreJudge` works incrementally) or all-pairs, and the same Comparator + Module
+  judge. Append-only allocator (idempotent per record id); `CompositeBlocker` supported.
+- **`ClusterDelta`** — `new` / `link`, with `merge`/`split`/`reject` reserved in the enum so
+  the contract stays stable for W2.4/M6.
+- Committed-data (Fodors-Zagat) + fresh-subprocess save/load round-trip tests; 100% coverage.
+  See `examples/incremental_assign.py`.
+
 ### M4: langres is the seam — DSPy experimentation foundation + first paid signal
 
 Reframed from a distillation-metric chase to **building the composable scorer seam we're
