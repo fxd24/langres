@@ -90,9 +90,7 @@ SurvivorshipStrategy = Callable[[FieldContext], Any]
 
 def _record_completeness(record: dict[str, Any], id_field: str) -> int:
     """Count a record's non-missing attribute fields (identity field excluded)."""
-    return sum(
-        1 for key, value in record.items() if key != id_field and not _is_missing(value)
-    )
+    return sum(1 for key, value in record.items() if key != id_field and not _is_missing(value))
 
 
 def _first(ctx: FieldContext) -> Any:
