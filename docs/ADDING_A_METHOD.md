@@ -232,10 +232,15 @@ cls = get_component("select_judge")       # lazily imports + registers
 assert cls.type_name == "select_judge"    # rebuildable by name, no pickle
 ```
 
-`tests/core/modules/test_dspy_judge.py` does the stronger version: it saves a
-`Resolver` (with the judge in the module slot) and reloads it in a **subprocess**,
-asserting the manifest carries `type_name` and **no `lm`** in the config. Mirror
-that for your judge.
+`tests/core/modules/test_dspy_judge.py` does the stronger version as **two**
+companion tests — mirror both for your judge:
+
+- `test_resolver_with_dspy_judge_saves_and_loads` — **in-process**: saves a
+  `Resolver` (judge in the module slot) and asserts the **manifest shape** —
+  `module_spec["type_name"] == "dspy_judge"` and **no `lm`** in the config.
+- `test_resolver_load_dspy_judge_in_fresh_process` (`@pytest.mark.slow`) — proves
+  the reload itself succeeds in a **fresh subprocess** (`Resolver.load` via
+  `langres.core` alone), i.e. that lazy registration fires on demand.
 
 ---
 
