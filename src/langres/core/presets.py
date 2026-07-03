@@ -247,7 +247,10 @@ class _SpendCappedModule(Module[Any]):
     :class:`~langres.clients.openrouter.BudgetExceeded` with every judgement
     already produced (and paid for) attached as ``.partial_judgements`` (E9;
     mirrors :class:`~langres.core.benchmark.BlindCostError`'s "set by the
-    catcher, not at raise time" pattern).
+    catcher, not at raise time" pattern). For a group-wise module
+    (``SelectJudge``), a group is never split across the cap boundary: the
+    already-paid-for siblings of a tripping judgement are drained in too (see
+    ``forward``'s ``provenance["group_end"]`` handling).
 
     Deliberately NOT :class:`~langres.core.benchmark.BudgetedModuleRunner`:
     that runner *silently truncates* past its soft cap (correct for the
@@ -262,13 +265,45 @@ class _SpendCappedModule(Module[Any]):
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         monitor = SpendMonitor(budget_usd=self._budget_usd)
         produced: list[PairwiseJudgement] = []
-        for judgement in self._module.forward(candidates):
+        judgements = self._module.forward(candidates)
+        for judgement in judgements:
             produced.append(judgement)
             cost = judgement.provenance.get("cost_usd", 0.0)
             monitor.add(float(cost) if cost is not None else 0.0)
             try:
                 monitor.check()
             except BudgetExceeded as exc:
+                # A group-wise module (SelectJudge) stamps the full call cost
+                # on the group's first judgement and $0 on its K-1 siblings,
+                # all sharing provenance["group_id"] and with
+                # provenance["group_end"] = True on the LAST one (E5,
+                # stamp_group_cost). If the cap trips here, those
+                # already-paid-for siblings must still land in
+                # partial_judgements -- a group must never be split across
+                # the cap boundary. Drain them from the same underlying
+                # iterator up to (and including) the group_end marker.
+                #
+                # This must NOT peek at the next judgement's group_id to
+                # detect the boundary: for a real GroupwiseModule the
+                # generator is lazy, so pulling one item past the group's
+                # last already-materialized judgement resumes forward_groups
+                # and fires the NEXT group's paid LLM call before there is
+                # anything to compare against -- silently discarding that
+                # judgement and its cost. group_end lets the drain stop
+                # exactly at the boundary without ever pulling past it.
+                #
+                # Because a sibling always carries $0 cost, monitor.check()
+                # can only ever trip on a group's FIRST judgement (a passing
+                # check means spend was <= budget; adding $0 can't newly
+                # exceed it) -- so `judgement` here is always a group's first,
+                # never a mid-group sibling, and "not group_end" correctly
+                # means "there are siblings left to drain".
+                group_id = judgement.provenance.get("group_id")
+                if group_id is not None and not judgement.provenance.get("group_end"):
+                    for sibling in judgements:
+                        produced.append(sibling)
+                        if sibling.provenance.get("group_end"):
+                            break
                 exc.partial_judgements = list(produced)
                 raise
             yield judgement

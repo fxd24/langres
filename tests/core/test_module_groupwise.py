@@ -301,6 +301,31 @@ def test_stamp_group_cost_does_not_mutate_input_judgements() -> None:
     assert "group_id" not in original.provenance
 
 
+def test_stamp_group_cost_sets_group_end_only_on_last_judgement() -> None:
+    """group_end marks exactly the LAST judgement, so a consumer draining a
+    whole group from a lazy stream (E9's _SpendCappedModule) can stop at the
+    boundary without peeking at (and thereby computing) the next group."""
+    judgements = [
+        _judgement("anchor", "m1"),
+        _judgement("anchor", "m2"),
+        _judgement("anchor", "m3"),
+    ]
+
+    stamped = stamp_group_cost(judgements, call_cost_usd=0.03, group_id="anchor")
+
+    assert "group_end" not in stamped[0].provenance
+    assert "group_end" not in stamped[1].provenance
+    assert stamped[2].provenance["group_end"] is True
+
+
+def test_stamp_group_cost_sets_group_end_on_single_judgement_group() -> None:
+    """A size-1 group's only judgement is both first and last -- group_end is True."""
+    stamped = stamp_group_cost([_judgement("anchor", "m1")], call_cost_usd=0.01, group_id="anchor")
+
+    assert stamped[0].provenance["cost_usd"] == pytest.approx(0.01)
+    assert stamped[0].provenance["group_end"] is True
+
+
 def test_stamp_group_cost_rejects_empty_list() -> None:
     """An empty judgement list is a caller bug, not a silently accepted no-op."""
     with pytest.raises(ValueError, match="at least one judgement"):

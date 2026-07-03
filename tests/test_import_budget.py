@@ -165,6 +165,14 @@ class TestCoreLazyGetattr:
 
         assert core.RFJudge is RFJudge
 
+    def test_select_judge_resolves(self) -> None:
+        pytest.importorskip("dspy", reason="requires the [llm] extra")
+        import langres.core as core
+
+        from langres.core.modules.select_judge import SelectJudge
+
+        assert core.SelectJudge is SelectJudge
+
     def test_embeddings_and_indexes_symbols_resolve(self) -> None:
         pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
         pytest.importorskip("faiss", reason="requires the [semantic] extra")
@@ -209,6 +217,15 @@ class TestCoreLazyGetattr:
 
         with pytest.raises(ImportError, match=r"langres\.core\.RFJudge.*langres\[trained\]"):
             core.RFJudge  # noqa: B018
+
+    def test_select_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
+        """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""
+        if _import_ok("dspy"):
+            pytest.skip("dspy is installed ([llm] extra present) -- nothing to observe")
+        import langres.core as core
+
+        with pytest.raises(ImportError, match=r"langres\.core\.SelectJudge.*langres\[llm\]"):
+            core.SelectJudge  # noqa: B018
 
     def test_submodules_resolve_to_the_module_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Attribute access resolves each submodule via ``__getattr__``.

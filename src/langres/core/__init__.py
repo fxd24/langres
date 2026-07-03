@@ -91,6 +91,7 @@ if TYPE_CHECKING:
     )
     from langres.core.modules.llm_judge import LLMJudge
     from langres.core.modules.rf_judge import RFJudge
+    from langres.core.modules.select_judge import SelectJudge
 
 __all__ = [
     "ARTIFACT_VERSION",
@@ -143,6 +144,7 @@ __all__ = [
     "RFJudge",
     "ScoreStats",
     "SchemaNotRegistered",
+    "SelectJudge",
     "SentenceTransformerEmbedder",
     "SerializableState",
     "SparseEmbeddingProvider",
@@ -182,17 +184,19 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "VectorIndex": "langres.core.indexes",
     "LLMJudge": "langres.core.modules.llm_judge",
     "RFJudge": "langres.core.modules.rf_judge",
+    "SelectJudge": "langres.core.modules.select_judge",
 }
 
 #: ``name -> extra`` for the lazy symbols a ``pip install langres[<extra>]``
 #: actually fixes -- everything in :data:`_LAZY_SYMBOLS` except the three
 #: submodules (dev/eval tooling, not distributed as a pip extra; see
 #: :data:`_LAZY_SUBMODULES`'s docstring). ``RFJudge`` needs scikit-learn (the
-#: ``[trained]`` extra, W1.2's trained-family judge); everything else needs
-#: either ``[llm]`` (LLMJudge) or ``[semantic]`` (embeddings/vector index/
-#: VectorBlocker).
+#: ``[trained]`` extra, W1.2's trained-family judge); ``LLMJudge``/
+#: ``SelectJudge`` need ``[llm]`` (litellm/dspy-ai); everything else needs
+#: ``[semantic]`` (embeddings/vector index/VectorBlocker).
 _EXTRA_BY_SYMBOL: dict[str, str] = {
-    name: {"LLMJudge": "llm", "RFJudge": "trained"}.get(name, "semantic") for name in _LAZY_SYMBOLS
+    name: {"LLMJudge": "llm", "SelectJudge": "llm", "RFJudge": "trained"}.get(name, "semantic")
+    for name in _LAZY_SYMBOLS
 }
 
 
