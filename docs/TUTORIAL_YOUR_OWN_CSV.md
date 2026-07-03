@@ -109,8 +109,7 @@ from langres import dedupe
 
 result = dedupe(records, schema=Contact, judge="string", threshold=0.6)
 
-for cluster in result:
-    print(sorted(cluster))
+print([sorted(c) for c in result])
 # [['1', '2'], ['3', '4']]      # "Acme Corporation"/"Acme Corp", etc.
 
 print(result.judge_used, result.score_type)

@@ -62,7 +62,8 @@ answer is fixed. The judge still runs the *real* `DSPyJudge.forward` code
 (rendering, parsing, scoring, provenance); only the model call is faked, so you
 are testing your pipeline wiring, not a mock of it.
 
-The same injection works for `link` and for a `Resolver`:
+The same injection works for `link` and for a `Resolver` (both blocks below reuse
+the `answer` dict and `Company` schema from the test above):
 
 ```python
 from langres import link
