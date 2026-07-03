@@ -44,21 +44,32 @@ see [docs/ROADMAP.md](docs/ROADMAP.md); for current scope, [docs/POC.md](docs/PO
 ```bash
 git clone https://github.com/raisesquad/langres.git
 cd langres
-uv sync            # installs langres + dev tooling into a local .venv
+uv sync            # core only -- string-judge dedupe/link, no ML deps
 uv run python examples/quickstart_verbs.py
 ```
 
-> **Target install layout (in progress, not final).** The dependency tree is
-> being split into optional extras so the core install stays lean:
+Once published, the same split will apply to `pip install`:
+
+```bash
+pip install langres              # core: string-judge dedupe/link only
+pip install langres[semantic]    # + VectorBlocker / embeddings (sentence-transformers, faiss, torch)
+pip install langres[llm]         # + LLMJudge / DSPy-compiled judges (litellm, dspy-ai)
+pip install langres[trained]     # + RFJudge (scikit-learn)
+```
+
+> **Extras layout.** The dependency tree is split into optional extras so the
+> core install stays lean:
 >
 > | Install | Pulls in | Enables |
 > |---|---|---|
-> | `pip install langres` | pydantic, rapidfuzz, networkx | the `"string"` judge — full dedupe/link with **no ML dependencies** |
-> | `pip install langres[semantic]` | sentence-transformers, FAISS, torch | the `"embedding"` judge + vector blocking |
-> | `pip install langres[llm]` | litellm, dspy | the `"zero_shot_llm"` judge |
+> | `uv sync` / `pip install langres` | pydantic, rapidfuzz, networkx, numpy | the `"string"` judge — full dedupe/link with **no ML dependencies** |
+> | `[semantic]` (`uv sync --all-extras` or `pip install langres[semantic]`) | sentence-transformers, FAISS, torch | the `"embedding"` judge + vector blocking |
+> | `[llm]` | litellm, dspy-ai | the `"zero_shot_llm"` judge |
+> | `[trained]` | scikit-learn | `RFJudge` (trained-family, W1.2) |
 >
-> This extras split is **not yet wired** — today `uv sync` installs the full
-> stack. The table above describes the target UX so you know where it's headed.
+> A bare `import langres`/`import langres.core` never imports torch/litellm/
+> faiss/scikit-learn — those resolve lazily the first time you actually touch
+> a symbol that needs them (`tests/test_import_budget.py` proves it).
 
 **Requirements:** Python >= 3.12.
 

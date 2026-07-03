@@ -1,7 +1,23 @@
 """Pytest configuration and shared fixtures for langres tests."""
 
+import os
 from collections.abc import Iterable
 from typing import Any
+
+# W0.4 SPEND-SAFETY: the handful of @pytest.mark.integration tests that make a
+# real, billed OpenRouter call must never run by accident. A key alone used to
+# be enough to trigger them -- and litellm's import-time load_dotenv() side
+# effect (fixed in W0.4, see tests/test_import_budget.py) could populate that
+# key from an unrelated .env even when the developer never intended a paid
+# run, which is exactly how this already cost real spend once. Both gates now
+# require this explicit opt-in on TOP OF a key being present.
+PAID_TESTS_ENABLED = (
+    bool(os.getenv("OPENROUTER_API_KEY")) and os.getenv("LANGRES_RUN_PAID_TESTS") == "1"
+)
+PAID_TEST_SKIP_REASON = (
+    "requires OPENROUTER_API_KEY AND LANGRES_RUN_PAID_TESTS=1 (explicit "
+    "opt-in for a real, billed OpenRouter call)"
+)
 
 
 def pairs_from_candidates(candidates: Iterable[Any]) -> set[frozenset[str]]:

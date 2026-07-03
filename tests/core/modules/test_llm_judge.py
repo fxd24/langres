@@ -12,9 +12,20 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudgeModule
+from langres.core.modules.llm_judge import LLMJudge, LLMJudgeModule
+from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
+
+
+def test_registered_under_llm_judge_via_lazy_lookup() -> None:
+    """``get_component('llm_judge')`` lazily imports+registers the class.
+
+    (W0.4: litellm is optional, so ``llm_judge`` joined
+    ``_LAZY_COMPONENT_MODULES`` alongside ``dspy_judge``.)
+    """
+    assert get_component("llm_judge") is LLMJudge
+    assert LLMJudge.type_name == "llm_judge"
 
 
 @pytest.fixture

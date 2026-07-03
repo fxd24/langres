@@ -1,6 +1,6 @@
 """Presets: resolve ``judge="auto"`` and assemble a spend-capped Resolver.
 
-This is the machinery behind the three-verb DX layer (:mod:`langres.verbs`):
+This is the machinery behind the two-verb DX layer (:mod:`langres.verbs`):
 picking a judge from available API keys, building its scorer Module, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import
@@ -57,11 +57,8 @@ from langres.clients.openrouter import (
 from langres.clients.settings import Settings
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
-from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
-from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -70,6 +67,14 @@ from langres.core.resolver import Resolver
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
+    # inside _build_vector_blocker (W0.4) so a core-only `import langres`
+    # never pulls faiss/torch in for a caller who never picks judge="embedding"
+    # or crosses the AllPairsBlocker -> VectorBlocker size threshold.
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
 
 #: The judge names the verb layer understands, plus the "auto" meta-value that
 #: :func:`choose_auto_judge` resolves down to one of the other three.
@@ -347,6 +352,13 @@ def _text_field_extractor(schema: type[BaseModel]) -> Any:
 
 def _build_vector_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     """Build a ``VectorBlocker`` (MiniLM + FAISS cosine) for ``schema``."""
+    # Lazy: faiss/sentence-transformers ([semantic] extra) must stay out of
+    # sys.modules unless a VectorBlocker is actually built (mirrors the
+    # zero_shot_llm branch's lazy dspy import right below).
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
     embedder = SentenceTransformerEmbedder(_VECTOR_MODEL_NAME)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     return VectorBlocker(

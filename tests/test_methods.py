@@ -17,7 +17,6 @@ The un-fakeable real-network LLM glue lives behind an ``OPENROUTER_API_KEY``
 skipif, so ``--cov`` stays green without a live key.
 """
 
-import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -52,6 +51,7 @@ from langres.methods import (
     make_resolver_factory,
 )
 from langres.core.blockers.vector import VectorBlocker
+from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
 
 # ---------------------------------------------------------------------------
 # Synthetic, embedding-free benchmark (FakeVectorIndex) for fast tests
@@ -677,10 +677,7 @@ def test_slow_fodors_zagat_race(method: str) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not os.getenv("OPENROUTER_API_KEY"),
-    reason="needs OPENROUTER_API_KEY for a real LLM call",
-)
+@pytest.mark.skipif(not PAID_TESTS_ENABLED, reason=PAID_TEST_SKIP_REASON)
 def test_llm_judge_real_network_smoke() -> None:  # pragma: no cover - requires live key
     """A single real LLM judgement via the injected env client (W4 path)."""
     from langres.clients import Settings, create_llm_client

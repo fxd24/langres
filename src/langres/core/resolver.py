@@ -37,14 +37,13 @@ import logging
 import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, Literal, Self, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
 import langres
 from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
-from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
@@ -58,6 +57,13 @@ from langres.core.serialization import (
     ComponentSpec,
     SerializableState,
 )
+
+if TYPE_CHECKING:
+    # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
+    # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
+    # core-only `import langres` never pulls faiss/torch in for a Resolver
+    # that never uses judge="embedding".
+    from langres.core.blockers.vector import VectorBlocker
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +136,7 @@ def _build_module_for_judge(
     )
 
 
-def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
+def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
     """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
 
     ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
@@ -142,6 +148,7 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     :func:`_build_module_for_judge`: ``core.presets`` sits ABOVE ``Resolver``
     and must not be imported back into it.
     """
+    from langres.core.blockers.vector import VectorBlocker
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes.vector_index import FAISSIndex
 
@@ -158,7 +165,7 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     )
 
 
-def _iter_vector_blockers(blocker: object) -> Iterator[VectorBlocker[Any]]:
+def _iter_vector_blockers(blocker: object) -> "Iterator[VectorBlocker[Any]]":
     """Yield every ``VectorBlocker`` reachable from ``blocker``.
 
     A plain ``VectorBlocker`` yields itself. A ``CompositeBlocker`` (the
@@ -168,9 +175,18 @@ def _iter_vector_blockers(blocker: object) -> Iterator[VectorBlocker[Any]]:
     recall-first pattern ``CompositeBlocker([KeyBlocker(...), VectorBlocker(...)],
     op="union")``. Index-free blockers (``AllPairsBlocker``, ``KeyBlocker``,
     ``GLinkerAdapter``) contribute nothing.
+
+    Checks ``type_name`` rather than ``isinstance(blocker, VectorBlocker)``
+    deliberately (W0.4, mirrors :meth:`Resolver._ensure_index_built`'s own
+    docstring): this walks the blocker tree on every ``resolve()``/
+    ``predict()`` call, so an ``isinstance`` check would need ``VectorBlocker``
+    imported unconditionally, pulling faiss/sentence-transformers (the
+    ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
+    pipeline. ``CompositeBlocker`` itself has no heavy dependency, so it's
+    safe to ``isinstance``-check directly.
     """
-    if isinstance(blocker, VectorBlocker):
-        yield blocker
+    if getattr(blocker, "type_name", None) == "vector_blocker":
+        yield cast("VectorBlocker[Any]", blocker)
     elif isinstance(blocker, CompositeBlocker):
         for child in blocker.children:
             yield from _iter_vector_blockers(child)
@@ -514,6 +530,14 @@ class Resolver:
         re-embed, so restore + same-records round-trips are cheap); different
         -> rebuild (so reusing the Resolver on a new record list scores
         against the right corpus rather than a stale one).
+
+        No ``isinstance(..., VectorBlocker)`` anywhere in this walk (W0.4): see
+        :func:`_iter_vector_blockers`'s docstring for why -- this method runs
+        on every ``resolve()``/``predict()`` call regardless of blocker, so an
+        ``isinstance`` check would need ``VectorBlocker`` imported
+        unconditionally, pulling faiss/sentence-transformers (the
+        ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
+        pipeline.
         """
         for vector_blocker in _iter_vector_blockers(self.blocker):
             entities = [vector_blocker.schema_factory(record) for record in records]

@@ -169,9 +169,12 @@ class LLMJudge(Module[SchemaT]):
 
     The client is optional. When omitted, it is lazily built from the
     environment with ``create_llm_client(Settings())`` on first use, enabling:
-    - Automatic Langfuse tracing for observability
     - Support for multiple LLM providers (OpenAI, Azure, etc.)
     - Serialization without persisting any secret
+    - Optional Langfuse tracing for observability (opt-in: pass
+      ``client=create_llm_client(Settings(), enable_langfuse=True)`` -- off by
+      default since langfuse is a dev-only dependency, not part of the
+      ``[llm]`` extra)
 
     Example:
         # Happy path: build the client from environment.

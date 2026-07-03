@@ -37,20 +37,32 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # ``dspy_judge``, which would otherwise import ``dspy`` (and open its disk cache)
 # on plain ``import langres.core``.
 #
-# ``key_blocker``/``composite_blocker``/``correlation_clusterer`` are ALSO
-# eager-imported today (``core/__init__.py``, mirroring ``AllPairsBlocker``/
-# ``VectorBlocker``/``LLMJudge``), so this entry is currently redundant for
-# them -- it exists so a saved artifact referencing these types keeps resolving
-# once those eager imports are trimmed (planned packaging-dx work), the same
-# safety net ``select_judge``/``dspy_judge`` already rely on.
+# ``key_blocker``/``composite_blocker``/``correlation_clusterer``/
+# ``fellegi_sunter_judge``/``rf_judge`` were added to this map so a saved
+# artifact referencing these types keeps resolving once W0.4's lazy-import
+# refactor trimmed ``core/__init__.py``'s eager imports -- the same safety net
+# ``select_judge``/``dspy_judge`` already relied on.
+#
+# W0.4 (extras split): ``llm_judge``/``vector_blocker``/``faiss_index``/
+# ``sentence_transformer_embedder``/``fake_embedder`` joined this map when
+# ``langres.core.__init__`` stopped eager-importing litellm (``llm_judge``) and
+# faiss/sentence-transformers (``vector_blocker``, ``faiss_index``,
+# ``*_embedder``) — those packages are now optional (``pip install
+# langres[llm]`` / ``langres[semantic]``), so importing them must be deferred
+# to the first actual access, exactly like ``dspy_judge``.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.modules.dspy_judge",
+    "faiss_index": "langres.core.indexes.vector_index",
+    "fake_embedder": "langres.core.embeddings",
     "fellegi_sunter_judge": "langres.core.judges.fellegi_sunter",
     "key_blocker": "langres.core.blockers.key",
+    "llm_judge": "langres.core.modules.llm_judge",
     "rf_judge": "langres.core.modules.rf_judge",
     "select_judge": "langres.core.modules.select_judge",
+    "sentence_transformer_embedder": "langres.core.embeddings",
+    "vector_blocker": "langres.core.blockers.vector",
 }
 
 

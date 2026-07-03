@@ -12,8 +12,19 @@ from langres.core.indexes.vector_index import (
     clip_scores_to_similarities,
     inverse_distances_to_similarities,
 )
+from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
+
+
+def test_registered_under_faiss_index_via_lazy_lookup() -> None:
+    """``get_component('faiss_index')`` lazily imports+registers the class.
+
+    (W0.4: faiss is optional, so ``faiss_index`` joined
+    ``_LAZY_COMPONENT_MODULES`` alongside ``dspy_judge``.)
+    """
+    assert get_component("faiss_index") is FAISSIndex
+    assert FAISSIndex.type_name == "faiss_index"
 
 
 class TestFAISSIndex:

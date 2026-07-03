@@ -71,7 +71,14 @@ modules, `Canonicalizer`, a general `Optimizer`, a synthetic data generator.
 
 ## Dependencies
 
-**Core stack**: Pydantic (validation), Optuna (hyperparameter optimization), DSPy (prompt optimization), sentence-transformers (embeddings), rapidfuzz (string similarity), networkx (graph clustering), PyTorch (learnable components).
+**Core** (always installed, `uv sync`): Pydantic + pydantic-settings (validation), rapidfuzz (string similarity), networkx (graph clustering), numpy. The string-judge/`AllPairsBlocker` path works with only these.
+
+**Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained]`):
+- `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
+- `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
+- `[trained]` — scikit-learn (`RFJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
+
+These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 

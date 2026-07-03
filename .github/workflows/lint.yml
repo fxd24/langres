@@ -24,7 +24,11 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        # --all-extras: mypy must resolve the [semantic]/[llm]/[trained]
+        # symbols that W0.4 made lazy (still statically type-checked via
+        # TYPE_CHECKING imports) -- a core-only `uv sync` wouldn't have
+        # torch/faiss/litellm/scikit-learn installed for it to check against.
+        run: uv sync --all-extras
 
       - name: Run ruff check
         run: uv run ruff check .

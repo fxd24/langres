@@ -141,3 +141,101 @@ def test_resolver_fresh_process_roundtrip_with_composite_key_vector_blocker(
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     assert "OK" in result.stdout
+
+
+@pytest.mark.slow
+def test_resolver_fresh_process_roundtrip_with_key_blocker_alone(tmp_path: Path) -> None:
+    """Fresh-process save/load/resolve for a Resolver whose *sole* blocker is
+    ``KeyBlocker`` (not nested inside a ``CompositeBlocker``).
+
+    The composite roundtrip test above only exercises ``key_blocker`` as a
+    composite CHILD -- ``Resolver.load`` reconstructs a composite's children
+    via the same generic ``_rebuild_component``, so that already proves
+    ``get_component("key_blocker")`` resolves. This test additionally proves
+    ``key_blocker`` resolves when it's the Resolver's top-level blocker slot
+    (W0.4 exit check: every ``_LAZY_COMPONENT_MODULES`` entry must survive a
+    fresh-process ``Resolver.load``, not just as an incidental nested case).
+    """
+    from langres.core import Clusterer, Comparator, KeyBlocker, Resolver, WeightedAverageJudge
+    from langres.core.models import CompanySchema
+    from tests.fixtures.companies import COMPANY_RECORDS
+
+    blocker: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="address")
+    comparator = Comparator.from_schema(CompanySchema)
+    resolver = Resolver(
+        blocker=blocker,
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.7),
+    )
+    resolver.resolve(COMPANY_RECORDS)
+    resolver.save(tmp_path)
+
+    script = (
+        "from langres.core import Resolver\n"
+        "from tests.fixtures.companies import COMPANY_RECORDS\n"
+        f"reloaded = Resolver.load({str(tmp_path)!r})\n"
+        "clusters = reloaded.resolve(COMPANY_RECORDS)\n"
+        "assert isinstance(clusters, list)\n"
+        "print('OK')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"fresh-process key-blocker roundtrip failed.\nSTDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+    assert "OK" in result.stdout
+
+
+@pytest.mark.slow
+def test_resolver_fresh_process_roundtrip_with_correlation_clusterer(tmp_path: Path) -> None:
+    """Fresh-process save/load/resolve for a Resolver whose clusterer slot is
+    ``CorrelationClusterer`` (the merge-resistant pivot-algorithm variant).
+
+    No existing test round-trips ``correlation_clusterer`` as an actual
+    Resolver slot through a fresh subprocess -- only ``get_component`` alone
+    (above) and an in-process ``config``/``from_config`` round trip
+    (``tests/core/clusterers/test_correlation_clusterer.py``). This closes
+    that gap for the W0.4 exit check.
+    """
+    from langres.core import AllPairsBlocker, Comparator, CorrelationClusterer, Resolver
+    from langres.core.judges.weighted_average import WeightedAverageJudge
+    from langres.core.models import CompanySchema
+    from tests.fixtures.companies import COMPANY_RECORDS
+
+    comparator = Comparator.from_schema(CompanySchema)
+    resolver = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=CorrelationClusterer(threshold=0.7),
+    )
+    resolver.resolve(COMPANY_RECORDS)
+    resolver.save(tmp_path)
+
+    script = (
+        "from langres.core import Resolver\n"
+        "from tests.fixtures.companies import COMPANY_RECORDS\n"
+        f"reloaded = Resolver.load({str(tmp_path)!r})\n"
+        "clusters = reloaded.resolve(COMPANY_RECORDS)\n"
+        "assert isinstance(clusters, list)\n"
+        "print('OK')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"fresh-process correlation-clusterer roundtrip failed.\nSTDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+    assert "OK" in result.stdout

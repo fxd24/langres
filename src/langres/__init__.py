@@ -2,7 +2,7 @@
 langres: A composable entity resolution framework.
 
 This package provides:
-- ``link`` / ``dedupe``: the three-verb DX layer (schema-optional, judge="auto"
+- ``link`` / ``dedupe``: the two-verb DX layer (schema-optional, judge="auto"
   by default, spend-capped) -- see ``langres.verbs``.
 - ``langres.core``: Low-level primitives for custom pipelines (``Resolver``,
   ``Blocker``, ``Module``, ``Clusterer``, ...).

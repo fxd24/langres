@@ -19,9 +19,20 @@ from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.reranking_vector_index import FakeHybridRerankingVectorIndex
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 from langres.core.models import CompanySchema
+from langres.core.registry import get_component
 from tests.conftest import edge_list_from_groups, pairs_from_candidates, pairs_from_groups
 
 logger = logging.getLogger(__name__)
+
+
+def test_registered_under_vector_blocker_via_lazy_lookup() -> None:
+    """``get_component('vector_blocker')`` lazily imports+registers the class.
+
+    (W0.4: faiss/sentence-transformers are optional, so ``vector_blocker``
+    joined ``_LAZY_COMPONENT_MODULES`` alongside ``dspy_judge``.)
+    """
+    assert get_component("vector_blocker") is VectorBlocker
+    assert VectorBlocker.type_name == "vector_blocker"
 
 
 # Helper functions for test construction
