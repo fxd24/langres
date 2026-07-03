@@ -7,7 +7,7 @@ implementations in the langres framework.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -272,6 +272,12 @@ def stamp_group_cost(
     ``_cost_track``, which already read ``provenance["cost_usd"]``) then sums
     a group to exactly one call's cost with no changes on their end.
 
+    ``provenance["group_end"]`` is set ``True`` on (only) the LAST judgement
+    of the group -- a boundary marker so a consumer draining a whole group
+    from a lazy stream (:class:`~langres.core.presets._SpendCappedModule`,
+    E9) knows exactly when to stop pulling without needing to peek at (and
+    thereby trigger the computation of) the next group.
+
     Args:
         judgements: The judgements produced from ONE call spanning ONE group,
             in any order. Must be non-empty.
@@ -293,8 +299,15 @@ def stamp_group_cost(
         raise ValueError("stamp_group_cost requires at least one judgement")
 
     stamped = []
+    last_index = len(judgements) - 1
     for index, judgement in enumerate(judgements):
         cost = call_cost_usd if index == 0 else 0.0
-        new_provenance = {**judgement.provenance, "cost_usd": cost, "group_id": group_id}
+        new_provenance: dict[str, Any] = {
+            **judgement.provenance,
+            "cost_usd": cost,
+            "group_id": group_id,
+        }
+        if index == last_index:
+            new_provenance["group_end"] = True
         stamped.append(judgement.model_copy(update={"provenance": new_provenance}))
     return stamped

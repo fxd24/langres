@@ -272,18 +272,35 @@ class _SpendCappedModule(Module[Any]):
             except BudgetExceeded as exc:
                 # A group-wise module (SelectJudge) stamps the full call cost
                 # on the group's first judgement and $0 on its K-1 siblings,
-                # all sharing provenance["group_id"] (E5). If the cap trips
-                # here, those already-paid-for siblings must still land in
+                # all sharing provenance["group_id"] and with
+                # provenance["group_end"] = True on the LAST one (E5,
+                # stamp_group_cost). If the cap trips here, those
+                # already-paid-for siblings must still land in
                 # partial_judgements -- a group must never be split across
                 # the cap boundary. Drain them from the same underlying
-                # iterator (no cost re-added; the group is already paid for)
-                # until a non-sibling judgement or the end of the stream.
+                # iterator up to (and including) the group_end marker.
+                #
+                # This must NOT peek at the next judgement's group_id to
+                # detect the boundary: for a real GroupwiseModule the
+                # generator is lazy, so pulling one item past the group's
+                # last already-materialized judgement resumes forward_groups
+                # and fires the NEXT group's paid LLM call before there is
+                # anything to compare against -- silently discarding that
+                # judgement and its cost. group_end lets the drain stop
+                # exactly at the boundary without ever pulling past it.
+                #
+                # Because a sibling always carries $0 cost, monitor.check()
+                # can only ever trip on a group's FIRST judgement (a passing
+                # check means spend was <= budget; adding $0 can't newly
+                # exceed it) -- so `judgement` here is always a group's first,
+                # never a mid-group sibling, and "not group_end" correctly
+                # means "there are siblings left to drain".
                 group_id = judgement.provenance.get("group_id")
-                if group_id is not None:
+                if group_id is not None and not judgement.provenance.get("group_end"):
                     for sibling in judgements:
-                        if sibling.provenance.get("group_id") != group_id:
-                            break
                         produced.append(sibling)
+                        if sibling.provenance.get("group_end"):
+                            break
                 exc.partial_judgements = list(produced)
                 raise
             yield judgement
