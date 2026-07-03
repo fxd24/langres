@@ -5,7 +5,7 @@ embeddings and ZERO spend (no LLM): load -> split (seed=0) -> tune threshold on
 TRAIN -> evaluate on the held-out TEST split against the TRUE ``perfectMapping``
 ground truth.
 
-This mirrors ``examples/m2_walking_skeleton_fodors_zagat.py``. It is marked
+This mirrors ``examples/research/m2_walking_skeleton_fodors_zagat.py``. It is marked
 ``slow`` (it embeds the corpus) but RUNS in CI. The F1 floor below is an
 INFORMATIONAL / regression gate pinned from the first real run (measured BCubed
 F1 = 0.9799), NOT a quality bar — it exists to catch a regression, not to assert

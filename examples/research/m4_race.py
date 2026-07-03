@@ -38,10 +38,10 @@ data-driven worst-case estimate before it starts.
 
 Usage (run with the sandbox disabled — OpenRouter is a network call)::
 
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m4_race.py --smoke
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m4_race.py --probe
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m4_race.py --compile
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m4_race.py --report
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m4_race.py --smoke
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m4_race.py --probe
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m4_race.py --compile
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m4_race.py --report
 
 ``OPENROUTER_API_KEY`` is loaded from ``.env`` (it is NOT a declared Settings
 field). ``print`` is allowed in examples (this is an operator tool).
@@ -94,7 +94,7 @@ logger = logging.getLogger("m4_race")
 # Constants
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "data" / "benchmarks" / "m4" / "results"
 ARTIFACT_DIR = ROOT / "data" / "benchmarks" / "m4" / "compiled_resolver"
 RESULTS_MD = ROOT / "data" / "benchmarks" / "m4" / "M4_RESULTS.md"
@@ -173,7 +173,7 @@ M3_FRONTIER = {
 
 
 # ---------------------------------------------------------------------------
-# Candidate construction (mirrors examples/m4_dspy_judge.py + m3_race.py)
+# Candidate construction (mirrors examples/research/m4_dspy_judge.py + m3_race.py)
 # ---------------------------------------------------------------------------
 
 

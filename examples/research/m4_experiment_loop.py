@@ -24,7 +24,7 @@ of the *plumbing*, not a real quality signal (a paid model + MIPROv2 lands in a
 later wave). The point is that the whole loop runs green at $0.
 
 Run:
-    uv run python examples/m4_experiment_loop.py
+    uv run python examples/research/m4_experiment_loop.py
 """
 
 import os

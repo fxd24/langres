@@ -17,7 +17,7 @@ the reported lift is not tuned on the pairs it is measured on:
    (via :mod:`langres.core.metrics`) so the quality is characterized, not asserted.
 
 Run:
-    uv run python examples/m4_calibration.py
+    uv run python examples/research/m4_calibration.py
 """
 
 import os

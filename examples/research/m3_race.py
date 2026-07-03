@@ -32,10 +32,10 @@ for the OpenRouter models (litellm otherwise prices them at $0).
 Usage (run with the sandbox disabled — OpenRouter + HF-hub are network calls)::
 
     # 0. Verify the model ids respond and report honest cost — ONE call each.
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m3_race.py --smoke
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m3_race.py --smoke
 
     # 1. Run the race (resumable; skips cells whose JSON already exists).
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/m3_race.py
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/m3_race.py
 
 ``OPENROUTER_API_KEY`` is loaded from ``.env`` (it is NOT a declared Settings
 field). ``print`` is allowed in examples (this is an operator tool).

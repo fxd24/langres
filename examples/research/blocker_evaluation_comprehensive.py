@@ -40,7 +40,7 @@ def main():
     # =========================================================================
     logger.info("Loading labeled funder organizations dataset...")
 
-    data_dir = Path(__file__).parent / "data"
+    data_dir = Path(__file__).parent.parent / "data"
     dataset = load_labeled_dedup_data(
         data_dir=str(data_dir),
         entity_names_file="funder_names_with_ids.json",

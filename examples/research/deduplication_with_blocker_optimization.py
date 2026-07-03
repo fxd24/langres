@@ -278,7 +278,7 @@ def main() -> None:
     azure_model = "azure/gpt-5-mini"
 
     # Load data
-    data_dir = Path(__file__).parent / "data"
+    data_dir = Path(__file__).parent.parent / "data"
     logger.info("Loading data from %s", data_dir)
 
     entities = load_companies(data_dir / "companies.json")

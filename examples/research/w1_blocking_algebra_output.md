@@ -1,13 +1,13 @@
 # W1.3 blocking algebra + C6 clusterer — reference output
 
-Reference run of `examples/w1_blocking_algebra.py` on Fodors-Zagat (FZ) and
+Reference run of `examples/research/w1_blocking_algebra.py` on Fodors-Zagat (FZ) and
 Amazon-Google (AG), **zero LLM spend** (blocking is `KeyBlocker`/`VectorBlocker`,
 scoring is `WeightedAverageJudge` — no LLM calls anywhere). Embedding/FAISS
 nondeterminism moves the low-order digits slightly across machines; the
 headline conclusions are stable. Reproduce with:
 
 ```
-uv run python examples/w1_blocking_algebra.py
+uv run python examples/research/w1_blocking_algebra.py
 ```
 
 ## 1. Composite blocking: Pair-Completeness (PC) / Reduction-Ratio (RR)
@@ -57,7 +57,7 @@ benchmarks are linkage tasks whose true matches are all cross-source).
 ## 2. Clusterer comparison: base `Clusterer` vs `CorrelationClusterer` (C6)
 
 Same blocking (`VectorBlocker`, pinned k) + same `WeightedAverageJudge` +
-same threshold (0.80, reused from `examples/m3_zero_spend_race_output.md`)
+same threshold (0.80, reused from `examples/research/m3_zero_spend_race_output.md`)
 for both rows — **only the clusterer differs**, isolating its effect.
 
 | dataset | clusterer | bc_P | bc_R | bc_F1 |

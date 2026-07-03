@@ -34,7 +34,7 @@ class CorrelationClusterer(Clusterer):
     (same ``threshold`` constructor, same ``config``/``from_config``,
     inherits ``evaluate()``/``inspect_clusters()`` unchanged -- only
     :meth:`cluster` differs). NOT the default: benchmark before switching (see
-    ``examples/w1_blocking_algebra_output.md``).
+    ``examples/research/w1_blocking_algebra_output.md``).
 
     Algorithm, per call to :meth:`cluster`:
 

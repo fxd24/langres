@@ -3,7 +3,7 @@
 **Date:** 2026-07-03
 **Branch:** `feat/w2-person-febrl`
 **Cost:** $0.00 (five free local methods; no LLM calls)
-**Script:** `examples/w2_person_benchmark.py`
+**Script:** `examples/research/w2_person_benchmark.py`
 **Dataset:** `src/langres/data/datasets/febrl_person/` (500/side FEBRL4 subset)
 
 ## What this proves
@@ -94,7 +94,7 @@ Five free scorers race on the identical blocked candidate set at `seed=0`:
 # once to regenerate the fixture — see datasets/febrl_person/SOURCE.md).
 KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 \
   uv run --extra semantic --extra trained --extra llm \
-  python examples/w2_person_benchmark.py
+  python examples/research/w2_person_benchmark.py
 ```
 
 (The `llm` extra is needed only because importing `langres.methods` pulls the

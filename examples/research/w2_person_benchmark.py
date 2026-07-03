@@ -13,7 +13,7 @@ directly comparable:
       BCubed P/R/F1 and pair-level P/R/F1. ``budget=0.0`` hard-asserts zero spend.
     * the trained family (fellegi_sunter · random_forest) — neither can be raced
       unfit, so they follow the fit-seam pattern from
-      ``examples/w1_trained_family_race.py``: fit on the train split's own blocked
+      ``examples/research/w1_trained_family_race.py``: fit on the train split's own blocked
       candidates (FS unsupervised, RF supervised), then grade the TEST split's
       blocked candidates once via ``evaluate_judge_on_candidates`` (pair-level F1
       only — the judged-once surface has no clustering step, so no BCubed).
@@ -24,7 +24,7 @@ deterministic and costs $0. The committed
 so the numbers survive without re-embedding.
 
 Run:
-    uv run python examples/w2_person_benchmark.py
+    uv run python examples/research/w2_person_benchmark.py
 """
 
 import os

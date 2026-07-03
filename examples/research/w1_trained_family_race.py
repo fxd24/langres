@@ -10,7 +10,7 @@ all three $0 replication datasets:
     AmazonGoogleBenchmark  — hard, single-text-blob (title+manufacturer)
     AbtBuyBenchmark        — textual-hard (free-text description, often missing)
 
-Unlike the zero-spend race in ``examples/m3_zero_spend_race.py``, neither judge
+Unlike the zero-spend race in ``examples/research/m3_zero_spend_race.py``, neither judge
 can be raced through ``run_method`` (see the KISS warning in
 ``docs/EXPERIMENTS.md``): both need an explicit fit step before ``forward()``
 works. This script instead follows the fit-seam pattern documented there:
@@ -31,7 +31,7 @@ targets — the goal is "in the band, honestly reported", not decimal
 replication (docs/research/20260701_er_seam_audit.md).
 
 Run:
-    uv run python examples/w1_trained_family_race.py
+    uv run python examples/research/w1_trained_family_race.py
 """
 
 import os
@@ -71,7 +71,7 @@ _METHODS: tuple[str, ...] = ("fellegi_sunter", "random_forest")
 class _RaceBenchmark(Benchmark[Any], BlockingBenchmark, Protocol):
     """A benchmark usable by BOTH the harness contract and the method registry.
 
-    Mirrors ``examples/m3_zero_spend_race.py``'s identical intersection type.
+    Mirrors ``examples/research/m3_zero_spend_race.py``'s identical intersection type.
     """
 
 
