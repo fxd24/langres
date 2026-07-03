@@ -26,6 +26,7 @@ The store round-trips through the config-registry artifact seam (no pickle):
 rebuilds it from the strategy names in a fresh process.
 """
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -109,18 +110,35 @@ def _longest(ctx: FieldContext) -> Any:
     return max(present, key=lambda iv: len(str(iv[1])))[1]
 
 
+def _mode_key(value: Any) -> str:
+    """A stable, hashable grouping key for mode counting over JSON-ish values.
+
+    The field value may be unhashable (a list/dict — multi-valued phones/emails
+    are exactly what survivorship targets), so it cannot key a ``dict`` directly.
+    Serialize it deterministically instead (order-insensitive for dicts); the
+    original value is still what :func:`_most_frequent` returns.
+    """
+    return json.dumps(value, sort_keys=True, default=str)
+
+
 def _most_frequent(ctx: FieldContext) -> Any:
-    """The most common non-missing value (mode); first-seen tiebreak."""
+    """The most common non-missing value (mode); first-seen tiebreak.
+
+    Counts by a serialized key (see :func:`_mode_key`) so list/dict-valued fields
+    don't crash, while returning the original value intact.
+    """
     present = ctx.present()
     if not present:
         return None
-    counts: dict[Any, int] = {}
-    first_index: dict[Any, int] = {}
+    counts: dict[str, int] = {}
+    first: dict[str, tuple[int, Any]] = {}
     for index, value in present:
-        counts[value] = counts.get(value, 0) + 1
-        first_index.setdefault(value, index)
+        key = _mode_key(value)
+        counts[key] = counts.get(key, 0) + 1
+        first.setdefault(key, (index, value))
     # Highest count wins; ties broken by earliest first appearance (stable).
-    return max(counts, key=lambda value: (counts[value], -first_index[value]))
+    best_key = max(counts, key=lambda key: (counts[key], -first[key][0]))
+    return first[best_key][1]
 
 
 def _most_complete(ctx: FieldContext) -> Any:
@@ -266,8 +284,11 @@ class Canonicalizer:
         others count as missing for it), which is exactly what makes a sparse
         record enrich a fuller one. The golden record's :attr:`id_field` is the
         stable master id: ``entity_id`` when given, else the first record's id
-        (deterministic in group order). A single-record group yields a copy of
-        that record.
+        (deterministic in group order). A single-record group yields a *verbatim
+        copy* of that record (only the id is restamped) — survivorship is not run,
+        so a lone record's missing-looking value (an empty string, ``[]``) is
+        preserved rather than coerced. This matters because ``AnchorStore`` mints a
+        size-1 entity for every unique record.
 
         Args:
             records: The entity's member records (raw dicts), in stable order.
@@ -286,6 +307,15 @@ class Canonicalizer:
         if not records:
             raise ValueError("canonicalize requires at least one record.")
 
+        # Single-record fast path: nothing to reconcile, so copy the record
+        # verbatim (restamping only the id). Running survivorship would rewrite a
+        # missing-looking value (e.g. "" -> None); a lone record must be preserved.
+        if len(records) == 1:
+            golden = dict(records[0])
+            if entity_id is not None:
+                golden[self.id_field] = entity_id
+            return golden
+
         # Field universe: every attribute key any record carried (id excluded —
         # it is stamped separately as the master id, not survivorship'd).
         fields = [
@@ -294,7 +324,7 @@ class Canonicalizer:
             if key != self.id_field
         ]
 
-        golden: dict[str, Any] = {}
+        golden = {}
         if entity_id is not None:
             golden[self.id_field] = entity_id
         elif self.id_field in records[0]:

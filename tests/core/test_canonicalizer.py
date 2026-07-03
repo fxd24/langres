@@ -63,6 +63,17 @@ def test_most_frequent_picks_mode() -> None:
     assert golden["phone"] == "222"
 
 
+def test_most_frequent_handles_unhashable_values() -> None:
+    """A list/dict-valued field (multi-valued phones/emails) must not crash the mode."""
+    records = [
+        {"id": "1", "phones": ["a", "b"]},
+        {"id": "2", "phones": ["a", "b"]},
+        {"id": "3", "phones": ["c"]},
+    ]
+    golden = Canonicalizer(field_strategies={"phones": "most_frequent"}).canonicalize(records)
+    assert golden["phones"] == ["a", "b"]  # most frequent WHOLE value, returned intact
+
+
 def test_first_and_source_priority_are_first_non_missing() -> None:
     records = [{"id": "1", "name": None}, {"id": "2", "name": "Real"}, {"id": "3", "name": "Other"}]
     assert Canonicalizer(default_strategy="first").canonicalize(records)["name"] == "Real"
@@ -123,6 +134,20 @@ def test_enrich_can_restamp_entity_id() -> None:
 def test_single_record_group_is_identity() -> None:
     record = {"id": "1", "name": "Solo", "phone": "555", "email": None}
     assert Canonicalizer().canonicalize([record]) == record
+
+
+def test_single_record_preserves_missing_looking_fields_verbatim() -> None:
+    """A singleton is copied, not survivorship'd: an empty-string field stays "" (not None).
+
+    AnchorStore mints a size-1 entity for every unique record, so a real record
+    with an empty field must not be silently nulled by canonicalize.
+    """
+    record = {"id": "1", "name": "Solo", "note": "", "tags": []}
+    golden = Canonicalizer().canonicalize([record])
+    assert golden == record  # verbatim copy — "" and [] preserved, not coerced to None
+    restamped = Canonicalizer().canonicalize([record], entity_id="e9")
+    assert restamped["id"] == "e9"
+    assert restamped["note"] == "" and restamped["tags"] == []
 
 
 def test_all_null_field_resolves_to_none() -> None:
