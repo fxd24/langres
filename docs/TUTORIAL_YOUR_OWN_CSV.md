@@ -2,14 +2,20 @@
 
 You have a messy CSV of records — customers, companies, products — and some rows
 are the same real-world thing spelled differently. This tutorial takes you from
-that file to **entity clusters**, entirely offline and at **$0** (no API key, no
-network, no model download), then shows how to calibrate the match threshold from
-a handful of labels and persist the pipeline for reuse.
+that file to **entity clusters** at **$0** (no API key, no LLM, no spend), then
+shows how to calibrate the match threshold from a handful of labels and persist
+the pipeline for reuse.
 
-Everything here runs on langres' **core** install (`uv sync`) — the
-string-similarity judge needs only Pydantic, rapidfuzz, networkx, and numpy. The
-one step that pulls an extra is threshold calibration (`derive_threshold` needs
-scikit-learn, the `[trained]` extra); it is optional.
+> **What "runs on core" depends on your file size.** `dedupe` picks its blocker
+> by row count. At **≤ 100 rows** it uses an all-pairs blocker and needs only the
+> **core** install (`uv sync`: Pydantic, rapidfuzz, networkx, numpy) — fully
+> offline, no network, no model download. **Above 100 rows** it auto-switches to
+> an embedding blocker (MiniLM + FAISS) to scale O(N·k) instead of O(N²); that
+> path needs the **`[semantic]`** extra and does a **one-time MiniLM model
+> download** on first run. Either way it stays **$0** — no API key, no LLM call.
+> The examples below use a 5-row file, so they run on core alone. (Threshold
+> calibration in step 4 adds one more optional extra, `[trained]` for
+> scikit-learn.)
 
 This is the middle rung of the docs ladder:
 
@@ -54,13 +60,11 @@ artifact that references it cannot be reloaded in a fresh process (the class was
 minted at runtime and isn't importable by name). For anything you intend to
 `save`/`load`, declare a real schema.
 
-A langres schema is any Pydantic model with a **string `id`** field. Add a
-`@computed_field embed_text` property to control the text used for
-similarity/blocking (it joins the fields that actually identify the entity and
-skips missing ones so absent fields don't inject empty tokens):
+A langres schema is any Pydantic model with a **string `id`** field. Declare the
+fields you want to match on — the string judge compares them field-by-field:
 
 ```python
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel
 from langres.core.registry import register_schema
 
 @register_schema("Contact")          # register by name -> durable save/load
@@ -69,11 +73,6 @@ class Contact(BaseModel):
     name: str
     city: str | None = None
     email: str | None = None
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def embed_text(self) -> str:
-        return " ".join(p for p in [self.name, self.city] if p)
 ```
 
 `@register_schema("Contact")` records the class in langres' component registry
@@ -82,13 +81,28 @@ that has imported the module — the config-registry contract, no pickle. (Omit 
 and in-process use still works; only cross-process `load` of an artifact needs
 the name.)
 
+> **What gets matched, and where `embed_text` fits.** The string judge scores on
+> the schema's declared `str | None` fields (`name`, `city`, `email` here) via
+> rapidfuzz — one similarity per field, weighted and combined; `id` is excluded.
+> When the embedding blocker is active (> 100 rows, or `judge="embedding"`),
+> `dedupe`/`Resolver.from_schema` derive the *blocking* text from those same
+> declared string fields automatically. A schema-level
+> `@computed_field embed_text` is a separate, **advanced** convention: it only
+> takes effect when you hand-build a `VectorBlocker(schema=..., text_field="embed_text")`
+> yourself (the declarative path the benchmark loaders use) — the verbs and
+> `from_schema` do **not** read it. You don't need it for this tutorial; just
+> declare the fields that identify the entity.
+
 ---
 
-## 3. Dedupe — offline by default
+## 3. Dedupe — no key, no spend
 
-`dedupe` groups the batch into clusters. Pin `judge="string"` to stay fully
-offline and free; the default `judge="auto"` would pick an LLM judge *if* an API
-key is set (and fall back to this same string judge, with one notice, if not):
+`dedupe` groups the batch into clusters. Pin `judge="string"` to stay **$0** with
+no LLM and no API key; the default `judge="auto"` would pick an LLM judge *if* an
+API key is set (and fall back to this same string judge, with one notice, if
+not). (For this 5-row file the string judge is also fully offline; on a file over
+100 rows the blocker step downloads MiniLM once, per the note at the top — still
+$0.)
 
 ```python
 from langres import dedupe
