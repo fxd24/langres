@@ -1,10 +1,12 @@
 name: Test
 
+# PR-only: the full suite is the repo's most expensive job, and every PR must
+# be green (and up to date) before merge, so the merge commit is already
+# covered -- a separate push-to-main run would just pay to re-test the same
+# code. No `branches` filter so it runs on PRs to any base (main and the
+# feat/* integration branches) without a stale hardcoded list.
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,6 +14,10 @@ concurrency:
 
 jobs:
   test:
+    # Kept at 4-vCPU (unlike the other jobs): with pytest-xdist `-n auto`
+    # (pyproject addopts) the suite now uses all 4 cores, so the runner is
+    # justified -- parallelizing cuts wall-time ~proportionally, making the
+    # bigger runner roughly cost-neutral but much faster.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       matrix:

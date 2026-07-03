@@ -14,7 +14,10 @@ on:
 
 jobs:
   security:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # 2-vCPU (smallest): uv sync + pip-audit + guarddog are network/single-
+    # threaded and don't parallelize across cores, so a bigger runner just adds
+    # idle, paid-for cores.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:

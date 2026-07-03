@@ -98,6 +98,7 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
+    "pytest-xdist>=3.6.0",
     "ranx>=0.3.21",
     "ruff>=0.15.2",
     "scikit-learn>=1.7.2",
@@ -116,7 +117,12 @@ exclude-newer = "2026-06-18"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=95 -m 'not integration'"
+# -n auto: run the suite across all available CPU cores (pytest-xdist). CI runs
+# on a 4-vCPU Blacksmith runner; without this pytest is single-threaded and
+# leaves 3 of 4 paid cores idle (~13min -> ~4min with parallelism). pytest-cov
+# aggregates coverage across workers automatically. Use `-n0` to disable when
+# debugging a single test.
+addopts = "-v -n auto --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=95 -m 'not integration'"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
