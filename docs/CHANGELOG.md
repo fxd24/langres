@@ -31,6 +31,27 @@ The Master Data Creation exit (UC4): merge one entity's records into a single
   Per-strategy correctness, edge cases, and a fresh-subprocess config round-trip;
   100% coverage.
 
+### M5 (W2.4): the data flywheel's harvest — verdicts + corrections → labeled pairs → threshold
+
+The harvest half of the flywheel. `JudgementLog` (W0.2) is the inlet; this turns its
+logged verdicts, plus human corrections, into labeled pairs that recalibrate a threshold.
+
+- **`langres.core.harvest`** — the outlet, eval/calibration-tier and import-light
+  (Pydantic only; scikit-learn stays lazy so the contract models never pull a heavy dep):
+  - **`Correction`** — the `corrections.jsonl` line contract an external review queue
+    (e.g. brainsquad) writes: `left_id`/`right_id`/`label` required, `"v":1`, plus optional
+    `original_score`/`original_verdict`/`reviewer`/`timestamp` audit context.
+  - **`CorrectionLog`** — reference JSONL reader/writer, mirroring `JudgementLog`.
+  - **`harvest_labeled_pairs(rows, corrections)`** — one `LabeledPair` per judgement row;
+    label = logged `verdict` (weak) unless a correction overrides it (matched
+    order-independently by id set), with `source` recording the provenance.
+  - **`derive_threshold_from_pairs(pairs)`** — `derive_threshold`'s first production caller.
+- **`examples/flywheel_threshold_harvest.py`** (D9) + committed Fodors-Zagat fixtures
+  (`examples/data/flywheel/`, built at $0 by `generate_fixtures.py`): derives the threshold
+  before vs. after 40 corrections and scores both on a **held-out gold** split. Exit criterion
+  met — held-out pair-F1 moves 0.558 → 0.708 (+0.150) in the correct direction (precision
+  0.39 → 0.56 at held recall), proven on gold the threshold was never fit on. 100% coverage.
+
 ### M5 (W2.2): incremental single-record assignment — `AnchorStore` + `Resolver.assign`
 
 The incremental-linking exit (S6): after a batch `resolve()`, answer "here is one NEW

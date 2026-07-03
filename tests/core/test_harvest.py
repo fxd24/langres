@@ -1,0 +1,231 @@
+"""Tests for langres.core.harvest (the flywheel's harvest half).
+
+Covers the ``corrections.jsonl`` contract (:class:`Correction` /
+:class:`CorrectionLog`), the verdicts+corrections -> labeled-pairs merge
+(:func:`harvest_labeled_pairs`), and the wiring to ``derive_threshold``
+(:func:`derive_threshold_from_pairs`). Everything here is zero-spend and
+dependency-light: plain dicts and JSONL round-trips, no judge, no model.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from langres.core.harvest import (
+    Correction,
+    CorrectionLog,
+    LabeledPair,
+    derive_threshold_from_pairs,
+    harvest_labeled_pairs,
+)
+
+
+def _row(left_id: str, right_id: str, score: float, verdict: bool) -> dict[str, Any]:
+    """A minimal JudgementLog-format row (the keys harvest actually reads)."""
+    return {
+        "v": 1,
+        "left_id": left_id,
+        "right_id": right_id,
+        "score": score,
+        "verdict": verdict,
+        "model": "test",
+        "cost_usd": 0.0,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Correction contract                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_correction_minimal_defaults() -> None:
+    """Only ids + label are required; version defaults to 1 and audit fields to None."""
+    c = Correction(left_id="a", right_id="b", label=True)
+    assert c.v == 1
+    assert c.label is True
+    assert c.original_score is None
+    assert c.original_verdict is None
+    assert c.reviewer is None
+    assert c.timestamp is None
+
+
+def test_correction_carries_optional_audit_context() -> None:
+    """The optional audit fields round-trip when the review tool supplies them."""
+    c = Correction(
+        left_id="a",
+        right_id="b",
+        label=False,
+        original_score=0.62,
+        original_verdict=True,
+        reviewer="alice",
+        timestamp="2026-07-03T10:00:00+00:00",
+    )
+    assert c.original_score == 0.62
+    assert c.original_verdict is True
+    assert c.reviewer == "alice"
+    assert c.timestamp == "2026-07-03T10:00:00+00:00"
+
+
+# --------------------------------------------------------------------------- #
+# CorrectionLog JSONL round-trip                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_correction_log_read_missing_file_is_empty(tmp_path: Path) -> None:
+    """A never-written corrections file reads back as ``[]`` (not an error)."""
+    log = CorrectionLog(tmp_path / "nope.jsonl")
+    assert log.read() == []
+
+
+def test_correction_log_append_creates_parent_dirs(tmp_path: Path) -> None:
+    """Appending creates missing parent directories (mirrors JudgementLog)."""
+    log = CorrectionLog(tmp_path / "nested" / "dir" / "corrections.jsonl")
+    log.append(Correction(left_id="a", right_id="b", label=True))
+    assert log.path.exists()
+
+
+def test_correction_log_round_trip_preserves_order_and_fields(tmp_path: Path) -> None:
+    """Every appended correction reloads in write order with all fields intact."""
+    log = CorrectionLog(tmp_path / "corrections.jsonl")
+    log.append(Correction(left_id="a", right_id="b", label=True, reviewer="alice"))
+    log.append(Correction(left_id="c", right_id="d", label=False, original_score=0.4))
+
+    reloaded = log.read()
+    assert [c.left_id for c in reloaded] == ["a", "c"]
+    assert reloaded[0].reviewer == "alice"
+    assert reloaded[1].label is False
+    assert reloaded[1].original_score == 0.4
+
+
+def test_correction_log_read_skips_blank_lines(tmp_path: Path) -> None:
+    """Blank lines in the file are ignored (trailing newlines, hand edits)."""
+    path = tmp_path / "corrections.jsonl"
+    path.write_text(
+        '{"v": 1, "left_id": "a", "right_id": "b", "label": true}\n'
+        "\n"
+        "   \n"
+        '{"v": 1, "left_id": "c", "right_id": "d", "label": false}\n',
+        encoding="utf-8",
+    )
+    reloaded = CorrectionLog(path).read()
+    assert len(reloaded) == 2
+    assert reloaded[0].left_id == "a"
+    assert reloaded[1].left_id == "d" or reloaded[1].right_id == "d"
+
+
+# --------------------------------------------------------------------------- #
+# harvest_labeled_pairs merge semantics                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_harvest_verdicts_only_passes_weak_labels_through() -> None:
+    """With no corrections, each row's verdict becomes the weak label."""
+    rows = [_row("a", "b", 0.9, True), _row("c", "d", 0.2, False)]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    assert pairs == [
+        LabeledPair(left_id="a", right_id="b", score=0.9, label=True, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.2, label=False, source="verdict"),
+    ]
+
+
+def test_harvest_correction_overrides_verdict() -> None:
+    """A correction for a judged pair overrides the verdict and marks the source."""
+    rows = [_row("a", "b", 0.62, True)]  # judge said match...
+    corrections = [Correction(left_id="a", right_id="b", label=False)]  # ...human says no
+    pairs = harvest_labeled_pairs(rows, corrections)
+    assert pairs == [
+        LabeledPair(left_id="a", right_id="b", score=0.62, label=False, source="correction")
+    ]
+
+
+def test_harvest_matches_corrections_order_independently() -> None:
+    """A correction identifies its pair by set membership, not left/right order."""
+    rows = [_row("a", "b", 0.7, False)]
+    corrections = [Correction(left_id="b", right_id="a", label=True)]  # swapped order
+    pairs = harvest_labeled_pairs(rows, corrections)
+    assert pairs[0].label is True
+    assert pairs[0].source == "correction"
+
+
+def test_harvest_last_correction_wins_for_duplicate_pair() -> None:
+    """Two corrections for the same pair: the later one takes effect."""
+    rows = [_row("a", "b", 0.5, True)]
+    corrections = [
+        Correction(left_id="a", right_id="b", label=True),
+        Correction(left_id="a", right_id="b", label=False),
+    ]
+    pairs = harvest_labeled_pairs(rows, corrections)
+    assert pairs[0].label is False
+
+
+def test_harvest_preserves_judgement_row_order_and_count() -> None:
+    """One labeled pair per judgement row, in row order (duplicate scorings kept)."""
+    rows = [_row("a", "b", 0.9, True), _row("a", "b", 0.4, False), _row("c", "d", 0.8, True)]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    assert [(p.score, p.label) for p in pairs] == [(0.9, True), (0.4, False), (0.8, True)]
+
+
+def test_harvest_skips_correction_for_unjudged_pair_with_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A correction referencing a pair absent from the log is skipped and warned about."""
+    rows = [_row("a", "b", 0.9, True)]
+    corrections = [
+        Correction(left_id="a", right_id="b", label=True),  # matches a row
+        Correction(left_id="x", right_id="y", label=True),  # no matching row
+    ]
+    with caplog.at_level(logging.WARNING):
+        pairs = harvest_labeled_pairs(rows, corrections)
+    assert len(pairs) == 1  # only the judged pair yields a labeled pair
+    assert "1 correction(s)" in caplog.text
+
+
+def test_harvest_coerces_row_field_types() -> None:
+    """Non-str ids and non-bool verdicts in a row are coerced to the model types."""
+    rows = [{"left_id": 1, "right_id": 2, "score": "0.75", "verdict": 1}]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    assert pairs[0].left_id == "1"
+    assert pairs[0].right_id == "2"
+    assert pairs[0].score == 0.75
+    assert pairs[0].label is True
+
+
+# --------------------------------------------------------------------------- #
+# derive_threshold_from_pairs wiring                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_derive_threshold_from_pairs_youden() -> None:
+    """The bridge feeds scores+labels to derive_threshold and returns its cut."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.1, label=False, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.2, label=False, source="verdict"),
+        LabeledPair(left_id="e", right_id="f", score=0.8, label=True, source="correction"),
+        LabeledPair(left_id="g", right_id="h", score=0.9, label=True, source="correction"),
+    ]
+    assert derive_threshold_from_pairs(pairs) == pytest.approx(0.8)
+
+
+def test_derive_threshold_from_pairs_percentile_passthrough() -> None:
+    """method/percentile kwargs pass through to derive_threshold."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.0, label=False, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=1.0, label=True, source="verdict"),
+    ]
+    assert derive_threshold_from_pairs(
+        pairs, method="percentile", percentile=50.0
+    ) == pytest.approx(0.5)
+
+
+def test_derive_threshold_from_pairs_propagates_single_class_error() -> None:
+    """Youden on a single-class label set raises (propagated from derive_threshold)."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.1, label=True, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.9, label=True, source="verdict"),
+    ]
+    with pytest.raises(ValueError, match="both classes"):
+        derive_threshold_from_pairs(pairs)

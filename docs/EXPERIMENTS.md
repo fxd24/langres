@@ -219,10 +219,50 @@ judgement stream. It is intentionally excluded from `Resolver` artifacts —
 `link()`/`dedupe()` never persist their internal resolver, so this isn't a
 durability gap in practice.
 
-This is the flywheel's inlet: a future milestone (W2.4) harvests these logs
-(plus a `corrections.jsonl` contract) into labeled pairs feeding
-`derive_threshold` and `fit()` — see `examples/judgement_log_demo.py` for the
-runnable write-then-read walkthrough.
+This is the flywheel's inlet; the harvest half is below.
+
+## Flywheel harvest — verdicts + corrections → a better threshold (`langres.core.harvest`)
+
+The outlet of the flywheel (W2.4): turn a `judgements.jsonl` log plus a
+`corrections.jsonl` review-queue export into **labeled pairs**, and feed them to
+`derive_threshold` — its first production caller. langres owns the contract and
+the harvest; the human-review UX (the queue a reviewer clicks) stays downstream.
+
+```python
+from langres import JudgementLog
+from langres.core.harvest import (
+    CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs,
+)
+
+rows = JudgementLog("runs/judgements.jsonl").read()      # the inlet's output
+corrections = CorrectionLog("runs/corrections.jsonl").read()
+
+pairs = harvest_labeled_pairs(rows, corrections)  # verdicts as weak labels,
+                                                  # corrections overriding them
+threshold = derive_threshold_from_pairs(pairs)    # data-driven, not hand-set
+```
+
+`harvest_labeled_pairs` emits one `LabeledPair` per judgement row; its label is
+the logged `verdict` (a weak label) unless a `Correction` covers the same pair
+(matched order-independently by id set), in which case the human label wins and
+`source="correction"` records the override. Deriving from verdicts **alone** just
+recovers the judge's own cut — self-training on your own labels teaches nothing;
+the human corrections are what carry new signal.
+
+**The two flywheel JSONL schemas:**
+
+- `judgements.jsonl` (written by `JudgementLog`) — `{"v":1, "left_id", "right_id",
+  "score", "verdict", "model", "cost_usd", "decision_step", "timestamp"}`.
+- `corrections.jsonl` (the `Correction` contract, written by a review tool) —
+  `{"v":1, "left_id", "right_id", "label"}` required, plus optional audit fields
+  `original_score` / `original_verdict` / `reviewer` / `timestamp`.
+
+Runnable demo: `examples/flywheel_threshold_harvest.py` reads committed
+Fodors-Zagat fixtures, derives the threshold before vs. after corrections, and
+scores both on a **held-out gold** split (never used to derive the threshold). 40
+simulated corrections move held-out pair-F1 from ~0.56 to ~0.71 — a real gain in
+the correct direction, not circular self-training. Regenerate the fixtures at $0
+with `examples/data/flywheel/generate_fixtures.py`.
 
 ## See also
 
@@ -230,4 +270,6 @@ runnable write-then-read walkthrough.
 - `examples/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
 - `examples/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
 - `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
+- `examples/flywheel_threshold_harvest.py` — harvest verdicts + corrections → a
+  re-derived threshold, with before/after held-out gold F1.
 - `examples/m3_race.py` / `examples/m3_zero_spend_race.py` — multi-method races.
