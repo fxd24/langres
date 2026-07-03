@@ -569,9 +569,7 @@ class Resolver:
             "Resolver.stream_against (incremental resolution) lands in M5."
         )  # pragma: no cover
 
-    def build_anchor_store(
-        self, records: list[Any], *, entity_prefix: str = "e"
-    ) -> "AnchorStore":
+    def build_anchor_store(self, records: list[Any], *, entity_prefix: str = "e") -> "AnchorStore":
         """Anchor this resolver on a batch so :meth:`assign` can run (M5, S6).
 
         A dedicated build pass over ``records`` that mints a **stable** entity id

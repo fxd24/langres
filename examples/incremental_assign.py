@@ -21,10 +21,30 @@ from langres.core import AnchorStore, CompanySchema, Resolver
 
 # A prior batch: records 1 and 2 are the same company; 3 and 4 are unique.
 BATCH = [
-    {"id": "1", "name": "Apple Inc", "address": "1 Infinite Loop Cupertino", "phone": "408-996-1010"},
-    {"id": "2", "name": "Apple Incorporated", "address": "1 Infinite Loop, Cupertino", "phone": "408-996-1010"},
-    {"id": "3", "name": "Microsoft Corporation", "address": "1 Microsoft Way Redmond", "phone": "425-882-8080"},
-    {"id": "4", "name": "Umbrella Corporation", "address": "Raccoon City Center", "phone": "202-555-0100"},
+    {
+        "id": "1",
+        "name": "Apple Inc",
+        "address": "1 Infinite Loop Cupertino",
+        "phone": "408-996-1010",
+    },
+    {
+        "id": "2",
+        "name": "Apple Incorporated",
+        "address": "1 Infinite Loop, Cupertino",
+        "phone": "408-996-1010",
+    },
+    {
+        "id": "3",
+        "name": "Microsoft Corporation",
+        "address": "1 Microsoft Way Redmond",
+        "phone": "425-882-8080",
+    },
+    {
+        "id": "4",
+        "name": "Umbrella Corporation",
+        "address": "Raccoon City Center",
+        "phone": "202-555-0100",
+    },
 ]
 
 
@@ -40,24 +60,40 @@ def main() -> None:
 
     # 2. A new mention of an existing company -> LINK to its stable entity id.
     delta = resolver.assign(
-        {"id": "9", "name": "Apple Inc.", "address": "1 Infinite Loop Cupertino", "phone": "408-996-1010"}
+        {
+            "id": "9",
+            "name": "Apple Inc.",
+            "address": "1 Infinite Loop Cupertino",
+            "phone": "408-996-1010",
+        }
     )
-    print(f"\nassign(Apple Inc.)   -> {delta.type} to {delta.entity_id} "
-          f"(matched anchors {delta.matched_anchor_ids})")
+    print(
+        f"\nassign(Apple Inc.)   -> {delta.type} to {delta.entity_id} "
+        f"(matched anchors {delta.matched_anchor_ids})"
+    )
 
     # 3. A brand-new company -> NEW freshly minted entity id.
     delta = resolver.assign(
-        {"id": "10", "name": "Nintendo Company", "address": "11-1 Kamitoba Kyoto", "phone": "075-541-6111"}
+        {
+            "id": "10",
+            "name": "Nintendo Company",
+            "address": "11-1 Kamitoba Kyoto",
+            "phone": "075-541-6111",
+        }
     )
     print(f"assign(Nintendo)     -> {delta.type} to {delta.entity_id}")
 
     # 4. A new mention of a record that was a SINGLETON in the batch -> LINK
     #    (singletons are first-class anchors, not dropped).
     delta = resolver.assign(
-        {"id": "11", "name": "Microsoft Corporation", "address": "1 Microsoft Way Redmond", "phone": "425-882-8080"}
+        {
+            "id": "11",
+            "name": "Microsoft Corporation",
+            "address": "1 Microsoft Way Redmond",
+            "phone": "425-882-8080",
+        }
     )
-    print(f"assign(Microsoft)    -> {delta.type} to {delta.entity_id} "
-          f"(singleton was assignable)")
+    print(f"assign(Microsoft)    -> {delta.type} to {delta.entity_id} (singleton was assignable)")
 
     # 5. Persist the whole store (pipeline + id bookkeeping) and reload it —
     #    the config-registry artifact seam, no pickle.
@@ -66,7 +102,12 @@ def main() -> None:
         store.save(path)
         reloaded = AnchorStore.load(path)
         delta = reloaded.assign(
-            {"id": "12", "name": "Apple Inc.", "address": "1 Infinite Loop Cupertino", "phone": "408-996-1010"}
+            {
+                "id": "12",
+                "name": "Apple Inc.",
+                "address": "1 Infinite Loop Cupertino",
+                "phone": "408-996-1010",
+            }
         )
         print(f"\nafter save/load: assign(Apple Inc.) -> {delta.type} to {delta.entity_id}")
 
