@@ -124,7 +124,11 @@ BUDGET_CEILING_USD = 10.0
 #: How many Amazon anchors (groups) of the fixed AG test split to score. Bounds
 #: the AG arms so a real run stays well inside budget; the pairwise arm makes one
 #: call per pair across these anchors, the set-wise arm one call per anchor.
-DEFAULT_AG_GROUPS = 150
+#: Measured on the fixed test split: 300 anchors -> 1421 pairs / 300 group calls
+#: (mean group ~4.7 members) / 91 gold positives -- a substantive comparison whose
+#: honest cost is ~$0.4 on gpt-4o-mini, ~$4-5 on frontier gpt-4o (see the module
+#: docstring's cost table).
+DEFAULT_AG_GROUPS = 300
 ENTITY_NOUN = "product"
 
 #: Pairwise threshold grid (post-processing only; judged once -- see
@@ -136,11 +140,16 @@ GRID: tuple[float, ...] = (
 
 #: Generous worst-case tokens/pair, sizing the BudgetedModuleRunner pre-flight cap.
 WORST_CASE_TOKENS_PER_PAIR = 1200.0
-#: Rough token counts for the upfront estimate ONLY -- the live SpendMonitor
-#: meters and enforces the REAL cost as scoring happens.
-_EST_TOKENS_PER_PAIR = 700.0
-_EST_TOKENS_PER_GROUP_BASE = 400.0
-_EST_TOKENS_PER_MEMBER = 250.0
+#: Rough per-call input/output token counts for the upfront estimate ONLY --
+#: priced with the model's real ``(input, output)`` split (like
+#: ``make_token_cost_track``) so the printed estimate tracks reality rather than a
+#: doubly-worst-case number. The live SpendMonitor meters and enforces the REAL
+#: cost as scoring happens.
+_EST_IN_TOK_PER_PAIR = 450.0
+_EST_OUT_TOK_PER_PAIR = 130.0
+_EST_IN_TOK_GROUP_BASE = 350.0
+_EST_IN_TOK_PER_MEMBER = 130.0
+_EST_OUT_TOK_PER_GROUP = 150.0
 
 _DEFAULT_LOG_PATH = Path("data/benchmarks/w3/w3_smoke_judgements.jsonl")
 _DEFAULT_RESULTS_PATH = Path("data/benchmarks/w3/w3_smoke_results.json")
@@ -319,11 +328,12 @@ def run_smoke(
     n_pairs = len(ag_candidates)
     n_group_calls = sum(1 for group in ag_groups if group.members)
 
-    est_tokens = n_pairs * _EST_TOKENS_PER_PAIR + sum(
-        _EST_TOKENS_PER_GROUP_BASE + _EST_TOKENS_PER_MEMBER * len(group.members)
-        for group in ag_groups
+    in_per_1m, out_per_1m = prices[cfg.model]
+    est_in_tokens = n_pairs * _EST_IN_TOK_PER_PAIR + sum(
+        _EST_IN_TOK_GROUP_BASE + _EST_IN_TOK_PER_MEMBER * len(group.members) for group in ag_groups
     )
-    est_usd = est_tokens * worst_per_token
+    est_out_tokens = n_pairs * _EST_OUT_TOK_PER_PAIR + n_group_calls * _EST_OUT_TOK_PER_GROUP
+    est_usd = est_in_tokens * in_per_1m / 1_000_000.0 + est_out_tokens * out_per_1m / 1_000_000.0
     results["estimate_usd"] = est_usd
     logger.info(
         "[estimate] AG arms: %d pairs (pairwise calls) / %d anchor groups (set-wise "
