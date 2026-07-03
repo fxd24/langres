@@ -122,7 +122,8 @@ class PersonSchema(BaseModel):
     attribute fields are optional: FEBRL's corruptions can blank any field.
 
     Attributes:
-        id: Globally-unique record id (e.g. ``"arec-0-org"`` / ``"brec-0-dup-0"``).
+        id: Globally-unique record id (e.g. ``"a0"`` / ``"b0"``): the FEBRL
+            record number prefixed with its source char.
         given_name: First name, if present.
         surname: Family name, if present.
         street_number: Street number as a raw string, if present.
@@ -201,7 +202,10 @@ def load_febrl_person() -> tuple[list[PersonSchema], list[set[str]], set[frozens
     source-prefixed ids (``a<rec_id>`` for ``person_a`` originals, ``b<rec_id>``
     for ``person_b`` duplicates). Ground truth comes from the explicit
     ``perfectMapping`` file (1:1 ``org``↔``dup`` links): each row yields a
-    2-element match set ``{a<id_a>, b<id_b>}``.
+    2-element match set ``{a<id_a>, b<id_b>}``. The mapping is diagonal
+    (``id_a == id_b``) because FEBRL4 pairs original record ``N`` with its single
+    duplicate ``N``; the ``a``/``b`` source prefix (not the number) distinguishes
+    the two sides, so the ids stay globally unique.
 
     ``gold_clusters`` is the **complete closed-world partition**: the 2-element
     match sets PLUS a singleton ``{id}`` for every record not in any match (mirrors

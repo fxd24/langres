@@ -16,9 +16,15 @@ the pairs that refer to the same synthetic person.
 
 Record columns: `rec_id,given_name,surname,street_number,address_1,address_2,
 suburb,postcode,state,date_of_birth,soc_sec_id`. Fields are plain (no wrapping
-quotes); empty cells are missing values. The loader prefixes each `rec_id` with
-its source (`a`/`b`) to make ids globally unique, mirroring the Fodors-Zagat
-(`f`/`z`) and Amazon-Google (`a`/`g`) loaders.
+quotes); empty cells are missing values. `rec_id` is the FEBRL **record number**
+`N` (an integer): upstream, original record `rec-N-org` pairs with its single
+duplicate `rec-N-dup-0`, so `person_a` and `person_b` share the numbering. The
+loader prefixes each `rec_id` with its source (`a`/`b`) to make ids globally
+unique (`a0`, `b0`, …), mirroring the Fodors-Zagat (`f`/`z`) and Amazon-Google
+(`a`/`g`) loaders. Because org `N` maps to dup `N`, `person_perfectMapping.csv`
+is **diagonal** (`id_a == id_b`); it is kept as an explicit gold file rather than
+relying on that convention. This is a clean **1:1 linkage** (like Fodors-Zagat),
+not a many-to-many task.
 
 ## Data is fully synthetic (no PII)
 
@@ -53,9 +59,10 @@ was chosen over OpenSanctions, whose Pairs data is CC-BY-NC.)
 from recordlinkage.datasets import load_febrl4
 
 dfA, dfB, links = load_febrl4(return_links=True)
-# Sort the true (org, dup) links by numeric rec index, take the first 500,
-# emit dfA rows -> person_a.csv, dfB rows -> person_b.csv, and the pairs ->
-# person_perfectMapping.csv (columns id_a,id_b). NaN cells become empty strings.
+# Sort the true (org, dup) links by numeric rec number N, take the first 500,
+# emit dfA rows -> person_a.csv and dfB rows -> person_b.csv (storing N as rec_id),
+# and the pairs -> person_perfectMapping.csv (columns id_a,id_b = N,N). NaN cells
+# become empty strings.
 ```
 
 Run transiently with `uv run --with recordlinkage python ...` (recordlinkage is
