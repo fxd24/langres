@@ -262,13 +262,28 @@ class _SpendCappedModule(Module[Any]):
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         monitor = SpendMonitor(budget_usd=self._budget_usd)
         produced: list[PairwiseJudgement] = []
-        for judgement in self._module.forward(candidates):
+        judgements = self._module.forward(candidates)
+        for judgement in judgements:
             produced.append(judgement)
             cost = judgement.provenance.get("cost_usd", 0.0)
             monitor.add(float(cost) if cost is not None else 0.0)
             try:
                 monitor.check()
             except BudgetExceeded as exc:
+                # A group-wise module (SelectJudge) stamps the full call cost
+                # on the group's first judgement and $0 on its K-1 siblings,
+                # all sharing provenance["group_id"] (E5). If the cap trips
+                # here, those already-paid-for siblings must still land in
+                # partial_judgements -- a group must never be split across
+                # the cap boundary. Drain them from the same underlying
+                # iterator (no cost re-added; the group is already paid for)
+                # until a non-sibling judgement or the end of the stream.
+                group_id = judgement.provenance.get("group_id")
+                if group_id is not None:
+                    for sibling in judgements:
+                        if sibling.provenance.get("group_id") != group_id:
+                            break
+                        produced.append(sibling)
                 exc.partial_judgements = list(produced)
                 raise
             yield judgement

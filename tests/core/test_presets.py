@@ -113,6 +113,21 @@ class _FakeGroupModule(Module[object]):
         raise NotImplementedError
 
 
+class _ChainedGroupsModule(Module[object]):
+    """Concatenates several group-wise fake modules' judgement streams, in order."""
+
+    def __init__(self, groups: list[Module[object]]) -> None:
+        self._groups = groups
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        remaining = list(candidates)
+        for group_module in self._groups:
+            yield from group_module.forward(iter(remaining))
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
 class _FakeVectorIndex:
     """No-op stand-in for a real FAISS index -- create_index does nothing."""
 
@@ -305,6 +320,29 @@ class TestSpendCappedModule:
         assert all(j.provenance.get("group_id") == "g1" for j in partial)
         # No cost was double-counted for the $0 siblings.
         assert sum(float(j.provenance["cost_usd"]) for j in partial) == 1.0
+
+    def test_cap_breach_drain_stops_at_next_groups_judgement(self) -> None:
+        """The drain loop must not swallow a DIFFERENT group's judgement past the boundary.
+
+        Exercises the "stop at the first non-sibling judgement" branch: group
+        "g1" trips the cap and is drained whole, but a later group "g2" behind
+        it in the stream must not be pulled in too.
+        """
+        module = _SpendCappedModule(
+            _ChainedGroupsModule(
+                [
+                    _FakeGroupModule(first_cost=1.0, n_siblings=1, group_id="g1"),
+                    _FakeGroupModule(first_cost=0.0, n_siblings=1, group_id="g2"),
+                ]
+            ),
+            budget_usd=0.9,
+        )
+        candidates = iter([_candidate(str(i)) for i in range(4)])
+        with pytest.raises(BudgetExceeded) as excinfo:
+            list(module.forward(candidates))
+        partial = excinfo.value.partial_judgements
+        assert len(partial) == 2
+        assert all(j.provenance.get("group_id") == "g1" for j in partial)
 
     def test_cap_breach_without_group_id_is_unchanged(self) -> None:
         """Pairwise (no group_id) modules keep the pre-existing single-judgement cap behavior."""
