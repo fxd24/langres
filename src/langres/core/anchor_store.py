@@ -49,29 +49,46 @@ logger = logging.getLogger(__name__)
 ANCHOR_STORE_VERSION = "1"
 
 
+def _find_schema_factory(blocker: Any) -> Any | None:
+    """Depth-first search for the first ``schema_factory`` reachable from ``blocker``.
+
+    Returns the blocker's own ``schema_factory`` if it exposes one, else recurses
+    into ``children`` at **arbitrary depth** (mirroring ``resolver._iter_vector_
+    blockers``) so a ``CompositeBlocker`` wrapping another ``CompositeBlocker``
+    still surfaces a nested child's factory. Returns ``None`` when nothing in the
+    tree exposes one.
+    """
+    factory = getattr(blocker, "schema_factory", None)
+    if factory is not None:
+        return factory
+    for child in getattr(blocker, "children", []):
+        found = _find_schema_factory(child)
+        if found is not None:
+            return found
+    return None
+
+
 def _schema_factory(blocker: Any) -> Any:
     """Return a record->entity factory reachable from ``blocker``.
 
     ``AnchorStore`` normalizes raw records through the blocker's
     ``schema_factory``. ``AllPairsBlocker``/``VectorBlocker`` expose one directly.
     A ``CompositeBlocker`` (blocking-algebra union/intersection) owns no schema of
-    its own but its children all share one — so recurse into ``children`` and use
-    the first reachable factory (the recall-first ``KeyBlocker`` union
-    ``VectorBlocker`` pattern therefore works). Only a blocker that neither
-    exposes nor contains a ``schema_factory`` (e.g. a ``GLinkerAdapter``) raises
-    an actionable error rather than a cryptic ``AttributeError`` in build/assign.
+    its own but its children all share one — so recurse through ``children`` at
+    any depth (composite-of-composites included, matching ``CompositeBlocker``'s
+    own documented nesting) and use the first reachable factory (the recall-first
+    ``KeyBlocker`` union ``VectorBlocker`` pattern therefore works). Only a blocker
+    that neither exposes nor contains a ``schema_factory`` anywhere in its tree
+    (e.g. a ``GLinkerAdapter``) raises an actionable error rather than a cryptic
+    ``AttributeError`` in build/assign.
     """
-    factory = getattr(blocker, "schema_factory", None)
+    factory = _find_schema_factory(blocker)
     if factory is not None:
         return factory
-    for child in getattr(blocker, "children", []):
-        child_factory = getattr(child, "schema_factory", None)
-        if child_factory is not None:
-            return child_factory
     raise NotImplementedError(
         f"AnchorStore cannot normalize records via a {type(blocker).__name__}: "
-        "no `schema_factory` on it or its children. Incremental assign needs a "
-        "blocker (or composite of blockers) that reconstructs entities itself "
+        "no `schema_factory` on it or any nested child. Incremental assign needs "
+        "a blocker (or composite of blockers) that reconstructs entities itself "
         "(AllPairsBlocker / VectorBlocker / a CompositeBlocker of them)."
     )
 
@@ -240,6 +257,11 @@ class AnchorStore:
         """
         clusters = resolver.resolve(records)
 
+        # Re-normalize each record to read its stable id. This repeats the
+        # normalization ``resolve()`` already did internally — a minor,
+        # build-only duplicate cost (one pass, no network) accepted to keep the
+        # id derivation self-contained rather than reaching into resolve()'s
+        # internals; assign() does not pay it.
         factory = _schema_factory(resolver.blocker)
         anchor_ids: list[str] = [factory(record).id for record in records]
         if len(set(anchor_ids)) != len(anchor_ids):
@@ -304,11 +326,14 @@ class AnchorStore:
         returns its existing entity id unchanged (idempotent, never renumbered).
 
         W2.2 boundary: assign matches against the anchor set fixed at
-        :meth:`build` time. A newly-assigned record extends the id map (so its
-        own id is idempotent) but is **not** added to the searchable corpus/
-        index — two distinct new ids that duplicate each other will each mint a
-        ``new`` entity. Growing the searchable set across assigns (so later
-        arrivals match earlier ones) is reserved for a later wave.
+        :meth:`build` time. A newly-assigned record extends only the id map
+        (``record_id -> entity_id``, so its own id is idempotent); its raw
+        payload is **not** retained and it is **not** added to the searchable
+        corpus/index — two distinct new ids that duplicate each other will each
+        mint a ``new`` entity. This keeps the store's memory and persisted size
+        bounded by the anchor set, not by the (unbounded) assign stream. Growing
+        the searchable set across assigns (so later arrivals match earlier ones)
+        is reserved for a later wave.
 
         Cost: with no vector index (e.g. an ``AllPairsBlocker`` pipeline) assign
         judges the record against **every** anchor — O(n) judge calls per record.
@@ -380,9 +405,13 @@ class AnchorStore:
             delta_type = "new"
             reasoning = "no anchor cleared the match threshold"
 
-        # Register (append-only): makes assign idempotent on this record id.
+        # Register (append-only): makes assign idempotent on this record id. Only
+        # the id->entity map grows; the raw record is deliberately NOT stored.
+        # ``_records`` holds anchors only (the searchable/judgeable corpus fixed
+        # at build time); a newly-assigned record is never an anchor (W2.2
+        # boundary) and nothing reads its payload back, so persisting it would be
+        # unbounded dead weight in memory and in anchor_store.json.
         self._assignments[record_id] = resolved_entity_id
-        self._records.setdefault(record_id, record)
 
         return ClusterDelta(
             type=delta_type,
@@ -417,21 +446,32 @@ class AnchorStore:
         ``similarity_score``) works incrementally. Falls back to every anchor
         (``similarity`` ``None``) when there is no index (e.g. an
         ``AllPairsBlocker``), the correct all-pairs behaviour for one new record.
+
+        The vector source is found via the resolver's own
+        :func:`~langres.core.resolver._iter_vector_blockers` — the *same* walk
+        ``resolve()`` used to build the index — so a ``VectorBlocker`` nested
+        (at any depth) inside a ``CompositeBlocker`` is searched against exactly
+        the index that was built for it. The first reachable vector blocker
+        supplies the kNN candidates; the judge still runs over all of them.
         """
-        blocker = self._resolver.blocker
-        if getattr(blocker, "type_name", None) != "vector_blocker" or not self._anchor_ids:
+        # Lazy import (module-load circular-import safety, like `load`); reusing
+        # the canonical walk guarantees we search the index resolve() built.
+        from langres.core.resolver import _iter_vector_blockers
+
+        blocker = next(iter(_iter_vector_blockers(self._resolver.blocker)), None)
+        if blocker is None or not self._anchor_ids:
             return [(anchor_id, None) for anchor_id in self._anchor_ids]
 
-        text = blocker.text_field_extractor(entity)  # type: ignore[attr-defined]
-        k = min(blocker.k_neighbors, len(self._anchor_ids))  # type: ignore[attr-defined]
+        text = blocker.text_field_extractor(entity)
+        k = min(blocker.k_neighbors, len(self._anchor_ids))
         # Pass the blocker's query_prompt so an asymmetric/instructional embedder
         # encodes the assign query exactly as the batch path does (vector.py).
-        distances, indices = blocker.vector_index.search(  # type: ignore[attr-defined]
+        distances, indices = blocker.vector_index.search(
             text,
             k,
-            query_prompt=blocker.query_prompt,  # type: ignore[attr-defined]
+            query_prompt=blocker.query_prompt,
         )
-        similarities = blocker.vector_index.to_similarities(distances)  # type: ignore[attr-defined]
+        similarities = blocker.vector_index.to_similarities(distances)
         # Skip -1 padding: a fusion/hybrid index (e.g. QdrantHybridIndex) pads
         # short result sets with -1 even when k <= ntotal. Indexing a bare list
         # with -1 would silently wrap to the last anchor -> a phantom match.

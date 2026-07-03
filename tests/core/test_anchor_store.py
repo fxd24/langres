@@ -423,6 +423,84 @@ def test_composite_blocker_reaches_child_schema_factory() -> None:
     assert resolver.assign(APPLE_NEW).type == "link"
 
 
+def test_nested_composite_blocker_supports_build_and_vector_assign() -> None:
+    """A CompositeBlocker-of-CompositeBlocker with a nested VectorBlocker works.
+
+    Mirrors #66's nested-composite index build: both the schema-factory
+    resolution (``build``) and the vector-candidate-source lookup (``assign``)
+    must recurse through composite-of-composites, not just one level. The
+    VectorBlocker sits at depth 2, so a single-level lookup would miss it —
+    ``build`` would raise NotImplementedError and ``assign`` would silently fall
+    back to the all-anchors (``similarity=None``) path.
+    """
+    index = FAISSIndex(embedder=FakeEmbedder(), metric="cosine")
+    vblocker: VectorBlocker[CompanySchema] = VectorBlocker(
+        vector_index=index, schema=CompanySchema, text_field="name", k_neighbors=10
+    )
+    # depth 2: outer( inner( vblocker, KeyBlocker ), KeyBlocker )
+    inner: CompositeBlocker[CompanySchema] = CompositeBlocker(
+        [vblocker, KeyBlocker(schema=CompanySchema, key_field="phone")], op="union"
+    )
+    outer: CompositeBlocker[CompanySchema] = CompositeBlocker(
+        [inner, KeyBlocker(schema=CompanySchema, key_field="address")], op="union"
+    )
+    comparator = Comparator.from_schema(CompanySchema)
+    resolver = Resolver(
+        blocker=outer,
+        comparator=comparator,
+        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.6),
+    )
+
+    # schema_factory recursion: every record is normalized and anchored.
+    store = resolver.build_anchor_store(RECORDS)
+    assert set(store.assignments) == {"1", "2", "3", "4"}
+
+    # vector-source recursion: candidate anchors come from the nested index and
+    # therefore carry a real similarity (the None fallback would mean the walk
+    # never reached the depth-2 VectorBlocker).
+    entity = _schema_factory(outer)(APPLE_NEW)
+    pairs = store._candidate_anchors(entity)
+    assert pairs and all(similarity is not None for _, similarity in pairs)
+
+    # And end-to-end assign still links through the nesting.
+    assert resolver.assign(APPLE_NEW).type == "link"
+
+
+def test_assign_does_not_store_non_anchor_records(tmp_path: Path) -> None:
+    """assign() must not accumulate raw non-anchor records (unbounded-growth guard).
+
+    ``_records`` holds the anchor corpus fixed at build time; a newly-assigned
+    record's payload is never read back (``_candidate`` only reads anchors), so
+    assign() must grow only the ``record_id -> entity_id`` map, not the record
+    store — otherwise a long incremental-ingestion stream bloats memory and
+    ``anchor_store.json`` without bound.
+    """
+    import json
+
+    store = AnchorStore.build(_string_resolver(), RECORDS)
+    anchors = set(store._records)
+    assert anchors == {"1", "2", "3", "4"}
+
+    for i in range(5):
+        delta = store.assign(
+            {"id": f"new-{i}", "name": f"Zzz {i} Co", "address": f"{i} Z St Ville", "phone": str(i)}
+        )
+        assert delta.type == "new"
+
+    # The raw-record store did NOT grow by the assigned records...
+    assert set(store._records) == anchors
+    # ...but the (cheap) id map did — idempotency is preserved.
+    assert {"new-0", "new-4"} <= set(store.assignments)
+
+    # Persisted manifest carries anchors only, not the assign stream.
+    path = tmp_path / "anchors"
+    store.save(path)
+    payload = json.loads((path / "anchor_store.json").read_text())
+    assert set(payload["records"]) == anchors
+    assert "new-0" in payload["assignments"]  # id map still round-trips
+
+
 def test_embedding_judge_assign_gets_similarity_score() -> None:
     """assign() must attach similarity_score so EmbeddingScoreJudge can score."""
     anchors = [
