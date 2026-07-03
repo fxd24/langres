@@ -10,6 +10,13 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# Cancel an in-flight review when a new commit is pushed to the same PR, so
+# rapid pushes don't stack concurrent Claude reviews (runner minutes + LLM
+# cost). Matches the concurrency guard the lint/test/security workflows use.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # Optional: Filter by PR author
