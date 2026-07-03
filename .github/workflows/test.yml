@@ -1,17 +1,28 @@
 name: Test
 
+# Per-PR: run the FAST suite only (slow ML tests excluded -- see the `test`
+# job). The full suite incl. slow tests + the coverage gate runs weekly and on
+# demand via the `test-full` job, so slow embedding/ML tests don't cost ~10min
+# on every PR. Jobs are gated by event with `if:` below.
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/m5-wave2]
+  schedule:
+    # Weekly on Monday at 06:00 UTC (full suite incl. slow tests)
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Fast per-PR tests: everything EXCEPT the ~76 slow embedding/ML tests (they
+  # load heavy torch models and dominate wall-time). Coverage is collected but
+  # NOT gated here (`--cov-fail-under=0` overrides the pyproject default),
+  # because the excluded slow tests are the only cover for some ML paths -- the
+  # 95% floor is enforced on `test-full` below.
   test:
+    if: github.event_name == 'pull_request'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       matrix:
@@ -30,25 +41,19 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        # --all-extras: the full non-integration suite exercises VectorBlocker/
+        # --all-extras: the non-slow suite still exercises VectorBlocker/
         # LLMJudge/RFJudge/etc. (the [semantic]/[llm]/[trained] extras), which
         # W0.4 made optional at runtime but which CI still needs installed to
         # run those tests.
         run: uv sync --all-extras
 
-      - name: Run unit tests and collect coverage
-        run: uv run pytest -m "not integration"
-
-    #   - name: Upload coverage to Codecov
-    #     uses: codecov/codecov-action@v4-beta
-    #     with:
-    #       flags: smart-tests
-    #       verbose: true
-    #       file: ./coverage.xml
-    #     env:
-    #       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Run fast unit tests (excludes slow ML tests)
+        run: uv run pytest -m "not integration and not slow" --cov-fail-under=0
 
   test-core-only:
+    if: github.event_name == 'pull_request'
+    # 2-vCPU (smallest): a ~20s import-boundary check, no parallel work.
+    #
     # W0.4: proves the [semantic]/[llm] extras boundary against a genuinely
     # core-only install, not just a simulated one -- `test` above always runs
     # with --all-extras, so tests/test_import_budget.py's real (un-monkeypatched)
@@ -59,7 +64,7 @@ jobs:
     # absent, then a *targeted* subset: the full test suite can't even collect
     # here (many test files import those packages directly to mock them), so
     # this only runs the import-budget file plus a quickstart smoke check.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -79,3 +84,37 @@ jobs:
 
       - name: Verify the core-only string-judge dedupe() path still works
         run: uv run python examples/quickstart_verbs.py
+
+  # Full suite INCLUDING the slow embedding/ML tests, plus the 95% coverage gate
+  # (inherited from pyproject addopts). Runs weekly + on demand only -- NOT per
+  # PR -- so ML regressions and the coverage floor are still enforced on a
+  # cadence without paying ~10min on every push. Trigger a run before a release
+  # or a risky ML change with the "Run workflow" button (workflow_dispatch).
+  # Do NOT mark this a required status check (it is skipped on PR events).
+  test-full:
+    if: github.event_name != 'pull_request'
+    # 4-vCPU: the slow ML tests' torch inference uses all 4 cores via torch's
+    # intra-op threading. (pytest-xdist `-n auto` was tried and REVERTED -- 4
+    # workers x ~4 torch threads oversubscribes the cores and runs slower.)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.24"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run full suite incl. slow tests (95% coverage gate)
+        run: uv run pytest -m "not integration"

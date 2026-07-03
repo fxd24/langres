@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/m5-wave2]
+    branches: [main, feat/m4-foundation, feat/m5-foundation]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,7 +12,9 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # 2-vCPU (smallest): ruff is fast and mypy is single-threaded (the
+    # bottleneck), so extra cores don't speed this job up.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
