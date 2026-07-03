@@ -202,14 +202,14 @@ class AnchorStore:
         """
         clusters = resolver.resolve(records)
 
-        factory = resolver.blocker.schema_factory
-        anchor_ids = [factory(record).id for record in records]  # type: ignore[attr-defined]
+        factory = resolver.blocker.schema_factory  # type: ignore[attr-defined]
+        anchor_ids: list[str] = [factory(record).id for record in records]
         records_by_id = dict(zip(anchor_ids, records))
 
         id_to_cluster: dict[str, frozenset[str]] = {}
-        for cluster in clusters:
-            frozen = frozenset(cluster)
-            for record_id in cluster:
+        for raw_cluster in clusters:
+            frozen = frozenset(raw_cluster)
+            for record_id in raw_cluster:
                 id_to_cluster[record_id] = frozen
 
         assignments: dict[str, str] = {}
@@ -287,20 +287,19 @@ class AnchorStore:
         matched_anchor_ids: list[str] = []
         best_score: float | None = None
         for judgement in judgements:
-            best_score = (
-                judgement.score if best_score is None else max(best_score, judgement.score)
-            )
+            best_score = judgement.score if best_score is None else max(best_score, judgement.score)
             if judgement.score >= threshold:
                 anchor_id = (
                     judgement.right_id if judgement.left_id == record_id else judgement.left_id
                 )
                 matched_anchor_ids.append(anchor_id)
 
-        # Distinct matched entities, in first-seen order.
+        # Distinct matched entities, in first-seen order. Every candidate anchor
+        # is a known record, so its assignment always exists.
         matched_entity_ids: list[str] = []
         for anchor_id in matched_anchor_ids:
-            entity_id = self._assignments.get(anchor_id)
-            if entity_id is not None and entity_id not in matched_entity_ids:
+            entity_id = self._assignments[anchor_id]
+            if entity_id not in matched_entity_ids:
                 matched_entity_ids.append(entity_id)
 
         if matched_entity_ids:
@@ -308,9 +307,7 @@ class AnchorStore:
             # lowest-ordinal (oldest) entity and reserves merge for later.
             resolved_entity_id = min(matched_entity_ids, key=self._ordinal_of)
             delta_type: ClusterDeltaType = "link"
-            reasoning = (
-                f"linked to existing entity via {len(matched_anchor_ids)} matched anchor(s)"
-            )
+            reasoning = f"linked to existing entity via {len(matched_anchor_ids)} matched anchor(s)"
         else:
             resolved_entity_id = self._mint()
             delta_type = "new"
@@ -352,15 +349,11 @@ class AnchorStore:
             return list(self._anchor_ids)
 
         text = blocker.text_field_extractor(entity)  # type: ignore[attr-defined]
+        # k <= ntotal, so a flat index returns exactly k valid neighbours (no
+        # -1 padding); the new record is not in the corpus, so no self-hit to skip.
         k = min(blocker.k_neighbors, len(self._anchor_ids))  # type: ignore[attr-defined]
         _distances, indices = blocker.vector_index.search(text, k)  # type: ignore[attr-defined]
-        anchor_ids: list[str] = []
-        for raw_index in indices.tolist():
-            index = int(raw_index)
-            # FAISS pads with -1 when fewer than k neighbours exist.
-            if 0 <= index < len(self._anchor_ids):
-                anchor_ids.append(self._anchor_ids[index])
-        return anchor_ids
+        return [self._anchor_ids[int(i)] for i in indices.tolist()]
 
     def _candidate(self, entity: Any, anchor_id: str) -> ERCandidate[Any]:
         """Build a ``(new_record, anchor)`` candidate pair for the judge."""
