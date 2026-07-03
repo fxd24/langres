@@ -6,6 +6,39 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### Wave 3 (W3): experiment DX — docs, the paid-smoke harness + result, examples curation
+
+Making the seam usable and the one substantive paid claim measured. Everything is
+zero-spend except the single ≤$10 smoke.
+
+- **DX docs (#75):** three newcomer guides — `docs/ADDING_A_METHOD.md` (register a
+  method behind the seam), `docs/TESTING_AT_ZERO_COST.md` (the DummyLM / `budget=0.0`
+  zero-spend test surface), `docs/TUTORIAL_YOUR_OWN_CSV.md` (bring-your-own-CSV
+  walkthrough).
+- **Paid-smoke harness (#76):** `examples/research/w3_paid_smoke.py` — one
+  SpendMonitor-capped operator run (hard $10 ceiling) that measures set-wise
+  `SelectJudge` vs pairwise on the SAME real model on Amazon-Google, plus the paid
+  verb surface (`link`/`dedupe`, a single group call, the signal log). Verified at $0
+  with DummyLM in `tests/examples/test_w3_paid_smoke.py`; the cap has a proven
+  fires-with-partials test (`BudgetExceeded.partial_judgements`).
+- **Paid-smoke result — $4.65 / $10** (`data/benchmarks/w3/w3_smoke_results_*.json` +
+  `docs/research/20260703_w3_paid_smoke_results.md`). **Set-wise quality is
+  model-dependent, not a clean win:** pairwise wins on gpt-4o-mini (pair-F1 **0.688 vs
+  0.620**, −0.068 set-wise) but set-wise wins on gpt-4o (**0.667 vs 0.618**, +0.049) —
+  the ComEM Select direction on a strong judge, but **not** its published +16 F1
+  magnitude. Set-wise makes 3–5× fewer LLM calls but costs more dollars (token-heavy
+  group prompts). The honest U4 "measure before believing the claim" outcome. Other
+  deliverables (gpt-4o-mini): `link` match score 0.95; `dedupe` 1 cluster; one group
+  call judged 22 members for $0.011; 4-row signal log; verb cost $0.0018.
+- **Examples curation (#77):** examples split into a **newcomer tier** kept at
+  `examples/` (`quickstart_verbs.py`, `person_resolution.py`, `incremental_assign.py`,
+  `canonicalizer_enrichment.py`, `flywheel_threshold_harvest.py`, …) and a **research
+  tier** moved to `examples/research/` (the `m3_*` / `m4_*` / `w1_*` / `w2_*` benchmark
+  harnesses); doc references updated (`docs/EXPERIMENTS.md`). Adds run-as-a-newcomer DX
+  numbers to `docs/FRICTION_LOG.md` — `import langres` **~0.2 s** (lazy heavy imports),
+  TTHW **~2.5 s**, cold install **2.3 s** core / **6.8 s** `[semantic]`, all inside
+  budget at $0.
+
 ### M5 (W2.3): golden records — `Canonicalizer` (survivorship + the enrichment loop)
 
 The Master Data Creation exit (UC4): merge one entity's records into a single
@@ -72,6 +105,27 @@ record — which existing entity, or new?" with a **stable** entity id.
 - Committed-data (Fodors-Zagat) + fresh-subprocess save/load round-trip tests; 100% coverage.
   See `examples/incremental_assign.py`.
 
+### M5 (W2.1): a second entity type, config-only — Person via FEBRL4
+
+The Generalise exit: langres resolves a **person** with **zero new core code** — config
+only, the same way a user would add a dataset.
+
+- **Dataset + adapter (#70):** a FEBRL4 Person subset fixture
+  (`src/langres/data/datasets/febrl_person/`, 500/side, 500 cross-source matches) + one
+  `src/langres/data/febrl_person.py` adapter (`FebrlPersonSchema` / `load_febrl_person`
+  / `FebrlPersonBenchmark`), the exact shape of the Fodors-Zagat / Amazon-Google /
+  Abt-Buy adapters. **Nothing under `src/langres/core/` changed.** (FEBRL4 is BSD-3
+  synthetic, Apache-2.0-compatible; OpenSanctions was CC-BY-NC and could not ship —
+  see the dataset `SOURCE.md`.)
+- **Measured at $0** (five free local methods raced on the identical blocked candidate
+  set, `k=20`): supervised `random_forest` tops pairwise **F1 0.964** (P 0.954 /
+  R 0.973); string judges hit **BCubed F1 0.998** at the pipeline level;
+  `fellegi_sunter` is high-recall/low-precision (R 1.0 / P 0.75), consistent with the
+  W1.2 trained-family finding. Blocking is the recall ceiling (~0.98 Pair-Completeness
+  at the cross-platform-honest `k=20` pin).
+- **Example + results:** `examples/research/w2_person_benchmark.py`,
+  `docs/research/20260703_w2_person_benchmark_results.md`. 100% coverage.
+
 ### M4: langres is the seam — DSPy experimentation foundation + first paid signal
 
 Reframed from a distillation-metric chase to **building the composable scorer seam we're
@@ -85,11 +139,11 @@ KISS: the smallest seam that proves the plumbing and yields a first honest signa
   replacing hand-set magic constants; demo lifts held-out AG pair-F1 +0.16 over 0.5.
 - **`run_methods(...) -> BenchmarkTable`** experiment facade (`.best()` / `.rank()`) +
   **`langres.clients.openrouter`** (price-pinning, `SpendMonitor` cumulative-spend guard,
-  extracted from `examples/m3_race.py`).
+  extracted from `examples/research/m3_race.py`).
 - **Proven end-to-end at $0** (DummyLM): a compiled `DSPyJudge` → `compile` →
   `evaluate_judge_on_candidates` (judged-once, pairwise-F1, SOTA-comparable) — the right
   surface for a compiled/paid judge; `run_methods` is the cheap-method race. Getting
-  started: `docs/EXPERIMENTS.md`, `examples/m4_experiment_loop.py`.
+  started: `docs/EXPERIMENTS.md`, `examples/research/m4_experiment_loop.py`.
 - **Review fixes on the seam:** Youden `+inf` ROC-sentinel guard, held-out train/test
   calibration split, `run_methods` stamps the requested registry method name, DSPy
   `temperature` forwarded to the LM, `load_state` restores the real compiled flag,
@@ -105,7 +159,7 @@ KISS: the smallest seam that proves the plumbing and yields a first honest signa
   overfit its 40-example bootstrap metric, confirming the OpenSanctions caveat. **C7
   verdict: the lever is the signature, not compilation — cut distillation.** Honest
   per-pair cost recorded; compiled `Resolver` artifact serialized. Harness
-  `examples/m4_race.py` (resumable, per-cell-committed, budget-capped).
+  `examples/research/m4_race.py` (resumable, per-cell-committed, budget-capped).
 - **Deferred to M4.5:** set-wise contract (S1), blocking pair-set algebra + embedder
   sweep, `fit()`-hook trained-judge family (S2).
 
@@ -131,7 +185,7 @@ Pair-level F1 (widened 0.05–0.99 grid) is the primary judge-ranking metric.
   pairs it never contained (was capping subsample recall artificially).
 - **Deferred (M4):** the cascade/hybrid (needs a token-cost source fix + threshold
   calibration to the embedding-score distribution) and the frontier FZ pass.
-- Harness `examples/m3_race.py` (resumable, per-cell-committed, budget-capped); results
+- Harness `examples/research/m3_race.py` (resumable, per-cell-committed, budget-capped); results
   `data/benchmarks/m3/M3_RESULTS.md`; decision `docs/M3_DIRECTION_MEMO.md`. The finding
   reshapes M4 toward *making a precise judge cheap* rather than bolting on an LLM.
 

@@ -127,11 +127,11 @@ the consumer** (brainsquad owns the stateful "body"; langres owns the "brain").
 
 | Use case (`USE_CASES.md`) | Where it lands | Status |
 |---|---|---|
-| **UC1 Deduplication** (batch → clusters) | M2 | on path |
-| **UC2 Entity Linking** (link to a target store) | M5 (incremental `stream_against`) | on path |
-| **UC10 Fuzzy FK** (special case of UC2) | via M5 | on path |
-| **UC4 Master Data Creation** (golden records / survivorship) | M5 — **promoted** (brainsquad needs golden labels *now*, not V1.1) | on path |
-| ⭐ **Flagship: incremental linking + progressive golden-record enrichment** (§2.4) | M5 (= UC2 ⊕ UC4 + Enricher loop) | **explicitly captured** — was only implicit across UC2/UC4/UC5 in `USE_CASES.md` |
+| **UC1 Deduplication** (batch → clusters) | M2 | **shipped** (M2 + `dedupe()` verb) |
+| **UC2 Entity Linking** (link to a target store) | M5 (incremental `assign`) | **shipped** — incremental `assign`; cross-source `stream_against` reserved |
+| **UC10 Fuzzy FK** (special case of UC2) | via M5 | **shipped** via `assign` |
+| **UC4 Master Data Creation** (golden records / survivorship) | M5 — **promoted** (brainsquad needs golden labels *now*, not V1.1) | **shipped** (`Canonicalizer` + enrichment) |
+| ⭐ **Flagship: incremental linking + progressive golden-record enrichment** (§2.4) | M5 (= UC2 ⊕ UC4 + Enricher loop) | **shipped** — `assign` ⊕ `Canonicalizer.enrich`, verified end-to-end |
 | **UC9 Negative constraints** (cannot-link) | M6 (constrained clustering) | on path |
 | **Human-in-the-loop** labeling | M1 (bootstrapper labeler — human option) | on path |
 | **Optimization** (Optuna + DSPy) | M3 / M4 / M6 | on path |
@@ -279,7 +279,7 @@ not accreted up front.
 - **Proven end-to-end at $0** (DummyLM): a *compiled* DSPyJudge runs through
   `evaluate_judge_on_candidates` (judged-once, pairwise-F1, SOTA-comparable — the right
   surface for a compiled/paid judge; `run_methods` is the cheap-method race). See
-  [`docs/EXPERIMENTS.md`](EXPERIMENTS.md), `examples/m4_experiment_loop.py`.
+  [`docs/EXPERIMENTS.md`](EXPERIMENTS.md), `examples/research/m4_experiment_loop.py`.
 
 **Paid first signal (monitored, ≤$5):** a manual precision probe + one small MIPROv2
 compile on Amazon-Google — **gated behind a frontier-zero-shot null baseline
@@ -303,41 +303,77 @@ on our data. **C7 verdict: the lever is the signature, not compilation — cut d
 *(Research input: [`docs/research/20260701_er_seam_audit.md`](research/20260701_er_seam_audit.md);
 delta backlog tracked in issue #55.)*
 
-### M4.5 — restore "any combination" against SOTA (research-driven)
-The seam fully expresses the pairwise pretrained/prompted family, but the ER field has
-moved to two shapes it does **not** yet express. Deferred here — each additive,
-backward-compatible, and *earned* by a real experiment (not built speculatively):
-- **S1 (highest-leverage): a set-wise judgement contract** — `SetJudgement` /
-  `ERCandidateGroup` + a groupwise judge that still yields `PairwiseJudgement`
-  (downstream untouched). Unlocks ComEM Select (+16 F1 at ~⅓ cost) and in-context
-  clustering — the field's biggest cost *and* quality lever.
-- **Blocking pair-set algebra** — `KeyBlocker` + `CompositeBlocker`
-  (union / intersection / difference) + embedder sweep; recall-first composition.
-- **S2: a `fit()` / `fit_unlabeled()` Module hook** + a `compile(student, trainset,
-  metric) → Module` Optimizer shape — homes the trained-judge family (Magellan RF,
-  Fellegi–Sunter EM, ZeroER, Snorkel, DSPy) the current forward-only Module can't
-  express.
-- Value-frequency-aware `FSJudge`; merge-resistant clusterer default. (Full
-  C / S / B delta table in the research doc + #55.)
+### M4.5 — restore "any combination" against SOTA (research-driven) — SHIPPED
+The seam fully expresses the pairwise pretrained/prompted family, but the ER field had
+moved to two shapes it did **not** yet express. All three are now **shipped** behind
+one seam — each additive, backward-compatible, and *earned* by a real experiment (not
+built speculatively):
+- **S1 (highest-leverage): a set-wise judgement contract — SHIPPED.** `SetJudgement`
+  / `ERCandidateGroup` + a groupwise `SelectJudge` that still yields
+  `PairwiseJudgement` (downstream untouched), scoring an anchor against a whole
+  candidate group in **one LLM call** (35× fewer calls at the group sizes in the W1
+  benchmark). **Quality is measured, not assumed, and the result is nuanced.** The W3
+  paid smoke grades set-wise vs pairwise on the same model on Amazon-Google: set-wise
+  edges *ahead* on the frontier model (gpt-4o, +0.049 pair-F1) but *behind* on the
+  mid-tier model (gpt-4o-mini, −0.068) — the ComEM Select direction on a strong judge,
+  but **not** a clean win and **not** the published +16 F1 magnitude. It uses fewer
+  *calls* but more *dollars* (token-heavy group prompts). Full read-out:
+  [`docs/research/20260703_w3_paid_smoke_results.md`](research/20260703_w3_paid_smoke_results.md).
+- **Blocking pair-set algebra — SHIPPED.** `KeyBlocker` + `CompositeBlocker`
+  (union / intersection / difference) + embedder sweep; recall-first composition. A
+  `CorrelationClusterer` (merge-resistant) joins the clusterer family.
+- **S2: a `fit()` / `fit_unlabeled()` Module hook — SHIPPED** (`langres.core.fit`
+  protocols; `Resolver.fit`). Homes the **trained-judge family**: `FellegiSunterJudge`
+  (classical Fellegi–Sunter EM, **unsupervised** — high-recall/low-precision on the W1.2
+  race) and `RFJudge` (Magellan-style sklearn random forest, **supervised** — the
+  precision lever), both serializable without pickle.
+- (Full C / S / B delta table in the research doc + #55.)
 
-### M5 — Generalise + incremental + golden-record loop
-Program/Project via **config-only** change; Geography via external authority
-(GeoNames) adapter; `stream_against` incremental linking against an entity store;
-**Canonicalizer** survivorship so a matched link **merges its features into the
-golden record** (§2.4 flagship loop).
-- **Exit:** a second entity type resolved with no new core code (config only);
-  incremental `.link(new_record)` returns the correct existing entity or "new";
-  **a sparse new mention correctly links to a feature-rich golden record, and the
-  golden record gains the mention's new features** (enrichment verified).
-- **Exit (north-star measurability — carried from the M2 audit):** **Person
-  resolution is *measurable*.** M0–M2 validate the machinery on Fodors-Zagat
-  restaurants because brainsquad Persons have ~0 duplicates and no ground truth;
-  M1's chartered Person gold set shipped as a restaurant one. Before M6 can gate
-  on "Person BCubed ≥ 0.85," M5 must establish an evaluable Person target —
-  either a real (even small) Person gold set via the bootstrapper, or a formally
-  defined measurable proxy (e.g. synthetic name-variant linking). Until this
-  exit is met, "validated on Fodors-Zagat" is explicitly *not* "validated on
-  Person."
+### M5 — Generalise + incremental + golden-record loop — SHIPPED
+A **second entity type** resolved config-only; `assign` incremental linking against an
+entity store; **Canonicalizer** survivorship so a matched link **merges its features
+into the golden record** (§2.4 flagship loop).
+
+**Shipped:**
+- **Generalise (config-only) — Person via FEBRL4 (#70).** A second entity type
+  resolves with **zero new core code** — a dataset fixture + one adapter, the same
+  shape as the restaurant/product adapters; nothing under `src/langres/core/` changed.
+  (FEBRL4 is the Apache-2.0-compatible synthetic Person benchmark; OpenSanctions was
+  CC-BY-NC and could not ship.)
+- **Incremental `assign()` — `AnchorStore` + `ClusterDelta` (#71).** After a batch
+  `resolve()`, `assign(record) -> ClusterDelta` answers "which existing entity, or
+  new?" with a **stable** entity id (append-only allocator, idempotent per id); the
+  store round-trips through a fresh-process `save`/`load` (no pickle).
+- **Golden records — `Canonicalizer` + the enrichment loop (#72).** Per-field
+  survivorship (`most_complete`, `longest`, `most_frequent`, `most_recent`,
+  `source_priority`) merges an entity's records into one golden dict; `enrich(golden,
+  mention)` folds a newly-linked sparse mention in via the *same* path (verified:
+  golden completeness 3 → 4).
+- **The flywheel harvest (#73).** `JudgementLog` verdicts + human `corrections.jsonl` →
+  labeled pairs → `derive_threshold` — held-out pair-F1 moves **0.558 → 0.708** after
+  40 corrections, scored on gold the threshold was never fit on (self-training on
+  verdicts alone teaches nothing; the human corrections carry the signal).
+- **Exit (met):** a second entity type with no new core code; incremental `assign`
+  returns the correct existing entity or "new"; a sparse mention links to a
+  feature-rich golden record and the golden record gains its features.
+- **Exit (north-star measurability — met).** Person resolution is now **measurable**
+  on the FEBRL4 gold set (500/side, 500 cross-source matches), replacing "validated
+  on restaurants" with a real Person target. Held-out result at $0 (five free local
+  methods): supervised `random_forest` tops pairwise **F1 0.964** (P 0.954 / R 0.973);
+  string judges hit **BCubed F1 0.998** at the pipeline level; blocking is the recall
+  ceiling (~0.98 Pair-Completeness at the cross-platform-honest `k=20` pin). FEBRL
+  Persons are clean multi-field identity data, so this is a high-ceiling benchmark, not
+  a hard one — see
+  [`docs/research/20260703_w2_person_benchmark_results.md`](research/20260703_w2_person_benchmark_results.md).
+- **Paid quality signal (W3).** The one substantive paid measurement — set-wise
+  `SelectJudge` vs pairwise on the same model — is **model-dependent, not a clean
+  win**: +0.049 pair-F1 on gpt-4o, −0.068 on gpt-4o-mini (see M4.5 · S1 above and
+  [`docs/research/20260703_w3_paid_smoke_results.md`](research/20260703_w3_paid_smoke_results.md)).
+- **DX evidence (measured, `docs/FRICTION_LOG.md`).** The newcomer path is fast and
+  cheap: `import langres` **~0.2 s** (heavy stacks stay out of `sys.modules` via the
+  W0.4 lazy imports), TTHW (fresh venv → first `dedupe`) **~2.5 s**, cold install
+  **2.3 s** core-only / **6.8 s** with the `[semantic]` extra — all well inside their
+  target budgets, at **$0** through the default string judge.
 
 ### M6 — Hardening (post-proof)
 Blocking-funnel optimisation (recall-first Optuna objective), score calibration,
