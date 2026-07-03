@@ -17,6 +17,13 @@ tests or running the suite.
 - Write tests for all new components in `tests/`
 - Use descriptive test names: `test_deduplication_task_with_company_flow`
 - Mark slow tests with `@pytest.mark.slow`, integration tests with `@pytest.mark.integration`
+  - **Mark any heavy test `@pytest.mark.slow`** (loads embedding/ML models, runs
+    torch inference, etc.). CI runs the **fast** subset (`not slow`) on every
+    PR; the **slow** tests + the coverage gate run on the **weekly** `test-full`
+    job (and on demand via *Run workflow*). So per-PR CI does not gate coverage
+    or exercise slow ML paths — mislabeling a heavy test as fast slows every PR,
+    and the coverage floor is verified weekly, not per-PR. Run the full suite
+    locally (`uv run pytest`) before merging a change to ML/embedding code.
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov` to verify 100% is maintained
 - Type-check as you go: `uv run mypy src/`

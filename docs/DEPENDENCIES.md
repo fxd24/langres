@@ -22,9 +22,10 @@ These are what actually defend the dependency set:
 ## Advisory Visibility (not merge gates)
 
 `pip-audit` and `guarddog` — via `make security` and the Security workflow
-(`.github/workflows/security.yml`) — are **advisory signals only**. They run on
-every PR and on the weekly schedule, but their steps use `continue-on-error`
-and do **not** block merges, because:
+(`.github/workflows/security.yml`) — are **advisory signals only**. In CI they
+run on the **weekly schedule** (plus manual `workflow_dispatch`), and locally
+via `make security`; their steps use `continue-on-error` and do **not** block
+merges, because:
 
 - The quarantine **deliberately delays patches**, so a non-empty CVE list is
   *expected*: recently-disclosed fixes are simply newer than the 7-day window
