@@ -35,7 +35,6 @@ it (it also conforms to ``langres.methods.BlockingBenchmark`` by exposing its
 """
 
 import logging
-from collections import defaultdict
 from collections.abc import Iterable
 from typing import Literal
 
@@ -221,54 +220,14 @@ def load_amazon_google_pair_splits() -> dict[str, list[tuple[str, str, int]]]:
 
 
 def _clusters_from_pairs(gold_pairs: set[frozenset[str]], all_ids: Iterable[str]) -> list[set[str]]:
-    """Connected components of the match graph, singleton-completed over ``all_ids``.
+    """Amazon-Google's connected-components partition (many-to-many linkage).
 
-    Amazon-Google is many-to-many, so the gold clusters are the connected
-    components of the undirected graph whose edges are the positive pairs (a
-    record reachable from another via a chain of matches shares its entity).
-    A tiny union-find computes the components; every corpus id not touched by any
-    match becomes its own singleton, yielding the **complete closed-world
-    partition** (match components + singletons) — exactly like Fodors-Zagat's
-    ``perfectMapping`` completion. Singletons add no positive pairs, so blocking
-    Pair-Completeness is unaffected.
-
-    Args:
-        gold_pairs: Positive match pairs as 2-element frozensets of corpus ids.
-        all_ids: Every corpus id (e.g. ``[r.id for r in corpus]``); order fixes
-            the singleton order for determinism.
-
-    Returns:
-        The complete partition: match components followed by one singleton per
-        unmatched id (in ``all_ids`` order).
+    Thin wrapper over the shared
+    :func:`~langres.data._benchmark_utils.clusters_from_pairs` (also used by
+    :mod:`langres.data.abt_buy`) -- kept as a local name so this module's
+    existing internal call sites and tests are unaffected.
     """
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        parent.setdefault(x, x)
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:  # path compression
-            parent[x], x = root, parent[x]
-        return root
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for pair in gold_pairs:
-        a, b = tuple(pair)
-        union(a, b)
-
-    components: dict[str, set[str]] = defaultdict(set)
-    for node in parent:
-        components[find(node)].add(node)
-    match_clusters = list(components.values())
-
-    matched_ids = set(parent)
-    singletons = [{rid} for rid in all_ids if rid not in matched_ids]
-    return match_clusters + singletons
+    return _bu.clusters_from_pairs(gold_pairs, all_ids)
 
 
 def load_amazon_google() -> tuple[list[ProductSchema], list[set[str]], set[frozenset[str]]]:

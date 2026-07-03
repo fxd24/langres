@@ -18,7 +18,8 @@ so this module never imports ``er_benchmarks`` or ``amazon_google``.
 import csv
 import logging
 import random
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from importlib import resources
 from typing import Any, Protocol, TypeVar
 
@@ -154,6 +155,58 @@ def pick_blocking_k(recalls: dict[int, float], threshold: float) -> int:
     if passing:
         return passing[0]
     return max(recalls, key=lambda k: recalls[k])
+
+
+def clusters_from_pairs(gold_pairs: set[frozenset[str]], all_ids: Iterable[str]) -> list[set[str]]:
+    """Connected components of the match graph, singleton-completed over ``all_ids``.
+
+    Shared by every many-to-many linkage benchmark (Amazon-Google, Abt-Buy): the
+    gold clusters are the connected components of the undirected graph whose
+    edges are the positive pairs (a record reachable from another via a chain of
+    matches shares its entity). A tiny union-find computes the components; every
+    id in ``all_ids`` not touched by any match becomes its own singleton,
+    yielding the **complete closed-world partition** (match components +
+    singletons) — exactly like Fodors-Zagat's ``perfectMapping`` completion.
+    Singletons add no positive pairs, so blocking Pair-Completeness is
+    unaffected.
+
+    Args:
+        gold_pairs: Positive match pairs as 2-element frozensets of corpus ids.
+        all_ids: Every corpus id (e.g. ``[r.id for r in corpus]``); order fixes
+            the singleton order for determinism.
+
+    Returns:
+        The complete partition: match components followed by one singleton per
+        unmatched id (in ``all_ids`` order).
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for pair in gold_pairs:
+        a, b = tuple(pair)
+        union(a, b)
+
+    components: dict[str, set[str]] = defaultdict(set)
+    for node in parent:
+        components[find(node)].add(node)
+    match_clusters = list(components.values())
+
+    matched_ids = set(parent)
+    singletons = [{rid} for rid in all_ids if rid not in matched_ids]
+    return match_clusters + singletons
 
 
 def _split_stratum(

@@ -42,6 +42,7 @@ from langres.core.indexes import (
 )
 from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import (
     CompanySchema,
@@ -56,6 +57,7 @@ from langres.core.module import GroupwiseModule, Module, stamp_group_cost
 # an LLMJudge artifact finds the type in the registry (mirrors WeightedAverageJudge
 # above). It also makes ``from langres.core import LLMJudge`` work.
 from langres.core.modules.llm_judge import LLMJudge
+from langres.core.modules.rf_judge import RFJudge
 from langres.core.registry import (
     SchemaNotRegistered,
     UnknownComponentType,
@@ -102,6 +104,7 @@ __all__ = [
     "FakeVectorIndex",
     "FastEmbedSparseEmbedder",
     "FeatureSpec",
+    "FellegiSunterJudge",
     "get_component",
     "get_schema",
     "GLinkerAdapter",
@@ -119,6 +122,7 @@ __all__ = [
     "register",
     "register_schema",
     "Resolver",
+    "RFJudge",
     "ScoreStats",
     "SchemaNotRegistered",
     "SentenceTransformerEmbedder",

@@ -30,6 +30,23 @@ is held constant per dataset so the race compares judges, not blockers:
   Clusterer (W1.1). Its injected client is a **DSPy LM**, same shape as
   ``dspy_judge``.
 
+Two more methods are dispatchable by name (:func:`_make_module_builder`
+recognizes them) but are deliberately **not** members of
+``ZERO_SPEND_METHODS``/``ALL_METHODS`` — the trained family (W1.2) needs an
+explicit fit step before scoring, which ``run_methods``/``run_method`` cannot
+provide (they rebuild the module fresh, unfit, per grid threshold). Build
++ fit + evaluate them via ``Resolver.fit(...)`` and
+``evaluate_judge_on_candidates`` instead — see ``docs/EXPERIMENTS.md``.
+
+- ``fellegi_sunter`` — VectorBlocker -> ``Comparator.from_schema`` ->
+  ``FellegiSunterJudge`` -> Clusterer. Learns m/u/prior via EM with **no
+  labels** (``UnsupervisedFitMixin.fit_unlabeled``, i.e.
+  ``resolver.fit(records)``).
+- ``random_forest`` — VectorBlocker -> ``Comparator.from_schema`` ->
+  ``RFJudge`` -> Clusterer. sklearn RandomForest over comparator similarities,
+  supervised (``SupervisedFitMixin.fit``, i.e.
+  ``resolver.fit(records, labels=...)``).
+
 A dataset participates by conforming to :class:`BlockingBenchmark` — exposing its
 record ``schema`` plus a pinned blocking config (``blocking_k`` and a
 ``build_blocker`` that returns a *fresh* VectorBlocker each call). This module
@@ -52,14 +69,16 @@ from langres.clients.openrouter import dspy_price_per_1k as _dspy_price_per_1k
 from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.comparator import Comparator
+from langres.core.comparator import Comparator, StringComparator
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.core.models import PairwiseJudgement
 from langres.core.module import Module
 from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP, CascadeModule
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.modules.rf_judge import RFJudge
 from langres.core.resolver import Resolver
 
 #: Methods whose scorer makes no API call — fully deterministic and zero-spend.
@@ -235,7 +254,16 @@ def _make_module_builder(
                 high_threshold=cascade_high,
             )
         ), None
-    raise ValueError(f"unknown method {method!r}; choose one of {ALL_METHODS}")
+    if method == "fellegi_sunter":
+        fs_comparator: StringComparator[Any] = Comparator.from_schema(schema)
+        return (lambda: FellegiSunterJudge(comparator=fs_comparator)), fs_comparator
+    if method == "random_forest":
+        rf_comparator: StringComparator[Any] = Comparator.from_schema(schema)
+        return (lambda: RFJudge(feature_specs=rf_comparator.feature_specs)), rf_comparator
+    raise ValueError(
+        f"unknown method {method!r}; choose one of "
+        f"{ALL_METHODS + ('fellegi_sunter', 'random_forest')}"
+    )
 
 
 def make_resolver_factory(
