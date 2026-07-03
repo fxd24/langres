@@ -13,7 +13,7 @@ from langres.data.febrl_person import (
     PERSON_RECALL_GATE,
     PERSON_THRESHOLD_GRID,
     FebrlPersonBenchmark,
-    PersonSchema,
+    FebrlPersonSchema,
     _cross_source,
     _record_from_row,
     build_person_blocker,
@@ -91,17 +91,19 @@ def test_gold_pairs_equal_partition_closure() -> None:
 
 
 def test_embed_text_composition_order() -> None:
-    r = PersonSchema(id="a1", given_name="rachael", surname="dent", suburb="byford", source="a")
+    r = FebrlPersonSchema(
+        id="a1", given_name="rachael", surname="dent", suburb="byford", source="a"
+    )
     assert r.embed_text == "rachael dent byford"
 
 
 def test_embed_text_omits_missing_fields() -> None:
-    r = PersonSchema(id="b1", given_name="elton", source="b")
+    r = FebrlPersonSchema(id="b1", given_name="elton", source="b")
     assert r.embed_text == "elton"
 
 
 def test_embed_text_serializes_as_computed_field() -> None:
-    r = PersonSchema(id="a9", given_name="ana", surname="lee", suburb="perth", source="a")
+    r = FebrlPersonSchema(id="a9", given_name="ana", surname="lee", suburb="perth", source="a")
     assert r.model_dump()["embed_text"] == "ana lee perth"
 
 
@@ -149,17 +151,17 @@ def test_record_from_row_preserves_present_fields() -> None:
 
 
 def test_cross_source_filters_intra_source_pairs() -> None:
-    a1 = PersonSchema(id="a1", given_name="x", source="a")
-    a2 = PersonSchema(id="a2", given_name="y", source="a")
-    b1 = PersonSchema(id="b1", given_name="z", source="b")
+    a1 = FebrlPersonSchema(id="a1", given_name="x", source="a")
+    a2 = FebrlPersonSchema(id="a2", given_name="y", source="a")
+    b1 = FebrlPersonSchema(id="b1", given_name="z", source="b")
     cross = ERCandidate(left=a1, right=b1, blocker_name="t")
     same = ERCandidate(left=a1, right=a2, blocker_name="t")
     assert _cross_source([cross, same]) == [cross]
 
 
 def test_cross_source_all_same_source_returns_empty() -> None:
-    a1 = PersonSchema(id="a1", given_name="x", source="a")
-    a2 = PersonSchema(id="a2", given_name="y", source="a")
+    a1 = FebrlPersonSchema(id="a1", given_name="x", source="a")
+    a2 = FebrlPersonSchema(id="a2", given_name="y", source="a")
     same = ERCandidate(left=a1, right=a2, blocker_name="t")
     assert _cross_source([same]) == []
 
@@ -171,7 +173,7 @@ def test_benchmark_exposes_pinned_config() -> None:
     bench = FebrlPersonBenchmark()
     assert bench.name == "febrl_person"
     assert bench.threshold_grid == PERSON_THRESHOLD_GRID
-    assert bench.schema is PersonSchema
+    assert bench.schema is FebrlPersonSchema
     assert bench.blocking_k == DEFAULT_PERSON_BLOCKING_K
 
 
@@ -238,10 +240,12 @@ def test_pick_blocking_k_raises_on_empty() -> None:
 
 
 def test_default_blocking_k_is_pinned_with_honest_gate_outcome() -> None:
-    assert DEFAULT_PERSON_BLOCKING_K == 5
+    assert DEFAULT_PERSON_BLOCKING_K == 20
     assert PERSON_RECALL_GATE == 0.95
-    assert ACHIEVED_PC_AT_DEFAULT_K == pytest.approx(0.9660, abs=1e-4)
-    # Like Fodors-Zagat, the person k-sweep clears the 0.95 gate at k=5.
+    # Pinned to the min-k clearing the gate on the ship platform (Linux CI); the
+    # recorded PC (macOS 0.978) clears the gate with margin.
+    assert ACHIEVED_PC_AT_DEFAULT_K == pytest.approx(0.9780, abs=1e-4)
+    assert ACHIEVED_PC_AT_DEFAULT_K >= PERSON_RECALL_GATE
     assert GATE_MET is True
 
 
@@ -263,11 +267,14 @@ def test_sweep_blocking_k_pins_documented_pair_completeness() -> None:
     assert set(recalls) == set(ks)
     assert all(0.0 <= v <= 1.0 for v in recalls.values())
 
-    chosen = pick_blocking_k(recalls, PERSON_RECALL_GATE)
-    assert chosen == DEFAULT_PERSON_BLOCKING_K
-    assert recalls[chosen] == pytest.approx(ACHIEVED_PC_AT_DEFAULT_K, abs=5e-3)
-    # The gate is honestly met: the chosen k is the smallest one clearing it.
-    assert recalls[chosen] >= PERSON_RECALL_GATE
+    # The pinned k must clear the gate. We deliberately do NOT assert that it
+    # equals ``pick_blocking_k`` (the platform-local min-k): the exact PC sits
+    # near the 0.95 gate at small k and shifts by platform (macOS min-k=5,
+    # Linux CI min-k=20; see the sweep note in febrl_person.py), so k=20 is
+    # pinned for cross-platform robustness rather than as the macOS min-k.
+    assert recalls[DEFAULT_PERSON_BLOCKING_K] >= PERSON_RECALL_GATE
+    # Recall is non-decreasing in k (larger neighbourhoods only add candidates).
+    assert recalls[50] >= recalls[DEFAULT_PERSON_BLOCKING_K]
 
 
 @pytest.mark.slow

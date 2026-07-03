@@ -1,7 +1,7 @@
 """FEBRL4 person entity-resolution benchmark adapter (M5 W2.1 — second entity type).
 
 Loads the vendored FEBRL4 **person** subset into a single corpus of
-:class:`PersonSchema` records plus cross-source ground-truth pairs. This is the
+:class:`FebrlPersonSchema` records plus cross-source ground-truth pairs. This is the
 M5 "generality" exit: a *second* entity type (a person, not a product or
 restaurant) resolved with **zero new core code** — only this config-only adapter,
 mirroring the Fodors-Zagat and Amazon-Google/Abt-Buy loaders.
@@ -53,7 +53,7 @@ __all__ = [
     "PERSON_RECALL_GATE",
     "PERSON_THRESHOLD_GRID",
     "FebrlPersonBenchmark",
-    "PersonSchema",
+    "FebrlPersonSchema",
     "build_person_blocker",
     "load_febrl_person",
     "pick_blocking_k",
@@ -85,24 +85,33 @@ _PERSON_FIELDS = (
 # VectorBlocker over SentenceTransformer("all-MiniLM-L6-v2") cosine similarity on
 # ``embed_text`` (given_name + surname + suburb). Sweep (k -> Pair-Completeness,
 # 500 gold pairs), reproduce via ``sweep_blocking_k`` (see the slow test):
-#   k= 5 -> 0.9660
-#   k=10 -> 0.9680
-#   k=20 -> 0.9780
-#   k=30 -> 0.9820
-#   k=50 -> 0.9860
-# FEBRL persons block cleanly: given_name+surname+suburb is distinctive, so recall
-# already clears the 0.95 gate at k=5 (like Fodors-Zagat, which saturates by k=5),
-# and only inches up with larger k. DEFAULT_PERSON_BLOCKING_K is the MIN k clearing
-# the 0.95 gate (see ``pick_blocking_k``).
-DEFAULT_PERSON_BLOCKING_K = 5
+#   k= 5 -> 0.966   (macOS)   -> < 0.95 (Linux CI)
+#   k=10 -> 0.968   (macOS)   -> < 0.95 (Linux CI)
+#   k=20 -> 0.978   (macOS)   -> >= 0.95 (Linux CI)
+#   k=30 -> 0.982   (macOS)
+#   k=50 -> 0.986   (macOS)
+# The recall is high everywhere but sits near the 0.95 gate at small k, and the
+# EXACT value shifts by platform: cross-platform embedding float differences
+# (ARM vs x86 BLAS) reorder borderline neighbours, so k=5 clears 0.95 on macOS
+# but dips just below it on the Linux CI runner. There is no seed/index fix —
+# ``FAISSIndex`` cosine search is already exact; the divergence is in the MiniLM
+# embeddings themselves, which are not bit-identical across architectures. So the
+# pin is chosen for ROBUSTNESS, not as the macOS min-k: DEFAULT_PERSON_BLOCKING_K
+# is the smallest k that clears the 0.95 gate on the SHIP platform (Linux CI),
+# k=20, which also clears comfortably on macOS (0.978). ``pick_blocking_k``
+# selects the platform-local min-k (5 on macOS, 20 on Linux); the slow test
+# therefore asserts the pinned k clears the gate rather than that it equals the
+# platform-local min-k.
+DEFAULT_PERSON_BLOCKING_K = 20
 
 #: Pair-Completeness gate the blocking k-sweep must clear (matches the clean
 #: Fodors-Zagat 1:1 target of 0.95; FEBRL persons block comparably cleanly).
 PERSON_RECALL_GATE = 0.95
 
-#: Cross-source Pair-Completeness achieved at :data:`DEFAULT_PERSON_BLOCKING_K`,
-#: recorded from the measured sweep above.
-ACHIEVED_PC_AT_DEFAULT_K = 0.9660
+#: Cross-source Pair-Completeness at :data:`DEFAULT_PERSON_BLOCKING_K`, measured
+#: on macOS (0.978); the Linux CI value differs slightly (see the sweep note) but
+#: also clears :data:`PERSON_RECALL_GATE`, which is what the slow test asserts.
+ACHIEVED_PC_AT_DEFAULT_K = 0.9780
 
 #: Whether :data:`ACHIEVED_PC_AT_DEFAULT_K` clears :data:`PERSON_RECALL_GATE`.
 GATE_MET = ACHIEVED_PC_AT_DEFAULT_K >= PERSON_RECALL_GATE
@@ -113,7 +122,7 @@ GATE_MET = ACHIEVED_PC_AT_DEFAULT_K >= PERSON_RECALL_GATE
 PERSON_THRESHOLD_GRID: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
 
-class PersonSchema(BaseModel):
+class FebrlPersonSchema(BaseModel):
     """A single person record from the FEBRL4 benchmark.
 
     ``id`` is globally unique across both sources (the loader prefixes the raw
@@ -163,12 +172,12 @@ class PersonSchema(BaseModel):
         return " ".join(p for p in [self.given_name, self.surname, self.suburb] if p)
 
 
-# Register PersonSchema at import time so a fresh process that only imports this
+# Register FebrlPersonSchema at import time so a fresh process that only imports this
 # module (e.g. to ``Resolver.load`` a saved artifact and ``resolve``) finds the
 # schema in the registry without first constructing a blocker. A declarative
 # VectorBlocker re-registers idempotently, so this is the single source of truth
 # for the registry key (same pattern as ``RestaurantSchema`` / ``ProductSchema``).
-register_schema_idempotent(PersonSchema)
+register_schema_idempotent(FebrlPersonSchema)
 
 
 def _read_csv_rows(filename: str) -> list[dict[str, str]]:
@@ -176,8 +185,8 @@ def _read_csv_rows(filename: str) -> list[dict[str, str]]:
     return _bu.read_csv_rows(_DATASET_PACKAGE, filename)
 
 
-def _record_from_row(row: dict[str, str], source: PersonSource, prefix: str) -> PersonSchema:
-    """Build a :class:`PersonSchema` from a raw CSV row dict.
+def _record_from_row(row: dict[str, str], source: PersonSource, prefix: str) -> FebrlPersonSchema:
+    """Build a :class:`FebrlPersonSchema` from a raw CSV row dict.
 
     The FEBRL CSVs are plainly quoted; empty cells (FEBRL blanks fields as a
     corruption) map to ``None`` for every attribute field. ``id`` is the raw
@@ -188,14 +197,14 @@ def _record_from_row(row: dict[str, str], source: PersonSource, prefix: str) -> 
         cleaned = row.get(name, "").strip()
         return cleaned or None
 
-    return PersonSchema(
+    return FebrlPersonSchema(
         id=f"{prefix}{row['rec_id'].strip()}",
         source=source,
         **{name: field(name) for name in _PERSON_FIELDS},
     )
 
 
-def load_febrl_person() -> tuple[list[PersonSchema], list[set[str]], set[frozenset[str]]]:
+def load_febrl_person() -> tuple[list[FebrlPersonSchema], list[set[str]], set[frozenset[str]]]:
     """Load the FEBRL person subset as one corpus plus its partition and gold pairs.
 
     Both sources are combined into a single corpus with globally-unique,
@@ -215,7 +224,7 @@ def load_febrl_person() -> tuple[list[PersonSchema], list[set[str]], set[frozens
     Returns:
         ``(corpus, gold_clusters, gold_pairs)``.
     """
-    corpus: list[PersonSchema] = [
+    corpus: list[FebrlPersonSchema] = [
         _record_from_row(row, "a", "a") for row in _read_csv_rows(_PERSON_A_FILE)
     ]
     corpus += [_record_from_row(row, "b", "b") for row in _read_csv_rows(_PERSON_B_FILE)]
@@ -247,7 +256,7 @@ def load_febrl_person() -> tuple[list[PersonSchema], list[set[str]], set[frozens
 
 def build_person_blocker(
     k_neighbors: int = DEFAULT_PERSON_BLOCKING_K,
-) -> VectorBlocker[PersonSchema]:
+) -> VectorBlocker[FebrlPersonSchema]:
     """Build the shared FEBRL person VectorBlocker (MiniLM + FAISS-cosine).
 
     Declarative (``schema=`` + ``text_field=``) so the resulting blocker is
@@ -260,26 +269,28 @@ def build_person_blocker(
             :data:`DEFAULT_PERSON_BLOCKING_K` (clears Pair-Completeness >= 0.95).
 
     Returns:
-        A :class:`VectorBlocker` over ``PersonSchema.embed_text``.
+        A :class:`VectorBlocker` over ``FebrlPersonSchema.embed_text``.
     """
     return VectorBlocker(
         vector_index=FAISSIndex(
             embedder=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
             metric="cosine",
         ),
-        schema=PersonSchema,
+        schema=FebrlPersonSchema,
         text_field="embed_text",
         k_neighbors=k_neighbors,
     )
 
 
-def _cross_source(candidates: list[ERCandidate[PersonSchema]]) -> list[ERCandidate[PersonSchema]]:
+def _cross_source(
+    candidates: list[ERCandidate[FebrlPersonSchema]],
+) -> list[ERCandidate[FebrlPersonSchema]]:
     """Keep only candidate pairs whose two records come from different sources."""
     return _bu.cross_source(candidates)
 
 
 def sweep_blocking_k(
-    corpus: list[PersonSchema],
+    corpus: list[FebrlPersonSchema],
     gold_clusters: list[set[str]],
     ks: tuple[int, ...] = (5, 10, 20, 30, 50),
 ) -> dict[int, float]:
@@ -287,7 +298,7 @@ def sweep_blocking_k(
 
     Person-typed wrapper over
     :func:`langres.data._benchmark_utils.sweep_blocking_k`, binding
-    ``PersonSchema`` + ``embed_text``: builds the FAISS index once and reuses it
+    ``FebrlPersonSchema`` + ``embed_text``: builds the FAISS index once and reuses it
     across all ``k``, filtering to cross-source pairs before measuring recall.
 
     Args:
@@ -298,7 +309,9 @@ def sweep_blocking_k(
     Returns:
         Mapping of ``k`` to cross-source Pair-Completeness (``candidate_recall``).
     """
-    return _bu.sweep_blocking_k(corpus, gold_clusters, PersonSchema, text_field="embed_text", ks=ks)
+    return _bu.sweep_blocking_k(
+        corpus, gold_clusters, FebrlPersonSchema, text_field="embed_text", ks=ks
+    )
 
 
 def pick_blocking_k(recalls: dict[int, float], threshold: float = PERSON_RECALL_GATE) -> int:
@@ -322,7 +335,7 @@ def pick_blocking_k(recalls: dict[int, float], threshold: float = PERSON_RECALL_
     return _bu.pick_blocking_k(recalls, threshold)
 
 
-class FebrlPersonBenchmark(Benchmark[PersonSchema]):
+class FebrlPersonBenchmark(Benchmark[FebrlPersonSchema]):
     """FEBRL persons as a :class:`~langres.core.benchmark.Benchmark` conformer.
 
     Adapts the person loader/splitter to the dataset-agnostic harness so
@@ -339,25 +352,25 @@ class FebrlPersonBenchmark(Benchmark[PersonSchema]):
     name = "febrl_person"
     threshold_grid = PERSON_THRESHOLD_GRID
     #: Record type, exposed for the method registry's Comparator/rapidfuzz fields.
-    schema = PersonSchema
+    schema = FebrlPersonSchema
     #: Pinned blocking neighbour count (blocking held constant across methods).
     blocking_k = DEFAULT_PERSON_BLOCKING_K
 
-    def build_blocker(self, k_neighbors: int) -> VectorBlocker[PersonSchema]:
+    def build_blocker(self, k_neighbors: int) -> VectorBlocker[FebrlPersonSchema]:
         """Return a fresh FEBRL person VectorBlocker (MiniLM + FAISS-cosine)."""
         return build_person_blocker(k_neighbors)
 
-    def load(self) -> tuple[list[PersonSchema], list[set[str]], set[frozenset[str]]]:
+    def load(self) -> tuple[list[FebrlPersonSchema], list[set[str]], set[frozenset[str]]]:
         """Return ``(corpus, gold_clusters, gold_pairs)`` for FEBRL persons."""
         corpus, gold_clusters, _gold_pairs = load_febrl_person()
         return corpus, gold_clusters, gold_pairs_from_clusters(gold_clusters)
 
     def split(
         self,
-        corpus: list[PersonSchema],
+        corpus: list[FebrlPersonSchema],
         gold_clusters: list[set[str]],
         *,
         seed: int,
-    ) -> tuple[list[PersonSchema], list[PersonSchema], list[set[str]], list[set[str]]]:
+    ) -> tuple[list[FebrlPersonSchema], list[FebrlPersonSchema], list[set[str]], list[set[str]]]:
         """Leakage-free stratified split via the shared ``stratified_corpus_split``."""
         return _bu.stratified_corpus_split(corpus, gold_clusters, seed=seed)
