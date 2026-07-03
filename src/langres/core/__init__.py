@@ -192,8 +192,7 @@ _LAZY_SYMBOLS: dict[str, str] = {
 #: either ``[llm]`` (LLMJudge) or ``[semantic]`` (embeddings/vector index/
 #: VectorBlocker).
 _EXTRA_BY_SYMBOL: dict[str, str] = {
-    name: {"LLMJudge": "llm", "RFJudge": "trained"}.get(name, "semantic")
-    for name in _LAZY_SYMBOLS
+    name: {"LLMJudge": "llm", "RFJudge": "trained"}.get(name, "semantic") for name in _LAZY_SYMBOLS
 }
 
 

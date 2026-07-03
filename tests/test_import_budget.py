@@ -6,10 +6,10 @@ Two concerns, both closed by making ``langres/__init__.py``'s import chain --
 (PEP 562 ``__getattr__``) instead of eager top-level imports:
 
 1. **Import weight**: a bare ``import langres`` must not pull torch, litellm,
-   faiss, or sentence-transformers into ``sys.modules`` (the ``[semantic]``/
-   ``[llm]`` extras) -- these are now optional dependencies, not installed in
-   a core-only environment, and even when installed should not slow down or
-   bloat a plain import.
+   faiss, sentence-transformers, or scikit-learn into ``sys.modules`` (the
+   ``[semantic]``/``[llm]``/``[trained]`` extras) -- these are now optional
+   dependencies, not installed in a core-only environment, and even when
+   installed should not slow down or bloat a plain import.
 2. **Spend safety**: ``litellm`` calls ``load_dotenv()`` as an import side
    effect, silently populating ``OPENROUTER_API_KEY``/etc. from any ``.env``
    on the path -- independent of whether a judge is ever chosen. A bare
@@ -43,7 +43,7 @@ def _import_ok(module_name: str) -> bool:
 # Import weight: heavy/optional deps must stay out of sys.modules.
 # ---------------------------------------------------------------------------
 
-_HEAVY_MODULES = ["torch", "litellm", "faiss", "sentence_transformers"]
+_HEAVY_MODULES = ["torch", "litellm", "faiss", "sentence_transformers", "sklearn"]
 
 _CHECK_SCRIPT = (
     "import sys; import langres; "
@@ -157,6 +157,14 @@ class TestCoreLazyGetattr:
 
         assert core.LLMJudge is LLMJudge
 
+    def test_rf_judge_resolves(self) -> None:
+        pytest.importorskip("sklearn", reason="requires the [trained] extra")
+        import langres.core as core
+
+        from langres.core.modules.rf_judge import RFJudge
+
+        assert core.RFJudge is RFJudge
+
     def test_embeddings_and_indexes_symbols_resolve(self) -> None:
         pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
         pytest.importorskip("faiss", reason="requires the [semantic] extra")
@@ -192,6 +200,15 @@ class TestCoreLazyGetattr:
 
         with pytest.raises(ImportError, match=r"langres\.core\.LLMJudge.*langres\[llm\]"):
             core.LLMJudge  # noqa: B018
+
+    def test_rf_judge_raises_actionable_import_error_when_trained_absent(self) -> None:
+        """Core-only install (no [trained]): a real, un-simulated ImportError (see above)."""
+        if _import_ok("sklearn"):
+            pytest.skip("scikit-learn is installed ([trained] extra present) -- nothing to observe")
+        import langres.core as core
+
+        with pytest.raises(ImportError, match=r"langres\.core\.RFJudge.*langres\[trained\]"):
+            core.RFJudge  # noqa: B018
 
     def test_submodules_resolve_to_the_module_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Attribute access resolves each submodule via ``__getattr__``.
