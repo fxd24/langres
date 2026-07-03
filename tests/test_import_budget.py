@@ -24,6 +24,7 @@ current pytest process is already polluted by other tests.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -31,6 +32,12 @@ import time
 from pathlib import Path
 
 import pytest
+
+
+def _import_ok(module_name: str) -> bool:
+    """True if ``module_name`` is importable, without actually importing it."""
+    return importlib.util.find_spec(module_name) is not None
+
 
 # ---------------------------------------------------------------------------
 # Import weight: heavy/optional deps must stay out of sys.modules.
@@ -131,6 +138,7 @@ class TestCoreLazyGetattr:
     """``langres.core.__getattr__`` for the [semantic]/[llm] symbols + submodules."""
 
     def test_vector_blocker_resolves_and_caches(self) -> None:
+        pytest.importorskip("faiss", reason="requires the [semantic] extra")
         import langres.core as core
 
         vb = core.VectorBlocker
@@ -142,6 +150,7 @@ class TestCoreLazyGetattr:
         assert core.__dict__["VectorBlocker"] is VectorBlocker
 
     def test_llm_judge_resolves(self) -> None:
+        pytest.importorskip("litellm", reason="requires the [llm] extra")
         import langres.core as core
 
         from langres.core.modules.llm_judge import LLMJudge
@@ -149,6 +158,8 @@ class TestCoreLazyGetattr:
         assert core.LLMJudge is LLMJudge
 
     def test_embeddings_and_indexes_symbols_resolve(self) -> None:
+        pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
+        pytest.importorskip("faiss", reason="requires the [semantic] extra")
         import langres.core as core
 
         from langres.core.embeddings import SentenceTransformerEmbedder
@@ -156,6 +167,31 @@ class TestCoreLazyGetattr:
 
         assert core.SentenceTransformerEmbedder is SentenceTransformerEmbedder
         assert core.FAISSIndex is FAISSIndex
+
+    def test_vector_blocker_raises_actionable_import_error_when_semantic_absent(self) -> None:
+        """Core-only install (no [semantic]): a real, un-simulated ImportError.
+
+        Unlike ``test_missing_dependency_raises_actionable_import_error``
+        below (which *simulates* absence via monkeypatching so it also runs
+        when the extra IS installed), this exercises the genuine failure path
+        -- meaningful only in a core-only environment, so it skips itself when
+        faiss is actually importable.
+        """
+        if _import_ok("faiss"):
+            pytest.skip("faiss is installed ([semantic] extra present) -- nothing to observe")
+        import langres.core as core
+
+        with pytest.raises(ImportError, match=r"langres\.core\.VectorBlocker.*langres\[semantic\]"):
+            core.VectorBlocker  # noqa: B018
+
+    def test_llm_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
+        """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""
+        if _import_ok("litellm"):
+            pytest.skip("litellm is installed ([llm] extra present) -- nothing to observe")
+        import langres.core as core
+
+        with pytest.raises(ImportError, match=r"langres\.core\.LLMJudge.*langres\[llm\]"):
+            core.LLMJudge  # noqa: B018
 
     def test_submodules_resolve_to_the_module_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Attribute access resolves each submodule via ``__getattr__``.
@@ -216,6 +252,7 @@ class TestClientsLazyGetattr:
     """``langres.clients.__getattr__`` for ``create_llm_client``/``create_wandb_tracker``."""
 
     def test_create_llm_client_resolves(self) -> None:
+        pytest.importorskip("litellm", reason="requires the [llm] extra")
         import langres.clients as clients
 
         from langres.clients.llm import create_llm_client
@@ -240,6 +277,7 @@ class TestBlockersPackageLazyGetattr:
     """``langres.core.blockers.__getattr__`` for ``VectorBlocker``."""
 
     def test_vector_blocker_resolves_via_package_path(self) -> None:
+        pytest.importorskip("faiss", reason="requires the [semantic] extra")
         import langres.core.blockers as blockers
 
         from langres.core.blockers.vector import VectorBlocker
@@ -260,6 +298,7 @@ class TestModulesPackageLazyGetattr:
     """``langres.core.modules.__getattr__`` for LLMJudge/LLMJudgeModule/CascadeModule."""
 
     def test_llm_judge_resolves_via_package_path(self) -> None:
+        pytest.importorskip("litellm", reason="requires the [llm] extra")
         import langres.core.modules as modules_pkg
 
         from langres.core.modules.llm_judge import LLMJudge
@@ -267,6 +306,7 @@ class TestModulesPackageLazyGetattr:
         assert modules_pkg.LLMJudge is LLMJudge
 
     def test_llm_judge_module_resolves_via_package_path(self) -> None:
+        pytest.importorskip("litellm", reason="requires the [llm] extra")
         import langres.core.modules as modules_pkg
 
         from langres.core.modules.llm_judge import LLMJudgeModule
@@ -274,6 +314,8 @@ class TestModulesPackageLazyGetattr:
         assert modules_pkg.LLMJudgeModule is LLMJudgeModule
 
     def test_cascade_module_resolves_via_package_path(self) -> None:
+        pytest.importorskip("litellm", reason="requires the [llm] extra")
+        pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
         import langres.core.modules as modules_pkg
 
         from langres.core.modules.cascade import CascadeModule
