@@ -25,6 +25,7 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 from langres.core.adapters.glinker import GLinkerAdapter
+from langres.core.anchor_store import AnchorStore, ClusterDelta
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.composite import CompositeBlocker
@@ -96,10 +97,12 @@ if TYPE_CHECKING:
 __all__ = [
     "ARTIFACT_VERSION",
     "AllPairsBlocker",
+    "AnchorStore",
     "ArtifactManifest",
     "benchmark",
     "Blocker",
     "CandidateStats",
+    "ClusterDelta",
     "ClusterStats",
     "Clusterer",
     "CompanySchema",
