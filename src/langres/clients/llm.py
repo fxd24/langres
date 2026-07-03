@@ -10,7 +10,7 @@ from langres.clients.settings import Settings
 logger = logging.getLogger(__name__)
 
 
-def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = True) -> Any:
+def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = False) -> Any:
     """Create LiteLLM client with optional Langfuse tracing.
 
     This function configures LiteLLM with the Langfuse OpenTelemetry callback
@@ -21,14 +21,23 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
 
     Args:
         settings: Optional Settings object. If None, loads from environment.
-        enable_langfuse: If True, configure Langfuse tracing (requires LANGFUSE_* env vars).
-                        If False, no tracing is configured.
+        enable_langfuse: If True, configure Langfuse tracing (requires LANGFUSE_*
+                        env vars *and* the ``langfuse`` package -- it's dev-group
+                        only, not part of the ``[llm]`` extra's install promise,
+                        see the Note below). Defaults to False: tracing is an
+                        explicit opt-in, so ``LLMJudge``'s internal
+                        ``create_llm_client(Settings())`` calls (and every other
+                        caller that doesn't pass this kwarg) work on a plain
+                        ``pip install langres[llm]`` with no langfuse installed.
 
     Returns:
         The litellm module configured with optional Langfuse callbacks.
 
     Raises:
         ValueError: If enable_langfuse=True but required Langfuse env vars are missing.
+        ImportError: If enable_langfuse=True but the ``langfuse`` package isn't
+            installed -- with a one-line fix (``pip install langres[dev]`` or
+            disable tracing).
 
     Environment variables (when enable_langfuse=True):
         LANGFUSE_PUBLIC_KEY: Langfuse public API key (required)
@@ -42,11 +51,11 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
         AZURE_API_VERSION: Azure OpenAI API version
 
     Example:
-        # With Langfuse tracing (requires LANGFUSE_* env vars)
-        client = create_llm_client(enable_langfuse=True)
+        # Default: no tracing, no langfuse required (just [llm])
+        client = create_llm_client()
 
-        # Without tracing (no env vars required)
-        client = create_llm_client(enable_langfuse=False)
+        # With Langfuse tracing (requires LANGFUSE_* env vars + langfuse installed)
+        client = create_llm_client(enable_langfuse=True)
 
         # Use with Azure OpenAI (reads from AZURE_API_* env vars)
         response = client.completion(
@@ -62,6 +71,13 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
         For Azure OpenAI, use model names with "azure/" prefix:
         - "azure/gpt-5-mini" (your deployment name)
         - LiteLLM reads AZURE_API_BASE, AZURE_API_KEY, AZURE_API_VERSION from environment
+
+    Note:
+        ``langfuse`` lives in the dev dependency group (experiment-tracking
+        tooling), not the ``[llm]`` extra -- a production ``pip install
+        langres[llm]`` install has litellm but not langfuse. Tracing therefore
+        defaults to off; pass ``enable_langfuse=True`` only when langfuse is
+        actually installed (dev environments, or ``pip install langres[dev]``).
     """
     if settings is None:
         settings = Settings()  # Loads from env vars
@@ -70,9 +86,21 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
     if enable_langfuse:
         # W0.4: langfuse moved to the dev dependency group (experiment-tracking
         # tooling, not part of the [llm] extra's install promise) -- imported
-        # here, lazily, so `create_llm_client(enable_langfuse=False)` works
-        # with just [llm] installed and no langfuse present.
-        from langfuse import Langfuse
+        # here, lazily, so the default (enable_langfuse=False) works with just
+        # [llm] installed and no langfuse present. A caller that explicitly
+        # asks for tracing without langfuse installed gets an actionable
+        # ImportError instead of a raw "No module named 'langfuse'" traceback.
+        try:
+            from langfuse import Langfuse
+        except ImportError as e:
+            raise ImportError(
+                "create_llm_client(enable_langfuse=True) requires the 'langfuse' "
+                "package, which is not installed. langfuse is a dev/observability "
+                "dependency, not part of the langres[llm] extra. Fix: "
+                "pip install 'langres[dev]' (or uv add --dev langfuse). "
+                "Or call create_llm_client(enable_langfuse=False) (the default) "
+                "to disable tracing."
+            ) from e
 
         # Validate Langfuse env vars are present
         if not settings.langfuse_public_key:
