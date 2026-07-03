@@ -209,9 +209,12 @@ are tracked in [TODOS.md](TODOS.md).
 
 - [Roadmap](docs/ROADMAP.md) — the composable-seam vision and milestones M0–M6
 - [POC Plan](docs/POC.md) — current stage, scope, success criteria
+- [Your own CSV in 15 minutes](docs/TUTORIAL_YOUR_OWN_CSV.md) — messy CSV → clusters, offline at $0, with threshold calibration and save/load
 - [Technical Overview](docs/TECHNICAL_OVERVIEW.md) — API reference and data contracts
 - [Resolver DX](docs/DX_RESOLVER.md) — the declarative `from_schema` + `save`/`load` path
 - [Experiments](docs/EXPERIMENTS.md) — experimentation DX, `derive_threshold`, the budget seam
+- [Testing at $0](docs/TESTING_AT_ZERO_COST.md) — DummyLM as the seam to test an ER pipeline without spending
+- [Adding a method](docs/ADDING_A_METHOD.md) — how to contribute a new ER method behind the seam (SelectJudge worked example)
 - [Use Cases](docs/USE_CASES.md) — use-case taxonomy and roadmap
 - [Dependencies](docs/DEPENDENCIES.md) — supply-chain policy and dependency management
 - [Examples](examples/) — runnable scripts
