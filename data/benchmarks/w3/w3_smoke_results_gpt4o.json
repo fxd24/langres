@@ -1,0 +1,45 @@
+{
+  "model": "openrouter/openai/gpt-4o",
+  "budget_usd": 5.0,
+  "estimate_usd": 2.2127499999999998,
+  "link": {
+    "match": true,
+    "score": 0.95,
+    "judge_used": "custom"
+  },
+  "dedupe": {
+    "clusters": [
+      [
+        "d1",
+        "d2"
+      ]
+    ],
+    "n_clusters": 1
+  },
+  "signal_log_rows": 8,
+  "verb_cost_usd": 0.0250552,
+  "group_call": {
+    "n_llm_calls": 1,
+    "n_members": 22,
+    "n_judgements": 22,
+    "cost_usd": 0.14668500000000004
+  },
+  "ag_pairwise": {
+    "f1": 0.6176470588235295,
+    "precision": 0.75,
+    "recall": 0.525,
+    "best_threshold": 0.9,
+    "n_llm_calls": 385,
+    "cost_usd": 0.9417750000000003
+  },
+  "ag_setwise": {
+    "f1": 0.6666666666666666,
+    "precision": 0.5714285714285714,
+    "recall": 0.8,
+    "best_threshold": 0.05,
+    "n_llm_calls": 120,
+    "cost_usd": 2.857514999999986
+  },
+  "total_spent_usd": 3.971030199999986,
+  "budget_remaining_usd": 1.0289698000000138
+}
