@@ -1,6 +1,6 @@
 """Presets: resolve ``judge="auto"`` and assemble a spend-capped Resolver.
 
-This is the machinery behind the three-verb DX layer (:mod:`langres.verbs`):
+This is the machinery behind the two-verb DX layer (:mod:`langres.verbs`):
 picking a judge from available API keys, building its scorer Module, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import

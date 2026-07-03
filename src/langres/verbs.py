@@ -1,4 +1,4 @@
-"""The three-verb DX layer: ``link``, ``dedupe``, and their result types.
+"""The two-verb DX layer: ``link``, ``dedupe``, and their result types.
 
 ``link(left, right)`` and ``dedupe(records)`` are the thin, schema-optional
 convenience layer on top of :mod:`langres.core.presets` (judge resolution +
