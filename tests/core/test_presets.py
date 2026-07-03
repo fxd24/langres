@@ -82,6 +82,37 @@ class _FakeCostlyModule(Module[object]):
         raise NotImplementedError
 
 
+class _FakeGroupModule(Module[object]):
+    """Yields one group's judgements per the E5 group-cost convention.
+
+    Full ``call_cost_usd`` on the first judgement, ``$0`` on the ``n_siblings``
+    remaining ones, all sharing ``provenance["group_id"]`` -- mirrors what
+    ``SelectJudge``/``stamp_group_cost`` produce for one LLM call spanning a
+    whole group.
+    """
+
+    def __init__(self, first_cost: float, n_siblings: int, group_id: str = "g1") -> None:
+        self._first_cost = first_cost
+        self._n_siblings = n_siblings
+        self._group_id = group_id
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        list(candidates)  # drain (content unused)
+        for i in range(self._n_siblings + 1):
+            cost = self._first_cost if i == 0 else 0.0
+            yield PairwiseJudgement(
+                left_id="anchor",
+                right_id=str(i),
+                score=0.9,
+                score_type="prob_llm",
+                decision_step="fake_group",
+                provenance={"cost_usd": cost, "group_id": self._group_id},
+            )
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
 class _FakeVectorIndex:
     """No-op stand-in for a real FAISS index -- create_index does nothing."""
 
@@ -252,6 +283,40 @@ class TestSpendCappedModule:
         module = _SpendCappedModule(inner, budget_usd=1.0)
         report = module.inspect_scores([])
         assert report is not None
+
+    def test_cap_breach_drains_group_siblings_into_partial_judgements(self) -> None:
+        """A group-wise module's tripping judgement must not split its group (#68 review).
+
+        ``SelectJudge``-style modules stamp the FULL call cost onto the first
+        judgement of a group and $0 onto its K-1 siblings, all sharing
+        ``provenance["group_id"]`` (E5). If the cap trips on that first
+        judgement, the already-paid-for siblings must still be drained into
+        ``partial_judgements`` -- a group must never be split across the cap
+        boundary.
+        """
+        module = _SpendCappedModule(
+            _FakeGroupModule(first_cost=1.0, n_siblings=2, group_id="g1"), budget_usd=0.9
+        )
+        candidates = iter([_candidate(str(i)) for i in range(3)])
+        with pytest.raises(BudgetExceeded) as excinfo:
+            list(module.forward(candidates))
+        partial = excinfo.value.partial_judgements
+        assert len(partial) == 3
+        assert all(j.provenance.get("group_id") == "g1" for j in partial)
+        # No cost was double-counted for the $0 siblings.
+        assert sum(float(j.provenance["cost_usd"]) for j in partial) == 1.0
+
+    def test_cap_breach_without_group_id_is_unchanged(self) -> None:
+        """Pairwise (no group_id) modules keep the pre-existing single-judgement cap behavior."""
+        module = _SpendCappedModule(_FakeCostlyModule(5, 0.5), budget_usd=0.9)
+        candidates = iter([_candidate(str(i)) for i in range(5)])
+        with pytest.raises(BudgetExceeded) as excinfo:
+            list(module.forward(candidates))
+        partial = excinfo.value.partial_judgements
+        # 0.5 -> ok, 1.0 -> breaches $0.9 cap: exactly 2 judgements were paid for,
+        # and none carry a group_id to drain siblings for.
+        assert len(partial) == 2
+        assert all(j.provenance.get("group_id") is None for j in partial)
 
 
 def _candidate(suffix: str) -> ERCandidate[PresetCompany]:
