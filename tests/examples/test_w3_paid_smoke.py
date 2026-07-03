@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from dspy.utils.dummies import DummyLM
 
+from examples.research.w3_paid_smoke import SmokeConfig, run_smoke
 from langres.clients.openrouter import BudgetExceeded
 from langres.core.benchmark import CostTrack
 from langres.core.models import PairwiseJudgement
@@ -47,9 +48,7 @@ def _select_lm() -> DummyLM:
     return DummyLM([{"reasoning": "no match", "selected_ids": "[]"}] * _POOL)
 
 
-def _cfg(tmp_path: Path, *, budget: float) -> "object":
-    from examples.research.w3_paid_smoke import SmokeConfig
-
+def _cfg(tmp_path: Path, *, budget: float) -> SmokeConfig:
     return SmokeConfig(
         model="openrouter/openai/gpt-4o-mini",
         budget_usd=budget,
@@ -60,8 +59,6 @@ def _cfg(tmp_path: Path, *, budget: float) -> "object":
 
 def test_full_flow_runs_at_zero_and_reports_both_quality_numbers(tmp_path: Path) -> None:
     """All four deliverables run end-to-end on DummyLM; both AG F1s are produced; $0 spend."""
-    from examples.research.w3_paid_smoke import run_smoke
-
     results = run_smoke(
         _cfg(tmp_path, budget=100.0),
         dspy_lm=_pairwise_lm(),
@@ -71,8 +68,10 @@ def test_full_flow_runs_at_zero_and_reports_both_quality_numbers(tmp_path: Path)
     # (1) link + dedupe ran.
     assert isinstance(results["link"]["match"], bool)
     assert 0.0 <= results["link"]["score"] <= 1.0
+    # DummyLM answers "no match", so no records merge -> 0 clusters; the point is
+    # dedupe RAN and returned a well-formed list-of-clusters result.
+    assert isinstance(results["dedupe"]["clusters"], list)
     assert isinstance(results["dedupe"]["n_clusters"], int)
-    assert results["dedupe"]["n_clusters"] >= 1
 
     # (3) a signal log was emitted (one row per judged pair across both verbs).
     assert results["signal_log_rows"] > 0
@@ -109,7 +108,6 @@ def test_spend_cap_fires_and_carries_partials(tmp_path: Path) -> None:
     SpendMonitor, which raises ``BudgetExceeded`` carrying the group's judgements
     on ``.partial_judgements``. This is the structural proof of the ≤$10 cap.
     """
-    from examples.research.w3_paid_smoke import run_smoke
 
     def fake_cost(judgements: list[PairwiseJudgement]) -> CostTrack:
         # A flat, nonzero per-call cost, independent of DummyLM's zero tokens.

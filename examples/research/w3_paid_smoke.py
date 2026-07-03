@@ -161,7 +161,12 @@ _LINK_RIGHT: dict[str, Any] = {
 }
 _DEDUPE_RECORDS: list[dict[str, Any]] = [
     {"id": "d1", "title": "Apple iPod Nano 8GB Silver", "manufacturer": "Apple", "price": "149"},
-    {"id": "d2", "title": "apple ipod nano 8 gb silver mp3 player", "manufacturer": "Apple", "price": "145"},
+    {
+        "id": "d2",
+        "title": "apple ipod nano 8 gb silver mp3 player",
+        "manufacturer": "Apple",
+        "price": "145",
+    },
     {"id": "d3", "title": "Samsung 32in LED HDTV", "manufacturer": "Samsung", "price": "399"},
 ]
 
@@ -468,15 +473,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="W3 paid smoke: SpendMonitor-capped SelectJudge-vs-pairwise on Amazon-Google."
     )
-    parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET_USD, help="Hard spend cap (USD).")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="A PRICES_PER_1M-pinned OpenRouter model.")
-    parser.add_argument("--ag-groups", type=int, default=DEFAULT_AG_GROUPS, help="Number of AG anchors to score.")
+    parser.add_argument(
+        "--budget", type=float, default=DEFAULT_BUDGET_USD, help="Hard spend cap (USD)."
+    )
+    parser.add_argument(
+        "--model", default=DEFAULT_MODEL, help="A PRICES_PER_1M-pinned OpenRouter model."
+    )
+    parser.add_argument(
+        "--ag-groups", type=int, default=DEFAULT_AG_GROUPS, help="Number of AG anchors to score."
+    )
     parser.add_argument("--log-path", default=str(_DEFAULT_LOG_PATH), help="Signal-log JSONL path.")
-    parser.add_argument("--results-path", default=str(_DEFAULT_RESULTS_PATH), help="Results JSON path.")
+    parser.add_argument(
+        "--results-path", default=str(_DEFAULT_RESULTS_PATH), help="Results JSON path."
+    )
     args = parser.parse_args()
 
     if args.budget > BUDGET_CEILING_USD:
-        print(f"[fatal] --budget ${args.budget:.2f} exceeds the ${BUDGET_CEILING_USD:.0f} W3 ceiling; refusing.")
+        print(
+            f"[fatal] --budget ${args.budget:.2f} exceeds the ${BUDGET_CEILING_USD:.0f} W3 ceiling; refusing."
+        )
         return 1
 
     load_dotenv(".env")  # OPENROUTER_API_KEY lives in .env, not Settings.
