@@ -169,16 +169,21 @@ def test_corrected_pairs_are_never_reasked() -> None:
 
 
 def test_disagreement_selects_differing_verdicts_sorted_by_score_gap() -> None:
-    """Only verdict flips qualify, largest score gap (most disagreement) first."""
+    """Only verdict flips qualify, largest score gap (most disagreement) first.
+
+    Insertion order is deliberately the OPPOSITE of the expected output (the
+    smaller-gap pair c-d is logged first), so this assertion fails if the sort
+    key is dropped -- it is not accidentally satisfied by input ordering.
+    """
     rows = [
-        _row("a", "b", 0.9, True),
-        _row("c", "d", 0.6, True),
-        _row("e", "f", 0.3, False),  # same verdict in both logs
-        _row("g", "h", 0.7, True),  # absent from the second log
+        _row("c", "d", 0.6, True),  # gap 0.1 -- logged first
+        _row("a", "b", 0.9, True),  # gap 0.7 -- logged second, but must sort first
+        _row("e", "f", 0.3, False),  # same verdict in both logs -> skipped
+        _row("g", "h", 0.7, True),  # absent from the second log -> skipped
     ]
     against = [
-        _row("a", "b", 0.2, False),  # gap 0.7
         _row("d", "c", 0.5, False),  # gap 0.1, reversed orientation still joins
+        _row("a", "b", 0.2, False),  # gap 0.7
         _row("e", "f", 0.25, False),
     ]
     items = select_for_review(rows, strategy="disagreement", against=against, audit_fraction=0.0)

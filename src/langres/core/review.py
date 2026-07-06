@@ -377,14 +377,16 @@ def _select_disagreement(
     against_by_pair: Mapping[frozenset[str], Mapping[str, Any]],
 ) -> list[ReviewItem]:
     """Pairs whose verdict differs across the two logs, largest score gap first."""
-    differing: list[tuple[float, Mapping[str, Any], Mapping[str, Any]]] = []
+    differing: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for key, row in eligible.items():
         other = against_by_pair.get(key)
         if other is None or bool(other["verdict"]) == bool(row["verdict"]):
             continue
-        gap = abs(float(row["score"]) - float(other["score"]))
-        differing.append((gap, row, other))
-    differing.sort(key=lambda entry: entry[0], reverse=True)
+        differing.append((row, other))
+    differing.sort(
+        key=lambda pair: abs(float(pair[0]["score"]) - float(pair[1]["score"])),
+        reverse=True,
+    )
     return [
         _build_item(
             row,
@@ -396,7 +398,7 @@ def _select_disagreement(
                 "against_decision_step": _opt_str(other.get("decision_step")),
             },
         )
-        for _gap, row, other in differing
+        for row, other in differing
     ]
 
 
