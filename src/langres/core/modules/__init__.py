@@ -11,13 +11,14 @@ those in for a caller who only wants the light module. See
 import importlib
 from typing import TYPE_CHECKING, Any
 
+from langres.core.modules.cascade_judge import CascadeJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
 
 if TYPE_CHECKING:
     from langres.core.modules.cascade import CascadeModule
     from langres.core.modules.llm_judge import LLMJudge, LLMJudgeModule
 
-__all__ = ["RapidfuzzModule", "LLMJudge", "LLMJudgeModule", "CascadeModule"]
+__all__ = ["CascadeJudge", "RapidfuzzModule", "LLMJudge", "LLMJudgeModule", "CascadeModule"]
 
 _LAZY: dict[str, tuple[str, str]] = {
     "LLMJudge": ("langres.core.modules.llm_judge", "pip install 'langres[llm]'"),

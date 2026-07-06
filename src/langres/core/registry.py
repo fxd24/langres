@@ -51,6 +51,7 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # langres[llm]`` / ``langres[semantic]``), so importing them must be deferred
 # to the first actual access, exactly like ``dspy_judge``.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
+    "cascade_judge": "langres.core.modules.cascade_judge",
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.modules.dspy_judge",
