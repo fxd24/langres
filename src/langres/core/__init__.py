@@ -71,6 +71,7 @@ from langres.core.registry import (
     register_schema,
 )
 from langres.core.resolver import Resolver
+from langres.core.review import ReviewItem, ReviewQueue, select_for_review
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
@@ -158,9 +159,12 @@ __all__ = [
     "register",
     "register_schema",
     "Resolver",
+    "ReviewItem",
+    "ReviewQueue",
     "RFJudge",
     "ScoreStats",
     "SchemaNotRegistered",
+    "select_for_review",
     "SelectJudge",
     "SentenceTransformerEmbedder",
     "SerializableState",
