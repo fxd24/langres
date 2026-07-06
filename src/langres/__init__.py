@@ -14,7 +14,15 @@ This package provides:
 """
 
 from langres.clients.openrouter import BudgetExceeded
-from langres.core import CompanySchema, ERCandidate, JudgementLog, PairwiseJudgement, Resolver
+from langres.core import (
+    CompanySchema,
+    ERCandidate,
+    JudgementLog,
+    PairwiseJudgement,
+    Resolver,
+    ReviewQueue,
+    select_for_review,
+)
 from langres.core.presets import NoJudgeAvailableError
 from langres.verbs import LinkVerdict, dedupe, link
 
@@ -27,8 +35,10 @@ __all__ = [
     "NoJudgeAvailableError",
     "PairwiseJudgement",
     "Resolver",
+    "ReviewQueue",
     "dedupe",
     "link",
+    "select_for_review",
 ]
 
 __version__ = "0.1.0"
