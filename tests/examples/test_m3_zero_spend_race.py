@@ -1,6 +1,6 @@
 """End-to-end validation of the full M3 harness with ZERO LLM spend.
 
-Drives the importable core of ``examples/m3_zero_spend_race.py``
+Drives the importable core of ``examples/research/m3_zero_spend_race.py``
 (``run_zero_spend_race``): every zero-spend scorer (rapidfuzz, weighted_average,
 embedding_cosine) raced through ``run_method`` on BOTH ``FodorsZagatBenchmark``
 and ``AmazonGoogleBenchmark`` at seed=0, with real MiniLM embeddings.
@@ -16,7 +16,7 @@ it runs in CI.
 
 import pytest
 
-from examples.m3_zero_spend_race import (
+from examples.research.m3_zero_spend_race import (
     _ag_pair_f1_spread,
     format_detailed_report,
     run_zero_spend_race,

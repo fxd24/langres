@@ -25,10 +25,12 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 from langres.core.adapters.glinker import GLinkerAdapter
+from langres.core.anchor_store import AnchorStore, ClusterDelta
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.blockers.key import KeyBlocker
+from langres.core.canonicalizer import Canonicalizer
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.comparator import Comparator, StringComparator
@@ -42,6 +44,13 @@ from langres.core.debugging import (
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
+from langres.core.harvest import (
+    Correction,
+    CorrectionLog,
+    LabeledPair,
+    derive_threshold_from_pairs,
+    harvest_labeled_pairs,
+)
 from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.fellegi_sunter import FellegiSunterJudge
@@ -96,10 +105,13 @@ if TYPE_CHECKING:
 __all__ = [
     "ARTIFACT_VERSION",
     "AllPairsBlocker",
+    "AnchorStore",
     "ArtifactManifest",
     "benchmark",
     "Blocker",
     "CandidateStats",
+    "Canonicalizer",
+    "ClusterDelta",
     "ClusterStats",
     "Clusterer",
     "CompanySchema",
@@ -108,8 +120,11 @@ __all__ = [
     "ComparisonVector",
     "ComponentSpec",
     "CompositeBlocker",
+    "Correction",
+    "CorrectionLog",
     "CorrelationClusterer",
     "derive_groups_from_pairs",
+    "derive_threshold_from_pairs",
     "EmbeddingProvider",
     "EmbeddingScoreJudge",
     "EntityProtocol",
@@ -128,8 +143,10 @@ __all__ = [
     "get_schema",
     "GLinkerAdapter",
     "GroupwiseModule",
+    "harvest_labeled_pairs",
     "JudgementLog",
     "KeyBlocker",
+    "LabeledPair",
     "LLMJudge",
     "LoggingModule",
     "metrics",

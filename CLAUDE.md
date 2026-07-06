@@ -67,7 +67,7 @@ langres/
 ```
 
 **Not built yet** (roadmap — do not reference as existing): `tasks`/`flows`
-modules, `Canonicalizer`, a general `Optimizer`, a synthetic data generator.
+modules, a general `Optimizer`, a synthetic data generator.
 
 ## Dependencies
 

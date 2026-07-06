@@ -5,8 +5,8 @@ langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything bel
 runs at **$0** with DSPy's `DummyLM` — no API key, no network. See the full
 runnable script:
 
-- **`examples/m4_experiment_loop.py`** — the whole loop end-to-end, zero-spend.
-  Run it: `uv run python examples/m4_experiment_loop.py`.
+- **`examples/research/m4_experiment_loop.py`** — the whole loop end-to-end, zero-spend.
+  Run it: `uv run python examples/research/m4_experiment_loop.py`.
 
 ## Two experiment surfaces — and when to use each
 
@@ -170,7 +170,7 @@ threshold = derive_threshold(scores, labels, method="youden")   # or "percentile
 `derive_threshold` maximizes Youden's J over the ROC curve (needs both classes in
 `labels`) and clamps the result into the observed score range. Derive on a **train**
 band and report on **held-out test** so the threshold isn't tuned on the pairs it's
-measured on — see `examples/m4_calibration.py` for the honest held-out version.
+measured on — see `examples/research/m4_calibration.py` for the honest held-out version.
 
 ## Budget monitoring (`SpendMonitor`, ≤ $5)
 
@@ -187,6 +187,26 @@ print(f"${monitor.spent:.2f} spent, ${monitor.remaining:.2f} left")
 it does not throttle the LM. For a hard pre-flight cap on the run itself, wrap the
 judge in a `BudgetedModuleRunner` and pass it to `evaluate_judge_on_candidates`. On
 the zero-spend `DummyLM` path both report **$0.00**.
+
+## W3 paid smoke — SelectJudge vs pairwise, measured
+
+`examples/research/w3_paid_smoke.py` is the ≤$10, SpendMonitor-capped operator run
+that puts both surfaces above on a real model at once: it grades a **set-wise
+`SelectJudge`** (one LLM call per anchor group) against an ordinary **pairwise
+judge** (one call per pair), same model on both arms, side by side on
+Amazon-Google via `evaluate_judge_on_candidates` / `pair_pr_curve`. Verified at $0
+with `DummyLM` in `tests/examples/test_w3_paid_smoke.py`; the single paid run cost
+**$4.65 total** across two model points.
+
+**The measured finding is honest and nuanced — set-wise is *not* a clean win.** It
+edges *ahead* of pairwise on the frontier model (gpt-4o, +0.049 F1) but falls
+*behind* on the mid-tier model (gpt-4o-mini, −0.068 F1): the one-call-per-group
+task is harder multi-candidate reasoning, and a weaker judge handles it less well.
+Set-wise consistently trades precision for recall, makes **3–5× fewer LLM calls**
+but costs **more dollars** (token-heavy group prompts), and ComEM's published +16
+F1 does **not** replicate at that magnitude here. Full two-point table, P/R split,
+and reproduction commands:
+[`docs/research/20260703_w3_paid_smoke_results.md`](research/20260703_w3_paid_smoke_results.md).
 
 ## Signal log — the flywheel inlet (`JudgementLog`)
 
@@ -219,15 +239,57 @@ judgement stream. It is intentionally excluded from `Resolver` artifacts —
 `link()`/`dedupe()` never persist their internal resolver, so this isn't a
 durability gap in practice.
 
-This is the flywheel's inlet: a future milestone (W2.4) harvests these logs
-(plus a `corrections.jsonl` contract) into labeled pairs feeding
-`derive_threshold` and `fit()` — see `examples/judgement_log_demo.py` for the
-runnable write-then-read walkthrough.
+This is the flywheel's inlet; the harvest half is below.
+
+## Flywheel harvest — verdicts + corrections → a better threshold (`langres.core.harvest`)
+
+The outlet of the flywheel (W2.4): turn a `judgements.jsonl` log plus a
+`corrections.jsonl` review-queue export into **labeled pairs**, and feed them to
+`derive_threshold` — its first production caller. langres owns the contract and
+the harvest; the human-review UX (the queue a reviewer clicks) stays downstream.
+
+```python
+from langres import JudgementLog
+from langres.core.harvest import (
+    CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs,
+)
+
+rows = JudgementLog("runs/judgements.jsonl").read()      # the inlet's output
+corrections = CorrectionLog("runs/corrections.jsonl").read()
+
+pairs = harvest_labeled_pairs(rows, corrections)  # verdicts as weak labels,
+                                                  # corrections overriding them
+threshold = derive_threshold_from_pairs(pairs)    # data-driven, not hand-set
+```
+
+`harvest_labeled_pairs` emits one `LabeledPair` per judgement row; its label is
+the logged `verdict` (a weak label) unless a `Correction` covers the same pair
+(matched order-independently by id set), in which case the human label wins and
+`source="correction"` records the override. Deriving from verdicts **alone** just
+recovers the judge's own cut — self-training on your own labels teaches nothing;
+the human corrections are what carry new signal.
+
+**The two flywheel JSONL schemas:**
+
+- `judgements.jsonl` (written by `JudgementLog`) — `{"v":1, "left_id", "right_id",
+  "score", "verdict", "model", "cost_usd", "decision_step", "timestamp"}`.
+- `corrections.jsonl` (the `Correction` contract, written by a review tool) —
+  `{"v":1, "left_id", "right_id", "label"}` required, plus optional audit fields
+  `original_score` / `original_verdict` / `reviewer` / `timestamp`.
+
+Runnable demo: `examples/flywheel_threshold_harvest.py` reads committed
+Fodors-Zagat fixtures, derives the threshold before vs. after corrections, and
+scores both on a **held-out gold** split (never used to derive the threshold). 40
+simulated corrections move held-out pair-F1 from ~0.56 to ~0.71 — a real gain in
+the correct direction, not circular self-training. Regenerate the fixtures at $0
+with `examples/data/flywheel/generate_fixtures.py`.
 
 ## See also
 
-- `examples/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
-- `examples/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
-- `examples/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
+- `examples/research/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
+- `examples/research/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
+- `examples/research/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
 - `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
-- `examples/m3_race.py` / `examples/m3_zero_spend_race.py` — multi-method races.
+- `examples/flywheel_threshold_harvest.py` — harvest verdicts + corrections → a
+  re-derived threshold, with before/after held-out gold F1.
+- `examples/research/m3_race.py` / `examples/research/m3_zero_spend_race.py` — multi-method races.

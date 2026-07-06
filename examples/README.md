@@ -1,95 +1,118 @@
 # langres Examples
 
-This directory contains example scripts demonstrating how to use the langres library.
+Example scripts demonstrating how to use the langres library, split into two
+tiers:
 
-## Available Examples
-
-### Getting Started
-
-- **verify_settings_and_clients.py** - Verify your environment configuration
-  - Tests that Settings loads from .env correctly
-  - Demonstrates LLM client creation (with/without Langfuse)
-  - Tests wandb tracker initialization
-  - Shows error handling for missing credentials
-  - **Run this first to verify your setup!**
-
-### Core API Examples
-
-- **basic_usage.py** - Simple deduplication workflow using RapidfuzzModule
-- **deduplication_with_blocker_optimization.py** - Complete optimization example
-  - VectorBlocker for candidate generation
-  - LLMJudgeModule with Azure OpenAI
-  - BlockerOptimizer with Optuna + wandb
-  - Demonstrates hyperparameter tuning
-  - Requires: AZURE_API_*, WANDB_API_KEY, LANGFUSE_* env vars
-
-### POC Evaluation Scripts
-
-- **phase2_full_pipeline.py** - Phase 2 POC evaluation: Full pipeline assessment
-  - Complete pipeline: VectorBlocker → LLMJudge → Clusterer
-  - Evaluates POC success criteria (BCubed F1 ≥ 0.85, Blocker Recall ≥ 0.95, Separation ≥ 0.2)
-  - Tests multiple clustering thresholds [0.5, 0.6, 0.7, 0.8, 0.9]
-  - Generates comprehensive diagnostics with cost analysis
-  - Uses disk-cached embeddings to avoid recomputation
-  - Caches LLM judgments for fast reruns
-  - Requires: AZURE_API_* env vars (LANGFUSE_* optional)
+- **Start here** — a clean progression for newcomers, top-level in `examples/`.
+- **Research & benchmark reproductions** (`examples/research/`) — the
+  milestone/benchmark/internal scripts used to validate the POC and later
+  milestones. Not part of the newcomer path; kept for reproducibility.
 
 ## Setup
 
-### 1. Configure Environment Variables
-
 ```bash
-# Copy the example file
+# Copy the example file and add any API keys you plan to use
 cp .env.example .env
-
-# Edit .env and add your API keys
 ```
 
-Required environment variables (only when using the respective services):
-- `AZURE_API_ENDPOINT` - Azure OpenAI endpoint (for LLM calls)
-- `AZURE_API_KEY` - Azure OpenAI API key (for LLM calls)
-- `WANDB_API_KEY` - Weights & Biases key (for experiment tracking)
-- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (for LLM tracing)
-- `LANGFUSE_SECRET_KEY` - Langfuse secret key (for LLM tracing)
+All environment variables are optional — most examples below run at **$0**
+with no key required. Scripts that spend money say so explicitly in their
+docstring and are gated behind an explicit flag or a hard budget cap.
 
-**Note:** All environment variables are optional. Services only validate credentials when actually used.
+## Start here
 
-### 2. Verify Setup
+Run in this order for the intended newcomer progression — verbs quickstart →
+dedupe → resolver → incremental assign → golden record → signal log →
+flywheel → person:
 
-```bash
-# Run the verification script to check your configuration
-uv run python examples/verify_settings_and_clients.py
-```
-
-This will show which services are configured and test that everything works.
-
-## Running Examples
-
-```bash
-# Verify setup first
-uv run python examples/verify_settings_and_clients.py
-
-# Run simple example (no API keys needed)
-uv run python examples/basic_usage.py
-
-# Run optimization example (requires API keys)
-uv run python examples/deduplication_with_blocker_optimization.py
-```
+- **`quickstart_verbs.py`** — dedupe records with zero labels in a handful of
+  lines, offline and $0 by default (`langres.dedupe`'s zero-spend string judge).
+- **`basic_usage.py`** — the foundational data contracts (`CompanySchema`,
+  `ERCandidate`, `PairwiseJudgement`).
+- **`deduplication_example.py`** — end-to-end entity resolution on a
+  real-world dataset of Swiss funder organization names.
+- **`resolver_company_dedup.py`** — the `Resolver` north-star: company
+  deduplication with `save`/`load`.
+- **`incremental_assign.py`** — `AnchorStore` for incremental single-record
+  assignment: "does this new record belong to an existing entity, or is it new?"
+- **`canonicalizer_enrichment.py`** — the enrichment loop: a sparse mention
+  links to an entity and enriches its golden record ($0, deterministic).
+- **`judgement_log_demo.py`** — the flywheel inlet: log every judge call
+  (`log=` on `dedupe()`/`link()`), then read the log back.
+- **`flywheel_threshold_harvest.py`** — the flywheel outlet: logged verdicts +
+  human corrections feed `derive_threshold` to re-calibrate a decision threshold.
+- **`person_resolution.py`** — the embeddings + LLM "strong path" on a second
+  entity type: semantic blocking (MiniLM + FAISS) feeding an LLM judge.
 
 ## Example Data
 
-The `data/` directory contains sample datasets:
-- `companies.json` - 100 company records with realistic duplicates
-- `companies_labels.json` - Ground truth labels for evaluation
+The `data/` directory contains sample datasets used by the examples above and
+by several research scripts:
+- `companies.json` / `companies_labels.json` — funder organization names + ground truth
+- `funder_names_with_ids.json` / `funder_name_deduplicated_groups.json` — labeled funder dedup data
+- `flywheel/` — fixtures for the judgement-log harvest demo
+
+## Research & benchmark reproductions (`examples/research/`)
+
+Milestone exit-criteria runs, benchmark harnesses, and exploratory demos.
+Several spend real money (OpenRouter) under an explicit hard budget cap — read
+each script's docstring before running it. Companion `*_results*.json` /
+`*_output.md` files are committed snapshots of past runs.
+
+- **`m1_bootstrap_fodors_zagat.py`** — M1 cold-start bootstrapping end-to-end
+  on Fodors-Zagat, deterministic and free.
+- **`run_m1_gold_set.py`** — M1's paid EXIT run: labels the Fodors-Zagat
+  cross-source band with a real budget-capped GLM teacher.
+- **`m2_walking_skeleton_fodors_zagat.py`** — M2's held-out BCubed baseline on
+  Fodors-Zagat, zero spend.
+- **`m3_race.py`** — M3's paid, resumable multi-method benchmark race (the EXIT run).
+- **`m3_zero_spend_race.py`** — the full M3 benchmark harness end-to-end with
+  NO LLM spend (the pre-flight gate before `m3_race.py`).
+- **`m3_regrade_subsample.py`** — re-grades committed AG subsample cells
+  against in-scope gold with no new LLM calls.
+- **`m3_report.py`** — renders the M3 race comparison table from committed
+  per-cell JSON results.
+- **`m4_dspy_judge.py`** — M4 `DSPyJudge` smoke: Signature → ChainOfThought →
+  compile → forward → eval → save/load, at $0 with `DummyLM`.
+- **`m4_calibration.py`** — a data-driven threshold beats a hand-set one on AG, at $0.
+- **`m4_experiment_loop.py`** — the DSPy-judge experimentation DX loop, end-to-end at $0.
+- **`m4_race.py`** — M4's paid, resumable DSPy-scorer benchmark on Amazon-Google.
+- **`w1_blocking_algebra.py`** — W1.3 blocking-algebra + clusterer benchmark
+  (Fodors-Zagat + Amazon-Google), $0.
+- **`w1_select_judge_benchmark.py`** — W1.1 `SelectJudge` call-count + honest-cost
+  reduction benchmark on Amazon-Google.
+- **`w1_trained_family_race.py`** — W1.2 trained-family replication
+  (`FellegiSunterJudge` + `RFJudge`), $0.
+- **`w2_person_benchmark.py`** — M5 W2.1: a second entity type (person)
+  resolved config-only, at $0.
+- **`phase1_blocker_optimization.py`** — POC Phase 1: blocker optimization evaluation.
+- **`phase2_full_pipeline.py`** — POC Phase 2: full pipeline evaluation
+  (VectorBlocker → LLMJudge → Clusterer) against the POC success criteria.
+- **`deduplication_with_blocker_optimization.py`** — `BlockerOptimizer` +
+  Optuna + wandb hyperparameter tuning example (requires Azure/wandb/Langfuse env vars).
+- **`deduplication_cached_faiss_simple.py`** — `DiskCachedEmbedder` speedup
+  demo with FAISS.
+- **`cached_embedder_demo.py`** — `DiskCachedEmbedder` persistent embedding-cache demo.
+- **`compare_embedders_for_funders.py`** — compares sentence-transformer
+  embedding models for funder-name deduplication.
+- **`instruction_embeddings_demo.py`** — instruction-prefixed query embeddings with FAISS search.
+- **`blocker_evaluation_demo.py`** — the blocker evaluation architecture, introductory demo.
+- **`blocker_evaluation_comprehensive.py`** — comprehensive blocker evaluation
+  across configurations.
+- **`blocking_evaluation_faiss_vs_qdrant.py`** — FAISS (dense-only) vs Qdrant
+  (dense + sparse hybrid) candidate generation comparison.
+- **`blocking_evaluation_with_reranking.py`** — FAISS vs Qdrant-hybrid vs
+  Qdrant-reranking candidate generation comparison.
+- **`blocking_evaluation_with_instructions.py`** — FAISS vs Qdrant-hybrid vs
+  CrossEncoder candidate generation, with caching + instruction prefixes.
+- **`blocking_evaluation_comprehensive_comparison.py`** — 5-way blocking
+  approach, model, and architecture comparison.
+- **`debug_pipeline.py`** — debugging an entity resolution pipeline with `PipelineDebugger`.
 
 ## Troubleshooting
 
 If you see errors like "environment variable is required":
-1. Make sure you've created a `.env` file (copy from `.env.example`)
-2. Add the required API keys for the services you're using
-3. Run `verify_settings_and_clients.py` to test your configuration
-
-For Azure OpenAI errors:
-- Verify `AZURE_API_BASE` is correctly formatted
-- Check that `AZURE_API_KEY` is valid
-- Ensure the deployment name (e.g., "gpt-5-mini") exists in your Azure resource
+1. Make sure you've created a `.env` file (copy from `.env.example`).
+2. Add the required API keys for the services you're using (Azure/OpenRouter/wandb/Langfuse).
+3. Most examples in **Start here** need no keys at all — if one fails on a
+   missing key, you likely picked a script from `examples/research/` that needs one.

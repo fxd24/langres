@@ -4,8 +4,8 @@
 **Branch:** `feat/w1-trained-family`
 **Cost:** $0 (CPU-only: MiniLM blocking + classical EM + sklearn RandomForest,
 no LLM calls)
-**Script:** `examples/w1_trained_family_race.py` (`uv run python
-examples/w1_trained_family_race.py`)
+**Script:** `examples/research/w1_trained_family_race.py` (`uv run python
+examples/research/w1_trained_family_race.py`)
 
 ## What this measures
 
@@ -141,7 +141,7 @@ change.
 ## Reproduce
 
 ```bash
-OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/w1_trained_family_race.py
+OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python examples/research/w1_trained_family_race.py
 ```
 
 No network calls, no API key, ~2 minutes on CPU (three MiniLM embedding passes

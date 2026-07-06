@@ -325,32 +325,56 @@ compiled_flow = optimizer.compile(trained_flow, gold_data)
 # compiled_flow now contains the trained model AND the best HPs
 ```
 
-### core.Canonicalizer (Base Class)
+### core.Canonicalizer (`langres.core.canonicalizer`, M5/W2.3) — ✅ ships today
 
-**Definition:** The "last mile" module for Master Data Creation (Use Case 4). It turns a list of cluster IDs into a single, merged, "golden" master dataset.
+**Definition:** The "last mile" of Master Data Creation (Use Case 4): merge one
+entity's records into a single **golden record** via field-by-field
+*survivorship* rules. Dict-in / dict-out — it consumes the same raw record dicts
+`resolve`/`assign`/`AnchorStore` pass around and emits one golden dict of the
+same schema shape. It owns only the survivorship policy and knows nothing about
+how the group was formed, so it composes with any grouping.
 
-**Key Methods:**
+**Key methods:**
 
-- `canonicalize(self, clusters: List[Set[str]], all_data: Dict[str, Any]) -> List[PydanticBaseModel]`
+- `canonicalize(records: list[dict], *, entity_id: str | None = None) -> dict` —
+  merge a whole group. Each attribute field is resolved by its configured
+  strategy over the group; a field only *some* records carry is still filled
+  (the rest count as missing for it). The golden record's `id` is `entity_id`
+  when given, else the first record's id. A single-record group returns a copy of
+  that record.
+- `enrich(golden: dict, mention: dict, *, entity_id: str | None = None) -> dict`
+  — the **enrichment loop**: fold a newly-linked mention into an existing golden
+  record. It is exactly `canonicalize([golden, mention])` with `golden`'s id
+  preserved — the *same* survivorship path, not a parallel one — so a sparse
+  mention from `Resolver.assign` fills fields the golden record lacked.
+- `save(path)` / `load(path)` — round-trip the policy through a pickle-free
+  `canonicalizer.json` (config-registry seam; `type_name = "canonicalizer"`).
 
-**Features:** You configure it with a list of "survivorship rules" per field.
+**Survivorship strategies** (named, per-field overridable; default `most_complete`):
+
+| Name | Winner |
+|------|--------|
+| `most_complete` (default) | Value from the record with the most non-missing fields overall (trust the richest source); present beats absent. |
+| `longest` | The longest non-missing string value. |
+| `most_frequent` | The most common non-missing value (mode). |
+| `most_recent` | Value from the record with the greatest `timestamp_field` (must be configured). |
+| `first` / `source_priority` | First non-missing value in group order. |
+
+All ties break deterministically to the **first-seen** value; `None` / empty
+strings are "missing" while `0` / `False` are present values. `id` is stamped as
+the master id, never survivorship'd.
 
 **Example:**
 
 ```python
 from langres.core import Canonicalizer
 
-# Define survivorship logic
-rules = {
-    "name": "most_frequent",
-    "address": "most_recent", # Assumes 'all_data' has timestamps
-    "phone_numbers": "merge_unique"
-}
-
-canonicalizer = Canonicalizer(rules=rules, output_schema=Company)
-
-# 'all_data' is a simple dict lookup: {id -> raw_record}
-master_dataset = canonicalizer.canonicalize(clusters, all_data)
+canon = Canonicalizer(
+    default_strategy="most_complete",
+    field_strategies={"name": "longest", "phone": "most_frequent"},
+)
+golden = canon.canonicalize(entity_records)      # merge a whole cluster/entity
+golden = canon.enrich(golden, new_mention)       # fold in a linked sparse mention
 ```
 
 ## 6. Core API: langres.data
@@ -437,6 +461,17 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
+
+### ClusterDelta (`langres.core`, M5/W2.2)
+
+The result of one incremental `Resolver.assign(record)` / `AnchorStore.assign(record)` — the outcome of assigning a single new record against a prior batch's anchor set.
+
+- `type: Literal["new", "link", "merge", "split", "reject"]`: `new` (a fresh entity was minted) or `link` (attached to an existing entity). `merge`/`split`/`reject` are **reserved** for the wider entity-maintenance surface (W2.4/M6) so the contract stays stable; W2.2 only ever emits `new`/`link`.
+- `record_id: str`: The assigned record's id.
+- `entity_id: str`: The **stable** entity id the record now belongs to (freshly minted for `new`, existing for `link`). Never changes on later assigns (append-only allocator).
+- `matched_anchor_ids: list[str]`: Anchor record ids that cleared the threshold (evidence for a `link`; empty for `new` and for the idempotent already-assigned-id `link`).
+- `score: Optional[float]`: Best matching score across judged candidates (observability); `None` when there were no candidates or on the idempotent path.
+- `reasoning: Optional[str]`: Human-readable note about the decision.
 
 ## 8. Group + Fit Contracts (W1.0) + SelectJudge (W1.1)
 
@@ -644,7 +679,7 @@ round-trip — persist such a pipeline via the `Resolver` artifact instead).
 
 Measured on Fodors-Zagat + Amazon-Google (Pair-Completeness / Reduction-Ratio,
 composite vs. each dataset's pinned `VectorBlocker` alone):
-`examples/w1_blocking_algebra_output.md`.
+`examples/research/w1_blocking_algebra_output.md`.
 
 ### CorrelationClusterer (`langres.core.clusterers.correlation`, "C6")
 
@@ -666,7 +701,7 @@ directly compared and matched) still merges fully under both.
 Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
 clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
 on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
-see `examples/w1_blocking_algebra_output.md` for the full tables and the
+see `examples/research/w1_blocking_algebra_output.md` for the full tables and the
 default-flip decision (kept opt-in; recommended for harder/messier
 entity-resolution problems, not flipped globally on a single hard-dataset
 win).

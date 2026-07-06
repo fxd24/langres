@@ -132,7 +132,7 @@ Runnable end-to-end: [`examples/resolver_company_dedup.py`](../examples/resolver
 
 ## Consuming a saved artifact (M2 — this is all brainsquad writes)
 
-The M2 walking skeleton (`examples/m2_walking_skeleton_fodors_zagat.py`) builds,
+The M2 walking skeleton (`examples/research/m2_walking_skeleton_fodors_zagat.py`) builds,
 tunes, and **saves** a Resolver artifact. The integrator who *consumes* that
 artifact writes none of the build code — only load + resolve:
 

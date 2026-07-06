@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
     # core-only `import langres` never pulls faiss/torch in for a Resolver
     # that never uses judge="embedding".
+    from langres.core.anchor_store import AnchorStore, ClusterDelta
     from langres.core.blockers.vector import VectorBlocker
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,9 @@ class Resolver:
         self.comparator = comparator
         self.module = module
         self.clusterer = clusterer
+        # Set by build_anchor_store(); the incremental-assign state assign() uses.
+        # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
+        self._anchor_store: "AnchorStore | None" = None
 
     # ------------------------------------------------------------------
     # Construction convenience
@@ -565,6 +569,55 @@ class Resolver:
         raise NotImplementedError(
             "Resolver.stream_against (incremental resolution) lands in M5."
         )  # pragma: no cover
+
+    def build_anchor_store(self, records: list[Any], *, entity_prefix: str = "e") -> "AnchorStore":
+        """Anchor this resolver on a batch so :meth:`assign` can run (M5, S6).
+
+        A dedicated build pass over ``records`` that mints a **stable** entity id
+        for every record — including the singletons ``resolve()`` drops — and
+        leaves the store on ``self`` for subsequent :meth:`assign` calls. Returns
+        the store, which is independently serializable
+        (:meth:`AnchorStore.save`).
+
+        Args:
+            records: The batch of raw record dicts to anchor on, same shape as
+                ``resolve()`` accepts.
+            entity_prefix: Prefix for minted entity ids (default ``"e"``).
+
+        Returns:
+            The built :class:`~langres.core.anchor_store.AnchorStore`.
+        """
+        from langres.core.anchor_store import AnchorStore
+
+        self._anchor_store = AnchorStore.build(self, records, entity_prefix=entity_prefix)
+        return self._anchor_store
+
+    def assign(self, record: Any) -> "ClusterDelta":
+        """Assign one new record to an existing entity, or mint a new one (M5, S6).
+
+        Incremental single-record resolution against the anchor set built by
+        :meth:`build_anchor_store`: returns a
+        :class:`~langres.core.anchor_store.ClusterDelta` that either ``link``\\ s
+        the record to an existing entity (with a stable id) or marks it ``new``.
+        Distinct from the reserved cross-source :meth:`link` /
+        :meth:`stream_against` stubs — ``assign`` is single-record incremental
+        linking.
+
+        Args:
+            record: A raw record dict, same shape as ``resolve()`` accepts.
+
+        Returns:
+            A :class:`~langres.core.anchor_store.ClusterDelta`.
+
+        Raises:
+            RuntimeError: If :meth:`build_anchor_store` was not called first.
+        """
+        if self._anchor_store is None:
+            raise RuntimeError(
+                "call build_anchor_store(records) before assign(record): assign "
+                "resolves a new record against a prior batch's anchor set."
+            )
+        return self._anchor_store.assign(record)
 
     # ------------------------------------------------------------------
     # Persistence
