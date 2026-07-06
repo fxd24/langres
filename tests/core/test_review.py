@@ -75,6 +75,19 @@ def test_unknown_strategy_raises() -> None:
         select_for_review([_row("a", "b", 0.5, True)], strategy=cast(Any, "certainty"))
 
 
+@pytest.mark.parametrize("bad", [1.5, -0.1, 10.0])
+def test_audit_fraction_out_of_range_raises(bad: float) -> None:
+    """audit_fraction outside [0, 1] is rejected -- a value > 1 would otherwise let
+    the audit slice exceed limit; a negative one would trip rng.sample."""
+    with pytest.raises(ValueError, match="audit_fraction must be in"):
+        select_for_review(
+            [_row("a", "b", 0.5, True)],
+            strategy="uncertainty",
+            threshold=0.5,
+            audit_fraction=bad,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Uncertainty strategy                                                        #
 # --------------------------------------------------------------------------- #

@@ -267,6 +267,12 @@ def select_for_review(
         raise ValueError(
             f"Unknown strategy {strategy!r}: expected 'uncertainty', 'disagreement' or 'audit'."
         )
+    if not 0.0 <= audit_fraction <= 1.0:
+        raise ValueError(
+            f"audit_fraction must be in [0.0, 1.0], got {audit_fraction!r}. It is the "
+            "share of the batch spent on random audit items (0.0 = no audit slice); "
+            "a value > 1 would let the audit slice exceed limit."
+        )
 
     rows = _clean_rows(judgement_rows, source="judgement_rows")
     corrected = {_pair_key(c.left_id, c.right_id) for c in corrections}

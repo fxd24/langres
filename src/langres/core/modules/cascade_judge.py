@@ -81,6 +81,14 @@ class CascadeJudge(Module[SchemaT]):
     judgement with a non-probability ``score_type`` triggers a one-time
     ``UserWarning`` per CascadeJudge instance.
 
+    Spend caps belong on the OUTSIDE of a cascade, not on a tier. ``forward``
+    runs the escalation judge once per band pair, so a per-call spend cap
+    wrapping the *escalation child* would reset its budget every pair and only
+    ever bound a single pair's cost -- never the tier's cumulative spend. The
+    verbs (``link`` / ``dedupe``) already apply their ``budget_usd`` cap around
+    the whole resolved judge, which correctly sees the escalated cost via
+    ``provenance["cost_usd"]``; keep it there. Pass bare judges as the tiers.
+
     Serialization mirrors :class:`~langres.core.blockers.composite.CompositeBlocker`:
     children serialize as ``{"type_name", "config"}`` registry specs, and
     out-of-band child state (e.g. a fitted
