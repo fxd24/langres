@@ -214,7 +214,7 @@ def test_derive_threshold_from_pairs_percentile_passthrough() -> None:
     """method/percentile kwargs pass through to derive_threshold."""
     pairs = [
         LabeledPair(left_id="a", right_id="b", score=0.0, label=False, source="verdict"),
-        LabeledPair(left_id="c", right_id="d", score=1.0, label=True, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=1.0, label=True, source="correction"),
     ]
     assert derive_threshold_from_pairs(
         pairs, method="percentile", percentile=50.0
@@ -225,7 +225,49 @@ def test_derive_threshold_from_pairs_propagates_single_class_error() -> None:
     """Youden on a single-class label set raises (propagated from derive_threshold)."""
     pairs = [
         LabeledPair(left_id="a", right_id="b", score=0.1, label=True, source="verdict"),
-        LabeledPair(left_id="c", right_id="d", score=0.9, label=True, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.9, label=True, source="correction"),
     ]
     with pytest.raises(ValueError, match="both classes"):
         derive_threshold_from_pairs(pairs)
+
+
+# --------------------------------------------------------------------------- #
+# derive_threshold_from_pairs silver-only guardrail                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_derive_threshold_from_pairs_warns_on_silver_only_input() -> None:
+    """All-silver input (every source=='verdict') fires the circularity warning."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.1, label=False, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.2, label=False, source="verdict"),
+        LabeledPair(left_id="e", right_id="f", score=0.8, label=True, source="verdict"),
+        LabeledPair(left_id="g", right_id="h", score=0.9, label=True, source="verdict"),
+    ]
+    with pytest.warns(UserWarning, match="silver-only calibration is circular"):
+        threshold = derive_threshold_from_pairs(pairs)
+    assert threshold == pytest.approx(0.8)  # the warning does not change the result
+
+
+def test_derive_threshold_from_pairs_no_warning_when_correction_present(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    """One human-corrected pair in the mix means gold is present: no warning."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.1, label=False, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=0.2, label=False, source="verdict"),
+        LabeledPair(left_id="e", right_id="f", score=0.8, label=True, source="verdict"),
+        LabeledPair(left_id="g", right_id="h", score=0.9, label=True, source="correction"),
+    ]
+    threshold = derive_threshold_from_pairs(pairs)
+    assert threshold == pytest.approx(0.8)
+    assert len(recwarn) == 0
+
+
+def test_derive_threshold_from_pairs_empty_input_raises_without_warning(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    """Empty input still hits the existing ValueError -- the guard must not warn first."""
+    with pytest.raises(ValueError, match="non-empty"):
+        derive_threshold_from_pairs([])
+    assert len(recwarn) == 0

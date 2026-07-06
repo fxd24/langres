@@ -7,10 +7,11 @@ plus a review tool's human corrections, into **labeled pairs** that feed
 :func:`langres.core.calibration.derive_threshold` (its first production caller)
 and, where applicable, a judge's ``fit()``.
 
-The division of labor is deliberate: langres owns the **contract** and the
-**harvest**; the human-review UX (the queue a reviewer clicks through) stays in
-the downstream application (e.g. brainsquad). :class:`Correction` is the stable
-line schema that review tool writes to ``corrections.jsonl``; :class:`CorrectionLog`
+The division of labor is deliberate: langres owns the **contract**, the
+**harvest**, and the headless + terminal review surfaces (the ``langres review``
+CLI and its CSV round-trip); anything with a rendering loop (a web review UI)
+stays in the downstream application (e.g. brainsquad). :class:`Correction` is the
+stable line schema a review tool writes to ``corrections.jsonl``; :class:`CorrectionLog`
 is the reference reader/writer for that file (mirroring ``JudgementLog`` so the
 two flywheel files are handled the same way); :func:`harvest_labeled_pairs` is
 the merge -- verdicts as weak labels, corrections overriding them where a human
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -242,6 +244,13 @@ def derive_threshold_from_pairs(
     off :func:`harvest_labeled_pairs`' output and returns a data-driven cut,
     replacing a hand-set constant.
 
+    Calibrating on silver labels alone is circular: the judge's own verdicts
+    were produced *by* a cut, so they are the only signal a threshold search
+    can recover. A :class:`UserWarning` flags that case -- overlay human
+    corrections (``source="correction"``) before calibrating. (Training a
+    *different* model on silver labels is legitimate, which is why
+    :func:`harvest_labeled_pairs` itself stays warning-free.)
+
     Args:
         pairs: Harvested labeled pairs (from :func:`harvest_labeled_pairs`).
         method: Passed through to
@@ -255,7 +264,23 @@ def derive_threshold_from_pairs(
         ValueError: Propagated from
             :func:`~langres.core.calibration.derive_threshold` (empty input,
             single-class labels under ``"youden"``, bad ``percentile``, ...).
+
+    Warns:
+        UserWarning: If ``pairs`` is non-empty and every label is silver
+            (``source == "verdict"``) -- silver-only calibration is circular
+            (see above). Suppress deliberately via :mod:`warnings` filters.
     """
+    if pairs and all(pair.source == "verdict" for pair in pairs):
+        warnings.warn(
+            "silver-only calibration is circular -- deriving a threshold from "
+            "a judge's own verdicts can only recover the cut that produced "
+            "them; overlay human corrections (source='correction') before "
+            "calibrating. (Training a DIFFERENT model on silver labels is "
+            "fine.)",
+            UserWarning,
+            stacklevel=2,
+        )
+
     from langres.core.calibration import derive_threshold
 
     return derive_threshold(
