@@ -1,7 +1,9 @@
 """Presets: resolve ``judge="auto"`` and assemble a spend-capped Resolver.
 
 This is the machinery behind the two-verb DX layer (:mod:`langres.verbs`):
-picking a judge from available API keys, building its scorer Module, wiring a
+picking a judge from available API keys (failing fast with
+:class:`NoJudgeAvailableError` when ``judge="auto"`` finds none -- never a
+silent fallback to fuzzy matching), building its scorer Module, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import
 back from here -- see ``Resolver.from_schema``'s own, deliberately duplicated,
@@ -110,8 +112,9 @@ _OPENROUTER_MODEL = DEFAULT_OPENROUTER_MODEL
 _OPENAI_MODEL = "openai/gpt-5-mini"
 
 #: Static ``PairwiseJudgement.score_type`` each judge kind emits -- used as a
-#: fallback label when no judgement was actually produced (e.g. an empty or
-#: single-record ``dedupe()`` call short-circuits before scoring).
+#: fallback label when no judgement was actually produced (e.g. a blocker
+#: that yields no candidate pairs; empty/single-record ``dedupe()`` calls
+#: short-circuit before judge resolution and never get here).
 _SCORE_TYPE_BY_JUDGE: dict[str, str] = {
     "string": "heuristic",
     "embedding": "sim_cos",
@@ -129,7 +132,7 @@ def _notice(message: str) -> None:
     """Emit a user-visible notice via ``warnings.warn`` (D2).
 
     ``logger.info`` is invisible under default logging config, so both the
-    auto-judge fallback notice and the pre-scoring cost line go through this
+    auto-judge selection notice and the pre-scoring cost line go through this
     one channel instead -- tests assert on it with ``pytest.warns``.
     """
     warnings.warn(message, stacklevel=3)
@@ -140,52 +143,85 @@ def _effective_budget(budget_usd: float | None) -> float:
     return DEFAULT_BUDGET_USD if budget_usd is None else budget_usd
 
 
-def choose_auto_judge(settings: Settings) -> tuple[JudgeName, str | None, str | None]:
-    """Resolve ``judge="auto"`` from available API keys.
+class NoJudgeAvailableError(RuntimeError):
+    """``judge="auto"`` refused to pick a judge it cannot run safely.
 
-    ``OPENROUTER_API_KEY`` set -> the OpenRouter gpt-4o-mini route;
-    else ``OPENAI_API_KEY`` set -> the direct-OpenAI gpt-5-mini route;
-    else -> the zero-spend ``"string"`` judge, with one notice (E1: a
-    candidate paid judge whose price is unpinned -- $0, unmetered -- is also
-    refused down to ``"string"``, since a blind cap is no cap at all).
+    Raised (never a silent fallback) when no LLM API key is set, or when the
+    selected model's price is unpinned so the spend cap would be blind. The
+    message carries the exact fixes; the offline escape hatch is an explicit
+    ``judge="string"``. Root-exported as ``langres.NoJudgeAvailableError``.
+    """
+
+
+#: Install line for the ``[llm]`` extra, shared by every error message that
+#: funnels a user onto the LLM-judge path (the keyed path dead-ends without it:
+#: ``dspy`` is imported at dspy_judge.py module level but ships in the extra).
+_INSTALL_LLM_EXTRA = "`uv sync --extra llm` or `pip install 'langres[llm]'`"
+_GETTING_STARTED_URL = "https://github.com/raisesquad/langres/blob/main/docs/GETTING_STARTED.md"
+
+
+def choose_auto_judge(
+    settings: Settings, *, model: str | None = None, budget_usd: float | None = None
+) -> tuple[JudgeName, str]:
+    """Resolve ``judge="auto"`` from available API keys -- or refuse, loudly.
+
+    ``OPENROUTER_API_KEY`` set -> the OpenRouter gpt-4o-mini route; else
+    ``OPENAI_API_KEY`` set -> the direct-OpenAI gpt-5-mini route; else ->
+    :class:`NoJudgeAvailableError`. There is deliberately no silent fallback
+    to ``"string"``: unsupervised fuzzy matching over-merges on unlabeled
+    data, so the offline judge is an explicit opt-in, never a default. A
+    caller-supplied ``model=`` overrides the key-derived pick (and runs the
+    same pinned-price check); a model whose price is unpinned -- $0-metered,
+    so the spend cap would be blind -- is refused too (E1; explicit
+    ``judge="zero_shot_llm"`` remains the blind-cap escape hatch).
+
+    The happy path emits one selection notice via :func:`_notice` -- which
+    model was picked, that paid API calls follow, and the cap -- BEFORE any
+    paid call is made.
 
     Args:
         settings: Loaded :class:`~langres.clients.settings.Settings` (reads
             ``openrouter_api_key`` / ``openai_api_key``).
+        model: Caller's model-id override (honored instead of the
+            key-derived default).
+        budget_usd: Spend cap named in the selection notice; ``None``
+            resolves to :data:`DEFAULT_BUDGET_USD`.
 
     Returns:
-        ``(resolved_judge, model, fallback_reason)`` -- ``model`` is the
-        model id to use when ``resolved_judge == "zero_shot_llm"`` (``None``
-        otherwise); ``fallback_reason`` is set (and a notice already emitted)
-        only when resolution fell back to ``"string"``.
+        ``("zero_shot_llm", model)`` -- the resolved judge and model id.
+
+    Raises:
+        NoJudgeAvailableError: No API key is set, or the selected model has
+            no pinned price in ``PRICES_PER_1M``.
     """
-    model: str | None
-    if settings.openrouter_api_key:
-        model = _OPENROUTER_MODEL
-    elif settings.openai_api_key:
-        model = _OPENAI_MODEL
-    else:
-        model = None
-
-    if model is not None and dspy_price_per_1k(model) > 0.0:
-        return "zero_shot_llm", model, None
-
-    if model is None:
-        reason = (
-            'judge="auto": no OPENROUTER_API_KEY or OPENAI_API_KEY is set, so '
-            "falling back to the zero-spend 'string' judge. Set one of those "
-            "env vars to use an LLM judge, and calibrate its threshold with "
-            "langres.core.calibration.derive_threshold once you have labels."
+    if not settings.openrouter_api_key and not settings.openai_api_key:
+        raise NoJudgeAvailableError(
+            'judge="auto" found no API key (OPENROUTER_API_KEY / OPENAI_API_KEY are unset).\n'
+            "langres refuses to fall back silently: unsupervised fuzzy string matching "
+            "over-merges on unlabeled data.\n"
+            f"Fix A: export OPENROUTER_API_KEY=... and install the LLM extra "
+            f"({_INSTALL_LLM_EXTRA}).\n"
+            'Fix B: pass judge="string" to opt into offline fuzzy matching (lower quality; '
+            "calibrate its threshold with langres.core.calibration.derive_threshold).\n"
+            f"LLM spend is hard-capped at ${DEFAULT_BUDGET_USD:.2f} by default (budget_usd=). "
+            f"Guide: {_GETTING_STARTED_URL}"
         )
-    else:
-        reason = (
-            f'judge="auto": the selected model {model!r} has no pinned price in '
-            "langres.clients.openrouter.PRICES_PER_1M, so its spend cap would be "
-            "blind; falling back to the zero-spend 'string' judge. Pass "
-            "judge='zero_shot_llm' explicitly to use it anyway, or pin a price."
+    resolved_model = model or (_OPENROUTER_MODEL if settings.openrouter_api_key else _OPENAI_MODEL)
+    if dspy_price_per_1k(resolved_model) <= 0.0:
+        raise NoJudgeAvailableError(
+            f'judge="auto" selected {resolved_model!r}, but it has no pinned price in '
+            "langres.clients.openrouter.PRICES_PER_1M -- its spend cap would be blind "
+            "($0-metered), and a blind cap is no cap at all.\n"
+            "Fix A: pin the model's price in PRICES_PER_1M, or use a model that already is.\n"
+            'Fix B: pass judge="zero_shot_llm" explicitly to run it anyway (unmetered), or '
+            'judge="string" for offline fuzzy matching.\n'
+            f"Guide: {_GETTING_STARTED_URL}"
         )
-    _notice(reason)
-    return "string", None, reason
+    _notice(
+        f'judge="auto" selected the LLM judge {resolved_model!r}: scoring makes PAID '
+        f"API calls, hard-capped at ${_effective_budget(budget_usd):.2f} (budget_usd=)."
+    )
+    return "zero_shot_llm", resolved_model
 
 
 def build_judge(
@@ -216,6 +252,8 @@ def build_judge(
         ValueError: If ``judge`` is an unrecognized string (including
             ``"auto"``, which only :func:`choose_auto_judge`/:func:`resolve_judge`
             resolve).
+        ImportError: For ``"zero_shot_llm"`` when the ``[llm]`` extra (dspy)
+            is not installed -- re-raised with the install line.
     """
     if isinstance(judge, Module):
         return judge
@@ -227,7 +265,17 @@ def build_judge(
     if judge == "zero_shot_llm":
         # Lazy: dspy must stay out of sys.modules unless a zero_shot_llm judge
         # is actually chosen (mirrors langres.methods._make_module_builder).
-        from langres.core.modules.dspy_judge import DSPyJudge
+        # dspy ships in the [llm] extra but is imported at dspy_judge.py module
+        # level -- without the wrap, a plain `uv sync` user who just set a key
+        # (as the NoJudgeAvailableError copy told them to) hits a raw
+        # ModuleNotFoundError two errors deep in the advertised happy path.
+        try:
+            from langres.core.modules.dspy_judge import DSPyJudge
+        except ImportError as exc:
+            raise ImportError(
+                'judge="zero_shot_llm" needs the [llm] extra (dspy is not installed). '
+                f"Install it with {_INSTALL_LLM_EXTRA}."
+            ) from exc
 
         resolved_model = model or _OPENROUTER_MODEL
         dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
@@ -318,7 +366,6 @@ class ResolvedModule(NamedTuple):
     module: Module[Any]
     judge_used: str
     model: str | None
-    fallback_reason: str | None
 
 
 def resolve_judge(
@@ -336,23 +383,30 @@ def resolve_judge(
             ``Module`` instance (the escape hatch -- reported as
             ``judge_used="custom"``).
         schema: The entity schema.
-        model: Model id override for ``"zero_shot_llm"`` (ignored otherwise).
+        model: Model id override for ``"zero_shot_llm"`` and ``"auto"``
+            (ignored otherwise). On the auto path the caller's model wins
+            over :func:`choose_auto_judge`'s key-derived pick.
         entity_noun: Domain noun for the LLM judge's prompt.
         budget_usd: Spend cap override; defaults to :data:`DEFAULT_BUDGET_USD`.
 
     Returns:
         A :class:`ResolvedModule` with the capped module, the resolved judge
-        name, the resolved model (only for ``"zero_shot_llm"``), and any
-        auto-fallback reason.
+        name, and the resolved model (only for ``"zero_shot_llm"``).
+
+    Raises:
+        NoJudgeAvailableError: On the ``"auto"`` path when no API key is set
+            or the selected model's price is unpinned (see
+            :func:`choose_auto_judge`).
     """
-    fallback_reason: str | None = None
     resolved_model = model
 
     if isinstance(judge, Module):
         judge_used = "custom"
         judge_kind: JudgeName | Module[Any] = judge
     elif judge == "auto":
-        resolved_kind, resolved_model, fallback_reason = choose_auto_judge(Settings())
+        resolved_kind, resolved_model = choose_auto_judge(
+            Settings(), model=model, budget_usd=budget_usd
+        )
         judge_kind = resolved_kind
         judge_used = resolved_kind
     else:
@@ -365,7 +419,7 @@ def resolve_judge(
     built = build_judge(judge_kind, schema, model=resolved_model, entity_noun=entity_noun)
     capped_budget = _effective_budget(budget_usd)
     capped = _SpendCappedModule(built, budget_usd=capped_budget)
-    return ResolvedModule(capped, judge_used, resolved_model, fallback_reason)
+    return ResolvedModule(capped, judge_used, resolved_model)
 
 
 def _text_field_extractor(schema: type[BaseModel]) -> Any:
@@ -479,7 +533,6 @@ class ResolvedJudge(NamedTuple):
     resolver: Resolver
     judge_used: str
     score_type: str
-    fallback_reason: str | None
 
 
 def build_resolver(
@@ -541,4 +594,4 @@ def build_resolver(
         clusterer=Clusterer(threshold=resolved_threshold),
     )
     score_type = _SCORE_TYPE_BY_JUDGE.get(resolved.judge_used, "unknown")
-    return ResolvedJudge(resolver, resolved.judge_used, score_type, resolved.fallback_reason)
+    return ResolvedJudge(resolver, resolved.judge_used, score_type)

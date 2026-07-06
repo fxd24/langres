@@ -51,7 +51,7 @@ langres/
 │   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
-│   │   ├── presets.py      # judge presets ("auto"/string/embedding/zero_shot_llm), spend cap
+│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm), NoJudgeAvailableError, spend cap
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, etc.

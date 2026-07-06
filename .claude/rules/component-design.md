@@ -16,9 +16,11 @@ built. The real layering is:)
 
 1. **Verbs (`langres.link` / `langres.dedupe`)** — the top DX layer.
    - Target: most users. Schema-optional, zero-label, `judge="auto"` with a
-     default spend cap.
+     default spend cap. `"auto"` is fail-fast: no API key raises
+     `NoJudgeAvailableError` (root-exported) — offline string matching is an
+     explicit `judge="string"` opt-in, never a silent fallback.
    - Returns self-describing results (`LinkVerdict`; a `dedupe` result carrying
-     `judge_used` / `score_type` / `fallback_reason`).
+     `judge_used` / `score_type`).
    - Philosophy: the one-liner front door. Thin sugar over `Resolver`.
 
 2. **`langres.Resolver`** — the declarative mid-layer.
@@ -166,5 +168,7 @@ clusters = resolver.resolve(records)   # -> list[set[str]]
 
 # High-level: the verbs do the same thing with schema inference + spend cap.
 from langres import dedupe
-result = dedupe(records)               # judge="auto" by default
+result = dedupe(records)               # judge="auto" (default) needs an API key --
+                                       # raises NoJudgeAvailableError without one;
+                                       # judge="string" is the offline opt-in
 ```

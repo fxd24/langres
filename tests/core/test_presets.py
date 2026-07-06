@@ -8,6 +8,8 @@ instead. "embedding" tests that need a real ``.encode()`` call load the local
 MiniLM model (no API key, no paid call) and are marked ``@pytest.mark.slow``.
 """
 
+import re
+import sys
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import patch
@@ -28,6 +30,7 @@ from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.presets import (
     DEFAULT_BUDGET_USD,
     _ALL_PAIRS_MAX_N,
+    NoJudgeAvailableError,
     _build_vector_blocker,
     _estimate_n_pairs,
     _OPENAI_MODEL,
@@ -216,44 +219,74 @@ class _FakeEmptyStreamBlocker:
 
 
 class TestChooseAutoJudge:
-    def test_no_keys_falls_back_to_string_with_notice(self) -> None:
-        with pytest.warns(UserWarning, match="no OPENROUTER_API_KEY or OPENAI_API_KEY"):
-            judge, model, reason = choose_auto_judge(_settings())
-        assert judge == "string"
-        assert model is None
-        assert reason is not None and "OPENROUTER_API_KEY" in reason
+    def test_no_keys_raises_with_actionable_copy(self) -> None:
+        """The error IS the keyless persona's landing page: what / why the
+        library refuses / fix A (key + install line) / fix B (explicit
+        offline opt-in + caveat) / default-cap reassurance / guide URL."""
+        with pytest.raises(NoJudgeAvailableError) as excinfo:
+            choose_auto_judge(_settings())
+        message = str(excinfo.value)
+        assert "no API key" in message
+        assert "OPENROUTER_API_KEY" in message and "OPENAI_API_KEY" in message
+        assert "over-merges" in message  # why the library refuses to fall back
+        assert "uv sync --extra llm" in message
+        assert "pip install 'langres[llm]'" in message
+        assert 'judge="string"' in message and "derive_threshold" in message
+        assert "$1.00" in message  # default spend-cap reassurance
+        assert "docs/GETTING_STARTED.md" in message
+        assert len(message.splitlines()) <= 5
 
-    def test_openrouter_key_resolves_to_zero_shot_llm_with_nonzero_price(self) -> None:
-        with warnings_none():
-            judge, model, reason = choose_auto_judge(_settings(openrouter="or-key"))
+    def test_openrouter_key_selects_llm_with_selection_notice(self) -> None:
+        with pytest.warns(UserWarning, match="PAID") as record:
+            judge, model = choose_auto_judge(_settings(openrouter="or-key"))
         assert judge == "zero_shot_llm"
         assert model == _OPENROUTER_MODEL
-        assert reason is None
         assert PRICES_PER_1M[model][0] > 0.0 and PRICES_PER_1M[model][1] > 0.0
+        message = str(record[0].message)
+        assert model in message  # which model was picked
+        assert f"${DEFAULT_BUDGET_USD:.2f}" in message  # the cap
 
     def test_openai_key_used_only_when_no_openrouter_key(self) -> None:
-        with warnings_none():
-            judge, model, reason = choose_auto_judge(_settings(openai="oai-key"))
+        with pytest.warns(UserWarning, match="PAID"):
+            judge, model = choose_auto_judge(_settings(openai="oai-key"))
         assert judge == "zero_shot_llm"
         assert model == _OPENAI_MODEL
-        assert reason is None
         assert PRICES_PER_1M[model][0] > 0.0 and PRICES_PER_1M[model][1] > 0.0
 
     def test_openrouter_key_preferred_over_openai_key(self) -> None:
-        judge, model, _ = choose_auto_judge(_settings(openrouter="or-key", openai="oai-key"))
+        with pytest.warns(UserWarning):
+            judge, model = choose_auto_judge(_settings(openrouter="or-key", openai="oai-key"))
         assert (judge, model) == ("zero_shot_llm", _OPENROUTER_MODEL)
 
     def test_refuses_paid_judge_with_unpinned_price(self) -> None:
-        """E1: a candidate model with no pinned price is refused, not silently $0-capped."""
+        """E1/TD1: a model with no pinned price raises -- a blind $0 cap is no
+        cap at all; explicit judge="zero_shot_llm" stays the escape hatch."""
         unpriced = {k: v for k, v in PRICES_PER_1M.items() if k != _OPENROUTER_MODEL}
         with (
             patch.dict("langres.clients.openrouter.PRICES_PER_1M", unpriced, clear=True),
-            pytest.warns(UserWarning, match="no pinned price"),
+            pytest.raises(NoJudgeAvailableError, match="no pinned price") as excinfo,
         ):
-            judge, model, reason = choose_auto_judge(_settings(openrouter="or-key"))
-        assert judge == "string"
-        assert model is None
-        assert reason is not None and _OPENROUTER_MODEL in reason
+            choose_auto_judge(_settings(openrouter="or-key"))
+        message = str(excinfo.value)
+        assert _OPENROUTER_MODEL in message
+        assert 'judge="zero_shot_llm"' in message  # the blind-cap escape hatch
+
+    def test_caller_model_override_is_honored_and_named_in_notice(self) -> None:
+        with pytest.warns(UserWarning, match=re.escape(_OPENAI_MODEL)):
+            judge, model = choose_auto_judge(_settings(openrouter="or-key"), model=_OPENAI_MODEL)
+        assert (judge, model) == ("zero_shot_llm", _OPENAI_MODEL)
+
+    def test_caller_model_override_runs_the_pinned_price_check(self) -> None:
+        with pytest.raises(NoJudgeAvailableError, match="no pinned price"):
+            choose_auto_judge(_settings(openrouter="or-key"), model="unknown/model-not-in-table")
+
+    def test_no_keys_raises_even_with_model_override(self) -> None:
+        with pytest.raises(NoJudgeAvailableError, match="no API key"):
+            choose_auto_judge(_settings(), model=_OPENROUTER_MODEL)
+
+    def test_budget_usd_is_named_in_the_selection_notice(self) -> None:
+        with pytest.warns(UserWarning, match=r"\$2\.50"):
+            choose_auto_judge(_settings(openrouter="or-key"), budget_usd=2.5)
 
 
 def warnings_none() -> "_NoWarnings":
@@ -320,6 +353,17 @@ class TestBuildJudge:
     def test_auto_is_not_resolved_here(self) -> None:
         with pytest.raises(ValueError, match="unknown judge"):
             build_judge("auto", PresetCompany)
+
+    def test_zero_shot_llm_without_llm_extra_raises_with_install_line(self) -> None:
+        """The keyed path must not dead-end in a raw ModuleNotFoundError: dspy
+        lives in the [llm] extra but is imported at dspy_judge.py module
+        level, so build_judge re-raises with the exact install guidance."""
+        with (
+            patch.dict(sys.modules, {"langres.core.modules.dspy_judge": None}),
+            pytest.raises(ImportError, match=r"uv sync --extra llm") as excinfo,
+        ):
+            build_judge("zero_shot_llm", PresetCompany)
+        assert "pip install 'langres[llm]'" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +483,6 @@ class TestResolveJudge:
         resolved = resolve_judge("string", PresetCompany)
         assert resolved.judge_used == "string"
         assert resolved.model is None
-        assert resolved.fallback_reason is None
         assert isinstance(resolved.module, _SpendCappedModule)
         assert resolved.module._budget_usd == DEFAULT_BUDGET_USD
 
@@ -460,21 +503,40 @@ class TestResolveJudge:
         assert resolved.module._module is injected
 
     def test_auto_resolution_is_delegated_to_choose_auto_judge(self) -> None:
-        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-not-a-real-key"}, clear=True):
+        with (
+            patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-not-a-real-key"}, clear=True),
+            pytest.warns(UserWarning, match="selected the LLM judge"),
+        ):
             resolved = resolve_judge("auto", PresetCompany)
         assert resolved.judge_used == "zero_shot_llm"
         assert resolved.model == _OPENROUTER_MODEL
         assert isinstance(resolved.module._module, DSPyJudge)
 
-    def test_auto_resolution_falls_back_to_string_without_keys(self) -> None:
+    def test_auto_resolution_raises_without_keys(self) -> None:
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
-            pytest.warns(UserWarning),
+            pytest.raises(NoJudgeAvailableError),
         ):
-            resolved = resolve_judge("auto", PresetCompany)
-        assert resolved.judge_used == "string"
-        assert resolved.fallback_reason is not None
+            resolve_judge("auto", PresetCompany)
+
+    def test_auto_path_honors_caller_model_override(self) -> None:
+        """Regression: choose_auto_judge's key-derived pick used to clobber a
+        caller-supplied model= on the auto path."""
+        with (
+            patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-not-a-real-key"}, clear=True),
+            pytest.warns(UserWarning, match=re.escape(_OPENAI_MODEL)),
+        ):
+            resolved = resolve_judge("auto", PresetCompany, model=_OPENAI_MODEL)
+        assert resolved.model == _OPENAI_MODEL
+        assert resolved.module._module.model == _OPENAI_MODEL  # type: ignore[attr-defined]
+
+    def test_explicit_zero_shot_llm_emits_no_selection_notice(self) -> None:
+        """The selection notice is auto-path-only: an explicit judge name is
+        the caller's own decision and gets no extra chatter here."""
+        with warnings_none():
+            resolved = resolve_judge("zero_shot_llm", PresetCompany)
+        assert resolved.judge_used == "zero_shot_llm"
 
 
 # ---------------------------------------------------------------------------
