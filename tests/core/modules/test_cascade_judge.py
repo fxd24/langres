@@ -494,6 +494,14 @@ class TestSerialization:
         with pytest.raises(ValueError, match="type_name"):
             _ = cascade.config
 
+    def test_registry_lazy_map_entry(self) -> None:
+        """Pin the lazy-map wiring so a fresh-process ``Resolver.load`` on a
+        cascade_judge artifact resolves even if ``langres.core``'s eager import
+        of the module is ever trimmed (mirrors the w1_2/w1_3 wiring tests)."""
+        from langres.core.registry import _LAZY_COMPONENT_MODULES
+
+        assert _LAZY_COMPONENT_MODULES["cascade_judge"] == "langres.core.modules.cascade_judge"
+
     def test_save_state_writes_per_child_subdirs(self, tmp_path: Path) -> None:
         cascade: CascadeJudge[CompanySchema] = CascadeJudge(
             student=StatefulStubJudge({}, value="fitted-student"),
