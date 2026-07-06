@@ -188,8 +188,7 @@ class CascadeJudge(Module[SchemaT]):
                     # judgements, rewritten to their escalated cascade form so
                     # the log rows keep cost_usd/model AND the tier step.
                     exc.partial_judgements = produced + [
-                        self._escalated(paid, student_judgement)
-                        for paid in exc.partial_judgements
+                        self._escalated(paid, student_judgement) for paid in exc.partial_judgements
                     ]
                     raise
                 escalation_judgement = self._one(raw, tier="escalation")
