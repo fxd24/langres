@@ -17,6 +17,7 @@ The un-fakeable real-network LLM glue lives behind an ``OPENROUTER_API_KEY``
 skipif, so ``--cov`` stays green without a live key.
 """
 
+import warnings
 from types import SimpleNamespace
 from typing import Any
 
@@ -52,6 +53,13 @@ from langres.methods import (
 )
 from langres.core.blockers.vector import VectorBlocker
 from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
+
+# A few tests below construct the (T3-deprecated) CascadeModule directly to
+# exercise the benchmark path — silence its intentional DeprecationWarning
+# module-wide so the suite output stays readable.
+# test_cascade_factory_suppresses_cascade_module_deprecation is unaffected:
+# it re-arms filters itself via warnings.catch_warnings + simplefilter.
+pytestmark = pytest.mark.filterwarnings("ignore:CascadeModule is deprecated:DeprecationWarning")
 
 # ---------------------------------------------------------------------------
 # Synthetic, embedding-free benchmark (FakeVectorIndex) for fast tests
@@ -284,6 +292,26 @@ def test_cascade_factory_without_client_does_not_require_live_key() -> None:
     resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
     assert isinstance(resolver.module, CascadeModule)
     assert resolver.module._llm_client is None
+
+
+def test_cascade_factory_suppresses_cascade_module_deprecation() -> None:
+    """methods.py's sanctioned CascadeModule construction stays noise-free (T3).
+
+    Direct ``CascadeModule(...)`` emits a ``DeprecationWarning`` (pointing to
+    ``CascadeJudge``), but the benchmark method registry still builds it
+    deliberately — its own construction site suppresses the warning so
+    ``run_methods("cascade")`` users see no noise for a choice they didn't make.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
+    assert isinstance(resolver.module, CascadeModule)
+    deprecations = [
+        w
+        for w in caught
+        if issubclass(w.category, DeprecationWarning) and "CascadeModule" in str(w.message)
+    ]
+    assert deprecations == []
 
 
 def test_dspy_judge_factory_prices_from_pinned_table() -> None:

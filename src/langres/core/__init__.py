@@ -62,6 +62,7 @@ from langres.core.models import (
     PairwiseJudgement,
 )
 from langres.core.module import GroupwiseModule, Module, stamp_group_cost
+from langres.core.modules.cascade_judge import CascadeJudge
 from langres.core.registry import (
     SchemaNotRegistered,
     UnknownComponentType,
@@ -112,6 +113,7 @@ __all__ = [
     "Blocker",
     "CandidateStats",
     "Canonicalizer",
+    "CascadeJudge",
     "ClusterDelta",
     "ClusterStats",
     "Clusterer",
