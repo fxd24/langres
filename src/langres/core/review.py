@@ -270,9 +270,7 @@ def select_for_review(
 
     rows = _clean_rows(judgement_rows, source="judgement_rows")
     corrected = {_pair_key(c.left_id, c.right_id) for c in corrections}
-    eligible = {
-        key: row for key, row in _dedupe_by_pair(rows).items() if key not in corrected
-    }
+    eligible = {key: row for key, row in _dedupe_by_pair(rows).items() if key not in corrected}
     rng = random.Random(seed)
 
     if strategy == "uncertainty":
@@ -367,7 +365,9 @@ def _select_uncertainty(
             in_band.append((distance, row))
     in_band.sort(key=lambda entry: entry[0])
     return [
-        _build_item(row, reason="uncertainty", details={"threshold": threshold, "distance": distance})
+        _build_item(
+            row, reason="uncertainty", details={"threshold": threshold, "distance": distance}
+        )
         for distance, row in in_band
     ]
 
