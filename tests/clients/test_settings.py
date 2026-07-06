@@ -18,7 +18,8 @@ class TestSettings:
             assert settings.openrouter_api_key == "or-test123"
 
     def test_settings_openrouter_api_key_defaults_to_none(self):
-        """Absent OPENROUTER_API_KEY leaves the field None (judge="auto" falls back)."""
+        """Absent OPENROUTER_API_KEY leaves the field None (judge="auto" then
+        raises NoJudgeAvailableError -- fail fast, never a silent fallback)."""
         with (
             patch.dict(os.environ, {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),

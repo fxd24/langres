@@ -9,9 +9,13 @@ ephemeral one from the records' own keys.
 
 Both verbs share one small contract:
 
-- ``judge="auto"`` (default) picks an LLM judge when an API key is set
-  (``OPENROUTER_API_KEY``/``OPENAI_API_KEY``), else falls back to the
-  zero-spend ``"string"`` judge with one notice -- see
+- ``judge="auto"`` (default) picks an LLM judge from the available API key
+  (``OPENROUTER_API_KEY``/``OPENAI_API_KEY``) and emits one selection notice
+  -- which model, that paid calls follow, the cap -- BEFORE any paid call.
+  With no key it raises :class:`~langres.core.presets.NoJudgeAvailableError`
+  (root-exported as ``langres.NoJudgeAvailableError``) instead of silently
+  falling back: unsupervised fuzzy matching over-merges on unlabeled data,
+  so the offline zero-spend ``"string"`` judge is an explicit opt-in -- see
   :func:`~langres.core.presets.choose_auto_judge`.
 - Every judge, including the free ones, runs under a default $1 spend cap
   (override with ``budget_usd=``); a cap breach raises
@@ -19,9 +23,8 @@ Both verbs share one small contract:
   judgement already produced on ``.partial_judgements`` (E9) -- see
   :mod:`langres.core.presets`'s module docstring for the resume recipe.
 - Results are self-describing (D2): every verb reports which judge actually
-  ran (``judge_used``), what its raw score means (``score_type`` -- see the
-  threshold-semantics note below), and why it fell back, if it did
-  (``fallback_reason``).
+  ran (``judge_used``) and what its raw score means (``score_type`` -- see
+  the threshold-semantics note below).
 - Threshold semantics differ across ``score_type`` scales (E12): a
   ``"heuristic"`` score, a cosine ``"sim_cos"``, and an LLM ``"prob_llm"`` are
   not comparable on the same 0..1 cut. ``threshold=None`` (the default)
@@ -82,7 +85,6 @@ class LinkVerdict(BaseModel):
     reasoning: str | None = None
     judge_used: str
     score_type: str
-    fallback_reason: str | None = None
     judgement: PairwiseJudgement
 
     def __bool__(self) -> bool:
@@ -97,9 +99,8 @@ class DedupeResult(list[set[str]]):
     """The clusters :func:`dedupe` returns -- a plain ``list[set[str]]``, self-describing.
 
     Behaves exactly like the list :meth:`~langres.core.resolver.Resolver.resolve`
-    returns; additionally carries ``judge_used``, ``score_type``, and
-    ``fallback_reason`` (D2) so a caller can inspect what actually ran without
-    a separate call.
+    returns; additionally carries ``judge_used`` and ``score_type`` (D2) so a
+    caller can inspect what actually ran without a separate call.
     """
 
     def __init__(
@@ -108,12 +109,10 @@ class DedupeResult(list[set[str]]):
         *,
         judge_used: str,
         score_type: str,
-        fallback_reason: str | None,
     ) -> None:
         super().__init__(clusters)
         self.judge_used = judge_used
         self.score_type = score_type
-        self.fallback_reason = fallback_reason
 
     def __repr__(self) -> str:
         return (
@@ -283,9 +282,10 @@ def link(
         left: The first record (a plain dict).
         right: The second record. ``link(a, a)`` (the same record twice) is
             well-defined -- it scores the entity against itself.
-        judge: ``"auto"`` (default; picks an LLM judge if a key is set, else
-            falls back to ``"string"``), ``"zero_shot_llm"``, ``"embedding"``,
-            ``"string"``, or a ``Module`` instance (e.g. an injected
+        judge: ``"auto"`` (default; picks an LLM judge from the available API
+            key and raises ``NoJudgeAvailableError`` when none is set),
+            ``"zero_shot_llm"``, ``"embedding"``, ``"string"`` (the explicit
+            offline opt-in), or a ``Module`` instance (e.g. an injected
             ``DSPyJudge(lm=DummyLM(...))`` for a zero-spend test).
         schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
             one from ``left``/``right``'s own keys.
@@ -304,6 +304,8 @@ def link(
     Raises:
         ValueError: On schema-inference errors (nested values, inconsistent
             id presence).
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
+            an unpinned-price model) -- never a silent fallback.
         BudgetExceeded: If scoring this pair would cross the spend cap.
     """
     if schema is None:
@@ -311,7 +313,7 @@ def link(
     else:
         resolved_schema, left_record, right_record = schema, left, right
 
-    module, judge_used, resolved_model, fallback_reason = resolve_judge(
+    module, judge_used, resolved_model = resolve_judge(
         judge, resolved_schema, model=model, entity_noun=entity_noun, budget_usd=budget_usd
     )
 
@@ -353,7 +355,6 @@ def link(
         reasoning=judgement.reasoning,
         judge_used=judge_used,
         score_type=judgement.score_type,
-        fallback_reason=fallback_reason,
         judgement=judgement,
     )
 
@@ -378,11 +379,15 @@ def dedupe(
 
     Args:
         records: The records to dedupe (plain dicts). ``[]`` -> ``[]``; a
-            single record -> ``[]`` (no pair possible). Every record must
-            have a unique ``"id"`` (or none at all -- positional ids are
-            assigned); a duplicate ``"id"`` raises.
-        judge: ``"auto"`` (default), ``"zero_shot_llm"``, ``"embedding"``,
-            ``"string"``, or a ``Module`` instance.
+            single record -> ``[]`` (no pair possible) -- both short-circuit
+            BEFORE judge resolution, so neither can raise
+            ``NoJudgeAvailableError``. Every record must have a unique
+            ``"id"`` (or none at all -- positional ids are assigned); a
+            duplicate ``"id"`` raises.
+        judge: ``"auto"`` (default; picks an LLM judge from the available API
+            key and raises ``NoJudgeAvailableError`` when none is set),
+            ``"zero_shot_llm"``, ``"embedding"``, ``"string"`` (the explicit
+            offline opt-in), or a ``Module`` instance.
         schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
             one from the records' own keys.
         model: Model id override for ``"zero_shot_llm"``.
@@ -400,11 +405,16 @@ def dedupe(
     Raises:
         ValueError: Duplicate ids, inconsistent id presence, or a nested
             value under schema inference.
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
+            an unpinned-price model) -- never a silent fallback.
         BudgetExceeded: If scoring would cross the spend cap; the exception
             carries the judgements already produced on ``.partial_judgements``.
     """
-    if not records:
-        return DedupeResult([], judge_used="none", score_type="none", fallback_reason=None)
+    if len(records) < 2:
+        # [] -> [] and [x] -> [] (no pair possible): short-circuit BEFORE
+        # judge resolution so a keyless empty/single-record call never raises
+        # NoJudgeAvailableError -- zero spend is possible either way.
+        return DedupeResult([], judge_used="none", score_type="none")
 
     if schema is None:
         resolved_schema, resolved_records = _infer(records)
@@ -436,5 +446,4 @@ def dedupe(
         clusters,
         judge_used=resolved.judge_used,
         score_type=score_type,
-        fallback_reason=resolved.fallback_reason,
     )

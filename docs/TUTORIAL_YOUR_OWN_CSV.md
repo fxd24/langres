@@ -97,10 +97,12 @@ the name.)
 
 ## 3. Dedupe — no key, no spend
 
-`dedupe` groups the batch into clusters. Pin `judge="string"` to stay **$0** with
-no LLM and no API key; the default `judge="auto"` would pick an LLM judge *if* an
-API key is set (and fall back to this same string judge, with one notice, if
-not). (For this 5-row file the string judge is also fully offline; on a file over
+`dedupe` groups the batch into clusters. Pass `judge="string"` to stay **$0**
+with no LLM and no API key — offline string matching is an **explicit opt-in**:
+the default `judge="auto"` picks an LLM judge from your API key and **raises
+`NoJudgeAvailableError`** (root-exported from `langres`) when it finds none,
+rather than silently degrading to fuzzy matching that over-merges on unlabeled
+data. (For this 5-row file the string judge is also fully offline; on a file over
 100 rows the blocker step downloads MiniLM once, per the note at the top — still
 $0.)
 
@@ -117,9 +119,9 @@ print(result.judge_used, result.score_type)
 ```
 
 The result is a plain `list[set[str]]` of id-clusters, and it is
-**self-describing**: `result.judge_used`, `result.score_type`, and
-`result.fallback_reason` tell you exactly what ran. **Singletons are dropped** —
-a record that matches nothing does not appear in the output.
+**self-describing**: `result.judge_used` and `result.score_type` tell you
+exactly what ran. **Singletons are dropped** — a record that matches nothing
+does not appear in the output.
 
 > **Entity linking instead of dedupe?** Use `link(left, right, schema=Contact,
 > judge="string")` to score one pair; it returns a `LinkVerdict` that is truthy
@@ -206,9 +208,10 @@ module that defines `Contact` first so the registration runs).
 
 ## Where to go next
 
-- **Spend a little on an LLM judge.** Set `OPENROUTER_API_KEY` and drop the
-  `judge=` kwarg: `dedupe(records, schema=Contact)` picks an LLM judge under a
-  default **$1 spend cap** (`budget_usd=`). See [`docs/EXPERIMENTS.md`](EXPERIMENTS.md).
+- **Spend a little on an LLM judge.** Set `OPENROUTER_API_KEY`, install the
+  `[llm]` extra (`uv sync --extra llm`), and drop the `judge=` kwarg:
+  `dedupe(records, schema=Contact)` picks an LLM judge under a default
+  **$1 spend cap** (`budget_usd=`). See [`docs/EXPERIMENTS.md`](EXPERIMENTS.md).
 - **Test your pipeline in CI without spending.** See
   [`docs/TESTING_AT_ZERO_COST.md`](TESTING_AT_ZERO_COST.md) — inject a DummyLM-backed
   judge for deterministic, offline, $0 assertions.
