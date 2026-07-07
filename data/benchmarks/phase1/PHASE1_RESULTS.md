@@ -14,3 +14,20 @@ Single-metric `StringComparator` (one rapidfuzz `token_sort_ratio` per field) + 
 - **gap to Ditto** is the distance a $0, single-metric local baseline leaves for the paid/multi-feature judges the later phases add.
 
 Per-dataset detail (shapes, tp/fp/fn, features) is in the sibling `phase1_rf_floor_<dataset>.json` files.
+
+## The seam: swap the judge, lift the number
+
+`PHASE1_LLM_PLACEMENT.md` is the companion **paid** run — a zero-shot `LLMJudge`
+(DeepSeek V4-Flash / V4-Pro) graded through the *same* `FixedSplitPairBenchmark`
+seam, same full splits, same honest (leakage-free) protocol. Swapping only the
+judge lifts honest F1 well above this $0 floor:
+
+| dataset | RF floor F1 | Flash F1 | Pro F1 | Ditto |
+| --- | --- | --- | --- | --- |
+| amazon_google | 0.360 | 0.575 | 0.614 | 0.756 |
+| abt_buy | 0.404 | 0.680 | 0.737 | 0.893 |
+
+Every LLM cell clears the floor by **+0.21 … +0.33** at real, metered OpenRouter
+cost ($5.20 total, 100% real-cost). The remaining **0.14 … 0.21** gap to Ditto —
+a *fine-tuned* specialist vs. these *zero-shot* judges — is exactly what the
+Phase 2 (#81) small-LM student is meant to close.
