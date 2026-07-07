@@ -2,7 +2,7 @@
 
 Every test here runs at **$0** with the deterministic ``SimulatedFrontierJudge``
 teacher -- no key, no network, no ``dspy``/``[semantic]`` extra, no real model
-call ever. They prove the two things the paid runs' hard-cap guarantee rests on:
+call ever. They prove the three things the paid runs' hard-cap guarantee rests on:
 
 1. **Both scripts run the whole closed loop end to end and produce a full report.**
    ``run_fz_smoke`` (committed Fodors-Zagat fixture) and ``run_ag_economics``
@@ -15,6 +15,11 @@ call ever. They prove the two things the paid runs' hard-cap guarantee rests on:
    :class:`~langres.clients.openrouter.BudgetExceeded` carrying the judgements
    already produced on ``.partial_judgements``. This is the structural proof the
    cap protects the orchestrator's real run: the loop cannot cross the budget.
+
+3. **The real path refuses to spend when the run is unsafe.**
+   ``preflight_real_model`` rejects a budget above the ceiling and a missing
+   ``OPENROUTER_API_KEY`` with a clean reason string *before* any env load or
+   network probe -- so a misconfigured paid run fails closed at $0, never mid-call.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from __future__ import annotations
 import warnings
 from contextlib import contextmanager
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -86,12 +92,11 @@ def test_ag_economics_runs_end_to_end_simulated() -> None:
     assert report.n_candidates <= _AG_MAX_PAIRS
 
 
-def test_ag_fixtures_span_both_label_classes(tmp_path: object) -> None:
+def test_ag_fixtures_span_both_label_classes(tmp_path: Path) -> None:
     """Materialized AG fixtures carry both label classes (else RFJudge.fit crashes)."""
     import json
-    from pathlib import Path
 
-    out = materialize_ag_fixtures(Path(str(tmp_path)) / "ag", max_pairs=_AG_MAX_PAIRS, seed=7)
+    out = materialize_ag_fixtures(tmp_path / "ag", max_pairs=_AG_MAX_PAIRS, seed=7)
     payload = json.loads((out / "gold_pairs.json").read_text())
     labels = {pair["label"] for pair in payload["candidate_pairs"]}
     assert labels == {True, False}
