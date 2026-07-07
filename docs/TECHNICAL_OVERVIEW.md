@@ -478,7 +478,7 @@ The result of one incremental `Resolver.assign(record)` / `AnchorStore.assign(re
 W1.0 froze two interfaces that later branches build against: this section
 documents the contracts. W1.1 shipped the first concrete `GroupwiseModule` —
 `SelectJudge` (`langres.core.modules.select_judge`) — proving the contract
-against a real set-wise judge; `FellegiSunterJudge` / `RFJudge` (trained
+against a real set-wise judge; `FellegiSunterJudge` / `RandomForestJudge` (trained
 judges over `ComparisonVector`, a later branch) still build against the
 contracts below without shipping yet.
 
@@ -639,7 +639,7 @@ subclassing required. `Resolver.fit(data, labels=None)` detects this with
   raises rather than silently discarding them.
 
 No concrete judge implements either hook yet; `FellegiSunterJudge` and
-`RFJudge` (a later branch) are the first.
+`RandomForestJudge` (a later branch) are the first.
 
 ## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
 

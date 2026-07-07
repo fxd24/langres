@@ -47,7 +47,7 @@ class _NonLearnableModule(Module[CompanySchema]):
 
 
 class _SupervisedModule(Module[CompanySchema]):
-    """A module implementing SupervisedFitMixin (e.g. a future RFJudge)."""
+    """A module implementing SupervisedFitMixin (e.g. a future RandomForestJudge)."""
 
     def __init__(self) -> None:
         self.fit_calls: list[tuple[list[ERCandidate[CompanySchema]], Sequence[bool]]] = []

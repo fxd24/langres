@@ -1,4 +1,4 @@
-# W1.2 trained-family replication: FellegiSunterJudge + RFJudge
+# W1.2 trained-family replication: FellegiSunterJudge + RandomForestJudge
 
 **Date:** 2026-07-02
 **Branch:** `feat/w1-trained-family`
@@ -15,7 +15,7 @@ a `fit()` step before they can score (`docs/EXPERIMENTS.md` § "The fit seam"):
 - **`FellegiSunterJudge`** (`fellegi_sunter`) — classical Fellegi-Sunter,
   fit via **EM with no labels** (`UnsupervisedFitMixin.fit_unlabeled`). The
   first "learn with no labels" proof in langres.
-- **`RFJudge`** (`random_forest`) — a Magellan-style `sklearn.RandomForestClassifier`
+- **`RandomForestJudge`** (`random_forest`) — a Magellan-style `sklearn.RandomForestClassifier`
   over `ComparisonVector.similarities`, fit **with labels**
   (`SupervisedFitMixin.fit`).
 

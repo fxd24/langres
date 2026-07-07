@@ -92,7 +92,7 @@ class CascadeJudge(Module[SchemaT]):
     Serialization mirrors :class:`~langres.core.blockers.composite.CompositeBlocker`:
     children serialize as ``{"type_name", "config"}`` registry specs, and
     out-of-band child state (e.g. a fitted
-    :class:`~langres.core.modules.rf_judge.RFJudge` forest) persists via
+    :class:`~langres.core.modules.random_forest_judge.RandomForestJudge` forest) persists via
     :class:`~langres.core.serialization.SerializableState` into per-child
     subdirectories (``<state_dir>/student``, ``<state_dir>/escalation``) --
     so a fitted student survives ``Resolver.save``/``load`` with zero Resolver
@@ -112,7 +112,7 @@ class CascadeJudge(Module[SchemaT]):
             tier outside the cascade).
 
     Example:
-        >>> student = RFJudge(feature_specs=comparator.feature_specs)
+        >>> student = RandomForestJudge(feature_specs=comparator.feature_specs)
         >>> student.fit(iter(train_candidates), train_labels)   # prob_rf scores
         >>> frontier = LLMJudge(client=client, model="gpt-4o")  # prob_llm scores
         >>> judge = CascadeJudge(student=student, escalation=frontier, band=(0.35, 0.65))
@@ -270,7 +270,7 @@ class CascadeJudge(Module[SchemaT]):
             "cuts student scores and one downstream threshold cuts the mixed "
             "student/escalation stream, so a raw similarity (e.g. 'sim_cos', "
             "'heuristic') mixed in makes those cuts meaningless. Calibrate the "
-            "child's scores (e.g. train an RFJudge, or map similarities through "
+            "child's scores (e.g. train an RandomForestJudge, or map similarities through "
             "derive_threshold-calibrated probabilities) before cascading.",
             stacklevel=2,
         )
@@ -341,7 +341,7 @@ class CascadeJudge(Module[SchemaT]):
         Delegates to any child implementing
         :class:`~langres.core.serialization.SerializableState`
         (``<state_dir>/student``, ``<state_dir>/escalation``). A stateful
-        child with nothing to persist yet (e.g. an unfit ``RFJudge``) writes
+        child with nothing to persist yet (e.g. an unfit ``RandomForestJudge``) writes
         no files; its empty subdir is dropped so :meth:`load_state` never
         tries to read a missing state file (mirrors ``Resolver.save``'s
         empty-sidecar handling).

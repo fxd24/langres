@@ -10,7 +10,7 @@ Resolver) detect this with ``isinstance(module, SupervisedFitMixin)`` /
 ``isinstance(module, UnsupervisedFitMixin)``.
 
 - ``SupervisedFitMixin``: for judges that learn from labeled pairs (e.g. a
-  future ``RFJudge`` fitting an sklearn RandomForest over
+  future ``RandomForestJudge`` fitting an sklearn RandomForest over
   ``ComparisonVector.similarities``).
 - ``UnsupervisedFitMixin``: for judges that learn without labels (e.g. a
   future ``FellegiSunterJudge`` fitting m/u probabilities via EM).

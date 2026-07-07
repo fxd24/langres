@@ -41,7 +41,7 @@ from langres.core.modules.cascade import CascadeModule
 from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
-from langres.core.modules.rf_judge import RFJudge
+from langres.core.modules.random_forest_judge import RandomForestJudge
 from langres.core.modules.select_judge import SelectJudge
 from langres.core.resolver import Resolver
 from langres.methods import (
@@ -265,7 +265,7 @@ def test_unknown_method_raises() -> None:
         # the dedicated fit/predict tests below). Not raced through
         # ZERO_SPEND_METHODS/ALL_METHODS for that reason (see methods.py).
         ("fellegi_sunter", FellegiSunterJudge, True, None),
-        ("random_forest", RFJudge, True, None),
+        ("random_forest", RandomForestJudge, True, None),
     ],
 )
 def test_factory_builds_valid_resolver(
@@ -513,7 +513,7 @@ def test_random_forest_end_to_end_via_resolver_fit_labels() -> None:
     assert judgements
     assert all(j.score_type == "prob_rf" for j in judgements)
     assert all(0.0 <= j.score <= 1.0 for j in judgements)
-    assert isinstance(resolver.module, RFJudge)
+    assert isinstance(resolver.module, RandomForestJudge)
 
 
 def test_random_forest_fit_requires_labels() -> None:

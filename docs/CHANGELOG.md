@@ -64,7 +64,7 @@ The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`
   into `judge="string"`) → log from day 1 → review at the margin
   (`select_for_review` + `langres review` / CSV round-trip) → harvest silver +
   gold (with the circularity caveat) → train a cheap trainable student
-  (RFJudge, Magellan-style — **not** LLM distillation) + `derive_threshold` →
+  (RandomForestJudge, Magellan-style — **not** LLM distillation) + `derive_threshold` →
   `CascadeJudge` → `Resolver.save`/`load`. Every step carries a runnable snippet
   inline; two explicit lanes (keyless `judge="string"` / keyed default `auto`);
   a competitive-positioning section (vs dedupe/Zingg/Splink, "use Splink when… /
