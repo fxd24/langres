@@ -13,13 +13,17 @@ The methodology mirrors the RF floor exactly, so the two numbers are comparable:
        ``(id_a, id_b, label)`` splits into ``ERCandidate`` objects. For an LLM
        judge the comparison vector is ignored, but reusing the same benchmark
        guarantees the records / gold / splits match the RF floor pair-for-pair.
-    2. The LLM judge scores each pair.
+    2. The LLM judge scores each pair. ``--derive-on fixed:0.5`` (the default)
+       grades the FULL test split at a constant 0.5 cut in a SINGLE judging pass --
+       leakage-free and, crucially, single-event-loop safe (see the hard cap note).
+       ``--derive-on valid``/``train`` instead derive the threshold on that split
+       via
        :func:`~langres.data.fixed_split_pair_benchmark.evaluate_fixed_split_honest`
-       derives the decision threshold on the VALID split (``--derive-on valid``,
-       the honest default) and applies that FIXED cut to the FULL test split,
-       *also* reporting the leaky "argmax-F1-on-test" number so the honesty delta
-       is explicit. ``--derive-on fixed:0.5`` skips the valid calls entirely
-       (cheapest, still leakage-free) and grades test at 0.5.
+       and apply the FIXED cut to test; because that judges a SECOND split it opens
+       a second ``asyncio.run`` and so is refused on the real (paid) path -- offered
+       only under ``--dry-run`` (the mock judge has no ``forward_async``). Either
+       way the leaky "argmax-F1-on-test" number is also reported so the honesty
+       delta is explicit.
 
 **Hard spend cap.** The real ``LLMJudge`` is judged **concurrently in chunks**
 (``--max-concurrent`` calls in flight via its ``forward_async`` -- ~an order of
@@ -38,9 +42,12 @@ Artifacts land in ``data/benchmarks/phase1/``: a per-``(model, dataset)`` JSON
 plus an appended row in ``PHASE1_LLM_PLACEMENT.md`` (regenerated from every
 committed JSON, so re-runs update rather than duplicate).
 
-Staged operation (recommended): cheap model, one dataset, ``fixed:0.5`` first,
-observe the printed cost, then scale up model / add ``--derive-on valid`` / go
-``--dataset both``. Example (run WITH a real key, sandbox off)::
+Staged operation (recommended): run ONE dataset per process at ``fixed:0.5`` (the
+real-path shape -- exactly one ``asyncio.run``), observe the printed cost, then
+scale up the model or run the other dataset in a fresh process. ``--derive-on
+valid``/``train`` and ``--dataset both`` each open a second ``asyncio.run`` and
+are refused on the real path (available under ``--dry-run``). Example (run WITH a
+real key, sandbox off)::
 
     uv run python examples/research/phase1_llm_placement.py \\
         --model openrouter/deepseek/deepseek-v4-flash \\
@@ -64,6 +71,7 @@ import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
+import tempfile  # noqa: E402
 from collections.abc import Iterator, Sequence  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -74,6 +82,7 @@ from langres.clients.openrouter import (  # noqa: E402
     BudgetExceeded,
     SpendMonitor,
     per_token_worst_price,
+    register_runtime_model_price,
 )
 from langres.core.metrics import classify_pairs, pair_pr_curve  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
@@ -447,7 +456,18 @@ def write_artifacts(artifact: dict[str, Any], out_dir: Path) -> tuple[Path, Path
         json.loads(p.read_text()) for p in sorted(out_dir.glob("phase1_llm_placement_*.json"))
     ]
     md_path = out_dir / _MARKDOWN_NAME
-    md_path.write_text(format_report(artifacts) + "\n")
+    # Atomic replace: the documented run pattern is one dataset per process, and
+    # several such processes regenerate this shared file concurrently. A bare
+    # ``write_text`` can be read half-written (torn) by a sibling; writing to a
+    # per-process temp in the SAME dir and ``os.replace``-ing it swaps the file in
+    # atomically so a reader always sees a complete table.
+    fd, tmp_name = tempfile.mkstemp(dir=out_dir, prefix=".phase1_md_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(format_report(artifacts) + "\n")
+        os.replace(tmp_name, md_path)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)  # no-op after a successful replace
     return json_path, md_path
 
 
@@ -725,6 +745,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
+        type=_parse_provider,
         default=None,
         help='Optional OpenRouter provider-pin JSON, e.g. \'{"order":["DeepSeek"],'
         '"allow_fallbacks":false}\'. Default None -> OpenRouter default routing.',
@@ -741,8 +762,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--derive-on",
         type=_parse_derive_on,
-        default="valid",
-        help="Threshold source: 'valid' (default) | 'train' | 'fixed:<0..1>' (skips derive calls).",
+        default="fixed:0.5",
+        help="Threshold source: 'fixed:<0..1>' (default, single-loop safe) | 'valid' | 'train'. "
+        "valid/train each judge a second split, so the real LLMJudge path refuses them "
+        "(litellm allows one asyncio.run per process).",
     )
     parser.add_argument(
         "--dry-run",
@@ -758,12 +781,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
     args = _parse_args(argv)
 
-    provider = _parse_provider(args.provider)
     datasets = ["amazon_google", "abt_buy"] if args.dataset == "both" else [args.dataset]
     cfg = PlacementConfig(
         model=args.model,
         datasets=datasets,
-        provider=provider,
+        provider=args.provider,  # already parsed by argparse (type=_parse_provider)
         max_usd=args.max_usd,
         derive_on=args.derive_on,
         dry_run=args.dry_run,
@@ -783,6 +805,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"would be blind. Pin its price first, or pick one of: {sorted(PRICES_PER_1M)}."
             )
             return 1
+        # Single-asyncio.run-per-process invariant. The real LLMJudge exposes
+        # forward_async, so every judge.forward() opens one asyncio.run. A
+        # valid/train derive judges a SECOND split (derive + test), and --dataset
+        # both judges a SECOND dataset -- either issues a second asyncio.run, which
+        # trips litellm's cross-loop logging-worker bug AFTER the first pass has
+        # already paid. Refuse before spending (before the price probe below).
+        if cfg.derive_on in ("valid", "train") or len(datasets) > 1:
+            print(
+                f"[fatal] the real LLMJudge path allows exactly ONE asyncio.run per "
+                f"process, but derive_on={cfg.derive_on!r} + datasets={datasets} would "
+                f"issue more (valid/train judges a second split; --dataset both a second "
+                f"dataset) and trip litellm's cross-loop worker bug after the first pass "
+                f"has already paid. Run ONE dataset per process at a fixed threshold, e.g. "
+                f"--dataset {datasets[0]} --derive-on fixed:0.5."
+            )
+            return 1
+        # Pin the model's price (incl. its dated OpenRouter runtime id) and confirm
+        # the id actually responds before the full run's spend. Without the pin an
+        # unpinned dated id makes litellm's completion_cost return 0.0, so the cap
+        # would under-meter to $0 whenever usage-accounting cost is absent. Mirrors
+        # examples/research/w3_paid_smoke.py.
+        if register_runtime_model_price(cfg.model) is None:
+            print(f"[fatal] {cfg.model} did not resolve/respond; STOP (never guess-and-spend).")
+            return 1
 
     print("=" * 78)
     print(f"Phase 1 -- LLMJudge placement | model={cfg.model} | datasets={datasets}")
@@ -800,12 +846,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"(partial judgements recovered: {len(exc.partial_judgements)})"
         )
         exit_code = 2
-
-    print("\n" + "=" * 78)
-    print(
-        f"[done] total honest spend ${monitor.spent:.4f} / ${cfg.max_usd:.2f} cap "
-        f"(remaining ${monitor.remaining:.4f})"
-    )
+    finally:
+        # Always report what was actually spent -- on success, on a BudgetExceeded
+        # stop, OR on a hard error escaping a chunk's forward_async gather. Money
+        # spent must never go unreported just because a run crashed.
+        print("\n" + "=" * 78)
+        print(
+            f"[done] total honest spend ${monitor.spent:.4f} / ${cfg.max_usd:.2f} cap "
+            f"(remaining ${monitor.remaining:.4f})"
+        )
     return exit_code
 
 

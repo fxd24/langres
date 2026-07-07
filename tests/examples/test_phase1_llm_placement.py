@@ -13,6 +13,14 @@ script:
 - respects ``--max-usd`` -- a tiny budget aborts cleanly with the partial
   judgements the money already bought;
 - the ``--dry-run`` judge is genuinely $0.
+
+The #80 real-path hardening is exercised the same way -- still $0, with a FAKE
+key + a stubbed price probe / dataset runner so no key, no network, no
+``litellm`` is ever touched: the real path refuses the multi-``asyncio.run``
+configs (``--derive-on valid``/``train``, ``--dataset both``) and an unresponsive
+model, allows ``fixed:0.5`` + one dataset, pins the price before spending, always
+prints the final spend report (even on a hard error), and rejects bad
+``--provider`` JSON via argparse.
 """
 
 from __future__ import annotations
@@ -25,13 +33,16 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+import examples.research.phase1_llm_placement as placement
 from examples.research.phase1_llm_placement import (
     RF_FLOOR_F1,
     PlacementConfig,
     _DryRunJudge,
+    _parse_args,
     _parse_derive_on,
     _parse_provider,
     build_artifact,
+    main,
     run_placement,
     write_artifacts,
 )
@@ -334,3 +345,145 @@ def test_parse_provider_json_or_none() -> None:
     }
     with pytest.raises(argparse.ArgumentTypeError):
         _parse_provider('["not", "an", "object"]')
+
+
+# ---------------------------------------------------------------------------
+# Real-path hardening (#80): single-loop guard, price pin, always-report spend,
+# atomic MD write, clean --provider errors. Still $0 -- the real (non-dry-run)
+# path is entered with a FAKE key + a stubbed price probe / dataset runner, so no
+# key, no network, no litellm is ever touched.
+# ---------------------------------------------------------------------------
+
+
+def _drive_real_main(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], *, register_ok: bool = True
+) -> int:
+    """Run ``main`` down the real (non-dry-run) path at $0.
+
+    Sets a FAKE ``OPENROUTER_API_KEY`` so the key gate passes (``load_dotenv``'s
+    default ``override=False`` leaves it intact), stubs the price probe so it
+    never calls the network, and stubs ``_run_one_dataset`` so an *allowed*
+    config does no judging. The refusal guards fire before both stubs, so a
+    rejected config returns without ever reaching them.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-not-real")
+    monkeypatch.setattr(
+        placement,
+        "register_runtime_model_price",
+        lambda model: "dated-runtime-id" if register_ok else None,
+    )
+    monkeypatch.setattr(placement, "_run_one_dataset", lambda cfg, dataset, monitor: None)
+    return main(argv)
+
+
+def test_derive_on_argparse_default_is_fixed() -> None:
+    """The no-flag default is now fixed:0.5 -- the single-loop-safe real-path shape."""
+    assert _parse_args([]).derive_on == "fixed:0.5"
+
+
+@pytest.mark.parametrize("derive_on", ["valid", "train"])
+def test_real_path_refuses_multiloop_derive(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], derive_on: str
+) -> None:
+    """valid/train each judge a second split (a 2nd asyncio.run) -> refused, non-zero."""
+    code = _drive_real_main(monkeypatch, ["--dataset", "amazon_google", "--derive-on", derive_on])
+    assert code == 1
+    assert "[fatal]" in capsys.readouterr().out
+
+
+def test_real_path_refuses_dataset_both(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dataset both judges a second dataset (a 2nd asyncio.run) -> refused, non-zero."""
+    code = _drive_real_main(monkeypatch, ["--dataset", "both", "--derive-on", "fixed:0.5"])
+    assert code == 1
+    assert "[fatal]" in capsys.readouterr().out
+
+
+def test_real_path_allows_fixed_single_dataset(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fixed:0.5 + one dataset = exactly one asyncio.run -> allowed (exit 0)."""
+    code = _drive_real_main(monkeypatch, ["--dataset", "amazon_google", "--derive-on", "fixed:0.5"])
+    assert code == 0
+    assert "[done] total honest spend" in capsys.readouterr().out
+
+
+def test_real_path_refuses_when_price_probe_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unresponsive model id (probe -> None) is refused before the full-run spend."""
+    code = _drive_real_main(
+        monkeypatch,
+        ["--dataset", "amazon_google", "--derive-on", "fixed:0.5"],
+        register_ok=False,
+    )
+    assert code == 1
+    assert "did not resolve/respond" in capsys.readouterr().out
+
+
+def test_spend_report_prints_on_hard_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A non-BudgetExceeded error escaping the loop still prints the spend report.
+
+    The money-path try/finally guarantees the ``[done] total honest spend`` line
+    even when a chunk's ``forward_async`` gather raises hard -- money already
+    spent is never left unreported. The error still propagates (not swallowed).
+    """
+
+    def boom(cfg: PlacementConfig, dataset: str, monitor: SpendMonitor) -> None:
+        raise RuntimeError("chunk gather blew up")
+
+    monkeypatch.setattr(placement, "_run_one_dataset", boom)
+    with pytest.raises(RuntimeError, match="chunk gather blew up"):
+        main(["--dry-run"])  # dry-run reaches the loop with no key, no network
+    assert "[done] total honest spend" in capsys.readouterr().out
+
+
+def test_atomic_md_write_combines_all_artifacts(tmp_path: Path) -> None:
+    """The MD is rebuilt from every JSON and swapped in atomically (os.replace).
+
+    Two per-dataset artifacts in one dir -> one combined table with a row each
+    (the glob rebuild), header intact (not torn), and no leftover temp file.
+    """
+    benchmark = _benchmark()
+    monitor = SpendMonitor(budget_usd=100.0)
+    result, meter = run_placement(
+        benchmark, _MockJudge(cost_usd=0.001), derive_on="fixed:0.5", monitor=monitor
+    )
+    art_ag = build_artifact(
+        result,
+        meter,
+        dataset="amazon_google",
+        model="openrouter/deepseek/deepseek-v4-flash",
+        provider=None,
+        n_test=4,
+        n_test_pos=2,
+        n_derive=0,
+    )
+    art_abt = build_artifact(
+        result,
+        meter,
+        dataset="abt_buy",
+        model="openrouter/deepseek/deepseek-v4-flash",
+        provider=None,
+        n_test=4,
+        n_test_pos=2,
+        n_derive=0,
+    )
+
+    write_artifacts(art_ag, tmp_path)
+    _, md_path = write_artifacts(art_abt, tmp_path)  # regenerates from BOTH jsons
+
+    table = md_path.read_text()
+    assert "amazon_google" in table
+    assert "abt_buy" in table
+    assert "| honest F1 |" in table  # header intact (a torn write would drop it)
+    assert not list(tmp_path.glob(".phase1_md_*")), "the atomic temp file must be cleaned up"
+
+
+def test_bad_provider_json_exits_via_argparse() -> None:
+    """Malformed --provider JSON exits cleanly via argparse, not a raw traceback."""
+    with pytest.raises(SystemExit):
+        _parse_args(["--provider", "{not valid json"])
