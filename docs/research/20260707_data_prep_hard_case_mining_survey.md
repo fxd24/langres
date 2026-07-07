@@ -400,7 +400,25 @@ Encoder models (BERT / sentence-transformers) are no longer the only game; the O
 
 ---
 
-## 13. References
+## 13. Future work
+
+*What the three research threads point to as concrete things to try — direction, not commitment. Kept here as a living note; the data-prep mining directions are tracked in [#86](https://github.com/raisesquad/langres/issues/86), the collective/relational architecture gap in §11.4.*
+
+**0 — The gating check comes first, and needs no training.** Before investing in any fine-tuning, cheaply test the premise: does a decoder embedder even help ER *blocking*? Drop an off-the-shelf **Qwen3-Embedding-0.6B** (Apache-2.0) — or an Echo-embedded base Qwen3 — behind the existing `VectorBlocker` and measure blocking recall (Pair Completeness) vs. the current encoder backend on a benchmark. This directly tests the **UniBlocker counter-signal** (§12.4): if decoder embeddings don't lift blocking recall on structured records, the shared-model story loses its main draw and we keep an encoder for blocking. **Validate the recall ceiling (§11.1) before building anything on top of it.**
+
+**1 — Prerequisite for everything below: a working QLoRA fine-tune path.** The real first *build* step is getting to a state where we can actually train a small model on the Qwen3 ladder (0.6B → 1.7B → 4B) on the 8GB 3070 — the #81/#83 fine-tune infrastructure. The one-model / embedding experiments all depend on it existing.
+
+**2 — Bet A (pragmatic, try first): one base family, two fine-tunes.** One Qwen3 base serving both stages — a matching QLoRA adapter (the `Judge`) + a contrastive embedding fine-tune/adapter (the `VectorBlocker`), hot-swapped via PEFT `set_adapter`. This is the realistic "shared model": cheap to build, no joint-loss balancing, one model family and one pipeline for both stages. Most likely to pay off first.
+
+**3 — Bet B (ambitious, a research gamble worth a probe): GritLM-style joint training.** Probe whether a single Qwen3 can do both embedding and matching via instruction-switched attention (§12.2), trained jointly. Honestly flagged as **untested at 0.6–4B / QLoRA scale** — but worth a small probe to see whether GritLM's "no-degradation" result at 7B holds at our scale. If it does, it's the cleanest possible artifact: one checkpoint, both stages.
+
+**4 — Then optimize / train the matcher itself.** With training working, the two arms from epic #85 apply — DSPy prompt-optimization first (measure the lift), then QLoRA fine-tune — fed by the hard-case-mined data (#86) as the training/demo pool. The data recipe (§1–10) is the lever; the shared-model embedding work above is how *one* fine-tuned artifact covers both stages.
+
+**Parked (separate threads):** the hard-case mining seam design + strategy menu (**#86**, this doc is its Task 0); a pluggable **collective/relational ER "joint mode"** — the one architecture langres lacks (§11.4), matching the ROADMAP's collective-resolution gap.
+
+---
+
+## 14. References
 
 Inline citations with links appear throughout the body; this is the consolidated list. Every entry carries a resolvable link where one was verified by the source agents; entries without a link are cited by author / venue / year (no URL was fabricated). Links marked with the source they were verified against.
 
