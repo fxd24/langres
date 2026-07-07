@@ -39,9 +39,11 @@ heavy stacks stay out of `sys.modules` on a bare import:
 `dedupe()` path never pays torch's import cost.
 
 **TTHW is dominated by the (tiny) core install, not by langres itself.**
-`quickstart_verbs.py` runs offline at $0 through the default zero-spend
-`"string"` judge — no API key, no network, no embedding-model download — and
-prints `2 cluster(s) found` in ~0.2 s. From a cold `uv venv` to that first
+`quickstart_verbs.py` runs offline at $0 through the explicitly pinned
+zero-spend `"string"` judge — no API key, no network, no embedding-model
+download. (The default `judge="auto"` requires an API key and raises
+`NoJudgeAvailableError` without one — offline fuzzy matching is an explicit
+opt-in, not a fallback.) It prints `2 cluster(s) found` in ~0.2 s. From a cold `uv venv` to that first
 cluster is ~2.5 s end-to-end. The heavier `[semantic]` / `[llm]` paths are only
 needed once a newcomer graduates past the toy dataset (N > ~100 records) or
 wants a real LLM judge; the quickstart deliberately pins `judge="string"` so the

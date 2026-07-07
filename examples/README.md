@@ -23,7 +23,7 @@ docstring and are gated behind an explicit flag or a hard budget cap.
 
 Run in this order for the intended newcomer progression — verbs quickstart →
 dedupe → resolver → incremental assign → golden record → signal log →
-flywheel → person:
+flywheel harvest → closed-loop flywheel → person:
 
 - **`quickstart_verbs.py`** — dedupe records with zero labels in a handful of
   lines, offline and $0 by default (`langres.dedupe`'s zero-spend string judge).
@@ -41,6 +41,11 @@ flywheel → person:
   (`log=` on `dedupe()`/`link()`), then read the log back.
 - **`flywheel_threshold_harvest.py`** — the flywheel outlet: logged verdicts +
   human corrections feed `derive_threshold` to re-calibrate a decision threshold.
+- **`flywheel_closed_loop.py`** — the whole loop closed end to end at **$0**:
+  bootstrap → select_for_review → harvest → train a cheap RFJudge student →
+  `CascadeJudge` (cheap everywhere, escalate only the margin) → report. The
+  runnable twin of [`docs/GETTING_STARTED.md`](../docs/GETTING_STARTED.md)
+  (needs the `[trained]` extra).
 - **`person_resolution.py`** — the embeddings + LLM "strong path" on a second
   entity type: semantic blocking (MiniLM + FAISS) feeding an LLM judge.
 

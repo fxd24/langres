@@ -2,7 +2,13 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # Review once when the PR is opened (or reopened) -- NOT on every push.
+    # `synchronize` (the per-push event) is deliberately omitted: re-reviewing
+    # on every commit stacks runner minutes + LLM cost and produces repeated,
+    # churny review threads. Iterate on a PR by pushing freely; the review runs
+    # at open time. (Re-request a fresh review manually by reopening the PR or
+    # via the @claude mention workflow in claude.yml.)
+    types: [opened, reopened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
@@ -10,9 +16,10 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
-# Cancel an in-flight review when a new commit is pushed to the same PR, so
-# rapid pushes don't stack concurrent Claude reviews (runner minutes + LLM
-# cost). Matches the concurrency guard the lint/test/security workflows use.
+# Backstop guard: cancel an in-flight review if the same PR re-triggers one
+# (e.g. a quick close/reopen) so two Claude reviews never run concurrently
+# (runner minutes + LLM cost). With `synchronize` removed above this rarely
+# fires, but it matches the concurrency guard the lint/test/security workflows use.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

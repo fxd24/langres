@@ -16,9 +16,11 @@ built. The real layering is:)
 
 1. **Verbs (`langres.link` / `langres.dedupe`)** — the top DX layer.
    - Target: most users. Schema-optional, zero-label, `judge="auto"` with a
-     default spend cap.
+     default spend cap. `"auto"` is fail-fast: no API key raises
+     `NoJudgeAvailableError` (root-exported) — offline string matching is an
+     explicit `judge="string"` opt-in, never a silent fallback.
    - Returns self-describing results (`LinkVerdict`; a `dedupe` result carrying
-     `judge_used` / `score_type` / `fallback_reason`).
+     `judge_used` / `score_type`).
    - Philosophy: the one-liner front door. Thin sugar over `Resolver`.
 
 2. **`langres.Resolver`** — the declarative mid-layer.
@@ -32,8 +34,12 @@ built. The real layering is:)
    - Target: advanced users building bespoke pipelines.
    - Real components: `Module` (judge), `Blocker` (`AllPairsBlocker`,
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
-     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`, …) and
-     `core.calibration.derive_threshold`.
+     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`,
+     `CascadeJudge` — cheap student + escalate-at-the-margin, …) and
+     `core.calibration.derive_threshold`. The flywheel seam lives here too:
+     `core.review.select_for_review` / `ReviewQueue` (pick the uncertain margin)
+     and `core.harvest` (`harvest_labeled_pairs`, `Correction`/`CorrectionLog`,
+     `derive_threshold_from_pairs`).
    - Philosophy: Like PyTorch's primitives.
    - **Not yet built** (roadmap, don't reference as existing): a general
      `Optimizer` (only `optimizers.BlockerOptimizer` exists).
@@ -166,5 +172,7 @@ clusters = resolver.resolve(records)   # -> list[set[str]]
 
 # High-level: the verbs do the same thing with schema inference + spend cap.
 from langres import dedupe
-result = dedupe(records)               # judge="auto" by default
+result = dedupe(records)               # judge="auto" (default) needs an API key --
+                                       # raises NoJudgeAvailableError without one;
+                                       # judge="string" is the offline opt-in
 ```

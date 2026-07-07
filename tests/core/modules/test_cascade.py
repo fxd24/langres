@@ -18,6 +18,13 @@ from langres.core.modules.cascade import CascadeModule
 
 logger = logging.getLogger(__name__)
 
+# The direct CascadeModule constructions throughout this file predate its T3
+# deprecation (CascadeJudge is the successor) — silence the intentional
+# DeprecationWarning module-wide so the suite output stays readable.
+# test_cascade_module_init_emits_deprecation_warning still asserts the warning
+# fires: pytest.warns installs its own "always" filter inside the block.
+pytestmark = pytest.mark.filterwarnings("ignore:CascadeModule is deprecated:DeprecationWarning")
+
 
 def test_cascade_module_initialization():
     """Test CascadeModule initialization with valid parameters."""
@@ -527,6 +534,17 @@ def test_cascade_module_requires_api_key():
             low_threshold=0.3,
             high_threshold=0.9,
         )
+
+
+def test_cascade_module_init_emits_deprecation_warning():
+    """Direct CascadeModule construction warns, pointing at CascadeJudge (T3).
+
+    methods.py's own benchmark construction site suppresses this warning
+    deliberately — see test_methods.py's
+    ``test_cascade_factory_suppresses_cascade_module_deprecation``.
+    """
+    with pytest.warns(DeprecationWarning, match="CascadeJudge"):
+        CascadeModule(llm_api_key="test-key")
 
 
 @pytest.mark.slow

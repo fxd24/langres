@@ -54,6 +54,7 @@ imports no dataset (no ``langres.data``), so it stays free of the
 ``core -> data -> core`` cycle the harness was designed to avoid.
 """
 
+import warnings
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -172,12 +173,19 @@ def _build_cascade_module(
     ``client.chat.completions.create(...)``, not the ``completion(...)`` an
     ``llm_judge`` (LiteLLM) client exposes.
     """
-    module: CascadeModule[Any] = CascadeModule(
-        llm_model=llm_model,
-        llm_api_key="injected",
-        low_threshold=low_threshold,
-        high_threshold=high_threshold,
-    )
+    with warnings.catch_warnings():
+        # CascadeModule is deprecated in favor of CascadeJudge (T3), but this
+        # benchmark method registry still constructs it deliberately (migration
+        # tracked in TODOS.md). Suppress the DeprecationWarning at this one
+        # sanctioned construction site so run_methods("cascade") stays
+        # noise-free for callers.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        module: CascadeModule[Any] = CascadeModule(
+            llm_model=llm_model,
+            llm_api_key="injected",
+            low_threshold=low_threshold,
+            high_threshold=high_threshold,
+        )
     if llm_client is not None:
         module._llm_client = llm_client
     return module

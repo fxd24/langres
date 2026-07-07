@@ -1,0 +1,562 @@
+[
+  {
+    "id": "f534",
+    "name": "arnie morton's of chicago",
+    "addr": "435 s. la cienega blv.",
+    "city": "los angeles",
+    "phone": "310/246-1501"
+  },
+  {
+    "id": "f535",
+    "name": "art's delicatessen",
+    "addr": "12224 ventura blvd.",
+    "city": "studio city",
+    "phone": "818/762-1221"
+  },
+  {
+    "id": "f536",
+    "name": "hotel bel-air",
+    "addr": "701 stone canyon rd.",
+    "city": "bel air",
+    "phone": "310/472-1211"
+  },
+  {
+    "id": "f537",
+    "name": "cafe bizou",
+    "addr": "14016 ventura blvd.",
+    "city": "sherman oaks",
+    "phone": "818/788-3536"
+  },
+  {
+    "id": "f538",
+    "name": "campanile",
+    "addr": "624 s. la brea ave.",
+    "city": "los angeles",
+    "phone": "213/938-1447"
+  },
+  {
+    "id": "f539",
+    "name": "chinois on main",
+    "addr": "2709 main st.",
+    "city": "santa monica",
+    "phone": "310/392-9025"
+  },
+  {
+    "id": "f540",
+    "name": "citrus",
+    "addr": "6703 melrose ave.",
+    "city": "los angeles",
+    "phone": "213/857-0034"
+  },
+  {
+    "id": "f541",
+    "name": "fenix",
+    "addr": "8358 sunset blvd. west",
+    "city": "hollywood",
+    "phone": "213/848-6677"
+  },
+  {
+    "id": "f542",
+    "name": "granita",
+    "addr": "23725 w. malibu rd.",
+    "city": "malibu",
+    "phone": "310/456-0488"
+  },
+  {
+    "id": "f543",
+    "name": "grill on the alley",
+    "addr": "9560 dayton way",
+    "city": "los angeles",
+    "phone": "310/276-0615"
+  },
+  {
+    "id": "f544",
+    "name": "restaurant katsu",
+    "addr": "1972 n. hillhurst ave.",
+    "city": "los angeles",
+    "phone": "213/665-1891"
+  },
+  {
+    "id": "f545",
+    "name": "l'orangerie",
+    "addr": "903 n. la cienega blvd.",
+    "city": "los angeles",
+    "phone": "310/652-9770"
+  },
+  {
+    "id": "f546",
+    "name": "le chardonnay",
+    "addr": "8284 melrose ave.",
+    "city": "los angeles",
+    "phone": "213/655-8880"
+  },
+  {
+    "id": "f547",
+    "name": "locanda veneta",
+    "addr": "3rd st.",
+    "city": "los angeles",
+    "phone": "310/274-1893"
+  },
+  {
+    "id": "f548",
+    "name": "matsuhisa",
+    "addr": "129 n. la cienega blvd.",
+    "city": "beverly hills",
+    "phone": "310/659-9639"
+  },
+  {
+    "id": "f549",
+    "name": "the palm",
+    "addr": "9001 santa monica blvd.",
+    "city": "los angeles",
+    "phone": "310/550-8811"
+  },
+  {
+    "id": "f550",
+    "name": "patina",
+    "addr": "5955 melrose ave.",
+    "city": "los angeles",
+    "phone": "213/467-1108"
+  },
+  {
+    "id": "f551",
+    "name": "philippe's the original",
+    "addr": "1001 n. alameda st.",
+    "city": "los angeles",
+    "phone": "213/628-3781"
+  },
+  {
+    "id": "f552",
+    "name": "pinot bistro",
+    "addr": "12969 ventura blvd.",
+    "city": "los angeles",
+    "phone": "818/990-0500"
+  },
+  {
+    "id": "f553",
+    "name": "rex il ristorante",
+    "addr": "617 s. olive st.",
+    "city": "los angeles",
+    "phone": "213/627-2300"
+  },
+  {
+    "id": "f554",
+    "name": "spago",
+    "addr": "1114 horn ave.",
+    "city": "los angeles",
+    "phone": "310/652-4025"
+  },
+  {
+    "id": "f555",
+    "name": "valentino",
+    "addr": "3115 pico blvd.",
+    "city": "santa monica",
+    "phone": "310/829-4313"
+  },
+  {
+    "id": "f556",
+    "name": "yujean kang's gourmet chinese cuisine",
+    "addr": "67 n. raymond ave.",
+    "city": "los angeles",
+    "phone": "818/585-0855"
+  },
+  {
+    "id": "f557",
+    "name": "21 club",
+    "addr": "21 w. 52nd st.",
+    "city": "new york",
+    "phone": "212/582-7200"
+  },
+  {
+    "id": "f558",
+    "name": "aquavit",
+    "addr": "13 w. 54th st.",
+    "city": "new york",
+    "phone": "212/307-7311"
+  },
+  {
+    "id": "f559",
+    "name": "aureole",
+    "addr": "34 e. 61st st.",
+    "city": "new york",
+    "phone": "212/ 319-1660"
+  },
+  {
+    "id": "f560",
+    "name": "cafe lalo",
+    "addr": "201 w. 83rd st.",
+    "city": "new york",
+    "phone": "212/496-6031"
+  },
+  {
+    "id": "f561",
+    "name": "cafe des artistes",
+    "addr": "1 w. 67th st.",
+    "city": "new york",
+    "phone": "212/877-3500"
+  },
+  {
+    "id": "f562",
+    "name": "carmine's",
+    "addr": "2450 broadway  between 90th and 91st sts.",
+    "city": "new york",
+    "phone": "212/362-2200"
+  },
+  {
+    "id": "f563",
+    "name": "carnegie deli",
+    "addr": "854 7th ave.  between 54th and 55th sts.",
+    "city": "new york",
+    "phone": "212/757-2245"
+  },
+  {
+    "id": "f564",
+    "name": "chanterelle",
+    "addr": "2 harrison st.  near hudson st.",
+    "city": "new york",
+    "phone": "212/966-6960"
+  },
+  {
+    "id": "f565",
+    "name": "daniel",
+    "addr": "20 e. 76th st.",
+    "city": "new york",
+    "phone": "212/288-0033"
+  },
+  {
+    "id": "f566",
+    "name": "dawat",
+    "addr": "210 e. 58th st.",
+    "city": "new york",
+    "phone": "212/355-7555"
+  },
+  {
+    "id": "f567",
+    "name": "felidia",
+    "addr": "243 e. 58th st.",
+    "city": "new york",
+    "phone": "212/758-1479"
+  },
+  {
+    "id": "f568",
+    "name": "four seasons grill room",
+    "addr": "99 e. 52nd st.",
+    "city": "new york",
+    "phone": "212/754-9494"
+  },
+  {
+    "id": "f569",
+    "name": "gotham bar & grill",
+    "addr": "12 e. 12th st.",
+    "city": "new york",
+    "phone": "212/620-4020"
+  },
+  {
+    "id": "f570",
+    "name": "gramercy tavern",
+    "addr": "42 e. 20th st.  between park ave. s and broadway",
+    "city": "new york",
+    "phone": "212/477-0777"
+  },
+  {
+    "id": "f571",
+    "name": "island spice",
+    "addr": "402 w. 44th st.",
+    "city": "new york",
+    "phone": "212/765-1737"
+  },
+  {
+    "id": "f572",
+    "name": "jo jo",
+    "addr": "160 e. 64th st.",
+    "city": "new york",
+    "phone": "212/223-5656"
+  },
+  {
+    "id": "f573",
+    "name": "la caravelle",
+    "addr": "33 w. 55th st.",
+    "city": "new york",
+    "phone": "212/586-4252"
+  },
+  {
+    "id": "z219",
+    "name": "arnie morton's of chicago",
+    "addr": "435 s. la cienega blvd.",
+    "city": "los angeles",
+    "phone": "310-246-1501"
+  },
+  {
+    "id": "z220",
+    "name": "art's deli",
+    "addr": "12224 ventura blvd.",
+    "city": "studio city",
+    "phone": "818-762-1221"
+  },
+  {
+    "id": "z221",
+    "name": "bel-air hotel",
+    "addr": "701 stone canyon rd.",
+    "city": "bel air",
+    "phone": "310-472-1211"
+  },
+  {
+    "id": "z222",
+    "name": "cafe bizou",
+    "addr": "14016 ventura blvd.",
+    "city": "sherman oaks",
+    "phone": "818-788-3536"
+  },
+  {
+    "id": "z223",
+    "name": "campanile",
+    "addr": "624 s. la brea ave.",
+    "city": "los angeles",
+    "phone": "213-938-1447"
+  },
+  {
+    "id": "z224",
+    "name": "chinois on main",
+    "addr": "2709 main st.",
+    "city": "santa monica",
+    "phone": "310-392-9025"
+  },
+  {
+    "id": "z225",
+    "name": "citrus",
+    "addr": "6703 melrose ave.",
+    "city": "los angeles",
+    "phone": "213-857-0034"
+  },
+  {
+    "id": "z226",
+    "name": "fenix at the argyle",
+    "addr": "8358 sunset blvd.",
+    "city": "w. hollywood",
+    "phone": "213-848-6677"
+  },
+  {
+    "id": "z227",
+    "name": "granita",
+    "addr": "23725 w. malibu rd.",
+    "city": "malibu",
+    "phone": "310-456-0488"
+  },
+  {
+    "id": "z228",
+    "name": "grill  the",
+    "addr": "9560 dayton way",
+    "city": "beverly hills",
+    "phone": "310-276-0615"
+  },
+  {
+    "id": "z229",
+    "name": "katsu",
+    "addr": "1972 hillhurst ave.",
+    "city": "los feliz",
+    "phone": "213-665-1891"
+  },
+  {
+    "id": "z230",
+    "name": "l'orangerie",
+    "addr": "903 n. la cienega blvd.",
+    "city": "w. hollywood",
+    "phone": "310-652-9770"
+  },
+  {
+    "id": "z231",
+    "name": "le chardonnay (los angeles)",
+    "addr": "8284 melrose ave.",
+    "city": "los angeles",
+    "phone": "213-655-8880"
+  },
+  {
+    "id": "z232",
+    "name": "locanda veneta",
+    "addr": "8638 w. third st.",
+    "city": "los angeles",
+    "phone": "310-274-1893"
+  },
+  {
+    "id": "z233",
+    "name": "matsuhisa",
+    "addr": "129 n. la cienega blvd.",
+    "city": "beverly hills",
+    "phone": "310-659-9639"
+  },
+  {
+    "id": "z234",
+    "name": "palm  the (los angeles)",
+    "addr": "9001 santa monica blvd.",
+    "city": "w. hollywood",
+    "phone": "310-550-8811"
+  },
+  {
+    "id": "z235",
+    "name": "patina",
+    "addr": "5955 melrose ave.",
+    "city": "los angeles",
+    "phone": "213-467-1108"
+  },
+  {
+    "id": "z236",
+    "name": "philippe the original",
+    "addr": "1001 n. alameda st.",
+    "city": "chinatown",
+    "phone": "213-628-3781"
+  },
+  {
+    "id": "z237",
+    "name": "pinot bistro",
+    "addr": "12969 ventura blvd.",
+    "city": "studio city",
+    "phone": "818-990-0500"
+  },
+  {
+    "id": "z238",
+    "name": "rex il ristorante",
+    "addr": "617 s. olive st.",
+    "city": "los angeles",
+    "phone": "213-627-2300"
+  },
+  {
+    "id": "z239",
+    "name": "spago (los angeles)",
+    "addr": "8795 sunset blvd.",
+    "city": "w. hollywood",
+    "phone": "310-652-4025"
+  },
+  {
+    "id": "z240",
+    "name": "valentino",
+    "addr": "3115 pico blvd.",
+    "city": "santa monica",
+    "phone": "310-829-4313"
+  },
+  {
+    "id": "z241",
+    "name": "yujean kang's",
+    "addr": "67 n. raymond ave.",
+    "city": "pasadena",
+    "phone": "818-585-0855"
+  },
+  {
+    "id": "z242",
+    "name": "21 club",
+    "addr": "21 w. 52nd st.",
+    "city": "new york city",
+    "phone": "212-582-7200"
+  },
+  {
+    "id": "z243",
+    "name": "aquavit",
+    "addr": "13 w. 54th st.",
+    "city": "new york city",
+    "phone": "212-307-7311"
+  },
+  {
+    "id": "z244",
+    "name": "aureole",
+    "addr": "34 e. 61st st.",
+    "city": "new york city",
+    "phone": "212-319-1660"
+  },
+  {
+    "id": "z245",
+    "name": "cafe lalo",
+    "addr": "201 w. 83rd st.",
+    "city": "new york city",
+    "phone": "212-496-6031"
+  },
+  {
+    "id": "z246",
+    "name": "cafe des artistes",
+    "addr": "1 w. 67th st.",
+    "city": "new york city",
+    "phone": "212-877-3500"
+  },
+  {
+    "id": "z247",
+    "name": "carmine's",
+    "addr": "2450 broadway",
+    "city": "new york city",
+    "phone": "212-362-2200"
+  },
+  {
+    "id": "z248",
+    "name": "carnegie deli",
+    "addr": "854 seventh ave.",
+    "city": "new york city",
+    "phone": "212-757-2245"
+  },
+  {
+    "id": "z249",
+    "name": "chanterelle",
+    "addr": "2 harrison st.",
+    "city": "new york city",
+    "phone": "212-966-6960"
+  },
+  {
+    "id": "z250",
+    "name": "daniel",
+    "addr": "20 e. 76th st.",
+    "city": "new york city",
+    "phone": "212-288-0033"
+  },
+  {
+    "id": "z251",
+    "name": "dawat",
+    "addr": "210 e. 58th st.",
+    "city": "new york city",
+    "phone": "212-355-7555"
+  },
+  {
+    "id": "z252",
+    "name": "felidia",
+    "addr": "243 e. 58th st.",
+    "city": "new york city",
+    "phone": "212-758-1479"
+  },
+  {
+    "id": "z253",
+    "name": "four seasons",
+    "addr": "99 e. 52nd st.",
+    "city": "new york city",
+    "phone": "212-754-9494"
+  },
+  {
+    "id": "z254",
+    "name": "gotham bar & grill",
+    "addr": "12 e. 12th st.",
+    "city": "new york city",
+    "phone": "212-620-4020"
+  },
+  {
+    "id": "z255",
+    "name": "gramercy tavern",
+    "addr": "42 e. 20th st.",
+    "city": "new york city",
+    "phone": "212-477-0777"
+  },
+  {
+    "id": "z256",
+    "name": "island spice",
+    "addr": "402 w. 44th st.",
+    "city": "new york city",
+    "phone": "212-765-1737"
+  },
+  {
+    "id": "z257",
+    "name": "jo jo",
+    "addr": "160 e. 64th st.",
+    "city": "new york city",
+    "phone": "212-223-5656"
+  },
+  {
+    "id": "z258",
+    "name": "la caravelle",
+    "addr": "33 w. 55th st.",
+    "city": "new york city",
+    "phone": "212-586-4252"
+  }
+]

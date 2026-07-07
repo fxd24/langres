@@ -1,10 +1,83 @@
 # Changelog
 
+## [0.2.0] - 2026-07-06 — the closed flywheel loop
+
+### ⚠️ BREAKING
+
+- **`judge="auto"` (the default for `link`/`dedupe`) now RAISES `NoJudgeAvailableError`
+  when no LLM API key is set, instead of silently falling back to fuzzy string
+  matching.** Unsupervised string matching over-merges on unlabeled data (in the
+  motivating demo it collapsed five distinct entities into one cluster with no
+  error), so the library refuses rather than hand back a confidently-wrong answer.
+  The unpinned-model-price branch raises the same error.
+- **`fallback_reason` removed** from `DedupeResult` / `LinkVerdict` / `ResolvedModule`
+  / `ResolvedJudge` — no path could set it after fail-fast, and an always-`None`
+  field is anti-self-describing.
+
+  **Migration:**
+  - Keyless callers: pass `judge="string"` explicitly to opt into offline fuzzy
+    matching (lower quality; pair it with `derive_threshold` on labeled data).
+  - Keyed default path: install the `[llm]` extra (`uv sync --extra llm` /
+    `pip install 'langres[llm]'`) **and** export `OPENROUTER_API_KEY`; the run is
+    spend-capped at `$1` by default (`budget_usd=`).
+  - Catch `NoJudgeAvailableError` (now root-exported from `langres`, alongside
+    `BudgetExceeded`) on the front door.
+  - Replace any `result.fallback_reason` reads with `result.judge_used` /
+    `result.score_type` plus the auto-path selection notice.
+
+### Added — the flywheel closed loop (bootstrap → log → review → harvest → train → cascade)
+
+- **`select_for_review` + `ReviewQueue`** (`langres.core.review`, root-exported) —
+  pick the judged pairs most worth a human's attention: `uncertainty` (near the
+  threshold), `disagreement` (two logs differ), and first-class `audit` (a seeded
+  governance sample that catches confident false merges). Snapshot-semantics queue.
+- **`langres` CLI** (`langres.cli`) — `review` (terminal y/n/s/q labeler, resumable),
+  `export-csv` / `import-csv` (spreadsheet round-trip, the primary review path),
+  `--version`. Formula-injection + terminal-control-char hardened; fully stream-injectable.
+- **`CascadeJudge`** (`cascade_judge`) — a cheap student everywhere, escalation only
+  inside a `(low, high)` band; escalated provenance preserves `cost_usd`/`model`;
+  serializes a fitted student through `Resolver.save`/`load`. (Old `CascadeModule`
+  deprecated.)
+- **Silver-only calibration guard** — `derive_threshold_from_pairs` warns when every
+  pair is a judge verdict (circular); overlay human corrections first.
+- **`examples/flywheel_closed_loop.py`** — the whole loop end to end at **$0** on a
+  committed Fodors-Zagat fixture, with a data-derived escalation band and an honest
+  "plumbing not economics" report.
+
+Docs (`docs/GETTING_STARTED.md` + the doc-ladder rewire) are detailed under
+[Unreleased] below.
+
 ## [Unreleased] - POC Phase
 
 - Designed two-layer API architecture and POC validation plan (3 approaches: classical, semantic, LLM hybrid)
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
+
+### Flywheel closed loop — `docs/GETTING_STARTED.md` + doc-ladder rewire
+
+The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`
+/ `ReviewQueue`, the `langres` review CLI, `CascadeJudge`, and
+`examples/flywheel_closed_loop.py`), telling the lifecycle end to end.
+
+- **`docs/GETTING_STARTED.md`** (new, "start here") — the flywheel at altitude:
+  LLM bootstrap under a cap (fail-fast `"auto"`: bring an LLM or explicitly opt
+  into `judge="string"`) → log from day 1 → review at the margin
+  (`select_for_review` + `langres review` / CSV round-trip) → harvest silver +
+  gold (with the circularity caveat) → train a cheap trainable student
+  (RFJudge, Magellan-style — **not** LLM distillation) + `derive_threshold` →
+  `CascadeJudge` → `Resolver.save`/`load`. Every step carries a runnable snippet
+  inline; two explicit lanes (keyless `judge="string"` / keyed default `auto`);
+  a competitive-positioning section (vs dedupe/Zingg/Splink, "use Splink when… /
+  use langres when…"); the audit slice as the governance/trust mechanism; the
+  ids-only review mode as the PII privacy posture; and two flywheel operating
+  notes (stable ids; one log per run, or dedupe rows before harvest).
+- **Snippet-rot guard** (`tests/docs/test_getting_started_snippets.py`) — runs
+  the guide's first keyless snippet verbatim at **$0** (hard-refuses any
+  non-`judge="string"` block, so a paid snippet can never slip in).
+- **Doc-ladder rewire** — `README.md` links GETTING_STARTED first as "start
+  here" (+ a quickstart pointer); `docs/TUTORIAL_YOUR_OWN_CSV.md` gains it as
+  the big-picture rung and in the calibration tease; `examples/README.md`
+  Start-here tier gains `flywheel_closed_loop.py`.
 
 ### Wave 3 (W3): experiment DX — docs, the paid-smoke harness + result, examples curation
 

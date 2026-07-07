@@ -3,10 +3,18 @@
 This module implements the cascade pattern that optimizes cost while maintaining
 quality by using cheap embedding similarity checks for obvious cases and expensive
 LLM judgment only for uncertain cases.
+
+.. deprecated::
+    Prefer :class:`~langres.core.modules.cascade_judge.CascadeJudge`, which
+    cascades ANY two pairwise ``Module`` instances (student + escalation band)
+    and round-trips through ``Resolver.save``/``load`` via the registry.
+    ``CascadeModule`` remains only for the ``methods.py`` benchmark path
+    (migration tracked in ``TODOS.md``).
 """
 
 import logging
 import re
+import warnings
 from collections.abc import Iterator
 
 import litellm
@@ -38,6 +46,12 @@ __all__ = ["CASCADE_LLM_DECISION_STEP", "CascadeModule", "DEFAULT_PROMPT"]
 
 class CascadeModule(Module[SchemaT]):
     """Schema-agnostic cascade module: embeddings + LLM with early exit.
+
+    .. deprecated::
+        Prefer :class:`~langres.core.modules.cascade_judge.CascadeJudge`
+        (composes any two pairwise Modules, serializable via the registry).
+        Constructing this class emits a ``DeprecationWarning``; only the
+        ``methods.py`` benchmark path still builds it deliberately.
 
     This module implements a multi-stage cascade pattern to optimize cost:
     1. Stage 1: Cheap embedding similarity check
@@ -117,6 +131,15 @@ class CascadeModule(Module[SchemaT]):
         Raises:
             ValueError: If thresholds are invalid or API key is missing
         """
+        warnings.warn(
+            "CascadeModule is deprecated: use "
+            "langres.core.modules.cascade_judge.CascadeJudge, which cascades any "
+            "two pairwise Modules (student + escalation band) and round-trips "
+            "through Resolver.save/load. CascadeModule remains only for the "
+            "methods.py benchmark path (migration tracked in TODOS.md).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not llm_api_key:
             raise ValueError("LLM API key is required")
 

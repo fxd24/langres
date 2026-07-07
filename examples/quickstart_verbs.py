@@ -1,11 +1,14 @@
 """Quickstart: dedupe records with zero labels in a handful of lines.
 
-Offline by default (D4): no API key is required, no network call is made, and
-no embedding model is downloaded -- this toy dataset (N <= 100) resolves
-through langres.dedupe's default zero-spend "string" judge. If
-OPENROUTER_API_KEY or OPENAI_API_KEY is set, this prints an "upgrade" note
-(it does NOT actually spend money -- see docs/EXPERIMENTS.md for a real
-LLM-judge walkthrough).
+Offline on purpose: this example pins judge="string", so no API key is
+required, no network call is made, and no embedding model is downloaded --
+this toy dataset (N <= 100) resolves through the zero-spend "string" judge.
+The default judge="auto" is different: it requires an LLM API key
+(OPENROUTER_API_KEY/OPENAI_API_KEY, plus the [llm] extra) and raises
+NoJudgeAvailableError without one -- langres never silently falls back to
+fuzzy matching. If a key IS set, this prints an "upgrade" note (it does NOT
+actually spend money -- see docs/EXPERIMENTS.md for a real LLM-judge
+walkthrough).
 
 Run it:
     uv run python examples/quickstart_verbs.py
@@ -46,7 +49,10 @@ if os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY"):
 else:
     print(
         "\nNo OPENROUTER_API_KEY/OPENAI_API_KEY set: dedupe(records) with the "
-        "default judge=\"auto\" would fall back to this same zero-spend 'string' "
-        "judge (with one warning). Set one of those env vars to try a real LLM "
-        "judge -- it runs under a $1 default spend cap (budget_usd=)."
+        'default judge="auto" would raise NoJudgeAvailableError -- langres '
+        "never silently falls back to fuzzy matching. This example opts into "
+        "the zero-spend 'string' judge explicitly (judge=\"string\"). To use a "
+        "real LLM judge, set one of those env vars and install the [llm] extra "
+        "(uv sync --extra llm) -- it runs under a $1 default spend cap "
+        "(budget_usd=)."
     )

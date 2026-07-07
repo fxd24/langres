@@ -50,7 +50,16 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # ``*_embedder``) — those packages are now optional (``pip install
 # langres[llm]`` / ``langres[semantic]``), so importing them must be deferred
 # to the first actual access, exactly like ``dspy_judge``.
+#
+# ``cascade_judge`` is pure-core (no heavy deps) and IS eager-imported today, so
+# this entry is redundant *right now* — it is kept deliberately as the same
+# saved-artifact safety net as its ``rf_judge``/``correlation_clusterer`` peers
+# above: a ``CascadeJudge`` wrapping a fitted student is exactly what lands in a
+# saved ``Resolver`` artifact, so its ``type_name`` must keep resolving even if a
+# future eager-import trim (like W0.4's) drops it from ``core/__init__.py``. It
+# is here for parity with those peers, not because it needs dep deferral.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
+    "cascade_judge": "langres.core.modules.cascade_judge",
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.modules.dspy_judge",

@@ -1,6 +1,6 @@
 [project]
 name = "langres"
-version = "0.1.0"
+version = "0.2.0"
 description = "A two-layer entity resolution framework with optimization, blocking, and human-in-the-loop capabilities"
 readme = "README.md"
 license = "Apache-2.0"
@@ -45,6 +45,11 @@ classifiers = [
 Repository = "https://github.com/raisesquad/langres"
 Issues = "https://github.com/raisesquad/langres/issues"
 Changelog = "https://github.com/raisesquad/langres/blob/main/CHANGELOG.md"
+
+[project.scripts]
+# Console-script entry point for the `langres` CLI (review / export-csv /
+# import-csv). Hand-edited: uv/hatchling do not manage [project.scripts].
+langres = "langres.cli:main"
 
 [project.optional-dependencies]
 # The embedding/vector stack -- VectorBlocker, embeddings.py, indexes.py

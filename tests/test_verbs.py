@@ -11,6 +11,7 @@ import inspect
 import math
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,7 @@ import pytest
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
+from langres import NoJudgeAvailableError
 from langres.clients.openrouter import BudgetExceeded
 from langres.core.judgement_log import JudgementLog
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -112,7 +114,6 @@ class TestLinkVerdict:
             reasoning=None,
             judge_used="string",
             score_type="heuristic",
-            fallback_reason=None,
             judgement=judgement,
         )
         assert bool(verdict) is True
@@ -136,7 +137,6 @@ class TestLinkVerdict:
             reasoning=None,
             judge_used="string",
             score_type="heuristic",
-            fallback_reason=None,
             judgement=judgement,
         )
         text = repr(verdict)
@@ -147,21 +147,18 @@ class TestLinkVerdict:
 
 class TestDedupeResult:
     def test_behaves_like_a_plain_list(self) -> None:
-        result = DedupeResult(
-            [{"a", "b"}], judge_used="string", score_type="heuristic", fallback_reason=None
-        )
+        result = DedupeResult([{"a", "b"}], judge_used="string", score_type="heuristic")
         assert result == [{"a", "b"}]
         assert len(result) == 1
         assert list(result) == [{"a", "b"}]
 
     def test_carries_judge_metadata(self) -> None:
-        result = DedupeResult([], judge_used="embedding", score_type="sim_cos", fallback_reason="x")
+        result = DedupeResult([], judge_used="embedding", score_type="sim_cos")
         assert result.judge_used == "embedding"
         assert result.score_type == "sim_cos"
-        assert result.fallback_reason == "x"
 
     def test_repr_includes_judge_used(self) -> None:
-        result = DedupeResult([], judge_used="string", score_type="heuristic", fallback_reason=None)
+        result = DedupeResult([], judge_used="string", score_type="heuristic")
         assert "judge_used='string'" in repr(result)
 
 
@@ -266,13 +263,32 @@ class TestCheckNoDuplicateIds:
 
 class TestDedupe:
     def test_empty_input_returns_empty_result(self) -> None:
-        result = dedupe([])
+        """dedupe([]) short-circuits BEFORE judge resolution: keyless empty
+        input must never raise NoJudgeAvailableError."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
+        ):
+            result = dedupe([])
         assert result == []
         assert result.judge_used == "none"
 
     def test_single_record_returns_empty(self) -> None:
         result = dedupe([{"id": "a", "name": "Solo"}], judge="string")
         assert result == []
+        assert result.judge_used == "none"
+
+    def test_single_record_keyless_short_circuits_before_judge_resolution(self) -> None:
+        """The docstring promises a single record -> [] (no pair possible):
+        one keyless record must return [] under the default judge="auto",
+        never raise NoJudgeAvailableError -- zero spend is possible."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
+        ):
+            result = dedupe([{"id": "a", "name": "Solo"}])
+        assert result == []
+        assert result.judge_used == "none"
 
     def test_duplicate_id_raises(self) -> None:
         records = [{"id": "a", "name": "X"}, {"id": "a", "name": "Y"}]
@@ -330,20 +346,17 @@ class TestDedupe:
         partial = excinfo.value.partial_judgements
         assert len(partial) == 2
 
-    def test_no_key_falls_back_to_string_with_fallback_reason(self) -> None:
+    def test_no_key_raises_no_judge_available_error(self) -> None:
+        records = [
+            {"id": "1", "name": "Acme"},
+            {"id": "2", "name": "Acme"},
+        ]
         with (
-            pytest.MonkeyPatch.context() as mp,
-            pytest.warns(UserWarning),
+            patch.dict("os.environ", {}, clear=True),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
+            pytest.raises(NoJudgeAvailableError, match="no API key"),
         ):
-            mp.delenv("OPENROUTER_API_KEY", raising=False)
-            mp.delenv("OPENAI_API_KEY", raising=False)
-            records = [
-                {"id": "1", "name": "Acme"},
-                {"id": "2", "name": "Acme"},
-            ]
-            result = dedupe(records, threshold=0.5)
-        assert result.judge_used == "string"
-        assert result.fallback_reason is not None
+            dedupe(records)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +420,15 @@ class TestLink:
         with pytest.raises(RuntimeError, match="produced no judgement"):
             link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_EmptyModule())
 
+    def test_no_key_raises_no_judge_available_error(self) -> None:
+        """link() fails fast on the keyless auto path exactly like dedupe()."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
+            pytest.raises(NoJudgeAvailableError, match="no API key"),
+        ):
+            link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"})
+
     def test_cap_breach_raises_with_partial_judgements(self) -> None:
         with pytest.raises(BudgetExceeded) as excinfo:
             link(
@@ -429,7 +451,6 @@ class TestLink:
             _SpendCappedModule(_dummy_judge(match=True, prob=0.8), budget_usd=1.0),
             "zero_shot_llm",
             "openrouter/openai/gpt-4o-mini",
-            None,
         )
         with (
             patch("langres.verbs.resolve_judge", return_value=fake_resolved),
@@ -449,7 +470,6 @@ class TestLink:
             _SpendCappedModule(_dummy_judge(match=True, prob=0.8), budget_usd=2.0),
             "zero_shot_llm",
             "unknown/model-not-in-table",
-            None,
         )
         with (
             patch("langres.verbs.resolve_judge", return_value=fake_resolved),
@@ -471,6 +491,128 @@ class TestLinkEmbeddingJudge:
         assert verdict.score > 0.99
         assert verdict.score_type == "sim_cos"
         assert verdict.judge_used == "embedding"
+
+
+# ---------------------------------------------------------------------------
+# judge="auto" selection notice: which model, that money is involved, the cap.
+# Must fire BEFORE any paid call, on both verbs, and ONLY on the auto path.
+# ---------------------------------------------------------------------------
+
+
+class _EventRecordingJudge(Module[object]):
+    """$0 stand-in for the auto-picked LLM judge that records when scoring
+    actually happens -- lets a test assert the selection notice fired first."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            self._events.append("score")
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,  # type: ignore[attr-defined]
+                right_id=candidate.right.id,  # type: ignore[attr-defined]
+                score=0.9,
+                score_type="prob_llm",
+                decision_step="fake",
+                provenance={"cost_usd": 0.0},
+            )
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
+class TestAutoSelectionNotice:
+    """Zero-spend throughout: the env key is fake and ``build_judge`` is
+    patched to a $0 recording judge, so nothing paid can ever run."""
+
+    @staticmethod
+    def _patch_auto_path(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-not-a-real-key")
+        monkeypatch.setattr(
+            "langres.core.presets._notice",
+            lambda message: events.append(f"notice:{message}"),
+        )
+        judge_module = _EventRecordingJudge(events)
+        monkeypatch.setattr(
+            "langres.core.presets.build_judge",
+            lambda judge, schema, *, model=None, entity_noun="entity": judge_module,
+        )
+
+    def test_dedupe_auto_notice_fires_before_any_scoring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: list[str] = []
+        self._patch_auto_path(monkeypatch, events)
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        result = dedupe(records, judge="auto")
+        assert result.judge_used == "zero_shot_llm"
+        selection = [i for i, e in enumerate(events) if "selected the LLM judge" in e]
+        assert len(selection) == 1
+        assert "score" in events
+        assert selection[0] < events.index("score")
+
+    def test_link_auto_notice_fires_before_any_scoring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: list[str] = []
+        self._patch_auto_path(monkeypatch, events)
+        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Corp"}, judge="auto")
+        assert verdict.judge_used == "zero_shot_llm"
+        selection = [i for i, e in enumerate(events) if "selected the LLM judge" in e]
+        assert len(selection) == 1
+        assert "score" in events
+        assert selection[0] < events.index("score")
+
+    def test_dedupe_auto_honors_model_override_and_notice_names_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: the auto pick used to clobber a caller-supplied model=."""
+        seen_models: list[str | None] = []
+        judge_module = _EventRecordingJudge([])
+
+        def fake_build_judge(
+            judge: object,
+            schema: object,
+            *,
+            model: str | None = None,
+            entity_noun: str = "entity",
+        ) -> Module[object]:
+            seen_models.append(model)
+            return judge_module
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-not-a-real-key")
+        monkeypatch.setattr("langres.core.presets.build_judge", fake_build_judge)
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        with pytest.warns(UserWarning, match=r"selected the LLM judge 'openai/gpt-5-mini'"):
+            result = dedupe(records, judge="auto", model="openai/gpt-5-mini")
+        assert result.judge_used == "zero_shot_llm"
+        assert seen_models == ["openai/gpt-5-mini"]
+
+    def test_string_judge_emits_no_selection_notice(self) -> None:
+        """The notice is auto-only: an explicit judge stays warning-free."""
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = dedupe(records, judge="string", threshold=0.5)
+        assert result.judge_used == "string"
+        assert not caught, f"unexpected warnings: {[str(w.message) for w in caught]}"
+
+
+def test_front_door_exceptions_are_root_exported() -> None:
+    """After fail-fast, NoJudgeAvailableError and BudgetExceeded are exactly
+    the two exceptions a front-door user must catch -- both live on `langres`
+    (hiding one in langres.clients.openrouter would read as inconsistency)."""
+    import langres
+    from langres import BudgetExceeded as root_budget_exceeded
+    from langres import NoJudgeAvailableError as root_no_judge
+    from langres.core.presets import NoJudgeAvailableError as presets_no_judge
+
+    assert root_no_judge is presets_no_judge
+    assert root_budget_exceeded is BudgetExceeded  # langres.clients.openrouter's class
+    assert "NoJudgeAvailableError" in langres.__all__
+    assert "BudgetExceeded" in langres.__all__
+    assert issubclass(root_no_judge, RuntimeError)
 
 
 # ---------------------------------------------------------------------------

@@ -49,14 +49,20 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
-│   │   ├── presets.py      # judge presets ("auto"/string/embedding/zero_shot_llm), spend cap
+│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm), NoJudgeAvailableError, spend cap
+│   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
-│   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, etc.
+│   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
+│   │   ├── judgement_log.py        # JudgementLog + LoggingModule (logs every judge call: ids, score, verdict, model, cost)
+│   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
+│   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
+│   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   │   └── optimizers/             # BlockerOptimizer (Optuna)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
