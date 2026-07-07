@@ -31,3 +31,11 @@ Every LLM cell clears the floor by **+0.21 … +0.33** at real, metered OpenRout
 cost ($5.20 total, 100% real-cost). The remaining **0.14 … 0.21** gap to Ditto —
 a *fine-tuned* specialist vs. these *zero-shot* judges — is exactly what the
 Phase 2 (#81) small-LM student is meant to close.
+
+**These are an untuned floor.** The judges use `LLMJudge`'s generic default
+prompt (no DSPy, no prompt/signature tuning, no few-shot) — hence the
+high-recall / low-precision profile (they over-call matches). langres's M4 work
+showed a **precision-tuned DSPy signature is a large lever** (cheap GLM
+0.409 → 0.757 on Amazon-Google, with *no* expensive compilation). So prompt/
+signature tuning is the near rung and a fine-tuned student the far rung on the
+ladder from this zero-shot number toward Ditto — deliberately left as follow-ups.
