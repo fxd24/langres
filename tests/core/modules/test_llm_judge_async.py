@@ -475,6 +475,36 @@ async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response, moc
 
 
 @pytest.mark.asyncio
+async def test_forward_async_records_real_cost_and_pins_provider(mock_llm_client):
+    """The async path records OpenRouter's real cost and threads the provider pin."""
+    resp = Mock()
+    resp.choices = [Mock()]
+    resp.choices[0].message.content = "MATCH\nScore: 0.9\nReasoning: Same"
+    resp.usage = Mock()
+    resp.usage.prompt_tokens = 100
+    resp.usage.completion_tokens = 50
+    resp._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 0.0007}}
+    resp.provider = "DeepInfra"
+    mock_llm_client.acompletion.return_value = resp
+
+    pin = {"only": ["DeepInfra"]}
+    module = LLMJudgeModule(client=mock_llm_client, model="openrouter/z-ai/glm-5.2", provider=pin)
+
+    candidate = ERCandidate(
+        left=CompanySchema(id="c1", name="Acme"),
+        right=CompanySchema(id="c2", name="Acme Corp"),
+        blocker_name="test",
+    )
+    j = (await module.forward_async([candidate]))[0]
+
+    assert j.provenance["cost_usd"] == pytest.approx(0.0007)
+    assert j.provenance["cost_is_real"] is True
+    assert j.provenance["provider"] == "DeepInfra"
+    extra_body = mock_llm_client.acompletion.call_args.kwargs["extra_body"]
+    assert extra_body == {"usage": {"include": True}, "provider": pin}
+
+
+@pytest.mark.asyncio
 async def test_forward_async_handles_missing_usage(mock_llm_client):
     """Test forward_async() handles responses without usage information."""
     # Response without usage info

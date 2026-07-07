@@ -149,8 +149,16 @@ class _MockLiteLLMClient:
         self.calls = 0
 
     def completion(
-        self, *, model: str, messages: list[dict[str, str]], temperature: float
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        **_kwargs: Any,
     ) -> SimpleNamespace:
+        # ``**_kwargs`` mirrors litellm.completion's real signature: on an
+        # ``openrouter/`` model LLMJudge threads ``extra_body`` (usage accounting
+        # + optional provider pin), which the client must accept and ignore here.
         self.calls += 1
         if self._boom_on_call is not None and self.calls == self._boom_on_call:
             raise RuntimeError("simulated LLM failure")
