@@ -11,11 +11,48 @@ import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
+from langres.clients.openrouter import SpendMonitor
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.llm_judge import LLMJudge, LLMJudgeModule
 from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
+
+# The hidden-param header LiteLLM's OpenRouter transform writes the real cost to.
+_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _pair() -> ERCandidate[CompanySchema]:
+    """A minimal company candidate pair for judge tests."""
+    return ERCandidate(
+        left=CompanySchema(id="c1", name="Acme Corporation"),
+        right=CompanySchema(id="c2", name="Acme Corp"),
+        blocker_name="test",
+    )
+
+
+def _openrouter_response(
+    content: str,
+    *,
+    real_cost: object,
+    provider: object,
+    prompt_tokens: int = 100,
+    completion_tokens: int = 50,
+) -> Mock:
+    """A completion response carrying OpenRouter's real billed cost + serving provider.
+
+    Mirrors how LiteLLM's OpenRouter transform surfaces usage-accounting cost
+    (``_hidden_params['additional_headers']``) and the serving provider.
+    """
+    resp = Mock()
+    resp.choices = [Mock()]
+    resp.choices[0].message.content = content
+    resp.usage = Mock()
+    resp.usage.prompt_tokens = prompt_tokens
+    resp.usage.completion_tokens = completion_tokens
+    resp._hidden_params = {"additional_headers": {_COST_HEADER: real_cost}}
+    resp.provider = provider
+    return resp
 
 
 def test_registered_under_llm_judge_via_lazy_lookup() -> None:
@@ -403,3 +440,114 @@ def test_llm_judge_handles_missing_usage_info_in_response(mock_llm_client):
     assert judgements[0].provenance["cost_usd"] == 0.0
     assert judgements[0].provenance["prompt_tokens"] == 0
     assert judgements[0].provenance["completion_tokens"] == 0
+
+
+# Real OpenRouter cost (usage accounting) + provider pinning
+
+
+def test_forward_records_real_openrouter_cost_and_provider(mocker):
+    """The real billed cost + serving provider are recorded; the estimate is skipped."""
+    client = Mock()
+    client.completion.return_value = _openrouter_response(
+        "MATCH\nScore: 0.9\nReasoning: Same company", real_cost=0.00042, provider="DeepInfra"
+    )
+    # If real cost is used, the pinned-table estimator must NOT be consulted.
+    completion_cost = mocker.patch("langres.core.modules.llm_judge.litellm.completion_cost")
+
+    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    j = list(module.forward([_pair()]))[0]
+
+    assert j.provenance["cost_usd"] == pytest.approx(0.00042)
+    assert j.provenance["cost_is_real"] is True
+    assert j.provenance["provider"] == "DeepInfra"
+    completion_cost.assert_not_called()
+
+
+def test_spend_monitor_records_the_real_cost() -> None:
+    """SpendMonitor accumulates the real billed cost that forward() records."""
+    client = Mock()
+    client.completion.return_value = _openrouter_response(
+        "MATCH\nScore: 0.8\nReasoning: x", real_cost=0.0031, provider="Together"
+    )
+    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+
+    monitor = SpendMonitor(budget_usd=1.0)
+    for j in module.forward([_pair()]):
+        monitor.add(float(j.provenance["cost_usd"]))
+
+    assert monitor.spent == pytest.approx(0.0031)
+
+
+def test_forward_falls_back_to_pinned_estimate_without_real_cost(mocker):
+    """With no real cost on the response, cost falls back to litellm's estimate."""
+    client = Mock()
+    resp = Mock()
+    resp.choices = [Mock()]
+    resp.choices[0].message.content = "MATCH\nScore: 0.7\nReasoning: x"
+    resp.usage = Mock()
+    resp.usage.prompt_tokens = 100
+    resp.usage.completion_tokens = 50
+    resp._hidden_params = {}  # no additional_headers → no real cost
+    resp.usage.cost = None  # and no raw usage.cost either
+    resp.provider = None
+    client.completion.return_value = resp
+
+    completion_cost = mocker.patch(
+        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.00777
+    )
+
+    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    j = list(module.forward([_pair()]))[0]
+
+    assert j.provenance["cost_usd"] == pytest.approx(0.00777)
+    assert j.provenance["cost_is_real"] is False
+    assert j.provenance["provider"] is None
+    completion_cost.assert_called_once_with(completion_response=resp)
+
+
+def test_openrouter_model_requests_usage_accounting() -> None:
+    """An openrouter/ model sends extra_body={"usage": {"include": True}}."""
+    client = Mock()
+    client.completion.return_value = _openrouter_response(
+        "MATCH\nScore: 0.9\nReasoning: x", real_cost=0.0001, provider="DeepInfra"
+    )
+    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+
+    list(module.forward([_pair()]))
+
+    extra_body = client.completion.call_args.kwargs["extra_body"]
+    assert extra_body["usage"] == {"include": True}
+    assert "provider" not in extra_body  # no pin configured
+
+
+def test_provider_pin_is_threaded_into_extra_body() -> None:
+    """A provider pin is passed through as extra_body["provider"] for reproducibility."""
+    client = Mock()
+    client.completion.return_value = _openrouter_response(
+        "MATCH\nScore: 0.9\nReasoning: x", real_cost=0.0001, provider="DeepInfra"
+    )
+    pin = {"order": ["DeepInfra"], "allow_fallbacks": False}
+    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2", provider=pin)
+
+    list(module.forward([_pair()]))
+
+    extra_body = client.completion.call_args.kwargs["extra_body"]
+    assert extra_body["provider"] == pin
+    assert extra_body["usage"] == {"include": True}
+
+
+def test_non_openrouter_model_sends_no_extra_body() -> None:
+    """Off OpenRouter, no usage/provider extra_body is sent (and a pin is ignored)."""
+    client = Mock()
+    resp = Mock()
+    resp.choices = [Mock()]
+    resp.choices[0].message.content = "MATCH\nScore: 0.9\nReasoning: x"
+    resp.usage = Mock()
+    resp.usage.prompt_tokens = 100
+    resp.usage.completion_tokens = 50
+    client.completion.return_value = resp
+
+    module = LLMJudgeModule(client=client, model="gpt-5-mini", provider={"only": ["X"]})
+    list(module.forward([_pair()]))
+
+    assert "extra_body" not in client.completion.call_args.kwargs

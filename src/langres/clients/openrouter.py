@@ -8,10 +8,12 @@ reports ``$0`` spend and hides real cost from any budget tally.
 
 This module lifts the *reusable* plumbing that makes cost honest — pinning
 published per-token prices into ``litellm.model_cost`` (including the dated
-runtime id), pricing judgements from their captured token counts, and building a
-no-keep-alive HTTP client that never stalls on a dead socket — out of the
-experiment scripts that first grew it, plus a small :class:`SpendMonitor` for
-budget-aware paid runs.
+runtime id), pricing judgements from their captured token counts, parsing
+OpenRouter's *actual* billed cost + serving provider off a response
+(:func:`parse_openrouter_billing`, via usage accounting) so the pinned table is
+only a fallback, and building a no-keep-alive HTTP client that never stalls on a
+dead socket — out of the experiment scripts that first grew it, plus a small
+:class:`SpendMonitor` for budget-aware paid runs.
 
 Experiment *policy* (which models to race, per-cell ledgers, model-selection
 lists) deliberately stays in the calling script: :data:`PRICES_PER_1M` is a
@@ -36,7 +38,14 @@ logger = logging.getLogger(__name__)
 #: policy: pass a caller-owned mapping to any helper below to override or extend
 #: it (e.g. to add a new model, or use negotiated rates).
 PRICES_PER_1M: dict[str, tuple[float, float]] = {
-    "openrouter/z-ai/glm-5.2": (0.95, 3.00),
+    # OpenRouter *cheapest-provider* list prices, checked 2026-07-07. These are a
+    # per-token *estimate* fallback only: the real-cost path
+    # (:func:`parse_openrouter_billing` reading usage accounting off the response)
+    # supersedes them for actual billing whenever OpenRouter reports the
+    # provider-billed cost. glm-5.2's list price also moved on this refresh.
+    "openrouter/z-ai/glm-5.2": (0.90, 2.86),
+    "openrouter/deepseek/deepseek-v4-flash": (0.09, 0.18),
+    "openrouter/deepseek/deepseek-v4-pro": (0.435, 0.87),
     "openrouter/z-ai/glm-4.6": (0.60, 2.20),
     "openrouter/openai/gpt-4o": (2.50, 10.00),
     # OpenRouter path for judge="auto" (OPENROUTER_API_KEY set) — see
@@ -261,6 +270,81 @@ def make_token_cost_track(
         )
 
     return track
+
+
+# ---------------------------------------------------------------------------
+# Real billed cost + serving provider (usage accounting)
+# ---------------------------------------------------------------------------
+
+#: The key LiteLLM's OpenRouter transform writes the provider-billed cost under
+#: (inside ``response._hidden_params["additional_headers"]``) when usage
+#: accounting is on. This is OpenRouter's *actual* cost, not LiteLLM's table
+#: estimate — see litellm/llms/openrouter/chat/transformation.py.
+_LITELLM_RESPONSE_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _real_cost_from_response(response: Any) -> float | None:
+    """Read OpenRouter's actual billed cost off a completion response, or ``None``.
+
+    Checks, in order: the LiteLLM OpenRouter transform's hidden-param header
+    (populated from ``usage.cost`` when usage accounting is requested), then a
+    raw ``usage.cost`` field. Returns ``None`` when neither is present or parses
+    (offline, non-OpenRouter, usage accounting off) so the caller can fall back
+    to the pinned per-token estimate.
+    """
+    hidden = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        headers = hidden.get("additional_headers")
+        if isinstance(headers, dict) and headers.get(_LITELLM_RESPONSE_COST_HEADER) is not None:
+            try:
+                return float(headers[_LITELLM_RESPONSE_COST_HEADER])
+            except (TypeError, ValueError):
+                pass
+    usage_cost = getattr(getattr(response, "usage", None), "cost", None)
+    if usage_cost is not None:
+        try:
+            return float(usage_cost)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _serving_provider_from_response(response: Any) -> str | None:
+    """Read the OpenRouter serving provider (e.g. ``"DeepInfra"``) off a response, or ``None``.
+
+    OpenRouter returns the upstream provider that actually served the request as
+    a top-level ``provider`` field; LiteLLM surfaces it as an attribute /
+    ``model_extra`` entry on the ``ModelResponse``. Returns ``None`` when absent.
+    """
+    provider = getattr(response, "provider", None)
+    if isinstance(provider, str) and provider:
+        return provider
+    extra = getattr(response, "model_extra", None)
+    if isinstance(extra, dict):
+        from_extra = extra.get("provider")
+        if isinstance(from_extra, str) and from_extra:
+            return from_extra
+    return None
+
+
+def parse_openrouter_billing(response: Any) -> tuple[float | None, str | None]:
+    """Parse OpenRouter's real billed cost and serving provider from a completion response.
+
+    OpenRouter reports the provider-billed cost and the upstream serving provider
+    when usage accounting is requested (``extra_body={"usage": {"include":
+    True}}``). This reads whichever the response carries, so a caller can record
+    the *actual* cost (and which provider served) instead of a pinned estimate.
+
+    Args:
+        response: A LiteLLM/OpenAI-shaped completion response.
+
+    Returns:
+        ``(cost_usd, provider)``. Each element is ``None`` when the response
+        carries no real cost / no provider (offline, non-OpenRouter route, or
+        usage accounting off) — the caller then falls back to the pinned
+        per-token estimate for cost.
+    """
+    return _real_cost_from_response(response), _serving_provider_from_response(response)
 
 
 # ---------------------------------------------------------------------------

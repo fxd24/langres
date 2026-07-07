@@ -1,6 +1,7 @@
 """Tests for langres.clients.openrouter (mock-based, $0 — no network, no spend)."""
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -13,6 +14,7 @@ from langres.clients.openrouter import (
     SpendMonitor,
     make_token_cost_track,
     no_keepalive_http_client,
+    parse_openrouter_billing,
     patch_litellm_prices,
     per_token_worst_price,
     register_runtime_model_price,
@@ -20,6 +22,34 @@ from langres.clients.openrouter import (
 from langres.core.models import PairwiseJudgement
 
 GLM = "openrouter/z-ai/glm-5.2"
+
+# The hidden-param header LiteLLM's OpenRouter transform writes the real cost to.
+_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _resp(
+    *,
+    hidden_params: object = None,
+    usage: object = None,
+    provider: object = None,
+    model_extra: object = None,
+) -> SimpleNamespace:
+    """Build a minimal completion-response stand-in for billing parsing.
+
+    Only the attributes explicitly passed are set; ``getattr(..., default)`` in
+    the parser handles the rest, matching how a real ``ModelResponse`` surfaces
+    (or omits) these fields.
+    """
+    ns = SimpleNamespace()
+    if hidden_params is not None:
+        ns._hidden_params = hidden_params
+    if usage is not None:
+        ns.usage = usage
+    if provider is not None:
+        ns.provider = provider
+    if model_extra is not None:
+        ns.model_extra = model_extra
+    return ns
 
 
 def _judgement(prompt_tokens: object, completion_tokens: object) -> PairwiseJudgement:
@@ -211,3 +241,92 @@ class TestSpendMonitor:
         monitor.add(2.0)
         assert monitor.budget_usd == pytest.approx(7.5)  # constant across spend
         assert SpendMonitor().budget_usd == pytest.approx(5.0)  # default budget
+
+
+class TestParseOpenRouterBilling:
+    """parse_openrouter_billing reads the real billed cost + serving provider."""
+
+    def test_real_cost_from_litellm_hidden_param_header(self) -> None:
+        # LiteLLM's OpenRouter transform stashes the provider-billed cost here.
+        resp = _resp(
+            hidden_params={"additional_headers": {_COST_HEADER: 0.00042}},
+            provider="DeepInfra",
+        )
+        cost, provider = parse_openrouter_billing(resp)
+        assert cost == pytest.approx(0.00042)
+        assert provider == "DeepInfra"
+
+    def test_real_cost_from_usage_cost_and_provider_from_model_extra(self) -> None:
+        # No hidden-param header: fall back to a raw usage.cost, provider via model_extra.
+        resp = _resp(
+            usage=SimpleNamespace(cost=0.0009),
+            model_extra={"provider": "Together"},
+        )
+        cost, provider = parse_openrouter_billing(resp)
+        assert cost == pytest.approx(0.0009)
+        assert provider == "Together"
+
+    def test_hidden_param_header_wins_over_usage_cost(self) -> None:
+        # The header is OpenRouter's authoritative figure; it takes precedence.
+        resp = _resp(
+            hidden_params={"additional_headers": {_COST_HEADER: 0.005}},
+            usage=SimpleNamespace(cost=0.009),
+        )
+        cost, _ = parse_openrouter_billing(resp)
+        assert cost == pytest.approx(0.005)
+
+    def test_absent_cost_and_provider_return_none(self) -> None:
+        # A bare response (no usage accounting, non-OpenRouter) yields no real cost.
+        cost, provider = parse_openrouter_billing(_resp(usage=SimpleNamespace()))
+        assert cost is None
+        assert provider is None
+
+    def test_malformed_header_and_usage_cost_are_ignored(self) -> None:
+        # Non-numeric values must not crash — they degrade to "no real cost".
+        resp = _resp(
+            hidden_params={"additional_headers": {_COST_HEADER: "not-a-number"}},
+            usage=SimpleNamespace(cost="also-bad"),
+        )
+        assert parse_openrouter_billing(resp) == (None, None)
+
+    def test_hidden_params_without_additional_headers_falls_through(self) -> None:
+        # _hidden_params present but no additional_headers → use usage.cost.
+        resp = _resp(hidden_params={}, usage=SimpleNamespace(cost=0.001))
+        cost, _ = parse_openrouter_billing(resp)
+        assert cost == pytest.approx(0.001)
+
+    def test_empty_provider_string_falls_back_to_model_extra(self) -> None:
+        # An empty provider attr is treated as absent; model_extra fills in.
+        resp = _resp(provider="", model_extra={"provider": "Fireworks"})
+        _, provider = parse_openrouter_billing(resp)
+        assert provider == "Fireworks"
+
+    def test_non_string_model_extra_provider_is_none(self) -> None:
+        resp = _resp(model_extra={"provider": 123})
+        _, provider = parse_openrouter_billing(resp)
+        assert provider is None
+
+
+class TestPriceTableRefresh:
+    """The 2026-07-07 price refresh added/updated the current OpenRouter ids."""
+
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("openrouter/z-ai/glm-5.2", (0.90, 2.86)),
+            ("openrouter/deepseek/deepseek-v4-flash", (0.09, 0.18)),
+            ("openrouter/deepseek/deepseek-v4-pro", (0.435, 0.87)),
+        ],
+    )
+    def test_refreshed_prices_present(self, model: str, expected: tuple[float, float]) -> None:
+        assert PRICES_PER_1M[model] == expected
+
+    def test_existing_entries_kept(self) -> None:
+        # The refresh must not drop pre-existing pinned models.
+        for model in (
+            "openrouter/z-ai/glm-4.6",
+            "openrouter/openai/gpt-4o",
+            "openrouter/openai/gpt-4o-mini",
+            "openai/gpt-5-mini",
+        ):
+            assert model in PRICES_PER_1M
