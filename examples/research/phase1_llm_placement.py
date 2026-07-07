@@ -224,21 +224,37 @@ class _MeteredJudge(Module[Any]):
             yield judgement
 
     def _forward_async(self, candidates: list[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
-        """Concurrent path: judge each chunk in parallel, then meter + cap-check it.
+        """Concurrent path: judge ALL chunks under a SINGLE event loop.
 
-        One ``asyncio.run`` per chunk (chunks run sequentially; within a chunk the
-        inner judge's ``forward_async`` fans out up to ``max_concurrent`` calls
-        concurrently). The cap is enforced once per chunk, so a breach stops the
-        run within a single chunk of overshoot -- the same mid-run hard stop as
-        the sequential path, just at chunk granularity.
+        litellm caches a global async logging worker bound to the FIRST event
+        loop created in the process; a *second* ``asyncio.run()`` orphans that
+        worker's queue and floods ``RuntimeError: <Queue ...> is bound to a
+        different event loop`` (one per call). So the whole judging for this call
+        runs under ONE ``asyncio.run`` (:meth:`_judge_chunks_async`) -- never one
+        per chunk. The corollary the CLI must honour: run ONE dataset per process
+        with a single-``forward`` eval (``--derive-on fixed:0.5``), so the process
+        makes exactly one ``asyncio.run`` total. ``--dataset both`` or a
+        ``valid``/``train`` derive would issue a second ``asyncio.run`` and hit
+        the same litellm bug.
+        """
+        return iter(asyncio.run(self._judge_chunks_async(candidates)))
+
+    async def _judge_chunks_async(
+        self, candidates: list[ERCandidate[Any]]
+    ) -> list[PairwiseJudgement]:
+        """Judge ``candidates`` chunk-by-chunk in one loop; meter + cap-check each.
+
+        Within the loop each chunk of ``chunk_size`` pairs fans out up to
+        ``max_concurrent`` concurrent calls (retry-backed), is metered, then the
+        cap is ``check()``-ed once -- the mid-run hard stop at chunk granularity
+        (a breach stops within one chunk of overshoot, carrying the already-paid
+        judgements on :attr:`BudgetExceeded.partial_judgements`).
         """
         produced: list[PairwiseJudgement] = []
         for start in range(0, len(candidates), self._chunk_size):
             chunk = candidates[start : start + self._chunk_size]
-            chunk_judgements: list[PairwiseJudgement] = asyncio.run(
-                self._inner.forward_async(  # type: ignore[attr-defined]
-                    iter(chunk), max_concurrent=self._max_concurrent
-                )
+            chunk_judgements: list[PairwiseJudgement] = await self._inner.forward_async(  # type: ignore[attr-defined]
+                iter(chunk), max_concurrent=self._max_concurrent
             )
             for judgement in chunk_judgements:
                 produced.append(judgement)
@@ -248,7 +264,7 @@ class _MeteredJudge(Module[Any]):
             except BudgetExceeded as exc:
                 exc.partial_judgements = list(produced)
                 raise
-            yield from chunk_judgements
+        return produced
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
         """Delegate score inspection to the wrapped judge."""
