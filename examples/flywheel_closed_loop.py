@@ -63,6 +63,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from langres.clients.openrouter import BudgetExceeded, SpendMonitor
 from langres.core.calibration import derive_threshold
 from langres.core.comparator import StringComparator
 from langres.core.harvest import (
@@ -198,6 +199,58 @@ class SimulatedFrontierJudge(Module[FZRecord]):
         return _inspect_scores_impl(judgements, sample_size)
 
 
+class _OuterSpendCap(Module[FZRecord]):
+    """Wrap the teacher judge in ONE cumulative spend cap for the whole run.
+
+    This is the correct place for a cascade's spend cap: on the OUTSIDE of the
+    whole (teacher) judge, holding ONE
+    :class:`~langres.clients.openrouter.SpendMonitor` for the wrapper's lifetime
+    so cost accumulates across EVERY ``forward`` call -- the stage-1 bootstrap
+    batch AND the cascade's per-pair escalations (the same teacher instance is
+    reused as the cascade's escalation tier). Core's
+    :class:`~langres.core.presets._SpendCappedModule` deliberately opens a FRESH
+    monitor per ``forward`` call (right for a single verb call), which -- passed
+    as a cascade tier -- would reset the budget on every one-pair escalation and
+    so bound nothing (see
+    :class:`~langres.core.modules.cascade_judge.CascadeJudge`'s docstring). One
+    shared monitor is what makes the outer cap real.
+
+    On a breach it raises :class:`~langres.clients.openrouter.BudgetExceeded`
+    carrying the judgements already produced (and paid for) on
+    ``.partial_judgements`` -- the same recovery contract ``_SpendCappedModule``,
+    ``LoggingModule``, and the cascade's escalation-side re-raise all rely on.
+    """
+
+    def __init__(self, judge: Module[FZRecord], *, budget_usd: float) -> None:
+        self._judge = judge
+        self._monitor = SpendMonitor(budget_usd=budget_usd)
+
+    @property
+    def spent(self) -> float:
+        """Cumulative metered cost so far (real USD for a real teacher)."""
+        return self._monitor.spent
+
+    def forward(self, candidates: Iterator[ERCandidate[FZRecord]]) -> Iterator[PairwiseJudgement]:
+        """Yield each teacher judgement, hard-stopping once cumulative cost passes budget."""
+        produced: list[PairwiseJudgement] = []
+        for judgement in self._judge.forward(candidates):
+            produced.append(judgement)
+            cost = judgement.provenance.get("cost_usd", 0.0)
+            self._monitor.add(float(cost) if cost is not None else 0.0)
+            try:
+                self._monitor.check()
+            except BudgetExceeded as exc:
+                exc.partial_judgements = list(produced)
+                raise
+            yield judgement
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        """Delegate score inspection to the wrapped judge."""
+        return self._judge.inspect_scores(judgements, sample_size)
+
+
 class PairMetrics(BaseModel):
     """Pairwise classification quality of one judge at one decision threshold."""
 
@@ -229,6 +282,10 @@ class ClosedLoopReport(BaseModel):
     escalation_rate: float
     frontier_call_reduction: float
     simulated_dollars_saved: float
+    #: Cumulative cost metered by the outer spend cap (``spend_cap_usd``): REAL
+    #: USD for an injected real teacher, fictional dollars for the simulated
+    #: default, and ``0.0`` when no cap is applied.
+    teacher_spend_usd: float = 0.0
     teacher: PairMetrics
     student: PairMetrics
     cascade: PairMetrics
@@ -398,8 +455,15 @@ def run_closed_loop(
     seed: int = _SEED,
     work_dir: Path | None = None,
     verbose: bool = False,
+    teacher: Module[FZRecord] | None = None,
+    spend_cap_usd: float | None = None,
 ) -> ClosedLoopReport:
-    """Run the full bootstrap -> review -> harvest -> train -> cascade loop at $0.
+    """Run the full bootstrap -> review -> harvest -> train -> cascade loop.
+
+    Defaults to the deterministic **$0 simulation** (the ``SimulatedFrontierJudge``
+    teacher). Inject a REAL judge via ``teacher=`` (the paid FZ/AG validation
+    scripts do) and pass ``spend_cap_usd=`` to hard-cap its cumulative spend --
+    the same loop, no duplication.
 
     Args:
         data_dir: Directory holding ``records.json`` and ``gold_pairs.json``.
@@ -408,13 +472,36 @@ def run_closed_loop(
             logs). A temporary directory is used when omitted.
         verbose: When ``True``, print the ``uv run langres review`` command and
             the next-queue / exhaustion message as the loop runs.
+        teacher: The frontier/escalation judge scored on every pair (bootstrap)
+            and inside the cascade band. ``None`` -> the deterministic $0
+            :class:`SimulatedFrontierJudge`. Must score :class:`FZRecord`
+            candidates carrying a comparison vector.
+        spend_cap_usd: When set, wraps ``teacher`` in ONE outer
+            :class:`~langres.clients.openrouter.SpendMonitor` cap
+            (:class:`_OuterSpendCap`) spanning the whole run -- the bootstrap
+            batch AND the cascade's per-pair escalations. Raises
+            :class:`~langres.clients.openrouter.BudgetExceeded` if cumulative
+            (real) cost crosses it. ``None`` (default) applies no cap. The cap
+            wraps the OUTSIDE of the teacher, never a cascade tier.
 
     Returns:
-        A :class:`ClosedLoopReport` with every metric the demo reports.
+        A :class:`ClosedLoopReport` with every metric the demo reports (including
+        ``teacher_spend_usd``, the cap's cumulative metered cost).
+
+    Raises:
+        BudgetExceeded: If ``spend_cap_usd`` is set and the teacher's cumulative
+            metered cost crosses it (carries ``.partial_judgements``).
     """
     if work_dir is None:
         with tempfile.TemporaryDirectory(prefix="flywheel_loop_") as tmp:
-            return run_closed_loop(data_dir, seed=seed, work_dir=Path(tmp), verbose=verbose)
+            return run_closed_loop(
+                data_dir,
+                seed=seed,
+                work_dir=Path(tmp),
+                verbose=verbose,
+                teacher=teacher,
+                spend_cap_usd=spend_cap_usd,
+            )
 
     records = _load_records(data_dir)
     specs = _load_candidate_specs(data_dir)
@@ -423,7 +510,18 @@ def run_closed_loop(
     candidates = _build_candidates(records, specs, comparator)
 
     # --- Stage 1: bootstrap -- the frontier teacher scores every pair, logged. ---
-    teacher = SimulatedFrontierJudge(seed=seed)
+    # Default teacher = the deterministic $0 simulation; a caller (the paid FZ/AG
+    # scripts) injects a REAL judge instead. An optional spend cap wraps the
+    # OUTSIDE of the whole teacher (ONE shared monitor across the bootstrap batch
+    # AND the cascade's per-pair escalations, since the same instance is reused as
+    # the escalation tier) -- never a cascade tier, which would reset the budget
+    # per pair (see _OuterSpendCap / CascadeJudge's docstring).
+    teacher = teacher if teacher is not None else SimulatedFrontierJudge(seed=seed)
+    spend_cap = (
+        _OuterSpendCap(teacher, budget_usd=spend_cap_usd) if spend_cap_usd is not None else None
+    )
+    if spend_cap is not None:
+        teacher = spend_cap
     teacher_threshold = 0.5  # the teacher's natural cut (its logistic is centered near here)
     boot_log = JudgementLog(work_dir / "judgements.jsonl")
     boot_log.path.unlink(missing_ok=True)
@@ -575,6 +673,7 @@ def run_closed_loop(
         escalation_rate=escalation_rate,
         frontier_call_reduction=reduction,
         simulated_dollars_saved=dollars_saved,
+        teacher_spend_usd=spend_cap.spent if spend_cap is not None else 0.0,
         teacher=teacher_metrics,
         student=student_metrics,
         cascade=cascade_metrics,
