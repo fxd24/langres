@@ -252,7 +252,68 @@ The bottom-left cell is where the cheapest, most reusable *new* langres strategi
 
 ---
 
-## 11. References
+## 11. How SOTA divides recall (blocking) vs precision (matching) — and the methods that don't
+
+*Added 2026-07-07 as a follow-up. Question: does every SOTA method split into a recall-optimized blocker + a precision-optimized matcher, or do some work differently? This directly frames where hard-case mining plugs in — the blocking→matching frontier is exactly what makes S1/S3 (§3) informative. Verified against the ER surveys + primary sources.*
+
+### 11.1 The consensus split is structural, not stylistic
+
+The two-stage split **is** the dominant paradigm — and the canonical pipeline is actually **four stages** (Christophides et al. CSUR 2020, [1905.06397]; Papadakis et al. CSUR 2020, [1905.06167]; verified from full PDFs):
+
+**Blocking → Block Processing (meta-blocking / filtering) → Matching → Clustering.**
+
+| Stage | Objective | Metric | langres |
+|---|---|---|---|
+| **Blocking** (indexing) | maximize **recall** while cutting comparisons | Pair Completeness (**PC ≈ recall**), Pairs Quality (**PQ ≈ precision**), Reduction Ratio (**RR**) | `Blocker` |
+| **Block processing** | prune redundant comparisons **without losing recall** (raise candidate-set efficiency/precision) | — | *(meta-blocking; not in langres)* |
+| **Matching** | maximize **precision** / F1 on survivors | precision / recall / F1 | `Judge` |
+| **Clustering** | global consistency / transitive closure | — | `Clusterer` |
+
+Papadakis Def. 3 scores blocking on PC/PQ/RR *simultaneously* — i.e. recall-like PC is its primary effectiveness axis, efficiency (PQ/RR) secondary.
+
+**Why it's structural:** the O(n²) wall (Papadakis: *"due to its inherently quadratic complexity"*) means an expensive matcher cannot see every pair, so a cheap high-recall filter runs first. Crucially, **blocking is the only stage allowed to produce false negatives** — Papadakis contrasts Blocking (allows false positives *and* false negatives) with exact Filtering (no false negatives). Because matching only ever sees pairs that survived blocking (a strict sequential automaton), **a true match dropped in blocking is unrecoverable downstream** — so blocking owns recall, matching owns precision. Barlaug & Gulla ([2010.11075]) state it near-verbatim: *"a high-recall implicit comparison step [blocking] to filter away obvious nonmatches first... [then] a more powerful high-precision explicit comparison [matching] afterward."*
+*(Honest flag: no survey uses the literal phrase "recall ceiling"; the logic is stated via architecture + stated goals, not that exact term.)*
+
+### 11.2 A spectrum from crisp split → no split
+
+| Where on the spectrum | How recall/precision is handled | Representative methods |
+|---|---|---|
+| **Crisp two-stage (default)** | two independent components; blocking = recall, matching = precision | Ditto, DeepMatcher, Magellan; production: **Splink, Zingg, Dedupe, JedAI** |
+| **+ heuristic stages, still crisp** | non-learned filters bolted between/within stages | meta-blocking (block processing); confidence/cost-ordered **cascade matchers** (= langres `CascadeJudge`) |
+| **Shared representation, separate objectives** | one embedding space, two distinct losses | **DIAL**, MutualER; **BLINK** bi-encoder→cross-encoder (+distillation coupling) |
+| **Learned recall objective** | the blocking predicate/embedding is *learned*, not hand-tuned | **DeepBlocker**, AutoBlock, Bilenko adaptive blocking, Michelson & Knoblock |
+| **Fused representation** | one learned model does both stages | **Sudowoodo** (contrastive rep → blocking *and* matching) |
+| **Objective changed / interleaved** | maximize progress-per-budget; scoring reprioritized continuously | **progressive / pay-as-you-go ER** |
+| **Matching + clustering fused** | one global partition objective (recall vs precision = two terms) | **correlation clustering**, FAMER |
+| **Pair-independence dropped (fully joint)** | matches decided jointly; per-pair precision not independently defined | **collective / relational ER** (Markov Logic, joint GNN) |
+| **Collapsed in one call** | candidate-discrimination + match in one LLM invocation | LLM **"Select"** (ComEM) |
+
+### 11.3 Keep the split, do it differently
+
+- **Shared representation, separate objectives** — **DIAL** (Jain et al. PVLDB 2022, [2104.03986]) jointly learns embeddings to "maximize recall for blocking and accuracy for matching" but keeps **separate objective functions per stage** (boundary softens, objectives stay crisp). **MutualER** (Dou et al. CIKM 2024): siamese blocker + heavier matcher, jointly trained via mutual hard-sample selection (preserve discrepancy) + similarity transfer (preserve consensus).
+- **Learned / deep blocking** — the recall target is *optimized*, not hand-tuned: **DeepBlocker** (Thirumuruganathan et al. PVLDB 2021, self-supervised, maximize `|C∩G|/|G|` s.t. small `|C|`), **AutoBlock** (Zhang et al. WSDM 2020, [1912.03417], supervised LSH), and the classic ML lineage **Bilenko et al.** (Adaptive Blocking, ICDM 2006) + **Michelson & Knoblock** (AAAI 2006). *(Note: self-supervised dense blocking can underperform plain pretrained embeddings in some regimes — supervision still has a role.)*
+- **Retrieve-and-rerank / fused representation** — the strongest boundary-softening: **Sudowoodo** (Wang et al. ICDE 2023, [2207.04122]) uses *one* contrastive self-supervised representation for NN-blocking *and* few-shot matching. **BLINK** (Wu et al. EMNLP 2020) is the canonical bi-encoder retrieval (recall) → cross-encoder rerank (precision) from entity linking, with **knowledge distillation transferring cross-encoder accuracy back into the bi-encoder** — an explicit coupling, not two independent stages.
+- **Meta-blocking** (Papadakis et al. TKDE 2014) — a genuinely separate, *non-learned* middle stage: build a co-occurrence blocking graph, prune low-weight edges (WEP/CEP/WNP/BLAST) to raise precision at controlled recall risk.
+- **Cascade matchers** — cheap→expensive *within* matching (a precision cascade; Viola-Jones lineage; ER-specific confidence-ordered variant Syed et al. 2025). **This is exactly langres's `CascadeJudge`.**
+
+### 11.4 Break or blur the split
+
+- **Collective / relational ER — departs most fundamentally.** Matches on co-occurring references are inferred *jointly*, so resolving (A,B) shifts the posterior for (A,C): **Bhattacharya & Getoor** (ACM TKDD 2007, relational clustering), **Singla & Domingos** (Markov Logic, ICDM 2006, one joint MAP inference over *all* candidate matches), and message-passing/GNN ER (e.g. HierGAT — *venue/year unverified*). The recall/precision **stage split dissolves at matching**, because per-pair precision stops being independently defined. (Blocking usually still precedes it.)
+- **Clustering-based ER** — matching + grouping become *one* global objective: **correlation clustering** (Bansal et al. 2004) and its ER use (Hassanzadeh et al. PVLDB 2009; Saeedi/FAMER 2017-18). Recall (connect all true matches) and precision (don't over-merge) become two terms of a single partition objective, not two decoupled stages (still usually blocking-fed).
+- **Progressive / pay-as-you-go ER** — a *different objective*: maximize matches-found per unit budget/time, emitting likely matches early (Whang et al. TKDE 2013; Simonini et al. ICDE 2018; Maciejewski et al. 2025, [2503.08298]). The stage skeleton is kept but **reordered/interleaved** — scoring and prioritization intermix continuously; objective shifts from F1 to area-under-the-progress-curve.
+- **LLM matching-as-retrieval** — **ComEM** (Wang et al. COLING 2025, [2405.16884]) defines **Match** (binary pairwise) / **Compare** (pairwise ranking) / **Select** (multi-choice: pick the match from a candidate set, or "none"). "Select" **collapses candidate-discrimination and the precision decision into one call** — yet ComEM's own cheap-filter→expensive-select design *reintroduces* coarse-to-fine staging for cost. (Directly mirrors langres's `SelectJudge` + `CascadeJudge`.)
+- **Production reality check** — **Splink** (Fellegi-Sunter), **Zingg**, **Dedupe.io**, **JedAI** all keep the two/three-stage split by default. Fellegi-Sunter's probabilistic score just *parameterizes* the matching stage with a tunable threshold; it does not dissolve the split.
+
+### 11.5 What this means for langres
+
+- **Keep `Blocker → Judge → Clusterer` as the default** — it *is* the production and survey consensus, and the four-stage pipeline maps onto it cleanly (block-processing/meta-blocking is the one stage langres lacks).
+- **The split is *why* hard-case mining works.** Blocking-derived hard negatives (§S3) are the near-misses sitting on the blocking→matching frontier — mining them sharpens the *matcher's precision* right where it's hardest. Hard-*positive* mining (AnyMatch, §S1) attacks the *recall ceiling* on genuinely hard matches. The two map onto the two objectives of the split.
+- **`CascadeJudge`/`SelectJudge` already instantiate two modern patterns** — the precision cascade (§11.3) and ComEM's Match/Compare/Select (§11.4).
+- **The one principled *alternative* worth a future pluggable "joint" mode** is collective/relational ER (§11.4) — it matches the ROADMAP's flagged collective-resolution gap. Progressive ER is a scheduling/UX concern, not an architectural alternative for a framework like langres.
+
+---
+
+## 12. References
 
 Inline citations with links appear throughout the body; this is the consolidated list. Every entry carries a resolvable link where one was verified by the source agents; entries without a link are cited by author / venue / year (no URL was fabricated). Links marked with the source they were verified against.
 
@@ -314,3 +375,24 @@ Inline citations with links appear throughout the body; this is the consolidated
 ### Tooling
 - **AutoGluon-Tabular** — Erickson et al. 2020 — [arXiv:2003.06505](https://arxiv.org/abs/2003.06505)
 - **DSPy** — optimizer paper (MIPROv2), Opsahl-Ong et al. — [arXiv:2406.11695](https://arxiv.org/abs/2406.11695) · optimizers doc: [github.com/stanfordnlp/dspy](https://github.com/stanfordnlp/dspy/blob/main/docs/docs/learn/optimization/optimizers.md)
+
+### ER pipeline architecture (§11)
+- **Blocking & Filtering survey** — Papadakis, Skoutas, Thanos, Palpanas, ACM CSUR 2020 — [arXiv:1905.06167](https://arxiv.org/abs/1905.06167)
+- **End-to-End ER for Big Data survey** — Christophides, Efthymiou, Palpanas, Papadakis, Stefanidis, ACM CSUR 2020 — [arXiv:1905.06397](https://arxiv.org/abs/1905.06397)
+- **Neural Networks for Entity Matching survey** — Barlaug & Gulla, ACM TKDD 2021 — [arXiv:2010.11075](https://arxiv.org/abs/2010.11075)
+- **Meta-Blocking** — Papadakis, Koutrika, Palpanas, Nejdl, IEEE TKDE 2014
+- **DIAL** — Jain, Sarawagi, Sen, PVLDB 2022 — [arXiv:2104.03986](https://arxiv.org/abs/2104.03986)
+- **MutualER** — Dou, Shen, Zhou, Bai, Kou, Nie, Cui, Yu, CIKM 2024
+- **DeepBlocker** — Thirumuruganathan et al., PVLDB 2021 — code: [github.com/qcri/DeepBlocker](https://github.com/qcri/DeepBlocker)
+- **AutoBlock** — Zhang et al., WSDM 2020 — [arXiv:1912.03417](https://arxiv.org/abs/1912.03417)
+- **Adaptive Blocking** — Bilenko, Kamath, Mooney, ICDM 2006 · **Learning Blocking Schemes** — Michelson & Knoblock, AAAI 2006
+- **BLINK** (bi-encoder retrieval → cross-encoder rerank) — Wu, Petroni, Josifoski, Riedel, Zettlemoyer, EMNLP 2020
+- **Collective Entity Resolution in Relational Data** — Bhattacharya & Getoor, ACM TKDD 2007 — [doi:10.1145/1217299.1217304](https://doi.org/10.1145/1217299.1217304)
+- **Entity Resolution with Markov Logic** — Singla & Domingos, ICDM 2006
+- **HierGAT** — Yao et al., reportedly SIGMOD 2022 *(venue/year unverified)*
+- **Correlation Clustering** — Bansal, Blum, Chawla, Machine Learning 2004 · **Clustering for duplicate detection** — Hassanzadeh, Chiang, Lee, Miller, PVLDB 2009 · **FAMER / distributed ER clustering** — Saeedi, Peukert, Rahm, ADBIS 2017 / 2018
+- **Pay-As-You-Go ER** — Whang, Marmaros, Garcia-Molina, IEEE TKDE 2013 · **Progressive ER: A Design Space Exploration** — Maciejewski et al. 2025 — [arXiv:2503.08298](https://arxiv.org/abs/2503.08298) · **Schema-agnostic Progressive ER** — Simonini et al., ICDE 2018 — [arXiv:1905.06385](https://arxiv.org/abs/1905.06385)
+- **Using ChatGPT for Entity Matching** — Peeters & Bizer — [arXiv:2305.03423](https://arxiv.org/abs/2305.03423) · **Entity Matching using LLMs** (EDBT 2025) — [arXiv:2310.11244](https://arxiv.org/abs/2310.11244)
+- **Match, Compare, or Select? (ComEM)** — Wang et al., COLING 2025 — [arXiv:2405.16884](https://arxiv.org/abs/2405.16884) · code: [github.com/tshu-w/ComEM](https://github.com/tshu-w/ComEM)
+- **Cascade approach to ER** — Syed et al., SciTePress 2025
+- **Production systems:** Splink (UK Ministry of Justice, Fellegi-Sunter) · Zingg · Dedupe.io · JedAI
