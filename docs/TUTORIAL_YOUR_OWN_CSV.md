@@ -24,6 +24,9 @@ This is the middle rung of the docs ladder:
 - **Here:** a real CSV, a typed schema, a calibrated threshold, save/load.
 - **Above:** [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) — racing judges, paid LLM
   judges, the budget seam.
+- **The big picture:** [`docs/GETTING_STARTED.md`](GETTING_STARTED.md) — the whole
+  flywheel lifecycle (LLM bootstrap → log → review at the margin → train a cheap
+  student → cascade → save/load) that this CSV walkthrough is one slice of.
 
 ---
 
@@ -172,9 +175,13 @@ under the default `"youden"` method (it raises on a single class); pass
 
 > **Where do labels come from at scale?** langres has a whole *flywheel* for
 > this: opt into `dedupe(..., log="judgements.jsonl")` to record every judge
-> call, collect human corrections, and harvest them into labeled pairs with
-> `langres.core.harvest` — which feeds this exact `derive_threshold`. See
-> [`examples/flywheel_threshold_harvest.py`](../examples/flywheel_threshold_harvest.py)
+> call, `select_for_review` the uncertain margin, collect human corrections
+> (`langres review` or the CSV round-trip), and harvest them into labeled pairs
+> with `langres.core.harvest` — which feeds this exact `derive_threshold`, and
+> then a cheap trained student behind a cascade. The end-to-end story is in
+> [`docs/GETTING_STARTED.md`](GETTING_STARTED.md), runnable at $0 in
+> [`examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py); the
+> harvest-only slice is [`examples/flywheel_threshold_harvest.py`](../examples/flywheel_threshold_harvest.py)
 > and [`docs/EXPERIMENTS.md`](EXPERIMENTS.md).
 
 ---
