@@ -34,8 +34,12 @@ built. The real layering is:)
    - Target: advanced users building bespoke pipelines.
    - Real components: `Module` (judge), `Blocker` (`AllPairsBlocker`,
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
-     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`, …) and
-     `core.calibration.derive_threshold`.
+     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`,
+     `CascadeJudge` — cheap student + escalate-at-the-margin, …) and
+     `core.calibration.derive_threshold`. The flywheel seam lives here too:
+     `core.review.select_for_review` / `ReviewQueue` (pick the uncertain margin)
+     and `core.harvest` (`harvest_labeled_pairs`, `Correction`/`CorrectionLog`,
+     `derive_threshold_from_pairs`).
    - Philosophy: Like PyTorch's primitives.
    - **Not yet built** (roadmap, don't reference as existing): a general
      `Optimizer` (only `optimizers.BlockerOptimizer` exists).

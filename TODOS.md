@@ -25,6 +25,16 @@ backlog in [#55](https://github.com/raisesquad/langres/issues/55).
 - **`langres select` subcommand (P3)** — today the queue is created in Python
   (`select_for_review` → `ReviewQueue`); a CLI subcommand would close the last non-Python
   step. Deferred while the CLI surface (UC2) settles.
+- **Update-aware `import-csv` de-dup (P3)** — `import-csv` appends every labeled row, so
+  re-importing the same CSV duplicates `Correction`s. Non-corrupting (`harvest_labeled_pairs`
+  is last-write-wins by pair) and append-always is *intentional* today — it lets a re-import
+  **update** a label. A refined guard would skip rows whose label matches the
+  already-recorded one while still letting changed labels through. (claude-review #79)
+- **CLI/queue durability polish (P3)** — `ReviewQueue.write` truncates in place (fine: the
+  queue is a regeneratable snapshot; source-of-truth durability lives on the append-only
+  logs) — an atomic temp-then-`os.replace` would harden it. Also add a test that exercises
+  the packaged `langres` console-script entry point (CLI tests call `main()` in-process, so
+  a typo'd `[project.scripts]` path wouldn't be caught). (claude-review #79)
 
 ## Distribution & licensing
 

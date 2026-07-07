@@ -17,7 +17,7 @@ Read before writing or editing Python in this repo.
 - **Type Checking**: Use `mypy` in strict mode - all code must pass type checking
 - **Validation**: Pydantic-first approach - all data models should use Pydantic
 - **Logging**: ALWAYS use the `logging` module instead of `print()` statements in source code and tests. Print statements are ONLY acceptable in `examples/` directory for demonstration purposes. Ruff's T201 rule enforces this.
-- **Package Manager**: Use `uv add` for dependencies (runtime), `uv add --dev` for dev dependencies. Never manually edit `pyproject.toml`. See [uv docs](https://docs.astral.sh/uv/) for details.
+- **Package Manager**: Use `uv add` for dependencies (runtime), `uv add --dev` for dev dependencies. Never manually edit `pyproject.toml` for dependencies. See [uv docs](https://docs.astral.sh/uv/) for details. **Exception:** tables `uv` does not manage — notably `[project.scripts]` (console entry points) — are hand-edited by necessity; mark them with a comment (see the `langres` entry point in `pyproject.toml`).
 - **Test Coverage**: 100% coverage required (POC requirement). See `[tool.coverage.*]` in pyproject.toml for configuration.
 
 ## Python Execution & File Management
