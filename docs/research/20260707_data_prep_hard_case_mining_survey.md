@@ -313,7 +313,94 @@ Papadakis Def. 3 scores blocking on PC/PQ/RR *simultaneously* — i.e. recall-li
 
 ---
 
-## 12. References
+## 12. One model for both stages — decoder-LLM embeddings
+
+*Added 2026-07-07 as a follow-up. Question: can decoder LLMs (GPT-style, not BERT-style encoders) produce embeddings — and could langres fine-tune ONE model (the Qwen3 ladder) to serve both stages: embeddings for the `VectorBlocker` (recall) and matching for the `Judge` (precision)? This is the concrete mechanism behind §11's "fused / shared representation" row. Verified against papers + HF cards + MTEB (July 2026). **MTEB v1 and v2 scores are NOT comparable — version tagged per figure.***
+
+### 12.1 Yes — decoder embeddings are now mainstream
+
+Encoder models (BERT / sentence-transformers) are no longer the only game; the OpenAI/Gemini embedding APIs are themselves decoder-derived.
+
+**The obstacle (the "pooling problem"):** decoder LLMs use *causal* attention, so only the last token has seen the full sequence; earlier tokens carry left-context-only representations, and the model was trained to predict the *next* token, not to compress a passage into one vector. So naive decoder embeddings underperform a bidirectional encoder. The field fixes this three ways — better pooling, converting to bidirectional attention (with light re-training), or prompt tricks.
+
+**Pooling:** last-token/EOS (E5-mistral, Qwen3-Embedding); mean; position-weighted mean (SGPT); learned latent-attention pooling (NV-Embed, top MTEB).
+
+| Technique | Base | How it embeds from a decoder | Note |
+|---|---|---|---|
+| SGPT ([2202.08904]) | GPT decoders | causal + position-weighted mean, contrastive | early (2022) |
+| E5-mistral ([2401.00368]) | Mistral-7B | causal + last-token; contrastive on GPT-4 synthetic data | ACL 2024, MTEB v1 ≈66.6 |
+| **LLM2Vec** ([2404.05961]) | any decoder 1.3–8B | **bidirectional attn + MNTP + SimCSE contrastive** — a model-agnostic decoder→encoder recipe | reproducible at LoRA scale; the general upgrade |
+| NV-Embed ([2405.17428]) | Mistral-7B | mask removed + **latent-attention pooling** + 2-stage contrastive | ICLR 2025; #1 MTEB v1 (2024) |
+| **Echo** ([2402.15449]) | any decoder | **duplicate the input in the prompt**, pool the 2nd copy (its tokens attend to the full 1st copy) — zero architecture change, zero training | +5% over last-token; cheapest path |
+| bge-en-icl ([2409.15700]) | Mistral-7B | last-token + in-context few-shot exemplars | ICL steering |
+
+**Instruction-conditioned embeddings** (E5-mistral/NV-Embed/bge-en-icl): a prepended task instruction steers the embedding space — so the *entity-pair-matching instruction itself* could bias the embedding toward ER-relevant similarity, a natural fit for reusing a matcher as a blocker.
+
+**Causal-vs-bidirectional tension:** removing the causal mask (LLM2Vec/NV-Embed) gives full-sequence context but breaks the pretrained graph, needing adaptation training (cheap via LoRA); keeping the mask (SGPT/E5/Echo) preserves the base exactly but leans on pooling/prompt tricks. Causal2Vec ([2507.23386]) splits the difference (prepend one contextual token from a small bidirectional model).
+
+### 12.2 One model for BOTH generation/matching AND embeddings
+
+**GritLM** ("Generative Representational Instruction Tuning," [2402.09906]) is the direct precedent — **one decoder does both**, mode chosen by instruction formatting: embedding calls run with the causal mask *removed* (bidirectional + mean-pool); generation/matching calls run unmodified (causal + LM head). Joint loss `λ_Rep·InfoNCE + λ_Gen·LM`. Its ablation is the load-bearing evidence that unification costs nothing: embedding-only 7B → MTEB 66.8 / gen ~0; gen-only → 41.2 / 55.2; **unified → 66.8 / 55.5 — matching both single-objective variants at once**. Bonus: >60% RAG speedup via shared-forward-pass doc caching.
+
+**Pragmatic alternative — two LoRA adapters on one frozen base** (adapter A = contrastive/embedding for blocking; adapter B = SFT/matching for the judge), hot-swapped via PEFT `set_adapter` (multi-adapter serving lineage: S-LoRA, MeteoRA). Cheaper to train than a joint GritLM run, no `λ` balancing, each adapter specializes — but you lose GritLM's shared-forward-pass speedup and its *proven* no-degradation guarantee.
+
+**Honest caveat (important):** GritLM was *full* fine-tune on 7B/8×7B. **No published result exists for GRIT-style joint training at 0.6B–4B or under QLoRA-rank constraints** — whether the joint objective survives on a small LoRA'd model is untested territory, not established fact.
+
+### 12.3 The current best embedding models (by family, July 2026)
+
+*(MTEB v1 ≠ v2; tagged. Verified via HF cards + Qwen repo + release coverage. Aggregator snippets that disagreed with primary sources were discarded.)*
+
+**Gemma family:**
+| Model | Base | Params | MTEB | License |
+|---|---|---|---|---|
+| EmbeddingGemma-300m | Gemma 3, **adapted to encoder** (bidirectional) | 300M | v2 Eng 69.67 / multi 61.15 | Gemma (use restrictions; not OSI) |
+| BGE-multilingual-gemma2 | Gemma-2-9B (decoder) | 9B | SOTA MIRACL/MTEB-fr/pl (aggregate unverified) | Gemma |
+| KaLM-Embedding-Gemma3-12B | Gemma3-12B | 12B | MMTEB SOTA 2025-11 | custom (non-permissive) |
+
+**Qwen family** (primary: QwenLM/Qwen3-Embedding, [2506.05176]):
+| Model | Base | Params | MTEB Eng v2 | MMTEB | Ctx | License |
+|---|---|---|---|---|---|---|
+| **Qwen3-Embedding-0.6B** | Qwen3 (causal decoder) | 0.6B | **70.70** | 64.33 | 32K | **Apache-2.0** |
+| **Qwen3-Embedding-4B** | Qwen3 | 4B | **74.60** | 69.45 | 32K | **Apache-2.0** |
+| Qwen3-Embedding-8B | Qwen3 | 8B | 75.22 | 70.58 | 32K | Apache-2.0 |
+| gte-Qwen2-1.5B-instruct | Qwen2 (decoder→bidirectional) | 1.5B | ~67.2 (older MTEB) | — | 32K | Apache-2.0 |
+
+**Other current top:**
+| Model | Arch | Params | MTEB | License |
+|---|---|---|---|---|
+| **Harrier-OSS-v1-27b** (Microsoft) | decoder, last-token | 27B | **v2 multilingual 74.3 — current open #1** (2026-03-30) | **MIT** |
+| Harrier-OSS-v1-0.6b | decoder | 0.6B | v2 multi 69.0 | MIT |
+| Llama-Embed-Nemotron-8B (NVIDIA) | decoder (Llama-3.1) | 8B | MMTEB #1 2025-10 (superseded) | non-commercial |
+| NV-Embed-v2 | decoder (Mistral) | 7B | v1 Eng #1 2024, 72.31 | CC-BY-NC (non-commercial) |
+| GritLM-7B | decoder (Mistral), embed+generate | 7B | strong v1 | Apache-2.0 |
+| e5-mistral-7b-instruct | decoder (Mistral) | 7B | strong v1 | MIT |
+| jina-embeddings-v3 | **encoder** (XLM-R) | 570M | strong multilingual | CC-BY-NC |
+| snowflake-arctic-embed-l-v2.0 | encoder | — | 73.4 (version unclear) | Apache-2.0 |
+| BGE-M3 | encoder (XLM-R) | 568M | strong long-doc/multilingual | MIT |
+
+**API (closed, no vendoring):** Gemini embedding-001 (v1 Eng 68.32, last verified API leader); OpenAI text-embedding-3-large (v1 64.6); Cohere embed-v4 (~65.2, multimodal); Voyage-3 (retrieval-metric leader).
+
+### 12.4 ER-specific reality — and a real counter-signal
+
+- **No ER precedent for decoder embeddings in blocking.** DeepBlocker uses FastText; the one paper squarely on universal dense ER blocking — **UniBlocker** ([2404.14831]) — *deliberately chose an encoder-only backbone* and argued against generic sentence-embedding LLMs for **structured records** ("divergences between unstructured natural language and structured records"), finding tabular-domain pretraining mattered more than base-LM choice. **Weigh this before assuming a decoder embedder beats an encoder for langres blocking.**
+- **"One model" realistically means "one base family, two fine-tunes."** Qwen3-Embedding-0.6B is a *separately released, contrastively-tuned checkpoint*, not the chat weights doing double duty. The realistic shared-model plan is one Qwen3 base + a matching QLoRA + a contrastive embedding fine-tune (or the GritLM joint route) — not one checkpoint natively both.
+- **Hardware is not the constraint.** 4-bit 4B ≈ 3.4 GB on the 8GB 3070, with room for adapters; sequential block-then-match passes are easily feasible. The open question is blocking *quality*, not fit.
+- **Integration point already exists.** `VectorBlocker` takes a pluggable embedding backend (sentence-transformers / FAISS / qdrant today); a decoder-LLM embedder slots in as a new backend — no new architecture.
+
+### 12.5 What this means for langres
+
+- **The one-model idea is viable, but its payoff is operational, not guaranteed quality.** Its value is *simplicity* — one base family, one fine-tune pipeline, one artifact for both stages — not a promise of better blocking than a dedicated encoder (UniBlocker is the cautionary datapoint).
+- **A concrete cheap→ambitious ladder to test it:**
+  1. **Zero-training prototype** — Echo embeddings off the fine-tuned Qwen3 matcher (double the prompt, pool the 2nd copy) → a `VectorBlocker` backend with no extra training.
+  2. **Two LoRA adapters on one Qwen3 base** — contrastive embedding adapter + matching adapter, hot-swapped. Standard PEFT.
+  3. **Off-the-shelf shortcut** — use `Qwen3-Embedding-0.6B/4B` (Apache-2.0, same family) as the blocker backend + a separately-fine-tuned Qwen3 matcher; skip the joint-training risk.
+  4. **Ambitious** — GritLM-style joint training (untested at this scale; a research bet).
+- **Best-fit model:** **Qwen3-Embedding-0.6B** (Apache-2.0, decoder, same family as the matching ladder, MTEB v2 Eng 70.7) — or 4B for the top rung. **Best open overall** is Harrier-OSS-v1-27b (MIT, 74.3 v2 multilingual), but it breaks the same-family property and is far too big for the 3070.
+- **Always validate blocking recall empirically before committing** — the recall ceiling (§11.1) means a weak blocker silently caps the whole pipeline, so "same model" convenience must not be bought at the cost of unproven blocking recall.
+
+---
+
+## 13. References
 
 Inline citations with links appear throughout the body; this is the consolidated list. Every entry carries a resolvable link where one was verified by the source agents; entries without a link are cited by author / venue / year (no URL was fabricated). Links marked with the source they were verified against.
 
@@ -396,3 +483,20 @@ Inline citations with links appear throughout the body; this is the consolidated
 - **Match, Compare, or Select? (ComEM)** — Wang et al., COLING 2025 — [arXiv:2405.16884](https://arxiv.org/abs/2405.16884) · code: [github.com/tshu-w/ComEM](https://github.com/tshu-w/ComEM)
 - **Cascade approach to ER** — Syed et al., SciTePress 2025
 - **Production systems:** Splink (UK Ministry of Justice, Fellegi-Sunter) · Zingg · Dedupe.io · JedAI
+
+### Decoder-LLM embeddings & the current model landscape (§12)
+- **SGPT** — Muennighoff 2022 — [arXiv:2202.08904](https://arxiv.org/abs/2202.08904)
+- **E5-mistral / Improving Text Embeddings with LLMs** — Wang et al., Microsoft, ACL 2024 — [arXiv:2401.00368](https://arxiv.org/abs/2401.00368) · [HF: intfloat/e5-mistral-7b-instruct](https://huggingface.co/intfloat/e5-mistral-7b-instruct)
+- **LLM2Vec** — BehnamGhader et al., COLM 2024 — [arXiv:2404.05961](https://arxiv.org/abs/2404.05961)
+- **NV-Embed** — Lee et al., NVIDIA, ICLR 2025 — [arXiv:2405.17428](https://arxiv.org/abs/2405.17428) · [HF: nvidia/NV-Embed-v2](https://huggingface.co/nvidia/NV-Embed-v2)
+- **Echo embeddings** — Springer et al., CMU, ICLR 2025 — [arXiv:2402.15449](https://arxiv.org/abs/2402.15449)
+- **bge-en-icl** — BAAI 2024 — [arXiv:2409.15700](https://arxiv.org/abs/2409.15700)
+- **GritLM / Generative Representational Instruction Tuning** — Muennighoff et al. 2024 — [arXiv:2402.09906](https://arxiv.org/abs/2402.09906)
+- **Causal2Vec** — 2025 — [arXiv:2507.23386](https://arxiv.org/abs/2507.23386)
+- **S-LoRA** (multi-adapter serving) — [arXiv:2311.03285](https://arxiv.org/abs/2311.03285) · **MeteoRA** (adapter routing) — [arXiv:2405.13053](https://arxiv.org/abs/2405.13053)
+- **Qwen3-Embedding** — Alibaba 2025 — [arXiv:2506.05176](https://arxiv.org/abs/2506.05176) · [github.com/QwenLM/Qwen3-Embedding](https://github.com/QwenLM/Qwen3-Embedding) · gte-Qwen2 — [HF: Alibaba-NLP/gte-Qwen2-1.5B-instruct](https://huggingface.co/Alibaba-NLP/gte-Qwen2-1.5B-instruct)
+- **EmbeddingGemma** — Google 2025 — [arXiv:2509.20354](https://arxiv.org/abs/2509.20354) · [HF: google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) · **BGE-multilingual-gemma2** — [HF: BAAI/bge-multilingual-gemma2](https://huggingface.co/BAAI/bge-multilingual-gemma2)
+- **Harrier-OSS-v1** (Microsoft, 2026) — [HF: microsoft/harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b) *(base LLM family undisclosed — unverified)* · **Llama-Embed-Nemotron-8B** — [HF: nvidia/llama-embed-nemotron-8b](https://huggingface.co/nvidia/llama-embed-nemotron-8b)
+- **stella_en_1.5B_v5** — [HF: dunzhang/stella_en_1.5B_v5](https://huggingface.co/dunzhang/stella_en_1.5B_v5) · **jina-embeddings-v3** — jina.ai · **snowflake-arctic-embed-l-v2.0** · **BGE-M3** — BAAI
+- **UniBlocker / Towards Universal Dense Blocking for Entity Resolution** — 2024 — [arXiv:2404.14831](https://arxiv.org/abs/2404.14831)
+- **Neural LSH for Entity Blocking** — Amazon Science 2024 — [arXiv:2401.18064](https://arxiv.org/abs/2401.18064) *(PLM encoder-vs-decoder unverified)*
