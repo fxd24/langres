@@ -9,7 +9,7 @@ the core dependencies) and stay eager. A handful pull an optional, heavy
 dependency -- the embedding/vector stack (torch/sentence-transformers/faiss/
 qdrant-client, the ``[semantic]`` extra), the LLM stack (litellm, the ``[llm]``
 extra), the trained-judge stack (scikit-learn, the ``[trained]`` extra --
-:class:`~langres.core.modules.rf_judge.RFJudge`), or dev/eval tooling
+:class:`~langres.core.modules.random_forest_judge.RandomForestJudge`), or dev/eval tooling
 (ranx/optuna/wandb) -- and are resolved lazily via PEP 562 ``__getattr__``
 (see :data:`_LAZY_SUBMODULES` / :data:`_LAZY_SYMBOLS` below): ``from
 langres.core import VectorBlocker`` still works, but the actual ``import`` of
@@ -101,7 +101,7 @@ if TYPE_CHECKING:
         VectorIndex,
     )
     from langres.core.modules.llm_judge import LLMJudge
-    from langres.core.modules.rf_judge import RFJudge
+    from langres.core.modules.random_forest_judge import RandomForestJudge
     from langres.core.modules.select_judge import SelectJudge
 
 __all__ = [
@@ -163,7 +163,7 @@ __all__ = [
     "Resolver",
     "ReviewItem",
     "ReviewQueue",
-    "RFJudge",
+    "RandomForestJudge",
     "ScoreStats",
     "SchemaNotRegistered",
     "select_for_review",
@@ -206,19 +206,21 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "QdrantHybridIndex": "langres.core.indexes",
     "VectorIndex": "langres.core.indexes",
     "LLMJudge": "langres.core.modules.llm_judge",
-    "RFJudge": "langres.core.modules.rf_judge",
+    "RandomForestJudge": "langres.core.modules.random_forest_judge",
     "SelectJudge": "langres.core.modules.select_judge",
 }
 
 #: ``name -> extra`` for the lazy symbols a ``pip install langres[<extra>]``
 #: actually fixes -- everything in :data:`_LAZY_SYMBOLS` except the three
 #: submodules (dev/eval tooling, not distributed as a pip extra; see
-#: :data:`_LAZY_SUBMODULES`'s docstring). ``RFJudge`` needs scikit-learn (the
+#: :data:`_LAZY_SUBMODULES`'s docstring). ``RandomForestJudge`` needs scikit-learn (the
 #: ``[trained]`` extra, W1.2's trained-family judge); ``LLMJudge``/
 #: ``SelectJudge`` need ``[llm]`` (litellm/dspy-ai); everything else needs
 #: ``[semantic]`` (embeddings/vector index/VectorBlocker).
 _EXTRA_BY_SYMBOL: dict[str, str] = {
-    name: {"LLMJudge": "llm", "SelectJudge": "llm", "RFJudge": "trained"}.get(name, "semantic")
+    name: {"LLMJudge": "llm", "SelectJudge": "llm", "RandomForestJudge": "trained"}.get(
+        name, "semantic"
+    )
     for name in _LAZY_SYMBOLS
 }
 

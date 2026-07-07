@@ -54,7 +54,7 @@ Once published, the same split will apply to `pip install`:
 pip install langres              # core: string-judge dedupe/link only
 pip install langres[semantic]    # + VectorBlocker / embeddings (sentence-transformers, faiss, torch)
 pip install langres[llm]         # + LLMJudge / DSPy-compiled judges (litellm, dspy-ai)
-pip install langres[trained]     # + RFJudge (scikit-learn)
+pip install langres[trained]     # + RandomForestJudge (scikit-learn)
 ```
 
 > **Extras layout.** The dependency tree is split into optional extras so the
@@ -65,7 +65,7 @@ pip install langres[trained]     # + RFJudge (scikit-learn)
 > | `uv sync` / `pip install langres` | pydantic, rapidfuzz, networkx, numpy | the `"string"` judge — full dedupe/link with **no ML dependencies** |
 > | `[semantic]` (`uv sync --all-extras` or `pip install langres[semantic]`) | sentence-transformers, FAISS, torch | the `"embedding"` judge + vector blocking |
 > | `[llm]` | litellm, dspy-ai | the `"zero_shot_llm"` judge |
-> | `[trained]` | scikit-learn | `RFJudge` (trained-family, W1.2) |
+> | `[trained]` | scikit-learn | `RandomForestJudge` (trained-family, W1.2) |
 >
 > A bare `import langres`/`import langres.core` never imports torch/litellm/
 > faiss/scikit-learn — those resolve lazily the first time you actually touch

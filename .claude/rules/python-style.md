@@ -18,7 +18,7 @@ Read before writing or editing Python in this repo.
 - **Validation**: Pydantic-first approach - all data models should use Pydantic
 - **Logging**: ALWAYS use the `logging` module instead of `print()` statements in source code and tests. Print statements are ONLY acceptable in `examples/` directory for demonstration purposes. Ruff's T201 rule enforces this.
 - **Package Manager**: Use `uv add` for dependencies (runtime), `uv add --dev` for dev dependencies. Never manually edit `pyproject.toml` for dependencies. See [uv docs](https://docs.astral.sh/uv/) for details. **Exception:** tables `uv` does not manage — notably `[project.scripts]` (console entry points) — are hand-edited by necessity; mark them with a comment (see the `langres` entry point in `pyproject.toml`).
-- **Test Coverage**: 100% coverage required (POC requirement). See `[tool.coverage.*]` in pyproject.toml for configuration.
+- **Test Coverage**: tiered — 95–100% on the `src/langres/core/**` contract, behavior/smoke on harness code. See `.claude/rules/testing.md` and `[tool.coverage.*]` in pyproject.toml.
 
 ## Python Execution & File Management
 

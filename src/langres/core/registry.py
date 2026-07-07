@@ -38,7 +38,7 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # on plain ``import langres.core``.
 #
 # ``key_blocker``/``composite_blocker``/``correlation_clusterer``/
-# ``fellegi_sunter_judge``/``rf_judge`` were added to this map so a saved
+# ``fellegi_sunter_judge``/``random_forest`` were added to this map so a saved
 # artifact referencing these types keeps resolving once W0.4's lazy-import
 # refactor trimmed ``core/__init__.py``'s eager imports -- the same safety net
 # ``select_judge``/``dspy_judge`` already relied on.
@@ -53,7 +53,7 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 #
 # ``cascade_judge`` is pure-core (no heavy deps) and IS eager-imported today, so
 # this entry is redundant *right now* — it is kept deliberately as the same
-# saved-artifact safety net as its ``rf_judge``/``correlation_clusterer`` peers
+# saved-artifact safety net as its ``random_forest``/``correlation_clusterer`` peers
 # above: a ``CascadeJudge`` wrapping a fitted student is exactly what lands in a
 # saved ``Resolver`` artifact, so its ``type_name`` must keep resolving even if a
 # future eager-import trim (like W0.4's) drops it from ``core/__init__.py``. It
@@ -68,7 +68,7 @@ _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "fellegi_sunter_judge": "langres.core.judges.fellegi_sunter",
     "key_blocker": "langres.core.blockers.key",
     "llm_judge": "langres.core.modules.llm_judge",
-    "rf_judge": "langres.core.modules.rf_judge",
+    "random_forest": "langres.core.modules.random_forest_judge",
     "select_judge": "langres.core.modules.select_judge",
     "sentence_transformer_embedder": "langres.core.embeddings",
     "vector_blocker": "langres.core.blockers.vector",

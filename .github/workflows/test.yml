@@ -42,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         # --all-extras: the non-slow suite still exercises VectorBlocker/
-        # LLMJudge/RFJudge/etc. (the [semantic]/[llm]/[trained] extras), which
+        # LLMJudge/RandomForestJudge/etc. (the [semantic]/[llm]/[trained] extras), which
         # W0.4 made optional at runtime but which CI still needs installed to
         # run those tests.
         run: uv sync --all-extras

@@ -8,7 +8,7 @@ prob_rf/prob_llm streams through one Clusterer threshold, the spend-cap +
 logging composition (an escalation-side BudgetExceeded must not drop paid
 judgements from the log), registry config round-trip, and SerializableState
 sidecar layout — including a full Resolver save/load round trip with a fitted
-RFJudge student.
+RandomForestJudge student.
 """
 
 import json
@@ -152,7 +152,7 @@ class GroupwiseStub(GroupwiseModule[CompanySchema]):
 class StatefulStubJudge(ScriptedJudge):
     """ScriptedJudge that also implements SerializableState (a ``state.txt`` file).
 
-    An empty ``value`` writes nothing — mirrors an unfit RFJudge's
+    An empty ``value`` writes nothing — mirrors an unfit RandomForestJudge's
     "nothing to save" behavior, exercising the empty-sidecar branches.
     """
 
@@ -574,12 +574,12 @@ class TestSerialization:
         assert student.value == "untouched"
 
     def test_resolver_save_load_roundtrip_with_fitted_rf_student(self, tmp_path: Path) -> None:
-        """Full Resolver round trip: fitted RFJudge student survives save/load
+        """Full Resolver round trip: fitted RandomForestJudge student survives save/load
         via the cascade's SerializableState sidecar (zero Resolver changes)."""
         pytest.importorskip("sklearn")
         from langres.core import AllPairsBlocker, Resolver
         from langres.core.comparator import StringComparator
-        from langres.core.modules.rf_judge import RFJudge
+        from langres.core.modules.random_forest_judge import RandomForestJudge
 
         comparator = StringComparator.from_schema(CompanySchema)
         candidates: list[ERCandidate[CompanySchema]] = []
@@ -608,13 +608,13 @@ class TestSerialization:
             )
             labels.append(False)
 
-        student: RFJudge[CompanySchema] = RFJudge(
+        student: RandomForestJudge[CompanySchema] = RandomForestJudge(
             feature_specs=comparator.feature_specs, n_estimators=10, random_state=0
         )
         student.fit(iter(candidates), labels)
         # Unfit escalation: persists nothing, so its sidecar subdir is dropped
         # (the tolerate-empty-dirs contract in a real Resolver round trip).
-        escalation: RFJudge[CompanySchema] = RFJudge(
+        escalation: RandomForestJudge[CompanySchema] = RandomForestJudge(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=1
         )
         cascade: CascadeJudge[CompanySchema] = CascadeJudge(
@@ -633,8 +633,8 @@ class TestSerialization:
         manifest = json.loads((tmp_path / "resolver.json").read_text())
         module_spec = next(c for c in manifest["components"] if c["slot"] == "module")
         assert module_spec["type_name"] == "cascade_judge"
-        assert module_spec["config"]["student"]["type_name"] == "rf_judge"
-        assert module_spec["config"]["escalation"]["type_name"] == "rf_judge"
+        assert module_spec["config"]["student"]["type_name"] == "random_forest"
+        assert module_spec["config"]["escalation"]["type_name"] == "random_forest"
         assert (tmp_path / "module" / "student" / "forest.json").exists()
         assert not (tmp_path / "module" / "escalation").exists()
 

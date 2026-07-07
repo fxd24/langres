@@ -325,7 +325,7 @@ built speculatively):
 - **S2: a `fit()` / `fit_unlabeled()` Module hook — SHIPPED** (`langres.core.fit`
   protocols; `Resolver.fit`). Homes the **trained-judge family**: `FellegiSunterJudge`
   (classical Fellegi–Sunter EM, **unsupervised** — high-recall/low-precision on the W1.2
-  race) and `RFJudge` (Magellan-style sklearn random forest, **supervised** — the
+  race) and `RandomForestJudge` (Magellan-style sklearn random forest, **supervised** — the
   precision lever), both serializable without pickle.
 - (Full C / S / B delta table in the research doc + #55.)
 

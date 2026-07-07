@@ -43,7 +43,7 @@ provide (they rebuild the module fresh, unfit, per grid threshold). Build
   labels** (``UnsupervisedFitMixin.fit_unlabeled``, i.e.
   ``resolver.fit(records)``).
 - ``random_forest`` — VectorBlocker -> ``Comparator.from_schema`` ->
-  ``RFJudge`` -> Clusterer. sklearn RandomForest over comparator similarities,
+  ``RandomForestJudge`` -> Clusterer. sklearn RandomForest over comparator similarities,
   supervised (``SupervisedFitMixin.fit``, i.e.
   ``resolver.fit(records, labels=...)``).
 
@@ -79,7 +79,7 @@ from langres.core.module import Module
 from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP, CascadeModule
 from langres.core.modules.llm_judge import LLMJudge
 from langres.core.modules.rapidfuzz import RapidfuzzModule
-from langres.core.modules.rf_judge import RFJudge
+from langres.core.modules.random_forest_judge import RandomForestJudge
 from langres.core.resolver import Resolver
 
 #: Methods whose scorer makes no API call — fully deterministic and zero-spend.
@@ -267,7 +267,7 @@ def _make_module_builder(
         return (lambda: FellegiSunterJudge(comparator=fs_comparator)), fs_comparator
     if method == "random_forest":
         rf_comparator: StringComparator[Any] = Comparator.from_schema(schema)
-        return (lambda: RFJudge(feature_specs=rf_comparator.feature_specs)), rf_comparator
+        return (lambda: RandomForestJudge(feature_specs=rf_comparator.feature_specs)), rf_comparator
     raise ValueError(
         f"unknown method {method!r}; choose one of "
         f"{ALL_METHODS + ('fellegi_sunter', 'random_forest')}"
