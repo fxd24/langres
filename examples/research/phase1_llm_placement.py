@@ -21,10 +21,14 @@ The methodology mirrors the RF floor exactly, so the two numbers are comparable:
        is explicit. ``--derive-on fixed:0.5`` skips the valid calls entirely
        (cheapest, still leakage-free) and grades test at 0.5.
 
-**Hard spend cap.** Every paid judgement's honest ``provenance["cost_usd"]`` is
-metered through ONE :class:`~langres.clients.openrouter.SpendMonitor` shared
-across the valid + test passes (and across datasets in a ``--dataset both`` run),
-so cumulative spend can never cross ``--max-usd``. A breach raises
+**Hard spend cap.** The real ``LLMJudge`` is judged **concurrently in chunks**
+(``--max-concurrent`` calls in flight via its ``forward_async`` -- ~an order of
+magnitude faster than the ~4s/call sequential path, and retry-backed). Every
+paid judgement's honest ``provenance["cost_usd"]`` is metered through ONE
+:class:`~langres.clients.openrouter.SpendMonitor` shared across the valid + test
+passes (and across datasets in a ``--dataset both`` run), and the cap is checked
+after **each chunk**, so cumulative spend can never cross ``--max-usd`` by more
+than a single chunk. A breach raises
 :class:`~langres.clients.openrouter.BudgetExceeded` carrying the judgements
 already paid for on ``.partial_judgements`` -- the run stops cleanly, the money
 already spent is reported, nothing is lost. A conservative worst-case projection
@@ -57,6 +61,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import argparse  # noqa: E402
+import asyncio  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 from collections.abc import Iterator, Sequence  # noqa: E402
@@ -130,39 +135,120 @@ class _MeteredJudge(Module[Any]):
 
     It also tallies this judge's own cost, call count, real-cost fraction, and
     served providers, so the caller can put the honest economics in the artifact.
+
+    A judge exposing an async ``forward_async`` (the real ``LLMJudge``) is driven
+    **concurrently in chunks**: each chunk of ``chunk_size`` pairs is judged in
+    parallel (up to ``max_concurrent`` calls in flight), then metered and
+    cap-checked as a unit. That is ~an order of magnitude faster than the
+    ~4s/call sequential path and retry-backed, while bounding any spend overshoot
+    to a single chunk. Judges without ``forward_async`` (the dry-run / mock
+    judges) keep the original sequential, per-judgement loop.
     """
 
-    def __init__(self, inner: Module[Any], *, monitor: SpendMonitor) -> None:
-        """Wrap ``inner``, metering it through the shared ``monitor``."""
+    def __init__(
+        self,
+        inner: Module[Any],
+        *,
+        monitor: SpendMonitor,
+        max_concurrent: int = 50,
+        chunk_size: int = 100,
+    ) -> None:
+        """Wrap ``inner``, metering it through the shared ``monitor``.
+
+        Args:
+            inner: The judge to meter.
+            monitor: The shared, run-wide spend monitor enforcing the hard cap.
+            max_concurrent: Parallel LLM calls in flight per chunk on the async
+                path (ignored by the sequential fallback).
+            chunk_size: Pairs judged (concurrently) before each cap ``check()`` on
+                the async path -- the overshoot bound. Internal, not CLI-exposed.
+        """
         self._inner = inner
         self._monitor = monitor
+        self._max_concurrent = max_concurrent
+        self._chunk_size = chunk_size
         self.cost_usd = 0.0
         self.n_judged = 0
         self.n_real_cost = 0
         self.providers: dict[str, int] = {}
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
-        """Yield each judgement after charging its cost and enforcing the cap."""
+        """Yield each judgement after charging its cost and enforcing the cap.
+
+        Dispatches on the wrapped judge: a real ``LLMJudge`` (anything exposing
+        ``forward_async``) takes the concurrent, chunked path; everything else
+        (the dry-run / mock judges) takes the unchanged sequential path. Both
+        preserve the run-wide hard cap and carry the already-paid-for judgements
+        on :class:`BudgetExceeded`'s ``.partial_judgements`` when it fires.
+        """
+        materialized = list(candidates)
+        if hasattr(self._inner, "forward_async"):
+            yield from self._forward_async(materialized)
+        else:
+            yield from self._forward_sync(materialized)
+
+    def _meter(self, judgement: PairwiseJudgement) -> None:
+        """Tally one judgement's cost / provider and add it to the shared monitor.
+
+        The single source of truth for the money accounting, shared by both the
+        sequential and concurrent paths (only the cap-``check()`` granularity
+        differs between them -- per judgement vs. per chunk).
+        """
+        prov = judgement.provenance
+        cost = prov.get("cost_usd", 0.0)
+        cost = float(cost) if cost is not None else 0.0
+        self.cost_usd += cost
+        self.n_judged += 1
+        if prov.get("cost_is_real"):
+            self.n_real_cost += 1
+        provider = prov.get("provider")
+        if isinstance(provider, str) and provider:
+            self.providers[provider] = self.providers.get(provider, 0) + 1
+        self._monitor.add(cost)
+
+    def _forward_sync(self, candidates: list[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        """Sequential path (unchanged): meter + cap-check after every judgement.
+
+        The dry-run / mock judges without ``forward_async`` take exactly this
+        loop -- one flat charge per judged pair, the cap enforced immediately.
+        """
         produced: list[PairwiseJudgement] = []
-        for judgement in self._inner.forward(candidates):
+        for judgement in self._inner.forward(iter(candidates)):
             produced.append(judgement)
-            prov = judgement.provenance
-            cost = prov.get("cost_usd", 0.0)
-            cost = float(cost) if cost is not None else 0.0
-            self.cost_usd += cost
-            self.n_judged += 1
-            if prov.get("cost_is_real"):
-                self.n_real_cost += 1
-            provider = prov.get("provider")
-            if isinstance(provider, str) and provider:
-                self.providers[provider] = self.providers.get(provider, 0) + 1
-            self._monitor.add(cost)
+            self._meter(judgement)
             try:
                 self._monitor.check()
             except BudgetExceeded as exc:
                 exc.partial_judgements = list(produced)
                 raise
             yield judgement
+
+    def _forward_async(self, candidates: list[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        """Concurrent path: judge each chunk in parallel, then meter + cap-check it.
+
+        One ``asyncio.run`` per chunk (chunks run sequentially; within a chunk the
+        inner judge's ``forward_async`` fans out up to ``max_concurrent`` calls
+        concurrently). The cap is enforced once per chunk, so a breach stops the
+        run within a single chunk of overshoot -- the same mid-run hard stop as
+        the sequential path, just at chunk granularity.
+        """
+        produced: list[PairwiseJudgement] = []
+        for start in range(0, len(candidates), self._chunk_size):
+            chunk = candidates[start : start + self._chunk_size]
+            chunk_judgements: list[PairwiseJudgement] = asyncio.run(
+                self._inner.forward_async(  # type: ignore[attr-defined]
+                    iter(chunk), max_concurrent=self._max_concurrent
+                )
+            )
+            for judgement in chunk_judgements:
+                produced.append(judgement)
+                self._meter(judgement)
+            try:
+                self._monitor.check()
+            except BudgetExceeded as exc:
+                exc.partial_judgements = list(produced)
+                raise
+            yield from chunk_judgements
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
         """Delegate score inspection to the wrapped judge."""
@@ -181,6 +267,8 @@ def run_placement(
     derive_on: str,
     monitor: SpendMonitor,
     argmax_grid: Sequence[float] = DEFAULT_ARGMAX_GRID,
+    max_concurrent: int = 50,
+    chunk_size: int = 100,
 ) -> tuple[HonestPairEval, _MeteredJudge]:
     """Score the full test split honestly, metered by a shared spend monitor.
 
@@ -194,6 +282,10 @@ def run_placement(
         monitor: The shared :class:`SpendMonitor` enforcing ``--max-usd`` across
             every pass and dataset of the run.
         argmax_grid: Thresholds swept for the leaky argmax-on-test comparison.
+        max_concurrent: Parallel LLM calls in flight per chunk when the judge
+            exposes ``forward_async`` (the real ``LLMJudge``); ignored otherwise.
+        chunk_size: Pairs judged concurrently before each cap ``check()`` on the
+            async path -- the spend-overshoot bound.
 
     Returns:
         ``(result, meter)`` -- the :class:`HonestPairEval` and the
@@ -204,7 +296,9 @@ def run_placement(
             exception carries the already-paid-for judgements on
             ``.partial_judgements``.
     """
-    metered = _MeteredJudge(judge, monitor=monitor)
+    metered = _MeteredJudge(
+        judge, monitor=monitor, max_concurrent=max_concurrent, chunk_size=chunk_size
+    )
     if derive_on.startswith("fixed:"):
         threshold = float(derive_on.split(":", 1)[1])
         result = _eval_fixed_threshold(metered, benchmark, threshold, argmax_grid)
@@ -480,6 +574,7 @@ class PlacementConfig:
     max_usd: float = 5.0
     derive_on: str = "valid"
     dry_run: bool = False
+    max_concurrent: int = 50
     out_dir: Path = field(default_factory=lambda: _OUTPUT_DIR)
 
 
@@ -523,7 +618,13 @@ def _run_one_dataset(
         if cfg.dry_run
         else _build_llm_judge(cfg.model, cfg.provider, _ENTITY_NOUN[dataset])
     )
-    result, meter = run_placement(benchmark, judge, derive_on=cfg.derive_on, monitor=monitor)
+    result, meter = run_placement(
+        benchmark,
+        judge,
+        derive_on=cfg.derive_on,
+        monitor=monitor,
+        max_concurrent=cfg.max_concurrent,
+    )
 
     artifact = build_artifact(
         result,
@@ -616,6 +717,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--max-usd", type=float, default=5.0, help="Hard cumulative spend cap (USD)."
     )
     parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=50,
+        help="Parallel LLM calls in flight per chunk on the async judge path (default 50).",
+    )
+    parser.add_argument(
         "--derive-on",
         type=_parse_derive_on,
         default="valid",
@@ -644,6 +751,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_usd=args.max_usd,
         derive_on=args.derive_on,
         dry_run=args.dry_run,
+        max_concurrent=args.max_concurrent,
     )
 
     if not cfg.dry_run:

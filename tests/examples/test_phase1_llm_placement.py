@@ -113,6 +113,110 @@ class _MockJudge(Module[_Rec]):
         raise NotImplementedError
 
 
+class _AsyncMockJudge(Module[_Rec]):
+    """A judge exposing BOTH a sync ``forward`` and an async ``forward_async``.
+
+    ``forward_async`` returns the same deterministic, flat-cost judgements as
+    :class:`_MockJudge` (mocked -- no real await, no network), and records the
+    size of every chunk it was handed plus the ``max_concurrent`` it was called
+    with, so a test can prove :class:`_MeteredJudge` drove the *async* path in
+    chunks. Its sync ``forward`` raises: if it ever runs, the wrapper wrongly
+    fell back to the sequential path instead of using ``forward_async``.
+    """
+
+    def __init__(self, *, cost_usd: float = 0.0, provider: str = "AsyncProvider") -> None:
+        self._cost = cost_usd
+        self._provider = provider
+        self.chunk_sizes: list[int] = []
+        self.max_concurrent_seen: list[int] = []
+
+    def _judge(self, candidate: ERCandidate[_Rec]) -> PairwiseJudgement:
+        pair = frozenset({candidate.left.id, candidate.right.id})
+        return PairwiseJudgement(
+            left_id=candidate.left.id,
+            right_id=candidate.right.id,
+            score=0.9 if pair in _MATCHES else 0.1,
+            score_type="prob_llm",
+            decision_step="async_mock",
+            provenance={
+                "cost_usd": self._cost,
+                "cost_is_real": True,
+                "provider": self._provider,
+                "model": "async-mock",
+            },
+        )
+
+    async def forward_async(
+        self, candidates: Iterator[ERCandidate[_Rec]], max_concurrent: int = 50
+    ) -> list[PairwiseJudgement]:
+        chunk = list(candidates)
+        self.chunk_sizes.append(len(chunk))
+        self.max_concurrent_seen.append(max_concurrent)
+        return [self._judge(candidate) for candidate in chunk]
+
+    def forward(self, candidates: Iterator[ERCandidate[_Rec]]) -> Iterator[PairwiseJudgement]:
+        raise AssertionError("sync forward must not run when forward_async exists")
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
+def test_async_path_meters_in_chunks_and_yields_all() -> None:
+    """A judge with forward_async is driven concurrently in chunks, fully metered."""
+    benchmark = _benchmark()
+    monitor = SpendMonitor(budget_usd=100.0)
+    judge = _AsyncMockJudge(cost_usd=0.003, provider="DeepSeek")
+
+    result, meter = run_placement(
+        benchmark, judge, derive_on="fixed:0.5", monitor=monitor, chunk_size=2
+    )
+
+    # fixed:0.5 judges only the 4 test pairs; chunk_size=2 -> two chunks of 2,
+    # each run through forward_async (the sync forward would have raised).
+    n_test = len(_SPLITS["test"])
+    assert judge.chunk_sizes == [2, 2]
+    assert judge.max_concurrent_seen == [50, 50]  # default max_concurrent threaded through
+    assert meter.n_judged == n_test
+
+    # Cumulative cost metered through the shared monitor; every judgement yielded.
+    assert meter.cost_usd == pytest.approx(0.003 * n_test)
+    assert monitor.spent == pytest.approx(meter.cost_usd)
+    assert meter.providers == {"DeepSeek": n_test}
+    assert result.honest.f1 == pytest.approx(1.0)  # clean separation, same as sync path
+
+
+def test_async_max_concurrent_is_threaded() -> None:
+    """run_placement's max_concurrent reaches the inner judge's forward_async."""
+    benchmark = _benchmark()
+    monitor = SpendMonitor(budget_usd=100.0)
+    judge = _AsyncMockJudge(cost_usd=0.0)
+
+    run_placement(
+        benchmark, judge, derive_on="fixed:0.5", monitor=monitor, max_concurrent=7, chunk_size=2
+    )
+
+    assert judge.max_concurrent_seen == [7, 7]
+
+
+def test_async_spend_cap_aborts_after_one_chunk_with_partials() -> None:
+    """The async cap is checked per chunk: a chunk that crosses stops the run.
+
+    Overshoot is bounded to a single chunk -- the next chunk is never judged --
+    and every already-paid-for judgement rides out on ``.partial_judgements``.
+    """
+    benchmark = _benchmark()
+    monitor = SpendMonitor(budget_usd=0.05)
+    judge = _AsyncMockJudge(cost_usd=0.05)  # one chunk of 2 = $0.10 > $0.05 cap
+
+    with pytest.raises(BudgetExceeded) as excinfo:
+        run_placement(benchmark, judge, derive_on="fixed:0.5", monitor=monitor, chunk_size=2)
+
+    partials = excinfo.value.partial_judgements
+    assert len(partials) == 2, "only the first chunk was judged before the hard stop"
+    assert judge.chunk_sizes == [2], "the second chunk must never be judged"
+    assert monitor.spent > monitor.budget_usd
+
+
 def test_computes_prf_records_cost_and_writes_artifacts(tmp_path: Path) -> None:
     """derive_on=valid: clean separation -> honest F1=1.0, cost + artifacts recorded."""
     benchmark = _benchmark()
@@ -207,6 +311,7 @@ def test_dry_run_config_defaults() -> None:
     assert cfg.derive_on == "valid"
     assert cfg.provider is None
     assert cfg.dry_run is False
+    assert cfg.max_concurrent == 50
 
 
 def test_parse_derive_on_accepts_and_rejects() -> None:
