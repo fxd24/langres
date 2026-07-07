@@ -27,9 +27,12 @@ Design constraints (this is a packaged console-script entry point):
   display cells (``=``/``+``/``-``/``@``) with ``'`` so a crafted record field
   cannot become a spreadsheet formula -- but it *never* touches the id columns
   (escaping an id like ``-42`` would break ``import-csv``'s own pair
-  validation). ``review`` strips C0/C1/ANSI control characters out of rendered
-  record content so a hostile field cannot clear or spoof the reviewer's
-  terminal.
+  validation). This assumes record **ids are internal/trusted**: a ``-``/``=``
+  leading id from an *untrusted* source stays a live formula-injection vector
+  when the export is opened in a spreadsheet -- the deliberate tradeoff for a
+  lossless round-trip, not a bug. ``review`` strips C0/C1/ANSI control
+  characters out of rendered record content so a hostile field cannot clear or
+  spoof the reviewer's terminal.
 """
 
 from __future__ import annotations
