@@ -326,7 +326,14 @@ def _score_verdicts(
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     return PairMetrics(
-        label=label, threshold=threshold, precision=precision, recall=recall, f1=f1, tp=tp, fp=fp, fn=fn
+        label=label,
+        threshold=threshold,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        tp=tp,
+        fp=fp,
+        fn=fn,
     )
 
 
@@ -407,9 +414,7 @@ def run_closed_loop(
     """
     if work_dir is None:
         with tempfile.TemporaryDirectory(prefix="flywheel_loop_") as tmp:
-            return run_closed_loop(
-                data_dir, seed=seed, work_dir=Path(tmp), verbose=verbose
-            )
+            return run_closed_loop(data_dir, seed=seed, work_dir=Path(tmp), verbose=verbose)
 
     records = _load_records(data_dir)
     specs = _load_candidate_specs(data_dir)
@@ -485,9 +490,7 @@ def run_closed_loop(
     student_threshold = derive_threshold(student_scores, heldout_gold, method="youden")
 
     # --- Stage 6: derive the escalation band from the student's own score spread. ---
-    (band_low, band_high), band_fraction = derive_escalation_band(
-        student_scores, student_threshold
-    )
+    (band_low, band_high), band_fraction = derive_escalation_band(student_scores, student_threshold)
     if verbose:
         print(
             f"[stage 6] band derived around student threshold {student_threshold:.3f}: "
@@ -501,7 +504,9 @@ def run_closed_loop(
 
     # --- Stage 7: disagreement selection seeds the next queue (skips corrected pairs). ---
     student_rows = _log_rows(student_judgements, student_threshold)
-    teacher_heldout = [teacher_by_pair[_pair_key(c.left.id, c.right.id)] for c in heldout_candidates]
+    teacher_heldout = [
+        teacher_by_pair[_pair_key(c.left.id, c.right.id)] for c in heldout_candidates
+    ]
     teacher_rows = _log_rows(teacher_heldout, student_threshold)
     next_items = select_for_review(
         student_rows,
