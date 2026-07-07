@@ -121,7 +121,7 @@ exclude-newer = "2026-06-18"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=95 -m 'not integration'"
+addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=90 -m 'not integration'"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
@@ -135,7 +135,12 @@ omit = ["*/tests/*", "*/__pycache__/*", "*/conftest.py"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 95
+# Relaxed, repo-wide floor for the tiered coverage policy (see
+# .claude/rules/testing.md): high (95-100%) on the src/langres/core/**
+# library contract, behavior/smoke on benchmark/experiment/harness code, so
+# the blended whole-repo floor sits below the core tier. Kept simple (one
+# floor, no per-module omit lists). Gated weekly by test-full, not per-PR.
+fail_under = 90
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

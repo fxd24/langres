@@ -21,7 +21,7 @@
 
 **📋 See `docs/POC.md` for the complete POC plan** (hypothesis, success criteria — BCubed F1 ≥ 0.85 for Approach 3 — core components, TDD approach, Go/No-Go criteria).
 
-**Current focus**: Building production-quality `langres.core` primitives with 100% test coverage. This is NOT throwaway prototype code—these components will become the foundation of the full library.
+**Current focus**: Building production-quality `langres.core` primitives under a **tiered coverage policy** (95–100% on the `core` contract, behavior/smoke on harness code — see `.claude/rules/testing.md`). This is NOT throwaway prototype code—these components will become the foundation of the full library.
 
 ## How I Work — Rules (`.claude/rules/`)
 
@@ -36,7 +36,7 @@ load only when you read/edit a file matching their `paths:`.
 **Path-scoped:**
 - `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
 - `component-design.md` *(`src/**`)* — the layered API (verbs → Resolver → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the three judge-dispatch sites).
-- `testing.md` *(`tests/**`)* — 100% coverage, markers, human-like dev-iteration loop.
+- `testing.md` *(`tests/**`)* — tiered coverage (high on `core`, behavior-focused on harness), markers, human-like dev-iteration loop.
 - `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
 ## Skills
