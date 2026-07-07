@@ -309,8 +309,21 @@ def main() -> int:
             f"pairs, seed {_SEED}). AG products mapped onto FZRecord as name=title, "
             "addr=manufacturer (cosmetic field labels; values drive the result). "
             "The positive rate is kept near the natural ~10% with a floor so both split "
-            "halves span both label classes. These are THE economics numbers "
-            "GETTING_STARTED cites; the FZ/simulated runs are wiring/plumbing only."
+            "halves span both label classes. "
+            "Honest reading -- the COST lever is unambiguous: "
+            f"{report.frontier_call_reduction:.1%} fewer frontier calls for "
+            f"${report.teacher_spend_usd:.2f}, at {report.escalated_accuracy:.1%} "
+            "escalated-verdict accuracy. QUALITY is the hard-data reality: AG is hard, so "
+            f"the *uncompiled* frontier teacher is itself low-precision "
+            f"({report.teacher.precision:.3f}), so its silver labels are noisy; a student "
+            f"trained on only {report.n_corrections} human corrections + that noisy silver "
+            f"is weak (F1 {report.student.f1:.3f}). The cascade recovers part of the gap "
+            f"(F1 {report.cascade.f1:.3f} > the cheap student's {report.student.f1:.3f}) but "
+            f"stays below the teacher (F1 {report.teacher.f1:.3f}) -- a cascade cannot exceed "
+            "the signal it distils. The lever that closes the gap is more human labels at the "
+            "margin, which is exactly what the loop accumulates. These are the real-model "
+            "economics behind GETTING_STARTED's cascade story; the FZ/simulated runs are "
+            "wiring/plumbing only."
         ),
     )
     json_path, md_path = write_result_docs(
