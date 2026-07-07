@@ -58,9 +58,11 @@ langres/
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
+│   │   ├── judgement_log.py        # JudgementLog + LoggingModule (logs every judge call: ids, score, verdict, model, cost)
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
+│   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   │   └── optimizers/             # BlockerOptimizer (Optuna)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing

@@ -102,7 +102,7 @@ class ReviewItem(BaseModel):
     v: int = _REVIEW_SCHEMA_VERSION
     left_id: str
     right_id: str
-    score: float
+    score: float = Field(ge=0.0, le=1.0)
     verdict: bool
     reason: ReviewReason
     decision_step: str | None = None
@@ -188,10 +188,14 @@ def select_for_review(
     """Select the judged pairs most worth a human's review.
 
     Reads ``JudgementLog``-format rows (e.g. from ``JudgementLog.read()``),
-    keys them order-independently by ``frozenset({left_id, right_id})`` with
-    last-write-wins on duplicates, drops every pair already answered in
-    ``corrections`` (a corrected pair is never re-asked), and applies
-    ``strategy``:
+    keys them order-independently by ``frozenset({left_id, right_id})``, with
+    the row LATEST IN THE INPUT SEQUENCE winning on duplicates -- positional,
+    by the order rows arrive in ``judgement_rows``, NOT by any logged
+    ``timestamp`` field. For the common case of a single append-only log this
+    is the same as chronological order, but a caller concatenating multiple
+    logs or replaying rows out of order should sort by ``timestamp`` first.
+    It then drops every pair already answered in ``corrections`` (a corrected
+    pair is never re-asked), and applies ``strategy``:
 
     - ``"uncertainty"``: pairs with ``|score - threshold| <= margin``, sorted
       most-uncertain first. Requires ``threshold``.
@@ -272,6 +276,12 @@ def select_for_review(
             f"audit_fraction must be in [0.0, 1.0], got {audit_fraction!r}. It is the "
             "share of the batch spent on random audit items (0.0 = no audit slice); "
             "a value > 1 would let the audit slice exceed limit."
+        )
+    if limit < 0:
+        raise ValueError(
+            f"limit must be >= 0, got {limit!r}. It is the maximum number of items "
+            "in the batch; a negative value would make random.Random.sample's "
+            "count negative and raise instead of returning an empty selection."
         )
 
     rows = _clean_rows(judgement_rows, source="judgement_rows")
