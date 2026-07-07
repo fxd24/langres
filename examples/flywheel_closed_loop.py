@@ -695,11 +695,52 @@ def format_report(report: ClosedLoopReport) -> str:
             f"recall={m.recall:.3f}  (tp={m.tp} fp={m.fp} fn={m.fn})"
         )
 
+    # A real paid run (teacher injected with a spend cap) metered real cost; the
+    # default simulated run did not. Keep the banner/spend/footer honest either way
+    # -- a script that prints "$0 / no API called" while spending money is a footgun.
+    real = report.teacher_spend_usd > 0.0
+    banner = (
+        f"  REAL PAID RUN -- ${report.teacher_spend_usd:.4f} spent on a live frontier "
+        "teacher (spend-capped)."
+        if real
+        else "  ALL SIMULATED / $0 -- the 'frontier' judge is a local stand-in; costs are fictional."
+    )
+    spend_line = (
+        f"Teacher spend (REAL):     ${report.teacher_spend_usd:.4f} on live API calls (spend-capped)"
+        if real
+        else (
+            f"Simulated dollars saved:  ${report.simulated_dollars_saved:.4f} "
+            "(FICTIONAL -- no API was called)"
+        )
+    )
+    # The "easy fixture" caveat is specific to THIS example's simulated FZ run; on a
+    # real run the dataset-specific caveats live in the committed result doc instead.
+    easy_note = (
+        []
+        if real
+        else [
+            "  (On this easy fixture the cheap student already resolves the held-out split, so",
+            "   the cascade's win here is the frontier-call reduction below -- NOT an F1 gain;",
+            "   the quality gain from escalation only shows up on harder data. See the paid runs.)",
+            "",
+        ]
+    )
+    footer = (
+        [
+            "  Measured on a live model -- these numbers are real, not simulated.",
+            "  Dataset-specific caveats are in the committed result doc.",
+        ]
+        if real
+        else [
+            "  Plumbing demo -- favorable BY CONSTRUCTION. Real economics need a real model",
+            "  on hard data; see the paid validation runs, never these simulated numbers.",
+        ]
+    )
     lines = [
         "=" * 82,
         "The data flywheel, closed: bootstrap -> review -> harvest -> train -> cascade",
         "=" * 82,
-        "  ALL SIMULATED / $0 -- the 'frontier' judge is a local stand-in; costs are fictional.",
+        banner,
         "",
         f"Dataset:   {report.n_records} records, {report.n_candidates} candidate pairs "
         f"({report.n_train} train / {report.n_heldout} held-out).",
@@ -719,25 +760,20 @@ def format_report(report: ClosedLoopReport) -> str:
         metric_row(report.student),
         metric_row(report.cascade),
         "",
-        "  (On this easy fixture the cheap student already resolves the held-out split, so",
-        "   the cascade's win here is the frontier-call reduction below -- NOT an F1 gain;",
-        "   the quality gain from escalation only shows up on harder data. See the paid runs.)",
-        "",
+        *easy_note,
         f"Escalation rate:          {report.escalation_rate:.1%} "
         f"({report.n_escalated}/{report.n_heldout} held-out pairs escalated to the frontier)",
         f"Frontier-call reduction:  {report.frontier_call_reduction:.1%} "
         "vs judging every pair with the frontier",
         f"Escalated-pair accuracy:  {report.escalated_accuracy:.1%} "
         f"({report.escalated_correct}/{report.n_escalated} escalated verdicts correct)",
-        f"Simulated dollars saved:  ${report.simulated_dollars_saved:.4f} "
-        "(FICTIONAL -- no API was called)",
+        spend_line,
         f"Audit-slice disagreement: {report.audit_disagreement_rate:.1%} "
         f"of a {report.audit_sample_size}-pair governance sample (cascade vs gold)",
         f"Next review queue:        {report.next_queue_size} student/teacher disagreements "
         f"(already-corrected pairs included: {report.next_queue_has_corrected_pair})",
         "=" * 82,
-        "  Plumbing demo -- favorable BY CONSTRUCTION. Real economics need a real model",
-        "  on hard data; see the paid validation runs, never these simulated numbers.",
+        *footer,
         "=" * 82,
     ]
     return "\n".join(lines)
