@@ -115,8 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "to stay in the shell."
         ),
         epilog=(
-            "After `pip install langres`, drop the `uv run` prefix "
-            "(e.g. `langres export-csv ...`)."
+            "After `pip install langres`, drop the `uv run` prefix (e.g. `langres export-csv ...`)."
         ),
     )
     parser.add_argument(
@@ -197,8 +196,7 @@ def _review(
     items = ReviewQueue(queue_path).read()
     if not items:
         out_stream.write(
-            "Review queue is empty -- nothing to review. "
-            "Regenerate it with select_for_review().\n"
+            "Review queue is empty -- nothing to review. Regenerate it with select_for_review().\n"
         )
         return 0
 
@@ -335,7 +333,9 @@ def _import_csv(csv_path: Path, queue_path: Path, out_path: Path, out_stream: Te
         out_stream.write(f"error: review queue not found: {queue_path}\n")
         return 1
 
-    queue_items = {_pair_key(item.left_id, item.right_id): item for item in ReviewQueue(queue_path).read()}
+    queue_items = {
+        _pair_key(item.left_id, item.right_id): item for item in ReviewQueue(queue_path).read()
+    }
 
     corrections: list[Correction] = []
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
