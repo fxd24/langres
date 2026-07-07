@@ -90,6 +90,7 @@ These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/c
 
 ## Important Notes
 
+- **Always verify claims before you assert them.** Never present an unverified hypothesis — about code, tooling, model/library capabilities, or data — as fact. Check the source, run the code, read the data first; if you can't, label it explicitly as unverified. (Detail in `.claude/rules/expert-knowledge.md`.)
 - This is an **early-stage project** - expect significant changes
 - Prioritize clean, testable code over premature optimization
 - Document design decisions in code comments
