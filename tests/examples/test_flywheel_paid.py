@@ -135,3 +135,35 @@ def test_run_closed_loop_cap_is_the_shared_mechanism() -> None:
     with _quiet():
         uncapped = run_closed_loop(seed=0)
     assert uncapped.teacher_spend_usd == 0.0
+
+
+# ---------------------------------------------------------------------------
+# (3) the real path refuses to spend when the run is unsafe (no network touched)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_refuses_budget_over_ceiling() -> None:
+    """A budget above the ceiling is refused before any env/network touch."""
+    from examples.research._flywheel_paid_common import preflight_real_model
+
+    reason = preflight_real_model("openrouter/openai/gpt-4o-mini", budget_usd=99.0, ceiling_usd=2.0)
+    assert reason is not None
+    assert "ceiling" in reason
+
+
+def test_preflight_refuses_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No OPENROUTER_API_KEY -> a clean refusal string, and NO network probe.
+
+    ``load_dotenv`` is stubbed so a developer's real ``.env`` can't repopulate the
+    key (which would then fire the real price-probe call). This proves the scripts
+    fail cleanly without a key at $0.
+    """
+    import dotenv
+
+    from examples.research._flywheel_paid_common import preflight_real_model
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    reason = preflight_real_model("openrouter/openai/gpt-4o-mini", budget_usd=1.0, ceiling_usd=2.0)
+    assert reason is not None
+    assert "OPENROUTER_API_KEY" in reason
