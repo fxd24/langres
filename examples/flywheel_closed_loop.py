@@ -620,6 +620,10 @@ def format_report(report: ClosedLoopReport) -> str:
         metric_row(report.student),
         metric_row(report.cascade),
         "",
+        "  (On this easy fixture the cheap student already resolves the held-out split, so",
+        "   the cascade's win here is the frontier-call reduction below -- NOT an F1 gain;",
+        "   the quality gain from escalation only shows up on harder data. See the paid runs.)",
+        "",
         f"Escalation rate:          {report.escalation_rate:.1%} "
         f"({report.n_escalated}/{report.n_heldout} held-out pairs escalated to the frontier)",
         f"Frontier-call reduction:  {report.frontier_call_reduction:.1%} "
