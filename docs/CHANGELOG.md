@@ -6,6 +6,32 @@
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### Flywheel closed loop — `docs/GETTING_STARTED.md` + doc-ladder rewire
+
+The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`
+/ `ReviewQueue`, the `langres` review CLI, `CascadeJudge`, and
+`examples/flywheel_closed_loop.py`), telling the lifecycle end to end.
+
+- **`docs/GETTING_STARTED.md`** (new, "start here") — the flywheel at altitude:
+  LLM bootstrap under a cap (fail-fast `"auto"`: bring an LLM or explicitly opt
+  into `judge="string"`) → log from day 1 → review at the margin
+  (`select_for_review` + `langres review` / CSV round-trip) → harvest silver +
+  gold (with the circularity caveat) → train a cheap trainable student
+  (RFJudge, Magellan-style — **not** LLM distillation) + `derive_threshold` →
+  `CascadeJudge` → `Resolver.save`/`load`. Every step carries a runnable snippet
+  inline; two explicit lanes (keyless `judge="string"` / keyed default `auto`);
+  a competitive-positioning section (vs dedupe/Zingg/Splink, "use Splink when… /
+  use langres when…"); the audit slice as the governance/trust mechanism; the
+  ids-only review mode as the PII privacy posture; and two flywheel operating
+  notes (stable ids; one log per run, or dedupe rows before harvest).
+- **Snippet-rot guard** (`tests/docs/test_getting_started_snippets.py`) — runs
+  the guide's first keyless snippet verbatim at **$0** (hard-refuses any
+  non-`judge="string"` block, so a paid snippet can never slip in).
+- **Doc-ladder rewire** — `README.md` links GETTING_STARTED first as "start
+  here" (+ a quickstart pointer); `docs/TUTORIAL_YOUR_OWN_CSV.md` gains it as
+  the big-picture rung and in the calibration tease; `examples/README.md`
+  Start-here tier gains `flywheel_closed_loop.py`.
+
 ### Wave 3 (W3): experiment DX — docs, the paid-smoke harness + result, examples curation
 
 Making the seam usable and the one substantive paid claim measured. Everything is
