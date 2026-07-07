@@ -107,7 +107,9 @@ def _read_table(filename: str) -> dict[str, dict[str, str]]:
 def _read_test_pairs() -> list[tuple[str, str, int]]:
     """Read the fixed AG test split as ``(ltable_id, rtable_id, label)`` tuples."""
     with resources.files(_DATASET_PACKAGE).joinpath(_TEST_PAIRS_FILE).open(encoding="utf-8") as fh:
-        return [(row["ltable_id"], row["rtable_id"], int(row["label"])) for row in csv.DictReader(fh)]
+        return [
+            (row["ltable_id"], row["rtable_id"], int(row["label"])) for row in csv.DictReader(fh)
+        ]
 
 
 def materialize_ag_fixtures(out_dir: Path, *, max_pairs: int, seed: int) -> Path:
@@ -145,7 +147,9 @@ def materialize_ag_fixtures(out_dir: Path, *, max_pairs: int, seed: int) -> Path
             "the vendored dataset looks truncated."
         )
     # Keep roughly the natural positive rate, but never fewer than the floor.
-    n_pos = min(len(positives), max(_MIN_POSITIVES, round(max_pairs * len(positives) / len(all_pairs))))
+    n_pos = min(
+        len(positives), max(_MIN_POSITIVES, round(max_pairs * len(positives) / len(all_pairs)))
+    )
     n_neg = min(len(negatives), max(0, max_pairs - n_pos))
     subset = positives[:n_pos] + negatives[:n_neg]
     rng.shuffle(subset)

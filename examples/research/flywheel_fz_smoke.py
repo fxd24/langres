@@ -124,7 +124,9 @@ def main() -> int:
         # warning are expected narration here, not errors.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            report = run_fz_smoke(model=args.model, budget_usd=args.budget, simulated=args.simulated)
+            report = run_fz_smoke(
+                model=args.model, budget_usd=args.budget, simulated=args.simulated
+            )
     except BudgetExceeded as exc:
         print(
             f"[stopped] spend cap fired: {exc} "
