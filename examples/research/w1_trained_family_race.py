@@ -1,9 +1,9 @@
-"""W1.2 trained-family replication — FellegiSunterJudge + RFJudge, $0.
+"""W1.2 trained-family replication — FellegiSunterJudge + RandomForestJudge, $0.
 
 Races the two W1.2 "trained family" judges — the first learn-with-no-labels
 proof (:class:`~langres.core.judges.fellegi_sunter.FellegiSunterJudge`, EM over
 random-sampled u + the blocked candidates for m/prior) and a Magellan-style
-supervised RandomForest (:class:`~langres.core.modules.rf_judge.RFJudge`) — on
+supervised RandomForest (:class:`~langres.core.modules.random_forest_judge.RandomForestJudge`) — on
 all three $0 replication datasets:
 
     FodorsZagatBenchmark   — saturated, clean multi-field identity data
@@ -194,7 +194,7 @@ def format_report(cells: list[TrainedCell]) -> str:
 def main() -> None:
     """Run the deterministic, zero-spend trained-family replication and print it."""
     print("=" * 78)
-    print("W1.2 trained-family replication — FellegiSunterJudge + RFJudge (seed=0)")
+    print("W1.2 trained-family replication — FellegiSunterJudge + RandomForestJudge (seed=0)")
     print("=" * 78)
 
     cells = run_trained_family_replication(SEED)

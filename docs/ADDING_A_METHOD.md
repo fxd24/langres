@@ -41,7 +41,7 @@ Resolver spine needs no changes. You implement only `forward_groups` and
 An `ERCandidate` carries an optional `comparison: ComparisonVector`
 (`src/langres/core/models.py`). This is the two-phase pipeline seam:
 
-- **Comparison-aware judges** (e.g. `WeightedAverageJudge`, `RFJudge`,
+- **Comparison-aware judges** (e.g. `WeightedAverageJudge`, `RandomForestJudge`,
   `FellegiSunterJudge`) consume a per-feature `ComparisonVector` that a
   `Comparator` stage attaches upstream, and raise if it's `None`. Wire these with
   a `Comparator` (step 3 returns one alongside the module builder).
@@ -68,7 +68,7 @@ allowed values live on `PairwiseJudgement` in `src/langres/core/models.py`:
 | `prob_llm` | per-pair LLM probability | `DSPyJudge`, `LLMJudge` |
 | `prob_group_llm` | **set-wise** LLM decision decomposed to a pair | `SelectJudge` |
 | `calibrated_prob` | calibrated probability | cascade / calibrated modules |
-| `prob_fs` / `prob_rf` | Fellegi-Sunter / random-forest probability | `FellegiSunterJudge`, `RFJudge` |
+| `prob_fs` / `prob_rf` | Fellegi-Sunter / random-forest probability | `FellegiSunterJudge`, `RandomForestJudge` |
 
 `SelectJudge` emits `score_type="prob_group_llm"` — a distinct literal precisely
 because its score comes from a *group* decision (1.0 for the single selected id,

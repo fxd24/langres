@@ -1,4 +1,4 @@
-"""RFJudge: sklearn RandomForest over ComparisonVector.similarities (W1.2, S2).
+"""RandomForestJudge: sklearn RandomForest over ComparisonVector.similarities (W1.2, S2).
 
 Magellan-style supervised judge (``SupervisedFitMixin.fit(candidates,
 labels)``): a feature vector per candidate (one entry per declared
@@ -55,8 +55,8 @@ class _ForestState:
     """Inference-only representation of a fitted forest: plain per-tree arrays.
 
     Deliberately NOT an sklearn estimator -- this is the one canonical
-    representation used both right after :meth:`RFJudge.fit` and after a
-    :meth:`RFJudge.load_state`, so a freshly-fit judge and a reloaded judge
+    representation used both right after :meth:`RandomForestJudge.fit` and after a
+    :meth:`RandomForestJudge.load_state`, so a freshly-fit judge and a reloaded judge
     score identically.
     """
 
@@ -121,7 +121,7 @@ def _check_sklearn_version_guard(saved_version: str) -> None:
     current_major_minor = ".".join(current_version.split(".")[:2])
     if saved_major_minor != current_major_minor:
         raise ValueError(
-            f"RFJudge artifact was fit with scikit-learn {saved_version}, but the "
+            f"RandomForestJudge artifact was fit with scikit-learn {saved_version}, but the "
             f"current environment has scikit-learn {current_version}. Refusing to "
             "load a forest artifact across a scikit-learn minor-version boundary "
             "— re-fit the judge in this environment, or install "
@@ -129,11 +129,11 @@ def _check_sklearn_version_guard(saved_version: str) -> None:
         )
 
 
-@register("rf_judge")
-class RFJudge(Module[SchemaT]):
+@register("random_forest")
+class RandomForestJudge(Module[SchemaT]):
     """Supervised sklearn RandomForest judge over declared comparator features."""
 
-    type_name: ClassVar[str] = "rf_judge"
+    type_name: ClassVar[str] = "random_forest"
 
     def __init__(
         self,
@@ -143,7 +143,7 @@ class RFJudge(Module[SchemaT]):
         max_depth: int | None = None,
         random_state: int = 0,
     ) -> None:
-        """Initialize an (unfit) RFJudge.
+        """Initialize an (unfit) RandomForestJudge.
 
         Args:
             feature_specs: The features to build the sklearn feature vector
@@ -164,7 +164,7 @@ class RFJudge(Module[SchemaT]):
         vector: ComparisonVector | None = candidate.comparison
         if vector is None:
             raise ValueError(
-                "RFJudge requires candidates carrying a comparison vector — add "
+                "RandomForestJudge requires candidates carrying a comparison vector — add "
                 "a Comparator to the pipeline."
             )
         return [
@@ -191,7 +191,7 @@ class RFJudge(Module[SchemaT]):
         materialized = list(candidates)
         if len(materialized) != len(labels):
             raise ValueError(
-                f"RFJudge.fit received {len(materialized)} candidates but "
+                f"RandomForestJudge.fit received {len(materialized)} candidates but "
                 f"{len(labels)} labels — they must be positionally aligned "
                 "and equal length."
             )
@@ -222,7 +222,7 @@ class RFJudge(Module[SchemaT]):
         """
         if self._forest_state is None:
             raise ValueError(
-                "RFJudge must be fit before forward(): call fit(candidates, "
+                "RandomForestJudge must be fit before forward(): call fit(candidates, "
                 "labels) directly, or resolver.fit(records, labels=...) on a "
                 "Resolver whose module is this judge."
             )
@@ -259,7 +259,7 @@ class RFJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "RFJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "RandomForestJudge[SchemaT]":
         """Reconstruct a fresh, UNFIT judge from :attr:`config`."""
         specs = [
             FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])

@@ -21,6 +21,7 @@ try:
 except ImportError:
     RateLimitError = Exception
 
+from langres.clients.openrouter import parse_openrouter_billing
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
 from langres.core.registry import register
@@ -192,9 +193,19 @@ class LLMJudge(Module[SchemaT]):
         module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
-        Defaults to ``gpt-5-mini`` at ``temperature=1.0``. Cost tracking is
-        delegated to ``litellm.completion_cost`` so pricing stays honest for
-        whatever model is actually used (no hardcoded table).
+        Defaults to ``gpt-5-mini`` at ``temperature=1.0``. Cost tracking prefers
+        OpenRouter's *actual* billed cost (via usage accounting, parsed by
+        :func:`~langres.clients.openrouter.parse_openrouter_billing`) and falls
+        back to ``litellm.completion_cost`` (the pinned/table estimate) when the
+        response carries no real cost. Provenance records the serving provider
+        and whether the recorded cost was real (``cost_is_real``).
+
+    Note:
+        On an ``openrouter/...`` model, pass ``provider`` to pin which upstream
+        provider serves the request (reproducible benchmark cost), e.g.
+        ``provider={"order": ["DeepInfra"], "allow_fallbacks": False}`` or
+        ``provider={"only": ["Together"]}``. It is sent as OpenRouter's
+        ``extra_body["provider"]`` routing block. Off OpenRouter it is ignored.
     """
 
     # Registry key, mirrored as a class attribute so the Resolver's uniform
@@ -208,6 +219,7 @@ class LLMJudge(Module[SchemaT]):
         temperature: float = 1.0,
         prompt_template: str | None = None,
         entity_noun: str = "entity",
+        provider: dict[str, Any] | None = None,
     ):
         """Initialize LLMJudge.
 
@@ -223,6 +235,12 @@ class LLMJudge(Module[SchemaT]):
                 :data:`DEFAULT_PROMPT`, rendered for ``entity_noun``, if None)
             entity_noun: Domain noun woven into the default prompt (e.g.
                 "company", "product"). Ignored when ``prompt_template`` is given.
+            provider: Optional OpenRouter provider-routing block, sent as
+                ``extra_body["provider"]`` to pin which upstream provider serves
+                the request (reproducible cost on a benchmark), e.g.
+                ``{"order": ["DeepInfra"], "allow_fallbacks": False}`` or
+                ``{"only": ["Together"]}``. ``None`` (the default) keeps
+                OpenRouter's own routing. Ignored for non-``openrouter/`` models.
 
         Raises:
             ValueError: If temperature out of range
@@ -234,6 +252,7 @@ class LLMJudge(Module[SchemaT]):
         self.model = model
         self.temperature = temperature
         self.entity_noun = entity_noun
+        self.provider = provider
         self.prompt_template = (
             prompt_template if prompt_template else render_default_prompt(entity_noun)
         )
@@ -270,18 +289,51 @@ class LLMJudge(Module[SchemaT]):
             "temperature": self.temperature,
             "prompt_template": self.prompt_template,
             "entity_noun": self.entity_noun,
+            "provider": self.provider,
         }
 
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
         """Rebuild from :attr:`config` via the lazy-client path (client from env)."""
+        provider = config.get("provider")
         return cls(
             client=None,
             model=str(config["model"]),
             temperature=float(config["temperature"]),  # type: ignore[arg-type]
             prompt_template=str(config["prompt_template"]),
             entity_noun=str(config["entity_noun"]),
+            provider=provider,  # type: ignore[arg-type]
         )
+
+    def _completion_kwargs(self) -> dict[str, Any]:
+        """Per-call OpenRouter extras: usage accounting + optional provider pin.
+
+        On an ``openrouter/...`` model, returns
+        ``{"extra_body": {"usage": {"include": True}, "provider": ...}}`` so the
+        response carries the real billed cost (and, when :attr:`provider` is set,
+        pins routing for a reproducible run). Off OpenRouter it returns ``{}`` —
+        usage accounting and provider routing are OpenRouter features and would
+        400 on OpenAI/Azure — so those calls are made exactly as before.
+        """
+        if not self.model.startswith("openrouter/"):
+            return {}
+        extra_body: dict[str, Any] = {"usage": {"include": True}}
+        if self.provider is not None:
+            extra_body["provider"] = self.provider
+        return {"extra_body": extra_body}
+
+    def _billing(self, response: Any) -> tuple[float, str | None, bool]:
+        """Return ``(cost_usd, serving_provider, cost_is_real)`` for a response.
+
+        Prefers OpenRouter's actual billed cost (usage accounting); falls back to
+        the pinned per-token estimate via :meth:`_calculate_cost` when the
+        response carries no real cost (offline, non-OpenRouter, or accounting
+        off). ``cost_is_real`` records which source was used.
+        """
+        real_cost, provider = parse_openrouter_billing(response)
+        if real_cost is not None:
+            return real_cost, provider, True
+        return self._calculate_cost(response), provider, False
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
@@ -316,6 +368,7 @@ class LLMJudge(Module[SchemaT]):
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.temperature,
+                **self._completion_kwargs(),
             )
 
             # Extract score and reasoning from response
@@ -323,8 +376,8 @@ class LLMJudge(Module[SchemaT]):
             score = self._extract_score(content)
             reasoning = self._extract_reasoning(content)
 
-            # Calculate cost
-            cost_usd = self._calculate_cost(response)
+            # Cost: OpenRouter's real billed cost when available, else the estimate.
+            cost_usd, provider, cost_is_real = self._billing(response)
 
             yield PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
@@ -336,6 +389,8 @@ class LLMJudge(Module[SchemaT]):
                 provenance={
                     "model": self.model,
                     "cost_usd": cost_usd,
+                    "cost_is_real": cost_is_real,
+                    "provider": provider,
                     "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
                     "completion_tokens": (
                         response.usage.completion_tokens if response.usage else 0
@@ -478,8 +533,8 @@ class LLMJudge(Module[SchemaT]):
             score = self._extract_score(content)
             reasoning = self._extract_reasoning(content)
 
-            # Calculate cost
-            cost_usd = self._calculate_cost(response)
+            # Cost: OpenRouter's real billed cost when available, else the estimate.
+            cost_usd, provider, cost_is_real = self._billing(response)
 
             return PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
@@ -491,6 +546,8 @@ class LLMJudge(Module[SchemaT]):
                 provenance={
                     "model": self.model,
                     "cost_usd": cost_usd,
+                    "cost_is_real": cost_is_real,
+                    "provider": provider,
                     "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
                     "completion_tokens": (
                         response.usage.completion_tokens if response.usage else 0
@@ -526,6 +583,7 @@ class LLMJudge(Module[SchemaT]):
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
+                    **self._completion_kwargs(),
                 )
                 return response
             except RateLimitError as e:

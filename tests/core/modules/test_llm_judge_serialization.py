@@ -42,10 +42,11 @@ def test_config_excludes_client_and_secrets() -> None:
 
     config = judge.config
 
-    assert set(config) == {"model", "temperature", "prompt_template", "entity_noun"}
+    assert set(config) == {"model", "temperature", "prompt_template", "entity_noun", "provider"}
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
     assert config["temperature"] == 0.3
     assert config["entity_noun"] == "company"
+    assert config["provider"] is None  # no provider pin by default
     # The client (and any secret it holds) is never serialized.
     assert "client" not in config
     assert object() not in config.values()
@@ -71,6 +72,24 @@ def test_from_config_round_trips_via_lazy_client_path() -> None:
     assert rebuilt.temperature == 0.7
     assert rebuilt.entity_noun == "product"
     assert rebuilt.prompt_template == original.prompt_template
+
+
+def test_provider_pin_round_trips_through_config() -> None:
+    """A provider pin survives ``config`` -> ``from_config`` (reproducible runs)."""
+    pin = {"order": ["DeepInfra"], "allow_fallbacks": False}
+    original = LLMJudge(
+        model="openrouter/z-ai/glm-5.2",
+        client=object(),
+        provider=pin,
+    )
+
+    config = original.config
+    assert config["provider"] == pin
+    json.dumps(config)  # a provider pin stays JSON-serializable
+
+    rebuilt = LLMJudge.from_config(config)
+    assert rebuilt.provider == pin
+    assert rebuilt.config == original.config
 
 
 def test_from_env_builds_client_from_environment(mocker) -> None:

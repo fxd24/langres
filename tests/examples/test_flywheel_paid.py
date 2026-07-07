@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-# The student is an RFJudge -- skip cleanly where scikit-learn (the [trained]
+# The student is a RandomForestJudge -- skip cleanly where scikit-learn (the [trained]
 # extra) is absent rather than fail collection. No dspy/semantic needed: both
 # scripts import the real teacher lazily and read AG straight from the CSVs.
 pytest.importorskip("sklearn")
@@ -44,7 +44,7 @@ from examples.research.flywheel_amazon_google import (  # noqa: E402
 from examples.research.flywheel_fz_smoke import run_fz_smoke  # noqa: E402
 from langres.clients.openrouter import BudgetExceeded  # noqa: E402
 
-#: Small AG subset keeps the RFJudge fit + fixture materialization quick.
+#: Small AG subset keeps the RandomForestJudge fit + fixture materialization quick.
 _AG_MAX_PAIRS = 300
 
 
@@ -93,7 +93,7 @@ def test_ag_economics_runs_end_to_end_simulated() -> None:
 
 
 def test_ag_fixtures_span_both_label_classes(tmp_path: Path) -> None:
-    """Materialized AG fixtures carry both label classes (else RFJudge.fit crashes)."""
+    """Materialized AG fixtures carry both label classes (else RandomForestJudge.fit crashes)."""
     import json
 
     out = materialize_ag_fixtures(tmp_path / "ag", max_pairs=_AG_MAX_PAIRS, seed=7)

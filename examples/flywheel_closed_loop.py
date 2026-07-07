@@ -27,7 +27,7 @@ The eight stages (all $0, all deterministic)::
     3. answer      a simulated human answers the queue from gold -> corrections.
     4. harvest     BEFORE: harvest verdicts alone -> derive_threshold fires the
                    silver-only circularity warning. AFTER: overlay corrections.
-    5. train       fit an RFJudge student on the harvested labels; calibrate its
+    5. train       fit a RandomForestJudge student on the harvested labels; calibrate its
                    threshold on the STUDENT's OWN scores (never the teacher's --
                    different scale).
     6. cascade     CascadeJudge(student, teacher, band=...) where the band is
@@ -42,7 +42,7 @@ The eight stages (all $0, all deterministic)::
                    that catches confident false merges), the escalation rate,
                    the frontier-call reduction, and the (simulated) dollars saved.
 
-Run it (needs the ``trained`` extra for scikit-learn behind ``RFJudge``; no
+Run it (needs the ``trained`` extra for scikit-learn behind ``RandomForestJudge``; no
 network, no spend)::
 
     uv run python examples/flywheel_closed_loop.py
@@ -77,7 +77,7 @@ from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.modules.cascade_judge import CASCADE_ESCALATED_STEP, CascadeJudge
-from langres.core.modules.rf_judge import RFJudge
+from langres.core.modules.random_forest_judge import RandomForestJudge
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.review import ReviewQueue, select_for_review
 
@@ -124,7 +124,7 @@ class SimulatedFrontierJudge(Module[FZRecord]):
     through a steep logistic into a confident probability, plus a small, stable
     per-pair perturbation so the scores spread realistically instead of snapping
     to two values. Emits ``score_type="prob_llm"`` on a shared ``[0, 1]``
-    probability scale (so it cascades with an ``RFJudge`` student without
+    probability scale (so it cascades with a ``RandomForestJudge`` student without
     tripping the scale-mismatch warning), and stamps a **fictional** ``cost_usd``
     -- no network call is ever made.
 
@@ -577,7 +577,9 @@ def run_closed_loop(
     train_idx, heldout_idx = _seeded_split(len(candidates), seed)
     train_candidates = [candidates[i] for i in train_idx]
     train_labels = [label_by_pair[_pair_key(c.left.id, c.right.id)] for c in train_candidates]
-    student: RFJudge[FZRecord] = RFJudge(feature_specs=comparator.feature_specs, random_state=seed)
+    student: RandomForestJudge[FZRecord] = RandomForestJudge(
+        feature_specs=comparator.feature_specs, random_state=seed
+    )
     student.fit(iter(train_candidates), train_labels)
 
     heldout_candidates = [candidates[i] for i in heldout_idx]

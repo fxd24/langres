@@ -17,7 +17,7 @@ import warnings
 
 import pytest
 
-# The student is an RFJudge -- skip cleanly where scikit-learn (the [trained] extra)
+# The student is a RandomForestJudge -- skip cleanly where scikit-learn (the [trained] extra)
 # is not installed rather than fail collection.
 pytest.importorskip("sklearn")
 

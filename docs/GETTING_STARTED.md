@@ -20,7 +20,7 @@ only the still-uncertain pairs back to the expensive judge.
    │        ▲                                             │              │
    │        │                                             ▼              │
    │   cascade: cheap  ◄──  train cheap student  ◄──  human review       │
-   │   student + escalate    (RFJudge.fit +           (langres review /  │
+   │   student + escalate    (RandomForestJudge.fit +           (langres review /  │
    │   only in the band       derive_threshold)        CSV round-trip)   │
    │        │                       ▲                                     │
    │        └───────────────────────┘  save / load the whole pipeline    │
@@ -98,7 +98,7 @@ extras, one per capability:
 ```bash
 uv sync                     # core: the keyless "string" lane, $0
 uv sync --extra llm         # [llm]: the LLM teacher for the keyed lane / bootstrap
-uv sync --extra trained     # [trained]: scikit-learn behind RFJudge + derive_threshold
+uv sync --extra trained     # [trained]: scikit-learn behind RandomForestJudge + derive_threshold
 # (need both? `uv sync --extra llm --extra trained`)
 ```
 
@@ -197,15 +197,15 @@ Depth: [`EXPERIMENTS.md` § Flywheel harvest](EXPERIMENTS.md) and
 
 ### 5. Train the cheap student
 
-Now imitate the expensive teacher cheaply. Fit an `RFJudge` — a **trainable
+Now imitate the expensive teacher cheaply. Fit a `RandomForestJudge` — a **trainable
 judge** — on the harvested labels, then calibrate *its own* threshold on *its
 own* scores:
 
 ```python
-from langres.core.modules.rf_judge import RFJudge
+from langres.core.modules.random_forest_judge import RandomForestJudge
 from langres.core.calibration import derive_threshold
 
-student = RFJudge(feature_specs=comparator.feature_specs)
+student = RandomForestJudge(feature_specs=comparator.feature_specs)
 student.fit(iter(train_candidates), train_labels)          # labels from step 4
 student_threshold = derive_threshold(student_scores, heldout_labels)
 ```

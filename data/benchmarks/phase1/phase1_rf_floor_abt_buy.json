@@ -1,0 +1,39 @@
+{
+  "dataset": "abt_buy",
+  "method": "RandomForestJudge",
+  "comparator": "StringComparator \u2014 one rapidfuzz token_sort_ratio similarity per string field (single-metric floor, NOT multi-metric Magellan-class)",
+  "features": [
+    "name",
+    "description",
+    "price"
+  ],
+  "n_train": 5743,
+  "n_train_pos": 616,
+  "n_test": 1916,
+  "n_test_pos": 206,
+  "threshold_method": "youden",
+  "derive_on": "train",
+  "derived_threshold": 0.2803340548340548,
+  "honest": {
+    "threshold": 0.2803340548340548,
+    "precision": 0.37872340425531914,
+    "recall": 0.4320388349514563,
+    "f1": 0.40362811791383213,
+    "tp": 89,
+    "fp": 146,
+    "fn": 117
+  },
+  "argmax_on_test": {
+    "threshold": 0.35,
+    "precision": 0.4271356783919598,
+    "recall": 0.41262135922330095,
+    "f1": 0.4197530864197531,
+    "tp": 85,
+    "fp": 114,
+    "fn": 121
+  },
+  "honesty_delta_f1": 0.01612496850592099,
+  "ditto_f1": 0.893,
+  "gap_to_ditto_f1": 0.4893718820861679,
+  "notes": "Zero-spend (rapidfuzz + scikit-learn). HONEST f1 uses a threshold derived on TRAIN via Youden and applied to the FULL test split; argmax_on_test is the leaky ceiling that tunes the threshold on the test set itself (honesty_delta_f1 = argmax_on_test.f1 - honest.f1). gap_to_ditto_f1 measures the honest number against the Ditto SOTA band; the gap is expected \u2014 this is a single-metric StringComparator floor, not a multi-feature replication."
+}

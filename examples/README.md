@@ -42,7 +42,7 @@ flywheel harvest → closed-loop flywheel → person:
 - **`flywheel_threshold_harvest.py`** — the flywheel outlet: logged verdicts +
   human corrections feed `derive_threshold` to re-calibrate a decision threshold.
 - **`flywheel_closed_loop.py`** — the whole loop closed end to end at **$0**:
-  bootstrap → select_for_review → harvest → train a cheap RFJudge student →
+  bootstrap → select_for_review → harvest → train a cheap RandomForestJudge student →
   `CascadeJudge` (cheap everywhere, escalate only the margin) → report. The
   runnable twin of [`docs/GETTING_STARTED.md`](../docs/GETTING_STARTED.md)
   (needs the `[trained]` extra).
@@ -87,7 +87,7 @@ each script's docstring before running it. Companion `*_results*.json` /
 - **`w1_select_judge_benchmark.py`** — W1.1 `SelectJudge` call-count + honest-cost
   reduction benchmark on Amazon-Google.
 - **`w1_trained_family_race.py`** — W1.2 trained-family replication
-  (`FellegiSunterJudge` + `RFJudge`), $0.
+  (`FellegiSunterJudge` + `RandomForestJudge`), $0.
 - **`w2_person_benchmark.py`** — M5 W2.1: a second entity type (person)
   resolved config-only, at $0.
 - **`phase1_blocker_optimization.py`** — POC Phase 1: blocker optimization evaluation.

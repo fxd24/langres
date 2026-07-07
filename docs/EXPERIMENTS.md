@@ -92,7 +92,7 @@ seam for this, and it dispatches on which of two runtime-checkable protocols
   upward), and learns m-probabilities + the match prior via log-space EM.
   Called with `resolver.fit(records)` — no `labels=`.
 - **`SupervisedFitMixin.fit(candidates, labels)`** — learns **with** labels.
-  `RFJudge` (a Magellan-style sklearn `RandomForestClassifier` over
+  `RandomForestJudge` (a Magellan-style sklearn `RandomForestClassifier` over
   `ComparisonVector.similarities`) is the example: `resolver.fit(records,
   labels=[...])`, positionally aligned with the blocked candidates. Omitting
   `labels=` raises — a trainable module that silently never trains is exactly
@@ -124,7 +124,7 @@ per-tree JSON array representation (an sklearn-version guard refuses to load
 across a minor-version boundary). FS's fitted state (`prior`/`m_prob`/`u_prob`)
 is plain JSON floats — no sidecar file needed. Both round-trip through a
 fresh-process `Resolver.load` (see `tests/core/judges/test_fellegi_sunter_judge.py`
-/ `tests/core/modules/test_rf_judge.py`).
+/ `tests/core/modules/test_random_forest_judge.py`).
 
 ## The DSPy loop: build → compile → evaluate
 

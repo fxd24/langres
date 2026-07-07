@@ -157,13 +157,13 @@ class TestCoreLazyGetattr:
 
         assert core.LLMJudge is LLMJudge
 
-    def test_rf_judge_resolves(self) -> None:
+    def test_random_forest_judge_resolves(self) -> None:
         pytest.importorskip("sklearn", reason="requires the [trained] extra")
         import langres.core as core
 
-        from langres.core.modules.rf_judge import RFJudge
+        from langres.core.modules.random_forest_judge import RandomForestJudge
 
-        assert core.RFJudge is RFJudge
+        assert core.RandomForestJudge is RandomForestJudge
 
     def test_select_judge_resolves(self) -> None:
         pytest.importorskip("dspy", reason="requires the [llm] extra")
@@ -209,14 +209,16 @@ class TestCoreLazyGetattr:
         with pytest.raises(ImportError, match=r"langres\.core\.LLMJudge.*langres\[llm\]"):
             core.LLMJudge  # noqa: B018
 
-    def test_rf_judge_raises_actionable_import_error_when_trained_absent(self) -> None:
+    def test_random_forest_judge_raises_actionable_import_error_when_trained_absent(self) -> None:
         """Core-only install (no [trained]): a real, un-simulated ImportError (see above)."""
         if _import_ok("sklearn"):
             pytest.skip("scikit-learn is installed ([trained] extra present) -- nothing to observe")
         import langres.core as core
 
-        with pytest.raises(ImportError, match=r"langres\.core\.RFJudge.*langres\[trained\]"):
-            core.RFJudge  # noqa: B018
+        with pytest.raises(
+            ImportError, match=r"langres\.core\.RandomForestJudge.*langres\[trained\]"
+        ):
+            core.RandomForestJudge  # noqa: B018
 
     def test_select_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
         """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""

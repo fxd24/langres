@@ -5,7 +5,7 @@ as the FZ wiring smoke, but on **Amazon-Google** -- a hard, unsaturated benchmar
 with a real teacher/student gap -- so the numbers it produces are the economics
 GETTING_STARTED cites (escalation rate, frontier-call reduction, pairwise F1 for
 teacher/student/cascade, real $ spent). A real frontier teacher (``gpt-4o-mini``
-via OpenRouter) bootstraps silver labels; a cheap RFJudge student is trained; a
+via OpenRouter) bootstraps silver labels; a cheap RandomForestJudge student is trained; a
 cascade runs the student everywhere and escalates only the uncertain band.
 
 Reuse, not duplication: ``run_closed_loop`` is Fodors-Zagat-shaped (its fixtures
@@ -90,8 +90,8 @@ _TEST_PAIRS_FILE = "test.csv"  # fixed literature split; label 1 = match
 #: Default number of candidate pairs to score (bounds real spend; the $10 cap is a
 #: backstop). ~2000 pairs on gpt-4o-mini is roughly $0.6-1.0 of teacher bootstrap.
 DEFAULT_MAX_PAIRS = 2000
-#: Floor on positives so both the RFJudge train half and the held-out metric split
-#: reliably span both label classes (all-True labels crash ``RFJudge.fit``).
+#: Floor on positives so both the RandomForestJudge train half and the held-out metric split
+#: reliably span both label classes (all-True labels crash ``RandomForestJudge.fit``).
 _MIN_POSITIVES = 30
 #: Rough per-pair cost estimate for the pre-flight heads-up (CoT output tokens
 #: dominate; the live cap meters and enforces the REAL cost).
