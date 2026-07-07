@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-# The student is an RandomForestJudge -- skip cleanly where scikit-learn (the [trained]
+# The student is a RandomForestJudge -- skip cleanly where scikit-learn (the [trained]
 # extra) is absent rather than fail collection. No dspy/semantic needed: both
 # scripts import the real teacher lazily and read AG straight from the CSVs.
 pytest.importorskip("sklearn")

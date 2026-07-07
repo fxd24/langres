@@ -27,7 +27,7 @@ The eight stages (all $0, all deterministic)::
     3. answer      a simulated human answers the queue from gold -> corrections.
     4. harvest     BEFORE: harvest verdicts alone -> derive_threshold fires the
                    silver-only circularity warning. AFTER: overlay corrections.
-    5. train       fit an RandomForestJudge student on the harvested labels; calibrate its
+    5. train       fit a RandomForestJudge student on the harvested labels; calibrate its
                    threshold on the STUDENT's OWN scores (never the teacher's --
                    different scale).
     6. cascade     CascadeJudge(student, teacher, band=...) where the band is
@@ -124,7 +124,7 @@ class SimulatedFrontierJudge(Module[FZRecord]):
     through a steep logistic into a confident probability, plus a small, stable
     per-pair perturbation so the scores spread realistically instead of snapping
     to two values. Emits ``score_type="prob_llm"`` on a shared ``[0, 1]``
-    probability scale (so it cascades with an ``RandomForestJudge`` student without
+    probability scale (so it cascades with a ``RandomForestJudge`` student without
     tripping the scale-mismatch warning), and stamps a **fictional** ``cost_usd``
     -- no network call is ever made.
 

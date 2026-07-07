@@ -197,7 +197,7 @@ Depth: [`EXPERIMENTS.md` § Flywheel harvest](EXPERIMENTS.md) and
 
 ### 5. Train the cheap student
 
-Now imitate the expensive teacher cheaply. Fit an `RandomForestJudge` — a **trainable
+Now imitate the expensive teacher cheaply. Fit a `RandomForestJudge` — a **trainable
 judge** — on the harvested labels, then calibrate *its own* threshold on *its
 own* scores:
 

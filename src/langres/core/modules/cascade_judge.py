@@ -270,7 +270,7 @@ class CascadeJudge(Module[SchemaT]):
             "cuts student scores and one downstream threshold cuts the mixed "
             "student/escalation stream, so a raw similarity (e.g. 'sim_cos', "
             "'heuristic') mixed in makes those cuts meaningless. Calibrate the "
-            "child's scores (e.g. train an RandomForestJudge, or map similarities through "
+            "child's scores (e.g. train a RandomForestJudge, or map similarities through "
             "derive_threshold-calibrated probabilities) before cascading.",
             stacklevel=2,
         )
