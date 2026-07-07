@@ -98,6 +98,14 @@ def test_review_empty_queue_is_a_friendly_stop(tmp_path: Path) -> None:
     assert "empty" in out.lower()
 
 
+def test_review_missing_queue_errors_instead_of_reading_as_empty(tmp_path: Path) -> None:
+    """A missing/typo'd --queue path must not silently look like an empty queue."""
+    rc, out = _run(["review", str(tmp_path / "nope.jsonl")])
+    assert rc == 1
+    assert "not found" in out
+    assert "empty" not in out.lower()
+
+
 def test_review_labels_yes_and_no_appends_corrections(tmp_path: Path) -> None:
     queue = _write_queue(
         tmp_path / "q.jsonl",
@@ -222,6 +230,16 @@ def test_review_strips_ansi_and_control_chars_from_records(tmp_path: Path) -> No
     assert "RED evil text" in out  # printable text is preserved
 
 
+def test_review_strips_ansi_escapes_from_ids(tmp_path: Path) -> None:
+    """A hostile natural-key id must not inject terminal escapes either."""
+    hostile_id = "\x1b[31mleft-id\x1b[0m"
+    queue = _write_queue(tmp_path / "q.jsonl", [_item(hostile_id, "b")])
+    rc, out = _run(["review", str(queue)], stdin="q\n")
+    assert rc == 0
+    assert "\x1b" not in out
+    assert "left-id" in out
+
+
 # --------------------------------------------------------------------------- #
 # export-csv                                                                   #
 # --------------------------------------------------------------------------- #
@@ -340,6 +358,39 @@ def test_import_csv_accepts_label_tokens(tmp_path: Path, token: str, expected: b
     assert "Imported 1 correction(s)" in out
     corrections = CorrectionLog(out_path).read()
     assert [(c.left_id, c.right_id, c.label) for c in corrections] == [("a", "b", expected)]
+
+
+def test_import_csv_strips_leading_bom(tmp_path: Path) -> None:
+    """Excel/Google Sheets 'CSV UTF-8' export prepends a BOM to the first header;
+    reading it as plain utf-8 would leave it glued to 'left_id' and trip the
+    missing-required-column check on a column that is visibly present."""
+    queue = _write_queue(tmp_path / "q.jsonl", [_item("a", "b")])
+    out_path = tmp_path / "corrections.jsonl"
+    csv_path = tmp_path / "in.csv"
+    csv_path.write_text("﻿left_id,right_id,label\na,b,y\n", encoding="utf-8")
+    rc, out = _run(["import-csv", str(csv_path), str(queue), "--out", str(out_path)])
+    assert rc == 0
+    assert "missing required column" not in out
+    corrections = CorrectionLog(out_path).read()
+    assert [(c.left_id, c.right_id, c.label) for c in corrections] == [("a", "b", True)]
+
+
+def test_import_csv_reviewer_flag_is_recorded_on_corrections(tmp_path: Path) -> None:
+    """--reviewer attributes CSV-sourced corrections (previously always None)."""
+    queue = _write_queue(tmp_path / "q.jsonl", [_item("a", "b"), _item("c", "d")])
+    out_path = tmp_path / "corrections.jsonl"
+    csv_path = _write_csv(
+        tmp_path / "in.csv",
+        ["left_id", "right_id", "label"],
+        [["a", "b", "y"], ["c", "d", "n"]],
+    )
+    rc, out = _run(
+        ["import-csv", str(csv_path), str(queue), "--out", str(out_path), "--reviewer", "alice"]
+    )
+    assert rc == 0
+    corrections = CorrectionLog(out_path).read()
+    assert len(corrections) == 2
+    assert all(c.reviewer == "alice" for c in corrections)
 
 
 def test_import_csv_blank_label_is_skipped(tmp_path: Path) -> None:

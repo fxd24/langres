@@ -88,6 +88,13 @@ def test_audit_fraction_out_of_range_raises(bad: float) -> None:
         )
 
 
+def test_negative_limit_raises() -> None:
+    """A negative limit would otherwise make rng.sample's count negative and
+    raise a raw ValueError from random.Random.sample instead of a clear one."""
+    with pytest.raises(ValueError, match="limit must be >= 0"):
+        select_for_review([_row("a", "b", 0.5, True)], strategy="audit", limit=-1)
+
+
 # --------------------------------------------------------------------------- #
 # Uncertainty strategy                                                        #
 # --------------------------------------------------------------------------- #
@@ -528,6 +535,17 @@ def test_queue_schema_invalid_line_raises_with_line_number(tmp_path: Path) -> No
     """Valid JSON that is not a ReviewItem (hand edit) fails the same way."""
     path = tmp_path / "queue.jsonl"
     path.write_text('{"left_id": "a"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="line 1"):
+        ReviewQueue(path).read()
+
+
+def test_queue_out_of_range_score_raises_with_line_number(tmp_path: Path) -> None:
+    """A hand-edited line with score outside [0, 1] fails the same corrupt-line way."""
+    path = tmp_path / "queue.jsonl"
+    path.write_text(
+        '{"left_id": "a", "right_id": "b", "score": 1.5, "verdict": true, "reason": "audit"}\n',
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="line 1"):
         ReviewQueue(path).read()
 

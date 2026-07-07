@@ -96,7 +96,9 @@ def main(
     if args.command == "export-csv":
         return _export_csv(Path(args.queue), Path(args.out_csv), out_stream)
     if args.command == "import-csv":
-        return _import_csv(Path(args.in_csv), Path(args.queue), Path(args.out), out_stream)
+        return _import_csv(
+            Path(args.in_csv), Path(args.queue), Path(args.out), args.reviewer, out_stream
+        )
 
     parser.print_help(out_stream)
     return 0
@@ -185,6 +187,12 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="corrections.jsonl",
         help="Corrections log to append to (default: %(default)s).",
     )
+    p_import.add_argument(
+        "--reviewer",
+        default=None,
+        metavar="NAME",
+        help="Optional reviewer name recorded on each correction.",
+    )
     return parser
 
 
@@ -196,6 +204,10 @@ def _review(
     out_stream: TextIO,
 ) -> int:
     """Interactive terminal labeling loop; appends each answer immediately."""
+    if not queue_path.exists():
+        out_stream.write(f"error: review queue not found: {queue_path}\n")
+        return 1
+
     items = ReviewQueue(queue_path).read()
     if not items:
         out_stream.write(
@@ -269,8 +281,8 @@ def _render_item(item: ReviewItem, index: int, total: int) -> str:
         + "\n"
         + f"Pair {index}/{total}  |  reason: {item.reason}"
         + f"  |  score: {item.score:.3f}  |  judge: {verdict}\n"
-        + f"  left  [{item.left_id}]:  {_render_record(item.left_record)}\n"
-        + f"  right [{item.right_id}]:  {_render_record(item.right_record)}\n"
+        + f"  left  [{_sanitize(item.left_id)}]:  {_render_record(item.left_record)}\n"
+        + f"  right [{_sanitize(item.right_id)}]:  {_render_record(item.right_record)}\n"
         + "-" * 60
         + "\n"
     )
@@ -327,7 +339,13 @@ def _export_csv(queue_path: Path, out_path: Path, out_stream: TextIO) -> int:
     return 0
 
 
-def _import_csv(csv_path: Path, queue_path: Path, out_path: Path, out_stream: TextIO) -> int:
+def _import_csv(
+    csv_path: Path,
+    queue_path: Path,
+    out_path: Path,
+    reviewer: str | None,
+    out_stream: TextIO,
+) -> int:
     """Read a labeled CSV back into a corrections log; abort (write nothing) on any bad row."""
     if not csv_path.exists():
         out_stream.write(f"error: input CSV not found: {csv_path}\n")
@@ -341,7 +359,7 @@ def _import_csv(csv_path: Path, queue_path: Path, out_path: Path, out_stream: Te
     }
 
     corrections: list[Correction] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         fields = reader.fieldnames or []
         missing = [column for column in ("left_id", "right_id", "label") if column not in fields]
@@ -379,6 +397,7 @@ def _import_csv(csv_path: Path, queue_path: Path, out_path: Path, out_stream: Te
                     left_id=left_id,
                     right_id=right_id,
                     label=label,
+                    reviewer=reviewer,
                     original_score=item.score,
                     original_verdict=item.verdict,
                 )

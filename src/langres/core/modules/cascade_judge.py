@@ -175,6 +175,11 @@ class CascadeJudge(Module[SchemaT]):
                 paid, in-flight escalation judgements in cascade form) --
                 otherwise an outer ``LoggingModule``'s ``[logged:]`` slice
                 would drop exactly the paid judgements.
+            Exception: Any OTHER exception raised by the escalation child
+                (e.g. a network error, rate limit, or API failure) propagates
+                unchanged, WITHOUT partial-judgement preservation -- only
+                ``BudgetExceeded`` is langres's own exception and carries the
+                ``partial_judgements`` field the ``LoggingModule`` slice needs.
         """
         low, high = self.band
         produced: list[PairwiseJudgement] = []

@@ -122,6 +122,19 @@ class DoubleJudge(ScriptedJudge):
                 )
 
 
+class RaisingJudge(ScriptedJudge):
+    """Stub escalation judge: raises a plain (non-BudgetExceeded) exception.
+
+    Represents a network/rate-limit/API failure -- unlike BudgetExceeded, it
+    carries no ``partial_judgements`` field, so it must propagate unchanged.
+    """
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        raise RuntimeError("escalation backend unavailable")
+
+
 class GroupwiseStub(GroupwiseModule[CompanySchema]):
     """Minimal GroupwiseModule — must be rejected by the CascadeJudge ctor."""
 
@@ -458,6 +471,23 @@ class TestBudgetExceededComposition:
         partials = excinfo.value.partial_judgements
         assert partials[-1].decision_step == CASCADE_ESCALATED_STEP
         assert partials[-1].provenance["cost_usd"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Non-BudgetExceeded escalation failures propagate unchanged
+# ---------------------------------------------------------------------------
+
+
+class TestNonBudgetExceededPropagation:
+    def test_generic_escalation_exception_propagates_unmodified(self) -> None:
+        """Only BudgetExceeded gets partial_judgements rewritten; a generic
+        failure (e.g. network/rate-limit/API error) from the escalation child
+        must propagate as-is -- not swallowed, not converted."""
+        student = ScriptedJudge({("a", "b"): 0.5})  # in-band -> escalates
+        cascade = CascadeJudge(student=student, escalation=RaisingJudge({}), band=(0.3, 0.7))
+
+        with pytest.raises(RuntimeError, match="escalation backend unavailable"):
+            list(cascade.forward(iter([_pair("a", "b")])))
 
 
 # ---------------------------------------------------------------------------
