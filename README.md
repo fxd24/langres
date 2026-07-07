@@ -215,6 +215,11 @@ are tracked in [TODOS.md](TODOS.md).
 
 ## Documentation
 
+- [**Getting started**](docs/GETTING_STARTED.md) — ⭐ **start here.** The flywheel
+  lifecycle end to end: LLM bootstrap → log → review at the margin → train a cheap
+  student → cascade → save/load, with a runnable snippet inline at every step.
+- [Quickstart script](examples/quickstart_verbs.py) — dedupe a list of dicts with
+  zero labels in ~10 lines, offline at $0 (`uv run python examples/quickstart_verbs.py`).
 - [Roadmap](docs/ROADMAP.md) — the composable-seam vision and milestones M0–M6
 - [POC Plan](docs/POC.md) — current stage, scope, success criteria
 - [Your own CSV in 15 minutes](docs/TUTORIAL_YOUR_OWN_CSV.md) — messy CSV → clusters, offline at $0, with threshold calibration and save/load
