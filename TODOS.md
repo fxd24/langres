@@ -8,6 +8,24 @@ Detail lives in the M4.5/M5 plan, the ROADMAP, and the seam-audit epic
 ([#20](https://github.com/raisesquad/langres/issues/20)) with method-delta
 backlog in [#55](https://github.com/raisesquad/langres/issues/55).
 
+## Flywheel loop follow-ons (deferred from the closed-loop phase, 0.2.0)
+
+- **Blocker-recall diagnostics (P2)** — the loop can only review/label pairs the blocker
+  emitted; pairs it never proposed are silently unrecoverable. Surface a recall estimate
+  / missed-pair diagnostic so users can tell a blocking gap from a judging gap. (separate
+  seam from the judge loop)
+- **`methods.py` → `CascadeJudge` migration (P3)** — the benchmark path still constructs
+  the deprecated `CascadeModule`; migrate it to `CascadeJudge` and drop the deprecation
+  shim. (`DeprecationWarning` already lands in 0.2.0.)
+- **Label-Studio / Argilla export (P3)** — CSV round-trip covers v1 labeling; an export
+  adapter for a real annotation tool is the next rung when a dataset outgrows a spreadsheet.
+- **Stratified-audit knob (P3)** — `select_for_review`'s audit slice is a uniform random
+  sample; a stratified variant (by score band / cluster size) would sharpen the
+  confident-false-merge catch. (uniform sampling is already unbiased.)
+- **`langres select` subcommand (P3)** — today the queue is created in Python
+  (`select_for_review` → `ReviewQueue`); a CLI subcommand would close the last non-Python
+  step. Deferred while the CLI surface (UC2) settles.
+
 ## Distribution & licensing
 
 - **PyPI publish** — decide whether/when to publish a wheel; not published today

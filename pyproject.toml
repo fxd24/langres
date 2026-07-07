@@ -1,6 +1,6 @@
 [project]
 name = "langres"
-version = "0.1.0"
+version = "0.2.0"
 description = "A two-layer entity resolution framework with optimization, blocking, and human-in-the-loop capabilities"
 readme = "README.md"
 license = "Apache-2.0"

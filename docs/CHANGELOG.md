@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.2.0] - 2026-07-06 — the closed flywheel loop
+
+### ⚠️ BREAKING
+
+- **`judge="auto"` (the default for `link`/`dedupe`) now RAISES `NoJudgeAvailableError`
+  when no LLM API key is set, instead of silently falling back to fuzzy string
+  matching.** Unsupervised string matching over-merges on unlabeled data (in the
+  motivating demo it collapsed five distinct entities into one cluster with no
+  error), so the library refuses rather than hand back a confidently-wrong answer.
+  The unpinned-model-price branch raises the same error.
+- **`fallback_reason` removed** from `DedupeResult` / `LinkVerdict` / `ResolvedModule`
+  / `ResolvedJudge` — no path could set it after fail-fast, and an always-`None`
+  field is anti-self-describing.
+
+  **Migration:**
+  - Keyless callers: pass `judge="string"` explicitly to opt into offline fuzzy
+    matching (lower quality; pair it with `derive_threshold` on labeled data).
+  - Keyed default path: install the `[llm]` extra (`uv sync --extra llm` /
+    `pip install 'langres[llm]'`) **and** export `OPENROUTER_API_KEY`; the run is
+    spend-capped at `$1` by default (`budget_usd=`).
+  - Catch `NoJudgeAvailableError` (now root-exported from `langres`, alongside
+    `BudgetExceeded`) on the front door.
+  - Replace any `result.fallback_reason` reads with `result.judge_used` /
+    `result.score_type` plus the auto-path selection notice.
+
+### Added — the flywheel closed loop (bootstrap → log → review → harvest → train → cascade)
+
+- **`select_for_review` + `ReviewQueue`** (`langres.core.review`, root-exported) —
+  pick the judged pairs most worth a human's attention: `uncertainty` (near the
+  threshold), `disagreement` (two logs differ), and first-class `audit` (a seeded
+  governance sample that catches confident false merges). Snapshot-semantics queue.
+- **`langres` CLI** (`langres.cli`) — `review` (terminal y/n/s/q labeler, resumable),
+  `export-csv` / `import-csv` (spreadsheet round-trip, the primary review path),
+  `--version`. Formula-injection + terminal-control-char hardened; fully stream-injectable.
+- **`CascadeJudge`** (`cascade_judge`) — a cheap student everywhere, escalation only
+  inside a `(low, high)` band; escalated provenance preserves `cost_usd`/`model`;
+  serializes a fitted student through `Resolver.save`/`load`. (Old `CascadeModule`
+  deprecated.)
+- **Silver-only calibration guard** — `derive_threshold_from_pairs` warns when every
+  pair is a judge verdict (circular); overlay human corrections first.
+- **`examples/flywheel_closed_loop.py`** — the whole loop end to end at **$0** on a
+  committed Fodors-Zagat fixture, with a data-derived escalation band and an honest
+  "plumbing not economics" report.
+
+Docs (`docs/GETTING_STARTED.md` + the doc-ladder rewire) are detailed under
+[Unreleased] below.
+
 ## [Unreleased] - POC Phase
 
 - Designed two-layer API architecture and POC validation plan (3 approaches: classical, semantic, LLM hybrid)
