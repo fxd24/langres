@@ -17,8 +17,23 @@ from langres.data.registry import (
     register,
 )
 
-#: The four vendored benchmarks + the tiny fixture that this wave registers.
-_EXPECTED_NAMES = {"abt_buy", "amazon_google", "febrl_person", "fodors_zagat", "tiny_fixture"}
+#: Every benchmark that ships loadable in-repo data: the five originals (Wave B)
+#: plus the four DeepMatcher loaders wired in by Wave C/D.
+_LOADABLE_NAMES = {
+    "abt_buy",
+    "amazon_google",
+    "dblp_acm",
+    "dblp_scholar",
+    "febrl_person",
+    "fodors_zagat",
+    "tiny_fixture",
+    "walmart_amazon",
+    "wdc_computers",
+}
+#: External-only entries (loadable=False; fetched manually, never vendored).
+_EXTERNAL_NAMES = {"opensanctions"}
+#: The full manifest = loadable + external-only.
+_EXPECTED_NAMES = _LOADABLE_NAMES | _EXTERNAL_NAMES
 
 
 # --- list_benchmarks: metadata only ---------------------------------------------
@@ -27,8 +42,11 @@ _EXPECTED_NAMES = {"abt_buy", "amazon_google", "febrl_person", "fodors_zagat", "
 def test_list_benchmarks_returns_every_registered_entry() -> None:
     entries = list_benchmarks()
     assert {e.name for e in entries} == _EXPECTED_NAMES
-    # All five ship in-repo this wave.
-    assert all(e.loadable for e in entries)
+    # Loadable flags: every in-repo dataset is loadable; the external-only entry
+    # (OpenSanctions) is not.
+    by_name = {e.name: e for e in entries}
+    assert {n for n, e in by_name.items() if e.loadable} == _LOADABLE_NAMES
+    assert {n for n, e in by_name.items() if not e.loadable} == _EXTERNAL_NAMES
     # Name-sorted for determinism.
     assert [e.name for e in entries] == sorted(e.name for e in entries)
 
@@ -41,8 +59,14 @@ def test_benchmark_entries_carry_correct_metadata() -> None:
     assert by_name["amazon_google"].loader_symbol == "AmazonGoogleBenchmark"
     assert by_name["febrl_person"].domain == "person"
     assert by_name["fodors_zagat"].domain == "restaurant"
-    # No loadable entry carries a fetch hint (that's the external-only seam).
-    assert all(e.fetch_hint is None for e in list_benchmarks())
+    # The Wave C/D loaders carry their own task/domain metadata.
+    assert by_name["dblp_acm"].domain == "bibliographic"
+    assert by_name["dblp_scholar"].loader_symbol == "DblpScholarBenchmark"
+    assert by_name["walmart_amazon"].module_path == "langres.data.walmart_amazon"
+    assert by_name["wdc_computers"].domain == "product"
+    # No loadable entry carries a fetch hint; only the external-only seam does.
+    assert all(e.fetch_hint is None for e in list_benchmarks() if e.loadable)
+    assert by_name["opensanctions"].fetch_hint is not None
 
 
 # --- list_methods ---------------------------------------------------------------
@@ -72,6 +96,29 @@ def test_get_benchmark_instantiates_existing_class_entries() -> None:
     benchmark = get_benchmark("fodors_zagat")
     assert isinstance(benchmark, Benchmark)
     assert benchmark.name == "fodors_zagat"
+
+
+@pytest.mark.parametrize("name", ["dblp_acm", "dblp_scholar", "walmart_amazon", "wdc_computers"])
+def test_get_benchmark_resolves_the_new_wave_c_loaders(name: str) -> None:
+    """Each new loadable entry imports + instantiates to a ``Benchmark``.
+
+    Only imports the loader module and builds the (cheap) benchmark instance —
+    it deliberately does NOT call ``.load()`` (DBLP-Scholar is a 66879-record,
+    ~8MB corpus). The per-dataset contract tests already exercise ``.load()``.
+    """
+    benchmark = get_benchmark(name)
+    assert isinstance(benchmark, Benchmark)
+    assert benchmark.name == name
+    assert callable(benchmark.load)  # present, but intentionally not invoked here.
+
+
+def test_get_benchmark_opensanctions_is_external_only() -> None:
+    """The registered ``loadable=False`` OpenSanctions entry raises with its hint."""
+    with pytest.raises(ExternalBenchmarkError) as exc:
+        get_benchmark("opensanctions")
+    message = str(exc.value)
+    assert "external-only" in message
+    assert "opensanctions.org" in message  # the fetch hint is surfaced
 
 
 def test_unknown_name_raises_with_did_you_mean() -> None:
