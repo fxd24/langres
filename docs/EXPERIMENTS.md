@@ -61,6 +61,14 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
   experimentation surface** and the SOTA-comparable precision measurement. For a
   paid judge, pass a `BudgetedModuleRunner` via `runner=` to hard-cap spend.
 
+> **One-liner for the common case.** When you just want honest pair-level P/R/F1
+> for a judge over a fixed candidate set — no spend cap, no raw judgements back —
+> `evaluate(judge, candidates, gold_pairs)` (`langres.core.benchmark`) is the thin
+> wrapper over `evaluate_judge_on_candidates` that returns only the `JudgePairEval`
+> (default grid `DEFAULT_PAIR_GRID`; `slice_fn=` forwarded). See
+> [`docs/BENCHMARKS.md`](BENCHMARKS.md#3-score-your-own-data) for the
+> bring-your-own-data walkthrough.
+
 > **KISS warning — do NOT race a compiled/paid LLM judge through `run_methods`.**
 > `run_methods`/`run_method` call the resolver factory *per grid threshold* and
 > **rebuild the module uncompiled, then re-judge every time**. For a compiled DSPy
@@ -286,6 +294,11 @@ with `examples/data/flywheel/generate_fixtures.py`.
 
 ## See also
 
+- [`docs/BENCHMARKS.md`](BENCHMARKS.md) — the benchmark portfolio + registry
+  (`list_benchmarks` / `get_benchmark`), and the `evaluate()` bring-your-own-data
+  scoring walkthrough.
+- `examples/research/portfolio_race.py` — registry-driven race over every loadable
+  benchmark (offline by default; optional capped LLM row).
 - `examples/research/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
 - `examples/research/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
 - `examples/research/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.

@@ -719,6 +719,51 @@ def test_evaluate_judge_gold_only_slice_reports_zero_recall_no_divide_by_zero() 
 
 
 # ---------------------------------------------------------------------------
+# evaluate() — the bring-your-own-data one-liner over evaluate_judge_on_candidates
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_returns_pair_eval_with_sane_metrics() -> None:
+    # Happy path: two true matches scored high, one non-match low -> at the tuned
+    # threshold the judge is perfect. evaluate() returns just the JudgePairEval.
+    scores = {"p0": 0.9, "p1": 0.8, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold, grid=(0.5, 0.85))
+    assert isinstance(result, benchmark_module.JudgePairEval)
+    assert result.pair.precision == pytest.approx(1.0)
+    assert result.pair.recall == pytest.approx(1.0)
+    assert result.pair.f1 == pytest.approx(1.0)
+    assert result.best_threshold == 0.5
+    assert result.n_candidates == 3
+    assert result.slices is None  # no slice_fn passed
+
+
+def test_evaluate_passes_slice_fn_through() -> None:
+    # slice_fn is forwarded: the result carries per-slice tracks graded at the one
+    # global best-F1 threshold (evaluate() is a thin passthrough, so this just
+    # confirms the kwarg reaches evaluate_judge_on_candidates).
+    scores = {"A_p": 0.9, "A_n": 0.5, "B_p": 0.4, "B_n": 0.35}
+    cands, gold = _slice_candidates(scores, positives={"A_p", "B_p"})
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores), cands, gold, grid=(0.3, 0.6), slice_fn=_tag_by_base_prefix
+    )
+    assert result.slices is not None
+    assert set(result.slices) == {"A", "B"}
+
+
+def test_evaluate_uses_default_pair_grid_when_grid_omitted() -> None:
+    # Omitting grid= sweeps DEFAULT_PAIR_GRID (the fine 0.05..0.95, 19 points), so
+    # the PR curve has one point per grid threshold and the tuned cut lands inside it.
+    scores = {"p0": 0.9, "p1": 0.85, "n0": 0.1}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold)
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == len(benchmark_module.DEFAULT_PAIR_GRID) == 19
+    assert result.best_threshold in benchmark_module.DEFAULT_PAIR_GRID
+    assert result.pair.f1 == pytest.approx(1.0)  # matches separable from the non-match
+
+
+# ---------------------------------------------------------------------------
 # complete_partition (re-homed to core)
 # ---------------------------------------------------------------------------
 

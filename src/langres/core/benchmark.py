@@ -694,6 +694,15 @@ def run_methods(
 # ---------------------------------------------------------------------------
 
 
+#: Default score-threshold grid for :func:`evaluate` — the fine ``0.05..0.95``
+#: sweep (19 points) a pair-level argmax wants. ``core.benchmark`` is
+#: deliberately free of any ``langres.data`` import (the harness is
+#: dataset-agnostic), so this mirrors
+#: ``langres.data.fixed_split_pair_benchmark.DEFAULT_ARGMAX_GRID`` by value rather
+#: than importing it.
+DEFAULT_PAIR_GRID: tuple[float, ...] = tuple(round(i * 0.05, 2) for i in range(1, 20))
+
+
 class JudgePairEval(BaseModel):
     """Pair-level evaluation of one judge over a *given* candidate set.
 
@@ -867,6 +876,44 @@ def evaluate_judge_on_candidates(
         slices=slices,
     )
     return result, judgements
+
+
+def evaluate(
+    module: Module[Any],
+    candidates: Sequence[Any],
+    gold_pairs: set[frozenset[str]],
+    *,
+    grid: Sequence[float] = DEFAULT_PAIR_GRID,
+    slice_fn: Callable[[frozenset[str]], str | None] | None = None,
+) -> JudgePairEval:
+    """Score any judge over a fixed candidate set against gold — the BYO-data one-liner.
+
+    A thin wrapper over :func:`evaluate_judge_on_candidates` that drops the raw
+    judgements (and the paid-judge ``runner`` / cost knobs) so the common
+    bring-your-own-data case is a single call returning honest pair-level
+    Precision/Recall/F1 at the best-F1 grid threshold, plus the full PR curve. For
+    a paid or compiled judge that needs a spend cap, custom cost accounting, or the
+    raw judgements back, call :func:`evaluate_judge_on_candidates` directly.
+
+    Args:
+        module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
+        candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
+        gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
+        grid: Score thresholds to sweep for the pair-level PR curve (defaults to
+            :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep).
+        slice_fn: Optional pair-key tagger forwarded verbatim to
+            :func:`evaluate_judge_on_candidates`; when given, the result's
+            ``slices`` are graded at the one global best-F1 threshold (the honest
+            seen -> unseen view). ``None`` (default) leaves ``slices`` unset.
+
+    Returns:
+        A :class:`JudgePairEval` — pair P/R/F1 at the best-F1 threshold, the PR
+        curve, cost, latency, and (when ``slice_fn`` is given) per-slice tracks.
+    """
+    result, _ = evaluate_judge_on_candidates(
+        module, candidates, gold_pairs, grid, slice_fn=slice_fn
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
