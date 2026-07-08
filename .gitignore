@@ -4,6 +4,8 @@ tmp/
 uv.lock
 .claude/*.bak
 wandb/
+mlflow.db
+mlruns/
 
 # macOS
 .DS_Store

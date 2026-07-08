@@ -25,6 +25,7 @@ from langres.core.modules.dspy_judge import (
     _salvage_usage,
 )
 from langres.core.registry import get_component
+from langres.core.runs import RunStore
 
 
 def _answers(n: int, *, match: str = "True", prob: str = "0.9") -> list[dict[str, str]]:
@@ -273,6 +274,14 @@ def _trainset(n: int = 4) -> list[dspy.Example]:
     ]
 
 
+def _other_trainset(n: int = 4) -> list[dspy.Example]:
+    """A trainset with DIFFERENT labeled content than :func:`_trainset`."""
+    return [
+        dspy.Example(left="Beta", right="Beta LLC", match=False).with_inputs("left", "right")
+        for _ in range(n)
+    ]
+
+
 def test_compile_bootstrap_populates_demos_and_sets_flag() -> None:
     """``compile(optimizer='bootstrap')`` tunes the program (adds demos) in place."""
     judge = _dummy_judge(_answers(50))
@@ -301,6 +310,120 @@ def test_compile_unknown_optimizer_raises() -> None:
     judge = _dummy_judge(_answers(10))
     with pytest.raises(ValueError, match="unknown optimizer"):
         judge.compile(_trainset(), optimizer="nope")
+
+
+# ---------------------------------------------------------------------------
+# Compile-run lineage (S6 tracking seam)
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_judge_has_no_compile_run_id() -> None:
+    """The lineage carrier starts unset — the read contract for a later capture_run."""
+    assert _dummy_judge()._compile_run_id is None
+
+
+def test_compile_records_run_and_stamps_compile_run_id(tmp_path: Path) -> None:
+    """``compile(store=...)`` persists one completed compile run and stamps its id.
+
+    Read contract for Stream C: ``judge._compile_run_id`` equals the recorded
+    ``attempt_id``, which a later ``capture_run`` threads into ``parent_run_id``.
+    """
+    store = RunStore(tmp_path / "runs.jsonl")
+    judge = _dummy_judge(_answers(50))
+    judge.compile(_trainset(), optimizer="bootstrap", store=store)
+
+    records = store.read()
+    assert len(records) == 1  # the running + terminal lines collapse (last-wins)
+    record = records[0]
+    assert record.status == "completed"
+    assert record.context.method == "dspy_compile"
+    assert record.context.experiment == "dspy_compile"
+    assert record.context.llm_model == judge.model
+    assert record.context.resolver_config is not None
+    assert record.context.resolver_config["optimizer"] == "bootstrap"
+    # The stamped carrier is exactly the persisted run's PK.
+    assert judge._compile_run_id == record.attempt_id
+
+
+def test_compile_fingerprints_trainset_into_recipe_id(tmp_path: Path) -> None:
+    """Different labeled trainsets get different recipe_ids; an identical one, the same.
+
+    Regression: ``compile`` used a constant ``dataset_name`` and left
+    ``dataset_fingerprint`` unset, so two compiles on DIFFERENT labels collapsed to
+    the SAME ``recipe_id`` (a store-based replay guard could treat them as one run).
+    The trainset now feeds ``dataset_fingerprint`` -> ``compute_recipe_id``.
+    """
+    store_a = RunStore(tmp_path / "a.jsonl")
+    store_b = RunStore(tmp_path / "b.jsonl")
+    store_c = RunStore(tmp_path / "c.jsonl")
+
+    _dummy_judge(_answers(50)).compile(_trainset(), optimizer="bootstrap", store=store_a)
+    _dummy_judge(_answers(50)).compile(_other_trainset(), optimizer="bootstrap", store=store_b)
+    _dummy_judge(_answers(50)).compile(_trainset(), optimizer="bootstrap", store=store_c)
+
+    [ra] = store_a.read()
+    [rb] = store_b.read()
+    [rc] = store_c.read()
+
+    # A content fingerprint is now stamped (no longer left None).
+    assert ra.context.dataset_fingerprint is not None
+    # Different labeled trainsets -> different fingerprint -> different recipe_id.
+    assert ra.context.dataset_fingerprint != rb.context.dataset_fingerprint
+    assert ra.recipe_id != rb.recipe_id
+    # An identical trainset -> identical fingerprint -> identical recipe_id (only
+    # the timestamped attempt_id differs), so genuine replays still dedup.
+    assert ra.context.dataset_fingerprint == rc.context.dataset_fingerprint
+    assert ra.recipe_id == rc.recipe_id
+    assert ra.attempt_id != rc.attempt_id
+
+
+def test_compile_threads_parent_run_id_onto_the_run(tmp_path: Path) -> None:
+    """A ``parent_run_id`` passed to compile is recorded on the compile run's context."""
+    store = RunStore(tmp_path / "runs.jsonl")
+    judge = _dummy_judge(_answers(50))
+    judge.compile(_trainset(), store=store, parent_run_id="sweep-abc")
+    [record] = store.read()
+    assert record.context.parent_run_id == "sweep-abc"
+
+
+def test_compile_stamps_run_id_even_without_a_store() -> None:
+    """The carrier is stamped even when nothing is persisted (default ``store=None``)."""
+    judge = _dummy_judge(_answers(50))
+    judge.compile(_trainset(), optimizer="bootstrap")
+    assert isinstance(judge._compile_run_id, str)
+    assert judge._compiled is True
+    # Default path is behavior-unchanged: demos were still bootstrapped.
+    assert sum(len(p.demos) for _, p in judge._program.named_predictors()) > 0
+
+
+def test_compile_tracking_params_do_not_leak_into_optimizer_kwargs(  # type: ignore[no-untyped-def]
+    tmp_path: Path,
+    mocker,
+) -> None:
+    """tracker/store/parent_run_id are bound params — never forwarded to the optimizer.
+
+    A real ``**kwargs`` (``max_bootstrapped_demos``) DOES reach the optimizer's
+    ``compile``; the tracking params do NOT (they are explicit, before ``**kwargs``).
+    """
+    fake_optimizer = mocker.MagicMock()
+    fake_optimizer.compile.return_value = dspy.ChainOfThought("left, right -> match")
+    mocker.patch("dspy.BootstrapFewShot", return_value=fake_optimizer)
+
+    judge = _dummy_judge(_answers(10))
+    judge.compile(
+        _trainset(),
+        store=RunStore(tmp_path / "runs.jsonl"),
+        parent_run_id="p",
+        max_bootstrapped_demos=2,
+    )
+
+    _, kwargs = fake_optimizer.compile.call_args
+    assert "store" not in kwargs
+    assert "tracker" not in kwargs
+    assert "parent_run_id" not in kwargs
+    assert kwargs["max_bootstrapped_demos"] == 2  # real optimizer kwargs still forwarded
+    # Even with the optimizer mocked, the run seam still fired and stamped the carrier.
+    assert isinstance(judge._compile_run_id, str)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 """wandb tracking client factory."""
 
 import logging
+import os
 from typing import Any
 
 import wandb
@@ -8,6 +9,10 @@ import wandb
 from langres.clients.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+#: ``WANDB_MODE`` values where wandb never contacts the server, so no API key is
+#: needed (offline runs sync later; disabled runs are a full no-op).
+_KEYLESS_WANDB_MODES = frozenset({"offline", "disabled"})
 
 
 def create_wandb_tracker(settings: Settings | None = None, job_type: str = "optimization") -> Any:
@@ -25,12 +30,16 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
         wandb run object that can be used to log metrics and artifacts.
 
     Raises:
-        ValueError: If WANDB_API_KEY environment variable is not set.
+        ValueError: If WANDB_API_KEY is not set AND wandb is in an online mode.
+            When ``WANDB_MODE`` is ``offline`` or ``disabled`` wandb needs no
+            key, so the requirement is skipped (offline/CI use).
 
     Environment variables required:
-        WANDB_API_KEY: Weights & Biases API key (required)
+        WANDB_API_KEY: Weights & Biases API key (required online; not needed
+            when ``WANDB_MODE`` is ``offline``/``disabled``)
         WANDB_PROJECT: W&B project name (optional, defaults to "langres")
         WANDB_ENTITY: W&B entity/team name (optional)
+        WANDB_MODE: ``online`` (default), ``offline``, or ``disabled``
 
     Example:
         # With explicit settings
@@ -55,8 +64,11 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
     if settings is None:
         settings = Settings()
 
-    # Validate wandb API key is present
-    if not settings.wandb_api_key:
+    # Validate wandb API key is present -- but only for online runs. Offline /
+    # disabled modes never contact the W&B server, so demanding a key there
+    # would needlessly block offline/CI use of the tracker.
+    offline = os.environ.get("WANDB_MODE", "").strip().lower() in _KEYLESS_WANDB_MODES
+    if not offline and not settings.wandb_api_key:
         raise ValueError("WANDB_API_KEY environment variable is required")
 
     run = wandb.init(

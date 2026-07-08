@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation]
+    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

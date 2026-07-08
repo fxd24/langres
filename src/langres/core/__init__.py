@@ -73,11 +73,25 @@ from langres.core.registry import (
 )
 from langres.core.resolver import Resolver
 from langres.core.review import ReviewItem, ReviewQueue, select_for_review
+from langres.core.runs import (
+    RunContext,
+    RunRecord,
+    RunStore,
+    capture_run,
+    compute_recipe_id,
+    resolve_store,
+)
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
     ComponentSpec,
     SerializableState,
+)
+from langres.core.trackers import (
+    ExperimentTracker,
+    MultiTracker,
+    NoOpTracker,
+    resolve_tracker,
 )
 
 if TYPE_CHECKING:
@@ -103,6 +117,7 @@ if TYPE_CHECKING:
     from langres.core.modules.llm_judge import LLMJudge
     from langres.core.modules.random_forest_judge import RandomForestJudge
     from langres.core.modules.select_judge import SelectJudge
+    from langres.core.trackers import MlflowTracker, WandbTracker
 
 __all__ = [
     "ARTIFACT_VERSION",
@@ -179,6 +194,19 @@ __all__ = [
     "VectorBlocker",
     "VectorIndex",
     "WeightedAverageJudge",
+    # Experiment tracking (S1): run identity + persistence + pluggable trackers.
+    "capture_run",
+    "compute_recipe_id",
+    "ExperimentTracker",
+    "MlflowTracker",
+    "MultiTracker",
+    "NoOpTracker",
+    "resolve_store",
+    "resolve_tracker",
+    "RunContext",
+    "RunRecord",
+    "RunStore",
+    "WandbTracker",
 ]
 
 #: Names resolved to a *submodule of this package* on first access -- unlike
@@ -208,6 +236,10 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "LLMJudge": "langres.core.modules.llm_judge",
     "RandomForestJudge": "langres.core.modules.random_forest_judge",
     "SelectJudge": "langres.core.modules.select_judge",
+    # Backend tracker adapters (S3/S4): the package's own __getattr__ pulls the
+    # concrete adapter -- and its mlflow/wandb dependency -- only on access.
+    "MlflowTracker": "langres.core.trackers",
+    "WandbTracker": "langres.core.trackers",
 }
 
 #: ``name -> extra`` for the lazy symbols a ``pip install langres[<extra>]``
@@ -218,9 +250,13 @@ _LAZY_SYMBOLS: dict[str, str] = {
 #: ``SelectJudge`` need ``[llm]`` (litellm/dspy-ai); everything else needs
 #: ``[semantic]`` (embeddings/vector index/VectorBlocker).
 _EXTRA_BY_SYMBOL: dict[str, str] = {
-    name: {"LLMJudge": "llm", "SelectJudge": "llm", "RandomForestJudge": "trained"}.get(
-        name, "semantic"
-    )
+    name: {
+        "LLMJudge": "llm",
+        "SelectJudge": "llm",
+        "RandomForestJudge": "trained",
+        "MlflowTracker": "mlflow",
+        "WandbTracker": "wandb",
+    }.get(name, "semantic")
     for name in _LAZY_SYMBOLS
 }
 
