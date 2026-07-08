@@ -24,6 +24,8 @@ plain ``import langres.core``. It is registered lazily via
 artifact imports it on demand (firing ``@register``).
 """
 
+import hashlib
+import json
 import logging
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -101,6 +103,27 @@ def _pair_metric(example: dspy.Example, prediction: Any, trace: Any = None) -> b
     is kept only when it reproduces the labeled match decision.
     """
     return bool(prediction.match) == bool(example.match)
+
+
+def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
+    """Content-address a ``trainset`` so compiles on DIFFERENT labels get DIFFERENT ids.
+
+    Each ``dspy.Example`` is reduced to its field dict (``toDict``) and dumped to
+    canonical JSON (sorted keys, no whitespace); the per-example strings are then
+    sorted before hashing, so an identical labeled set fingerprints identically
+    regardless of row order, while any content change — a flipped label, an edited
+    field, an added/removed example — changes the digest. Fed to the compile
+    :class:`~langres.core.runs.RunContext`'s ``dataset_fingerprint`` so two
+    ``compile`` runs on different trainsets no longer collapse to the same
+    ``recipe_id``. Mirrors :func:`langres.core.runs.dataset_fingerprint`'s style.
+    """
+    digest = hashlib.sha256()
+    for line in sorted(
+        json.dumps(example.toDict(), sort_keys=True, separators=(",", ":")) for example in trainset
+    ):
+        digest.update(line.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 @register("dspy_judge")
@@ -326,6 +349,12 @@ class DSPyJudge(Module[SchemaT]):
             experiment="dspy_compile",
             method="dspy_compile",
             dataset_name="dspy_trainset",
+            # Content-address the labels so two compiles on DIFFERENT trainsets
+            # get DIFFERENT recipe_ids (dataset_fingerprint feeds compute_recipe_id).
+            # Without it, a constant dataset_name collapsed distinct compiles to
+            # one id, letting a store-based replay guard treat different labels as
+            # the same run.
+            dataset_fingerprint=_trainset_fingerprint(trainset),
             llm_model=self.model,
             parent_run_id=parent_run_id,
             resolver_config={
@@ -334,6 +363,8 @@ class DSPyJudge(Module[SchemaT]):
                 **self.config,
             },
         )
+        # NOTE: this compile run records $0 spend; capturing paid DSPy-compile
+        # spend (the ``spend_usd`` seam) is deferred to issue #100 (cost-tracking).
         with capture_run(context, store=store, tracker=tracker) as run:
             with dspy.context(lm=self._get_lm()):
                 if optimizer == "bootstrap":

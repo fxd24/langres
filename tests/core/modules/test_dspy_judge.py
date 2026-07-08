@@ -274,6 +274,14 @@ def _trainset(n: int = 4) -> list[dspy.Example]:
     ]
 
 
+def _other_trainset(n: int = 4) -> list[dspy.Example]:
+    """A trainset with DIFFERENT labeled content than :func:`_trainset`."""
+    return [
+        dspy.Example(left="Beta", right="Beta LLC", match=False).with_inputs("left", "right")
+        for _ in range(n)
+    ]
+
+
 def test_compile_bootstrap_populates_demos_and_sets_flag() -> None:
     """``compile(optimizer='bootstrap')`` tunes the program (adds demos) in place."""
     judge = _dummy_judge(_answers(50))
@@ -335,6 +343,38 @@ def test_compile_records_run_and_stamps_compile_run_id(tmp_path: Path) -> None:
     assert record.context.resolver_config["optimizer"] == "bootstrap"
     # The stamped carrier is exactly the persisted run's PK.
     assert judge._compile_run_id == record.attempt_id
+
+
+def test_compile_fingerprints_trainset_into_recipe_id(tmp_path: Path) -> None:
+    """Different labeled trainsets get different recipe_ids; an identical one, the same.
+
+    Regression: ``compile`` used a constant ``dataset_name`` and left
+    ``dataset_fingerprint`` unset, so two compiles on DIFFERENT labels collapsed to
+    the SAME ``recipe_id`` (a store-based replay guard could treat them as one run).
+    The trainset now feeds ``dataset_fingerprint`` -> ``compute_recipe_id``.
+    """
+    store_a = RunStore(tmp_path / "a.jsonl")
+    store_b = RunStore(tmp_path / "b.jsonl")
+    store_c = RunStore(tmp_path / "c.jsonl")
+
+    _dummy_judge(_answers(50)).compile(_trainset(), optimizer="bootstrap", store=store_a)
+    _dummy_judge(_answers(50)).compile(_other_trainset(), optimizer="bootstrap", store=store_b)
+    _dummy_judge(_answers(50)).compile(_trainset(), optimizer="bootstrap", store=store_c)
+
+    [ra] = store_a.read()
+    [rb] = store_b.read()
+    [rc] = store_c.read()
+
+    # A content fingerprint is now stamped (no longer left None).
+    assert ra.context.dataset_fingerprint is not None
+    # Different labeled trainsets -> different fingerprint -> different recipe_id.
+    assert ra.context.dataset_fingerprint != rb.context.dataset_fingerprint
+    assert ra.recipe_id != rb.recipe_id
+    # An identical trainset -> identical fingerprint -> identical recipe_id (only
+    # the timestamped attempt_id differs), so genuine replays still dedup.
+    assert ra.context.dataset_fingerprint == rc.context.dataset_fingerprint
+    assert ra.recipe_id == rc.recipe_id
+    assert ra.attempt_id != rc.attempt_id
 
 
 def test_compile_threads_parent_run_id_onto_the_run(tmp_path: Path) -> None:
