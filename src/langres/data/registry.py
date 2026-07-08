@@ -249,3 +249,68 @@ register(
         loader_symbol="TinyFixtureBenchmark",
     )
 )
+
+# ---------------------------------------------------------------------------
+# Wave C/D: the four DeepMatcher-style loaders (bibliographic + product) plus
+# the external-only OpenSanctions entry (loadable=False; never vendored because
+# CC-BY-NC is incompatible with langres's Apache-2.0 license). Its fetch_hint
+# points at the source data + the published matcher baselines.
+# ---------------------------------------------------------------------------
+
+register(
+    BenchmarkEntry(
+        name="dblp_acm",
+        task="linkage",
+        domain="bibliographic",
+        loadable=True,
+        module_path="langres.data.dblp_acm",
+        loader_symbol="DblpAcmBenchmark",
+    )
+)
+register(
+    BenchmarkEntry(
+        name="dblp_scholar",
+        task="linkage",
+        domain="bibliographic",
+        loadable=True,
+        module_path="langres.data.dblp_scholar",
+        loader_symbol="DblpScholarBenchmark",
+    )
+)
+register(
+    BenchmarkEntry(
+        name="walmart_amazon",
+        task="linkage",
+        domain="product",
+        loadable=True,
+        module_path="langres.data.walmart_amazon",
+        loader_symbol="WalmartAmazonBenchmark",
+    )
+)
+register(
+    BenchmarkEntry(
+        name="wdc_computers",
+        task="linkage",
+        domain="product",
+        loadable=True,
+        module_path="langres.data.wdc_computers",
+        loader_symbol="WdcComputersBenchmark",
+    )
+)
+register(
+    BenchmarkEntry(
+        name="opensanctions",
+        task="linkage",
+        domain="person/org",
+        loadable=False,
+        module_path="",
+        loader_symbol="",
+        fetch_hint=(
+            "OpenSanctions is CC-BY-NC 4.0 — incompatible with langres's Apache-2.0 "
+            "license, so it is never vendored. Fetch the entity-matching data from "
+            "https://www.opensanctions.org/docs/ and compare against the published "
+            "matcher baselines (rule-based F1 91.33, GPT-4o 98.95, "
+            "DeepSeek-R1-Distill-14B 98.23, Llama-3.1-8B 95.94)."
+        ),
+    )
+)

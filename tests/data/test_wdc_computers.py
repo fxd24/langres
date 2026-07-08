@@ -2,10 +2,12 @@
 
 Runs the shared loader contract (``tests/data/_loader_contract.py``) against the
 factory-built ``WdcComputersBenchmark`` and checks the Wave D ``wdc_slice_map``
-seen/unseen tagging. The third test wires the slice map through
+seen/unseen tagging. A third test wires the slice map through
 ``evaluate_judge_on_candidates`` end-to-end (a rapidfuzz judge over the WDC test
-pairs) to prove the honest fixed-threshold sliced eval on real data. All are fast
-(CSV parse + rapidfuzz over titles; no embeddings).
+pairs) to prove the honest fixed-threshold sliced eval on real data. Those three
+are fast (CSV parse + rapidfuzz over titles; no embeddings). A fourth,
+``@pytest.mark.slow`` test re-runs the embedding sweep to guard the pinned
+blocking Pair-Completeness constant (weekly ``test-full`` only).
 """
 
 import logging
@@ -16,7 +18,10 @@ from langres.core.benchmark import evaluate_judge_on_candidates
 from langres.core.metrics import classify_pairs
 from langres.core.models import ERCandidate
 from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.data import _benchmark_utils as _bu
 from langres.data.wdc_computers import (
+    WDC_COMPUTERS_ACHIEVED_PC,
+    WDC_COMPUTERS_BLOCKING_K,
     WdcComputersBenchmark,
     WdcComputersSchema,
     load_wdc_computers,
@@ -118,3 +123,24 @@ def test_wdc_sliced_judge_eval_grades_every_slice_at_one_fixed_threshold() -> No
     observed = {tag: round(t.f1, 4) for tag, t in result.slices.items()}
     logger.info("WDC test sliced F1 @ fixed threshold %.2f: %s", result.best_threshold, observed)
     assert result.slices["seen"] != result.slices["unseen"]
+
+
+@pytest.mark.slow
+def test_sweep_blocking_k_pins_documented_pair_completeness() -> None:
+    """Re-measure blocking Pair-Completeness at the pinned k, guarding the constant.
+
+    Mirrors ``test_amazon_google.py``: runs the real embedding sweep at
+    ``WDC_COMPUTERS_BLOCKING_K`` and asserts the live cross-source PC matches the
+    pinned ``WDC_COMPUTERS_ACHIEVED_PC`` (an honest sub-gate 0.7237 — title-only
+    text is hard) within tolerance. Slow (loads MiniLM + embeds the corpus) →
+    weekly ``test-full`` only, zero per-PR cost.
+    """
+    corpus, gold_clusters, _pairs = load_wdc_computers()
+    recalls = _bu.sweep_blocking_k(
+        corpus,
+        gold_clusters,
+        WdcComputersSchema,
+        text_field="embed_text",
+        ks=(WDC_COMPUTERS_BLOCKING_K,),
+    )
+    assert recalls[WDC_COMPUTERS_BLOCKING_K] == pytest.approx(WDC_COMPUTERS_ACHIEVED_PC, abs=5e-3)
