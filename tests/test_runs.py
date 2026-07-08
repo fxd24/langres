@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -160,6 +162,22 @@ class TestComputeRecipeId:
         b = _context(llm_model="gpt-4o-mini", blocking_k=20)
         assert compute_recipe_id(a) != compute_recipe_id(b)
 
+    def test_permuted_config_keys_give_same_recipe_id(self) -> None:
+        # L2: the order-stable seeds map (see TestCollectSeeds) feeds the
+        # recipe_id, so two key-permuted builds of the same logical experiment
+        # content-address identically.
+        cfg_a = {
+            "alpha": {"type_name": "Judge", "seed": 4},
+            "beta": {"type_name": "Judge", "seed": 5},
+        }
+        cfg_b = {
+            "beta": {"type_name": "Judge", "seed": 5},
+            "alpha": {"type_name": "Judge", "seed": 4},
+        }
+        a = _context(resolver_config=cfg_a, seeds=runs._collect_seeds(7, cfg_a))
+        b = _context(resolver_config=cfg_b, seeds=runs._collect_seeds(7, cfg_b))
+        assert compute_recipe_id(a) == compute_recipe_id(b)
+
 
 # ---------------------------------------------------------------------------
 # RunStore
@@ -229,6 +247,113 @@ class TestRunStore:
         assert len(lines) == 2
         for line in lines:
             assert json.loads(line)["v"] == 1
+
+    def test_append_flushes_and_fsyncs_before_releasing_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # HIGH-1 regression: the bytes must reach the OS (flush + fsync) *under*
+        # the exclusive lock, so a concurrent writer cannot interleave. Record
+        # the syscall order and assert fsync lands before the LOCK_UN.
+        events: list[str] = []
+
+        class _RecordingFcntl:
+            LOCK_EX = 2
+            LOCK_UN = 8
+
+            @staticmethod
+            def flock(fileno: int, op: int) -> None:
+                events.append(f"flock:{op}")
+
+        real_fsync = runs.os.fsync
+
+        def _spy_fsync(fd: int) -> None:
+            events.append("fsync")
+            real_fsync(fd)
+
+        monkeypatch.setattr(runs, "fcntl", _RecordingFcntl)
+        monkeypatch.setattr(runs.os, "fsync", _spy_fsync)
+
+        store = RunStore(tmp_path / "runs.jsonl")
+        store.append(_record("r1-t"))
+
+        assert events == [
+            f"flock:{_RecordingFcntl.LOCK_EX}",
+            "fsync",
+            f"flock:{_RecordingFcntl.LOCK_UN}",
+        ]
+        assert RunStore(tmp_path / "runs.jsonl").read()[0].attempt_id == "r1-t"
+
+    def test_read_tolerates_torn_trailing_line(self, tmp_path: Path) -> None:
+        # A concurrent writer mid-append leaves a partial JSON line with no
+        # terminating newline; read() must skip it, not raise.
+        path = tmp_path / "runs.jsonl"
+        store = RunStore(path)
+        store.append(_record("r1-t"))
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write('{"attempt_id": "r2-t", "recipe')  # torn write, no newline
+        rows = store.read()
+        assert [r.attempt_id for r in rows] == ["r1-t"]
+
+    def test_read_warns_on_malformed_complete_line(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A complete (newline-terminated) garbage line is genuine corruption:
+        # skip it but surface a warning instead of silently swallowing it.
+        path = tmp_path / "runs.jsonl"
+        store = RunStore(path)
+        store.append(_record("r1-t"))
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("this is not valid json\n")
+        store.append(_record("r2-t"))
+        with caplog.at_level(logging.WARNING):
+            rows = store.read()
+        assert [r.attempt_id for r in rows] == ["r1-t", "r2-t"]
+        assert any("malformed run record" in r.message for r in caplog.records)
+
+    def test_append_without_fcntl_warns_once_and_still_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Codex#2: on a platform without fcntl (e.g. Windows), append degrades
+        # to a lock-free write and warns exactly once -- it never crashes.
+        monkeypatch.setattr(runs, "fcntl", None)
+        monkeypatch.setattr(runs, "_FLOCK_WARNED", False)
+        store = RunStore(tmp_path / "runs.jsonl")
+        with caplog.at_level(logging.WARNING):
+            store.append(_record("r1-t"))
+            store.append(_record("r2-t"))
+        assert [r.attempt_id for r in store.read()] == ["r1-t", "r2-t"]
+        flock_warnings = [r for r in caplog.records if "advisory file lock" in r.message]
+        assert len(flock_warnings) == 1  # warned once, not once per append
+
+
+def test_import_langres_does_not_eagerly_require_fcntl(tmp_path: Path) -> None:
+    """Codex#2: ``import langres`` (which imports ``core.runs``) must not need fcntl.
+
+    ``fcntl`` is Unix-only; a hard top-level import would break ``import langres``
+    on Windows. Simulate fcntl being unimportable (``sys.modules['fcntl'] = None``
+    makes ``import fcntl`` raise ``ImportError``) in a fresh subprocess and assert
+    the package still imports and ``RunStore`` still round-trips.
+    """
+    script = (
+        "import sys; sys.modules['fcntl'] = None; "
+        "import langres; from langres.core import runs; "
+        "assert runs.fcntl is None, runs.fcntl; "
+        "from langres.core.runs import RunStore, RunContext, RunRecord; "
+        "store = RunStore(sys.argv[1]); "
+        "ctx = RunContext(experiment='e', dataset_name='d'); "
+        "rec = RunRecord(attempt_id='a-t', recipe_id='a', context=ctx, "
+        "started_at='2026-07-08T00:00:00+00:00', status='completed'); "
+        "store.append(rec); "
+        "assert [r.attempt_id for r in store.read()] == ['a-t']; "
+        "print('OK')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "runs.jsonl")],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    assert "OK" in result.stdout
 
 
 class TestResolveStore:
@@ -406,6 +531,21 @@ class TestCollectSeeds:
         assert sorted(judge_seeds.values()) == [4, 5, 6]
         assert len(judge_seeds) == 3
 
+    def test_seed_labels_are_order_stable(self) -> None:
+        # L2 regression: two semantically identical configs built with permuted
+        # dict-key order must yield the SAME seeds map. Disambiguation suffixes
+        # are assigned in canonical (sorted) traversal order, not raw
+        # dict-insertion order, so the derived recipe_id can't drift.
+        config_a = {
+            "alpha": {"type_name": "Judge", "seed": 4},
+            "beta": {"type_name": "Judge", "seed": 5},
+        }
+        config_b = {
+            "beta": {"type_name": "Judge", "seed": 5},
+            "alpha": {"type_name": "Judge", "seed": 4},
+        }
+        assert runs._collect_seeds(7, config_a) == runs._collect_seeds(7, config_b)
+
 
 # ---------------------------------------------------------------------------
 # capture_run
@@ -486,6 +626,27 @@ class TestCaptureRun:
         assert record.error_type == "ValueError"
         assert record.error_message is not None and "boom" in record.error_message
         # contextvar still reset after an exception.
+        assert current_run.get() is None
+
+    def test_tracker_start_run_failure_writes_failed_record_and_resets_contextvar(
+        self, tmp_path: Path
+    ) -> None:
+        # HIGH-2 regression: start_run runs inside the protected block, so a
+        # failure there still writes a terminal "failed" record for the attempt
+        # and restores the contextvar -- the "running" line never dangles.
+        class _BoomTracker(_SpyTracker):
+            def start_run(self, context: Any, *, run_name: str | None = None) -> None:
+                raise RuntimeError("start boom")
+
+        path = tmp_path / "runs.jsonl"
+        assert current_run.get() is None
+        with pytest.raises(RuntimeError, match="start boom"):
+            with capture_run(_context(), store=RunStore(path), tracker=_BoomTracker()):
+                pass  # pragma: no cover - start_run raises before the body runs
+        record = RunStore(path).read()[0]
+        assert record.status == "failed"
+        assert record.error_type == "RuntimeError"
+        assert record.error_message is not None and "start boom" in record.error_message
         assert current_run.get() is None
 
     def test_drives_the_tracker(self, tmp_path: Path) -> None:

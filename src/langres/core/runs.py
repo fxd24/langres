@@ -27,11 +27,11 @@ is *same recipe -> same* :func:`compute_recipe_id`, **not** same metrics:
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import importlib.metadata
 import json
 import logging
+import os
 import subprocess
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -44,6 +44,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from langres.core.trackers import ExperimentTracker, NoOpTracker
+
+# ``fcntl`` is Unix-only. ``runs`` sits on the bare ``import langres`` path
+# (``judgement_log`` imports ``current_run`` from it), so a hard top-level
+# import would break importing the package on Windows. Load it lazily: on a
+# platform without ``fcntl`` the store degrades to a lock-free append with a
+# one-time warning (see :meth:`RunStore.append`) rather than crashing the import.
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows/non-Unix platforms have no fcntl
+    fcntl = None  # type: ignore[assignment]
 
 __all__ = [
     "RunContext",
@@ -93,6 +103,9 @@ _RECIPE_FIELDS = (
 
 #: One-shot guard so a git-less environment warns exactly once per process.
 _GIT_SHA_WARNED = False
+
+#: One-shot guard so a flock-less (non-Unix) environment warns exactly once.
+_FLOCK_WARNED = False
 
 
 def _detect_langres_version() -> str | None:
@@ -268,8 +281,15 @@ def _scan_for_seeds(node: Any, seeds: dict[str, int], *, path: str) -> None:
             value = node.get(key)
             if isinstance(value, int) and not isinstance(value, bool):
                 seeds[_unique_label(f"{prefix}.{key}", seeds)] = value
-        for child_key, child in node.items():
-            _scan_for_seeds(child, seeds, path=f"{path}.{child_key}" if path else str(child_key))
+        # Traverse mapping children in canonical (sorted-key) order so the
+        # disambiguation suffixes ``_unique_label`` hands out -- and therefore
+        # the ``seeds`` map and the ``recipe_id`` that hashes it -- do not depend
+        # on the caller's raw dict-insertion order. Lists keep their index order
+        # (a list is semantically ordered data).
+        for child_key in sorted(node, key=str):
+            _scan_for_seeds(
+                node[child_key], seeds, path=f"{path}.{child_key}" if path else str(child_key)
+            )
     elif isinstance(node, (list, tuple)):
         for index, item in enumerate(node):
             _scan_for_seeds(item, seeds, path=f"{path}[{index}]")
@@ -333,28 +353,57 @@ class RunStoreError(RuntimeError):
     """A :class:`RunStore` could not persist a record (unwritable path, etc.)."""
 
 
+def _warn_flock_unavailable() -> None:
+    """Warn once that advisory file locking is unavailable on this platform."""
+    global _FLOCK_WARNED
+    if not _FLOCK_WARNED:
+        logger.warning(
+            "fcntl is unavailable on this platform; RunStore.append is writing without an "
+            "advisory file lock -- concurrent writers to the same runs file may interleave."
+        )
+        _FLOCK_WARNED = True
+
+
 class RunStore:
     """Append-only JSONL store of :class:`RunRecord` lines.
 
     ``append`` takes an exclusive ``fcntl.flock`` (cross-process safety when
     several agents write the same file) and creates parent dirs on demand
     (``JudgementLog``'s precedent). ``read`` collapses the ``running`` +
-    terminal lines of each attempt via **last-wins-by-attempt_id**.
+    terminal lines of each attempt via **last-wins-by-attempt_id** and tolerates
+    a torn trailing line from a concurrent writer. On a platform without
+    ``fcntl`` (e.g. Windows) ``append`` degrades to a lock-free write.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
     def append(self, record: RunRecord) -> None:
-        """Append one record; wrap any OS failure as :class:`RunStoreError`."""
+        """Append one record durably; wrap any OS failure as :class:`RunStoreError`.
+
+        The bytes are ``flush``ed and ``fsync``ed to the OS *before* the advisory
+        lock is released, so the whole line lands under the lock and concurrent
+        writers cannot interleave. (A bare ``TextIOWrapper.write`` only fills a
+        Python buffer -- the real ``write(2)`` would otherwise happen at
+        ``close()``, after the lock was already dropped.) Where ``fcntl`` is
+        absent the lock is skipped with a one-time warning.
+        """
+        line = record.model_dump_json() + "\n"
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                use_lock = fcntl is not None
+                if use_lock:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                else:
+                    _warn_flock_unavailable()
                 try:
-                    handle.write(record.model_dump_json() + "\n")
+                    handle.write(line)
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    if use_lock:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         except OSError as exc:
             raise RunStoreError(
                 f"could not append a run record to {self.path}: {exc}. Check the path is "
@@ -363,16 +412,36 @@ class RunStore:
             ) from exc
 
     def read(self) -> list[RunRecord]:
-        """Every attempt's latest record, in first-seen order (last-wins)."""
+        """Every attempt's latest record, in first-seen order (last-wins).
+
+        Tolerant of a concurrent writer: a torn/partial *trailing* line (the file
+        being appended right now) is skipped quietly, while a genuinely malformed
+        *complete* line is skipped with a ``logging`` warning rather than
+        aborting the whole read.
+        """
         if not self.path.exists():
             return []
         by_attempt: dict[str, RunRecord] = {}
         with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if stripped:
-                    record = RunRecord.model_validate_json(stripped)
-                    by_attempt[record.attempt_id] = record
+            lines = handle.readlines()
+        last_index = len(lines) - 1
+        for index, raw in enumerate(lines):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                record = RunRecord.model_validate_json(stripped)
+            except ValueError:
+                # A trailing line with no terminating newline is almost certainly
+                # a torn write from a racing appender -- skip it silently. A
+                # complete (newline-terminated) or mid-file bad line is real
+                # corruption, worth a warning but not worth aborting the read.
+                if index == last_index and not raw.endswith("\n"):
+                    logger.debug("skipping a torn trailing line in %s", self.path)
+                else:
+                    logger.warning("skipping a malformed run record line in %s", self.path)
+                continue
+            by_attempt[record.attempt_id] = record
         return list(by_attempt.values())
 
 
@@ -461,8 +530,12 @@ def capture_run(
     Computes ``recipe_id`` + ``attempt_id``; if ``store`` resolves, appends a
     ``status="running"`` line first (a crash then leaves a visible gap); sets
     the :data:`current_run` contextvar (set/reset token, so a nested capture
-    restores the parent on exit); starts the tracker; yields a
-    :class:`_RunHandle`. On exit it finalizes the :class:`RunRecord`
+    restores the parent on exit); then, *inside* the protected block, starts the
+    tracker and yields a :class:`_RunHandle`. Starting the tracker sits inside
+    the try/finally on purpose: if ``start_run`` (or anything before the yield)
+    raises, the contextvar is still reset and a terminal ``status="failed"``
+    record is still written before the error propagates -- the ``running`` line
+    never dangles. On exit it finalizes the :class:`RunRecord`
     (status/metrics/cost/timing/artifacts + the tracker's ``run_url``), appends
     the terminal line, and finishes the tracker. ``store=None`` writes NOTHING.
     """
@@ -482,13 +555,12 @@ def capture_run(
                 status="running",
             )
         )
-    tracker.start_run(context, run_name=context.experiment)
-
     handle = _RunHandle(attempt_id, recipe_id, tracker)
     token = current_run.set(attempt_id)
     error_type: str | None = None
     error_message: str | None = None
     try:
+        tracker.start_run(context, run_name=context.experiment)
         yield handle
     except BaseException as exc:
         error_type = type(exc).__name__
