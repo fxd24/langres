@@ -133,9 +133,7 @@ class TestStartRun:
         }
         assert fake_wandb.run.name == "dedupe-ag"
 
-    def test_flattens_context_into_config(
-        self, fake_wandb: _FakeWandb, settings: Settings
-    ) -> None:
+    def test_flattens_context_into_config(self, fake_wandb: _FakeWandb, settings: Settings) -> None:
         tracker = WandbTracker(settings)
         tracker.start_run(_context())
 
@@ -237,9 +235,7 @@ class TestFinish:
 
 
 class TestRunUrlAndNative:
-    def test_run_url_from_underlying_run(
-        self, fake_wandb: _FakeWandb, settings: Settings
-    ) -> None:
+    def test_run_url_from_underlying_run(self, fake_wandb: _FakeWandb, settings: Settings) -> None:
         tracker = WandbTracker(settings)
         tracker.start_run(_context())
         assert tracker.run_url == "https://wandb.ai/acme/langres/runs/abc123"
@@ -267,9 +263,7 @@ class TestRunUrlAndNative:
 
 
 class TestResolveTracker:
-    def test_resolve_tracker_wandb_returns_real_wandb_tracker(
-        self, fake_wandb: _FakeWandb
-    ) -> None:
+    def test_resolve_tracker_wandb_returns_real_wandb_tracker(self, fake_wandb: _FakeWandb) -> None:
         resolved = resolve_tracker("wandb")
         assert isinstance(resolved, WandbTracker)
         assert resolved.name == "wandb"

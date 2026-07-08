@@ -98,8 +98,7 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
         text=True,
     )
     assert result.returncode == 0, (
-        f"tracking import-budget check failed.\n"
-        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        f"tracking import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
 
