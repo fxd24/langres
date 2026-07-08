@@ -18,8 +18,10 @@ Therefore:
   ``difflib`` "did you mean" on an unknown name. A ``loadable=False`` entry (an
   external-only dataset that must be fetched manually) raises a clear
   external-only error instead.
-- :func:`list_methods` surfaces ``langres.methods.ALL_METHODS`` (imported lazily,
-  since ``langres.methods`` itself pulls the heavy stack).
+- :func:`list_methods` surfaces ``ALL_METHODS`` by reading the import-light
+  ``langres._method_names`` leaf (no heavy deps), **not** ``langres.methods``
+  (which pulls the heavy stack at module scope) — so listing method names is
+  safe in a core-only / partial-extras install.
 
 This module lives in ``langres.data``, is kept **off** ``langres/__init__``'s
 eager import path, and is **not** wired into ``langres.core.benchmark`` — that
@@ -130,11 +132,13 @@ def list_benchmarks() -> list[BenchmarkEntry]:
 def list_methods() -> list[str]:
     """Return the resolution method names the registry can race (``ALL_METHODS``).
 
-    Imports ``langres.methods`` lazily (it pulls the heavy stack at module scope),
-    so merely importing this registry and calling :func:`list_benchmarks` stays
-    import-light.
+    Reads the import-light ``langres._method_names`` leaf (zero heavy deps) — the
+    single source of truth these names share with ``langres.methods`` dispatch —
+    **not** ``langres.methods`` itself (which pulls faiss / sentence-transformers
+    / scikit-learn at module scope). So listing method names is safe in a
+    core-only / partial-extras install.
     """
-    from langres.methods import ALL_METHODS
+    from langres._method_names import ALL_METHODS
 
     return list(ALL_METHODS)
 

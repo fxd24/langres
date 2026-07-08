@@ -82,20 +82,11 @@ from langres.core.modules.rapidfuzz import RapidfuzzModule
 from langres.core.modules.random_forest_judge import RandomForestJudge
 from langres.core.resolver import Resolver
 
-#: Methods whose scorer makes no API call — fully deterministic and zero-spend.
-ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embedding_cosine")
-
-#: Methods whose scorer calls an LLM — they take an injected client (mock/real).
-#: ``dspy_judge`` and ``select_judge`` are LLM-backed too, but their injected
-#: client is a **DSPy LM** (``dspy.LM`` / ``DummyLM``), not the LiteLLM/OpenAI
-#: client the others take — see :func:`_make_module_builder`. ``select_judge``
-#: (W1.1, ComEM-style set-wise) additionally makes ONE LLM call per anchor
-#: GROUP instead of one call per pair — see
-#: :class:`~langres.core.modules.select_judge.SelectJudge`.
-LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge", "select_judge")
-
-#: Every method the registry can build, in race order.
-ALL_METHODS: tuple[str, ...] = ZERO_SPEND_METHODS + LLM_METHODS
+# The canonical method-name tuples live in the import-light ``_method_names``
+# leaf (no heavy deps) so name-listing (``data.registry.list_methods``) and
+# dispatch (this module) share one source of truth. Re-exported here so the
+# public ``langres.methods.ALL_METHODS`` etc. stay stable.
+from langres._method_names import ALL_METHODS, LLM_METHODS, ZERO_SPEND_METHODS
 
 #: Default LLM model id for the LLM/cascade methods. Overridden in W4 with the
 #: real frontier/GLM model; tests inject a mock client and ignore the model.

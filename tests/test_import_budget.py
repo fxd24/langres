@@ -98,6 +98,41 @@ def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
     )
 
 
+# ``langres.data.registry.list_methods`` is a public, import-light discovery API
+# (exported from ``langres.data``): it must return the method NAMES without
+# pulling ``langres.methods`` — which imports VectorBlocker / RandomForestJudge /
+# EmbeddingScoreJudge at module scope, dragging in faiss / scikit-learn /
+# sentence-transformers. The names live in the ``langres._method_names`` leaf so
+# a core-only (or ``[semantic]``-only) user can list them. Subprocess-based for a
+# fresh import state (this pytest process is already polluted by other tests).
+_LIST_METHODS_SCRIPT = (
+    "import sys; import langres.data.registry as r; r.list_methods(); "
+    "assert 'langres.methods' not in sys.modules, "
+    "'list_methods pulled langres.methods (the heavy dispatch module)'; "
+    "leaked = [m for m in ['faiss', 'sklearn', 'sentence_transformers'] if m in sys.modules]; "
+    "assert not leaked, f'list_methods leaked heavy modules: {leaked}'; "
+    "print('OK')"
+)
+
+
+def test_registry_list_methods_stays_import_light() -> None:
+    """``registry.list_methods()`` must not pull ``langres.methods`` or the heavy stack.
+
+    Guards the P2 fix: method NAMES come from the import-light
+    ``langres._method_names`` leaf, so name-listing is safe in a core-only /
+    partial-extras install even though ``langres.methods`` (dispatch) imports the
+    ``[semantic]``/``[trained]`` stack at module scope.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _LIST_METHODS_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"list_methods import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 def test_import_langres_is_fast() -> None:
     """Soft timing budget: a warm ``import langres`` should be well under a second.
 
