@@ -25,11 +25,14 @@ from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from langres.core.blockers.vector import VectorBlocker
-from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
+
+# NOTE: the heavy ``[semantic]`` stack (VectorBlocker / SentenceTransformerEmbedder /
+# FAISSIndex) is imported LAZILY inside ``sweep_blocking_k`` (its sole consumer), not
+# at module scope. This keeps ``import langres.data._benchmark_utils`` — and hence the
+# generic loader factory that reuses these helpers — faiss-free, so a dataset can be
+# loaded/split offline without pulling faiss + sentence-transformers.
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,13 @@ def sweep_blocking_k(
     Returns:
         Mapping of ``k`` to cross-source Pair-Completeness.
     """
+    # Lazy [semantic] import (kept out of module scope): only this k-sweep needs
+    # the vector stack, so importing it here keeps the module faiss-free for the
+    # loaders/factory that only call the light helpers above.
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
     embedder = SentenceTransformerEmbedder(_EMBED_MODEL)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     index.create_index([getattr(r, text_field) for r in corpus])
