@@ -108,8 +108,30 @@ class TestCreateWandbTracker:
             call_kwargs = mock_wandb.init.call_args.kwargs
             assert call_kwargs["entity"] is None
 
-    def test_create_wandb_tracker_raises_error_if_api_key_missing(self):
-        """Test create_wandb_tracker raises ValueError if WANDB_API_KEY missing."""
+    def test_create_wandb_tracker_raises_error_if_api_key_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Online (default) mode still requires WANDB_API_KEY -- the guard is intact."""
+        monkeypatch.delenv("WANDB_MODE", raising=False)
         settings = Settings(wandb_api_key=None)
         with pytest.raises(ValueError, match="WANDB_API_KEY environment variable is required"):
             create_wandb_tracker(settings)
+
+    @pytest.mark.parametrize("mode", ["offline", "disabled", "OFFLINE", " offline "])
+    def test_create_wandb_tracker_skips_api_key_when_offline(
+        self, monkeypatch: pytest.MonkeyPatch, mode: str
+    ):
+        """WANDB_MODE offline/disabled needs no key -- the requirement is skipped (F2)."""
+        monkeypatch.setenv("WANDB_MODE", mode)
+        settings = Settings(wandb_api_key=None, wandb_project="offline-proj")
+
+        with patch("langres.clients.tracking.wandb") as mock_wandb:
+            mock_run = MagicMock()
+            mock_wandb.init.return_value = mock_run
+
+            run = create_wandb_tracker(settings)  # must NOT raise without a key
+
+            assert run is mock_run
+            mock_wandb.init.assert_called_once_with(
+                project="offline-proj", entity=None, job_type="optimization"
+            )

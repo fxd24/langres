@@ -13,13 +13,28 @@ itself (nested dicts/lists -> dotted keys; ``context.tags`` -> MLflow tags),
 streams metrics as the run progresses, uploads local file/dir artifacts (and
 records URL/reference artifacts as tags), and derives a deep-link ``run_url``
 when the tracking URI is an HTTP server.
+
+Local-store default (the F1 fix): with no ``mlflow_tracking_uri`` configured the
+adapter leaves MLflow to its own default backend, which is version-dependent --
+MLflow <3.14 uses the local ``./mlruns`` FileStore, MLflow 3.14+ a local
+``sqlite:///mlflow.db``. MLflow 3.14 also puts *any* local FileStore in
+"maintenance mode" and refuses to open a run against it unless
+``MLFLOW_ALLOW_FILE_STORE=true``. So :meth:`MlflowTracker.start_run` sets that
+flag (via ``os.environ.setdefault`` -- an explicit user value is never clobbered)
+whenever the configured store is a local file store: an unset URI (the old
+``./mlruns`` fallback still in play on MLflow <3.14) or an explicit ``file:`` /
+local-path ``mlflow_tracking_uri``. It is **not** set for HTTP tracking servers
+or SQLAlchemy (``sqlite:``/``postgresql:``/...) backends -- including MLflow
+3.14's own sqlite default -- which don't need it.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import mlflow
 
@@ -65,12 +80,27 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
     return flat
 
 
+def _is_local_file_store(tracking_uri: str | None) -> bool:
+    """True when the configured tracking URI selects (or falls back to) a FileStore.
+
+    An unset URI (``None``) is treated as a file store: on MLflow <3.14 it falls
+    back to the local ``./mlruns`` FileStore, so we proactively allow it. A
+    scheme-less local path or an explicit ``file:`` URI is a FileStore too.
+    HTTP(S) tracking servers and SQLAlchemy (``sqlite:``/``postgresql:``/...)
+    backends are NOT file stores -- they don't need the maintenance-mode flag.
+    """
+    if tracking_uri is None:
+        return True
+    return urlparse(tracking_uri).scheme in ("", "file")
+
+
 class MlflowTracker:
     """Push langres runs into MLflow -- one adapter instance per :func:`capture_run`.
 
     Reads its store config from :class:`~langres.clients.settings.Settings`
-    (``mlflow_tracking_uri`` -- unset means MLflow's local ``./mlruns`` file
-    store -- and ``mlflow_experiment``). ``start_run`` flattens the
+    (``mlflow_tracking_uri`` -- unset lets MLflow pick its own default backend,
+    a local sqlite db on MLflow 3.14 -- and ``mlflow_experiment``; see the module
+    docstring for the local-file-store handling). ``start_run`` flattens the
     :class:`~langres.core.runs.RunContext` into params/tags itself, since the
     :func:`capture_run` driver only calls ``start_run`` / ``log_metrics`` /
     ``log_artifact`` / ``finish``.
@@ -87,6 +117,11 @@ class MlflowTracker:
 
     def start_run(self, context: RunContext, *, run_name: str | None = None) -> None:
         """Open an MLflow run and stamp the flattened context onto it as params/tags."""
+        if _is_local_file_store(self._tracking_uri):
+            # MLflow >=3.14 puts the local ./mlruns FileStore in "maintenance
+            # mode" and refuses to open a run unless this flag is set. setdefault
+            # so an explicit user override wins; never set it for http/sql stores.
+            os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
         if self._tracking_uri is not None:
             mlflow.set_tracking_uri(self._tracking_uri)
         mlflow.set_experiment(self._settings.mlflow_experiment)

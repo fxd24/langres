@@ -19,6 +19,7 @@ them).
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -90,6 +91,9 @@ def _clean_mlflow_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate Settings from any ambient MLflow env so tests are deterministic."""
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     monkeypatch.delenv("MLFLOW_EXPERIMENT", raising=False)
+    # The file-store maintenance-mode flag (F1) -- cleared so each test observes
+    # the adapter's own setdefault, not a leaked value. monkeypatch restores it.
+    monkeypatch.delenv("MLFLOW_ALLOW_FILE_STORE", raising=False)
 
 
 @pytest.fixture
@@ -196,6 +200,68 @@ def test_start_run_without_tracking_uri_skips_set_tracking_uri(
 
     assert fake.tracking_uri is None
     assert fake.experiment == "langres"  # the Settings default
+
+
+# ---------------------------------------------------------------------------
+# start_run: MLflow 3.14 local-file-store maintenance-mode flag (F1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        None,  # unset -> file-store fallback (MLflow <3.14's ./mlruns); allow it
+        "file:///tmp/mlruns",  # explicit file: URI
+        "./mlruns",  # scheme-less local path
+    ],
+)
+def test_start_run_allows_local_file_store_out_of_the_box(
+    mlflow_env: tuple[ModuleType, _FakeMlflow], uri: str | None
+) -> None:
+    """Unset/local-file config -> adapter sets MLFLOW_ALLOW_FILE_STORE.
+
+    So a file-store fallback never trips MLflow 3.14's maintenance-mode guard.
+    """
+    module, _ = mlflow_env
+    tracker = module.MlflowTracker(_settings(mlflow_tracking_uri=uri))
+
+    tracker.start_run(_make_context())
+
+    assert os.environ["MLFLOW_ALLOW_FILE_STORE"] == "true"
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://mlflow.example.com",  # HTTP tracking server
+        "http://localhost:5000",
+        "sqlite:///mlflow.db",  # SQLAlchemy backend
+        "postgresql://user@host/db",
+    ],
+)
+def test_start_run_does_not_set_file_store_flag_for_http_or_sql(
+    mlflow_env: tuple[ModuleType, _FakeMlflow], uri: str
+) -> None:
+    """HTTP/SQL backends aren't file stores -> the maintenance-mode flag is never set."""
+    module, _ = mlflow_env
+    tracker = module.MlflowTracker(_settings(mlflow_tracking_uri=uri))
+
+    tracker.start_run(_make_context())
+
+    assert "MLFLOW_ALLOW_FILE_STORE" not in os.environ
+
+
+def test_start_run_preserves_explicit_file_store_flag(
+    mlflow_env: tuple[ModuleType, _FakeMlflow], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """setdefault semantics: an explicit user value is never clobbered by the adapter."""
+    module, _ = mlflow_env
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "false")
+    tracker = module.MlflowTracker(_settings(mlflow_tracking_uri=None))
+
+    tracker.start_run(_make_context())
+
+    assert os.environ["MLFLOW_ALLOW_FILE_STORE"] == "false"
 
 
 # ---------------------------------------------------------------------------
