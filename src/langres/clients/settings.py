@@ -26,6 +26,19 @@ class Settings(BaseSettings):
         AZURE_API_VERSION: Azure OpenAI API version (default: "2024-02-15-preview")
         QDRANT_URL: Qdrant vector database URL (optional)
         QDRANT_API_KEY: Qdrant API key (optional)
+        RUN_STORE_PATH: JSONL path for persisted run records (optional). NOTE:
+            not auto-wired yet -- capture_run(store=...) does NOT default to this
+            setting, so a caller must pass store= explicitly today (e.g.
+            store=Settings().run_store_path). Threading it as the zero-config
+            default store is deferred to the benchmark/harness wrap; until then
+            capture_run(store=None) writes nothing. See langres.core.runs.
+        MLFLOW_TRACKING_URI: MLflow tracking server URI (optional). Read by the
+            MLflow tracker (MlflowTracker / resolve_tracker("mlflow")), NOT by
+            capture_run directly -- it only takes effect when you use the MLflow
+            backend. Unset lets MLflow pick its own default backend (a local
+            file store; MlflowTracker enables it out of the box).
+        MLFLOW_EXPERIMENT: MLflow experiment name (default: "langres"). Read by
+            the MLflow tracker (MlflowTracker.start_run), not by capture_run.
 
     Example:
         # Load from environment variables
@@ -73,6 +86,11 @@ class Settings(BaseSettings):
     # Qdrant vector database (optional, for future use)
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
+
+    # Experiment tracking (S1): run-record persistence + MLflow backend config.
+    run_store_path: str | None = None
+    mlflow_tracking_uri: str | None = None
+    mlflow_experiment: str = "langres"
 
     model_config = SettingsConfigDict(
         env_file=".env",

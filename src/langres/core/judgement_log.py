@@ -15,9 +15,11 @@ the wrap entirely -- no file, no extra generator layer, byte-identical to
 pre-W0.2 behavior.
 
 Privacy (adopted DX): record content is OFF by default. Each line carries
-only ids, score, verdict, model, cost, decision_step, timestamp, and the
-schema-version field ``"v": 1`` -- never the underlying record fields or the
-judge's free-text reasoning. Pass ``features=True`` to additionally log
+only ids, score, verdict, model, cost, decision_step, timestamp, the
+enclosing run's ``run_id`` (the active ``capture_run`` attempt id, or
+``null`` outside one -- the join key to the ``RunRecord``/trace, W1 S5), and
+the schema-version field ``"v": 1`` -- never the underlying record fields or
+the judge's free-text reasoning. Pass ``features=True`` to additionally log
 ``reasoning`` and the judge's raw ``provenance`` dict (comparison levels,
 similarities, token counts, ...): **this may contain PII** -- the record
 content a judge reasoned over, verbatim -- and JSONL is plaintext on disk.
@@ -42,6 +44,7 @@ from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.reports import ScoreInspectionReport
+from langres.core.runs import current_run
 
 __all__ = ["JudgementLog", "LoggingModule"]
 
@@ -69,6 +72,9 @@ class JudgementLog:
         """Append one JSON line for ``judgement`` (called by :class:`LoggingModule`)."""
         row: dict[str, Any] = {
             "v": _SCHEMA_VERSION,
+            # The enclosing tracking run (S5): joins this row to its RunRecord
+            # and any LLM trace on the attempt id; ``None`` outside a capture_run.
+            "run_id": current_run.get(),
             "left_id": judgement.left_id,
             "right_id": judgement.right_id,
             "score": judgement.score,

@@ -636,11 +636,66 @@ class Resolver:
         slots.append(("clusterer", self.clusterer))
         return slots
 
+    def _build_manifest(self) -> ArtifactManifest:
+        """Assemble the in-memory :class:`ArtifactManifest` (no disk I/O).
+
+        Shared by :meth:`save` (which writes it, plus sidecars) and
+        :meth:`config_dict` (which returns it as a dict). Serializes each slot
+        component into a :class:`ComponentSpec` via :func:`_component_spec`,
+        which raises :class:`TypeError` for a component lacking a registry
+        ``type_name`` — that error is intentional and not swallowed here.
+        """
+        components = [
+            _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
+        ]
+        return ArtifactManifest(
+            artifact_version=ARTIFACT_VERSION,
+            langres_version=langres.__version__,
+            components=components,
+        )
+
+    def config_dict(self) -> dict[str, object]:
+        """Return the resolver's hash-safe config snapshot, WITHOUT writing to disk.
+
+        Returns only the reproducible *config* the manifest wraps — the ordered
+        per-slot ``type_name`` + construction config under a ``components`` key —
+        and deliberately **omits** the volatile version/provenance envelope
+        (``artifact_version``, ``langres_version``) that :meth:`save` writes to
+        ``resolver.json``.
+
+        This is by design: the tracking layer feeds this dict to
+        ``RunContext.resolver_config``, which is inside
+        :func:`~langres.core.runs.compute_recipe_id`'s hash domain. Emitting the
+        version fields would fork ``recipe_id`` on every package or
+        artifact-schema bump, silently defeating idempotent replay. Version and
+        provenance live on :class:`~langres.core.runs.RunContext` as separate,
+        **unhashed** fields (e.g. ``RunContext.langres_version``); :meth:`save`
+        still records them on disk for artifact reconstruction.
+
+        Known limitation: this captures **declared** component config, not
+        compiled/optimized in-memory state — e.g. a DSPy-compiled program's tuned
+        prompts do not appear here. Persisting that state is out of scope for the
+        config snapshot (it round-trips via :class:`SerializableState` sidecars in
+        :meth:`save`, not through this dict).
+
+        Returns:
+            A plain, JSON-serializable dict with a single ``components`` key: the
+            ordered slot specs (each a ``type_name`` + ``config``). No version
+            fields — see above.
+
+        Raises:
+            TypeError: If a slot component lacks a registry ``type_name`` (same
+                contract as :meth:`save`; not swallowed).
+        """
+        return {"components": self._build_manifest().model_dump()["components"]}
+
     def save(self, path: str | Path) -> None:
         """Persist the whole pipeline to ``path`` as a self-describing artifact.
 
-        Writes ``resolver.json`` (an :class:`ArtifactManifest`) plus, for any
-        slot component that implements
+        Writes ``resolver.json`` (a full :class:`ArtifactManifest`, including the
+        ``artifact_version`` + ``langres_version`` envelope that
+        :meth:`config_dict` intentionally omits) plus, for any slot component that
+        implements
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
@@ -652,9 +707,8 @@ class Resolver:
         out_dir = Path(path)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        components: list[ComponentSpec] = []
+        manifest = self._build_manifest()
         for slot_name, component in self._slots():
-            components.append(_component_spec(component, slot=slot_name))
             owner = _state_owner(component)
             if owner is not None:
                 state_dir = out_dir / slot_name
@@ -667,11 +721,6 @@ class Resolver:
                 if not any(state_dir.iterdir()):
                     state_dir.rmdir()
 
-        manifest = ArtifactManifest(
-            artifact_version=ARTIFACT_VERSION,
-            langres_version=langres.__version__,
-            components=components,
-        )
         (out_dir / _MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
         logger.info("Saved Resolver artifact to %s", out_dir)
 

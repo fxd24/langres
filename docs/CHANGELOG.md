@@ -53,6 +53,43 @@ Docs (`docs/GETTING_STARTED.md` + the doc-ladder rewire) are detailed under
 - Implemented core primitives (`Module`, `Blocker`, `Clusterer`) with Pydantic data contracts and 100% test coverage
 - Completed Approach 1 (classical baseline): `AllPairsBlocker` + `RapidfuzzModule` end-to-end pipeline
 
+### Experiment tracking & observability — run store, `ExperimentTracker`, LLM trace correlation
+
+The missing spine under langres's otherwise-**ephemeral** benchmark runs (rich results
+were printed, then lost — no run id, no config/data snapshot, no cross-run compare):
+content-addressed run identity, JSONL persistence, a pluggable tracker seam, and
+end-to-end trace correlation — **dependency-free** on the core path (`import langres`
+still pulls no `mlflow`/`wandb`).
+
+- **Run store + identity** (`langres.core.runs`, root-exported) — `RunContext` (the
+  recipe) + `RunRecord` (recipe + outcomes) with a content-addressed `recipe_id`
+  (`sha256` over config/data/seeds, *excluding* code/env provenance so a dirty tree or
+  `uv.lock` bump keeps the id) and an `attempt_id` PK; an `fcntl.flock`-guarded,
+  append-only JSONL `RunStore` (`read()` collapses `running`+terminal lines
+  last-wins-by-`attempt_id`); and `capture_run(context, *, store=None,
+  tracker=NoOpTracker())` — writes a `running` line at start and a terminal line on
+  exit, and sets the `current_run` contextvar. **`store=None` writes nothing.**
+- **`ExperimentTracker` Protocol + adapters** (`langres.core.trackers`) — an
+  Accelerate-style seam (`NoOpTracker` null default, `MultiTracker` fan-out to run
+  MLflow *and* W&B at once, `resolve_tracker` dispatch) with lazy **MLflow** and **W&B**
+  adapters behind the `[mlflow]` / `[wandb]` extras (a missing extra raises a helpful
+  `pip install 'langres[<backend>]'` `ImportError`). MLflow defaults to a local file
+  store out of the box; W&B supports keyless `offline`/`disabled` runs for CI/no-key use.
+- **LLM trace correlation** — `capture_run` sets `current_run`; `JudgementLog` records
+  the active `run_id`, and `LLMJudge` injects litellm `metadata` (`langres_attempt_id`
+  + pair ids + decision step) on **both** the sync (`forward`) and async
+  (`forward_async`) paths, so a Langfuse/OTel trace joins the `RunRecord` and
+  `JudgementLog`. Off a run (or a non-litellm client) the calls stay byte-identical
+  (no `metadata`).
+- **DSPy compile lineage** — `DSPyJudge.compile(...)` records the compilation as a
+  first-class optimization run via `capture_run` and stamps `_compile_run_id`, so a
+  later eval run threads it into `parent_run_id` (compile → eval lineage).
+- **`Settings`** — `RUN_STORE_PATH`, `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT` (the
+  MLflow ones consumed by `MlflowTracker`; a zero-config default `store` from
+  `RUN_STORE_PATH` is deferred to the benchmark wrap — pass `store=` explicitly today).
+  Docs: `docs/EXPERIMENTS.md`; runnable zero-spend
+  `examples/research/experiment_tracking_demo.py`.
+
 ### Flywheel closed loop — `docs/GETTING_STARTED.md` + doc-ladder rewire
 
 The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`

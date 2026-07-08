@@ -24,6 +24,8 @@ plain ``import langres.core``. It is registered lazily via
 artifact imports it on demand (firing ``@register``).
 """
 
+import hashlib
+import json
 import logging
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -36,6 +38,8 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
+from langres.core.runs import RunContext, RunStore, capture_run
+from langres.core.trackers import ExperimentTracker, resolve_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,27 @@ def _pair_metric(example: dspy.Example, prediction: Any, trace: Any = None) -> b
     return bool(prediction.match) == bool(example.match)
 
 
+def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
+    """Content-address a ``trainset`` so compiles on DIFFERENT labels get DIFFERENT ids.
+
+    Each ``dspy.Example`` is reduced to its field dict (``toDict``) and dumped to
+    canonical JSON (sorted keys, no whitespace); the per-example strings are then
+    sorted before hashing, so an identical labeled set fingerprints identically
+    regardless of row order, while any content change — a flipped label, an edited
+    field, an added/removed example — changes the digest. Fed to the compile
+    :class:`~langres.core.runs.RunContext`'s ``dataset_fingerprint`` so two
+    ``compile`` runs on different trainsets no longer collapse to the same
+    ``recipe_id``. Mirrors :func:`langres.core.runs.dataset_fingerprint`'s style.
+    """
+    digest = hashlib.sha256()
+    for line in sorted(
+        json.dumps(example.toDict(), sort_keys=True, separators=(",", ":")) for example in trainset
+    ):
+        digest.update(line.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 @register("dspy_judge")
 class DSPyJudge(Module[SchemaT]):
     """DSPy ``ChainOfThought`` entity-matching scorer — compilable and serializable.
@@ -160,6 +185,11 @@ class DSPyJudge(Module[SchemaT]):
         # from the ``langres.clients.openrouter`` price table (unknown models stay
         # $0), or a caller may set ``judge.price_per_1k_tokens`` directly.
         self.price_per_1k_tokens = 0.0
+        # Lineage carrier: :meth:`compile` records the compilation as a tracked
+        # optimization run and stamps its ``attempt_id`` here, so a later
+        # ``capture_run`` (the eval run using this compiled program) can read it
+        # into ``parent_run_id`` — otherwise the compile→eval lineage stays None.
+        self._compile_run_id: str | None = None
 
     def _get_lm(self) -> Any:
         """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use."""
@@ -276,9 +306,21 @@ class DSPyJudge(Module[SchemaT]):
         valset: Sequence[dspy.Example] | None = None,
         *,
         optimizer: str = "bootstrap",
+        tracker: ExperimentTracker | None = None,
+        store: str | Path | RunStore | None = None,
+        parent_run_id: str | None = None,
         **kwargs: Any,
     ) -> Self:
         """Compile (tune) the DSPy program against a gold set, in place.
+
+        The compilation is recorded as a first-class **optimization run** via
+        :func:`~langres.core.runs.capture_run`, and its ``attempt_id`` is stamped
+        onto :attr:`_compile_run_id` so a later ``capture_run`` (the eval run that
+        uses the compiled program) can thread it into ``parent_run_id`` for the
+        compile→eval lineage. Persistence is opt-in: with the default
+        ``store=None`` / ``tracker=None`` (resolved to a no-op) nothing is written
+        and the compiled program is byte-identical to the un-tracked path — only
+        the in-memory ``_compile_run_id`` carrier is stamped.
 
         Args:
             trainset: Labeled ``dspy.Example`` s (``left`` / ``right`` inputs +
@@ -287,30 +329,62 @@ class DSPyJudge(Module[SchemaT]):
             optimizer: ``"bootstrap"`` (``BootstrapFewShot`` — deterministic under
                 ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2
                 auto="light"`` — the paid path, exercised only by the example).
-            **kwargs: Forwarded to the optimizer's ``compile``.
+            tracker: Experiment tracker for the compile run (``None`` — the
+                default — resolves to a no-op via ``resolve_tracker``).
+            store: Where to persist the compile :class:`RunRecord` (default: none).
+            parent_run_id: Optional parent run this compilation belongs to (e.g. a
+                sweep) — recorded on the compile run's context.
+            **kwargs: Forwarded to the optimizer's ``compile`` (the tracking
+                params above are bound explicitly, so they never leak into it).
 
         Returns:
-            ``self`` with ``_program`` replaced by the compiled program and
-            ``_compiled`` set — so callers can chain ``judge.compile(...).forward(...)``.
+            ``self`` with ``_program`` replaced by the compiled program,
+            ``_compiled`` set, and ``_compile_run_id`` stamped — so callers can
+            chain ``judge.compile(...).forward(...)``.
         """
-        with dspy.context(lm=self._get_lm()):
-            if optimizer == "bootstrap":
-                self._program = dspy.BootstrapFewShot(metric=_pair_metric).compile(
-                    self._program, trainset=list(trainset), **kwargs
-                )
-            elif optimizer == "mipro":  # pragma: no cover - paid, non-deterministic path
-                # Exercised only by the paid example (MIPROv2 proposes+evaluates
-                # instructions via real LM calls; it is not deterministic under
-                # DummyLM, so it is kept out of the zero-spend unit suite).
-                self._program = dspy.MIPROv2(metric=_pair_metric, auto="light").compile(
-                    self._program,
-                    trainset=list(trainset),
-                    valset=list(valset) if valset is not None else None,
-                    **kwargs,
-                )
-            else:
-                raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
+        if optimizer not in ("bootstrap", "mipro"):
+            raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
+        tracker = resolve_tracker(tracker)
+        context = RunContext(
+            experiment="dspy_compile",
+            method="dspy_compile",
+            dataset_name="dspy_trainset",
+            # Content-address the labels so two compiles on DIFFERENT trainsets
+            # get DIFFERENT recipe_ids (dataset_fingerprint feeds compute_recipe_id).
+            # Without it, a constant dataset_name collapsed distinct compiles to
+            # one id, letting a store-based replay guard treat different labels as
+            # the same run.
+            dataset_fingerprint=_trainset_fingerprint(trainset),
+            llm_model=self.model,
+            parent_run_id=parent_run_id,
+            resolver_config={
+                "type_name": self.type_name,
+                "optimizer": optimizer,
+                **self.config,
+            },
+        )
+        # NOTE: this compile run records $0 spend; capturing paid DSPy-compile
+        # spend (the ``spend_usd`` seam) is deferred to issue #100 (cost-tracking).
+        with capture_run(context, store=store, tracker=tracker) as run:
+            with dspy.context(lm=self._get_lm()):
+                if optimizer == "bootstrap":
+                    self._program = dspy.BootstrapFewShot(metric=_pair_metric).compile(
+                        self._program, trainset=list(trainset), **kwargs
+                    )
+                else:  # "mipro"  # pragma: no cover - paid, non-deterministic path
+                    # Exercised only by the paid example (MIPROv2 proposes+evaluates
+                    # instructions via real LM calls; it is not deterministic under
+                    # DummyLM, so it is kept out of the zero-spend unit suite).
+                    self._program = dspy.MIPROv2(metric=_pair_metric, auto="light").compile(
+                        self._program,
+                        trainset=list(trainset),
+                        valset=list(valset) if valset is not None else None,
+                        **kwargs,
+                    )
         self._compiled = True
+        # Stamp the lineage carrier AFTER a successful compile (a failed compile
+        # propagates out of ``capture_run`` before this line, so it never stamps).
+        self._compile_run_id = run.attempt_id
         return self
 
     #: Sidecar file recording whether the saved program was compiled, so a reload

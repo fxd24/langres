@@ -188,6 +188,90 @@ it does not throttle the LM. For a hard pre-flight cap on the run itself, wrap t
 judge in a `BudgetedModuleRunner` and pass it to `evaluate_judge_on_candidates`. On
 the zero-spend `DummyLM` path both report **$0.00**.
 
+## Persisting & comparing runs (`capture_run` + `RunStore`)
+
+Every surface above scores a run, prints it, and forgets it — no run id, no
+config/data snapshot, no way to compare against last week's run. `capture_run`
+adds the missing spine: it wraps a run, gives it a content-addressed identity, and
+persists one JSONL line you can read back and diff across sessions. It is
+**dependency-free** (stdlib + pydantic) and writes nothing unless you pass a `store`.
+
+```python
+from langres import dedupe
+from langres.core import RunContext, RunStore, capture_run, compute_recipe_id
+
+context = RunContext(
+    experiment="string-judge-sweep",
+    resolver_config={"judge": "string", "threshold": 0.6},   # config snapshot (hashed)
+    dataset_name="toy-companies",
+    seeds={"split": 13},                                     # named seeds (hashed)
+)
+
+with capture_run(context, store=RunStore("runs/langres_runs.jsonl")) as run:
+    result = dedupe(records, judge="string", threshold=0.6)
+    run.log_metrics({"f1": 0.75}, metric_definition="pair_f1", headline_metric=0.75)
+    run.record_cost(0.0)               # = SpendMonitor.spent for a paid judge
+
+runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
+```
+
+**What a `RunRecord` captures** — one frozen line per attempt:
+
+- **Identity.** `recipe_id` = `sha256` over the *recipe fields* (`resolver_config`,
+  `dataset_name`, `dataset_fingerprint`, `llm_model`, `seeds`, …); `attempt_id` =
+  `f"{recipe_id}-{started_at}"` is the record PK.
+- **Config snapshot** — `resolver_config` (best-effort; `None` for a bespoke run
+  with no registered config) plus `llm_model` / `blocking_k` / `method` / `budget_usd`.
+- **Provenance, recorded but *not* hashed** — `git_sha` + `git_dirty`,
+  `lockfile_hash`, `langres_version`, `python_version`, `platform`. So a dirty tree
+  or a `uv.lock` bump does **not** mint a new `recipe_id`: it stays a dedup key over
+  the *logical* experiment (config + data + seeds), stable across code churn.
+- **Metrics** (`metrics` opaque dict + `metric_definition` + `headline_metric` +
+  `per_seed_metrics`), **cost** (`spend_usd`, `budget_exceeded`), **artifacts**, and
+  **status** (`running` / `completed` / `failed` / `budget_exceeded` — `running` is
+  written at *start*, so a crashed run leaves a visible lone line).
+
+**The API.** `capture_run(context, *, store=None, tracker=NoOpTracker())` computes
+the identity, writes the `running` line, yields a handle (`log_metrics` /
+`record_cost` / `log_artifact` / `set_status`), then finalizes the terminal record
+on exit. `store` accepts a path or a `RunStore`; **`store=None` writes nothing**.
+`RunStore.read()` collapses each attempt's `running`+terminal lines
+**last-wins-by-`attempt_id`** and takes an `fcntl.flock` per append, so several
+agents can write one file safely. Pass `tracker=` (an `ExperimentTracker`) to *also*
+mirror params/metrics into MLflow or W&B; omit it for the JSONL-only path.
+(`git_sha()` and `dataset_fingerprint()` live in `langres.core.runs`.)
+
+**How the tracking `Settings` take effect (today).** `Settings` reads
+`RUN_STORE_PATH`, `MLFLOW_TRACKING_URI`, and `MLFLOW_EXPERIMENT`, but they are
+*not* auto-applied by `capture_run`:
+
+- `RUN_STORE_PATH` is **not** wired as a default `store` yet — `capture_run`'s
+  `store` still defaults to `None` (writes nothing), so you pass it explicitly:
+  `capture_run(context, store=Settings().run_store_path)`. Threading it as the
+  zero-config default is deferred to the benchmark/harness wrap.
+- `MLFLOW_TRACKING_URI` / `MLFLOW_EXPERIMENT` are consumed by the **MLflow
+  tracker** (`resolve_tracker("mlflow")` / `MlflowTracker`), not by `capture_run`
+  — they take effect only when you pass that tracker. Likewise `WANDB_*` is read
+  by `WandbTracker`. With no tracker (`NoOpTracker`) none of these are read.
+
+**Idempotent replay — the agent move.** LLM runs are nondeterministic, so identity
+is *same recipe → same `recipe_id`*, **not** same metrics. An agent re-running a
+sweep skips a config it already paid for and checks its budget in two lines:
+
+```python
+completed = [r for r in RunStore("runs/langres_runs.jsonl").read() if r.status == "completed"]
+already_ran = compute_recipe_id(context) in {r.recipe_id for r in completed}   # skip if True
+remaining = 5.0 - sum(r.spend_usd for r in completed)                          # budget left
+```
+
+`RunContext.parent_run_id` threads lineage — a sweep parents its per-seed children;
+a DSPy-compile run parents the eval runs that reuse its compiled program.
+
+Runnable, zero-spend end to end: **`examples/research/experiment_tracking_demo.py`**
+captures a two-threshold sweep, reads it back, and prints the two-run metric diff
+plus the agent two-liner. Run it:
+`uv run python examples/research/experiment_tracking_demo.py`.
+
 ## W3 paid smoke — SelectJudge vs pairwise, measured
 
 `examples/research/w3_paid_smoke.py` is the ≤$10, SpendMonitor-capped operator run
@@ -292,4 +376,6 @@ with `examples/data/flywheel/generate_fixtures.py`.
 - `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
 - `examples/flywheel_threshold_harvest.py` — harvest verdicts + corrections → a
   re-derived threshold, with before/after held-out gold F1.
+- `examples/research/experiment_tracking_demo.py` — persist runs with `capture_run`
+  + `RunStore`, diff two runs across sessions, and the agent idempotency/budget two-liner.
 - `examples/research/m3_race.py` / `examples/research/m3_zero_spend_race.py` — multi-method races.
