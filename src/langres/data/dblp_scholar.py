@@ -43,30 +43,54 @@ DblpScholarSource = Literal["a", "b"]
 # Pinned blocking k for the cross-source DBLP<->Scholar matches, measured with
 # VectorBlocker over SentenceTransformer("all-MiniLM-L6-v2") cosine similarity on
 # ``embed_text`` (title + authors + venue + year), over the full 66879-record
-# corpus. Measured cross-source Pair-Completeness sweep (5443 gold pairs;
-# reproduce via ``_benchmark_utils.sweep_blocking_k`` — see the tmp/ script noted
-# in the ATTRIBUTION):
-#   k= 5 -> 0.9151
-#   k=10 -> 0.9491
-#   k=20 -> 0.9686
-#   k=30 -> 0.9761
-#   k=50 -> 0.9827
-# DBLP-Scholar's titles are discriminative, so vector blocking clears the 0.90
-# gate comfortably. ``pick_blocking_k`` picks the SMALLEST k clearing the gate
-# (k=5 already reaches 0.9151), keeping the candidate set small; the realised
-# recall is recorded in ``DBLP_SCHOLAR_ACHIEVED_PC`` / ``DBLP_SCHOLAR_GATE_MET``.
-DBLP_SCHOLAR_BLOCKING_K = 5
+# corpus. Measured cross-source Pair-Completeness sweep (candidate_recall of the
+# cross-source candidates against the closed-world gold clusters; reproduce via
+# ``_benchmark_utils.sweep_blocking_k`` — the tmp/ script is noted in the
+# ATTRIBUTION):
+#   k= 5 -> 0.3727
+#   k=10 -> 0.3863
+#   k=20 -> 0.3911
+#   k=30 -> 0.3926
+#   k=50 -> 0.3945
+#
+# READ THIS BEFORE CONCLUDING "BLOCKING IS BAD": the low PC is a MANY-TO-MANY
+# CLOSURE ARTIFACT, not a blocking failure. DBLP-Scholar is heavily many-to-many
+# (2351 match clusters, largest = 37 records), so the closed-world partition's
+# within-cluster gold pairs (13763 total, what ``evaluate_blocking`` scores recall
+# against) are only 5473 cross-source (39.77%) + 8290 intra-source (60.23%,
+# DBLP-DBLP / Scholar-Scholar pairs implied by the transitive closure). Blocking
+# candidates are filtered to CROSS-source (this is a linkage task), so the 8290
+# intra-source gold pairs are structurally un-recallable — capping PC at 0.3977
+# (= 5473/13763) no matter how good blocking is. Achieved PC 0.3945 is therefore
+# 0.3945/0.3977 = 0.9921 of the *achievable* ceiling, i.e. vector blocking
+# actually surfaces ~99% of the true cross-source gold matches (true cross-source
+# recall by k: 0.937/0.971/0.983/0.987/0.992). k=20 already gives ~0.983 true
+# recall, so a future tuner can drop k to shrink the candidate set.
+#
+# Following the spec + ``amazon_google`` methodology, we pin the LITERAL
+# sweep_blocking_k output: no k reaches the 0.90 PC gate (all plateau ~0.39, an
+# artifact ceiling of 0.3977), so ``pick_blocking_k`` returns the best-PC k=50 and
+# ``GATE_MET`` is honestly False. The "miss" is a metric-vs-many-to-many artifact,
+# NOT a real recall shortfall (contrast amazon_google, whose 0.84 IS a genuine
+# shortfall). ``DBLP_SCHOLAR_ACHIEVED_PC`` / ``DBLP_SCHOLAR_GATE_MET`` record the
+# faithful, reproducible numbers.
+DBLP_SCHOLAR_BLOCKING_K = 50
 
 #: Pair-Completeness gate the blocking k-sweep aims to clear (mirrors Amazon-Google
-#: / Abt-Buy at 0.90). DBLP-Scholar clears it (see ``DBLP_SCHOLAR_GATE_MET``).
+#: / Abt-Buy at 0.90). NOT met here — but the miss is a many-to-many closure
+#: artifact (see the sweep note above), not a blocking failure: true cross-source
+#: recall is ~0.99; the PC metric is capped at 0.3977 by intra-source closure pairs.
 DBLP_SCHOLAR_RECALL_GATE = 0.90
 
 #: Cross-source Pair-Completeness achieved at :data:`DBLP_SCHOLAR_BLOCKING_K`,
 #: recorded from the measured sweep so callers report realised blocking recall
-#: without re-running embeddings.
-DBLP_SCHOLAR_ACHIEVED_PC = 0.9151
+#: without re-running embeddings. Deflated by the closure artifact (ceiling
+#: 0.3977); the true cross-source blocking recall is ~0.9921 (see the note above).
+DBLP_SCHOLAR_ACHIEVED_PC = 0.3945
 
 #: Whether :data:`DBLP_SCHOLAR_ACHIEVED_PC` clears :data:`DBLP_SCHOLAR_RECALL_GATE`.
+#: False — honestly recorded (mirrors ``amazon_google``): the literal PC metric
+#: (0.3945) falls short of 0.90, here for a benign many-to-many reason, not hidden.
 DBLP_SCHOLAR_GATE_MET = DBLP_SCHOLAR_ACHIEVED_PC >= DBLP_SCHOLAR_RECALL_GATE
 
 #: Clusterer thresholds swept when racing methods (mirrors the other adapters).
