@@ -18,6 +18,7 @@ from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.metrics import calculate_bcubed_metrics, classify_pairs, evaluate_blocking
 from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.data._benchmark_utils import cross_source
 from langres.data.tiny_fixture import (
     TinyFixtureBenchmark,
     TinyFixtureSchema,
@@ -76,7 +77,13 @@ def test_end_to_end_offline_block_judge_cluster_metrics() -> None:
     if "n_left" in inspect.signature(evaluate_blocking).parameters:
         n_a = sum(1 for r in corpus if r.source == "a")
         n_b = sum(1 for r in corpus if r.source == "b")
-        stats_rr = evaluate_blocking(candidates, gold_clusters, n_left=n_a, n_right=n_b)
+        # Cross-source (linkage) RR compares the emitted cross-source candidates
+        # against the |A|*|B| space, so restrict to cross-source pairs first
+        # (as the real loaders do). Feeding all-pairs — which includes the
+        # n_a(n_a-1)/2 + n_b(n_b-1)/2 same-source pairs — against the |A|*|B|
+        # denominator would push the ratio above 1 and RR negative.
+        cross_candidates = cross_source(candidates)
+        stats_rr = evaluate_blocking(cross_candidates, gold_clusters, n_left=n_a, n_right=n_b)
         assert stats_rr.reduction_ratio is not None
         assert 0.0 <= stats_rr.reduction_ratio <= 1.0
 
