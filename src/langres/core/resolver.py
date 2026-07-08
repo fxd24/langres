@@ -636,11 +636,54 @@ class Resolver:
         slots.append(("clusterer", self.clusterer))
         return slots
 
+    def _build_manifest(self) -> ArtifactManifest:
+        """Assemble the in-memory :class:`ArtifactManifest` (no disk I/O).
+
+        Shared by :meth:`save` (which writes it, plus sidecars) and
+        :meth:`config_dict` (which returns it as a dict). Serializes each slot
+        component into a :class:`ComponentSpec` via :func:`_component_spec`,
+        which raises :class:`TypeError` for a component lacking a registry
+        ``type_name`` — that error is intentional and not swallowed here.
+        """
+        components = [
+            _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
+        ]
+        return ArtifactManifest(
+            artifact_version=ARTIFACT_VERSION,
+            langres_version=langres.__version__,
+            components=components,
+        )
+
+    def config_dict(self) -> dict[str, object]:
+        """Return the resolver's full config snapshot, WITHOUT writing to disk.
+
+        Builds the same :class:`ArtifactManifest` :meth:`save` would (the ordered
+        per-slot ``type_name`` + construction config) and returns its
+        ``.model_dump()`` — a plain, JSON-serializable dict. Used by the
+        experiment-tracking layer to capture a pipeline's declared config
+        (``RunContext.resolver_config``) without materializing an artifact.
+
+        Known limitation: this captures **declared** component config, not
+        compiled/optimized in-memory state — e.g. a DSPy-compiled program's tuned
+        prompts do not appear here. Persisting that state is out of scope for the
+        config snapshot (it round-trips via :class:`SerializableState` sidecars in
+        :meth:`save`, not through this dict).
+
+        Returns:
+            The manifest as a dict: ``artifact_version``, ``langres_version``,
+            and the ordered ``components`` specs.
+
+        Raises:
+            TypeError: If a slot component lacks a registry ``type_name`` (same
+                contract as :meth:`save`; not swallowed).
+        """
+        return self._build_manifest().model_dump()
+
     def save(self, path: str | Path) -> None:
         """Persist the whole pipeline to ``path`` as a self-describing artifact.
 
-        Writes ``resolver.json`` (an :class:`ArtifactManifest`) plus, for any
-        slot component that implements
+        Writes ``resolver.json`` (an :class:`ArtifactManifest`, identical to
+        :meth:`config_dict`) plus, for any slot component that implements
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
@@ -652,9 +695,8 @@ class Resolver:
         out_dir = Path(path)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        components: list[ComponentSpec] = []
+        manifest = self._build_manifest()
         for slot_name, component in self._slots():
-            components.append(_component_spec(component, slot=slot_name))
             owner = _state_owner(component)
             if owner is not None:
                 state_dir = out_dir / slot_name
@@ -667,11 +709,6 @@ class Resolver:
                 if not any(state_dir.iterdir()):
                     state_dir.rmdir()
 
-        manifest = ArtifactManifest(
-            artifact_version=ARTIFACT_VERSION,
-            langres_version=langres.__version__,
-            components=components,
-        )
         (out_dir / _MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
         logger.info("Saved Resolver artifact to %s", out_dir)
 
