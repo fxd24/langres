@@ -65,6 +65,39 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
 
 
+# The eval harness (``core.metrics`` / ``core.benchmark``) must be importable
+# without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP) is now
+# imported lazily inside ``evaluate_blocking_with_ranking`` only, so importing
+# the modules must never pull ``ranx`` into ``sys.modules``. Subprocess-based for
+# a fresh import state (this pytest process loads ranx via the ranking-metric
+# test). The curated ``langres.eval`` facade gets the same assertion in
+# ``tests/test_eval.py``.
+_RANX_DECOUPLE_SCRIPT = (
+    "import sys; "
+    "import langres.core.metrics; import langres.core.benchmark; "
+    "assert 'ranx' not in sys.modules, "
+    "'ranx leaked into sys.modules without calling the ranking metrics'; "
+    "print('OK')"
+)
+
+
+def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
+    """core.metrics/core.benchmark must import without the [eval] extra.
+
+    Locks in the ranx decoupling: ``ranx`` is imported lazily only when
+    ``evaluate_blocking_with_ranking`` (MRR/NDCG/MAP) actually runs, so the
+    module imports stay ranx-free.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _RANX_DECOUPLE_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"ranx-decoupling check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 def test_import_langres_is_fast() -> None:
     """Soft timing budget: a warm ``import langres`` should be well under a second.
 

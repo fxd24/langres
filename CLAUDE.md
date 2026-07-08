@@ -80,12 +80,13 @@ modules, a general `Optimizer`, a synthetic data generator.
 
 **Core** (always installed, `uv sync`): Pydantic + pydantic-settings (validation), rapidfuzz (string similarity), networkx (graph clustering), numpy. The string-judge/`AllPairsBlocker` path works with only these.
 
-**Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained]`):
+**Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained,eval]`):
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
+- `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `core.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `core.metrics`/`core.benchmark` (BCubed/pairwise metrics, `evaluate()`) stays importable without it.
 
-These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
+These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 

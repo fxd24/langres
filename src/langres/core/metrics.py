@@ -18,7 +18,6 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from ranx import Qrels, Run, evaluate  # type: ignore[import-untyped]
 
 from langres.core.debugging import CandidateStats
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -828,12 +827,22 @@ def evaluate_blocking_with_ranking(
         # Build run (predictions with scores)
         run_dict[entity_id] = {candidate_id: score for candidate_id, score in ranked_candidates}
 
+    # Ranking metrics (MRR/NDCG/MAP) are the only place ranx is used; import it
+    # lazily so importing this module (and core.benchmark) never requires the
+    # opt-in ``[eval]`` extra -- only *calling* this function does.
+    try:
+        from ranx import Qrels, Run, evaluate as ranx_evaluate  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - exercised only without the eval extra
+        raise ImportError(
+            "Ranking metrics (MRR/NDCG/MAP) require the 'eval' extra: pip install 'langres[eval]'"
+        ) from exc
+
     # Create ranx objects
     qrels = Qrels(qrels_dict)
     run = Run(run_dict)
 
     # Compute ranx metrics (MRR, NDCG@K)
-    ranx_metrics = evaluate(
+    ranx_metrics = ranx_evaluate(
         qrels,
         run,
         metrics=["mrr", "map"] + [f"ndcg@{k}" for k in k_values],
