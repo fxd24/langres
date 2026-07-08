@@ -11,6 +11,8 @@ present in ``langres.core.metrics`` and skipped otherwise (everything else runs)
 """
 
 import inspect
+import subprocess
+import sys
 
 from langres.core import metrics as _metrics
 from langres.core.benchmark import complete_partition
@@ -35,6 +37,32 @@ def test_tiny_fixture_satisfies_the_loader_contract() -> None:
         TinyFixtureBenchmark(),
         expected_corpus_size=_N_CORPUS,
         expected_gold_pairs=_N_GOLD_PAIRS,
+    )
+
+
+def test_load_and_split_stay_faiss_free() -> None:
+    """Importing + loading + splitting the fixture pulls no [semantic] stack.
+
+    The loader factory reuses ``langres.data._benchmark_utils``, whose vector-stack
+    imports are lazy (inside ``sweep_blocking_k`` only). A fresh subprocess (mirrors
+    ``tests/test_import_budget.py``) proves the offline-load invariant the factory /
+    tiny-fixture docstrings promise: ``build_blocker`` is the *only* faiss entry
+    point, so ``import + load() + split()`` must leave faiss/sentence_transformers
+    out of ``sys.modules``.
+    """
+    script = (
+        "import sys; import langres.data.tiny_fixture as tf; "
+        "b = tf.TinyFixtureBenchmark(); "
+        "corpus, gold_clusters, _ = b.load(); "
+        "b.split(corpus, gold_clusters, seed=0); "
+        "leaked = [m for m in ['faiss', 'sentence_transformers'] if m in sys.modules]; "
+        "assert not leaked, f'offline load/split leaked heavy modules: {leaked}'; "
+        "print('OK')"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, (
+        f"offline-load import-budget check failed.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
 

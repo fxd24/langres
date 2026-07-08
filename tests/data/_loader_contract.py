@@ -31,13 +31,20 @@ def assert_loader_contract(
 
     Checks, against ``benchmark.load()`` and ``benchmark.split(...)``:
 
-    1. **Protocol conformance** — the instance is a runtime ``Benchmark``.
+    1. **Protocol conformance** — the instance is a runtime ``Benchmark`` and
+       exposes the ``BlockingBenchmark`` shape the method registry needs
+       (``schema`` / ``blocking_k`` / callable ``build_blocker``).
     2. **Id scheme** — every corpus id is ``<char><int>`` and ids are unique.
     3. **Closed-world partition** — ``gold_clusters`` partition the corpus exactly.
     4. **Gold-pair consistency** — ``gold_pairs`` equals the within-cluster pairs,
        and every gold pair's two ids are in the corpus.
     5. **Leakage-free split** — train/test record ids are disjoint and cover the
        corpus, and no gold cluster straddles the split.
+
+    The ``BlockingBenchmark`` checks are structural (``hasattr`` / ``callable``) so
+    the contract stays dependency-light: ``build_blocker`` lazy-imports the
+    ``[semantic]`` stack, so it is only *called* as an optional smoke, guarded so a
+    core-only environment (no faiss) skips it rather than failing.
 
     Args:
         benchmark: A loaded benchmark instance (class already constructed).
@@ -47,6 +54,19 @@ def assert_loader_contract(
         seed: Split seed to exercise.
     """
     assert isinstance(benchmark, Benchmark), "benchmark does not satisfy the Benchmark protocol"
+
+    # BlockingBenchmark shape (methods.py's registry needs it). Structural only —
+    # methods.BlockingBenchmark is a plain Protocol, never isinstance-checked.
+    assert hasattr(benchmark, "schema"), "benchmark is missing 'schema' (BlockingBenchmark)"
+    assert hasattr(benchmark, "blocking_k"), "benchmark is missing 'blocking_k' (BlockingBenchmark)"
+    assert callable(benchmark.build_blocker), "benchmark.build_blocker is not callable"
+    # Optional runtime smoke — build_blocker lazy-imports the [semantic] stack, so
+    # guard it: a core-only env (no faiss) skips this rather than failing.
+    try:
+        blocker = benchmark.build_blocker(benchmark.blocking_k)
+        assert type(blocker).__name__ == "VectorBlocker"
+    except ImportError:
+        pass  # [semantic] extra absent — the structural checks above are the contract.
 
     corpus, gold_clusters, gold_pairs = benchmark.load()
 

@@ -42,6 +42,15 @@ def test_table_id_map_remaps_when_any_id_is_non_integer() -> None:
     assert _table_id_map(rows, "id", "b") == {"1": "b0", "abc": "b1"}
 
 
+def test_table_id_map_rejects_duplicate_raw_ids() -> None:
+    # Duplicate raw ids would silently collapse to one final id (dropping a record),
+    # so the map raises instead — for both the integer and remap paths.
+    with pytest.raises(ValueError, match=r"duplicate raw ids.*'1'"):
+        _table_id_map([{"id": "1"}, {"id": "1"}, {"id": "2"}], "id", "a")
+    with pytest.raises(ValueError, match=r"duplicate raw ids.*'dup'"):
+        _table_id_map([{"id": "dup"}, {"id": "dup"}], "id", "b")
+
+
 # --- _record_from_row: required-field fallback ----------------------------------
 
 
@@ -93,6 +102,23 @@ def test_factory_rejects_non_single_alpha_prefix(bad_prefix: str) -> None:
             dataset_package="langres.data.datasets.tiny_fixture",
             table_a=SourceTable(file="tableA.csv", source="a", id_prefix=bad_prefix),
             table_b=SourceTable(file="tableB.csv", source="b", id_prefix="b"),
+            split_files={"train": "train.csv"},
+            blocking_k=5,
+            threshold_grid=(0.5,),
+            achieved_pc=1.0,
+            gate_met=True,
+        )
+
+
+def test_factory_rejects_equal_prefixes() -> None:
+    # Both tables single-alpha but EQUAL -> overlapping raw ids would collide.
+    with pytest.raises(ValueError, match="DISTINCT id_prefixes"):
+        make_deepmatcher_benchmark(
+            name="tiny_fixture",
+            schema=TinyFixtureSchema,
+            dataset_package="langres.data.datasets.tiny_fixture",
+            table_a=SourceTable(file="tableA.csv", source="a", id_prefix="a"),
+            table_b=SourceTable(file="tableB.csv", source="b", id_prefix="a"),
             split_files={"train": "train.csv"},
             blocking_k=5,
             threshold_grid=(0.5,),

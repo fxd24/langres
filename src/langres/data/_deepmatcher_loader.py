@@ -103,8 +103,20 @@ def _table_id_map(rows: list[dict[str, str]], id_column: str, prefix: str) -> di
 
     Returns:
         Mapping of raw source id -> final corpus id.
+
+    Raises:
+        ValueError: If a raw id repeats within the table — the returned dict is
+            keyed by raw id, so duplicates would silently collapse two distinct
+            records onto one final id (and drop rows from the corpus).
     """
     raw_ids = [row[id_column].strip() for row in rows]
+    if len(set(raw_ids)) != len(raw_ids):
+        dups = sorted({rid for rid in raw_ids if raw_ids.count(rid) > 1})
+        raise ValueError(
+            f"Table with id_prefix {prefix!r} has duplicate raw ids in column "
+            f"{id_column!r}: {dups}. Raw ids must be unique within a table (they "
+            "key the id map); dedupe the source or pick a different id column."
+        )
     if all(_INT_ID.match(rid) for rid in raw_ids):
         return {rid: f"{prefix}{rid}" for rid in raw_ids}
     # Non-integer source ids: remap deterministically to synthetic ints (row order
@@ -178,10 +190,13 @@ class DeepMatcherBenchmark(Generic[SchemaT]):
     (``schema`` / ``blocking_k`` / :meth:`build_blocker`), so the same instance
     drives both :func:`~langres.core.benchmark.run_method` and the method registry.
     It does not *inherit* ``Benchmark`` because that protocol's record type must
-    expose ``id`` — a constraint a schema-generic base cannot state — so
-    conformance is structural (verified at runtime via ``isinstance`` against the
-    ``@runtime_checkable`` protocol), exactly as the hand-written conformers are
-    for ``BlockingBenchmark``.
+    expose ``id`` — a constraint a schema-generic base cannot state. ``Benchmark``
+    conformance is therefore structural, and — since ``Benchmark`` is
+    ``@runtime_checkable`` — additionally confirmable via ``isinstance`` (as the
+    loader contract test does). ``BlockingBenchmark`` conformance is purely
+    structural / duck-typed: ``langres.methods.BlockingBenchmark`` is a plain
+    ``Protocol`` that is never ``isinstance``-checked, exactly like the
+    hand-written conformers.
 
     Attributes:
         name: Stable dataset name (e.g. ``"wdc_products"``).
@@ -318,7 +333,8 @@ def make_deepmatcher_benchmark(
         :class:`DeepMatcherBenchmark` subclass.
 
     Raises:
-        ValueError: If either table's ``id_prefix`` is not a single alpha char.
+        ValueError: If either table's ``id_prefix`` is not a single alpha char,
+            or if the two tables share the same ``id_prefix``.
     """
     for table in (table_a, table_b):
         if len(table.id_prefix) != 1 or not table.id_prefix.isalpha():
@@ -326,6 +342,11 @@ def make_deepmatcher_benchmark(
                 f"{name}: SourceTable id_prefix must be a single alphabetic char; "
                 f"got {table.id_prefix!r} for {table.file!r}."
             )
+    if table_a.id_prefix == table_b.id_prefix:
+        raise ValueError(
+            f"{name}: table_a and table_b must use DISTINCT id_prefixes; both are "
+            f"{table_a.id_prefix!r} (equal prefixes + overlapping raw ids collide)."
+        )
 
     # Register the schema now (import time), like the hand-written loaders, so a
     # saved artifact's ``schema_type_name`` round-trips without building a blocker.
