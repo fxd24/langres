@@ -26,6 +26,7 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
+from langres.core.runs import current_run
 
 logger = logging.getLogger(__name__)
 
@@ -364,11 +365,29 @@ class LLMJudge(Module[SchemaT]):
             )
 
             # Call client (works for both LiteLLM and OpenAI)
-            response = self._get_client().completion(
+            client = self._get_client()
+            completion_kwargs = self._completion_kwargs()
+            # Run correlation (S5): stamp the active tracking run's attempt id +
+            # pair identity into litellm's first-class ``metadata`` param, so a
+            # Langfuse/OTel trace joins the RunRecord and JudgementLog on
+            # ``langres_attempt_id``. Gated on BOTH (a) an open ``capture_run``
+            # (``current_run`` set) and (b) the litellm path -- a user-supplied
+            # direct client (e.g. a raw OpenAI client) would 400 on an unknown
+            # ``metadata`` kwarg. When ``current_run`` is None the call stays
+            # byte-identical to before -- no ``metadata`` key is added.
+            attempt_id = current_run.get()
+            if attempt_id is not None and client is litellm:
+                completion_kwargs["metadata"] = {
+                    "langres_attempt_id": attempt_id,
+                    "left_id": candidate.left.id,  # type: ignore[attr-defined]
+                    "right_id": candidate.right.id,  # type: ignore[attr-defined]
+                    "decision_step": "llm_judgment",
+                }
+            response = client.completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.temperature,
-                **self._completion_kwargs(),
+                **completion_kwargs,
             )
 
             # Extract score and reasoning from response

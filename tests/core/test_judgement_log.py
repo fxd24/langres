@@ -22,6 +22,7 @@ from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.reports import ScoreInspectionReport
+from langres.core.runs import RunContext, capture_run
 
 
 def _judgement(
@@ -179,6 +180,53 @@ class TestJudgementLogAppend:
         row = log.read()[0]
         assert row["reasoning"] == "looks like a match"
         assert row["provenance"] == {"similarities": {"name": 1.0}}
+
+
+# ---------------------------------------------------------------------------
+# JudgementLog run correlation (S5): nullable run_id = active attempt id
+# ---------------------------------------------------------------------------
+
+
+def _run_context() -> RunContext:
+    """A minimal, git/dataset-free RunContext (no subprocess, no files)."""
+    return RunContext(experiment="s5-judgement-log", dataset_name="fake")
+
+
+class TestJudgementLogRunCorrelation:
+    def test_append_stamps_run_id_from_active_capture_run(self, tmp_path: Path) -> None:
+        """Inside a capture_run, the row's run_id equals that run's attempt_id --
+        the exact three-way join (RunRecord.attempt_id == JudgementLog.run_id)."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        with capture_run(_run_context(), store=None) as handle:
+            log.append(_judgement(), verdict=True)
+        row = log.read()[0]
+        assert row["run_id"] == handle.attempt_id
+
+    def test_append_run_id_is_none_outside_capture_run(self, tmp_path: Path) -> None:
+        """Outside any capture_run, run_id is null -- the field is always present."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(), verdict=True)
+        row = log.read()[0]
+        assert row["run_id"] is None
+
+    def test_run_id_resets_when_capture_run_exits(self, tmp_path: Path) -> None:
+        """A row logged after the run closes carries run_id=None again."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        with capture_run(_run_context(), store=None):
+            log.append(_judgement("in", "run"), verdict=True)
+        log.append(_judgement("after", "run"), verdict=True)
+        rows = log.read()
+        assert rows[0]["run_id"] is not None
+        assert rows[1]["run_id"] is None
+
+    def test_pre_s5_rows_without_run_id_still_parse(self, tmp_path: Path) -> None:
+        """Additive under ``"v": 1``: an old row (no run_id key) still reads back;
+        a reader simply sees the key absent (``.get`` -> None)."""
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"v": 1, "left_id": "a", "right_id": "b", "score": 0.9}\n')
+        rows = JudgementLog(path).read()
+        assert len(rows) == 1
+        assert rows[0].get("run_id") is None
 
 
 # ---------------------------------------------------------------------------
