@@ -293,3 +293,52 @@ def test_gmd_gold_extra_record_raises() -> None:
 def test_gmd_disjoint_record_sets_raises() -> None:
     with pytest.raises(ValueError, match="same record set"):
         generalized_merge_distance([{"a"}], [{"b"}])
+
+
+# ---------------------------------------------------------------------------
+# GMD -- empty placeholder clusters must never produce a negative distance
+# (regression for the PR #89 review finding: an empty predicted cluster has an
+# empty slice set, so ``split_cost * (len(slice_gids) - 1)`` charged -1.0)
+# ---------------------------------------------------------------------------
+
+
+def test_gmd_empty_predicted_cluster_is_zero() -> None:
+    """An empty predicted cluster holds no records: a perfect match stays 0.0."""
+    assert generalized_merge_distance([set(), {"a"}], [{"a"}]) == 0.0
+
+
+def test_gmd_empty_gold_cluster_is_zero() -> None:
+    """Symmetric case: an empty gold cluster also contributes nothing -> 0.0."""
+    assert generalized_merge_distance([{"a"}], [set(), {"a"}]) == 0.0
+
+
+def test_gmd_empty_predicted_cluster_does_not_change_a_real_case() -> None:
+    """Padding the predicted partition with an empty cluster is a no-op.
+
+    '3 singletons -> 1 cluster' costs 2 merges with or without the placeholder.
+    """
+    with_empty = generalized_merge_distance([{"a"}, {"b"}, {"c"}, set()], [{"a", "b", "c"}])
+    without_empty = generalized_merge_distance([{"a"}, {"b"}, {"c"}], [{"a", "b", "c"}])
+    assert with_empty == without_empty == 2.0
+
+
+def test_gmd_is_never_negative_across_all_cases() -> None:
+    """GMD is a distance: it must be >= 0.0 for every partition pair, including
+    the empty-cluster edge cases that previously underflowed to -1.0."""
+    cases: list[tuple[list[set[str]], list[set[str]]]] = [
+        # Existing oracle cases.
+        ([{"a", "b", "c"}], [{"a", "b", "c"}]),
+        ([{"a"}, {"b"}, {"c"}], [{"a", "b", "c"}]),
+        ([{"a", "b", "c"}], [{"a"}, {"b"}, {"c"}]),
+        ([{"a", "b", "c", "d"}], [{"a", "b"}, {"c", "d"}]),
+        ([{"a", "b"}, {"c", "d"}], [{"a", "b", "c", "d"}]),
+        ([{"a", "c"}, {"b", "d"}], [{"a", "b"}, {"c", "d"}]),
+        ([], []),
+        ([{"a"}, {"b"}], [{"a"}, {"b"}]),
+        # Empty-cluster edge cases.
+        ([set(), {"a"}], [{"a"}]),
+        ([{"a"}], [set(), {"a"}]),
+        ([{"a"}, {"b"}, {"c"}, set()], [{"a", "b", "c"}]),
+    ]
+    for predicted, gold in cases:
+        assert generalized_merge_distance(predicted, gold) >= 0.0

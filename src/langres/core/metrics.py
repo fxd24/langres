@@ -691,6 +691,12 @@ def generalized_merge_distance(
     seen: set[int] = set()  # gold clusters that have already received some mass
     for cluster in predicted_clusters:
         slice_gids = {gold_id[rec] for rec in cluster}
+        if not slice_gids:
+            # An empty predicted cluster holds no records: zero slices, so it
+            # contributes zero splits and zero merges. Skip it before charging
+            # ``split_cost * (len(slice_gids) - 1)``, which would otherwise be
+            # ``-split_cost`` and make the distance spuriously negative.
+            continue
         # Splits needed to separate this predicted cluster into its gold slices.
         cost += split_cost * (len(slice_gids) - 1)
         for gid in slice_gids:
