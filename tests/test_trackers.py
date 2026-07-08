@@ -174,7 +174,26 @@ class TestResolveTracker:
         with pytest.raises(ImportError, match=r"langres\[mlflow\]"):
             resolve_tracker("mlflow")
 
-    def test_wandb_string_raises_helpful_import_error_when_absent(self) -> None:
+    def test_wandb_string_raises_helpful_import_error_when_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``wandb`` extra -> a helpful ``langres[wandb]`` ImportError.
+
+        S4 landed the adapter module and ``wandb`` is a real dev dependency, so
+        genuine absence no longer occurs in this env. Simulate it by forcing the
+        adapter import to fail (mirrors the ``mlflow`` twin above) -- the
+        missing-extra translation is what ``resolve_tracker`` must surface either way.
+        """
+        import langres.core.trackers as trackers_mod
+
+        real_import = trackers_mod.importlib.import_module
+
+        def _fail_wandb_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.wandb_tracker":
+                raise ImportError("No module named 'wandb'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers_mod.importlib, "import_module", _fail_wandb_import)
         with pytest.raises(ImportError, match=r"langres\[wandb\]"):
             resolve_tracker("wandb")
 
@@ -229,9 +248,24 @@ class TestLazyAdapterGetattr:
         with pytest.raises(ImportError, match=r"langres\[mlflow\]"):
             trackers.MlflowTracker  # noqa: B018
 
-    def test_wandb_tracker_attribute_raises_helpful_import_error(self) -> None:
+    def test_wandb_tracker_attribute_raises_helpful_import_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``trackers.WandbTracker`` -> helpful ImportError when the extra is absent.
+
+        Absence is simulated (see the ``resolve_tracker`` twin above): S4 made the
+        adapter module + ``wandb`` present, so the raw missing case is forced here.
+        """
         import langres.core.trackers as trackers
 
+        real_import = trackers.importlib.import_module
+
+        def _fail_wandb_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.wandb_tracker":
+                raise ImportError("No module named 'wandb'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers.importlib, "import_module", _fail_wandb_import)
         with pytest.raises(ImportError, match=r"langres\[wandb\]"):
             trackers.WandbTracker  # noqa: B018
 
