@@ -1,145 +1,93 @@
-# Evaluation Readiness Plan (reframed)
+# Evaluation Readiness Plan (review-hardened)
 
 Date: 2026-07-08
 Integration branch: `feat/eval-readiness`
-Supersedes: `docs/plans/20260707_research_readiness_eval_plan.md` (Codex draft — greenfield-framed)
+Status: approved (David) + hardened by a 3-model plan review (Codex + two Claude lenses, 2026-07-08).
 
-## Why this reframe
+## Context
 
-The Codex draft was written as if the evaluation layer were greenfield ("add a
-`langres.core.metrics` module", "add an evaluation harness"). A verification pass
-against the actual repo shows **~70–80% of that layer already exists** and is solid.
-Building to the original plan would **re-implement working code** — the exact reuse
-trap `.claude/rules/component-design.md` and personal-rule #6 warn against.
+Prepare langres to reproduce/compare SOTA entity resolution by adding the
+**evaluation instrument** — the metrics the field uses, a credible benchmark
+portfolio, honest per-slice reporting — that must exist before any training.
+The eval layer is **~70–80% already built** (`core/metrics.py`,
+`core/benchmark.py` harness, `reports.py`, `review`/`harvest`); this wave is
+**gap-only**. Vision anchor: langres = the composable ER seam (Retrieve → Judge
+→ Resolve), swappable + serializable, whose edge is zero-shot-LLM-judge →
+optional cheap distilled student, and which should make it **easy to build ER
+systems**. Build the leanest instrument that unlocks the next experiment
+(frontier null-baseline gate + set-wise judge), then stop.
 
-This plan is therefore **audit-then-fill-the-gaps**, anchored to the authoritative
-delta list in `docs/research/20260701_er_seam_audit.md` (§7 metrics/datasets, and
-deltas **C1**, **C2**, **C7**) rather than the from-scratch framing.
+Direction: **A — lean, vision-first**. Portfolio finalized by a citation/paper
+research pass; design corrected by the review below.
 
-Scope for this wave: **P0 metrics + P1 benchmarks + P2 harness slicing.**
-Hard-case mining (the Codex draft's P3) is the *bridge to training* and is deferred
-to its own later wave — and much of its surface already exists (see below).
+## Portfolio (license-clean)
 
-## What already exists — REUSE, do not rebuild
+| Have | Add — bundle-able (full DeepMatcher split, CC-BY 4.0 via Leipzig/matchbench) | External-only | Deferred |
+|---|---|---|---|
+| FZ, Amazon-Google, Abt-Buy, FEBRL4 | **DBLP-ACM, DBLP-Scholar, Walmart-Amazon (structured), WDC Products** | OpenSanctions (metadata + baselines, CC-BY-NC → never vendored) | Beer/iTunes; scaling-curve C1; real-world person fixture (NCVR/GLEIF) |
 
-Verified by two independent code sweeps (file:line).
+## Review gate outcome (why the design below looks like it does)
 
-**Metrics** — `src/langres/core/metrics.py` (39 KB, single reusable module; no metric
-math duplicated into experiment scripts):
-- BCubed P/R/F1 (`calculate_bcubed_*`), pairwise P/R/F1 + confusion counts
-  (`calculate_pairwise_metrics`, `PairMetrics`, `classify_pairs`), cluster→pairs
-  (`pairs_from_clusters`), pair PR curve (`pair_pr_curve`).
-- Blocking eval (`evaluate_blocking` → `CandidateStats`): already returns
-  **`candidate_recall` = Pair Completeness**, `candidate_precision`,
-  `missed_matches_count` (FN), `false_positive_candidates_count` (FP). Ranking
-  variant `evaluate_blocking_with_ranking` (MAP/MRR/NDCG/Recall@k via `ranx`).
-- Agreement: `cohens_kappa`, `matthews_corrcoef`. Calibration: `brier_score`,
-  `expected_calibration_error`, `reliability_bins`. Threshold pick:
-  `core/calibration.py:derive_threshold`.
+Three independent reviewers converged on these corrections — all folded in:
 
-**Benchmarks** — `src/langres/data/`:
-- `Benchmark` protocol (`core/benchmark.py:351`); `BlockingBenchmark` overlay
-  (`methods.py:105`). Loaders + adapters for **Fodors-Zagat, Amazon-Google,
-  Abt-Buy, FEBRL4 Person**, each vendored as tiny CSVs under
-  `data/datasets/<name>/` with `ATTRIBUTION.md`, loaded via `importlib.resources`.
-- `fixed_split_pair_benchmark.py:FixedSplitPairBenchmark` — a **dataset-agnostic**
-  bridge that turns DeepMatcher/Magellan `(id_a, id_b, label)` train/valid/test
-  rows into `ERCandidate`s (with comparison vectors) + aligned labels. This is the
-  adapter the new literature datasets plug into.
+1. **Registry must be a static, import-light manifest, not import-all discovery.** Every loader eagerly imports the `[semantic]` stack (`VectorBlocker`/`SentenceTransformer`/`FAISS`). Auto-importing all loaders would break the core-only install and `test_import_budget`, and kill all benchmarks if one loader fails to import.
+2. **Dataset-namespaced schema class names are mandatory.** `register_schema_idempotent` *raises* on a name clash; DBLP-ACM/DBLP-Scholar share a schema shape and Walmart-Amazon collides with amazon_google's `ProductSchema`. Parallel agents can't see each other → guaranteed crash.
+3. **Slices stay external — no `ERCandidate` / `FixedSplitPairBenchmark` contract change.** `build()` unpacks strict 3-tuples; a 4th tag element would break the shared adapter. Compute the slice via a `slice_fn` closure over a `pair_key→tag` map the WDC benchmark exposes.
+4. **Honest per-slice thresholding.** One global best-F1 threshold, then grade each slice at that *fixed* cut. Per-slice argmax would fake the seen→unseen drop.
+5. **The "make ER easy" user needs a BYO-data one-liner + the LLM-judge in the flagship example** — two north-star DX gaps the reproduce-SOTA framing missed.
+6. **Prefer a generic loader factory over 4 × ~350-line verbatim copies** (≈1.4k duplicated lines = the bloat the seam audit §6 warns against). Cuts the next dataset to ~30 lines.
 
-**Harness** — `core/benchmark.py` + `methods.py` + `reports.py`:
-- `run_method`/`run_methods`/`BenchmarkTable`, `evaluate_judge_on_candidates`,
-  `evaluate_resolver_bcubed`, honest-vs-leaky pair eval
-  (`evaluate_fixed_split_honest`), `BudgetedModuleRunner`, cost/latency tracks.
-- Report models: `BlockerEvaluationReport`, `ScoreInspectionReport`,
-  `ClusterInspectionReport`, `RecallCurveStats`, etc. Builders in `analysis.py`.
+## Genuine gaps this wave fills
 
-**Hard-case surface already present** (relevant to the deferred P3 wave):
-`select_for_review` (uncertainty/disagreement/audit), `ReviewQueue`,
-`harvest_labeled_pairs`, and **FP/FN extraction** already exist
-(`analysis.py:extract_false_positives` / `extract_missed_matches`,
-`diagnostics.py`).
+- **P0 metrics** — Reduction Ratio + Generalized Merge Distance. **DONE** on `feat/eval-metrics-rr-gmd` (PR #89): pure-stdlib, 100% cov, RR threaded onto `evaluate_blocking` with `n_left`/`n_right`/`num_records` (handles cross-source `|A|·|B|` correctly).
+- **P1** — import-light benchmark **registry/manifest** + generic **loader factory** + 4 loaders + OpenSanctions metadata (non-loadable) + `list_methods()`.
+- **P2** — external **slice tags + sliced aggregation** (C2), honest fixed-threshold grading, WDC seen/unseen. C1 scaling curve **deferred** (no consumer; gated behind training).
+- **DX** — BYO-data `evaluate(...)` one-liner + "score your own data" tutorial; registry-driven `portfolio_race.py` incl. LLM-judge behind `--paid`.
 
-## Genuine gaps — what this wave ADDS
+## Key design decisions (final)
 
-### P0 — Metrics (pure-Python; must stay import-budget clean)
-1. **Reduction Ratio** as a first-class blocking metric — `RR = 1 − C / P_all`,
-   handling both dedup (`P_all = n(n−1)/2`) and cross-source linkage
-   (`P_all = |A|·|B|`). Surface it on `CandidateStats`/`evaluate_blocking` alongside
-   the existing `candidate_recall` (PC) so blocking is scored on **PC *and* RR**,
-   not PC alone (seam audit §7).
-2. **Generalized Merge Distance (GMD)** — Menestrina et al. 2010, cost-based
-   merge/split-asymmetric partition distance; the slice-based algorithm. Add to
-   `metrics.py` with tests against hand-computed small partitions. Complements the
-   biased Pair-F1 / BCubed pair.
+1. **Registry — `src/langres/data/registry.py` (import-light manifest).** A static `name → BenchmarkEntry{task, domain, loadable, module_path, loader_symbol}` map (lightweight metadata, no loader import). `list_benchmarks()` returns metadata without importing any loader; `get_benchmark(name)` imports only the selected module (actionable `pip install langres[semantic]` error on missing extra, like `core/registry.py`). Lives in `langres.data`, **off** `langres/__init__.py`'s eager path, **not** wired into `core.benchmark` (avoids the `core→data→core` cycle). Add `list_methods()` (surface `ALL_METHODS`). Register the existing 4 + the new entries. OpenSanctions entry is `loadable=False`; its `load()` raises an actionable "fetch manually" error.
 
-(Deliberately NOT adding a sklearn-style `classification_report` convenience —
-low value, F1 is already available inline; simplicity rule.)
+2. **Loader factory — `src/langres/data/_deepmatcher_loader.py` (central, Wave B).** `make_deepmatcher_benchmark(schema, package, table_files, split_files, constants, ...)` → `(load_<x>, load_<x>_pair_splits, <X>Benchmark)`, reusing the six `_benchmark_utils.py` helpers. Per-dataset module becomes ~30–50 lines: the **dataset-namespaced** schema (`DblpAcmSchema`, `DblpScholarSchema`, `WalmartAmazonSchema`, `WdcProductSchema` — never reuse `ProductSchema`), the factory call, honest constants. Asserts id format at load and remaps to synthetic `<char><int>` if a source violates the `int(rid[1:])` split constraint. Ship a **shared parametrized test template** (id-scheme + gold-count + split-leakage) each loader reuses.
 
-### P1 — Benchmark portfolio + registry
-1. **Name-keyed benchmark registry** (`name → Benchmark`) mirroring the existing
-   *method* registry, so `run_methods` / docs / CI can look benchmarks up by name.
-2. **New loaders**, each a tiny vendored fixture under `data/datasets/<name>/` +
-   loader module wired through `FixedSplitPairBenchmark`:
-   - **WDC Products** — hard product matching + unseen-entity generalization slice.
-   - **DBLP-ACM** — ~99 F1 ceiling, clean regression guard.
-   - **Walmart-Amazon DIRTY** — dirty/missing-value case (exercises the
-     missing-aware Comparator).
-   - **OpenSanctions Pairs** — **metadata + published baselines + external-download
-     adapter ONLY. NO bundled data** (OpenSanctions is CC-BY-NC, incompatible with
-     langres's Apache-2.0 — same reason W2.1 chose FEBRL4). We race *against* its
-     baselines (GPT-4o 98.95, DeepSeek-R1-Distill-14B 98.23), we do not vendor it.
-3. **Pending:** a benchmark-discovery research pass (citation-following /
-   Connected Papers / recent arXiv) may add datasets before the loaders are locked.
+3. **Slice tags (Wave D) — external, `core/benchmark.py`.** `evaluate_judge_on_candidates(..., slice_fn: Callable[[Any], str|None] | None = None)`; compute the **global** best-F1 threshold once, then grade each slice at that fixed threshold via `classify_pairs(slice_judgements, slice_gold, global_threshold)` → optional `slices: dict[str, PairTrack]` on `JudgePairEval`. **No `ERCandidate` or `FixedSplitPairBenchmark` change.** WDC benchmark exposes `slice_map(split) -> dict[frozenset, str]` (seen/half-seen/unseen from train-entity membership); the caller builds `slice_fn` closing over it.
 
-### P2 — Harness slicing + scaling curve
-1. **Per-pair slice tags + sliced aggregation** (delta **C2**) in
-   `evaluate_judge_on_candidates` / `FixedSplitPairBenchmark`, enabling WDC-style
-   unseen-entity / corner-case slice reporting.
-2. **Scaling-curve output** (delta **C1**) — power-law fit + extrapolation + band
-   over a training-size sweep, emitted as a serializable report shape (extend
-   `reports.py`, don't invent a parallel style).
+4. **Honest constants (all loaders).** Measure PC once via the slow `sweep_blocking_k`, commit the number as evidence, and pin `DEFAULT_<X>_BLOCKING_K` / `ACHIEVED_PC` / `GATE_MET` to the true values. A **non-slow deterministic fixture test** (id-parse + gold-counts) gates CI. Literature F1 ceilings are **cited**, never asserted as locally measured.
 
-## Out of scope (unchanged from Codex draft, plus)
-- All training: DSPy compile improvements, embedding fine-tuning, QLoRA/LoRA.
-- Hard-case mining wave (FP/FN mining productization, blocking-derived hard
-  negatives S3, EL2N/difficulty S4, stratified sampling) — **next** wave.
-- Automatic dataset downloads for bundled datasets; new paid benchmark runs.
+5. **DX (Wave E).** `evaluate(judge_or_resolver, gold_pairs) -> BenchmarkTable`-shaped one-liner wrapping `evaluate_judge_on_candidates`, + a "score your own CSV" tutorial section (build on `FixedSplitPairBenchmark.from_loaders`). `portfolio_race.py` iterates loadable registry entries → `run_methods` → `BenchmarkTable.to_markdown()`, includes the zero-shot-LLM-judge row behind an API-key/`--paid` guard (free by default), skips non-loadable entries. Portfolio doc names each dataset + why. State the registry's real value honestly: **discoverability + serialization** (`run_methods` already killed the racing boilerplate).
 
-## Acceptance criteria
-1. `uv run pytest -m "not slow and not integration"` green; new code ≥95% coverage
-   on the `core` contract (tiered policy, `.claude/rules/testing.md`).
-2. Bare `import langres` still leaks none of torch/faiss/litellm/sentence_transformers/
-   sklearn (`tests/test_import_budget.py`); RR/GMD are pure-Python.
-3. Docs name the benchmark portfolio and *why* each is a first target (regression
-   guard / textual-hard / dirty / unseen-entity / north-star).
-4. A tiny fixture benchmark runs end-to-end producing pairwise + blocking (incl.
-   **RR**) + clustering (incl. **GMD**) metrics.
-5. Registry resolves every bundled benchmark by name.
-
-## Execution — waves, branches, PRs
-
-Orchestrated from the main session; implementation in **isolated worktrees**
-(rule #5). Each wave → its own branch → PR into `feat/eval-readiness`
-(integration). David reviews the integration branch; one final PR to `main`.
+## Waves, dependencies, branches
 
 | Wave | Content | Depends on | Branch |
 |---|---|---|---|
-| **R** | Benchmark-discovery research (read-only) → finalize P1 list | — | (no branch; memo) |
-| **A** | P0 metrics: Reduction Ratio + GMD + tests | — | `feat/eval-metrics-rr-gmd` |
-| **B** | P1 registry (name→Benchmark) | A merged (touches nothing of A) | `feat/eval-benchmark-registry` |
-| **C** | P1 loaders: WDC, DBLP-ACM, Walmart-Amazon + OpenSanctions metadata | R (list), B (registry) | `feat/eval-datasets-*` |
-| **D** | P2 slice tags + sliced aggregation; scaling-curve report | A (metrics) | `feat/eval-harness-slicing` |
+| **A** ✅ | RR + GMD metrics (PR #89, green) | — | `feat/eval-metrics-rr-gmd` |
+| **B** | Registry manifest + loader factory + shared test template + `list_methods`; register existing 4 | A merged | `feat/eval-registry-factory` |
+| **C1** | **WDC Products** loader (+ `slice_map`) — critical path for D | **B merged** | `feat/eval-dataset-wdc` |
+| **C2** | DBLP-ACM, DBLP-Scholar, Walmart-Amazon (structured) + OpenSanctions metadata — mutually parallel, independently shippable | **B merged** | `feat/eval-dataset-<name>` ×4 |
+| **D** | External slice tags + honest fixed-threshold sliced aggregation | A merged; C1/WDC (real slice map) | `feat/eval-slice-tags` |
+| **E** | DX: `evaluate()` one-liner + tutorial; `portfolio_race.py`; portfolio doc | B, C | `feat/eval-portfolio-dx` |
 
-Waves that touch the same files (`metrics.py`, `data/__init__.py`, `benchmark.py`)
-are sequenced, not parallelized, to avoid double-writing. R + A run first and in
-parallel (R is read-only, A is metrics-only).
+**Sequencing is real, per the review:** B must **merge** before any C loader branches (they import `registry`/factory). C loaders add isolated modules + fixtures + tests; the **orchestrator owns manifest entries centrally** (one line each) to avoid collision. Packaging is parallel-safe (hatchling ships committed `data/datasets/<x>/*.csv` with no pyproject edit).
 
-## Risks
-| Risk | Mitigation |
-|---|---|
-| Re-implementing existing metrics | This plan is gap-only; each wave cites the existing symbols it extends. |
-| GMD algorithm correctness | TDD against hand-computed partitions + published example. |
-| Concurrent agents double-write shared files | Sequence waves by file overlap; one integration branch. |
-| Bundling CC-BY-NC data | OpenSanctions is metadata/external-only, never vendored. |
-| Import-budget regression | RR/GMD pure-Python; any heavy dep stays behind lazy submodule boundary. |
+## Access / front-loaded (rule #1)
+- Datasets from HuggingFace **matchbench** (`huggingface.co` reachable). WDC from `webdatacommons.org` (not allowlisted → `dangerouslyDisableSandbox` for that fetch); verify WDC id column is integer, else remap.
+- Git writes need `dangerouslyDisableSandbox` (repo sandbox blocks `.git/config`).
+- No paid LLM in this wave (the `--paid` example row stays off by default). Frontier null-baseline gate is the immediate follow-on, not part of these PRs.
+
+## Verification (before hand-off)
+1. `uv run pytest -m "not slow and not integration"` green; new `core` code ≥95% cov; `test_import_budget` green — **incl. `list_benchmarks()` importing no loader / no faiss in a core-only env.**
+2. `list_benchmarks()` returns every entry with correct `loadable`; `get_benchmark("<x>").load()` valid for loadable ones; OpenSanctions `.load()` raises the actionable error.
+3. A new dataset runs end-to-end → pairwise + blocking (incl. **RR**) + clustering (incl. **GMD**).
+4. WDC `slice_fn` → non-empty `slices` with distinct seen/unseen `PairTrack`s graded at the **same** threshold (expect an unseen F1 drop).
+5. `portfolio_race.py` runs free by default over loadable entries; `evaluate()` one-liner scores a toy gold set.
+6. Pinned constants match a fresh `sweep_blocking_k`; literature ceilings cited, not claimed.
+
+## Out of scope / deferred
+- Scaling-curve **C1**, hard-case mining (FP/FN extraction already exists), Beer/iTunes, experiment-tracking adapter (separate follow-on), all training, `langres bench` CLI (note: `cli.py` is stdlib-only → needs a lazy-import carve-out).
+- **Real-world bundle-able person/org fixture (NCVR/GLEIF)** — deferred (David, 2026-07-08); tracked as the **explicit precondition** for the multilingual-person north-star experiment.
+
+## Fast-follow (not this wave)
+- If the loader factory lands clean, no separate refactor needed. Otherwise extract it next so adding a dataset is ~30 lines.
+
+## Wave A review item
+- Confirm `reduction_ratio` was added at the **end** of the `CandidateStats` dataclass (`core/debugging.py`) with a default + a compat test (positional-caller / `asdict` safety).
