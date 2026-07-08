@@ -158,10 +158,13 @@ def race_paid_llm(
     For each benchmark the test split is blocked once into a fixed candidate set,
     then an ``LLMJudge`` is graded pairwise via
     :func:`~langres.core.benchmark.evaluate_judge_on_candidates` under a
-    :class:`~langres.core.benchmark.BudgetedModuleRunner` pre-flight cap sized by
-    the remaining budget. A single :class:`SpendMonitor` meters cumulative spend and
-    raises before the cap is crossed. Judged **once** (never via ``run_methods``) so
-    a paid judge is not re-charged per grid threshold.
+    :class:`~langres.core.benchmark.BudgetedModuleRunner` whose hard cap is the
+    budget *still remaining* (never a fresh floored allowance), so cumulative spend
+    across datasets cannot exceed ``budget_usd``. A single :class:`SpendMonitor`
+    meters that cumulative spend; once too little is left to fund even one
+    worst-case pair the loop stops early, keeping the rows already collected. Judged
+    **once** (never via ``run_methods``) so a paid judge is not re-charged per grid
+    threshold.
 
     Args:
         names: Loadable benchmark names to score.
@@ -180,9 +183,20 @@ def race_paid_llm(
     monitor = SpendMonitor(budget_usd=budget_usd)
     client = create_llm_client()
     worst_per_token = per_token_worst_price(model)
+    # Cost of one worst-case pair — the minimum budget needed to make progress on a
+    # dataset. Below this, minting a fresh runner would only overshoot the cumulative
+    # cap (SpendMonitor.check runs after each dataset, so it can't pre-empt spend).
+    min_progress_usd = WORST_CASE_TOKENS_PER_PAIR * worst_per_token
     rows: list[tuple[str, PairTrack, float]] = []
 
     for name in names:
+        if monitor.remaining < min_progress_usd:
+            print(
+                f"[stop] budget exhausted: ${monitor.remaining:.4f} left "
+                f"< ${min_progress_usd:.4f}/pair worst case; skipping remaining datasets."
+            )
+            break
+
         bench = cast(_RaceBenchmark, get_benchmark(name))
         corpus, gold_clusters, _ = bench.load()
         _, test_records, _, test_clusters = bench.split(corpus, gold_clusters, seed=SEED)
@@ -190,13 +204,18 @@ def race_paid_llm(
         resolver = make_resolver_factory("llm_judge", bench, llm_client=client, llm_model=model)(
             0.5
         )
-        candidates = list(resolver._candidates(test_records))
+        candidates = list(resolver._candidates([r.model_dump() for r in test_records]))
         gold_pairs = gold_pairs_from_clusters(test_clusters)
 
+        # Bound both budgets by what's actually left — never mint fresh budget. Hard
+        # cap = remaining (so cumulative spend can't exceed ``budget_usd``); soft cap
+        # = 90% of remaining for pre-flight headroom. The break above guarantees
+        # ``remaining >= min_progress_usd > 0``, so both are positive and soft <= hard
+        # (the runner's constructor invariants).
         runner = BudgetedModuleRunner(
             resolver.module,
-            budget_usd=max(0.02, monitor.remaining),
-            budget_soft_usd=max(0.01, monitor.remaining - 0.20),
+            budget_usd=monitor.remaining,
+            budget_soft_usd=monitor.remaining * 0.9,
             worst_case_units_per_pair=WORST_CASE_TOKENS_PER_PAIR,
         )
         print(f"[paid] {name}: judging {len(candidates)} candidates with {model} ...")
