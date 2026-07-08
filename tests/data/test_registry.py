@@ -110,6 +110,28 @@ def test_external_only_entry_raises_actionable_error(monkeypatch: pytest.MonkeyP
     assert "https://example.org/data" in message  # the fetch hint is surfaced
 
 
+def test_missing_semantic_extra_raises_pip_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A loader that fails to import faiss surfaces a 'pip install langres[semantic]' hint."""
+
+    def _fail(_module_path: str) -> object:
+        raise ModuleNotFoundError("No module named 'faiss'", name="faiss")
+
+    monkeypatch.setattr(registry.importlib, "import_module", _fail)
+    with pytest.raises(ImportError, match=r"pip install langres\[semantic\]"):
+        get_benchmark("abt_buy")
+
+
+def test_unrelated_import_error_is_reraised(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ModuleNotFoundError unrelated to an extra propagates unchanged (no false hint)."""
+
+    def _fail(_module_path: str) -> object:
+        raise ModuleNotFoundError("No module named 'nope'", name="nope")
+
+    monkeypatch.setattr(registry.importlib, "import_module", _fail)
+    with pytest.raises(ModuleNotFoundError, match="nope"):
+        get_benchmark("abt_buy")
+
+
 def test_register_rejects_duplicate_names(monkeypatch: pytest.MonkeyPatch) -> None:
     dup = BenchmarkEntry(
         name="abt_buy",  # already registered
