@@ -18,11 +18,16 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import Mock
 
-import litellm
+import pytest
 
-from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.llm_judge import LLMJudge
-from langres.core.runs import RunContext, capture_run
+# The litellm-path gate is identity (``client is litellm``), so these tests need
+# the real litellm module. It lives in the optional ``[llm]`` extra and is not
+# guaranteed installed (the bare-core CI job) -- skip the whole file if absent.
+litellm = pytest.importorskip("litellm")
+
+from langres.core.models import CompanySchema, ERCandidate  # noqa: E402
+from langres.core.modules.llm_judge import LLMJudge  # noqa: E402
+from langres.core.runs import RunContext, capture_run  # noqa: E402
 
 
 def _pair() -> ERCandidate[CompanySchema]:
