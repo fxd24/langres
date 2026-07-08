@@ -655,13 +655,22 @@ class Resolver:
         )
 
     def config_dict(self) -> dict[str, object]:
-        """Return the resolver's full config snapshot, WITHOUT writing to disk.
+        """Return the resolver's hash-safe config snapshot, WITHOUT writing to disk.
 
-        Builds the same :class:`ArtifactManifest` :meth:`save` would (the ordered
-        per-slot ``type_name`` + construction config) and returns its
-        ``.model_dump()`` — a plain, JSON-serializable dict. Used by the
-        experiment-tracking layer to capture a pipeline's declared config
-        (``RunContext.resolver_config``) without materializing an artifact.
+        Returns only the reproducible *config* the manifest wraps — the ordered
+        per-slot ``type_name`` + construction config under a ``components`` key —
+        and deliberately **omits** the volatile version/provenance envelope
+        (``artifact_version``, ``langres_version``) that :meth:`save` writes to
+        ``resolver.json``.
+
+        This is by design: the tracking layer feeds this dict to
+        ``RunContext.resolver_config``, which is inside
+        :func:`~langres.core.runs.compute_recipe_id`'s hash domain. Emitting the
+        version fields would fork ``recipe_id`` on every package or
+        artifact-schema bump, silently defeating idempotent replay. Version and
+        provenance live on :class:`~langres.core.runs.RunContext` as separate,
+        **unhashed** fields (e.g. ``RunContext.langres_version``); :meth:`save`
+        still records them on disk for artifact reconstruction.
 
         Known limitation: this captures **declared** component config, not
         compiled/optimized in-memory state — e.g. a DSPy-compiled program's tuned
@@ -670,20 +679,23 @@ class Resolver:
         :meth:`save`, not through this dict).
 
         Returns:
-            The manifest as a dict: ``artifact_version``, ``langres_version``,
-            and the ordered ``components`` specs.
+            A plain, JSON-serializable dict with a single ``components`` key: the
+            ordered slot specs (each a ``type_name`` + ``config``). No version
+            fields — see above.
 
         Raises:
             TypeError: If a slot component lacks a registry ``type_name`` (same
                 contract as :meth:`save`; not swallowed).
         """
-        return self._build_manifest().model_dump()
+        return {"components": self._build_manifest().model_dump()["components"]}
 
     def save(self, path: str | Path) -> None:
         """Persist the whole pipeline to ``path`` as a self-describing artifact.
 
-        Writes ``resolver.json`` (an :class:`ArtifactManifest`, identical to
-        :meth:`config_dict`) plus, for any slot component that implements
+        Writes ``resolver.json`` (a full :class:`ArtifactManifest`, including the
+        ``artifact_version`` + ``langres_version`` envelope that
+        :meth:`config_dict` intentionally omits) plus, for any slot component that
+        implements
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
