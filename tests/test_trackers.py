@@ -3,8 +3,10 @@
 Covers the pure logic: the ``NoOpTracker`` null object, ``MultiTracker``
 fan-out, ``resolve_tracker`` dispatch (every branch), and the lazy
 ``MlflowTracker``/``WandbTracker`` module ``__getattr__`` -- which must raise a
-helpful ``ImportError`` naming the real extra while the adapter modules are
-still absent (S3/S4 add them).
+helpful ``ImportError`` naming the real extra when the backend/adapter is
+absent. S3 landed the ``mlflow`` adapter (and made ``mlflow`` a real dev dep),
+so its missing-extra case is now *simulated*; ``wandb``'s adapter is still
+absent until S4.
 """
 
 from __future__ import annotations
@@ -149,7 +151,26 @@ class TestResolveTracker:
         assert isinstance(resolved.trackers[0], NoOpTracker)
         assert resolved.trackers[1] is spy
 
-    def test_mlflow_string_raises_helpful_import_error_when_absent(self) -> None:
+    def test_mlflow_string_raises_helpful_import_error_when_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``mlflow`` extra -> a helpful ``langres[mlflow]`` ImportError.
+
+        S3 landed the adapter module and made ``mlflow`` a real dev/CI dependency,
+        so genuine absence no longer occurs in this env. Simulate it by forcing the
+        adapter import to fail (mirrors ``_fake_import`` below) -- the missing-extra
+        translation is what ``resolve_tracker`` must surface either way.
+        """
+        import langres.core.trackers as trackers_mod
+
+        real_import = trackers_mod.importlib.import_module
+
+        def _fail_mlflow_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.mlflow_tracker":
+                raise ImportError("No module named 'mlflow'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers_mod.importlib, "import_module", _fail_mlflow_import)
         with pytest.raises(ImportError, match=r"langres\[mlflow\]"):
             resolve_tracker("mlflow")
 
@@ -187,9 +208,24 @@ class TestResolveTracker:
 
 
 class TestLazyAdapterGetattr:
-    def test_mlflow_tracker_attribute_raises_helpful_import_error(self) -> None:
+    def test_mlflow_tracker_attribute_raises_helpful_import_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``trackers.MlflowTracker`` -> helpful ImportError when the extra is absent.
+
+        Absence is simulated (see the ``resolve_tracker`` twin above): S3 made the
+        adapter module + ``mlflow`` present, so the raw missing case is forced here.
+        """
         import langres.core.trackers as trackers
 
+        real_import = trackers.importlib.import_module
+
+        def _fail_mlflow_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.mlflow_tracker":
+                raise ImportError("No module named 'mlflow'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers.importlib, "import_module", _fail_mlflow_import)
         with pytest.raises(ImportError, match=r"langres\[mlflow\]"):
             trackers.MlflowTracker  # noqa: B018
 
