@@ -64,7 +64,8 @@ from langres.core.benchmark import (  # noqa: E402
     gold_pairs_from_clusters,
     run_methods,
 )
-from langres.data.registry import BenchmarkEntry, get_benchmark, list_benchmarks  # noqa: E402
+from langres.data.registry import BenchmarkEntry  # noqa: E402
+from langres.eval import get_benchmark, list_benchmarks  # noqa: E402  (curated eval facade)
 from langres.methods import BlockingBenchmark, make_resolver_factory  # noqa: E402
 
 logger = logging.getLogger("portfolio_race")

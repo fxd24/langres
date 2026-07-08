@@ -10,17 +10,26 @@ labeled pairs with the same honest pair-level metrics. This doc covers both:
 3. [Score your own data](#3-score-your-own-data) — `evaluate(judge, candidates,
    gold_pairs)`.
 
+> **Entry point:** `langres.eval` is the curated evaluation surface. It
+> re-exports `evaluate`, `list_benchmarks` / `get_benchmark`, and the ER metrics
+> (`reduction_ratio`, BCubed/pairwise, …) so you import them from one place
+> instead of reaching into `core.benchmark` / `core.metrics` / `data.registry`.
+> The ranking metrics (MRR/NDCG/MAP, via
+> `core.metrics.evaluate_blocking_with_ranking`) additionally need the opt-in
+> `[eval]` extra: `pip install 'langres[eval]'`.
+
 ---
 
 ## 1. Discover and race the portfolio
 
 The datasets live behind a static, import-light manifest in
-`langres.data.registry` — a **name → benchmark** map you can list without
-importing any loader (so it is safe in a core-only install and never pulls the
-`[semantic]` stack into `sys.modules`):
+`langres.data.registry` (re-exported through the curated `langres.eval` facade)
+— a **name → benchmark** map you can list without importing any loader (so it is
+safe in a core-only install and never pulls the `[semantic]` stack into
+`sys.modules`):
 
 ```python
-from langres.data.registry import list_benchmarks, get_benchmark
+from langres.eval import list_benchmarks, get_benchmark
 
 for entry in list_benchmarks():           # metadata only, no dataset load
     print(entry.name, entry.task, entry.domain, "loadable" if entry.loadable else "external")
@@ -81,7 +90,8 @@ OpenSanctions.
 
 Have your own records plus some labeled `(id_a, id_b, match?)` pairs? Score any
 judge over them at honest pair-level Precision/Recall/F1 with the one-liner
-`evaluate(judge, candidates, gold_pairs)` (`langres.core.benchmark`). It grades
+`evaluate(judge, candidates, gold_pairs)` (`langres.eval`, re-exported from
+`langres.core.benchmark`). It grades
 the judge at the best-F1 threshold over a grid and returns a `JudgePairEval` — no
 blocking-recall ceiling, no clustering amplification, so the number is directly
 comparable to pairwise-F1 SOTA.
@@ -94,7 +104,7 @@ give it your schema and two loaders, and `build(split)` returns the
 ```python
 from pydantic import BaseModel
 
-from langres.core.benchmark import evaluate
+from langres.eval import evaluate
 from langres.core.judges.weighted_average import WeightedAverageJudge
 from langres.data.fixed_split_pair_benchmark import FixedSplitPairBenchmark
 

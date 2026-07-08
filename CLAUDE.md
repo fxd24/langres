@@ -49,6 +49,7 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load

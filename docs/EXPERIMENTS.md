@@ -63,8 +63,10 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
 
 > **One-liner for the common case.** When you just want honest pair-level P/R/F1
 > for a judge over a fixed candidate set — no spend cap, no raw judgements back —
-> `evaluate(judge, candidates, gold_pairs)` (`langres.core.benchmark`) is the thin
-> wrapper over `evaluate_judge_on_candidates` that returns only the `JudgePairEval`
+> `evaluate(judge, candidates, gold_pairs)` — import it from the curated
+> `langres.eval` facade (`from langres.eval import evaluate`; re-exported from
+> `langres.core.benchmark`) — is the thin wrapper over
+> `evaluate_judge_on_candidates` that returns only the `JudgePairEval`
 > (default grid `DEFAULT_PAIR_GRID`; `slice_fn=` forwarded). See
 > [`docs/BENCHMARKS.md`](BENCHMARKS.md#3-score-your-own-data) for the
 > bring-your-own-data walkthrough.
