@@ -37,7 +37,7 @@ from langres.core.module import Module, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import RunContext, RunStore, capture_run
-from langres.core.trackers import ExperimentTracker, NoOpTracker
+from langres.core.trackers import ExperimentTracker, resolve_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ class DSPyJudge(Module[SchemaT]):
         valset: Sequence[dspy.Example] | None = None,
         *,
         optimizer: str = "bootstrap",
-        tracker: ExperimentTracker = NoOpTracker(),
+        tracker: ExperimentTracker | None = None,
         store: str | Path | RunStore | None = None,
         parent_run_id: str | None = None,
         **kwargs: Any,
@@ -295,9 +295,9 @@ class DSPyJudge(Module[SchemaT]):
         onto :attr:`_compile_run_id` so a later ``capture_run`` (the eval run that
         uses the compiled program) can thread it into ``parent_run_id`` for the
         compile→eval lineage. Persistence is opt-in: with the default
-        ``store=None`` / ``tracker=NoOpTracker()`` nothing is written and the
-        compiled program is byte-identical to the un-tracked path — only the
-        in-memory ``_compile_run_id`` carrier is stamped.
+        ``store=None`` / ``tracker=None`` (resolved to a no-op) nothing is written
+        and the compiled program is byte-identical to the un-tracked path — only
+        the in-memory ``_compile_run_id`` carrier is stamped.
 
         Args:
             trainset: Labeled ``dspy.Example`` s (``left`` / ``right`` inputs +
@@ -306,7 +306,8 @@ class DSPyJudge(Module[SchemaT]):
             optimizer: ``"bootstrap"`` (``BootstrapFewShot`` — deterministic under
                 ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2
                 auto="light"`` — the paid path, exercised only by the example).
-            tracker: Experiment tracker for the compile run (default: no-op).
+            tracker: Experiment tracker for the compile run (``None`` — the
+                default — resolves to a no-op via ``resolve_tracker``).
             store: Where to persist the compile :class:`RunRecord` (default: none).
             parent_run_id: Optional parent run this compilation belongs to (e.g. a
                 sweep) — recorded on the compile run's context.
@@ -320,6 +321,7 @@ class DSPyJudge(Module[SchemaT]):
         """
         if optimizer not in ("bootstrap", "mipro"):
             raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
+        tracker = resolve_tracker(tracker)
         context = RunContext(
             experiment="dspy_compile",
             method="dspy_compile",

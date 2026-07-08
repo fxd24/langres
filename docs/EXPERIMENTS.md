@@ -241,6 +241,19 @@ agents can write one file safely. Pass `tracker=` (an `ExperimentTracker`) to *a
 mirror params/metrics into MLflow or W&B; omit it for the JSONL-only path.
 (`git_sha()` and `dataset_fingerprint()` live in `langres.core.runs`.)
 
+**How the tracking `Settings` take effect (today).** `Settings` reads
+`RUN_STORE_PATH`, `MLFLOW_TRACKING_URI`, and `MLFLOW_EXPERIMENT`, but they are
+*not* auto-applied by `capture_run`:
+
+- `RUN_STORE_PATH` is **not** wired as a default `store` yet — `capture_run`'s
+  `store` still defaults to `None` (writes nothing), so you pass it explicitly:
+  `capture_run(context, store=Settings().run_store_path)`. Threading it as the
+  zero-config default is deferred to the benchmark/harness wrap.
+- `MLFLOW_TRACKING_URI` / `MLFLOW_EXPERIMENT` are consumed by the **MLflow
+  tracker** (`resolve_tracker("mlflow")` / `MlflowTracker`), not by `capture_run`
+  — they take effect only when you pass that tracker. Likewise `WANDB_*` is read
+  by `WandbTracker`. With no tracker (`NoOpTracker`) none of these are read.
+
 **Idempotent replay — the agent move.** LLM runs are nondeterministic, so identity
 is *same recipe → same `recipe_id`*, **not** same metrics. An agent re-running a
 sweep skips a config it already paid for and checks its budget in two lines:

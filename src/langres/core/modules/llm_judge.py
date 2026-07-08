@@ -336,6 +336,31 @@ class LLMJudge(Module[SchemaT]):
             return real_cost, provider, True
         return self._calculate_cost(response), provider, False
 
+    def _run_correlation_metadata(
+        self, client: Any, left_id: Any, right_id: Any, decision_step: str
+    ) -> dict[str, Any] | None:
+        """Litellm ``metadata`` correlating this call to the active run, or ``None``.
+
+        S5 run correlation: when a ``capture_run`` is open (``current_run`` set)
+        AND the client is the litellm module (identity check), return the
+        ``metadata`` payload -- the run's ``attempt_id``, the pair ids, and the
+        ``decision_step`` -- so a Langfuse/OTel trace joins the ``RunRecord`` and
+        ``JudgementLog`` on ``langres_attempt_id``. Returns ``None`` otherwise
+        (no open run, or a user-supplied direct client that would 400 on an
+        unknown ``metadata`` kwarg), so the completion call stays byte-identical
+        to before when no run is active. Shared by :meth:`forward` (sync) and
+        :meth:`_call_llm_with_retry` (async) so the two paths cannot drift.
+        """
+        attempt_id = current_run.get()
+        if attempt_id is not None and client is litellm:
+            return {
+                "langres_attempt_id": attempt_id,
+                "left_id": left_id,
+                "right_id": right_id,
+                "decision_step": decision_step,
+            }
+        return None
+
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs using LLM judgment.
 
@@ -367,22 +392,18 @@ class LLMJudge(Module[SchemaT]):
             # Call client (works for both LiteLLM and OpenAI)
             client = self._get_client()
             completion_kwargs = self._completion_kwargs()
-            # Run correlation (S5): stamp the active tracking run's attempt id +
-            # pair identity into litellm's first-class ``metadata`` param, so a
-            # Langfuse/OTel trace joins the RunRecord and JudgementLog on
-            # ``langres_attempt_id``. Gated on BOTH (a) an open ``capture_run``
-            # (``current_run`` set) and (b) the litellm path -- a user-supplied
-            # direct client (e.g. a raw OpenAI client) would 400 on an unknown
-            # ``metadata`` kwarg. When ``current_run`` is None the call stays
-            # byte-identical to before -- no ``metadata`` key is added.
-            attempt_id = current_run.get()
-            if attempt_id is not None and client is litellm:
-                completion_kwargs["metadata"] = {
-                    "langres_attempt_id": attempt_id,
-                    "left_id": candidate.left.id,  # type: ignore[attr-defined]
-                    "right_id": candidate.right.id,  # type: ignore[attr-defined]
-                    "decision_step": "llm_judgment",
-                }
+            # Run correlation (S5): stamp the active tracking run + pair identity
+            # into litellm's ``metadata`` param (shared with the async path via
+            # ``_run_correlation_metadata``). ``None`` off a run keeps the call
+            # byte-identical -- no ``metadata`` key is added.
+            metadata = self._run_correlation_metadata(
+                client,
+                candidate.left.id,  # type: ignore[attr-defined]
+                candidate.right.id,  # type: ignore[attr-defined]
+                "llm_judgment",
+            )
+            if metadata is not None:
+                completion_kwargs["metadata"] = metadata
             response = client.completion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -540,6 +561,8 @@ class LLMJudge(Module[SchemaT]):
             response = await self._call_llm_with_retry(
                 prompt=prompt,
                 max_retries=max_retries,
+                left_id=candidate.left.id,  # type: ignore[attr-defined]
+                right_id=candidate.right.id,  # type: ignore[attr-defined]
             )
 
             # Record actual token usage (thread-safe)
@@ -579,12 +602,16 @@ class LLMJudge(Module[SchemaT]):
         self,
         prompt: str,
         max_retries: int,
+        left_id: Any,
+        right_id: Any,
     ) -> Any:
         """Call LLM API with exponential backoff retry for rate limits.
 
         Args:
             prompt: The prompt to send to the LLM
             max_retries: Maximum retry attempts
+            left_id: Left record id, for the run-correlation ``metadata``
+            right_id: Right record id, for the run-correlation ``metadata``
 
         Returns:
             LLM API response
@@ -596,13 +623,20 @@ class LLMJudge(Module[SchemaT]):
             Implements exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s max
         """
         client = self._get_client()
+        completion_kwargs = self._completion_kwargs()
+        # Run correlation (S5): mirror forward()'s litellm ``metadata`` injection
+        # on the async path -- async judging inside ``capture_run`` would otherwise
+        # lose trace correlation. ``None`` off a run keeps the call byte-identical.
+        metadata = self._run_correlation_metadata(client, left_id, right_id, "llm_judgment_async")
+        if metadata is not None:
+            completion_kwargs["metadata"] = metadata
         for attempt in range(max_retries):
             try:
                 response = await client.acompletion(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
-                    **self._completion_kwargs(),
+                    **completion_kwargs,
                 )
                 return response
             except RateLimitError as e:
