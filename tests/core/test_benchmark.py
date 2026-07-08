@@ -38,6 +38,7 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import FakeVectorIndex
+from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.module import GroupwiseModule, Module
 from langres.core.reports import ScoreInspectionReport
@@ -476,14 +477,21 @@ class _ScoreModule(Module[CompanySchema]):
     written to ``provenance['cost_usd']`` so the cost track is exercised too.
     """
 
-    def __init__(self, scores: dict[str, float], *, cost: float = 0.0) -> None:
+    def __init__(
+        self, scores: dict[str, float], *, cost: float = 0.0, skip: frozenset[str] = frozenset()
+    ) -> None:
         self._scores = scores
         self._cost = cost
+        self._skip = skip
 
     def forward(
         self, candidates: Iterator[ERCandidate[CompanySchema]]
     ) -> Iterator[PairwiseJudgement]:
         for cand in candidates:
+            # ``skip`` yields NO judgement for those left ids, modelling a judge
+            # that produced no verdict for a candidate (the gold-only slice case).
+            if cand.left.id in self._skip:
+                continue
             yield PairwiseJudgement(
                 left_id=cand.left.id,
                 right_id=cand.right.id,
@@ -593,6 +601,121 @@ def test_evaluate_judge_on_candidates_ignores_gold_outside_candidates() -> None:
     # Only p0 is in scope; it is caught and n0 excluded -> perfect, ghost ignored.
     assert result.pair.recall == pytest.approx(1.0)
     assert result.pair.f1 == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_judge_on_candidates — honest fixed-threshold sliced aggregation
+# ---------------------------------------------------------------------------
+
+
+def _slice_candidates(
+    scores: dict[str, float], positives: set[str]
+) -> tuple[list[ERCandidate[CompanySchema]], set[frozenset[str]]]:
+    """Candidates keyed by left id (right id is ``r_<lid>``); gold = ``positives``."""
+    cands = [
+        ERCandidate(
+            left=CompanySchema(id=lid, name=lid),
+            right=CompanySchema(id=f"r_{lid}", name=lid),
+            blocker_name="test",
+        )
+        for lid in scores
+    ]
+    gold = {frozenset({lid, f"r_{lid}"}) for lid in positives}
+    return cands, gold
+
+
+def _tag_by_base_prefix(pair_key: frozenset[str]) -> str:
+    """Tag a ``{lid, r_<lid>}`` pair by the first char of its non-``r_`` id."""
+    base = next(i for i in pair_key if not i.startswith("r_"))
+    return base[0]
+
+
+def test_evaluate_judge_no_slice_fn_leaves_slices_none() -> None:
+    # Default (no slice_fn): slices stays None and the rest of the result is intact.
+    scores = {"p0": 0.9, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold, grid=(0.5,)
+    )
+    assert result.slices is None
+    assert result.pair.f1 == pytest.approx(1.0)
+
+
+def test_evaluate_judge_grades_slices_at_fixed_threshold_not_per_slice_argmax() -> None:
+    # Two slices A and B. The GLOBAL best-F1 threshold is 0.3 (ties break to the
+    # first grid entry). At that FIXED cut slice A scores F1=0.667 — but slice A's
+    # OWN argmax threshold (0.6, isolating its one true match) would score F1=1.0.
+    # An honest sliced eval must report 0.667 (the fixed cut), never the 1.0 an
+    # argmax would fake — that is exactly how a seen->unseen drop gets hidden.
+    scores = {"A_p": 0.9, "A_n": 0.5, "B_p": 0.4, "B_n": 0.35}
+    cands, gold = _slice_candidates(scores, positives={"A_p", "B_p"})
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold, grid=(0.3, 0.6), slice_fn=_tag_by_base_prefix
+    )
+
+    assert result.best_threshold == 0.3
+    assert result.slices is not None
+    assert set(result.slices) == {"A", "B"}
+
+    # Every slice is graded at the ONE global threshold: reconstruct via
+    # classify_pairs at result.best_threshold and it must match exactly.
+    for tag, track in result.slices.items():
+        tag_judged = [j for j in judgements if j.left_id.startswith(tag)]
+        tag_gold = {pk for pk in gold if _tag_by_base_prefix(pk) == tag}
+        expected = classify_pairs(tag_judged, tag_gold, result.best_threshold)
+        assert track.precision == pytest.approx(expected.precision)
+        assert track.recall == pytest.approx(expected.recall)
+        assert track.f1 == pytest.approx(expected.f1)
+        assert track.pr_curve is None  # a single fixed cut has no per-slice curve
+
+    # Proof it is NOT a per-slice argmax: slice A's own best threshold (0.6) beats
+    # its fixed-cut grade, so an argmax would have reported the higher number.
+    a_judged = [j for j in judgements if j.left_id.startswith("A")]
+    a_gold = {pk for pk in gold if _tag_by_base_prefix(pk) == "A"}
+    a_argmax_f1 = classify_pairs(a_judged, a_gold, 0.6).f1
+    assert a_argmax_f1 == pytest.approx(1.0)
+    assert a_argmax_f1 > result.slices["A"].f1
+
+
+def test_evaluate_judge_slice_fn_none_tag_excludes_pairs_from_every_slice() -> None:
+    # slice_fn returns None for X-prefixed pairs -> they land in no slice, even
+    # though X0 is a (high-scoring) gold pair that would form its own slice.
+    scores = {"A0": 0.9, "B0": 0.8, "X0": 0.9}
+    cands, gold = _slice_candidates(scores, positives={"A0", "B0", "X0"})
+
+    def slice_fn(pair_key: frozenset[str]) -> str | None:
+        tag = _tag_by_base_prefix(pair_key)
+        return None if tag == "X" else tag
+
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores), cands, gold, grid=(0.5,), slice_fn=slice_fn
+    )
+    assert result.slices is not None
+    assert set(result.slices) == {"A", "B"}
+    assert None not in result.slices
+
+
+def test_evaluate_judge_gold_only_slice_reports_zero_recall_no_divide_by_zero() -> None:
+    # The judge produces NO verdict for G0 (skip), but G0 is a gold candidate, so
+    # its slice "G" holds a gold pair with zero judged pairs. Unioning the tag sets
+    # keeps slice G reporting recall=0 (a real miss) instead of vanishing — and
+    # classify_pairs over an empty predicted set must not divide by zero.
+    scores = {"S0": 0.9, "S1": 0.2, "G0": 0.9}
+    cands, gold = _slice_candidates(scores, positives={"S0", "G0"})
+    result, judgements = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule(scores, skip=frozenset({"G0"})),
+        cands,
+        gold,
+        grid=(0.5,),
+        slice_fn=_tag_by_base_prefix,
+    )
+    assert not any(j.left_id == "G0" for j in judgements)  # G0 truly unjudged
+    assert result.slices is not None
+    assert set(result.slices) == {"S", "G"}
+    assert result.slices["G"].recall == 0.0
+    assert result.slices["G"].precision == 0.0
+    assert result.slices["G"].f1 == 0.0
+    assert result.slices["S"].f1 == pytest.approx(1.0)  # S0 caught, S1 below cut
 
 
 # ---------------------------------------------------------------------------

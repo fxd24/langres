@@ -28,6 +28,7 @@ contract across methods is a complete resolver.
 import logging
 import math
 import time
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
@@ -713,6 +714,12 @@ class JudgePairEval(BaseModel):
         best_threshold: The grid threshold maximizing pair-level F1.
         truncated: ``True`` when fewer pairs were judged than supplied (a budget
             cap fired or calls were skipped) — the cell is partial.
+        slices: Optional per-slice pair tracks, each graded at the SAME fixed
+            ``best_threshold`` as ``pair`` (never a per-slice argmax). Populated
+            only when :func:`evaluate_judge_on_candidates` is given a ``slice_fn``;
+            ``None`` otherwise. This is the honest seen -> unseen view: one global
+            cut, reported across data slices, so a degradation cannot be tuned
+            away.
     """
 
     pair: PairTrack
@@ -722,6 +729,55 @@ class JudgePairEval(BaseModel):
     n_judged: int
     best_threshold: float
     truncated: bool
+    slices: dict[str, PairTrack] | None = None
+
+
+def _grade_slices(
+    judgements: list[PairwiseJudgement],
+    gold_in_scope: set[frozenset[str]],
+    slice_fn: Callable[[frozenset[str]], str | None],
+    threshold: float,
+) -> dict[str, PairTrack]:
+    """Grade each data slice at ONE fixed ``threshold`` (never a per-slice argmax).
+
+    The load-bearing honesty rule of the sliced eval: the global best-F1
+    ``threshold`` is chosen once over *all* judged pairs, then every slice is
+    graded at that SAME cut via :func:`~langres.core.metrics.classify_pairs`. A
+    per-slice argmax would re-tune the threshold within each slice and so hide the
+    seen -> unseen degradation this report exists to expose.
+
+    Judged pairs are grouped by ``slice_fn`` of their order-independent pair key,
+    and ``gold_in_scope`` by the same tagger; a pair tagged ``None`` is excluded
+    from every slice. The judged-tag and gold-tag sets are *unioned* so a slice
+    holding gold pairs but no judged pair (e.g. a budget runner dropped its
+    candidates, or the judge skipped them) still reports recall — ``0.0`` with no
+    divide-by-zero — rather than silently vanishing.
+
+    Args:
+        judgements: The judgements actually produced by the judge.
+        gold_in_scope: Gold pairs realizable from the candidate set (already
+            intersected with the candidate pairs by the caller).
+        slice_fn: Maps a pair key to a slice tag, or ``None`` to drop the pair.
+        threshold: The single fixed cut every slice is graded at.
+
+    Returns:
+        ``tag -> PairTrack`` (``pr_curve=None`` — a single fixed cut has no curve).
+    """
+    judged_by_tag: dict[str, list[PairwiseJudgement]] = defaultdict(list)
+    for judgement in judgements:
+        tag = slice_fn(frozenset((judgement.left_id, judgement.right_id)))
+        if tag is not None:
+            judged_by_tag[tag].append(judgement)
+    gold_by_tag: dict[str, set[frozenset[str]]] = defaultdict(set)
+    for pair_key in gold_in_scope:
+        tag = slice_fn(pair_key)
+        if tag is not None:
+            gold_by_tag[tag].add(pair_key)
+    slices: dict[str, PairTrack] = {}
+    for tag in set(judged_by_tag) | set(gold_by_tag):
+        metrics = classify_pairs(judged_by_tag.get(tag, []), gold_by_tag.get(tag, set()), threshold)
+        slices[tag] = PairTrack(precision=metrics.precision, recall=metrics.recall, f1=metrics.f1)
+    return slices
 
 
 def evaluate_judge_on_candidates(
@@ -730,6 +786,7 @@ def evaluate_judge_on_candidates(
     gold_pairs: set[frozenset[str]],
     grid: Sequence[float],
     *,
+    slice_fn: Callable[[frozenset[str]], str | None] | None = None,
     runner: "BudgetedModuleRunner | None" = None,
     price_per_token_or_pair: float = 0.0,
     cost_track_fn: Callable[[list[PairwiseJudgement]], CostTrack] = _cost_track,
@@ -748,6 +805,12 @@ def evaluate_judge_on_candidates(
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
         grid: Score thresholds to sweep for the pair-level PR curve.
+        slice_fn: Optional tagger mapping a pair key (``frozenset({left_id,
+            right_id})``) to a slice tag, or ``None`` to exclude the pair. When
+            given, the judged pairs and the in-scope gold are grouped by tag and
+            each slice is graded at the ONE global ``best_threshold`` (never a
+            per-slice argmax), populating ``JudgePairEval.slices``. When ``None``
+            (default), ``slices`` stays ``None`` and the result is unchanged.
         runner: Optional budget runner. When given, the judge runs through it (its
             ``module`` must be ``module``) so spend is hard-capped; the run may
             therefore judge fewer pairs than supplied. When ``None``, the judge is
@@ -784,6 +847,13 @@ def evaluate_judge_on_candidates(
     best = max(curve, key=lambda m: m.f1)
     pair = PairTrack(precision=best.precision, recall=best.recall, f1=best.f1, pr_curve=curve)
 
+    # Sliced view (honest): grade every slice at the SAME global best.threshold.
+    slices = (
+        _grade_slices(judgements, gold_in_scope, slice_fn, best.threshold)
+        if slice_fn is not None
+        else None
+    )
+
     n_judged = len(judgements)
     latency = LatencyTrack(seconds_per_pair=elapsed / n_judged if n_judged > 0 else 0.0)
     result = JudgePairEval(
@@ -794,6 +864,7 @@ def evaluate_judge_on_candidates(
         n_judged=n_judged,
         best_threshold=best.threshold,
         truncated=n_judged < len(candidates),
+        slices=slices,
     )
     return result, judgements
 
