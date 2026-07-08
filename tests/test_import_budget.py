@@ -43,7 +43,17 @@ def _import_ok(module_name: str) -> bool:
 # Import weight: heavy/optional deps must stay out of sys.modules.
 # ---------------------------------------------------------------------------
 
-_HEAVY_MODULES = ["torch", "litellm", "faiss", "sentence_transformers", "sklearn"]
+_HEAVY_MODULES = [
+    "torch",
+    "litellm",
+    "faiss",
+    "sentence_transformers",
+    "sklearn",
+    # Tracking backends (S1): the ExperimentTracker adapters must load mlflow/
+    # wandb lazily, never on a bare `import langres`.
+    "mlflow",
+    "wandb",
+]
 
 _CHECK_SCRIPT = (
     "import sys; import langres; "
@@ -62,6 +72,34 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
     assert result.returncode == 0, (
         f"import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
+_TRACKING_MODULES = ["ranx", "mlflow", "wandb"]
+
+_TRACKING_CHECK_SCRIPT = (
+    "import sys; import langres; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'tracking deps leaked into sys.modules: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_TRACKING_MODULES)
+
+
+def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
+    """The S1 tracking layer must not pull ranx/mlflow/wandb on a bare import.
+
+    ``core/runs.py`` refs the result models (which need ``ranx``) only under
+    ``TYPE_CHECKING``, and the ``ExperimentTracker`` adapters import
+    ``mlflow``/``wandb`` lazily -- so eager ``import langres`` stays clean.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _TRACKING_CHECK_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"tracking import-budget check failed.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
 
