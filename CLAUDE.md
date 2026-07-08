@@ -67,6 +67,7 @@ langres/
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
+│       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_verbs.py is the offline quickstart)
 └── docs/               # Documentation
@@ -115,4 +116,5 @@ The `.agent/` folder contains external expert analyses of the langres project:
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 - **`docs/EXPERIMENTS.md`** — experimentation DX getting-started: the `run_methods` full-pipeline race vs. `evaluate_judge_on_candidates` (judged-once) for compiled/paid judges; `derive_threshold` to kill magic constants; the `SpendMonitor` budget seam.
+- **`docs/BENCHMARKS.md`** — the benchmark portfolio (each dataset + why it's a target + caveats), the `data/registry` discoverability seam (`list_benchmarks` / `get_benchmark`, the `portfolio_race` example), and the `evaluate()` bring-your-own-data pair-scoring walkthrough.
 - **`docs/CHANGELOG.md`** — project progress; completed POC milestones.
