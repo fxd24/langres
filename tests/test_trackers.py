@@ -11,7 +11,9 @@ absent until S4.
 
 from __future__ import annotations
 
+import logging
 import types
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -82,6 +84,49 @@ class TestNoOpTracker:
         assert isinstance(NoOpTracker().name, str)
 
 
+class _BoomTracker:
+    """A Protocol-satisfying tracker that raises on one named method.
+
+    Used to prove :class:`MultiTracker` isolates a raising child so the remaining
+    children still get the call and the exception never propagates.
+    """
+
+    name = "boom"
+
+    def __init__(self, method: str) -> None:
+        self._method = method
+
+    def _maybe_boom(self, method: str) -> None:
+        if method == self._method:
+            raise RuntimeError(f"boom in {method}")
+
+    def start_run(self, context: Any, *, run_name: str | None = None) -> None:
+        self._maybe_boom("start_run")
+
+    def log_params(self, params: Any) -> None:
+        self._maybe_boom("log_params")
+
+    def log_metrics(self, metrics: Any, *, step: int | None = None) -> None:
+        self._maybe_boom("log_metrics")
+
+    def log_artifact(self, key: str, value: str) -> None:
+        self._maybe_boom("log_artifact")
+
+    def set_tags(self, tags: Any) -> None:
+        self._maybe_boom("set_tags")
+
+    def finish(self, *, status: str) -> None:
+        self._maybe_boom("finish")
+
+    @property
+    def run_url(self) -> str | None:
+        return None
+
+    @property
+    def native(self) -> Any:
+        return self
+
+
 class TestMultiTracker:
     def test_exposes_trackers_list(self) -> None:
         children = [_SpyTracker(), _SpyTracker()]
@@ -122,6 +167,39 @@ class TestMultiTracker:
     def test_native_exposes_child_list(self) -> None:
         children = [_SpyTracker(), _SpyTracker()]
         assert MultiTracker(children).native == children
+
+
+class TestMultiTrackerErrorIsolation:
+    """M3: one child raising must not abort the fan-out or propagate."""
+
+    def test_child_raising_on_finish_still_finishes_others_and_does_not_propagate(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        boom, spy = _BoomTracker("finish"), _SpyTracker()
+        multi = MultiTracker([boom, spy])
+
+        with caplog.at_level(logging.ERROR, logger="langres.core.trackers"):
+            multi.finish(status="completed")  # must NOT raise
+
+        # The second child still received finish despite the first raising.
+        assert ("finish", "completed") in spy.calls
+        # The failure was logged (not printed), naming the failing method.
+        assert any("finish" in record.getMessage() for record in caplog.records)
+
+    def test_every_fanout_method_isolates_a_raising_child(self) -> None:
+        cases: list[tuple[str, Callable[[MultiTracker], None]]] = [
+            ("start_run", lambda m: m.start_run("ctx", run_name="r")),
+            ("log_params", lambda m: m.log_params({"p": 1})),
+            ("log_metrics", lambda m: m.log_metrics({"x": 1.0}, step=1)),
+            ("log_artifact", lambda m: m.log_artifact("k", "v")),
+            ("set_tags", lambda m: m.set_tags({"t": "v"})),
+            ("finish", lambda m: m.finish(status="completed")),
+        ]
+        for method, call in cases:
+            spy = _SpyTracker()
+            multi = MultiTracker([_BoomTracker(method), spy])
+            call(multi)  # must NOT raise for any method
+            assert spy.calls and spy.calls[-1][0] == method
 
 
 class TestResolveTracker:

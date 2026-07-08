@@ -31,6 +31,7 @@ or SQLAlchemy (``sqlite:``/``postgresql:``/...) backends -- including MLflow
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -57,14 +58,34 @@ _STATUS_TO_MLFLOW: dict[str, str] = {
 }
 
 
+#: Characters MLflow forbids in a param/metric name. MLflow allows only
+#: alphanumerics, ``_ - . space /`` (and ``:`` off Windows); we sanitize to the
+#: Windows-safe subset (no colon) so a key validates on every platform.
+_MLFLOW_UNSAFE_KEY_CHARS = re.compile(r"[^\w.\-/ ]")
+
+
+def _sanitize_key(key: str) -> str:
+    """Coerce a flattened key into an MLflow-safe param name.
+
+    MLflow rejects any name outside ``[alphanumerics _ - . space /]`` -- a raw
+    ``key[0]`` from a sequence field, or a config key carrying a stray symbol,
+    would crash ``mlflow.log_params``. Every out-of-charset character is replaced
+    with ``_`` so *any* context logs without a crash.
+    """
+    return _MLFLOW_UNSAFE_KEY_CHARS.sub("_", key)
+
+
 def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
     """Flatten a nested dict/list into ``{dotted.key: str value}`` for MLflow params.
 
     MLflow params are flat, scalar key/value pairs, so nested config
     (``resolver_config``, ``seeds``) is expanded to dotted keys (``seeds.split``,
-    ``resolver_config.blocker.type_name``) and list items to indexed keys
-    (``cascade_band[0]``). Leaf scalars are stringified; the top-level call is
-    always a mapping, so the empty ``prefix`` never yields a keyless entry.
+    ``resolver_config.blocker.type_name``) and list items to dotted indices
+    (``cascade_band.0``). ``.`` is used for indices (not ``[0]``) because ``[``/``]``
+    are outside MLflow's allowed param-name charset; :func:`_sanitize_key` is the
+    backstop for any remaining out-of-charset character. Leaf scalars are
+    stringified; the top-level call is always a mapping, so the empty ``prefix``
+    never yields a keyless entry.
     """
     flat: dict[str, str] = {}
     if isinstance(value, Mapping):
@@ -73,7 +94,7 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
             flat.update(_flatten(child, child_prefix))
     elif isinstance(value, (list, tuple)):
         for index, child in enumerate(value):
-            child_prefix = f"{prefix}[{index}]" if prefix else str(index)
+            child_prefix = f"{prefix}.{index}" if prefix else str(index)
             flat.update(_flatten(child, child_prefix))
     elif prefix:
         flat[prefix] = str(value)
@@ -125,7 +146,10 @@ class MlflowTracker:
         if self._tracking_uri is not None:
             mlflow.set_tracking_uri(self._tracking_uri)
         mlflow.set_experiment(self._settings.mlflow_experiment)
-        self._run = mlflow.start_run(run_name=run_name)
+        # nested=True when a run is already active, so a nested capture_run (e.g. a
+        # DSPy compile() run inside an outer benchmark run) does not trip MLflow's
+        # "Run ... is already active" guard.
+        self._run = mlflow.start_run(run_name=run_name, nested=mlflow.active_run() is not None)
         self._run_id = self._run.info.run_id
         self._experiment_id = self._run.info.experiment_id
 
@@ -135,9 +159,14 @@ class MlflowTracker:
         self.set_tags(tags)
 
     def log_params(self, params: Mapping[str, Any]) -> None:
-        """Log flat params (stringified -- MLflow params are immutable strings)."""
+        """Log flat params (keys sanitized MLflow-safe, values stringified).
+
+        Keys pass through :func:`_sanitize_key` -- MLflow param names allow only a
+        restricted charset, so any out-of-charset character (e.g. from a sequence
+        or a config key) is coerced to ``_`` rather than crashing the run.
+        """
         if params:
-            mlflow.log_params({key: str(value) for key, value in params.items()})
+            mlflow.log_params({_sanitize_key(key): str(value) for key, value in params.items()})
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
         """Stream numeric metrics, optionally at a training ``step``."""

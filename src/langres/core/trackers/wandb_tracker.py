@@ -1,20 +1,21 @@
 """W&B (Weights & Biases) :class:`ExperimentTracker` adapter (Stream S4).
 
 Lazily loaded by :func:`langres.core.trackers.resolve_tracker` and
-``from langres.core.trackers import WandbTracker`` -- so ``import wandb`` (at this
-module's top) never lands on the eager ``import langres`` path (asserted by
-``tests/test_import_budget.py``). The adapter reuses langres's existing
-:func:`langres.clients.tracking.create_wandb_tracker` for the ``wandb.init``
-(project/entity/api-key resolution from :class:`~langres.clients.settings.Settings`)
-and enriches that run with the flattened :class:`~langres.core.runs.RunContext`.
+``from langres.core.trackers import WandbTracker`` -- it pulls ``wandb`` only
+transitively (via :func:`langres.clients.tracking.create_wandb_tracker`), so it
+never lands on the eager ``import langres`` path (asserted by
+``tests/test_import_budget.py``). The adapter reuses that helper for the
+``wandb.init`` (project/entity/api-key resolution from
+:class:`~langres.clients.settings.Settings`) and enriches the returned run --
+logging, metrics, and finish all go through *that* run object, never the
+module-global ``wandb.*`` functions -- with the flattened
+:class:`~langres.core.runs.RunContext`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
-
-import wandb
 
 from langres.clients.settings import Settings
 from langres.clients.tracking import create_wandb_tracker
@@ -52,7 +53,7 @@ class WandbTracker:
     """Push langres runs into Weights & Biases (the ``"wandb"`` backend).
 
     One :class:`~langres.core.runs.RunContext` becomes one W&B run: the context
-    is flattened into ``run.config``, metrics stream via :func:`wandb.log`, and
+    is flattened into ``run.config``, metrics stream via ``run.log``, and
     artifact pointers land in ``run.summary``. :attr:`run_url` deep-links the W&B
     UI (threaded into :attr:`~langres.core.runs.RunRecord.artifacts`);
     :attr:`native` is the escape hatch to the underlying ``wandb`` run.
@@ -85,8 +86,14 @@ class WandbTracker:
             self._run.config.update(_flatten(dict(params)), allow_val_change=True)
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
-        """Stream metrics to the active W&B run (:func:`wandb.log`)."""
-        wandb.log(dict(metrics), step=step)
+        """Stream metrics to *this* run (``run.log``), not the module-global run.
+
+        Routed through ``self._run`` so a nested/second ``WandbTracker`` logs to its
+        own run instead of whatever run is globally active (possibly the parent's).
+        A no-op before :meth:`start_run`.
+        """
+        if self._run is not None:
+            self._run.log(dict(metrics), step=step)
 
     def log_artifact(self, key: str, value: str) -> None:
         """Record an artifact path/URL as a run-summary entry (an output pointer)."""
@@ -99,10 +106,15 @@ class WandbTracker:
             self._run.tags = tuple(f"{key}:{value}" for key, value in tags.items())
 
     def finish(self, *, status: str) -> None:
-        """Close the W&B run, mapping status -> exit code (``0`` ok, ``1`` otherwise)."""
+        """Close *this* run (``run.finish``), mapping status -> exit code (``0``/``1``).
+
+        Routed through ``self._run`` so a child's ``finish()`` ends only its own run
+        -- ``wandb.finish()`` (module-global) would end whatever run is globally
+        active, possibly the parent's. A no-op before :meth:`start_run`.
+        """
         if self._run is not None:
             self._run.summary["status"] = status
-        wandb.finish(exit_code=0 if status == "completed" else 1)
+            self._run.finish(exit_code=0 if status == "completed" else 1)
 
     @property
     def run_url(self) -> str | None:

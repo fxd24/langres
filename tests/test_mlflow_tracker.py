@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+from collections.abc import Iterator
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
@@ -52,7 +53,9 @@ class _FakeMlflow:
         self.artifact_files: list[str] = []
         self.artifact_dirs: list[str] = []
         self.ended_status: str | None = None
+        self.nested_flags: list[bool] = []
         self._run = _FakeRun()
+        self._active: _FakeRun | None = None
 
     def set_tracking_uri(self, uri: str) -> None:
         self.tracking_uri = uri
@@ -60,9 +63,14 @@ class _FakeMlflow:
     def set_experiment(self, name: str) -> None:
         self.experiment = name
 
-    def start_run(self, run_name: str | None = None) -> _FakeRun:
+    def start_run(self, run_name: str | None = None, nested: bool = False) -> _FakeRun:
         self.run_name = run_name
+        self.nested_flags.append(nested)
+        self._active = self._run
         return self._run
+
+    def active_run(self) -> _FakeRun | None:
+        return self._active
 
     def log_params(self, params: dict[str, str]) -> None:
         self.params.update(params)
@@ -84,6 +92,7 @@ class _FakeMlflow:
 
     def end_run(self, status: str | None = None) -> None:
         self.ended_status = status
+        self._active = None
 
 
 @pytest.fixture(autouse=True)
@@ -97,19 +106,29 @@ def _clean_mlflow_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def mlflow_env(monkeypatch: pytest.MonkeyPatch) -> tuple[ModuleType, _FakeMlflow]:
+def mlflow_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, _FakeMlflow]]:
     """Inject a fake ``mlflow`` and (re)import the adapter module against it.
 
-    Returns ``(adapter_module, fake_mlflow)``. monkeypatch restores both
-    ``sys.modules["mlflow"]`` and the adapter module entry on teardown, so the
-    fake never leaks into other tests.
+    Yields ``(adapter_module, fake_mlflow)``. monkeypatch restores
+    ``sys.modules["mlflow"]``; the adapter-module entry is saved/restored *by hand*
+    -- NOT via ``monkeypatch.delitem``, whose no-op-on-absent-key semantics would
+    leave the fake-bound adapter leaked into later tests (the real-mlflow tests
+    below would then import the fake and read a nonexistent ``run-abc123``). This
+    guarantees the next import always re-binds against the current ``mlflow``.
     """
     fake = _FakeMlflow()
     monkeypatch.setitem(sys.modules, "mlflow", fake)  # type: ignore[misc]
-    # Drop any real/prior import so the top-level `import mlflow` rebinds to fake.
-    monkeypatch.delitem(sys.modules, _TRACKER_MODULE, raising=False)
+    # Drop any prior import so the top-level `import mlflow` rebinds to the fake,
+    # remembering what was there to restore it on teardown.
+    saved_adapter = sys.modules.pop(_TRACKER_MODULE, None)
     module = importlib.import_module(_TRACKER_MODULE)
-    return module, fake
+    try:
+        yield module, fake
+    finally:
+        if saved_adapter is not None:
+            sys.modules[_TRACKER_MODULE] = saved_adapter
+        else:
+            sys.modules.pop(_TRACKER_MODULE, None)
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -170,8 +189,11 @@ def test_start_run_flattens_context_into_dotted_params(
     assert fake.params["seeds.split"] == "7"
     assert fake.params["seeds.blocker.random_state"] == "42"
     assert fake.params["resolver_config.blocker.type_name"] == "AllPairsBlocker"
-    assert fake.params["cascade_band[0]"] == "0.3"
-    assert fake.params["cascade_band[1]"] == "0.7"
+    # Sequence fields flatten to dotted indices (``cascade_band.0``), never
+    # ``cascade_band[0]`` -- ``[``/``]`` are outside MLflow's param-name charset.
+    assert fake.params["cascade_band.0"] == "0.3"
+    assert fake.params["cascade_band.1"] == "0.7"
+    assert not any("[" in key or "]" in key for key in fake.params)
     # tags are routed to MLflow tags, NOT duplicated as params.
     assert "tags.team" not in fake.params
     assert "tags" not in fake.params
@@ -436,3 +458,102 @@ def test_getattr_exposes_mlflow_tracker_class(
     import langres.core.trackers as trackers
 
     assert trackers.MlflowTracker is module.MlflowTracker
+
+
+# ---------------------------------------------------------------------------
+# Param-key sanitization (Codex#1): dotted indices + out-of-charset coercion
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_uses_dotted_indices_never_brackets(
+    mlflow_env: tuple[ModuleType, _FakeMlflow],
+) -> None:
+    """Sequence/nested fields flatten to dotted indices (``k.0``), never ``k[0]``."""
+    module, _ = mlflow_env
+
+    flat = module._flatten({"cascade_band": [0.3, 0.7], "cfg": {"bands": [1]}})
+
+    assert flat == {"cascade_band.0": "0.3", "cascade_band.1": "0.7", "cfg.bands.0": "1"}
+    assert not any("[" in key or "]" in key for key in flat)
+    # A bare top-level scalar (empty prefix) yields nothing -- no keyless entry.
+    assert module._flatten("bare-scalar") == {}
+
+
+def test_sanitize_key_coerces_out_of_charset_to_underscore(
+    mlflow_env: tuple[ModuleType, _FakeMlflow],
+) -> None:
+    """Any char outside MLflow's ``[alphanumerics _ - . space /]`` becomes ``_``."""
+    module, _ = mlflow_env
+
+    assert module._sanitize_key("cascade_band.0") == "cascade_band.0"  # safe -> unchanged
+    assert module._sanitize_key("a/b-c.d e") == "a/b-c.d e"  # every allowed char kept
+    assert module._sanitize_key("weird[0]:x!") == "weird_0__x_"  # []/:/! -> _
+
+
+# ---------------------------------------------------------------------------
+# Real mlflow against a local file store: nested runs (M4) + safe keys (Codex#1)
+# ---------------------------------------------------------------------------
+
+
+def _drain_active_mlflow_runs() -> None:
+    """End any still-active real mlflow run so global state can't leak across tests."""
+    import mlflow
+
+    while mlflow.active_run() is not None:
+        mlflow.end_run()
+
+
+def test_real_mlflow_nested_start_run_does_not_raise(tmp_path: Any) -> None:
+    """M4: opening a run while one is already active must not raise (nested=True).
+
+    Uses the REAL mlflow adapter against a local file store -- reproduces a nested
+    ``capture_run`` (a DSPy ``compile()`` run inside an outer benchmark run).
+    """
+    from langres.core.trackers.mlflow_tracker import MlflowTracker
+
+    uri = f"file://{tmp_path}/mlruns"
+    outer = MlflowTracker(_settings(mlflow_tracking_uri=uri, mlflow_experiment="nested-check"))
+    inner = MlflowTracker(_settings(mlflow_tracking_uri=uri, mlflow_experiment="nested-check"))
+    try:
+        outer.start_run(_make_context(), run_name="outer")
+        # A second run while the outer is active -- would raise "Run ... is already
+        # active" without nested=True.
+        inner.start_run(_make_context(), run_name="inner")
+        assert inner.native is not None
+        inner.finish(status="completed")
+        outer.finish(status="completed")
+    finally:
+        _drain_active_mlflow_runs()
+
+
+def test_real_mlflow_sequence_field_yields_safe_param_keys(tmp_path: Any) -> None:
+    """Codex#1: a context with a sequence/nested field logs only MLflow-safe keys.
+
+    ``cascade_band`` (a tuple) and a nested list under ``resolver_config`` would
+    naively flatten to ``cascade_band[0]`` -- which real mlflow rejects. With the
+    fix, ``start_run`` succeeds and every stored key is bracket-free.
+    """
+    from mlflow import MlflowClient
+
+    from langres.core.trackers.mlflow_tracker import MlflowTracker
+
+    uri = f"file://{tmp_path}/mlruns"
+    tracker = MlflowTracker(_settings(mlflow_tracking_uri=uri, mlflow_experiment="seq-keys"))
+    context = RunContext(
+        experiment="seq-keys",
+        dataset_name="febrl4",
+        cascade_band=(0.3, 0.7),  # tuple -> sequence field
+        resolver_config={"blocker": {"bands": [0.1, 0.2]}},  # nested list
+    )
+    try:
+        tracker.start_run(context)  # real mlflow validates every key -> must not raise
+        run_id = tracker.native.info.run_id
+        tracker.finish(status="completed")
+
+        params = MlflowClient(tracking_uri=uri).get_run(run_id).data.params
+        assert params["cascade_band.0"] == "0.3"
+        assert params["cascade_band.1"] == "0.7"
+        assert params["resolver_config.blocker.bands.0"] == "0.1"
+        assert not any("[" in key or "]" in key for key in params)
+    finally:
+        _drain_active_mlflow_runs()

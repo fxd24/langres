@@ -32,7 +32,7 @@ class _FakeConfig:
 
 
 class _FakeRun:
-    """Stand-in for a ``wandb`` run object."""
+    """Stand-in for a ``wandb`` run object -- records ``log``/``finish`` on itself."""
 
     def __init__(self, *, url: str | None = "https://wandb.ai/acme/langres/runs/abc123") -> None:
         self.config = _FakeConfig()
@@ -40,10 +40,23 @@ class _FakeRun:
         self.name: str | None = None
         self.tags: tuple[str, ...] = ()
         self.url = url
+        self.log_calls: list[tuple[dict[str, Any], int | None]] = []
+        self.finish_calls: list[int | None] = []
+
+    def log(self, data: dict[str, Any], step: int | None = None) -> None:
+        self.log_calls.append((dict(data), step))
+
+    def finish(self, exit_code: int | None = None) -> None:
+        self.finish_calls.append(exit_code)
 
 
 class _FakeWandb:
-    """Minimal fake ``wandb`` module: records init/log/finish calls."""
+    """Minimal fake ``wandb`` module: ``init`` returns the run; ``log``/``finish``.
+
+    The module-global ``log``/``finish`` here are the *tripwire* for M5: the
+    adapter must route through ``run.log``/``run.finish`` (recorded on
+    :class:`_FakeRun`), so these ``log_calls``/``finish_calls`` must stay empty.
+    """
 
     def __init__(self, run: _FakeRun | None = None) -> None:
         self.run = run if run is not None else _FakeRun()
@@ -64,13 +77,16 @@ class _FakeWandb:
 
 @pytest.fixture
 def fake_wandb(monkeypatch: pytest.MonkeyPatch) -> _FakeWandb:
-    """Patch the fake over BOTH modules that reference ``wandb`` in this path."""
+    """Patch the fake over the ``wandb`` the reused ``create_wandb_tracker`` init uses.
+
+    The adapter itself no longer references a module-global ``wandb`` (log/finish
+    route through ``self._run``), so only ``langres.clients.tracking.wandb`` -- the
+    ``wandb.init`` seam -- needs patching.
+    """
     fake = _FakeWandb()
     import langres.clients.tracking as tracking_mod
-    from langres.core.trackers import wandb_tracker
 
     monkeypatch.setattr(tracking_mod, "wandb", fake)
-    monkeypatch.setattr(wandb_tracker, "wandb", fake)
     return fake
 
 
@@ -152,14 +168,16 @@ class TestStartRun:
 
 
 class TestLogging:
-    def test_log_metrics_forwards_to_wandb_log(
+    def test_log_metrics_routes_to_run_log_not_module_global(
         self, fake_wandb: _FakeWandb, settings: Settings
     ) -> None:
         tracker = WandbTracker(settings)
         tracker.start_run(_context())
         tracker.log_metrics({"f1": 0.91, "recall": 0.88}, step=3)
 
-        assert fake_wandb.log_calls == [({"f1": 0.91, "recall": 0.88}, 3)]
+        # Routed to THIS run (M5), not the module-global wandb.log.
+        assert fake_wandb.run.log_calls == [({"f1": 0.91, "recall": 0.88}, 3)]
+        assert fake_wandb.log_calls == []
 
     def test_log_metrics_defaults_step_to_none(
         self, fake_wandb: _FakeWandb, settings: Settings
@@ -168,7 +186,12 @@ class TestLogging:
         tracker.start_run(_context())
         tracker.log_metrics({"f1": 0.5})
 
-        assert fake_wandb.log_calls == [({"f1": 0.5}, None)]
+        assert fake_wandb.run.log_calls == [({"f1": 0.5}, None)]
+
+    def test_log_metrics_noop_before_start(self, fake_wandb: _FakeWandb) -> None:
+        # No run yet -> nothing logged, and no crash (must not hit the module global).
+        WandbTracker().log_metrics({"f1": 0.5})
+        assert fake_wandb.log_calls == []
 
     def test_log_params_merges_into_config(
         self, fake_wandb: _FakeWandb, settings: Settings
@@ -216,7 +239,9 @@ class TestFinish:
         tracker.start_run(_context())
         tracker.finish(status="completed")
 
-        assert fake_wandb.finish_calls == [0]
+        # Ends THIS run (M5), not the module-global wandb.finish.
+        assert fake_wandb.run.finish_calls == [0]
+        assert fake_wandb.finish_calls == []
         assert fake_wandb.run.summary["status"] == "completed"
 
     @pytest.mark.parametrize("status", ["failed", "budget_exceeded"])
@@ -227,11 +252,14 @@ class TestFinish:
         tracker.start_run(_context())
         tracker.finish(status=status)
 
-        assert fake_wandb.finish_calls == [1]
+        assert fake_wandb.run.finish_calls == [1]
+        assert fake_wandb.finish_calls == []
 
-    def test_finish_before_start_still_calls_wandb_finish(self, fake_wandb: _FakeWandb) -> None:
+    def test_finish_before_start_is_noop(self, fake_wandb: _FakeWandb) -> None:
+        # No run was started -> nothing to finish; must not touch the module global.
         WandbTracker().finish(status="completed")
-        assert fake_wandb.finish_calls == [0]
+        assert fake_wandb.run.finish_calls == []
+        assert fake_wandb.finish_calls == []
 
 
 class TestRunUrlAndNative:
@@ -245,10 +273,8 @@ class TestRunUrlAndNative:
     ) -> None:
         fake = _FakeWandb(_FakeRun(url=None))
         import langres.clients.tracking as tracking_mod
-        from langres.core.trackers import wandb_tracker
 
         monkeypatch.setattr(tracking_mod, "wandb", fake)
-        monkeypatch.setattr(wandb_tracker, "wandb", fake)
 
         tracker = WandbTracker(settings)
         tracker.start_run(_context())

@@ -23,6 +23,7 @@ extra to install -- which is the correct, testable behavior now.
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     # Type-only: the tracker sees a RunContext but never imports runs at runtime
     # (runs imports this module for its NoOpTracker default -- keep it acyclic).
     from langres.core.runs import RunContext
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ExperimentTracker",
@@ -136,29 +139,42 @@ class MultiTracker:
     def __init__(self, trackers: Sequence[ExperimentTracker]) -> None:
         self.trackers: list[ExperimentTracker] = list(trackers)
 
-    def start_run(self, context: RunContext, *, run_name: str | None = None) -> None:
+    def _fan_out(self, method: str, *args: Any, **kwargs: Any) -> None:
+        """Call ``method`` on every child, isolating per-child failures.
+
+        A child raising must not abort the fan-out or mask a real exception --
+        this matters most for ``finish``, which runs inside ``capture_run``'s
+        ``finally`` where a raising child would otherwise swallow the user's own
+        error. So each call is guarded: a failure is logged (never printed) and
+        the remaining children still get the call.
+        """
         for tracker in self.trackers:
-            tracker.start_run(context, run_name=run_name)
+            try:
+                getattr(tracker, method)(*args, **kwargs)
+            except Exception:
+                logger.exception(
+                    "tracker %r raised in %s(); continuing with the remaining trackers",
+                    getattr(tracker, "name", tracker),
+                    method,
+                )
+
+    def start_run(self, context: RunContext, *, run_name: str | None = None) -> None:
+        self._fan_out("start_run", context, run_name=run_name)
 
     def log_params(self, params: Mapping[str, Any]) -> None:
-        for tracker in self.trackers:
-            tracker.log_params(params)
+        self._fan_out("log_params", params)
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
-        for tracker in self.trackers:
-            tracker.log_metrics(metrics, step=step)
+        self._fan_out("log_metrics", metrics, step=step)
 
     def log_artifact(self, key: str, value: str) -> None:
-        for tracker in self.trackers:
-            tracker.log_artifact(key, value)
+        self._fan_out("log_artifact", key, value)
 
     def set_tags(self, tags: Mapping[str, str]) -> None:
-        for tracker in self.trackers:
-            tracker.set_tags(tags)
+        self._fan_out("set_tags", tags)
 
     def finish(self, *, status: str) -> None:
-        for tracker in self.trackers:
-            tracker.finish(status=status)
+        self._fan_out("finish", status=status)
 
     @property
     def run_url(self) -> str | None:
