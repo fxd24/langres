@@ -75,6 +75,74 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
 
 
+# The eval harness (``core.metrics`` / ``core.benchmark``) must be importable
+# without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP) is now
+# imported lazily inside ``evaluate_blocking_with_ranking`` only, so importing
+# the modules must never pull ``ranx`` into ``sys.modules``. Subprocess-based for
+# a fresh import state (this pytest process loads ranx via the ranking-metric
+# test). The curated ``langres.eval`` facade gets the same assertion in
+# ``tests/test_eval.py``.
+_RANX_DECOUPLE_SCRIPT = (
+    "import sys; "
+    "import langres.core.metrics; import langres.core.benchmark; "
+    "assert 'ranx' not in sys.modules, "
+    "'ranx leaked into sys.modules without calling the ranking metrics'; "
+    "print('OK')"
+)
+
+
+def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
+    """core.metrics/core.benchmark must import without the [eval] extra.
+
+    Locks in the ranx decoupling: ``ranx`` is imported lazily only when
+    ``evaluate_blocking_with_ranking`` (MRR/NDCG/MAP) actually runs, so the
+    module imports stay ranx-free.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _RANX_DECOUPLE_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"ranx-decoupling check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
+# ``langres.data.registry.list_methods`` is a public, import-light discovery API
+# (exported from ``langres.data``): it must return the method NAMES without
+# pulling ``langres.methods`` — which imports VectorBlocker / RandomForestJudge /
+# EmbeddingScoreJudge at module scope, dragging in faiss / scikit-learn /
+# sentence-transformers. The names live in the ``langres._method_names`` leaf so
+# a core-only (or ``[semantic]``-only) user can list them. Subprocess-based for a
+# fresh import state (this pytest process is already polluted by other tests).
+_LIST_METHODS_SCRIPT = (
+    "import sys; import langres.data.registry as r; r.list_methods(); "
+    "assert 'langres.methods' not in sys.modules, "
+    "'list_methods pulled langres.methods (the heavy dispatch module)'; "
+    "leaked = [m for m in ['faiss', 'sklearn', 'sentence_transformers'] if m in sys.modules]; "
+    "assert not leaked, f'list_methods leaked heavy modules: {leaked}'; "
+    "print('OK')"
+)
+
+
+def test_registry_list_methods_stays_import_light() -> None:
+    """``registry.list_methods()`` must not pull ``langres.methods`` or the heavy stack.
+
+    Guards the P2 fix: method NAMES come from the import-light
+    ``langres._method_names`` leaf, so name-listing is safe in a core-only /
+    partial-extras install even though ``langres.methods`` (dispatch) imports the
+    ``[semantic]``/``[trained]`` stack at module scope.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _LIST_METHODS_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"list_methods import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 _TRACKING_MODULES = ["ranx", "mlflow", "wandb"]
 
 _TRACKING_CHECK_SCRIPT = (

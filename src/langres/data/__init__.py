@@ -5,6 +5,12 @@ entity resolution datasets.
 """
 
 from langres.data.loaders import load_labeled_dedup_data
+from langres.data.registry import (
+    BenchmarkEntry,
+    get_benchmark,
+    list_benchmarks,
+    list_methods,
+)
 from langres.data.schemas import LabeledDeduplicationDataset, LabeledGroup
 from langres.data.splitting import stratified_dedup_split
 
@@ -16,4 +22,9 @@ __all__ = [
     "load_labeled_dedup_data",
     # Splitting
     "stratified_dedup_split",
+    # Benchmark registry (import-light manifest)
+    "BenchmarkEntry",
+    "get_benchmark",
+    "list_benchmarks",
+    "list_methods",
 ]

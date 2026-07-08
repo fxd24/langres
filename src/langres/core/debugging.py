@@ -44,7 +44,15 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 @dataclass
 class CandidateStats:
-    """Statistics for candidate generation quality."""
+    """Statistics for candidate generation quality.
+
+    ``reduction_ratio`` is the classic blocking-efficiency metric
+    ``1 - candidates / all_possible_pairs`` (see
+    :func:`langres.core.metrics.reduction_ratio`). It is populated by
+    :func:`langres.core.metrics.evaluate_blocking`; the deprecated
+    :class:`PipelineDebugger` path leaves it at its ``0.0`` default. Defaulted
+    so existing constructions of this dataclass remain valid.
+    """
 
     total_candidates: int
     avg_candidates_per_entity: float
@@ -52,6 +60,7 @@ class CandidateStats:
     candidate_precision: float
     missed_matches_count: int
     false_positive_candidates_count: int
+    reduction_ratio: float = 0.0
 
 
 @dataclass

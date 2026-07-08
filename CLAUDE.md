@@ -49,6 +49,7 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
@@ -67,6 +68,7 @@ langres/
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
+│       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_verbs.py is the offline quickstart)
 └── docs/               # Documentation
@@ -79,12 +81,13 @@ modules, a general `Optimizer`, a synthetic data generator.
 
 **Core** (always installed, `uv sync`): Pydantic + pydantic-settings (validation), rapidfuzz (string similarity), networkx (graph clustering), numpy. The string-judge/`AllPairsBlocker` path works with only these.
 
-**Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained]`):
+**Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained,eval]`):
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
+- `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `core.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `core.metrics`/`core.benchmark` (BCubed/pairwise metrics, `evaluate()`) stays importable without it.
 
-These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
+These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 
@@ -115,4 +118,5 @@ The `.agent/` folder contains external expert analyses of the langres project:
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 - **`docs/EXPERIMENTS.md`** — experimentation DX getting-started: the `run_methods` full-pipeline race vs. `evaluate_judge_on_candidates` (judged-once) for compiled/paid judges; `derive_threshold` to kill magic constants; the `SpendMonitor` budget seam.
+- **`docs/BENCHMARKS.md`** — the benchmark portfolio (each dataset + why it's a target + caveats), the `data/registry` discoverability seam (`list_benchmarks` / `get_benchmark`, the `portfolio_race` example), and the `evaluate()` bring-your-own-data pair-scoring walkthrough.
 - **`docs/CHANGELOG.md`** — project progress; completed POC milestones.
