@@ -124,6 +124,38 @@
   rendered prompt matches the archived one, **failing loudly** on a mismatch (the
   alignment being off would make every comparison meaningless).
 
+### Added — Peeters LLM-EM paid run: crash-safe & resumable (no billed call is ever lost)
+
+- **The paid run now durably persists every judged pair, so a kill loses nothing.**
+  A first live run was killed partway and lost ~$0.187 of already-billed calls
+  because results were only written at the very end. `peeters_llm_em_replication.py`
+  now streams one JSON line per judged pair — `flush` + `os.fsync` **before** the
+  next paid call — into a per-`(model, dataset, prompt-design)` JSONL under
+  `--results-dir` (default the gitignored `tmp/peeters/`), mirroring the
+  `m3_race.py` durability pattern at per-pair granularity (new `PeetersResultStore`
+  + `results_path_for`). Each row carries `left_id`/`right_id`, `gold`, our raw
+  `response_text` + parsed `verdict`, the `LLMUsage` vector, and
+  `cost_usd`/`cost_is_real`/`provider`/`model`. (Justified NOT reusing
+  `core.judgement_log.JudgementLog`: it has no `gold` column and buries
+  `cost_is_real`/`provider` behind `features=True`; a tiny report-shaped sink with
+  `fsync` and truncation-tolerant reads is simpler and keeps the operator tool
+  decoupled from that core class.)
+- **Resume: re-running skips already-judged pairs.** A completed model re-runs at
+  **$0 with zero API calls**; a partial run picks up exactly where it stopped. The
+  hard spend cap is seeded with spend already recorded (`PeetersResultStore.spent()`
+  seeds the `SpendMonitor`), so the aggregate cap **holds across resumes** — a
+  resumed run cannot exceed it, and one already at the cap makes no calls. A
+  truncated JSONL (a kill mid-write) is recovered from: the partial trailing line is
+  skipped and its pair re-judged, and `append` repairs a missing final newline so no
+  intact row is ever lost.
+- **The final report is computed from the JSONL**, so the numbers are identical
+  whether the run finished in one pass or several. New **`--report-only`** mode
+  (`report_live_from_store` / `report_compare_from_store`) reprints the full report
+  — including the `--compare-archived` agreement/confusion/disagreement table and F1
+  — from existing results with **zero API calls**. Progress prints every
+  `--progress-every` pairs (running spend + running archive-agreement); stdout is
+  line-buffered (also pass `python -u`) so a kill can't swallow it.
+
 ### Fixed
 
 - **Corrected the published Abt-Buy F1 for `gpt-4o-2024-08-06` from a wrong

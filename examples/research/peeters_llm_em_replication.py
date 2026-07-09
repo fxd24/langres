@@ -74,6 +74,27 @@ Cheaper trials + per-pair agreement against the archive:
   the usage vector + real billed cost. It fails loudly if our rendered prompt does
   not match the archived one (a mismatch means the alignment is off).
 
+Crash-safe & resumable (paid runs never lose a billed call):
+
+* Every judged pair is appended — ``flush`` + ``os.fsync`` — as one JSON line to a
+  per-(model, dataset, prompt-design) JSONL under ``--results-dir`` (default the
+  gitignored ``tmp/peeters/``) BEFORE the next paid call, so a ``SIGKILL`` cannot
+  lose an already-billed pair (the earlier run that persisted only at the very end
+  lost ~$0.187). Each row carries ids, gold, our raw answer + parsed verdict, the
+  :class:`LLMUsage` vector, and ``cost_usd``/``cost_is_real``/``provider``/``model``.
+* **Resume** re-reads that JSONL and **skips already-judged pairs** — re-running a
+  completed model costs **$0** and makes ZERO API calls. The hard spend cap accounts
+  for spend already recorded (:meth:`PeetersResultStore.spent`), so the aggregate cap
+  holds across resumes and a resumed run cannot exceed it.
+* The final report is computed **from the JSONL**, so the numbers are identical
+  whether the run finished in one pass or several. ``--report-only`` recomputes and
+  prints the full report (agreement/confusion/disagreements + F1 with
+  ``--compare-archived``) from existing results with zero API calls — the way to get
+  the final table after a paid run.
+* Progress is printed every ``--progress-every`` pairs (running spend + running
+  archive-agreement). Drive the script with ``python -u`` (or it line-buffers stdout
+  itself) so that progress is not lost on a kill.
+
 Data licensing: MatchGPT ships no LICENSE (``license: null``); langres is
 Apache-2.0. Nothing from MatchGPT is vendored — the ~186 MB answer archive is
 downloaded transiently to a cache dir (``--cache-dir``) and never committed. Our
@@ -85,10 +106,16 @@ Usage::
     uv run python examples/research/peeters_llm_em_replication.py
     uv run python examples/research/peeters_llm_em_replication.py --mode dry-run
     uv run python examples/research/peeters_llm_em_replication.py --mode dry-run --limit 150
-    # PAID (run with the sandbox disabled — OpenRouter is a network call):
-    uv run python examples/research/peeters_llm_em_replication.py --mode live --yes-spend-money
+    # PAID (run with the sandbox disabled — OpenRouter is a network call). ``-u`` +
+    # the per-pair JSONL make it crash-safe: a kill loses nothing, just re-run to resume.
+    python -u examples/research/peeters_llm_em_replication.py --mode live \\
+        --compare-archived --yes-spend-money
+    # ...killed partway? Re-run the SAME command — judged pairs are skipped ($0), the
+    # cap counts prior spend, and it picks up where it left off.
+    # Get the final table from the persisted results, zero API calls:
+    python examples/research/peeters_llm_em_replication.py --report-only --compare-archived
     # PAID, sized to a 150-pair stratified subset, with per-pair archive agreement:
-    uv run python examples/research/peeters_llm_em_replication.py --mode live \\
+    python -u examples/research/peeters_llm_em_replication.py --mode live \\
         --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150 \\
         --compare-archived --yes-spend-money
 
@@ -101,13 +128,16 @@ import argparse
 import difflib
 import json
 import logging
+import os
 import random
+import sys
 import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from langres.clients.openrouter import (
@@ -116,6 +146,7 @@ from langres.clients.openrouter import (
     SpendMonitor,
 )
 from langres.core.metrics import classify_pairs
+from langres.core.models import PairwiseJudgement
 from langres.core.modules.llm_judge import LLMJudge, parse_binary_yes_no
 from langres.core.usage import LLMUsage
 from langres.data.peeters import (
@@ -291,6 +322,114 @@ BUDGET_CEILING_USD = 2.00
 #: run meters the REAL output cost; this only sizes the pre-flight estimate.
 _EST_OUTPUT_TOKENS_PER_PROMPT = 2
 
+#: Default per-pair progress cadence (print a line every N judged pairs).
+DEFAULT_PROGRESS_EVERY = 50
+
+#: Prompt design pinned for the live/compare paid runs (arXiv v4 Table 2 target).
+LIVE_PROMPT_DESIGN = "domain-complex-force"
+
+#: JSONL result-row schema version (independent of ``JudgementLog``'s ``v``).
+_RESULT_SCHEMA_VERSION = 1
+
+
+# ---------------------------------------------------------------------------
+# Crash-safe, resumable per-pair results store (mirrors m3_race's durability).
+#
+# Why not reuse ``langres.core.judgement_log.JudgementLog``? It is the closest
+# in-repo sink and we DO borrow its shape (a ``v``-versioned JSONL, one row per
+# judgement, a ``read()`` round-trip). But it is structurally a judge-CALL log:
+# it has no notion of the GOLD label (it never sees ground truth), and it keeps
+# ``cost_is_real``/``provider`` only inside the raw ``provenance`` dict behind
+# ``features=True`` (which also logs PII record content), not as first-class
+# columns. The final F1/agreement table here must be recomputable from the rows
+# ALONE, which needs ``gold`` per row — so bending ``JudgementLog`` to fit would
+# mean a post-hoc gold join plus digging into nested provenance. It also does not
+# ``fsync``. A tiny purpose-built sink with exactly the columns the report needs
+# (``gold`` included), an ``fsync`` on every append, and truncation-tolerant reads
+# is simpler and keeps this operator tool decoupled from a core class whose
+# contract (a privacy-conscious flywheel inlet keyed to ``capture_run``) is a
+# different concern.
+# ---------------------------------------------------------------------------
+
+
+def results_path_for(results_dir: str | Path, dataset: str, prompt_design: str, model: str) -> Path:
+    """The per-(model, dataset, prompt-design) JSONL path under ``results_dir``.
+
+    The ``openrouter/...`` model id's slashes are flattened so nothing creates a
+    stray subdirectory; the three fields keep each race cell in its own file, so a
+    crash in one never touches another (and resume/report-only target one file).
+    """
+    slug = model.replace("/", "_")
+    return Path(results_dir) / f"{dataset}__{prompt_design}__{slug}.jsonl"
+
+
+class PeetersResultStore:
+    """Append-only JSONL sink for one paid race cell — durable, resumable, atomic-ish.
+
+    Each judged pair is one JSON line, ``flush``-ed and ``os.fsync``-ed before the
+    next paid call, so a ``SIGKILL`` cannot lose an already-billed call (the kernel
+    holds the bytes even if the process dies). Reads tolerate a truncated trailing
+    line (a kill mid-write) by skipping it; :meth:`append` first repairs a missing
+    final newline so a later resume never fuses a leftover partial fragment onto a
+    fresh row. :meth:`judged_pairs` drives skip-if-committed resume and
+    :meth:`spent` seeds the cross-resume budget ledger.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def append(self, row: dict[str, Any]) -> None:
+        """Append one result row as a JSON line, flushed + fsync'd for durability."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_trailing_newline()
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def _ensure_trailing_newline(self) -> None:
+        """If the file ends mid-line (an interrupted write), close that line first.
+
+        Turns a leftover partial fragment into its own (skippable) line so the next
+        append lands on a clean line instead of being concatenated onto the
+        fragment — which would make BOTH unparseable and silently lose the new row.
+        """
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return
+        with self.path.open("rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) == b"\n":
+                return
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def rows(self) -> list[dict[str, Any]]:
+        """Every intact row in write order; an unparseable (truncated) line is skipped."""
+        if not self.path.exists():
+            return []
+        out: list[dict[str, Any]] = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                out.append(json.loads(stripped))
+            except json.JSONDecodeError:
+                logger.warning(
+                    "skipping unparseable JSONL line in %s (crash mid-write?)", self.path
+                )
+        return out
+
+    def judged_pairs(self) -> set[frozenset[str]]:
+        """The set of ``frozenset({left_id, right_id})`` already committed (resume skip set)."""
+        return {frozenset({r["left_id"], r["right_id"]}) for r in self.rows()}
+
+    def spent(self) -> float:
+        """Sum of the recorded ``cost_usd`` across committed rows (the resume-safe ledger)."""
+        return sum(float(r.get("cost_usd") or 0.0) for r in self.rows())
+
 
 def stratified_subset_indices(labels: Sequence[int], limit: int, seed: int = 0) -> list[int]:
     """Pick ``limit`` sample-order indices, preserving the positive ratio, deterministically.
@@ -454,35 +593,195 @@ def _build_live_judge(
     )
 
 
-def _judge_under_budget(
-    judge: LLMJudge[Any], candidates: Sequence[Any], budget_usd: float
-) -> tuple[list[Any], float, bool, bool]:
-    """Stream ``judge.forward`` over ``candidates`` under a hard :class:`SpendMonitor`.
+def _row_from_judgement(
+    judgement: Any,
+    *,
+    model: str,
+    dataset: str,
+    prompt_design: str,
+    gold: int,
+) -> dict[str, Any]:
+    """The durable JSONL row for one judged pair (everything the report needs).
 
-    Charges each judgement's REAL (OpenRouter-billed) cost to the monitor and
-    stops the moment cumulative spend crosses ``budget_usd``. Returns
-    ``(judgements, real_cost_usd, cost_is_real, budget_hit)`` — the judgements are
-    in candidate order and truncated at the pair that tripped the cap. Shared by
-    :func:`run_live` and :func:`run_compare_archived`.
+    Carries ``gold`` (so F1 is recomputable from rows alone) plus the raw model
+    answer (``response_text``), our parsed ``verdict``, the per-call ``LLMUsage``
+    vector and ``cost_usd``/``cost_is_real``/``provider``/``model`` — the columns
+    ``JudgementLog`` either lacks (``gold``) or buries in ``provenance``.
     """
+    prov = judgement.provenance
+    return {
+        "v": _RESULT_SCHEMA_VERSION,
+        "model": model,
+        "dataset": dataset,
+        "prompt_design": prompt_design,
+        "left_id": judgement.left_id,
+        "right_id": judgement.right_id,
+        "gold": int(gold),
+        "response_text": judgement.reasoning or "",
+        "verdict": int(judgement.score),
+        "score": float(judgement.score),
+        "cost_usd": float(prov.get("cost_usd") or 0.0),
+        "cost_is_real": bool(prov.get("cost_is_real")),
+        "provider": prov.get("provider"),
+        "usage": prov.get("usage"),
+    }
+
+
+def _judge_stream(
+    spec: PeetersReplicationSpec,
+    model: str,
+    candidates: Sequence[Any],
+    gold_by_pair: dict[frozenset[str], int],
+    budget_usd: float,
+    *,
+    client: Any,
+    store: PeetersResultStore | None,
+    progress_every: int,
+    prior_spent: float,
+    dataset: str,
+    prompt_design: str,
+    their_verdict_by_pair: dict[frozenset[str], int] | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Judge ``candidates`` under an AGGREGATE cap, persisting each row as it lands.
+
+    The :class:`SpendMonitor` is seeded with ``prior_spent`` (spend already recorded
+    in ``store``), so the hard cap holds across resumes — a resumed run cannot push
+    cumulative spend past ``budget_usd``, and one that is already at/over the cap
+    makes **zero** API calls. Every judgement is appended to ``store`` (flush +
+    ``fsync``) *before* the next paid call, so a kill cannot lose a billed call. An
+    incremental progress line (unbuffered) prints every ``progress_every`` pairs —
+    including running archive-agreement when ``their_verdict_by_pair`` is given.
+
+    Returns ``(rows_this_pass, budget_hit)``; ``rows_this_pass`` is what THIS pass
+    judged (the report is computed from the whole ``store``, not this list).
+    """
+    rows: list[dict[str, Any]] = []
     monitor = SpendMonitor(budget_usd=budget_usd)
-    judgements: list[Any] = []
-    real_cost = 0.0
-    cost_is_real = True
+    monitor.add(prior_spent)
+    try:
+        monitor.check()
+    except BudgetExceeded:
+        logger.warning(
+            "prior spend $%.4f already at/over cap $%.2f — making no calls", prior_spent, budget_usd
+        )
+        return rows, True
+    if not candidates:
+        return rows, False
+
+    judge = _build_live_judge(spec, model, client)
+    running_cost = prior_spent
+    agree = 0
+    n_done = 0
     budget_hit = False
+    total = len(candidates)
     for judgement in judge.forward(iter(candidates)):
-        judgements.append(judgement)
-        cost = float(judgement.provenance.get("cost_usd") or 0.0)
-        real_cost += cost
-        cost_is_real = cost_is_real and bool(judgement.provenance.get("cost_is_real"))
-        monitor.add(cost)
+        key = frozenset({judgement.left_id, judgement.right_id})
+        row = _row_from_judgement(
+            judgement,
+            model=model,
+            dataset=dataset,
+            prompt_design=prompt_design,
+            gold=gold_by_pair.get(key, 0),
+        )
+        if store is not None:
+            store.append(row)  # durable BEFORE the next paid call
+        rows.append(row)
+        n_done += 1
+        running_cost += row["cost_usd"]
+        monitor.add(row["cost_usd"])
+        if their_verdict_by_pair is not None and int(judgement.score) == their_verdict_by_pair.get(
+            key
+        ):
+            agree += 1
+        if progress_every and n_done % progress_every == 0:
+            msg = f"[live] {model}  judged {n_done}/{total}  spend ${running_cost:.4f}"
+            if their_verdict_by_pair is not None:
+                msg += f"  archive-agree {agree}/{n_done} = {agree / n_done * 100:.1f}%"
+            print(msg, flush=True)
         try:
             monitor.check()
         except BudgetExceeded:
             budget_hit = True
-            logger.warning("budget cap hit after %d/%d pairs", len(judgements), len(candidates))
+            logger.warning("budget cap hit after %d/%d pairs", n_done, total)
             break
-    return judgements, real_cost, cost_is_real, budget_hit
+    return rows, budget_hit
+
+
+def _metrics_from_rows(rows: Sequence[dict[str, Any]]) -> Any:
+    """Pairwise P/R/F1 (via ``classify_pairs``) from persisted rows' verdict vs. gold."""
+    judgements = [
+        PairwiseJudgement(
+            left_id=r["left_id"],
+            right_id=r["right_id"],
+            score=float(r["verdict"]),
+            score_type="prob_llm",
+            decision_step="peeters_live",
+            provenance={},
+        )
+        for r in rows
+    ]
+    gold = {frozenset({r["left_id"], r["right_id"]}) for r in rows if r.get("gold") == 1}
+    return classify_pairs(judgements, gold, threshold=0.5)
+
+
+def _aggregate_usage_from_rows(rows: Sequence[dict[str, Any]], model: str) -> LLMUsage:
+    """Sum the per-row ``usage`` vectors into one :class:`LLMUsage` (reuses ``_aggregate_usage``)."""
+    ns = [SimpleNamespace(provenance={"usage": r.get("usage")}) for r in rows]
+    return _aggregate_usage(ns, model)
+
+
+def _live_report_from_rows(
+    rows: Sequence[dict[str, Any]], *, model: str, n_pairs: int
+) -> dict[str, Any]:
+    """The live report computed PURELY from persisted rows (identical across resumes).
+
+    ``budget_hit`` is derived as ``n_judged < n_pairs`` — for these runs the only
+    reason the stream stops short of the full pair set is the spend cap firing.
+    """
+    metrics = _metrics_from_rows(rows)
+    usage = _aggregate_usage_from_rows(rows, model)
+    n_judged = len(rows)
+    real_cost = sum(float(r.get("cost_usd") or 0.0) for r in rows)
+    cost_is_real = n_judged > 0 and all(bool(r.get("cost_is_real")) for r in rows)
+    return {
+        "model": model,
+        "published_f1": PAID_MODELS.get(model),
+        "n_pairs": n_pairs,
+        "n_judged": n_judged,
+        "budget_hit": n_judged < n_pairs,
+        "f1": metrics.f1 * 100.0,
+        "precision": metrics.precision * 100.0,
+        "recall": metrics.recall * 100.0,
+        "tp": metrics.tp,
+        "fp": metrics.fp,
+        "fn": metrics.fn,
+        "usage": usage.model_dump(),
+        "real_cost_usd": real_cost,
+        "cost_is_real": cost_is_real,
+        "usd_per_1k_pairs": (real_cost / n_judged * 1000.0) if n_judged else 0.0,
+    }
+
+
+def _n_pairs_for(spec: PeetersReplicationSpec, limit: int | None, seed: int) -> int:
+    """The full pair count a (limit, seed) run judges — the report's ``n_pairs`` denominator."""
+    sample = load_peeters_sample(spec)
+    if limit is None:
+        return len(sample)
+    return len(stratified_subset_indices([label for _l, _r, label in sample], limit, seed))
+
+
+def report_live_from_store(
+    store: PeetersResultStore,
+    *,
+    spec: PeetersReplicationSpec,
+    model: str,
+    limit: int | None = None,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Recompute the live report from an existing results JSONL — ZERO API calls."""
+    return _live_report_from_rows(
+        store.rows(), model=model, n_pairs=_n_pairs_for(spec, limit, seed)
+    )
 
 
 def run_live(
@@ -493,16 +792,25 @@ def run_live(
     prices: dict[str, tuple[float, float]] = PRICES_PER_1M,
     client: Any = None,
     indices: Sequence[int] | None = None,
+    store: PeetersResultStore | None = None,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
 ) -> dict[str, Any]:
     """Judge every sampled pair with a live ``LLMJudge`` under a hard spend cap.
 
     Builds the judge via :func:`_build_live_judge` (paper template, Peeters
-    serializer, ``parse_binary_yes_no``, ``temperature=0.0``, provider pinned),
-    then streams it under a :class:`SpendMonitor` via :func:`_judge_under_budget`.
-    Computes pairwise P/R/F1 at threshold 0.5 (no sweep — the protocol is binary)
-    over the pairs actually judged and aggregates the token-usage vector + billed
-    cost. ``indices`` (from :func:`stratified_subset_indices`) restricts the run to
-    a ``--limit`` subset; ``None`` judges all pairs.
+    serializer, ``parse_binary_yes_no``, ``temperature=0.0``, provider pinned) and
+    streams it under a :class:`SpendMonitor` via :func:`_judge_stream`, computing
+    pairwise P/R/F1 at threshold 0.5 (no sweep — the protocol is binary) over the
+    pairs judged. ``indices`` (from :func:`stratified_subset_indices`) restricts the
+    run to a ``--limit`` subset; ``None`` judges all pairs.
+
+    When ``store`` is given the run is **crash-safe and resumable**: pairs already
+    committed to the JSONL are skipped (a completed model re-runs at $0 with zero
+    API calls), the cap accounts for spend already recorded (the aggregate ledger),
+    each new pair is durably persisted before the next paid call, and the returned
+    report is computed from the WHOLE store — so the numbers are identical whether
+    the run finished in one pass or several. ``store=None`` keeps the classic
+    in-memory path (writes nothing to disk).
 
     ``client`` is injectable (a fake returning "Yes"/"No") so the whole flow is
     verified at **$0** in tests; ``None`` lets ``LLMJudge`` build a real litellm
@@ -513,39 +821,38 @@ def run_live(
     if indices is not None:
         candidates = [candidates[i] for i in indices]
         sample = [sample[i] for i in indices]
+    n_pairs = len(candidates)
+    gold_by_pair = {frozenset({left, right}): label for left, right, label in sample}
 
-    judge = _build_live_judge(spec, model, client)
-    judgements, real_cost, cost_is_real, budget_hit = _judge_under_budget(
-        judge, candidates, budget_usd
+    prior_spent = 0.0
+    if store is not None:
+        judged = store.judged_pairs()
+        prior_spent = store.spent()
+        remaining = [c for c in candidates if frozenset({c.left.id, c.right.id}) not in judged]
+        if len(remaining) < n_pairs:
+            print(
+                f"[resume] {model}: skipping {n_pairs - len(remaining)}/{n_pairs} already-judged "
+                f"pairs (prior spend ${prior_spent:.4f})",
+                flush=True,
+            )
+        candidates = remaining
+
+    rows_this_pass, _budget_hit = _judge_stream(
+        spec,
+        model,
+        candidates,
+        gold_by_pair,
+        budget_usd,
+        client=client,
+        store=store,
+        progress_every=progress_every,
+        prior_spent=prior_spent,
+        dataset=spec.name,
+        prompt_design=LIVE_PROMPT_DESIGN,
     )
-    n_judged = len(judgements)
 
-    # Gold is restricted to the pairs actually judged (subset ∩ budget prefix), so
-    # ``fn`` counts only positives the model was asked about and answered "no" to.
-    gold = {
-        frozenset({left_id, right_id})
-        for left_id, right_id, label in sample[:n_judged]
-        if label == 1
-    }
-    metrics = classify_pairs(judgements, gold, threshold=0.5)
-    usage = _aggregate_usage(judgements, model)
-    return {
-        "model": model,
-        "published_f1": PAID_MODELS.get(model),
-        "n_pairs": len(candidates),
-        "n_judged": n_judged,
-        "budget_hit": budget_hit,
-        "f1": metrics.f1 * 100.0,
-        "precision": metrics.precision * 100.0,
-        "recall": metrics.recall * 100.0,
-        "tp": metrics.tp,
-        "fp": metrics.fp,
-        "fn": metrics.fn,
-        "usage": usage.model_dump(),
-        "real_cost_usd": real_cost,
-        "cost_is_real": cost_is_real and n_judged > 0,
-        "usd_per_1k_pairs": (real_cost / n_judged * 1000.0) if n_judged else 0.0,
-    }
+    report_rows = store.rows() if store is not None else rows_this_pass
+    return _live_report_from_rows(report_rows, model=model, n_pairs=n_pairs)
 
 
 # ---------------------------------------------------------------------------
@@ -690,23 +997,32 @@ def run_compare_archived(
     spec: PeetersReplicationSpec,
     model: str,
     *,
-    prompt_design: str = "domain-complex-force",
+    prompt_design: str = LIVE_PROMPT_DESIGN,
     budget_usd: float,
     client: Any = None,
     archived: Sequence[dict[str, Any]] | None = None,
     cache_dir: Path | None = None,
     limit: int | None = None,
     seed: int = 0,
+    store: PeetersResultStore | None = None,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
 ) -> dict[str, Any]:
     """Judge a (optionally ``--limit``-ed) subset live and compare pair-by-pair to the archive.
 
     Runs the live judge over the stratified subset (:func:`_build_live_judge` +
-    :func:`_judge_under_budget`), loads the authors' archived answers for the same
+    :func:`_judge_stream`), loads the authors' archived answers for the same
     model (:func:`load_archived_answers`, or the injected ``archived`` in tests),
-    and reports: the per-pair agreement rate, the 2x2 confusion of ours vs. theirs,
-    up to 10 concrete disagreeing pairs, our F1/P/R on the judged subset next to
-    *their* F1/P/R recomputed on that same subset (plus the published full-set
-    number), and the usage vector + real billed cost.
+    and reports (via :func:`_compare_report_from_rows`): the per-pair agreement
+    rate, the 2x2 confusion of ours vs. theirs, up to 10 concrete disagreeing
+    pairs, our F1/P/R on the judged subset next to *their* F1/P/R recomputed on
+    that same subset (plus the published full-set number), and the usage vector +
+    real billed cost.
+
+    When ``store`` is given the run is **crash-safe and resumable** exactly as in
+    :func:`run_live` (skip-if-committed, cross-resume budget ledger, per-pair
+    ``fsync``); progress lines additionally show the running archive-agreement. The
+    report is recomputed from the persisted rows + the archive, so ``--report-only``
+    (:func:`report_compare_from_store`) reproduces it with zero API calls.
 
     The archived JSONL row count is asserted equal to the *full* pair-set count
     before any subsetting; per-compared-pair the rendered prompt is asserted equal
@@ -739,38 +1055,110 @@ def run_compare_archived(
     sub_prompts = [full_prompts[i] for i in indices]
     sub_candidates = [full_candidates[i] for i in indices]
     sub_archived = [archived[i] for i in indices]
+    n_pairs = len(sub_candidates)
 
-    judge = _build_live_judge(spec, model, client)
-    our_judgements, real_cost, cost_is_real, budget_hit = _judge_under_budget(
-        judge, sub_candidates, budget_usd
+    gold_by_pair = {frozenset({p.left_id, p.right_id}): p.label for p in sub_prompts}
+    # Their archived verdict per pair — powers the running agreement in progress lines.
+    their_verdict_by_pair = {
+        frozenset({p.left_id, p.right_id}): parse_binary_answer(str(a["answer"]))
+        for p, a in zip(sub_prompts, sub_archived, strict=True)
+    }
+
+    prior_spent = 0.0
+    candidates = sub_candidates
+    if store is not None:
+        judged = store.judged_pairs()
+        prior_spent = store.spent()
+        candidates = [c for c in sub_candidates if frozenset({c.left.id, c.right.id}) not in judged]
+        if len(candidates) < n_pairs:
+            print(
+                f"[resume] {model}: skipping {n_pairs - len(candidates)}/{n_pairs} already-judged "
+                f"pairs (prior spend ${prior_spent:.4f})",
+                flush=True,
+            )
+
+    _rows_this_pass, _budget_hit = _judge_stream(
+        spec,
+        model,
+        candidates,
+        gold_by_pair,
+        budget_usd,
+        client=client,
+        store=store,
+        progress_every=progress_every,
+        prior_spent=prior_spent,
+        dataset=spec.name,
+        prompt_design=prompt_design,
+        their_verdict_by_pair=their_verdict_by_pair,
     )
-    n_judged = len(our_judgements)
 
-    # Budget may have truncated the run: compare only the pairs actually judged.
-    judged_prompts = sub_prompts[:n_judged]
-    judged_candidates = sub_candidates[:n_judged]
-    judged_archived = sub_archived[:n_judged]
+    report_rows = store.rows() if store is not None else _rows_this_pass
+    return _compare_report_from_rows(
+        report_rows, spec=spec, model=model, archived=archived, n_pairs=n_pairs
+    )
 
+
+def _compare_report_from_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    spec: PeetersReplicationSpec,
+    model: str,
+    archived: Sequence[dict[str, Any]],
+    n_pairs: int,
+) -> dict[str, Any]:
+    """The archive-agreement report computed PURELY from persisted rows + the archive.
+
+    Reconstructs each judged pair's rendered prompt, candidate and archived answer
+    (from ``spec`` + ``archived``, both free/local) keyed on ``(left_id, right_id)``,
+    then reuses :func:`build_compared_pairs` / :func:`confusion_and_agreement` so a
+    ``--report-only`` run reproduces the exact agreement/confusion/disagreement table
+    and F1 with zero API calls.
+    """
+    full_prompts = render_sample_prompts(spec)
+    if len(archived) != len(full_prompts):
+        raise SystemExit(
+            f"[fatal] archived JSONL has {len(archived)} rows but the {spec.name} pair set "
+            f"has {len(full_prompts)} — alignment would be wrong; aborting."
+        )
+    full_candidates = build_candidates(spec)
     serializer = make_record_serializer(spec)
-    compared = build_compared_pairs(
-        judged_prompts, judged_candidates, our_judgements, judged_archived, serializer
-    )
-    summary = confusion_and_agreement(compared)
+    prompt_by_pair = {frozenset({p.left_id, p.right_id}): p for p in full_prompts}
+    cand_by_pair = {frozenset({c.left.id, c.right.id}): c for c in full_candidates}
+    archived_by_pair = {
+        frozenset({full_prompts[i].left_id, full_prompts[i].right_id}): archived[i]
+        for i in range(len(full_prompts))
+    }
 
-    gold = {frozenset({p.left_id, p.right_id}) for p in judged_prompts if p.label == 1}
-    our_metrics = classify_pairs(list(our_judgements), gold, threshold=0.5)
-    their_judgements = judgements_from_answers(
-        judged_prompts, [str(a["answer"]) for a in judged_archived]
-    )
+    prompts_sub: list[Any] = []
+    cands_sub: list[Any] = []
+    our_js: list[Any] = []
+    arch_sub: list[dict[str, Any]] = []
+    for r in rows:
+        key = frozenset({r["left_id"], r["right_id"]})
+        prompts_sub.append(prompt_by_pair[key])
+        cands_sub.append(cand_by_pair[key])
+        our_js.append(
+            SimpleNamespace(score=float(r["verdict"]), reasoning=r.get("response_text") or "")
+        )
+        arch_sub.append(archived_by_pair[key])
+
+    compared = build_compared_pairs(prompts_sub, cands_sub, our_js, arch_sub, serializer)
+    summary = confusion_and_agreement(compared)
+    gold = {frozenset({p.left_id, p.right_id}) for p in prompts_sub if p.label == 1}
+    our_metrics = _metrics_from_rows(rows)
+    their_judgements = judgements_from_answers(prompts_sub, [str(a["answer"]) for a in arch_sub])
     their_metrics = classify_pairs(their_judgements, gold, threshold=0.5)
-    usage = _aggregate_usage(our_judgements, model)
+    usage = _aggregate_usage_from_rows(rows, model)
     disagreements = [c for c in compared if c.our_verdict != c.their_verdict][:10]
+    n_judged = len(rows)
+    real_cost = sum(float(r.get("cost_usd") or 0.0) for r in rows)
+    cost_is_real = n_judged > 0 and all(bool(r.get("cost_is_real")) for r in rows)
 
     return {
         "model": model,
-        "n_pairs": len(sub_candidates),
+        "n_pairs": n_pairs,
         "n_judged": n_judged,
-        "budget_hit": budget_hit,
+        "budget_hit": n_judged < n_pairs,
         "agreement_rate": summary["agreement_rate"],
         "confusion": summary["confusion"],
         "disagreements": [
@@ -804,9 +1192,38 @@ def run_compare_archived(
         "published_f1": PAID_MODELS.get(model),
         "usage": usage.model_dump(),
         "real_cost_usd": real_cost,
-        "cost_is_real": cost_is_real and n_judged > 0,
+        "cost_is_real": cost_is_real,
         "usd_per_1k_pairs": (real_cost / n_judged * 1000.0) if n_judged else 0.0,
     }
+
+
+def report_compare_from_store(
+    store: PeetersResultStore,
+    *,
+    spec: PeetersReplicationSpec,
+    model: str,
+    archived: Sequence[dict[str, Any]] | None = None,
+    cache_dir: Path | None = None,
+    prompt_design: str = LIVE_PROMPT_DESIGN,
+    limit: int | None = None,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Recompute the archive-agreement report from an existing JSONL — ZERO API calls.
+
+    ``archived`` is injectable (tests); otherwise the authors' answers are loaded
+    from ``cache_dir`` (the same cache the live ``--compare-archived`` run filled).
+    """
+    if archived is None:
+        if cache_dir is None:
+            raise ValueError("report_compare_from_store needs either `archived` or a `cache_dir`")
+        archived = load_archived_answers(spec, model, prompt_design, cache_dir)
+    return _compare_report_from_rows(
+        store.rows(),
+        spec=spec,
+        model=model,
+        archived=archived,
+        n_pairs=_n_pairs_for(spec, limit, seed),
+    )
 
 
 def _print_archived_comparison(report: dict[str, Any]) -> None:
@@ -958,9 +1375,47 @@ def _run_dry_run_mode(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_live_mode(args: argparse.Namespace) -> int:
-    import os
+def _store_for(args: argparse.Namespace, dataset: str, model: str) -> PeetersResultStore:
+    """The per-(model, dataset, prompt-design) durable results store for this run."""
+    return PeetersResultStore(
+        results_path_for(args.results_dir, dataset, args.prompt_design, model)
+    )
 
+
+def _run_report_only_mode(args: argparse.Namespace) -> int:
+    """Recompute + print the full report from existing JSONL results — ZERO API calls."""
+    spec = get_peeters_replication(args.dataset)
+    models = _resolve_paid_models(args.model)
+    print("Report-only — reading persisted results, NO API key, NO LLM call, $0 spend.\n")
+    reports: list[dict[str, Any]] = []
+    for model in models:
+        store = _store_for(args, spec.name, model)
+        if not store.rows():
+            print(f"[warn] no results at {store.path} for {model}; skipping.")
+            continue
+        print(f"[report-only] {model}: {len(store.rows())} rows from {store.path}")
+        if args.compare_archived:
+            report = report_compare_from_store(
+                store,
+                spec=spec,
+                model=model,
+                cache_dir=args.cache_dir,
+                prompt_design=args.prompt_design,
+                limit=args.limit,
+                seed=args.seed,
+            )
+            _print_archived_comparison(report)
+        else:
+            report = report_live_from_store(
+                store, spec=spec, model=model, limit=args.limit, seed=args.seed
+            )
+        reports.append(report)
+    if not args.compare_archived and reports:
+        _print_comparison(reports)
+    return 0
+
+
+def _run_live_mode(args: argparse.Namespace) -> int:
     from dotenv import load_dotenv
 
     spec = get_peeters_replication(args.dataset)
@@ -979,6 +1434,7 @@ def _run_live_mode(args: argparse.Namespace) -> int:
             f"input_tokens={report['input_tokens']}  est=${report['est_usd']:.4f}"
         )
     print(f"\nestimated total: ${total_est:.4f}  |  hard cap: ${args.budget:.2f}\n")
+    print(f"results dir: {args.results_dir}  (per-pair JSONL; resume + --report-only read it)\n")
 
     if not args.yes_spend_money:
         print(
@@ -999,10 +1455,11 @@ def _run_live_mode(args: argparse.Namespace) -> int:
     per_model_budget = args.budget / len(models)
     try:
         for model in models:
+            store = _store_for(args, spec.name, model)
             if args.compare_archived:
                 print(
                     f"[live+archive] judging {spec.name} with {model} "
-                    f"(per-model cap ${per_model_budget:.2f})..."
+                    f"(per-model cap ${per_model_budget:.2f}) -> {store.path}"
                 )
                 report = run_compare_archived(
                     spec,
@@ -1012,14 +1469,23 @@ def _run_live_mode(args: argparse.Namespace) -> int:
                     cache_dir=args.cache_dir,
                     limit=args.limit,
                     seed=args.seed,
+                    store=store,
+                    progress_every=args.progress_every,
                 )
                 _print_archived_comparison(report)
             else:
                 print(
                     f"[live] judging {spec.name} with {model} "
-                    f"(per-model cap ${per_model_budget:.2f})..."
+                    f"(per-model cap ${per_model_budget:.2f}) -> {store.path}"
                 )
-                report = run_live(spec, model, budget_usd=per_model_budget, indices=indices)
+                report = run_live(
+                    spec,
+                    model,
+                    budget_usd=per_model_budget,
+                    indices=indices,
+                    store=store,
+                    progress_every=args.progress_every,
+                )
             results.append(report)
     except BudgetExceeded as exc:
         print(f"[stopped] budget cap fired: {exc}")
@@ -1036,6 +1502,10 @@ def _run_live_mode(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    # Line-buffer stdout so an incremental progress line survives a SIGKILL rather
+    # than dying in the buffer (also pass ``python -u`` when driving this script).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
@@ -1107,9 +1577,44 @@ def main() -> int:
         help="Where to download/extract the answer archive (replay/compare-archived; gitignored).",
     )
     parser.add_argument(
-        "--results-path", default=None, help="Optional JSON path to write live results to."
+        "--results-dir",
+        type=Path,
+        default=Path("tmp/peeters"),
+        help=(
+            "Directory for the crash-safe per-pair JSONL results (one file per model). "
+            "A live run appends here as it goes; resume + --report-only read it. Gitignored "
+            "(default tmp/peeters)."
+        ),
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=DEFAULT_PROGRESS_EVERY,
+        help=f"Print a progress line every N judged pairs (default {DEFAULT_PROGRESS_EVERY}).",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help=(
+            "Recompute + print the report from existing --results-dir JSONL with ZERO API "
+            "calls (add --compare-archived for the agreement report). No spend, no key."
+        ),
+    )
+    parser.add_argument(
+        "--results-path",
+        default=None,
+        help="Optional JSON path to also dump the final aggregate report(s) to (live mode).",
     )
     args = parser.parse_args()
+
+    if args.limit is not None and args.limit <= 0:
+        print(f"[fatal] --limit must be a positive integer (got {args.limit}).")
+        return 1
+
+    # Report-only reads persisted results ($0) — it is orthogonal to --mode and may
+    # carry --compare-archived, so it is handled before the paid-mode guards below.
+    if args.report_only:
+        return _run_report_only_mode(args)
 
     if args.mode == "live" and args.budget > BUDGET_CEILING_USD:
         print(f"[fatal] --budget ${args.budget:.2f} exceeds the ${BUDGET_CEILING_USD:.2f} ceiling.")
@@ -1117,10 +1622,6 @@ def main() -> int:
 
     if args.compare_archived and args.mode != "live":
         print("[fatal] --compare-archived only applies to --mode live (it runs a paid judge).")
-        return 1
-
-    if args.limit is not None and args.limit <= 0:
-        print(f"[fatal] --limit must be a positive integer (got {args.limit}).")
         return 1
 
     if args.mode == "replay":
