@@ -95,13 +95,42 @@
   assertion, and reports F1 + the aggregated `LLMUsage` vector + the real
   OpenRouter-billed cost (`cost_is_real`) vs the paper's published F1. Races two
   dated snapshots: `gpt-4o-mini-2024-07-18` (paper F1 90.95, est ~$0.017) and
-  `gpt-4o-2024-08-06` (paper F1 89.33, est ~$0.27); measured total ≈ $0.29.
+  `gpt-4o-2024-08-06` (paper F1 90.47, est ~$0.27); measured total ≈ $0.29.
 - **`PRICES_PER_1M` gains the two dated snapshots** the paid run pins:
   `openrouter/openai/gpt-4o-mini-2024-07-18` ($0.15/$0.60) and
   `openrouter/openai/gpt-4o-2024-08-06` ($2.50/$10.00) — OpenRouter list prices
   (checked 2026-07-09); the script refuses to start if a model is unpriced.
+- **The live judge pins the OpenRouter → OpenAI provider route.** Our sole
+  deviation from the paper's setup is the OpenRouter hop; the live `LLMJudge` now
+  sets `provider={"order": ["OpenAI"], "allow_fallbacks": False}` (`LIVE_PROVIDER`,
+  sent as `extra_body["provider"]`) so OpenRouter must serve the request from
+  OpenAI's own backend and cannot silently substitute a different
+  provider/quantization of the snapshot.
+- **`--limit N` + `--seed` run a stratified subset.** `--limit N` keeps
+  `round(N · pos_ratio)` positives and the rest negatives — preserving the ~17.1%
+  Abt-Buy positive ratio, deterministic under `--seed` (default 0) — instead of
+  all 1206 (the pair set is a positive block then a negative block, so a naive
+  first-`N` would be all matches). A 150-pair gpt-4o-mini live trial costs
+  **~$0.002**. Applies to `dry-run`/`live`/`replay`.
+- **`--compare-archived` (`--mode live`) checks per-pair agreement against the
+  authors' archived answers.** For the exact model we run, it loads the authors'
+  archived per-pair answer (reusing the replay harness's cached download) and
+  reports the per-pair **agreement rate**, a **2×2 confusion** of ours-vs-theirs,
+  up to **10 concrete disagreeing pairs** (record text, gold label, their raw
+  answer, our raw answer), and **our** F1/P/R on the judged subset next to
+  **their** F1/P/R recomputed on that *same* subset (plus the published full-set
+  number) — both verdicts parsed through the one canonical `parse_binary_yes_no`.
+  It asserts the archived row count equals the pair-set count and that each
+  rendered prompt matches the archived one, **failing loudly** on a mismatch (the
+  alignment being off would make every comparison meaningless).
 
 ### Fixed
+
+- **Corrected the published Abt-Buy F1 for `gpt-4o-2024-08-06` from a wrong
+  `89.33` to `90.47`** (P 83.27 / R 99.03) — arXiv 2310.11244 v4 Table 2 and the
+  authors' `results.xlsx` agree. Fixed in the harness (`PAID_MODELS` + docstring),
+  `PRICES_PER_1M`'s comment, and `docs/BENCHMARKS.md`. (`gpt-4o-mini-2024-07-18`
+  stays **90.95**, P 89.25 / R 92.72.)
 
 - **Unified the two yes/no answer parsers into one canonical implementation.**
   `llm_judge.parse_binary_yes_no` and `data.peeters.parse_binary_answer` had

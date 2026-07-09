@@ -224,8 +224,8 @@ and `$/1k pairs`), with the paper's published F1 as a column:
 
 | model (OpenRouter id) | paper "name" | published Abt-Buy F1 | ~est cost |
 |---|---|---|---|
-| `openai/gpt-4o-mini-2024-07-18` | GPT-mini | **90.95** | ~$0.017 |
-| `openai/gpt-4o-2024-08-06` | GPT-4o | **89.33** | ~$0.27 |
+| `openai/gpt-4o-mini-2024-07-18` | GPT-mini | **90.95** (P 89.25 / R 92.72) | ~$0.017 |
+| `openai/gpt-4o-2024-08-06` | GPT-4o | **90.47** (P 83.27 / R 99.03) | ~$0.27 |
 
 `gpt-4-0613` (the F1 **95.15** cell §4 replays) would cost ~$3.15 live and is
 **deliberately declined** — not worth the spend, and it retires 2026-10-23;
@@ -234,6 +234,41 @@ and `$/1k pairs`), with the paper's published F1 as a column:
 raced model MUST be priced in `langres.clients.openrouter.PRICES_PER_1M` — an
 unpriced model silently contributes $0 to the cap, so the script refuses to start
 without a price entry.
+
+The one deviation from the paper's setup is that we route the same dated snapshot
+through **OpenRouter** rather than calling OpenAI directly, so the live judge pins
+`provider={"order": ["OpenAI"], "allow_fallbacks": False}` (`LLMJudge(provider=…)`
+→ `extra_body["provider"]`) — OpenRouter must serve the request from OpenAI's own
+backend and can't silently swap in a different provider/quantization.
+
+### 4b. Cheaper trials + per-pair agreement against the authors' answers
+
+`--limit N` runs a **stratified** subset of `N` pairs (preserving the ~17.1%
+positive ratio, deterministic under `--seed`, default 0) — the file is a positive
+block followed by a negative block, so a naive first-`N` would be all matches. A
+150-pair gpt-4o-mini trial costs **~$0.002**.
+
+`--compare-archived` (`--mode live`) judges each pair live **and** compares our
+parsed verdict to the authors' archived per-pair answer for the *same* model
+(reusing the replay harness's cached download). It reports the **per-pair
+agreement rate**, a **2×2 confusion** of ours-vs-theirs (both-yes / both-no /
+we-yes-they-no / we-no-they-yes), up to **10 concrete disagreeing pairs** (record
+text, gold label, their raw answer, our raw answer), and **our** F1/P/R on the
+judged subset next to **their** F1/P/R recomputed on that *same* subset (plus the
+published full-set number). Both verdicts are parsed through the one canonical
+`parse_binary_yes_no`, and it **fails loudly** if our rendered prompt does not
+match the archived one — a mismatch means the alignment is off and every
+downstream comparison would be meaningless.
+
+```bash
+# $0 preview of the 150-pair subset cost:
+uv run python examples/research/peeters_llm_em_replication.py --mode dry-run \
+    --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150
+# PAID (~$0.002), with per-pair archive agreement (run with the sandbox disabled):
+uv run python examples/research/peeters_llm_em_replication.py --mode live \
+    --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150 \
+    --compare-archived --yes-spend-money
+```
 
 ---
 

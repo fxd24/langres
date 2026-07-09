@@ -55,7 +55,8 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     # OpenRouter usage accounting (cost_is_real). The dated snapshots are pinned
     # (not the undated gpt-4o/gpt-4o-mini aliases above) so the paid run is
     # reproducible. gpt-4o-mini-2024-07-18 = the paper's "GPT-mini" (published
-    # F1 90.95); gpt-4o-2024-08-06 = their "GPT-4o" (published F1 89.33).
+    # F1 90.95); gpt-4o-2024-08-06 = their "GPT-4o" (published F1 90.47 --
+    # corrected from an earlier wrong 89.33; arXiv v4 Table 2 + results.xlsx).
     "openrouter/openai/gpt-4o-mini-2024-07-18": (0.15, 0.60),
     "openrouter/openai/gpt-4o-2024-08-06": (2.50, 10.00),
     # OpenRouter path for judge="auto" (OPENROUTER_API_KEY set) — see

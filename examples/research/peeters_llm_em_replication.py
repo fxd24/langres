@@ -29,9 +29,11 @@ run pays for is exactly what the `$0` replay validated:
 The paid run races exactly two dated snapshots (Abt-Buy domain-complex-force):
 
 * ``openrouter/openai/gpt-4o-mini-2024-07-18`` — the paper's "GPT-mini", published
-  F1 **90.95**.
+  F1 **90.95** (P=89.25, R=92.72).
 * ``openrouter/openai/gpt-4o-2024-08-06`` — the paper's "GPT-4o", published F1
-  **89.33**.
+  **90.47** (P=83.27, R=99.03). (An earlier draft of this harness carried a wrong
+  89.33 for this cell; arXiv v4 Table 2 and the authors' ``results.xlsx`` agree on
+  90.47.)
 
 ``gpt-4-0613`` (the F1 **95.15** cell the offline replay reproduces) would cost
 ~$3.15 to run live and was **deliberately declined** — not worth the spend, and
@@ -51,6 +53,26 @@ Spend safety (read twice):
 * ``OPENROUTER_API_KEY`` is **required** for ``--mode live`` and is **NOT present
   in this environment**; the paid path fails fast with a clear message rather
   than silently falling back to another provider or an unpriced model.
+* The one deviation from the paper's setup is that we route the same dated model
+  snapshot through **OpenRouter** instead of calling OpenAI directly. The live
+  judge therefore pins :data:`LIVE_PROVIDER`
+  (``{"order": ["OpenAI"], "allow_fallbacks": False}``) so OpenRouter must serve
+  the request from OpenAI's own backend and cannot silently substitute a
+  different provider/quantization of the model.
+
+Cheaper trials + per-pair agreement against the archive:
+
+* ``--limit N`` runs a **stratified** subset of ``N`` pairs (preserving the
+  17.1% positive ratio, deterministic under ``--seed``, default 0) instead of all
+  1206 — so a live trial can be sized to a few cents. Applies to
+  ``dry-run``/``live``/``replay``.
+* ``--compare-archived`` (``--mode live`` only) judges each pair live **and**
+  compares our parsed verdict to the authors' archived answer for the same model,
+  reporting the per-pair agreement rate, a 2x2 confusion of ours-vs-theirs, up to
+  10 concrete disagreeing pairs, our F1/P/R on the judged subset next to *their*
+  F1/P/R recomputed on that same subset (and the published full-set number), plus
+  the usage vector + real billed cost. It fails loudly if our rendered prompt does
+  not match the archived one (a mismatch means the alignment is off).
 
 Data licensing: MatchGPT ships no LICENSE (``license: null``); langres is
 Apache-2.0. Nothing from MatchGPT is vendored — the ~186 MB answer archive is
@@ -62,8 +84,13 @@ Usage::
     # $0, no key:
     uv run python examples/research/peeters_llm_em_replication.py
     uv run python examples/research/peeters_llm_em_replication.py --mode dry-run
+    uv run python examples/research/peeters_llm_em_replication.py --mode dry-run --limit 150
     # PAID (run with the sandbox disabled — OpenRouter is a network call):
     uv run python examples/research/peeters_llm_em_replication.py --mode live --yes-spend-money
+    # PAID, sized to a 150-pair stratified subset, with per-pair archive agreement:
+    uv run python examples/research/peeters_llm_em_replication.py --mode live \\
+        --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150 \\
+        --compare-archived --yes-spend-money
 
 ``print`` is allowed in examples (this is an operator tool).
 """
@@ -71,12 +98,15 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
+import random
 import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +128,7 @@ from langres.data.peeters import (
     list_peeters_replications,
     load_peeters_sample,
     make_record_serializer,
+    parse_binary_answer,
     render_sample_prompts,
 )
 
@@ -158,8 +189,21 @@ def ensure_answers(cache_dir: Path, dataset: str, prompt_design: str, model: str
     return extracted
 
 
-def replay(dataset: str, model: str, prompt_design: str, cache_dir: Path) -> None:
-    """Replay one archived run and report prompt round-trip + pairwise F1 ($0)."""
+def replay(
+    dataset: str,
+    model: str,
+    prompt_design: str,
+    cache_dir: Path,
+    *,
+    limit: int | None = None,
+    seed: int = 0,
+) -> None:
+    """Replay one archived run and report prompt round-trip + pairwise F1 ($0).
+
+    ``limit`` runs a stratified subset (via :func:`stratified_subset_indices`) —
+    handy for a quick look; the published-F1 assertion is a full-set claim, so it
+    is reported (not asserted) when the run is limited.
+    """
     spec = get_peeters_replication(dataset)
     prompts = render_sample_prompts(spec)  # our records + serializer, in sample order
 
@@ -171,6 +215,11 @@ def replay(dataset: str, model: str, prompt_design: str, cache_dir: Path) -> Non
             f"archive has {len(archived)} lines but our sample has {len(prompts)} pairs — "
             "alignment would be wrong; aborting."
         )
+
+    if limit is not None:
+        indices = stratified_subset_indices([p.label for p in prompts], limit, seed)
+        prompts = [prompts[i] for i in indices]
+        archived = [archived[i] for i in indices]
 
     # --- Prompt round-trip: our rendered prompt vs their archived prompt -------
     exact = sum(1 for p, rec in zip(prompts, archived, strict=True) if p.prompt == rec["prompt"])
@@ -194,7 +243,11 @@ def replay(dataset: str, model: str, prompt_design: str, cache_dir: Path) -> Non
     print(f"  tp={metrics.tp} fp={metrics.fp} fn={metrics.fn}")
 
     target = PUBLISHED_F1.get((dataset, model, prompt_design))
-    if target is not None:
+    if target is not None and limit is not None:
+        print(
+            f"published Table 2 F1 : {target:.2f}  (full-set claim — not asserted on a --limit subset)"
+        )
+    elif target is not None:
         delta = abs(f1_pct - target)
         ok = delta <= F1_TOLERANCE
         print(f"published Table 2 F1 : {target:.2f}  (Δ={delta:.4f}, tol={F1_TOLERANCE})")
@@ -216,8 +269,17 @@ def replay(dataset: str, model: str, prompt_design: str, cache_dir: Path) -> Non
 #: visible at a glance.
 PAID_MODELS: dict[str, float] = {
     "openrouter/openai/gpt-4o-mini-2024-07-18": 90.95,  # paper "GPT-mini"
-    "openrouter/openai/gpt-4o-2024-08-06": 89.33,  # paper "GPT-4o"
+    "openrouter/openai/gpt-4o-2024-08-06": 90.47,  # paper "GPT-4o" (corrected from 89.33)
 }
+
+#: OpenRouter provider-routing block pinned on the live judge. Our sole deviation
+#: from the paper's setup is routing the same dated snapshot through OpenRouter
+#: rather than calling OpenAI directly; pinning ``order: ["OpenAI"]`` +
+#: ``allow_fallbacks: False`` forces OpenRouter to serve the request from OpenAI's
+#: own backend, so a different provider/quantization can't silently be substituted
+#: and change the F1/cost we report. Sent as ``LLMJudge(provider=...)`` ->
+#: ``extra_body["provider"]``.
+LIVE_PROVIDER: dict[str, Any] = {"order": ["OpenAI"], "allow_fallbacks": False}
 
 #: Hard spend cap (USD) for the two-model run combined. Measured total ≈ $0.29,
 #: so $1.00 is a ~3.4x margin. ``main`` refuses anything above the ceiling.
@@ -228,6 +290,40 @@ BUDGET_CEILING_USD = 2.00
 #: protocol answers with a single "Yes"/"No" word (~1–2 o200k tokens). The live
 #: run meters the REAL output cost; this only sizes the pre-flight estimate.
 _EST_OUTPUT_TOKENS_PER_PROMPT = 2
+
+
+def stratified_subset_indices(labels: Sequence[int], limit: int, seed: int = 0) -> list[int]:
+    """Pick ``limit`` sample-order indices, preserving the positive ratio, deterministically.
+
+    The Peeters pair set is a *concatenation* of the positive block followed by the
+    negative block (Abt-Buy: 206 positives at indices 0–205, then 1000 negatives),
+    so naively taking the first ``N`` rows would return an all-positive (or, past
+    206, positive-heavy) subset. This instead keeps ``round(limit * pos_ratio)``
+    positives and the rest negatives — reproducing the full set's ~17.1% positive
+    ratio — sampling each class with a seeded :class:`random.Random` so the same
+    ``(limit, seed)`` always yields the same subset. Indices are returned in
+    **ascending** (sample) order, so they can subset any sample-aligned sequence
+    (prompts, candidates, archived answers) without breaking alignment.
+
+    Args:
+        labels: The full pair set's gold labels, in sample order (``1`` = match).
+        limit: Target subset size. ``>= len(labels)`` returns every index.
+        seed: RNG seed (default ``0``) making the choice reproducible.
+
+    Returns:
+        The chosen indices, ascending. Its length is ``limit`` unless a class is
+        exhausted first (not the case for the shipped Abt-Buy/Amazon-Google sets
+        at any ``limit <= 1206``).
+    """
+    n = len(labels)
+    if limit >= n:
+        return list(range(n))
+    positives = [i for i, label in enumerate(labels) if label == 1]
+    negatives = [i for i, label in enumerate(labels) if label == 0]
+    n_pos = min(round(limit * len(positives) / n), len(positives), limit)
+    n_neg = min(limit - n_pos, len(negatives))
+    rng = random.Random(seed)
+    return sorted(rng.sample(positives, n_pos) + rng.sample(negatives, n_neg))
 
 
 def _tokenizer_model(model: str) -> str:
@@ -263,6 +359,7 @@ def dry_run(
     *,
     prices: dict[str, tuple[float, float]] = PRICES_PER_1M,
     count_tokens: Callable[[str], int] | None = None,
+    indices: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Render every pair through the LIVE path and count tokens — ZERO API calls.
 
@@ -270,7 +367,9 @@ def dry_run(
     ``make_record_serializer`` the live ``LLMJudge`` uses, so the input-token
     total is the true billed input. Output tokens are estimated (the single-word
     binary answer). ``count_tokens`` is injectable for a dependency-free test;
-    ``None`` uses the real litellm/tiktoken counter.
+    ``None`` uses the real litellm/tiktoken counter. ``indices`` (from
+    :func:`stratified_subset_indices`) prices only that ``--limit`` subset;
+    ``None`` prices all pairs.
 
     Returns a dict with the pair count, input/output token totals, mean/max input,
     and a cost estimate priced against ``prices[model]``.
@@ -278,6 +377,8 @@ def dry_run(
     template = build_llm_prompt_template(spec)
     serializer = make_record_serializer(spec)
     candidates = build_candidates(spec)
+    if indices is not None:
+        candidates = [candidates[i] for i in indices]
     counter = count_tokens if count_tokens is not None else _litellm_token_counter(model)
 
     input_tokens = 0
@@ -329,46 +430,41 @@ def _aggregate_usage(judgements: Sequence[Any], model: str) -> LLMUsage:
     )
 
 
-def run_live(
-    spec: PeetersReplicationSpec,
-    model: str,
-    *,
-    budget_usd: float,
-    prices: dict[str, tuple[float, float]] = PRICES_PER_1M,
-    client: Any = None,
-) -> dict[str, Any]:
-    """Judge every sampled pair with a live ``LLMJudge`` under a hard spend cap.
+def _build_live_judge(
+    spec: PeetersReplicationSpec, model: str, client: Any = None
+) -> LLMJudge[Any]:
+    """The live ``LLMJudge`` for a Peeters slice — the single build site.
 
-    Builds the judge with the paper's ``domain-complex-force`` template, the
-    Peeters ``record_serializer``, ``response_parser=parse_binary_yes_no`` and
-    ``temperature=0.0``, then streams ``forward`` over the candidates — charging
-    each judgement's REAL (OpenRouter-billed) cost to a
-    :class:`SpendMonitor` and stopping the moment cumulative spend crosses
-    ``budget_usd``. Computes pairwise P/R/F1 at threshold 0.5 (no sweep — the
-    protocol is binary) and aggregates the token-usage vector + billed cost.
-
-    ``client`` is injectable (a fake returning "Yes"/"No") so the whole flow is
-    verified at **$0** in tests; ``None`` lets ``LLMJudge`` build a real litellm
-    client from the environment (the paid path).
+    Wires the paper's ``domain-complex-force`` template, the Peeters per-dataset
+    ``record_serializer``, ``response_parser=parse_binary_yes_no`` and
+    ``temperature=0.0``, and pins :data:`LIVE_PROVIDER` so OpenRouter routes to
+    OpenAI's own backend (our only deviation from the paper is the OpenRouter
+    hop). Shared by :func:`run_live` and :func:`run_compare_archived` so the two
+    paid paths judge with a byte-identical judge. ``client`` is injectable (a
+    fake) so the whole flow is exercised at **$0** in tests.
     """
-    template = build_llm_prompt_template(spec)
-    serializer = make_record_serializer(spec)
-    candidates = build_candidates(spec)
-    gold = {
-        frozenset({left_id, right_id})
-        for left_id, right_id, label in load_peeters_sample(spec)
-        if label == 1
-    }
-
-    judge: LLMJudge[Any] = LLMJudge(
+    return LLMJudge(
         client=client,
         model=model,
         temperature=0.0,
-        prompt_template=template,
-        record_serializer=serializer,
+        prompt_template=build_llm_prompt_template(spec),
+        record_serializer=make_record_serializer(spec),
         response_parser=parse_binary_yes_no,
+        provider=LIVE_PROVIDER,
     )
 
+
+def _judge_under_budget(
+    judge: LLMJudge[Any], candidates: Sequence[Any], budget_usd: float
+) -> tuple[list[Any], float, bool, bool]:
+    """Stream ``judge.forward`` over ``candidates`` under a hard :class:`SpendMonitor`.
+
+    Charges each judgement's REAL (OpenRouter-billed) cost to the monitor and
+    stops the moment cumulative spend crosses ``budget_usd``. Returns
+    ``(judgements, real_cost_usd, cost_is_real, budget_hit)`` — the judgements are
+    in candidate order and truncated at the pair that tripped the cap. Shared by
+    :func:`run_live` and :func:`run_compare_archived`.
+    """
     monitor = SpendMonitor(budget_usd=budget_usd)
     judgements: list[Any] = []
     real_cost = 0.0
@@ -386,10 +482,53 @@ def run_live(
             budget_hit = True
             logger.warning("budget cap hit after %d/%d pairs", len(judgements), len(candidates))
             break
+    return judgements, real_cost, cost_is_real, budget_hit
 
+
+def run_live(
+    spec: PeetersReplicationSpec,
+    model: str,
+    *,
+    budget_usd: float,
+    prices: dict[str, tuple[float, float]] = PRICES_PER_1M,
+    client: Any = None,
+    indices: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Judge every sampled pair with a live ``LLMJudge`` under a hard spend cap.
+
+    Builds the judge via :func:`_build_live_judge` (paper template, Peeters
+    serializer, ``parse_binary_yes_no``, ``temperature=0.0``, provider pinned),
+    then streams it under a :class:`SpendMonitor` via :func:`_judge_under_budget`.
+    Computes pairwise P/R/F1 at threshold 0.5 (no sweep — the protocol is binary)
+    over the pairs actually judged and aggregates the token-usage vector + billed
+    cost. ``indices`` (from :func:`stratified_subset_indices`) restricts the run to
+    a ``--limit`` subset; ``None`` judges all pairs.
+
+    ``client`` is injectable (a fake returning "Yes"/"No") so the whole flow is
+    verified at **$0** in tests; ``None`` lets ``LLMJudge`` build a real litellm
+    client from the environment (the paid path).
+    """
+    candidates = build_candidates(spec)
+    sample = load_peeters_sample(spec)
+    if indices is not None:
+        candidates = [candidates[i] for i in indices]
+        sample = [sample[i] for i in indices]
+
+    judge = _build_live_judge(spec, model, client)
+    judgements, real_cost, cost_is_real, budget_hit = _judge_under_budget(
+        judge, candidates, budget_usd
+    )
+    n_judged = len(judgements)
+
+    # Gold is restricted to the pairs actually judged (subset ∩ budget prefix), so
+    # ``fn`` counts only positives the model was asked about and answered "no" to.
+    gold = {
+        frozenset({left_id, right_id})
+        for left_id, right_id, label in sample[:n_judged]
+        if label == 1
+    }
     metrics = classify_pairs(judgements, gold, threshold=0.5)
     usage = _aggregate_usage(judgements, model)
-    n_judged = len(judgements)
     return {
         "model": model,
         "published_f1": PAID_MODELS.get(model),
@@ -407,6 +546,317 @@ def run_live(
         "cost_is_real": cost_is_real and n_judged > 0,
         "usd_per_1k_pairs": (real_cost / n_judged * 1000.0) if n_judged else 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-pair agreement against the authors' archived answers (--compare-archived).
+#
+# The paid run above scores *our* F1 against the paper's published number. This
+# goes finer-grained: for the exact model we run, the authors archived their raw
+# per-pair answer, so we can check pair-by-pair whether our live verdict matches
+# theirs — the rows a human reads when the aggregate F1 diverges from the paper.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ComparedPair:
+    """One pair judged both ways: our live verdict vs. the authors' archived verdict.
+
+    Attributes:
+        left_id / right_id: Source-prefixed record ids.
+        left / right: The serialized records the model actually saw.
+        label: Gold label (``1`` = match, ``0`` = non-match).
+        our_answer / our_verdict: Our raw model answer and its
+            :func:`parse_binary_yes_no` verdict (``1``/``0``).
+        their_answer / their_verdict: The authors' archived raw answer and its
+            :func:`parse_binary_yes_no` verdict — both sides go through the one
+            canonical parser so the comparison is apples-to-apples.
+    """
+
+    left_id: str
+    right_id: str
+    left: str
+    right: str
+    label: int
+    our_answer: str
+    our_verdict: int
+    their_answer: str
+    their_verdict: int
+
+
+def load_archived_answers(
+    spec: PeetersReplicationSpec,
+    model: str,
+    prompt_design: str,
+    cache_dir: Path,
+) -> list[dict[str, Any]]:
+    """Fetch + parse the authors' archived ``{prompt, answer}`` rows for ``model``.
+
+    Reuses the offline replay's :func:`ensure_answers` download/extract/cache path
+    (no duplication) — mapping the OpenRouter routing id to the bare model id the
+    archive member is keyed on (``openrouter/openai/gpt-4o-mini-2024-07-18`` →
+    ``gpt-4o-mini-2024-07-18``). Rows are returned in the archive's line order,
+    which matches the sampled pair set (hence :func:`stratified_subset_indices`
+    can subset both consistently).
+    """
+    archived_model = model.split("/")[-1]  # archive members use the bare OpenAI id
+    path = ensure_answers(cache_dir, spec.name, prompt_design, archived_model)
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def build_compared_pairs(
+    prompts: Sequence[Any],
+    candidates: Sequence[Any],
+    our_judgements: Sequence[Any],
+    archived: Sequence[dict[str, Any]],
+    serializer: Callable[[Any], str],
+) -> list[ComparedPair]:
+    """Zip the four sample-aligned streams into :class:`ComparedPair`\\ s, failing loud on drift.
+
+    For each pair it asserts our rendered prompt equals the archived ``prompt``
+    field — a mismatch means the alignment between our pair set and their archive
+    is off, which would make *every* downstream comparison meaningless, so it
+    raises :class:`SystemExit` with a unified diff rather than reporting garbage.
+    Both verdicts come from :func:`parse_binary_yes_no` (ours already applied by
+    the live judge; theirs via :func:`parse_binary_answer`).
+
+    Raises:
+        ValueError: If the four inputs are not the same length.
+        SystemExit: On the first prompt that does not match its archived prompt.
+    """
+    n = len(prompts)
+    if not (len(candidates) == n and len(our_judgements) == n and len(archived) == n):
+        raise ValueError(
+            f"compare inputs must align 1:1 (prompts={n}, candidates={len(candidates)}, "
+            f"judgements={len(our_judgements)}, archived={len(archived)})"
+        )
+    compared: list[ComparedPair] = []
+    for i in range(n):
+        rendered = prompts[i].prompt
+        archived_prompt = str(archived[i]["prompt"])
+        if rendered != archived_prompt:
+            diff = "\n".join(
+                difflib.unified_diff(
+                    archived_prompt.splitlines(),
+                    rendered.splitlines(),
+                    fromfile="archived",
+                    tofile="ours",
+                    lineterm="",
+                )
+            )
+            raise SystemExit(
+                f"[fatal] prompt mismatch at compared row {i} "
+                f"({prompts[i].left_id} vs {prompts[i].right_id}) — alignment is off, so "
+                f"every downstream comparison would be meaningless. Aborting.\n{diff}"
+            )
+        their_answer = str(archived[i]["answer"])
+        our_answer = our_judgements[i].reasoning or ""
+        compared.append(
+            ComparedPair(
+                left_id=prompts[i].left_id,
+                right_id=prompts[i].right_id,
+                left=serializer(candidates[i].left),
+                right=serializer(candidates[i].right),
+                label=prompts[i].label,
+                our_answer=our_answer,
+                our_verdict=int(our_judgements[i].score),
+                their_answer=their_answer,
+                their_verdict=parse_binary_answer(their_answer),
+            )
+        )
+    return compared
+
+
+def confusion_and_agreement(compared: Sequence[ComparedPair]) -> dict[str, Any]:
+    """The per-pair agreement rate + the 2x2 confusion of our verdicts vs. theirs."""
+    both_yes = sum(1 for c in compared if c.our_verdict == 1 and c.their_verdict == 1)
+    both_no = sum(1 for c in compared if c.our_verdict == 0 and c.their_verdict == 0)
+    we_yes_they_no = sum(1 for c in compared if c.our_verdict == 1 and c.their_verdict == 0)
+    we_no_they_yes = sum(1 for c in compared if c.our_verdict == 0 and c.their_verdict == 1)
+    n = len(compared)
+    return {
+        "n_compared": n,
+        "agreement_rate": (both_yes + both_no) / n if n else 0.0,
+        "confusion": {
+            "both_yes": both_yes,
+            "both_no": both_no,
+            "we_yes_they_no": we_yes_they_no,
+            "we_no_they_yes": we_no_they_yes,
+        },
+    }
+
+
+def run_compare_archived(
+    spec: PeetersReplicationSpec,
+    model: str,
+    *,
+    prompt_design: str = "domain-complex-force",
+    budget_usd: float,
+    client: Any = None,
+    archived: Sequence[dict[str, Any]] | None = None,
+    cache_dir: Path | None = None,
+    limit: int | None = None,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Judge a (optionally ``--limit``-ed) subset live and compare pair-by-pair to the archive.
+
+    Runs the live judge over the stratified subset (:func:`_build_live_judge` +
+    :func:`_judge_under_budget`), loads the authors' archived answers for the same
+    model (:func:`load_archived_answers`, or the injected ``archived`` in tests),
+    and reports: the per-pair agreement rate, the 2x2 confusion of ours vs. theirs,
+    up to 10 concrete disagreeing pairs, our F1/P/R on the judged subset next to
+    *their* F1/P/R recomputed on that same subset (plus the published full-set
+    number), and the usage vector + real billed cost.
+
+    The archived JSONL row count is asserted equal to the *full* pair-set count
+    before any subsetting; per-compared-pair the rendered prompt is asserted equal
+    to the archived one (:func:`build_compared_pairs` raises on a mismatch). The
+    ``archived`` / ``client`` seams let the whole path run at **$0** in tests.
+
+    Raises:
+        SystemExit: On an archived-vs-pair-set row-count mismatch (or, via
+            :func:`build_compared_pairs`, a per-pair prompt mismatch).
+        ValueError: If ``archived is None`` and no ``cache_dir`` was given.
+    """
+    full_prompts = render_sample_prompts(spec)
+    if archived is None:
+        if cache_dir is None:
+            raise ValueError("run_compare_archived needs either `archived` or a `cache_dir`")
+        archived = load_archived_answers(spec, model, prompt_design, cache_dir)
+    if len(archived) != len(full_prompts):
+        raise SystemExit(
+            f"[fatal] archived JSONL has {len(archived)} rows but the {spec.name} pair set "
+            f"has {len(full_prompts)} — alignment would be wrong; aborting."
+        )
+
+    labels = [p.label for p in full_prompts]
+    indices = (
+        stratified_subset_indices(labels, limit, seed)
+        if limit is not None
+        else list(range(len(labels)))
+    )
+    full_candidates = build_candidates(spec)
+    sub_prompts = [full_prompts[i] for i in indices]
+    sub_candidates = [full_candidates[i] for i in indices]
+    sub_archived = [archived[i] for i in indices]
+
+    judge = _build_live_judge(spec, model, client)
+    our_judgements, real_cost, cost_is_real, budget_hit = _judge_under_budget(
+        judge, sub_candidates, budget_usd
+    )
+    n_judged = len(our_judgements)
+
+    # Budget may have truncated the run: compare only the pairs actually judged.
+    judged_prompts = sub_prompts[:n_judged]
+    judged_candidates = sub_candidates[:n_judged]
+    judged_archived = sub_archived[:n_judged]
+
+    serializer = make_record_serializer(spec)
+    compared = build_compared_pairs(
+        judged_prompts, judged_candidates, our_judgements, judged_archived, serializer
+    )
+    summary = confusion_and_agreement(compared)
+
+    gold = {frozenset({p.left_id, p.right_id}) for p in judged_prompts if p.label == 1}
+    our_metrics = classify_pairs(list(our_judgements), gold, threshold=0.5)
+    their_judgements = judgements_from_answers(
+        judged_prompts, [str(a["answer"]) for a in judged_archived]
+    )
+    their_metrics = classify_pairs(their_judgements, gold, threshold=0.5)
+    usage = _aggregate_usage(our_judgements, model)
+    disagreements = [c for c in compared if c.our_verdict != c.their_verdict][:10]
+
+    return {
+        "model": model,
+        "n_pairs": len(sub_candidates),
+        "n_judged": n_judged,
+        "budget_hit": budget_hit,
+        "agreement_rate": summary["agreement_rate"],
+        "confusion": summary["confusion"],
+        "disagreements": [
+            {
+                "left_id": c.left_id,
+                "right_id": c.right_id,
+                "left": c.left,
+                "right": c.right,
+                "gold_label": c.label,
+                "their_answer": c.their_answer,
+                "our_answer": c.our_answer,
+            }
+            for c in disagreements
+        ],
+        "ours": {
+            "f1": our_metrics.f1 * 100.0,
+            "precision": our_metrics.precision * 100.0,
+            "recall": our_metrics.recall * 100.0,
+            "tp": our_metrics.tp,
+            "fp": our_metrics.fp,
+            "fn": our_metrics.fn,
+        },
+        "theirs_subset": {
+            "f1": their_metrics.f1 * 100.0,
+            "precision": their_metrics.precision * 100.0,
+            "recall": their_metrics.recall * 100.0,
+            "tp": their_metrics.tp,
+            "fp": their_metrics.fp,
+            "fn": their_metrics.fn,
+        },
+        "published_f1": PAID_MODELS.get(model),
+        "usage": usage.model_dump(),
+        "real_cost_usd": real_cost,
+        "cost_is_real": cost_is_real and n_judged > 0,
+        "usd_per_1k_pairs": (real_cost / n_judged * 1000.0) if n_judged else 0.0,
+    }
+
+
+def _print_archived_comparison(report: dict[str, Any]) -> None:
+    """Print the per-pair archive-agreement report (agreement, confusion, disagreements)."""
+    conf = report["confusion"]
+    ours = report["ours"]
+    theirs = report["theirs_subset"]
+    pub = report["published_f1"]
+    print("\n" + "=" * 96)
+    print(f"Peeters LLM-EM ARCHIVE AGREEMENT — {report['model']}")
+    print("=" * 96)
+    print(
+        f"pairs judged         : {report['n_judged']}/{report['n_pairs']}"
+        + ("  (budget cap hit — partial)" if report["budget_hit"] else "")
+    )
+    print(f"per-pair agreement   : {report['agreement_rate'] * 100:.2f}%  (ours vs. theirs)")
+    print("confusion (ours×theirs):")
+    print(f"  both YES : {conf['both_yes']:5d}    both NO       : {conf['both_no']:5d}")
+    print(
+        f"  we-Y they-N: {conf['we_yes_they_no']:3d}    we-N they-Y   : {conf['we_no_they_yes']:5d}"
+    )
+    print("-" * 96)
+    print(
+        f"OURS   (judged subset): F1={ours['f1']:.2f}  P={ours['precision']:.2f}  R={ours['recall']:.2f}"
+    )
+    print(
+        f"THEIRS (same subset)  : F1={theirs['f1']:.2f}  P={theirs['precision']:.2f}  "
+        f"R={theirs['recall']:.2f}"
+    )
+    pub_s = f"{pub:.2f}" if pub is not None else "—"
+    print(f"THEIRS (published, full set) : F1={pub_s}")
+    usage = report["usage"]
+    print(
+        f"usage: in={usage['input_tokens']} out={usage['output_tokens']}  "
+        f"real_cost=${report['real_cost_usd']:.4f}  cost_is_real={report['cost_is_real']}  "
+        f"$/1k={report['usd_per_1k_pairs']:.4f}"
+    )
+    disagreements = report["disagreements"]
+    print("-" * 96)
+    print("disagreeing pairs (up to 10 of the divergences):")
+    if not disagreements:
+        print("  (none — every judged pair agreed with the archive)")
+    for d in disagreements:
+        print(
+            f"  [{d['left_id']} vs {d['right_id']}] gold={d['gold_label']}  "
+            f"theirs={d['their_answer']!r}  ours={d['our_answer']!r}"
+        )
+        print(f"      left : {d['left']}")
+        print(f"      right: {d['right']}")
+    print("=" * 96)
 
 
 def _print_comparison(results: Sequence[dict[str, Any]]) -> None:
@@ -464,9 +914,24 @@ def _assert_priced(models: Sequence[str]) -> None:
         )
 
 
+def _subset_indices(spec: PeetersReplicationSpec, limit: int | None, seed: int) -> list[int] | None:
+    """The ``--limit`` stratified sample indices for ``spec`` (``None`` = all pairs)."""
+    if limit is None:
+        return None
+    labels = [label for _left, _right, label in load_peeters_sample(spec)]
+    return stratified_subset_indices(labels, limit, seed)
+
+
 def _run_replay_mode(args: argparse.Namespace) -> int:
     print("Offline replay — NO API key, NO LLM call, $0 spend. Replaying archived answers.\n")
-    replay(args.dataset, args.model or "gpt-4-0613", args.prompt_design, args.cache_dir)
+    replay(
+        args.dataset,
+        args.model or "gpt-4-0613",
+        args.prompt_design,
+        args.cache_dir,
+        limit=args.limit,
+        seed=args.seed,
+    )
     return 0
 
 
@@ -474,10 +939,11 @@ def _run_dry_run_mode(args: argparse.Namespace) -> int:
     spec = get_peeters_replication(args.dataset)
     models = _resolve_paid_models(args.model)
     _assert_priced(models)
+    indices = _subset_indices(spec, args.limit, args.seed)
     print("Dry run — NO API key, NO LLM call, $0 spend. Rendering prompts + counting tokens.\n")
     total_est = 0.0
     for model in models:
-        report = dry_run(spec, model)
+        report = dry_run(spec, model, indices=indices)
         total_est += report["est_usd"]
         print(
             f"{model:40}  pairs={report['n_pairs']}  "
@@ -500,14 +966,18 @@ def _run_live_mode(args: argparse.Namespace) -> int:
     spec = get_peeters_replication(args.dataset)
     models = _resolve_paid_models(args.model)
     _assert_priced(models)
+    indices = _subset_indices(spec, args.limit, args.seed)
 
     # Print the estimate BEFORE any network call, so the operator sees the cost.
     print("Estimating cost (dry run, $0) before any spend...\n")
     total_est = 0.0
     for model in models:
-        report = dry_run(spec, model)
+        report = dry_run(spec, model, indices=indices)
         total_est += report["est_usd"]
-        print(f"  {model:40}  input_tokens={report['input_tokens']}  est=${report['est_usd']:.4f}")
+        print(
+            f"  {model:40}  pairs={report['n_pairs']}  "
+            f"input_tokens={report['input_tokens']}  est=${report['est_usd']:.4f}"
+        )
     print(f"\nestimated total: ${total_est:.4f}  |  hard cap: ${args.budget:.2f}\n")
 
     if not args.yes_spend_money:
@@ -529,16 +999,34 @@ def _run_live_mode(args: argparse.Namespace) -> int:
     per_model_budget = args.budget / len(models)
     try:
         for model in models:
-            print(
-                f"[live] judging {spec.name} with {model} "
-                f"(per-model cap ${per_model_budget:.2f})..."
-            )
-            results.append(run_live(spec, model, budget_usd=per_model_budget))
+            if args.compare_archived:
+                print(
+                    f"[live+archive] judging {spec.name} with {model} "
+                    f"(per-model cap ${per_model_budget:.2f})..."
+                )
+                report = run_compare_archived(
+                    spec,
+                    model,
+                    prompt_design=args.prompt_design,
+                    budget_usd=per_model_budget,
+                    cache_dir=args.cache_dir,
+                    limit=args.limit,
+                    seed=args.seed,
+                )
+                _print_archived_comparison(report)
+            else:
+                print(
+                    f"[live] judging {spec.name} with {model} "
+                    f"(per-model cap ${per_model_budget:.2f})..."
+                )
+                report = run_live(spec, model, budget_usd=per_model_budget, indices=indices)
+            results.append(report)
     except BudgetExceeded as exc:
         print(f"[stopped] budget cap fired: {exc}")
         return 2
 
-    _print_comparison(results)
+    if not args.compare_archived:
+        _print_comparison(results)
     if args.results_path:
         out = Path(args.results_path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -584,6 +1072,30 @@ def main() -> int:
         help=f"Hard spend cap (USD) for live mode (default ${DEFAULT_BUDGET_USD:.2f}).",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Run a stratified subset of N pairs (preserving the ~17.1%% positive ratio, "
+            "deterministic under --seed) instead of all 1206. Applies to dry-run/live/replay."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="RNG seed for the --limit stratified subset (default 0).",
+    )
+    parser.add_argument(
+        "--compare-archived",
+        action="store_true",
+        help=(
+            "(--mode live) also compare each judged pair to the authors' archived answer for "
+            "the same model: per-pair agreement, a 2x2 confusion, up to 10 disagreements, and "
+            "our vs. their F1/P/R on the judged subset."
+        ),
+    )
+    parser.add_argument(
         "--yes-spend-money",
         action="store_true",
         help="Required to actually spend in --mode live (off by default).",
@@ -592,7 +1104,7 @@ def main() -> int:
         "--cache-dir",
         type=Path,
         default=Path(tempfile.gettempdir()) / "langres-peeters-replication",
-        help="Where to download/extract the answer archive (replay mode; gitignored).",
+        help="Where to download/extract the answer archive (replay/compare-archived; gitignored).",
     )
     parser.add_argument(
         "--results-path", default=None, help="Optional JSON path to write live results to."
@@ -601,6 +1113,14 @@ def main() -> int:
 
     if args.mode == "live" and args.budget > BUDGET_CEILING_USD:
         print(f"[fatal] --budget ${args.budget:.2f} exceeds the ${BUDGET_CEILING_USD:.2f} ceiling.")
+        return 1
+
+    if args.compare_archived and args.mode != "live":
+        print("[fatal] --compare-archived only applies to --mode live (it runs a paid judge).")
+        return 1
+
+    if args.limit is not None and args.limit <= 0:
+        print(f"[fatal] --limit must be a positive integer (got {args.limit}).")
         return 1
 
     if args.mode == "replay":
