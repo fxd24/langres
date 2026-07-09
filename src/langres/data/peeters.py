@@ -44,12 +44,13 @@ bibliographic sets) the ``Publication`` noun + bib task prefix.
 from __future__ import annotations
 
 import difflib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from pydantic import BaseModel
 
-from langres.core.models import PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.modules.llm_judge import parse_binary_yes_no
 from langres.data import _benchmark_utils as _bu
 
@@ -57,13 +58,17 @@ __all__ = [
     "DOMAIN_COMPLEX_FORCE_PRODUCT_PREFIX",
     "PEETERS_REPLICATIONS",
     "PeetersPairPrompt",
+    "PeetersRecord",
     "PeetersReplicationSpec",
+    "build_candidates",
+    "build_llm_prompt_template",
     "get_peeters_replication",
     "gold_match_pairs",
     "judgements_from_answers",
     "list_peeters_replications",
     "load_peeters_records",
     "load_peeters_sample",
+    "make_record_serializer",
     "parse_binary_answer",
     "regenerate_sample_rows",
     "register",
@@ -403,6 +408,80 @@ def render_sample_prompts(spec: PeetersReplicationSpec) -> list[PeetersPairPromp
         )
         prompts.append(PeetersPairPrompt(left_id, right_id, label, prompt))
     return prompts
+
+
+# ---------------------------------------------------------------------------
+# Live (paid) LLM-judge seam: template + record_serializer + candidates.
+#
+# The offline replay above validates the parser + metric wiring at $0. To run a
+# *live* judge over the same slice, an ``LLMJudge`` renders each pair itself from
+# ``prompt_template`` + ``record_serializer``; these three functions build those
+# from a spec so the live prompt is byte-identical to the archived one (proven in
+# tests). Reusable across any Peeters slice/prompt-design, not just abt-buy.
+# ---------------------------------------------------------------------------
+
+
+class PeetersRecord(BaseModel):
+    """A single record for the live LLM-judge path: an id + its raw CSV row.
+
+    The minimal :class:`~langres.core.models.ERCandidate` entity an ``LLMJudge``
+    needs — it carries ``id`` (for the judgement) and the raw ``fields`` mapping
+    the :func:`make_record_serializer` closure truncates into the prompt. Kept
+    dataset-agnostic (a raw-row bag, not a typed product/publication schema) so
+    one type serves every Peeters slice.
+    """
+
+    id: str
+    fields: dict[str, str]
+
+
+def build_llm_prompt_template(spec: PeetersReplicationSpec) -> str:
+    """The ``LLMJudge.prompt_template`` (with ``{left}``/``{right}``) for ``spec``.
+
+    Renders the spec's prompt design with the two records left as the literal
+    ``{left}`` / ``{right}`` placeholders ``LLMJudge`` substitutes at judgement
+    time (literal replacement, so the surrounding quotes/newlines are preserved).
+    Substituting the serialized records back in reproduces :func:`render_prompt`
+    exactly.
+    """
+    return render_prompt(
+        "{left}", "{right}", task_prefix=spec.task_prefix, entity_noun=spec.entity_noun
+    )
+
+
+def make_record_serializer(spec: PeetersReplicationSpec) -> Callable[[PeetersRecord], str]:
+    """An ``LLMJudge.record_serializer`` applying ``spec``'s per-field truncation.
+
+    Binds ``spec.serialization_fields`` into a closure that runs
+    :func:`serialize_record` over a :class:`PeetersRecord`'s raw ``fields`` — so
+    the live judge serializes each record byte-identically to the offline replay.
+    """
+    fields = spec.serialization_fields
+
+    def serializer(record: PeetersRecord) -> str:
+        return serialize_record(record.fields, fields)
+
+    return serializer
+
+
+def build_candidates(spec: PeetersReplicationSpec) -> list[ERCandidate[PeetersRecord]]:
+    """The sampled pairs as :class:`ERCandidate`\\ s, in sample order, for a live run.
+
+    The live-path sibling of :func:`render_sample_prompts`: instead of
+    pre-rendering the prompt, it wraps each record as a :class:`PeetersRecord` so
+    an ``LLMJudge`` (with :func:`build_llm_prompt_template` +
+    :func:`make_record_serializer`) renders it. Order matches the committed sample
+    (and hence :func:`gold_match_pairs` from the same slice).
+    """
+    left_records, right_records = load_peeters_records(spec)
+    return [
+        ERCandidate(
+            left=PeetersRecord(id=left_id, fields=left_records[left_id]),
+            right=PeetersRecord(id=right_id, fields=right_records[right_id]),
+            blocker_name="peeters_sample",
+        )
+        for left_id, right_id, _label in load_peeters_sample(spec)
+    ]
 
 
 def judgements_from_answers(

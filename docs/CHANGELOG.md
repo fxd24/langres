@@ -75,6 +75,32 @@
   in *their* gold standard's `price` column (e.g. `6.5600000000000005` vs our
   vendored `6.56`), not a serializer bug.
 
+### Added — Peeters LLM-EM live (paid) path
+
+- **Live-run seams in `langres.data.peeters`** so an `LLMJudge` can run the exact
+  Peeters prompt over a slice: `build_llm_prompt_template(spec)` (the
+  `domain-complex-force` template with `{left}`/`{right}`),
+  `make_record_serializer(spec)` (the per-dataset serializer), `build_candidates(spec)`
+  (the sampled pairs as `ERCandidate`s), and the `PeetersRecord` entity. A test
+  pins that the live rendering (`template.replace(...)` + serializer) reproduces
+  `render_sample_prompts`' archived-validated prompt **byte-for-byte** — so the
+  paid run pays for precisely the prompt the $0 replay validated at F1 95.15.
+- **`peeters_llm_em_replication.py` gains `--mode dry-run` and `--mode live`.**
+  `dry-run` ($0, no key) renders all 1206 pairs through the live path and reports
+  token counts (100,256 input over abt-buy, matching a direct o200k_base count)
+  + a cost estimate. `live` (**paid, off by default**) runs `LLMJudge`
+  (`domain-complex-force` template, Peeters serializer, `parse_binary_yes_no`,
+  `temperature=0.0`) over the pairs under a hard `SpendMonitor` cap (default
+  **$1.00**), guarded by an explicit `--yes-spend-money` flag + a priced-model
+  assertion, and reports F1 + the aggregated `LLMUsage` vector + the real
+  OpenRouter-billed cost (`cost_is_real`) vs the paper's published F1. Races two
+  dated snapshots: `gpt-4o-mini-2024-07-18` (paper F1 90.95, est ~$0.017) and
+  `gpt-4o-2024-08-06` (paper F1 89.33, est ~$0.27); measured total ≈ $0.29.
+- **`PRICES_PER_1M` gains the two dated snapshots** the paid run pins:
+  `openrouter/openai/gpt-4o-mini-2024-07-18` ($0.15/$0.60) and
+  `openrouter/openai/gpt-4o-2024-08-06` ($2.50/$10.00) — OpenRouter list prices
+  (checked 2026-07-09); the script refuses to start if a model is unpriced.
+
 ### Fixed
 
 - **Unified the two yes/no answer parsers into one canonical implementation.**

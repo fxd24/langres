@@ -200,6 +200,41 @@ round-trip. (amazon-google round-trips 99.51%; the 6 diffs are float-repr
 artifacts in *their* gold standard's `price`, e.g. `6.5600000000000005` vs our
 `6.56` — a data-provenance difference, not a serializer bug.)
 
+### 4a. Run it *live* (paid), budget-capped
+
+The same harness can run a **real** `LLMJudge` over the identical 1206-pair slice
+— the paper's `domain-complex-force` template, the Peeters per-dataset
+`record_serializer`, `response_parser=parse_binary_yes_no`, `temperature=0.0` —
+so the number is ours, not a replay. It is off by default and triple-guarded (an
+explicit `--yes-spend-money` flag, a priced-model assertion, and a hard
+`SpendMonitor` cap). **Preview the cost at $0 first** (renders every prompt,
+counts tokens, makes **zero** API calls):
+
+```bash
+uv run python examples/research/peeters_llm_em_replication.py --mode dry-run
+# -> 100,256 input tokens/model; est $0.017 (gpt-4o-mini) + $0.27 (gpt-4o) = ~$0.29
+
+# The paid run (needs OPENROUTER_API_KEY; run with the sandbox disabled):
+uv run python examples/research/peeters_llm_em_replication.py --mode live --yes-spend-money
+```
+
+It races two dated snapshots and prints a comparison table (F1, P/R, the
+aggregated `LLMUsage` vector, the **real** OpenRouter-billed cost + `cost_is_real`,
+and `$/1k pairs`), with the paper's published F1 as a column:
+
+| model (OpenRouter id) | paper "name" | published Abt-Buy F1 | ~est cost |
+|---|---|---|---|
+| `openai/gpt-4o-mini-2024-07-18` | GPT-mini | **90.95** | ~$0.017 |
+| `openai/gpt-4o-2024-08-06` | GPT-4o | **89.33** | ~$0.27 |
+
+`gpt-4-0613` (the F1 **95.15** cell §4 replays) would cost ~$3.15 live and is
+**deliberately declined** — not worth the spend, and it retires 2026-10-23;
+`gpt-3.5-turbo-0613`/`-0301` were shut down 2024-09-13. The default budget cap is
+**$1.00** for both models combined (measured total ≈ $0.29, a ~3.4× margin). Every
+raced model MUST be priced in `langres.clients.openrouter.PRICES_PER_1M` — an
+unpriced model silently contributes $0 to the cap, so the script refuses to start
+without a price entry.
+
 ---
 
 ## See also

@@ -48,6 +48,16 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     "openrouter/deepseek/deepseek-v4-pro": (0.435, 0.87),
     "openrouter/z-ai/glm-4.6": (0.60, 2.20),
     "openrouter/openai/gpt-4o": (2.50, 10.00),
+    # Peeters LLM-EM paid replication (Abt-Buy domain-complex-force, arXiv
+    # 2310.11244 v4 Table 2). OpenRouter list prices from
+    # https://openrouter.ai/api/v1/models, checked 2026-07-09; these are the
+    # pre-flight cap guard only -- the real billed cost still comes from
+    # OpenRouter usage accounting (cost_is_real). The dated snapshots are pinned
+    # (not the undated gpt-4o/gpt-4o-mini aliases above) so the paid run is
+    # reproducible. gpt-4o-mini-2024-07-18 = the paper's "GPT-mini" (published
+    # F1 90.95); gpt-4o-2024-08-06 = their "GPT-4o" (published F1 89.33).
+    "openrouter/openai/gpt-4o-mini-2024-07-18": (0.15, 0.60),
+    "openrouter/openai/gpt-4o-2024-08-06": (2.50, 10.00),
     # OpenRouter path for judge="auto" (OPENROUTER_API_KEY set) — see
     # langres.core.presets.choose_auto_judge. OpenRouter's own listing for this
     # route isn't in LiteLLM's pricing table; conservative-high over OpenAI's

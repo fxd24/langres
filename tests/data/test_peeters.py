@@ -110,6 +110,60 @@ def test_parse_binary_answer_delegates_to_canonical_parser(answer: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Live LLM-judge seam: template + record_serializer + candidates (paid path)
+# --------------------------------------------------------------------------- #
+
+
+def test_build_llm_prompt_template_carries_placeholders() -> None:
+    spec = get_peeters_replication("abt-buy")
+    template = P.build_llm_prompt_template(spec)
+    assert "{left}" in template
+    assert "{right}" in template
+    assert template.startswith(spec.task_prefix)
+
+
+def test_make_record_serializer_reproduces_serialize_record() -> None:
+    spec = get_peeters_replication("abt-buy")
+    left_records, _right = load_peeters_records(spec)
+    serializer = P.make_record_serializer(spec)
+    an_id = next(iter(left_records))
+    record = P.PeetersRecord(id=an_id, fields=left_records[an_id])
+    assert serializer(record) == serialize_record(left_records[an_id], spec.serialization_fields)
+
+
+def test_build_candidates_aligns_with_sample_order() -> None:
+    spec = get_peeters_replication("abt-buy")
+    candidates = P.build_candidates(spec)
+    sample = load_peeters_sample(spec)
+    assert len(candidates) == len(sample) == _EXPECTED["abt-buy"]["total"]
+    for candidate, (left_id, right_id, _label) in zip(candidates, sample):
+        assert candidate.left.id == left_id
+        assert candidate.right.id == right_id
+        assert candidate.blocker_name == "peeters_sample"
+
+
+def test_llm_rendering_reproduces_archived_prompts_byte_exact() -> None:
+    """The template+serializer an LLMJudge uses reproduces the $0-validated prompt.
+
+    LLMJudge renders each pair as ``template.replace("{left}", serializer(left))``
+    ``.replace("{right}", serializer(right))`` (literal substitution). This must
+    equal ``render_sample_prompts``' prompt byte-for-byte, so the PAID run pays
+    for the exact prompt the offline replay already validated at F1 95.15.
+    """
+    spec = get_peeters_replication("abt-buy")
+    template = P.build_llm_prompt_template(spec)
+    serializer = P.make_record_serializer(spec)
+    candidates = P.build_candidates(spec)
+    prompts = render_sample_prompts(spec)
+    assert len(candidates) == len(prompts)
+    for candidate, pair in zip(candidates, prompts):
+        rendered = template.replace("{left}", serializer(candidate.left)).replace(
+            "{right}", serializer(candidate.right)
+        )
+        assert rendered == pair.prompt
+
+
+# --------------------------------------------------------------------------- #
 # Serializer (per-field whitespace-token truncation, space-joined)
 # --------------------------------------------------------------------------- #
 
