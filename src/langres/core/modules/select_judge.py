@@ -63,6 +63,7 @@ from langres.core.module import GroupwiseModule, SchemaT, stamp_group_cost
 from langres.core.modules.dspy_judge import _salvage_usage
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
+from langres.core.usage import LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +235,10 @@ class SelectJudge(GroupwiseModule[SchemaT]):
                 )
                 continue
 
-            usage = prediction.get_lm_usage()  # {model: {prompt_tokens, completion_tokens, ...}}
-            prompt_tokens = sum(int(u.get("prompt_tokens", 0)) for u in usage.values())
-            completion_tokens = sum(int(u.get("completion_tokens", 0)) for u in usage.values())
+            # {model: {prompt_tokens, completion_tokens, *_details, ...}}
+            usage = LLMUsage.from_lm_usage(prediction.get_lm_usage(), model=self.model)
+            prompt_tokens = usage.input_tokens
+            completion_tokens = usage.output_tokens
             cost = self._cost_usd(prompt_tokens, completion_tokens)
 
             selected_ids = list(prediction.selected_ids)
@@ -273,6 +275,7 @@ class SelectJudge(GroupwiseModule[SchemaT]):
                         "model": self.model,
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
+                        "usage": usage.model_dump(),
                     },
                 )
                 for member in group.members

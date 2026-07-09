@@ -249,8 +249,9 @@ def test_llm_judge_handles_api_error(mock_llm_client):
 
 
 def test_llm_judge_uses_custom_prompt(mock_llm_client):
-    """Test LLMJudgeModule accepts custom prompt template."""
-    custom_prompt = "Are these the same? {left_name} vs {right_name}"
+    """Test LLMJudgeModule accepts custom prompt template (with the required
+    ``{left}``/``{right}`` placeholders)."""
+    custom_prompt = "Are these the same? {left} vs {right}"
 
     module = LLMJudgeModule(
         client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
@@ -259,9 +260,14 @@ def test_llm_judge_uses_custom_prompt(mock_llm_client):
     assert module.prompt_template == custom_prompt
 
 
-def test_llm_judge_score_extraction_fallback():
-    """Test that LLMJudgeModule falls back to 0.5 when score extraction fails."""
-    # Mock client to return response without score
+def test_llm_judge_score_extraction_abstains_with_flag():
+    """An unparseable score now ABSTAINS (flagged 0.0), never a silent 0.5.
+
+    Behavior change (defect fix): the old code returned a real-looking 0.5 that
+    was indistinguishable downstream from a genuine mid-confidence verdict. The
+    default ``on_parse_error='abstain'`` policy instead emits score 0.0 flagged
+    with ``provenance['parse_error']`` so the abstention is visible.
+    """
     mock_client = Mock()
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -271,6 +277,8 @@ def test_llm_judge_score_extraction_fallback():
     mock_response.usage = Mock()
     mock_response.usage.prompt_tokens = 100
     mock_response.usage.completion_tokens = 20
+    mock_response.usage.prompt_tokens_details = None
+    mock_response.usage.completion_tokens_details = None
     mock_client.completion.return_value = mock_response
 
     module = LLMJudgeModule(client=mock_client, model="gpt-4o-mini")
@@ -281,10 +289,10 @@ def test_llm_judge_score_extraction_fallback():
         blocker_name="test",
     )
 
-    # Should log warning and use 0.5 as default
     judgements = list(module.forward([candidate]))
     assert len(judgements) == 1
-    assert judgements[0].score == 0.5  # Default fallback
+    assert judgements[0].score == 0.0
+    assert judgements[0].provenance["parse_error"] is True
 
 
 def test_llm_judge_reasoning_extraction_fallback():

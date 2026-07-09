@@ -121,10 +121,21 @@ def test_forward_provenance_has_cost_and_token_keys() -> None:
         "cost_usd",
         "prompt_tokens",
         "completion_tokens",
+        "usage",
     }
     assert judgement.provenance["cost_usd"] == 0.0
     assert judgement.provenance["prompt_tokens"] == 0
     assert judgement.provenance["completion_tokens"] == 0
+
+
+def test_forward_provenance_carries_usage_vector() -> None:
+    """The typed usage vector is captured (all zeros under DummyLM = no billed usage)."""
+    [judgement] = list(_dummy_judge().forward(iter([_candidate()])))
+    usage = judgement.provenance["usage"]
+    assert usage["input_tokens"] == 0
+    assert usage["output_tokens"] == 0
+    assert usage["reasoning_tokens"] == 0
+    assert usage["model"] == judgement.provenance["model"]
 
 
 def test_forward_parses_bool_and_float_outputs() -> None:

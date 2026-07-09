@@ -8,6 +8,7 @@ structured accessors, and the import-cycle guard (core must not import
 ``langres.data``).
 """
 
+import logging
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -585,6 +586,66 @@ def test_evaluate_judge_on_candidates_handles_empty_candidates() -> None:
     assert result.n_judged == 0
     assert result.latency.seconds_per_pair == 0.0
     assert not result.truncated
+
+
+class _AbstainingModule(Module[CompanySchema]):
+    """Like ``_ScoreModule`` but flags ids in ``abstain`` with ``parse_error``.
+
+    Models an LLMJudge under ``on_parse_error='abstain'``: the judgement is still
+    emitted (score 0.0) but carries ``provenance['parse_error']`` so the evaluator
+    can count it instead of silently folding it into the metric.
+    """
+
+    def __init__(self, scores: dict[str, float], abstain: frozenset[str]) -> None:
+        self._scores = scores
+        self._abstain = abstain
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for cand in candidates:
+            provenance: dict[str, Any] = {"cost_usd": 0.0}
+            if cand.left.id in self._abstain:
+                provenance["parse_error"] = True
+            yield PairwiseJudgement(
+                left_id=cand.left.id,
+                right_id=cand.right.id,
+                score=self._scores[cand.left.id],
+                score_type="prob_llm",
+                decision_step="fake",
+                provenance=provenance,
+            )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError  # pragma: no cover — unused here
+
+
+def test_evaluate_surfaces_parse_error_count_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scores = {"p0": 0.9, "p1": 0.0}
+    cands, gold = _labeled_candidates(scores)
+    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+        result, _ = benchmark_module.evaluate_judge_on_candidates(
+            _AbstainingModule(scores, abstain=frozenset({"p1"})), cands, gold, grid=(0.5,)
+        )
+    assert result.n_parse_errors == 1
+    assert any(
+        "parse" in r.message.lower() or "abstention" in r.message.lower() for r in caplog.records
+    )
+
+
+def test_evaluate_no_parse_errors_is_zero_and_quiet(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scores = {"p0": 0.9}
+    cands, gold = _labeled_candidates(scores)
+    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+        result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold, grid=(0.5,))
+    assert result.n_parse_errors == 0
+    assert not any("parse" in r.message.lower() for r in caplog.records)
 
 
 def test_evaluate_judge_on_candidates_ignores_gold_outside_candidates() -> None:

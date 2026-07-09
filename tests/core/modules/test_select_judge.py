@@ -106,6 +106,17 @@ def test_forward_groups_scores_selected_member_one_and_others_zero() -> None:
     assert all(j.reasoning == "because" for j in judgements)
 
 
+def test_forward_groups_provenance_carries_usage_vector() -> None:
+    """Every success-path member judgement carries the typed ``usage`` vector."""
+    judge = _judge([_answer('["m2"]')])
+    judgements = list(judge.forward_groups(iter([_group("a", ["m1", "m2"])])))
+    for j in judgements:
+        usage = j.provenance["usage"]
+        assert usage["input_tokens"] == 0  # DummyLM records no usage
+        assert usage["output_tokens"] == 0
+        assert usage["model"] == j.provenance["model"]
+
+
 def test_forward_groups_no_selection_scores_every_member_zero() -> None:
     """An empty selection (no candidate matches the anchor) scores every member 0.0."""
     judge = _judge([_answer("[]")])

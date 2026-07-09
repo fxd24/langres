@@ -40,6 +40,7 @@ from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import RunContext, RunStore, capture_run
 from langres.core.trackers import ExperimentTracker, resolve_tracker
+from langres.core.usage import LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +265,11 @@ class DSPyJudge(Module[SchemaT]):
                 # untrackable (``cost_untracked``) so downstream accounting does not
                 # silently undercount once a real price is wired to the token seam.
                 err_prompt_tokens, err_completion_tokens = _salvage_usage(lm)
+                err_usage = LLMUsage(
+                    input_tokens=err_prompt_tokens,
+                    output_tokens=err_completion_tokens,
+                    model=self.model,
+                )
                 yield PairwiseJudgement(
                     left_id=left_id,
                     right_id=right_id,
@@ -278,13 +284,13 @@ class DSPyJudge(Module[SchemaT]):
                         "completion_tokens": err_completion_tokens,
                         "cost_untracked": True,
                         "error": str(error),
+                        "usage": err_usage.model_dump(),
                     },
                 )
                 continue
 
-            usage = prediction.get_lm_usage()  # {model: {prompt_tokens, completion_tokens, ...}}
-            prompt_tokens = sum(int(u.get("prompt_tokens", 0)) for u in usage.values())
-            completion_tokens = sum(int(u.get("completion_tokens", 0)) for u in usage.values())
+            # {model: {prompt_tokens, completion_tokens, *_details, ...}}
+            usage = LLMUsage.from_lm_usage(prediction.get_lm_usage(), model=self.model)
             yield PairwiseJudgement(
                 left_id=left_id,
                 right_id=right_id,
@@ -294,9 +300,10 @@ class DSPyJudge(Module[SchemaT]):
                 reasoning=prediction.reasoning,
                 provenance={
                     "model": self.model,
-                    "cost_usd": self._cost_usd(prompt_tokens, completion_tokens),
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
+                    "cost_usd": self._cost_usd(usage.input_tokens, usage.output_tokens),
+                    "prompt_tokens": usage.input_tokens,
+                    "completion_tokens": usage.output_tokens,
+                    "usage": usage.model_dump(),
                 },
             )
 

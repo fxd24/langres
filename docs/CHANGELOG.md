@@ -1,5 +1,213 @@
 # Changelog
 
+## [Unreleased] — paper replication: usage vector, LLM-judge seams, Peeters LLM-EM
+
+### ⚠️ Behavior changes
+
+- **`LLMJudge` no longer silently returns `0.5` when it cannot parse a score.**
+  The default `response_parser` now *abstains* on an unparseable response: the
+  judgement carries `provenance["parse_error"] = True` with `score=0.0` (a
+  flagged abstention, distinguishable downstream) instead of a plausible-looking
+  mid-confidence `0.5`. `on_parse_error="raise"` turns the same case into an
+  immediate `LLMParseError`. The default is `"abstain"` because aborting a long
+  paid run on one flaky response is worse than a surfaced, counted abstention —
+  and `evaluate()` / `evaluate_judge_on_candidates()` now expose the count as
+  `JudgePairEval.n_parse_errors` and warn loudly when it is non-zero.
+- **`LLMJudge` default `temperature` changed `1.0` → `0.0`** (deterministic;
+  the ER-paper convention, and already the `DSPyJudge` default). Pass
+  `temperature=1.0` to restore the old behavior.
+- **`LLMJudge.prompt_template` now requires literal `{left}` and `{right}`
+  placeholders** (validated at construction) and substitutes them by literal
+  replacement rather than `str.format`, so a template containing other braces
+  (e.g. a paper's JSON output schema `{"match": true}`) works instead of raising
+  `KeyError`.
+- **`JudgementLog` schema `"v"` bumped `1` → `2`:** the default (privacy-safe,
+  `features=False`) row gained a non-PII `usage` token vector (`null` for
+  non-LLM judges). Old `v: 1` rows still read back unchanged.
+
+### Added
+
+- **`langres.core.usage.LLMUsage`** — a frozen Pydantic token-usage vector in the
+  OpenTelemetry GenAI vocabulary (snake_case, SUBSET semantics): `input_tokens`
+  and `output_tokens` (inclusive totals) with `cache_read_input_tokens`,
+  `cache_creation_input_tokens`, `reasoning_tokens` as subsets, plus the serving
+  `provider` and `model`. Import-light (pydantic only) so a future pricing layer
+  can consume it without core's heavy deps. `LLMJudge` / `DSPyJudge` / `SelectJudge`
+  now record it under `provenance["usage"]` (additive — legacy
+  `prompt_tokens`/`completion_tokens` unchanged). Pinned against LiteLLM's
+  Anthropic normalization (`usage.prompt_tokens` is already the inclusive input
+  total, so the cache subsets are never double-counted).
+- **`LLMJudge` paper-replication seams** (first-class constructor params, no
+  subclass fork): `response_parser` (default `parse_score_response`; shipped
+  reusable `parse_binary_yes_no` for the Yes/No prompt family), `record_serializer`
+  (default `default_record_serializer`), `system_prompt`, and `on_parse_error`.
+  All exported from `langres.core.modules.llm_judge` (`ParsedVerdict`,
+  `LLMParseError`, the two parsers, `default_record_serializer`).
+
+### Added — Peeters et al. (EDBT 2025) LLM-EM replication (offline, $0)
+
+- **`langres.data.peeters`** — a replication seam for *Entity Matching using
+  Large Language Models* (Peeters, Steiner & Bizer, arXiv 2310.11244 v4). A small
+  manifest + loader-factory (`list_peeters_replications` / `get_peeters_replication`,
+  mirroring `data.registry`) over the pieces needed to reproduce their published
+  F1 by **replaying their archived model answers** — no API key, no LLM call, $0:
+  - `serialize_record` (their per-field whitespace-token truncation recipe),
+    `render_prompt` (the `domain-complex-force` template), `parse_binary_answer`
+    (their exact strip/de-punctuate/lowercase/`"yes" in text` parser).
+  - `regenerate_sample_rows` — deterministically regenerates their sampled
+    evaluation subset from our **already-vendored** DeepMatcher `test.csv`
+    (numpy-only reproduction of `pandas.sample(random_state=42)`), plus
+    `load_peeters_sample` / `load_peeters_records` / `render_sample_prompts` and
+    the `judgements_from_answers` bridge to `core.metrics.classify_pairs`.
+  - Registered slices: `abt-buy` (1206 pairs) and `amazon-google` (1234). Both are
+    **slices** of the existing `abt_buy` / `amazon_google` benchmarks (a subset of
+    the `test` split), so they stay out of `data.registry` (the clustering-benchmark
+    manifest); their binary pair-classification protocol has no blocking/clustering/
+    threshold sweep.
+- **Committed pair-set artifacts** `datasets/{abt_buy,amazon_google}/peeters_sampled_test.csv`
+  — regenerated from our own CSVs and verified **exactly equal** to the authors'
+  published `sampled_gs` (1206/1206, 1234/1234, 0 label mismatches). No MatchGPT
+  data is vendored (it ships no LICENSE; langres is Apache-2.0).
+- **`examples/research/peeters_llm_em_replication.py`** — the offline replay
+  harness. Reproduces arXiv v4 Table 2 `abt-buy` / `gpt-4-0613` /
+  `domain-complex-force` → **F1 95.15** (prompt round-trip 100.00% byte-exact).
+  amazon-google round-trips 99.51% — the 6 residual diffs are float-repr artifacts
+  in *their* gold standard's `price` column (e.g. `6.5600000000000005` vs our
+  vendored `6.56`), not a serializer bug.
+
+### Added — Peeters LLM-EM live (paid) path
+
+- **Live-run seams in `langres.data.peeters`** so an `LLMJudge` can run the exact
+  Peeters prompt over a slice: `build_llm_prompt_template(spec)` (the
+  `domain-complex-force` template with `{left}`/`{right}`),
+  `make_record_serializer(spec)` (the per-dataset serializer), `build_candidates(spec)`
+  (the sampled pairs as `ERCandidate`s), and the `PeetersRecord` entity. A test
+  pins that the live rendering (`template.replace(...)` + serializer) reproduces
+  `render_sample_prompts`' archived-validated prompt **byte-for-byte** — so the
+  paid run pays for precisely the prompt the $0 replay validated at F1 95.15.
+- **`peeters_llm_em_replication.py` gains `--mode dry-run` and `--mode live`.**
+  `dry-run` ($0, no key) renders all 1206 pairs through the live path and reports
+  token counts (100,256 input over abt-buy, matching a direct o200k_base count)
+  + a cost estimate. `live` (**paid, off by default**) runs `LLMJudge`
+  (`domain-complex-force` template, Peeters serializer, `parse_binary_yes_no`,
+  `temperature=0.0`) over the pairs under a hard `SpendMonitor` cap (default
+  **$1.00**), guarded by an explicit `--yes-spend-money` flag + a priced-model
+  assertion, and reports F1 + the aggregated `LLMUsage` vector + the real
+  OpenRouter-billed cost (`cost_is_real`) vs the paper's published F1. Races two
+  dated snapshots: `gpt-4o-mini-2024-07-18` (paper F1 90.95, est ~$0.017) and
+  `gpt-4o-2024-08-06` (paper F1 90.47, est ~$0.27); measured total ≈ $0.29.
+- **`PRICES_PER_1M` gains the two dated snapshots** the paid run pins:
+  `openrouter/openai/gpt-4o-mini-2024-07-18` ($0.15/$0.60) and
+  `openrouter/openai/gpt-4o-2024-08-06` ($2.50/$10.00) — OpenRouter list prices
+  (checked 2026-07-09); the script refuses to start if a model is unpriced.
+- **The live judge pins the OpenRouter → OpenAI provider route.** Our sole
+  deviation from the paper's setup is the OpenRouter hop; the live `LLMJudge` now
+  sets `provider={"order": ["OpenAI"], "allow_fallbacks": False}` (`LIVE_PROVIDER`,
+  sent as `extra_body["provider"]`) so OpenRouter must serve the request from
+  OpenAI's own backend and cannot silently substitute a different
+  provider/quantization of the snapshot.
+- **`--limit N` + `--seed` run a stratified subset.** `--limit N` keeps
+  `round(N · pos_ratio)` positives and the rest negatives — preserving the ~17.1%
+  Abt-Buy positive ratio, deterministic under `--seed` (default 0) — instead of
+  all 1206 (the pair set is a positive block then a negative block, so a naive
+  first-`N` would be all matches). A 150-pair gpt-4o-mini live trial costs
+  **~$0.002**. Applies to `dry-run`/`live`/`replay`.
+- **`--compare-archived` (`--mode live`) checks per-pair agreement against the
+  authors' archived answers.** For the exact model we run, it loads the authors'
+  archived per-pair answer (reusing the replay harness's cached download) and
+  reports the per-pair **agreement rate**, a **2×2 confusion** of ours-vs-theirs,
+  up to **10 concrete disagreeing pairs** (record text, gold label, their raw
+  answer, our raw answer), and **our** F1/P/R on the judged subset next to
+  **their** F1/P/R recomputed on that *same* subset (plus the published full-set
+  number) — both verdicts parsed through the one canonical `parse_binary_yes_no`.
+  It asserts the archived row count equals the pair-set count and that each
+  rendered prompt matches the archived one, **failing loudly** on a mismatch (the
+  alignment being off would make every comparison meaningless).
+
+### Added — Peeters LLM-EM paid run: crash-safe & resumable (no billed call is ever lost)
+
+- **The paid run now durably persists every judged pair, so a kill loses nothing.**
+  A first live run was killed partway and lost ~$0.187 of already-billed calls
+  because results were only written at the very end. `peeters_llm_em_replication.py`
+  now streams one JSON line per judged pair — `flush` + `os.fsync` **before** the
+  next paid call — into a per-`(model, dataset, prompt-design)` JSONL under
+  `--results-dir` (default the gitignored `tmp/peeters/`), mirroring the
+  `m3_race.py` durability pattern at per-pair granularity (new `PeetersResultStore`
+  + `results_path_for`). Each row carries `left_id`/`right_id`, `gold`, our raw
+  `response_text` + parsed `verdict`, the `LLMUsage` vector, and
+  `cost_usd`/`cost_is_real`/`provider`/`model`. (Justified NOT reusing
+  `core.judgement_log.JudgementLog`: it has no `gold` column and buries
+  `cost_is_real`/`provider` behind `features=True`; a tiny report-shaped sink with
+  `fsync` and truncation-tolerant reads is simpler and keeps the operator tool
+  decoupled from that core class.)
+- **Resume: re-running skips already-judged pairs.** A completed model re-runs at
+  **$0 with zero API calls**; a partial run picks up exactly where it stopped. The
+  hard spend cap is seeded with spend already recorded (`PeetersResultStore.spent()`
+  seeds the `SpendMonitor`), so the aggregate cap **holds across resumes** — a
+  resumed run cannot exceed it, and one already at the cap makes no calls. A
+  truncated JSONL (a kill mid-write) is recovered from: the partial trailing line is
+  skipped and its pair re-judged, and `append` repairs a missing final newline so no
+  intact row is ever lost.
+- **The final report is computed from the JSONL**, so the numbers are identical
+  whether the run finished in one pass or several. New **`--report-only`** mode
+  (`report_live_from_store` / `report_compare_from_store`) reprints the full report
+  — including the `--compare-archived` agreement/confusion/disagreement table and F1
+  — from existing results with **zero API calls**. Progress prints every
+  `--progress-every` pairs (running spend + running archive-agreement); stdout is
+  line-buffered (also pass `python -u`) so a kill can't swallow it.
+
+### Fixed
+
+- **Corrected the published Abt-Buy F1 for `gpt-4o-2024-08-06` from a wrong
+  `89.33` to `90.47`** (P 83.27 / R 99.03) — arXiv 2310.11244 v4 Table 2 and the
+  authors' `results.xlsx` agree. Fixed in the harness (`PAID_MODELS` + docstring),
+  `PRICES_PER_1M`'s comment, and `docs/BENCHMARKS.md`. (`gpt-4o-mini-2024-07-18`
+  stays **90.95**, P 89.25 / R 92.72.)
+- **`LLMJudge` no longer corrupts a prompt when a record contains `{left}`/`{right}`.**
+  `_render_prompt` chained two `str.replace` calls, so the second rescanned the
+  already-inserted left record: a record whose text held the literal `{right}` had
+  that token overwritten with the right record. Now a single `re.sub` pass
+  substitutes template placeholders only, never data — a silent, data-dependent
+  regression versus the old `str.format` behaviour.
+- **Peeters results are partitioned by pair subset.** `results_path_for` now takes
+  `limit`/`seed`, because those select a *different pair set*. A `--limit 150` trial
+  and the full 1206-pair run previously shared one JSONL, while resume and
+  `--report-only` consume every row in it — so a trial's rows would leak into the
+  full report (wrong `n_judged`/cost/F1) and its prior spend would eat the budget
+  cap. A full run (`limit=None`) keeps the plain three-field name.
+
+### Results — the replication reproduces the paper
+
+Abt-Buy, `domain-complex-force`, all 1206 pairs, `temperature=0`, OpenAI provider
+pinned. Rows committed under `examples/research/results/peeters/`; replay the table
+with `--report-only` at **$0**.
+
+| model | ours F1 | published F1 | per-pair agreement | real cost | $/1k pairs |
+|---|---|---|---|---|---|
+| `gpt-4o-mini-2024-07-18` | 92.09 | 90.95 | 99.25% | $0.0158 | $0.0131 |
+| `gpt-4o-2024-08-06` | 90.71 | 90.47 | 99.25% | $0.2627 | $0.2178 |
+
+Scoring the authors' **archived** per-pair answers through `langres.core.metrics`
+reproduces their published F1 **exactly** — the scoring path is validated
+independently of the model. Our small F1 excess is **serving nondeterminism**, not a
+better method (same prompt, same pairs, `temperature=0`, but routed via OpenRouter).
+Recorded per-call `cost_usd` tracked OpenRouter's billed delta to within **1.2%**.
+
+- **Unified the two yes/no answer parsers into one canonical implementation.**
+  `llm_judge.parse_binary_yes_no` and `data.peeters.parse_binary_answer` had
+  shipped independent implementations of the same contract that **diverged on
+  intra-word punctuation**: the judge parser did `re.sub(r"[^\w\s]", " ", …)`
+  (replace punctuation with a space, and keep `_`), while the paper adapter did
+  `str.translate(…, string.punctuation)` (delete punctuation, incl. `_`). They
+  disagreed on e.g. `"ye-s"`, `"y-e-s"`, `"Ye's"`, `"ye_s"`, `"Y.E.S."` (MATCH
+  for the paper, NON-MATCH for the judge). `parse_binary_yes_no` is now the
+  single source of truth and mirrors the reference `check_for_prediction`
+  exactly (strip → **delete** `string.punctuation` → lowercase → `"yes" in
+  text`); `parse_binary_answer` is a thin `int` adapter over it. This matters
+  because the `$0` offline replay validates `parse_binary_answer`, but the paid
+  run goes through `LLMJudge(response_parser=parse_binary_yes_no)` — unification
+  makes the replay validate the exact path the paid run pays for.
+
 ## [0.2.0] - 2026-07-06 — the closed flywheel loop
 
 ### ⚠️ BREAKING

@@ -9,11 +9,13 @@ Supports both direct OpenAI client and LiteLLM for enhanced observability.
 import asyncio
 import logging
 import re
+import string
 import time
-from collections.abc import Iterator
-from typing import Any, ClassVar
+from collections.abc import Callable, Iterator
+from typing import Any, ClassVar, Literal
 
 import litellm
+from pydantic import BaseModel
 
 # Type checking for litellm exceptions
 try:
@@ -27,6 +29,7 @@ from langres.core.module import Module, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import current_run
+from langres.core.usage import LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +55,99 @@ Reasoning: <brief explanation>
 The score should be your confidence that these are the same {entity_noun} (1.0 = definitely same, 0.0 = definitely different)."""
 
 
+# Matches only the two record placeholders, so a single `re.sub` pass over the
+# template can never rescan (and corrupt) an already-substituted record.
+_PLACEHOLDER_RE = re.compile(r"\{(left|right)\}")
+
+
 def render_default_prompt(entity_noun: str = "entity") -> str:
     """Render :data:`DEFAULT_PROMPT` for ``entity_noun``, leaving ``{left}``/``{right}``.
 
     Substitutes only the ``{entity_noun}`` placeholder so the result is still a
-    ``str.format`` template expecting ``left`` and ``right`` at judgement time.
+    template with ``{left}`` / ``{right}`` filled at judgement time.
     """
     return DEFAULT_PROMPT.replace("{entity_noun}", entity_noun)
+
+
+class LLMParseError(ValueError):
+    """Raised by :class:`LLMJudge` when ``on_parse_error='raise'`` and the
+    configured ``response_parser`` could not parse a score from a response."""
+
+
+class ParsedVerdict(BaseModel):
+    """The output of an :class:`LLMJudge` ``response_parser``.
+
+    ``score`` is the match confidence in ``[0, 1]``, or ``None`` to signal a
+    *parse failure* — the parser could not read a verdict from the response.
+    ``None`` is the load-bearing distinction the old silent-0.5 fallback erased:
+    the judge routes a ``None`` through its ``on_parse_error`` policy rather than
+    emitting it as a real mid-confidence score. ``reasoning`` is the optional
+    free-text justification the parser extracted (``None`` when absent).
+    """
+
+    score: float | None
+    reasoning: str | None = None
+
+
+def parse_score_response(content: str) -> ParsedVerdict:
+    """Default parser: read a ``Score: 0.XX`` line (the neutral :data:`DEFAULT_PROMPT`).
+
+    On a match the score is clamped to ``[0, 1]`` and the reasoning is taken from
+    a ``Reasoning:`` line (falling back to the full content). When there is no
+    ``Score:`` line at all the verdict's ``score`` is ``None`` — a parse failure,
+    NOT ``0.5`` — so a naive replication of a "Yes"/"No" paper prompt (which has
+    no score line) is caught instead of silently scored as noise.
+    """
+    match = re.search(r"Score:\s*(\d+\.?\d*)", content, re.IGNORECASE)
+    if match is None:
+        return ParsedVerdict(score=None)
+    score = max(0.0, min(1.0, float(match.group(1))))
+    reasoning_match = re.search(r"Reasoning:\s*(.+)", content, re.IGNORECASE | re.DOTALL)
+    reasoning = reasoning_match.group(1).strip() if reasoning_match else content
+    return ParsedVerdict(score=score, reasoning=reasoning)
+
+
+def parse_binary_yes_no(content: str) -> ParsedVerdict:
+    """Canonical parser for the published yes/no ER-prompt family.
+
+    This is the single source of truth for the yes/no contract: it deliberately
+    mirrors the reference ``check_for_prediction`` from Peeters, Steiner & Bizer
+    (*Entity Matching using Large Language Models*, arXiv 2310.11244) **exactly**
+    — ``strip()`` → **delete** ``string.punctuation`` → ``lower()`` →
+    ``"yes" in text`` maps to ``1.0`` else ``0.0``. ``langres.data.peeters.
+    parse_binary_answer`` is a thin ``int`` adapter over this function; there is
+    only one code path so the ``$0`` offline replay validates the exact parser
+    the paid ``LLMJudge(response_parser=...)`` run will use.
+
+    Fidelity to the reference beats cleverness, so the crudeness is preserved on
+    purpose:
+
+    - Punctuation is **deleted**, not replaced with a space, so intra-word
+      punctuation collapses: ``"ye-s"``, ``"Y.E.S."``, ``"ye_s"`` all → ``"yes"``
+      → MATCH. (``_`` is in ``string.punctuation``, so it is deleted too.)
+    - It is a bare substring test with no negation handling: ``"Not yes"``
+      contains ``"yes"`` and therefore MATCHES. Reproducing the paper's reported
+      F1 requires the paper's parser, warts included.
+
+    It is deliberately **total**: absence of "yes" is a confident non-match
+    (``0.0``), never a parse failure (``score is None``). So ``on_parse_error``
+    never fires for this family and a long *paid* run cannot abort on one flaky
+    response. Pass a custom parser that returns ``score=None`` if you want strict
+    abstention instead.
+    """
+    cleaned = content.strip().translate(str.maketrans("", "", string.punctuation)).lower()
+    score = 1.0 if "yes" in cleaned else 0.0
+    return ParsedVerdict(score=score, reasoning=content.strip() or None)
+
+
+def default_record_serializer(entity: Any) -> str:
+    """Default ``record_serializer``: today's ``entity.model_dump_json(indent=2)``.
+
+    Kept as a standalone, importable callable so a caller can wrap or compose it;
+    the behavior is unchanged for existing users (the full record, including
+    ``id`` / ``source`` / ``embed_text``, is rendered as indented JSON).
+    """
+    return str(entity.model_dump_json(indent=2))
 
 
 class _RateLimiter:
@@ -194,7 +283,8 @@ class LLMJudge(Module[SchemaT]):
         module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
-        Defaults to ``gpt-5-mini`` at ``temperature=1.0``. Cost tracking prefers
+        Defaults to ``gpt-5-mini`` at ``temperature=0.0`` (deterministic, the ER
+        convention; see :meth:`__init__`). Cost tracking prefers
         OpenRouter's *actual* billed cost (via usage accounting, parsed by
         :func:`~langres.clients.openrouter.parse_openrouter_billing`) and falls
         back to ``litellm.completion_cost`` (the pinned/table estimate) when the
@@ -217,10 +307,15 @@ class LLMJudge(Module[SchemaT]):
         self,
         client: Any = None,
         model: str = "gpt-5-mini",
-        temperature: float = 1.0,
+        temperature: float = 0.0,
         prompt_template: str | None = None,
         entity_noun: str = "entity",
         provider: dict[str, Any] | None = None,
+        *,
+        system_prompt: str | None = None,
+        response_parser: Callable[[str], ParsedVerdict] | None = None,
+        record_serializer: Callable[[Any], str] | None = None,
+        on_parse_error: Literal["abstain", "raise"] = "abstain",
     ):
         """Initialize LLMJudge.
 
@@ -231,9 +326,16 @@ class LLMJudge(Module[SchemaT]):
                 first use. Inject a client only as an escape hatch (e.g. tests
                 or a custom client); use :meth:`from_env` for the happy path.
             model: Model name (e.g., "gpt-5-mini", "azure/gpt-5-mini")
-            temperature: Sampling temperature (0.0 = deterministic, 2.0 = random)
-            prompt_template: Custom prompt template (uses the neutral
-                :data:`DEFAULT_PROMPT`, rendered for ``entity_noun``, if None)
+            temperature: Sampling temperature (0.0 = deterministic, 2.0 = random).
+                Defaults to ``0.0`` — ER papers score at temperature 0 for
+                reproducibility, and the sibling ``DSPyJudge`` already defaults
+                to 0.0 (this makes 0.0 the house default for the judge family).
+            prompt_template: Custom prompt template. Must contain both ``{left}``
+                and ``{right}`` placeholders (the two records are substituted in
+                at judgement time). Any other braces are preserved verbatim, so a
+                paper's prompt carrying a literal JSON schema (e.g. ``{"match":
+                true}``) works unchanged. Uses the neutral :data:`DEFAULT_PROMPT`
+                (rendered for ``entity_noun``) when ``None``.
             entity_noun: Domain noun woven into the default prompt (e.g.
                 "company", "product"). Ignored when ``prompt_template`` is given.
             provider: Optional OpenRouter provider-routing block, sent as
@@ -242,21 +344,56 @@ class LLMJudge(Module[SchemaT]):
                 ``{"order": ["DeepInfra"], "allow_fallbacks": False}`` or
                 ``{"only": ["Together"]}``. ``None`` (the default) keeps
                 OpenRouter's own routing. Ignored for non-``openrouter/`` models.
+            system_prompt: Optional system message. When set, the request sends
+                two messages (``system`` then ``user``); when ``None`` (default)
+                a single ``user`` message is sent (byte-identical to before).
+            response_parser: Callable mapping the raw response text to a
+                :class:`ParsedVerdict` (score + optional reasoning). Defaults to
+                :func:`parse_score_response` (the ``Score:``-line parser). Ship a
+                published-prompt replication with :func:`parse_binary_yes_no`.
+                A verdict whose ``score`` is ``None`` is a parse failure and is
+                routed through ``on_parse_error``. NOT serialized (see
+                :attr:`config`).
+            record_serializer: Callable ``(entity) -> str`` rendering each record
+                into the prompt. Defaults to :func:`default_record_serializer`
+                (``model_dump_json(indent=2)``). Override to control exactly what
+                the LLM sees (e.g. drop ``id``/``source``). NOT serialized.
+            on_parse_error: What to do on a parse failure. ``"abstain"`` (the
+                default) emits a judgement flagged ``provenance["parse_error"] =
+                True`` with ``score=0.0`` — the evaluator surfaces and warns on
+                the count; ``"raise"`` raises :class:`LLMParseError` immediately.
+                The default abstains because aborting a long paid run on a single
+                flaky response is worse than a surfaced, counted abstention.
 
         Raises:
-            ValueError: If temperature out of range
+            ValueError: If temperature out of range, ``on_parse_error`` is not
+                ``"abstain"``/``"raise"``, or ``prompt_template`` lacks
+                ``{left}``/``{right}``.
         """
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
+        if on_parse_error not in ("abstain", "raise"):
+            raise ValueError("on_parse_error must be 'abstain' or 'raise'")
 
         self.client = client
         self.model = model
         self.temperature = temperature
         self.entity_noun = entity_noun
         self.provider = provider
+        self.system_prompt = system_prompt
+        self.on_parse_error = on_parse_error
+        self._parse = response_parser if response_parser is not None else parse_score_response
+        self._serialize = (
+            record_serializer if record_serializer is not None else default_record_serializer
+        )
         self.prompt_template = (
             prompt_template if prompt_template else render_default_prompt(entity_noun)
         )
+        if "{left}" not in self.prompt_template or "{right}" not in self.prompt_template:
+            raise ValueError(
+                "prompt_template must contain both {left} and {right} placeholders "
+                "(the two records are substituted at judgement time)"
+            )
 
     @classmethod
     def from_env(
@@ -284,18 +421,32 @@ class LLMJudge(Module[SchemaT]):
 
     @property
     def config(self) -> dict[str, object]:
-        """Pure, serializable construction config (never the client or secrets)."""
+        """Pure, serializable construction config (never the client or secrets).
+
+        Carries the ``system_prompt`` and ``on_parse_error`` policy so a saved
+        paper-replication judge reloads with them. The ``response_parser`` and
+        ``record_serializer`` callables are **not** serialized (there is no
+        no-pickle way to persist an arbitrary callable) — like the ``client``,
+        they revert to the defaults on :meth:`from_config`/``Resolver.load``.
+        Re-inject a custom parser/serializer after load if you need it.
+        """
         return {
             "model": self.model,
             "temperature": self.temperature,
             "prompt_template": self.prompt_template,
             "entity_noun": self.entity_noun,
             "provider": self.provider,
+            "system_prompt": self.system_prompt,
+            "on_parse_error": self.on_parse_error,
         }
 
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
-        """Rebuild from :attr:`config` via the lazy-client path (client from env)."""
+        """Rebuild from :attr:`config` via the lazy-client path (client from env).
+
+        Older artifacts without ``system_prompt`` / ``on_parse_error`` fall back
+        to the constructor defaults (``None`` / ``"abstain"``).
+        """
         provider = config.get("provider")
         return cls(
             client=None,
@@ -304,6 +455,8 @@ class LLMJudge(Module[SchemaT]):
             prompt_template=str(config["prompt_template"]),
             entity_noun=str(config["entity_noun"]),
             provider=provider,  # type: ignore[arg-type]
+            system_prompt=config.get("system_prompt"),  # type: ignore[arg-type]
+            on_parse_error=config.get("on_parse_error", "abstain"),  # type: ignore[arg-type]
         )
 
     def _completion_kwargs(self) -> dict[str, Any]:
@@ -375,12 +528,11 @@ class LLMJudge(Module[SchemaT]):
             volume, consider batching or async processing.
         """
         for candidate in candidates:
-            # Format entities as strings
-            left_str = self._format_entity(candidate.left)
-            right_str = self._format_entity(candidate.right)
-
-            # Create prompt
-            prompt = self.prompt_template.format(left=left_str, right=right_str)
+            # Render each record via the injectable serializer and substitute the
+            # two into the template (literal braces preserved -- see _render_prompt).
+            left_str = self._serialize(candidate.left)
+            right_str = self._serialize(candidate.right)
+            prompt = self._render_prompt(left_str, right_str)
 
             # Call LLM API
             logger.debug(
@@ -406,18 +558,19 @@ class LLMJudge(Module[SchemaT]):
                 completion_kwargs["metadata"] = metadata
             response = client.completion(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=self._messages(prompt),
                 temperature=self.temperature,
                 **completion_kwargs,
             )
 
-            # Extract score and reasoning from response
+            # Parse the verdict via the injectable parser; a parse failure is
+            # routed through ``on_parse_error`` (never a silent 0.5).
             content = response.choices[0].message.content or ""
-            score = self._extract_score(content)
-            reasoning = self._extract_reasoning(content)
+            score, reasoning, parse_error = self._resolve_verdict(content)
 
             # Cost: OpenRouter's real billed cost when available, else the estimate.
             cost_usd, provider, cost_is_real = self._billing(response)
+            usage = LLMUsage.from_response(response, model=self.model, provider=provider)
 
             yield PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
@@ -426,16 +579,9 @@ class LLMJudge(Module[SchemaT]):
                 score_type="prob_llm",
                 decision_step="llm_judgment",
                 reasoning=reasoning,
-                provenance={
-                    "model": self.model,
-                    "cost_usd": cost_usd,
-                    "cost_is_real": cost_is_real,
-                    "provider": provider,
-                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                    "completion_tokens": (
-                        response.usage.completion_tokens if response.usage else 0
-                    ),
-                },
+                provenance=self._build_provenance(
+                    cost_usd, cost_is_real, provider, usage, parse_error=parse_error
+                ),
             )
 
     async def forward_async(
@@ -538,12 +684,12 @@ class LLMJudge(Module[SchemaT]):
             PairwiseJudgement for this candidate
         """
         async with semaphore:
-            # Format entities as strings
-            left_str = self._format_entity(candidate.left)
-            right_str = self._format_entity(candidate.right)
+            # Render each record via the injectable serializer and substitute.
+            left_str = self._serialize(candidate.left)
+            right_str = self._serialize(candidate.right)
 
-            # Create prompt
-            prompt = self.prompt_template.format(left=left_str, right=right_str)
+            # Create prompt (literal braces preserved -- see _render_prompt)
+            prompt = self._render_prompt(left_str, right_str)
 
             # Estimate token usage (rough approximation: 4 chars = 1 token)
             estimated_tokens = len(prompt) // 4 + 200  # Add buffer for response
@@ -570,13 +716,14 @@ class LLMJudge(Module[SchemaT]):
                 actual_tokens = response.usage.prompt_tokens + response.usage.completion_tokens
                 await rate_limiter.record_usage_async(actual_tokens)
 
-            # Extract score and reasoning from response
+            # Parse the verdict via the injectable parser; a parse failure is
+            # routed through ``on_parse_error`` (never a silent 0.5).
             content = response.choices[0].message.content or ""
-            score = self._extract_score(content)
-            reasoning = self._extract_reasoning(content)
+            score, reasoning, parse_error = self._resolve_verdict(content)
 
             # Cost: OpenRouter's real billed cost when available, else the estimate.
             cost_usd, provider, cost_is_real = self._billing(response)
+            usage = LLMUsage.from_response(response, model=self.model, provider=provider)
 
             return PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
@@ -585,17 +732,14 @@ class LLMJudge(Module[SchemaT]):
                 score_type="prob_llm",
                 decision_step="llm_judgment_async",
                 reasoning=reasoning,
-                provenance={
-                    "model": self.model,
-                    "cost_usd": cost_usd,
-                    "cost_is_real": cost_is_real,
-                    "provider": provider,
-                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                    "completion_tokens": (
-                        response.usage.completion_tokens if response.usage else 0
-                    ),
-                    "method": "async_batch",
-                },
+                provenance=self._build_provenance(
+                    cost_usd,
+                    cost_is_real,
+                    provider,
+                    usage,
+                    parse_error=parse_error,
+                    method="async_batch",
+                ),
             )
 
     async def _call_llm_with_retry(
@@ -634,7 +778,7 @@ class LLMJudge(Module[SchemaT]):
             try:
                 response = await client.acompletion(
                     model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=self._messages(prompt),
                     temperature=self.temperature,
                     **completion_kwargs,
                 )
@@ -655,58 +799,87 @@ class LLMJudge(Module[SchemaT]):
                     logger.error("Max retries (%d) exceeded for rate limit error", max_retries)
                     raise
 
-    def _format_entity(self, entity: SchemaT) -> str:
-        """Format entity as string for LLM prompt.
+    def _render_prompt(self, left_str: str, right_str: str) -> str:
+        """Substitute the two records into the template in a single pass.
 
-        Args:
-            entity: Pydantic entity schema
+        Scans the *template* once for ``{left}`` / ``{right}`` rather than using
+        ``str.format`` so that any *other* braces in the template — a paper's
+        JSON output schema, for instance — are preserved verbatim instead of
+        raising ``KeyError`` / ``IndexError``. Both placeholders are guaranteed
+        present (validated at construction).
 
-        Returns:
-            String representation of entity
+        Single-pass matters: chained ``str.replace`` calls would rescan the
+        already-inserted left record, so a record whose text happens to contain
+        the literal ``{right}`` would have that token overwritten with the right
+        record. One pass substitutes template placeholders only, never data.
         """
-        return entity.model_dump_json(indent=2)
+        values = {"left": left_str, "right": right_str}
+        return _PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], self.prompt_template)
 
-    def _extract_score(self, content: str) -> float:
-        """Extract probability score from LLM response.
+    def _messages(self, prompt: str) -> list[dict[str, str]]:
+        """Build the chat messages, prepending ``system_prompt`` when configured."""
+        if self.system_prompt is not None:
+            return [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+        return [{"role": "user", "content": prompt}]
 
-        Args:
-            content: LLM response text
+    def _resolve_verdict(self, content: str) -> tuple[float, str | None, bool]:
+        """Parse ``content`` and apply the parse-failure policy.
 
-        Returns:
-            Probability score in range [0.0, 1.0]
-
-        Note:
-            Looks for "Score: 0.XX" pattern. Defaults to 0.5 if not found.
+        Returns ``(score, reasoning, parse_error)``. On a successful parse the
+        parser's score/reasoning pass through with ``parse_error=False``. On a
+        parse failure (``ParsedVerdict.score is None``) either raises
+        :class:`LLMParseError` (``on_parse_error='raise'``) or abstains —
+        ``(0.0, reasoning, True)`` — flagged so downstream can distinguish it
+        from a real low-confidence score.
         """
-        # Look for "Score: 0.XX" pattern
-        match = re.search(r"Score:\s*(\d+\.?\d*)", content, re.IGNORECASE)
-        if match:
-            score = float(match.group(1))
-            # Clamp to [0, 1] range
-            return max(0.0, min(1.0, score))
+        verdict = self._parse(content)
+        if verdict.score is not None:
+            return verdict.score, verdict.reasoning, False
+        if self.on_parse_error == "raise":
+            raise LLMParseError(
+                f"response_parser could not parse a score from response: {content!r}"
+            )
+        logger.warning(
+            "response_parser could not parse a score; abstaining (score=0.0, "
+            "parse_error flagged). Raw response: %r",
+            content,
+        )
+        return 0.0, verdict.reasoning, True
 
-        logger.warning("Could not extract score from LLM response, defaulting to 0.5")
-        return 0.5
+    def _build_provenance(
+        self,
+        cost_usd: float,
+        cost_is_real: bool,
+        provider: str | None,
+        usage: LLMUsage,
+        *,
+        parse_error: bool,
+        method: str | None = None,
+    ) -> dict[str, Any]:
+        """Assemble the judgement provenance (shared by the sync + async paths).
 
-    def _extract_reasoning(self, content: str) -> str:
-        """Extract reasoning from LLM response.
-
-        Args:
-            content: LLM response text
-
-        Returns:
-            Reasoning text
-
-        Note:
-            Looks for "Reasoning:" followed by text. Returns full content if not found.
+        Keeps the legacy ``prompt_tokens`` / ``completion_tokens`` keys (readers
+        such as ``JudgementLog``, ``bootstrap.labelers`` and
+        ``openrouter.make_token_cost_track`` depend on them) alongside the new
+        typed ``usage`` vector, and flags ``parse_error`` only when it fired.
         """
-        # Look for "Reasoning:" followed by text
-        match = re.search(r"Reasoning:\s*(.+)", content, re.IGNORECASE | re.DOTALL)
-        if match:
-            return match.group(1).strip()
-
-        # Fallback: return full content
-        return content
+        provenance: dict[str, Any] = {
+            "model": self.model,
+            "cost_usd": cost_usd,
+            "cost_is_real": cost_is_real,
+            "provider": provider,
+            "prompt_tokens": usage.input_tokens,
+            "completion_tokens": usage.output_tokens,
+            "usage": usage.model_dump(),
+        }
+        if parse_error:
+            provenance["parse_error"] = True
+        if method is not None:
+            provenance["method"] = method
+        return provenance
 
     def _calculate_cost(self, response) -> float:  # type: ignore[no-untyped-def]
         """Calculate API call cost in USD via LiteLLM's own pricing.
