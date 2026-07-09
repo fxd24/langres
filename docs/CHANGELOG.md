@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — Peeters et al. (EDBT 2025) LLM-EM replication (offline, $0)
+
+- **`langres.data.peeters`** — a replication seam for *Entity Matching using
+  Large Language Models* (Peeters, Steiner & Bizer, arXiv 2310.11244 v4). A small
+  manifest + loader-factory (`list_peeters_replications` / `get_peeters_replication`,
+  mirroring `data.registry`) over the pieces needed to reproduce their published
+  F1 by **replaying their archived model answers** — no API key, no LLM call, $0:
+  - `serialize_record` (their per-field whitespace-token truncation recipe),
+    `render_prompt` (the `domain-complex-force` template), `parse_binary_answer`
+    (their exact strip/de-punctuate/lowercase/`"yes" in text` parser).
+  - `regenerate_sample_rows` — deterministically regenerates their sampled
+    evaluation subset from our **already-vendored** DeepMatcher `test.csv`
+    (numpy-only reproduction of `pandas.sample(random_state=42)`), plus
+    `load_peeters_sample` / `load_peeters_records` / `render_sample_prompts` and
+    the `judgements_from_answers` bridge to `core.metrics.classify_pairs`.
+  - Registered slices: `abt-buy` (1206 pairs) and `amazon-google` (1234). Both are
+    **slices** of the existing `abt_buy` / `amazon_google` benchmarks (a subset of
+    the `test` split), so they stay out of `data.registry` (the clustering-benchmark
+    manifest); their binary pair-classification protocol has no blocking/clustering/
+    threshold sweep.
+- **Committed pair-set artifacts** `datasets/{abt_buy,amazon_google}/peeters_sampled_test.csv`
+  — regenerated from our own CSVs and verified **exactly equal** to the authors'
+  published `sampled_gs` (1206/1206, 1234/1234, 0 label mismatches). No MatchGPT
+  data is vendored (it ships no LICENSE; langres is Apache-2.0).
+- **`examples/research/peeters_llm_em_replication.py`** — the offline replay
+  harness. Reproduces arXiv v4 Table 2 `abt-buy` / `gpt-4-0613` /
+  `domain-complex-force` → **F1 95.15** (prompt round-trip 100.00% byte-exact).
+  amazon-google round-trips 99.51% — the 6 residual diffs are float-repr artifacts
+  in *their* gold standard's `price` column (e.g. `6.5600000000000005` vs our
+  vendored `6.56`), not a serializer bug.
+
 ## [0.2.0] - 2026-07-06 — the closed flywheel loop
 
 ### ⚠️ BREAKING

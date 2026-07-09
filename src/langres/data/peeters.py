@@ -237,9 +237,7 @@ def render_prompt(
         The full rendered prompt string.
     """
     return (
-        f"{task_prefix}"
-        f"{entity_noun} 1: '{left_serialized}'\n"
-        f"{entity_noun} 2: '{right_serialized}'"
+        f"{task_prefix}{entity_noun} 1: '{left_serialized}'\n{entity_noun} 2: '{right_serialized}'"
     )
 
 
