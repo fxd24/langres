@@ -292,6 +292,24 @@ class TestSafeTemplateSubstitution:
         with pytest.raises(ValueError, match=r"\{left\}.*\{right\}|placeholder"):
             _judge(Mock(), prompt_template="No placeholders here")
 
+    def test_placeholder_literal_inside_a_record_is_not_substituted(self) -> None:
+        """A record whose text contains ``{right}`` must survive verbatim.
+
+        Chained ``str.replace`` would rescan the inserted left record and
+        overwrite its ``{right}`` token with the right record — silent,
+        data-dependent prompt corruption.
+        """
+        client = Mock()
+        client.completion.return_value = _response("Score: 0.9")
+        judge = _judge(
+            client,
+            record_serializer=lambda e: "PRE {right} POST" if e.id == "c1" else "RIGHT",  # type: ignore[attr-defined]
+            prompt_template="L={left} R={right}",
+        )
+        list(judge.forward([_pair()]))
+        prompt = client.completion.call_args.kwargs["messages"][0]["content"]
+        assert prompt == "L=PRE {right} POST R=RIGHT"
+
 
 # ---------------------------------------------------------------------------
 # temperature default (ER papers use 0)

@@ -210,6 +210,21 @@ def test_results_path_for_is_per_model_dataset_prompt(tmp_path: Path) -> None:
     assert "/" not in p1.name
 
 
+def test_results_path_for_partitions_by_subset(tmp_path: Path) -> None:
+    """A --limit/--seed subset judges a different pair set, so it needs its own file.
+
+    Sharing one path would let a trial's rows leak into the full run's report
+    (wrong n_judged/cost/F1) and let unrelated prior spend eat the budget cap.
+    """
+    full = results_path_for(tmp_path, "abt-buy", _PROMPT_DESIGN, _MODEL)
+    limited = results_path_for(tmp_path, "abt-buy", _PROMPT_DESIGN, _MODEL, limit=150)
+    other_seed = results_path_for(tmp_path, "abt-buy", _PROMPT_DESIGN, _MODEL, limit=150, seed=1)
+
+    assert len({full, limited, other_seed}) == 3
+    # A full run keeps the plain three-field name (back-compat with existing results).
+    assert results_path_for(tmp_path, "abt-buy", _PROMPT_DESIGN, _MODEL, limit=None) == full
+
+
 # --------------------------------------------------------------------------- #
 # run_live with a store — per-pair persistence
 # --------------------------------------------------------------------------- #

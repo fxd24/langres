@@ -163,6 +163,35 @@
   authors' `results.xlsx` agree. Fixed in the harness (`PAID_MODELS` + docstring),
   `PRICES_PER_1M`'s comment, and `docs/BENCHMARKS.md`. (`gpt-4o-mini-2024-07-18`
   stays **90.95**, P 89.25 / R 92.72.)
+- **`LLMJudge` no longer corrupts a prompt when a record contains `{left}`/`{right}`.**
+  `_render_prompt` chained two `str.replace` calls, so the second rescanned the
+  already-inserted left record: a record whose text held the literal `{right}` had
+  that token overwritten with the right record. Now a single `re.sub` pass
+  substitutes template placeholders only, never data — a silent, data-dependent
+  regression versus the old `str.format` behaviour.
+- **Peeters results are partitioned by pair subset.** `results_path_for` now takes
+  `limit`/`seed`, because those select a *different pair set*. A `--limit 150` trial
+  and the full 1206-pair run previously shared one JSONL, while resume and
+  `--report-only` consume every row in it — so a trial's rows would leak into the
+  full report (wrong `n_judged`/cost/F1) and its prior spend would eat the budget
+  cap. A full run (`limit=None`) keeps the plain three-field name.
+
+### Results — the replication reproduces the paper
+
+Abt-Buy, `domain-complex-force`, all 1206 pairs, `temperature=0`, OpenAI provider
+pinned. Rows committed under `examples/research/results/peeters/`; replay the table
+with `--report-only` at **$0**.
+
+| model | ours F1 | published F1 | per-pair agreement | real cost | $/1k pairs |
+|---|---|---|---|---|---|
+| `gpt-4o-mini-2024-07-18` | 92.09 | 90.95 | 99.25% | $0.0158 | $0.0131 |
+| `gpt-4o-2024-08-06` | 90.71 | 90.47 | 99.25% | $0.2627 | $0.2178 |
+
+Scoring the authors' **archived** per-pair answers through `langres.core.metrics`
+reproduces their published F1 **exactly** — the scoring path is validated
+independently of the model. Our small F1 excess is **serving nondeterminism**, not a
+better method (same prompt, same pairs, `temperature=0`, but routed via OpenRouter).
+Recorded per-call `cost_usd` tracked OpenRouter's billed delta to within **1.2%**.
 
 - **Unified the two yes/no answer parsers into one canonical implementation.**
   `llm_judge.parse_binary_yes_no` and `data.peeters.parse_binary_answer` had

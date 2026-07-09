@@ -352,15 +352,31 @@ _RESULT_SCHEMA_VERSION = 1
 # ---------------------------------------------------------------------------
 
 
-def results_path_for(results_dir: str | Path, dataset: str, prompt_design: str, model: str) -> Path:
-    """The per-(model, dataset, prompt-design) JSONL path under ``results_dir``.
+def results_path_for(
+    results_dir: str | Path,
+    dataset: str,
+    prompt_design: str,
+    model: str,
+    *,
+    limit: int | None = None,
+    seed: int = 0,
+) -> Path:
+    """The per-(model, dataset, prompt-design, subset) JSONL path under ``results_dir``.
 
     The ``openrouter/...`` model id's slashes are flattened so nothing creates a
-    stray subdirectory; the three fields keep each race cell in its own file, so a
-    crash in one never touches another (and resume/report-only target one file).
+    stray subdirectory; the fields keep each race cell in its own file, so a crash
+    in one never touches another (and resume/report-only target one file).
+
+    ``limit``/``seed`` are part of the identity because they *select a different
+    pair set*. A ``--limit 150`` trial and the full run judge different pairs, and
+    both resume and report-only consume every row in the file — so sharing one path
+    would let a trial's rows leak into the full report (wrong ``n_judged``, cost and
+    F1) and let unrelated prior spend eat the budget cap. A full run (``limit=None``)
+    keeps the plain three-field name.
     """
     slug = model.replace("/", "_")
-    return Path(results_dir) / f"{dataset}__{prompt_design}__{slug}.jsonl"
+    subset = "" if limit is None else f"__limit{limit}-seed{seed}"
+    return Path(results_dir) / f"{dataset}__{prompt_design}__{slug}{subset}.jsonl"
 
 
 class PeetersResultStore:
@@ -1376,9 +1392,16 @@ def _run_dry_run_mode(args: argparse.Namespace) -> int:
 
 
 def _store_for(args: argparse.Namespace, dataset: str, model: str) -> PeetersResultStore:
-    """The per-(model, dataset, prompt-design) durable results store for this run."""
+    """The durable results store for this race cell, partitioned by its pair subset."""
     return PeetersResultStore(
-        results_path_for(args.results_dir, dataset, args.prompt_design, model)
+        results_path_for(
+            args.results_dir,
+            dataset,
+            args.prompt_design,
+            model,
+            limit=args.limit,
+            seed=args.seed,
+        )
     )
 
 

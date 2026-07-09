@@ -55,6 +55,11 @@ Reasoning: <brief explanation>
 The score should be your confidence that these are the same {entity_noun} (1.0 = definitely same, 0.0 = definitely different)."""
 
 
+# Matches only the two record placeholders, so a single `re.sub` pass over the
+# template can never rescan (and corrupt) an already-substituted record.
+_PLACEHOLDER_RE = re.compile(r"\{(left|right)\}")
+
+
 def render_default_prompt(entity_noun: str = "entity") -> str:
     """Render :data:`DEFAULT_PROMPT` for ``entity_noun``, leaving ``{left}``/``{right}``.
 
@@ -795,15 +800,21 @@ class LLMJudge(Module[SchemaT]):
                     raise
 
     def _render_prompt(self, left_str: str, right_str: str) -> str:
-        """Substitute the two records into the template via literal replacement.
+        """Substitute the two records into the template in a single pass.
 
-        Uses ``str.replace`` on ``{left}`` / ``{right}`` rather than
+        Scans the *template* once for ``{left}`` / ``{right}`` rather than using
         ``str.format`` so that any *other* braces in the template — a paper's
         JSON output schema, for instance — are preserved verbatim instead of
         raising ``KeyError`` / ``IndexError``. Both placeholders are guaranteed
         present (validated at construction).
+
+        Single-pass matters: chained ``str.replace`` calls would rescan the
+        already-inserted left record, so a record whose text happens to contain
+        the literal ``{right}`` would have that token overwritten with the right
+        record. One pass substitutes template placeholders only, never data.
         """
-        return self.prompt_template.replace("{left}", left_str).replace("{right}", right_str)
+        values = {"left": left_str, "right": right_str}
+        return _PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], self.prompt_template)
 
     def _messages(self, prompt: str) -> list[dict[str, str]]:
         """Build the chat messages, prepending ``system_prompt`` when configured."""
