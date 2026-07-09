@@ -413,14 +413,33 @@ Proposed additive fields on `RunRecord` (all optional, old lines stay valid):
 
 ```
 # -- Cost (v:2, additive) --
-usage: dict[str, int] | None = None          # §6.1 rolled up over the run's calls
+usage_by_key: list[UsageBucket] | None = None     # §6.1 rolled up PER price-book key
 provider_reported_cost_usd: float | None = None   # sum of §6.3 facts, when all real
 cost_is_real: bool = False                    # True iff every call had a real cost
 derived_cost_usd: float | None = None         # §6.2 derive-on-read, DENORMALIZED
 price_book_version: str | None = None         # which prices produced derived_cost_usd
 # spend_usd / budget_exceeded retained: spend_usd = the run's authoritative total
 #   (provider-reported when cost_is_real, else derived), for back-compat readers.
+
+# UsageBucket = the price-book key + the LLMUsage vector accumulated under it:
+#   {model, provider, usage: {input_tokens, output_tokens, cache_read_input_tokens,
+#                             cache_creation_input_tokens, reasoning_tokens}}
 ```
+
+**Why `usage_by_key`, not a single flat `usage` vector?** Pricing is keyed on
+`(model, provider, effective_date)` (§6.2). A run that mixes models — a
+`CascadeJudge` is *defined* by cheap-student-then-expensive-teacher — or that
+OpenRouter routes to two serving providers of the same model (~10× apart, §5)
+would collapse into one anonymous token total, and re-pricing could then only
+apply a single price row to the aggregate. That silently corrupts spend, which is
+the exact failure this design exists to prevent. Bucketing by the price-book key
+keeps the roll-up re-priceable.
+
+`effective_date` needs no bucket: `RunRecord.started_at` already dates the run.
+A run that straddles a price change is priced at its start — the per-call rows in
+`JudgementLog` (§6.1) remain the **authoritative, per-call-dated fact**, and the
+run roll-up is a denormalized convenience derived from them. When a run is long
+enough for that to matter, re-derive from the call log, not the roll-up.
 
 **Why denormalize `derived_cost_usd` when Weave stores nothing?** Weave derives on
 read because it has a SQL store that can `JOIN` tokens against a live price table
