@@ -53,17 +53,29 @@ fuzzy matching. It is one file in fifty. Nobody tells the reader which fifty.
 
 ## 2. The four gaps, with evidence
 
-### G1 — `evaluate()` structurally cannot report cost
+### G1 — `evaluate()` reports dollars, but no tokens and no spend cap
 
-`langres.eval.evaluate` is the bring-your-own-data one-liner. Its own docstring:
+> **Correction (verified by running it).** An earlier draft of this note claimed
+> `evaluate()` "structurally cannot report cost." **That was wrong.** It returns a
+> `JudgePairEval` whose `.cost` is a real `CostTrack`, aggregated from each
+> judgement's `provenance["cost_usd"]` by the default `_cost_track`
+> (`benchmark.py:516`). `report.cost.usd_total` works today. The docstring's
+> "drops the paid-judge `runner` / cost knobs" refers to the *inputs*, not the
+> output. Verified with a scripted judge: `cost.usd_total == $0.0030`.
 
-> "A thin wrapper over `evaluate_judge_on_candidates` that **drops** the raw
-> judgements (and the paid-judge `runner` / **cost knobs**) …"
+The real gaps are narrower and sharper:
 
-So langres' headline eval call cannot answer *"what F1, at what price?"* — the
-exact question modern LLM-era ER is a trade-off over, and the one the cost design
-note (#101) exists to serve. `LLMUsage` (landed in #102) is the fact layer; nothing
-at the eval layer surfaces it.
+1. **The `LLMUsage` fact layer never reaches the eval report.** `CostTrack` carries
+   `usd_total, usd_per_1k_pairs, est_usd_per_100k, escalation_rate,
+   llm_calls_per_candidate` — **no tokens, no `cost_is_real`**. So the OTel token
+   vector that #102 landed on `PairwiseJudgement.provenance`, and that #101's design
+   makes the *fact* from which dollars are derived, dies at the judgement boundary.
+   You cannot re-price an `evaluate()` result, and you cannot tell whether its
+   dollars were provider-billed or estimated.
+2. **`evaluate()` has no spend cap.** It drops the `runner`
+   (`BudgetedModuleRunner`), which is the only thing that bounds spend. The
+   friendly one-liner, handed a paid judge and 1,206 pairs, will spend **unbounded**.
+   That is a worse defect than the one I originally alleged.
 
 ### G2 — no public seam from a benchmark to candidates
 
@@ -83,12 +95,28 @@ candidates = list(resolver._candidates([r.model_dump() for r in test_records]))
 `langres.eval`. When your own examples reach through the wall, the wall is in the
 wrong place.
 
-### G3 — the eval path assumes a threshold sweep
+### G3 — the eval path always sweeps, and selects the threshold on the test labels
 
-`evaluate(..., grid=(0.05, …, 0.95))` always sweeps and reports best-F1. Peeters'
-protocol — and every binary Yes/No paper prompt — has **no threshold**. There is
-no `threshold=0.5` fixed-decision option. We had to compute metrics through
-`classify_pairs` by hand.
+**What `threshold` means.** A judge emits a `score` per pair. `classify_pairs`
+(`metrics.py:303`) predicts *match* iff `score >= threshold`. It is the decision
+cutoff that turns a score into a yes/no.
+
+`evaluate()` never takes one. It sweeps `DEFAULT_PAIR_GRID` — 19 points from 0.05
+to 0.95 — and reports P/R/F1 **at the threshold that maximises F1 on the very gold
+set it is scoring against**. Two consequences:
+
+1. **The headline F1 is optimistically biased.** It is a max over 19 thresholds
+   fitted to the labels being reported on. That is threshold selection on the test
+   set. (`run_method` does this honestly — `benchmark.py:585` picks the argmax on a
+   *train* curve. `evaluate()` does not.)
+2. **For a binary judge the sweep is meaningless.** Peeters' protocol — and every
+   Yes/No paper prompt — emits scores in `{0.0, 1.0}`, so all 19 thresholds produce
+   an identical partition and identical F1. Verified: the reported
+   `best_threshold` comes back as **`0.05`**, the first grid point, an artifact of
+   the argmax tie-break rather than a property of the matcher.
+
+There is no `threshold=0.5` fixed-decision option, which is why the replication
+computed its metrics through `classify_pairs` by hand.
 
 ### G4 — langres ships no test double
 
@@ -108,9 +136,10 @@ calls, no embeddings, no infra" is currently something the user must build.
 the only class with a prompt seam — is unreachable by name from `link()`,
 `dedupe()`, or `Resolver.from_schema()`. Tracked as **#103**.
 
-### G6 — the docs describe modules that do not exist
+### G6 — the docs describe modules that do not exist *and should not*
 
-Verified by import:
+Verified by import — none of these exist, and no `DeduplicationTask`,
+`EntityLinkingTask` or `CompanyFlow` class exists anywhere in `src/` or `tests/`:
 
 | symbol | exists? | documented in |
 |---|---|---|
@@ -119,7 +148,33 @@ Verified by import:
 | `langres.ui` (Streamlit) | **no** | `TECHNICAL_OVERVIEW.md` |
 | `Optimizer.finetune` | **no** | `docs/research/20260701_er_seam_audit.md` |
 
-A newcomer's first read is partly fiction.
+The interesting question is not whether they exist but whether they *should*.
+**They should not — and every intent behind them already shipped under a better
+name.** `docs/ROADMAP.md`, the current statement of direction, mentions
+`tasks`/`flows`/`ui` **zero times**.
+
+| the 2025 idea | its intent | what actually serves it now |
+|---|---|---|
+| `langres.tasks` (`DeduplicationTask`) | an out-of-the-box entry point | **the verbs** — `dedupe()` / `link()`. Declarative, schema-optional, spend-capped. |
+| `langres.flows` (`CompanyFlow`) | a reusable, portable domain "brain" | **the `Resolver` artifact** — `from_schema` + `save`/`load` via the config-registry. A *serialized* brain beats a hand-written class. |
+| `langres.ui` (Streamlit labeler) | close the human-in-the-loop | **the CLI** — `langres review` / `export-csv` / `import-csv`, over `ReviewQueue` + `CorrectionLog`. |
+
+`langres.ui` is the one to reject on principle, not just on redundancy. ROADMAP §1:
+*"Engine intelligence in langres; data, persistence, **visibility** in the
+consumer."* A shipped Streamlit app **is** visibility. It belongs to brainsquad, on
+the same side of the seam as streaming and temporal support. Shipping it would put
+langres on both sides of its own architectural boundary.
+
+`TECHNICAL_OVERVIEW.md` is stale in two further ways, both worth fixing in the same
+pass: it describes a **two**-layer API (`tasks` / `core`) that has been a
+**three**-layer one (verbs → `Resolver` → `core`) since M0; it calls `ReviewQueue`
+"a storage backend (e.g. a simple SQLite database)" when it is a truncating JSONL
+*snapshot* regenerated from the judgement log (`review.py:115-123`); and its
+"Observability & Tracing (TBD)" section predates #99 (trackers) and #101 (the OTel
+cost vocabulary).
+
+**Recommendation: delete `tasks`/`flows`/`ui` from the docs rather than build them,
+and record that the intents survived while the modules did not.**
 
 ---
 
@@ -171,15 +226,22 @@ judge = LLMJudge(
     temperature=0.0,                     # ✓ default since #102
 )
 
-report = evaluate(judge, candidates, gold, threshold=0.5)   # BLOCKED (G3): always sweeps a grid
+report = evaluate(judge, candidates, gold, threshold=0.5)   # BLOCKED (G3): always sweeps a
+                                                           # grid, picks argmax-F1 on the test labels
+                                                           # ALSO: no spend cap (G1.2) — unbounded spend
 
-print(f"F1 {report.f1:.2f}  ·  ${report.cost_usd:.4f}  ·  {report.usage.input_tokens} in-tokens")
-#                                 ^^^^^^^^^^^^^^^^^^ BLOCKED (G1): evaluate() drops cost
+print(f"F1 {report.pair.f1:.2f}  ·  ${report.cost.usd_total:.4f}")   # ✓ both work today
+print(f"   {report.cost.usage.input_tokens} in-tokens, real={report.cost.cost_is_real}")
+#          ^^^^^^^^^^^^^^^^^^ BLOCKED (G1.1): CostTrack has no tokens, no cost_is_real
 ```
 
 **Twelve lines. Three blockers.** This is what the 1,658-line replication should
 have looked like, and it is the single example that would have *shown langres
 off*: bring a prompt, get accuracy and dollars.
+
+Note the shape of the surviving G1: dollars are already there. What is missing is
+the *token vector* those dollars were derived from — the exact fact #101 argues is
+primary — and any bound on spend.
 
 Its mocked twin — what CI runs, and what a user runs before spending a cent:
 
@@ -240,10 +302,14 @@ deletes.
 | wave | fixes | unblocks |
 |---|---|---|
 | **A** | `langres.testing` (`ScriptedJudge`, `FakeEmbedder`) — one double, replacing 4 hand-rolled copies | G4 → CI, and the mocked twin of 02 |
-| **A** | curate `examples/` vs `examples/research/` (label harnesses "not a tutorial"); delete doc fiction | G6 |
-| **B** | `evaluate()` returns cost + usage; add fixed `threshold=` alongside `grid=` | G1, G3 → example 02 & 03 |
+| **A** | curate `examples/` vs `examples/research/` (label harnesses "not a tutorial"); **delete** `tasks`/`flows`/`ui` from the docs; fix `TECHNICAL_OVERVIEW`'s two-layer API and `ReviewQueue`-is-SQLite claims | G6 |
+| **B** | `CostTrack` carries the `LLMUsage` token vector + `cost_is_real`; `evaluate()` accepts a `runner`/`budget_usd` so the one-liner cannot spend unbounded | G1 → example 02 & 03 |
+| **B** | `evaluate()` accepts a fixed `threshold=`; when it sweeps, say so and warn that `best_threshold` is fitted to the labels being reported | G3 |
 | **B** | public `bench.candidates(split=…)` seam; re-export `gold_pairs_from_clusters` | G2 → kills `resolver._candidates()` |
 | **C** | `judge="prompt_llm"` preset reaching `LLMJudge` | G5 (#103) |
+
+The sharpest single line item is **`evaluate()` has no spend cap**. Everything else
+degrades an experiment; that one bills for it.
 
 Wave A is pure addition and unblocks the CI contract. Wave B is the one that
 makes example 02 — the one that sells the library — writable at all.
