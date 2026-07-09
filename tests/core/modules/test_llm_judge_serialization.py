@@ -42,7 +42,15 @@ def test_config_excludes_client_and_secrets() -> None:
 
     config = judge.config
 
-    assert set(config) == {"model", "temperature", "prompt_template", "entity_noun", "provider"}
+    assert set(config) == {
+        "model",
+        "temperature",
+        "prompt_template",
+        "entity_noun",
+        "provider",
+        "system_prompt",
+        "on_parse_error",
+    }
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
     assert config["temperature"] == 0.3
     assert config["entity_noun"] == "company"
