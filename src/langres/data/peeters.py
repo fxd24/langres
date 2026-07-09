@@ -96,9 +96,10 @@ class PeetersReplicationSpec:
         entity_noun: Prompt noun — ``"Product"`` (product sets) or
             ``"Publication"`` (bibliographic sets).
         task_prefix: The rendered prompt prefix for the chosen prompt design.
-        serialization_fields: Ordered ``(column, max_whitespace_tokens)`` recipe;
-            each field is truncated to its first ``max`` whitespace tokens and the
-            fields are joined by single spaces (reproducing their f-string).
+        serialization_fields: Ordered ``(column, max_tokens)`` recipe; each field
+            is truncated to its first ``max`` single-space tokens (``split(' ')``,
+            **not** ``split()``) and the fields are joined by single spaces
+            (reproducing their f-string).
         sample_file: Committed regenerated pair-list filename (in
             ``dataset_package``), columns ``ltable_id,rtable_id,label`` in
             regeneration order.
@@ -192,9 +193,11 @@ def serialize_record(record: Mapping[str, str], fields: Sequence[tuple[str, int]
     """Serialize a record with Peeters' per-field whitespace-token truncation.
 
     For each ``(column, max_tokens)`` the field value is truncated to its first
-    ``max_tokens`` whitespace tokens and stripped; the results are joined by
-    single spaces. This reproduces their f-string exactly — including the
-    leading/trailing/collapsed spaces a missing field leaves behind (e.g. an
+    ``max_tokens`` **single-space** tokens (``value.split(" ")`` — deliberately
+    NOT ``value.split()``, so internal runs of spaces/tabs are kept as tokens,
+    matching MatchGPT's ``prep_em_tasks.ipynb``) and stripped; the results are
+    joined by single spaces. This reproduces their f-string exactly — including
+    the leading/trailing/collapsed spaces a missing field leaves behind (e.g. an
     empty ``price`` yields a trailing space), which is load-bearing for the
     byte-exact prompt round-trip. Values are already lowercased in the
     DeepMatcher source.
@@ -301,6 +304,12 @@ def regenerate_sample_rows(spec: PeetersReplicationSpec) -> list[tuple[int, int,
 
     kept_positives = positives
     if len(positives) > spec.max_positives:
+        # Fresh RandomState per sample() call (they pass the int 42 each time, so
+        # positives and negatives each get an independent RandomState(42) — not
+        # one advancing RNG threaded across both). Neither shipped slice trips
+        # this branch (abt-buy 206, amazon-google 234 are under the 250 cap), but
+        # it is verified to match Peeters' published sample exactly on a set that
+        # DOES exceed the cap: dblp-scholar (250 positives after the cap).
         pos_idx = np.random.RandomState(spec.random_state).choice(
             len(positives), size=spec.max_positives, replace=False
         )
@@ -431,7 +440,8 @@ def judgements_from_answers(
             decision_step=decision_step,
             provenance={"raw_answer": answer},
         )
-        for prompt, answer in zip(prompts, answers, strict=True)
+        # Lengths are guaranteed equal by the explicit check above.
+        for prompt, answer in zip(prompts, answers)
     ]
 
 

@@ -122,6 +122,25 @@ def test_serialize_missing_column_treated_as_empty() -> None:
     assert serialize_record({"name": "acme"}, (("name", 50), ("price", 5))) == "acme "
 
 
+@pytest.mark.parametrize(
+    ("value", "cap", "expected"),
+    [
+        # Internal double space: split(" ") keeps the "" token, so cap=2 stops
+        # after "a" (split() would keep "a b" -> the whole point of byte-exactness).
+        ("a  b c", 2, "a"),
+        # Leading space is a token under split(" ") but dropped by split().
+        (" x y", 2, "x"),
+    ],
+)
+def test_serialize_uses_single_space_split_not_whitespace_split(
+    value: str, cap: int, expected: str
+) -> None:
+    # Locks the load-bearing invariant that serialize_record splits on a single
+    # space (str.split(" ")), matching MatchGPT — a regression to str.split()
+    # would silently break the byte-exact prompt round-trip.
+    assert serialize_record({"name": value}, (("name", cap),)) == expected
+
+
 # --------------------------------------------------------------------------- #
 # Prompt renderer
 # --------------------------------------------------------------------------- #
