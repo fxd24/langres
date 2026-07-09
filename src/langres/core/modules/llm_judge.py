@@ -709,7 +709,12 @@ class LLMJudge(Module[SchemaT]):
                 decision_step="llm_judgment_async",
                 reasoning=reasoning,
                 provenance=self._build_provenance(
-                    cost_usd, cost_is_real, provider, usage, parse_error=parse_error, method="async_batch"
+                    cost_usd,
+                    cost_is_real,
+                    provider,
+                    usage,
+                    parse_error=parse_error,
+                    method="async_batch",
                 ),
             )
 

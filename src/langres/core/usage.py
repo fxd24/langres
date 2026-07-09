@@ -106,9 +106,7 @@ class LLMUsage(BaseModel):
     model: str = ""
 
     @classmethod
-    def from_response(
-        cls, response: Any, *, model: str, provider: str | None = None
-    ) -> "LLMUsage":
+    def from_response(cls, response: Any, *, model: str, provider: str | None = None) -> "LLMUsage":
         """Build the vector from a LiteLLM/OpenAI-shaped completion ``response``.
 
         Reads ``response.usage`` (``None``-safe). ``provider`` is the serving

@@ -633,8 +633,7 @@ def test_evaluate_surfaces_parse_error_count_and_warns(
         )
     assert result.n_parse_errors == 1
     assert any(
-        "parse" in r.message.lower() or "abstention" in r.message.lower()
-        for r in caplog.records
+        "parse" in r.message.lower() or "abstention" in r.message.lower() for r in caplog.records
     )
 
 

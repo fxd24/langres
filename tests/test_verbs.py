@@ -647,7 +647,9 @@ class TestDedupeWithLog:
 
         rows = JudgementLog(log_path).read()
         assert len(rows) == 3  # C(3,2) all-pairs candidates
-        assert all(row["v"] == 1 for row in rows)
+        assert all(row["v"] == 2 for row in rows)
+        # A string judge carries no token usage — the vector is logged as null.
+        assert all(row["usage"] is None for row in rows)
         assert {"1", "2"} in result
 
     def test_accepts_a_judgementlog_instance_directly(self, tmp_path: Path) -> None:
