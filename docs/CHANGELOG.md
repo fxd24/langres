@@ -1,5 +1,49 @@
 # Changelog
 
+## [Unreleased] — token-usage vector + LLM-judge paper-prompt seams
+
+### ⚠️ Behavior changes
+
+- **`LLMJudge` no longer silently returns `0.5` when it cannot parse a score.**
+  The default `response_parser` now *abstains* on an unparseable response: the
+  judgement carries `provenance["parse_error"] = True` with `score=0.0` (a
+  flagged abstention, distinguishable downstream) instead of a plausible-looking
+  mid-confidence `0.5`. `on_parse_error="raise"` turns the same case into an
+  immediate `LLMParseError`. The default is `"abstain"` because aborting a long
+  paid run on one flaky response is worse than a surfaced, counted abstention —
+  and `evaluate()` / `evaluate_judge_on_candidates()` now expose the count as
+  `JudgePairEval.n_parse_errors` and warn loudly when it is non-zero.
+- **`LLMJudge` default `temperature` changed `1.0` → `0.0`** (deterministic;
+  the ER-paper convention, and already the `DSPyJudge` default). Pass
+  `temperature=1.0` to restore the old behavior.
+- **`LLMJudge.prompt_template` now requires literal `{left}` and `{right}`
+  placeholders** (validated at construction) and substitutes them by literal
+  replacement rather than `str.format`, so a template containing other braces
+  (e.g. a paper's JSON output schema `{"match": true}`) works instead of raising
+  `KeyError`.
+- **`JudgementLog` schema `"v"` bumped `1` → `2`:** the default (privacy-safe,
+  `features=False`) row gained a non-PII `usage` token vector (`null` for
+  non-LLM judges). Old `v: 1` rows still read back unchanged.
+
+### Added
+
+- **`langres.core.usage.LLMUsage`** — a frozen Pydantic token-usage vector in the
+  OpenTelemetry GenAI vocabulary (snake_case, SUBSET semantics): `input_tokens`
+  and `output_tokens` (inclusive totals) with `cache_read_input_tokens`,
+  `cache_creation_input_tokens`, `reasoning_tokens` as subsets, plus the serving
+  `provider` and `model`. Import-light (pydantic only) so a future pricing layer
+  can consume it without core's heavy deps. `LLMJudge` / `DSPyJudge` / `SelectJudge`
+  now record it under `provenance["usage"]` (additive — legacy
+  `prompt_tokens`/`completion_tokens` unchanged). Pinned against LiteLLM's
+  Anthropic normalization (`usage.prompt_tokens` is already the inclusive input
+  total, so the cache subsets are never double-counted).
+- **`LLMJudge` paper-replication seams** (first-class constructor params, no
+  subclass fork): `response_parser` (default `parse_score_response`; shipped
+  reusable `parse_binary_yes_no` for the Yes/No prompt family), `record_serializer`
+  (default `default_record_serializer`), `system_prompt`, and `on_parse_error`.
+  All exported from `langres.core.modules.llm_judge` (`ParsedVerdict`,
+  `LLMParseError`, the two parsers, `default_record_serializer`).
+
 ## [0.2.0] - 2026-07-06 — the closed flywheel loop
 
 ### ⚠️ BREAKING

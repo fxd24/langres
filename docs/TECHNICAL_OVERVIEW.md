@@ -462,6 +462,33 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
 
+**LLM-judge provenance keys.** `LLMJudge` / `DSPyJudge` / `SelectJudge` write
+`model`, `cost_usd`, `provider`, the legacy `prompt_tokens` / `completion_tokens`
+(kept for `JudgementLog`, `bootstrap.labelers`, `openrouter.make_token_cost_track`),
+and — added here — a typed **`usage`** vector: `LLMUsage.model_dump()`
+(`langres.core.usage`). It follows the OpenTelemetry GenAI vocabulary (snake_case,
+SUBSET semantics): `input_tokens` / `output_tokens` are the *inclusive* totals
+(`input_tokens` == `prompt_tokens`), and `cache_read_input_tokens`,
+`cache_creation_input_tokens`, `reasoning_tokens` are subsets of them, plus the
+serving `provider` and `model` id. LiteLLM already normalizes Anthropic's raw
+`input_tokens` up to the inclusive total, so the subsets are never re-added. An
+`LLMJudge` under `on_parse_error="abstain"` (the default) also sets
+`provenance["parse_error"] = True` on a response its `response_parser` could not
+parse (score `0.0`, distinguishable downstream); `evaluate()` /
+`evaluate_judge_on_candidates()` surface the count as `JudgePairEval.n_parse_errors`
+and warn when non-zero.
+
+**`LLMJudge` paper-replication seams (constructor).** To run a published paper's
+prompt without subclassing: `response_parser` (default `parse_score_response`; the
+shipped `parse_binary_yes_no` covers the Yes/No prompt family), `record_serializer`
+(default `default_record_serializer` = `model_dump_json(indent=2)`), `system_prompt`
+(sends `system`+`user` when set), and `on_parse_error` (`"abstain"` | `"raise"`).
+`prompt_template` requires literal `{left}`/`{right}` placeholders and preserves all
+other braces verbatim (a paper's JSON schema is safe). `temperature` defaults to
+`0.0`. `system_prompt` / `on_parse_error` serialize via `config`; the parser and
+serializer callables do not (they revert to defaults on `Resolver.load`, like the
+client).
+
 ### ClusterDelta (`langres.core`, M5/W2.2)
 
 The result of one incremental `Resolver.assign(record)` / `AnchorStore.assign(record)` — the outcome of assigning a single new record against a prior batch's anchor set.
