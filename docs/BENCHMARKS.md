@@ -9,6 +9,8 @@ labeled pairs with the same honest pair-level metrics. This doc covers both:
 2. [The datasets, and why each is a target](#2-the-datasets-and-why-each-is-a-target).
 3. [Score your own data](#3-score-your-own-data) — `evaluate(judge, candidates,
    gold_pairs)`.
+4. [Replicate a published LLM benchmark, offline](#4-replicate-a-published-llm-benchmark-offline)
+   — the Peeters et al. (EDBT 2025) LLM-EM replay at $0.
 
 > **Entry point:** `langres.eval` is the curated evaluation surface. It
 > re-exports `evaluate`, `list_benchmarks` / `get_benchmark`, and the ER metrics
@@ -145,6 +147,61 @@ best-F1 threshold (never a per-slice argmax).
 
 ---
 
+## 4. Replicate a published LLM benchmark, offline
+
+To trust our metric code, reproduce a *published* number without spending a cent.
+`langres.data.peeters` replicates *Entity Matching using Large Language Models*
+(Peeters, Steiner & Bizer, arXiv 2310.11244 v4, EDBT 2025;
+[`wbsg-uni-mannheim/MatchGPT`](https://github.com/wbsg-uni-mannheim/MatchGPT))
+by **replaying the authors' archived model answers** — no API key, no LLM call,
+`$0`:
+
+```python
+from langres.data.peeters import (
+    get_peeters_replication, render_sample_prompts,
+    judgements_from_answers, gold_match_pairs,
+)
+from langres.core.metrics import classify_pairs
+
+spec = get_peeters_replication("abt-buy")     # or "amazon-google"
+prompts = render_sample_prompts(spec)          # our records + their serializer + prompt
+answers = [...]                                # their archived raw "Yes"/"No" answers
+judgements = judgements_from_answers(prompts, answers)
+m = classify_pairs(judgements, gold_match_pairs(prompts), threshold=0.5)
+print(m.precision, m.recall, m.f1)             # binary pairwise P/R/F1
+```
+
+- **It's a *slice*, not a new benchmark.** Their eval set is a deterministic
+  `sample(random_state=42)` subset of the DeepMatcher `test.csv` we already
+  vendor. `regenerate_sample_rows(spec)` reproduces it from our own CSVs (a
+  numpy-only reproduction of `pandas.sample`), and the tracked
+  `datasets/<ds>/peeters_sampled_test.csv` is verified **exactly equal** to the
+  authors' published `sampled_gs` (abt-buy 1206, amazon-google 1234; 0 label
+  mismatches). Because the protocol is a fixed **binary pair-classification** task
+  (no blocking, no clustering, no threshold sweep), it stays out of the
+  `data/registry` clustering manifest and gets its own small
+  `list_peeters_replications()` / `get_peeters_replication()` seam.
+- **No MatchGPT data is vendored.** MatchGPT ships no LICENSE (`license: null`);
+  langres is Apache-2.0. The pair lists are regenerated from *our* data; the
+  ~186 MB answer archive is fetched transiently by the harness to a gitignored
+  cache dir.
+
+Run the full replay — regenerate the sample, render every prompt, diff it against
+the archived prompt, parse the answers, and score — with
+[`examples/research/peeters_llm_em_replication.py`](../examples/research/peeters_llm_em_replication.py):
+
+```bash
+uv run python examples/research/peeters_llm_em_replication.py   # abt-buy / gpt-4-0613
+```
+
+It reproduces arXiv v4 **Table 2** `abt-buy` / `gpt-4-0613` /
+`domain-complex-force` → **F1 95.15** at a **100.00% byte-exact** prompt
+round-trip. (amazon-google round-trips 99.51%; the 6 diffs are float-repr
+artifacts in *their* gold standard's `price`, e.g. `6.5600000000000005` vs our
+`6.56` — a data-provenance difference, not a serializer bug.)
+
+---
+
 ## See also
 
 - [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) — the two measurement surfaces
@@ -154,3 +211,5 @@ best-F1 threshold (never a per-slice argmax).
   counterpart: a messy CSV → entity clusters via `dedupe`, at $0.
 - [`examples/research/portfolio_race.py`](../examples/research/portfolio_race.py)
   — the registry-driven race this doc describes.
+- [`examples/research/peeters_llm_em_replication.py`](../examples/research/peeters_llm_em_replication.py)
+  — the offline Peeters et al. LLM-EM replay (§4).
