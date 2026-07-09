@@ -9,6 +9,7 @@ Supports both direct OpenAI client and LiteLLM for enhanced observability.
 import asyncio
 import logging
 import re
+import string
 import time
 from collections.abc import Callable, Iterator
 from typing import Any, ClassVar, Literal
@@ -102,16 +103,34 @@ def parse_score_response(content: str) -> ParsedVerdict:
 
 
 def parse_binary_yes_no(content: str) -> ParsedVerdict:
-    """Reusable parser for the published yes/no ER-prompt family.
+    """Canonical parser for the published yes/no ER-prompt family.
 
-    Strips punctuation, lowercases, and maps ``"yes" in text`` to ``1.0`` else
-    ``0.0`` — the exact contract the "Yes"/"No" prompt family (e.g. Ditto,
-    Jellyfish) answers with. It is deliberately **total**: absence of "yes" is a
-    confident non-match (``0.0``), never a parse failure, because in that family
-    "not yes" is the answer, not a garbled response. Pass a custom parser that
-    returns ``score=None`` if you want strict abstention instead.
+    This is the single source of truth for the yes/no contract: it deliberately
+    mirrors the reference ``check_for_prediction`` from Peeters, Steiner & Bizer
+    (*Entity Matching using Large Language Models*, arXiv 2310.11244) **exactly**
+    — ``strip()`` → **delete** ``string.punctuation`` → ``lower()`` →
+    ``"yes" in text`` maps to ``1.0`` else ``0.0``. ``langres.data.peeters.
+    parse_binary_answer`` is a thin ``int`` adapter over this function; there is
+    only one code path so the ``$0`` offline replay validates the exact parser
+    the paid ``LLMJudge(response_parser=...)`` run will use.
+
+    Fidelity to the reference beats cleverness, so the crudeness is preserved on
+    purpose:
+
+    - Punctuation is **deleted**, not replaced with a space, so intra-word
+      punctuation collapses: ``"ye-s"``, ``"Y.E.S."``, ``"ye_s"`` all → ``"yes"``
+      → MATCH. (``_`` is in ``string.punctuation``, so it is deleted too.)
+    - It is a bare substring test with no negation handling: ``"Not yes"``
+      contains ``"yes"`` and therefore MATCHES. Reproducing the paper's reported
+      F1 requires the paper's parser, warts included.
+
+    It is deliberately **total**: absence of "yes" is a confident non-match
+    (``0.0``), never a parse failure (``score is None``). So ``on_parse_error``
+    never fires for this family and a long *paid* run cannot abort on one flaky
+    response. Pass a custom parser that returns ``score=None`` if you want strict
+    abstention instead.
     """
-    cleaned = re.sub(r"[^\w\s]", " ", content).lower()
+    cleaned = content.strip().translate(str.maketrans("", "", string.punctuation)).lower()
     score = 1.0 if "yes" in cleaned else 0.0
     return ParsedVerdict(score=score, reasoning=content.strip() or None)
 

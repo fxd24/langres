@@ -90,6 +90,46 @@ class TestBinaryYesNoParser:
         """The published yes/no family is total: no 'yes' => 0.0 (not a match)."""
         assert parse_binary_yes_no("These are different products.").score == 0.0
 
+    @pytest.mark.parametrize(
+        "answer",
+        # Intra-word punctuation the paper's check_for_prediction DELETES (not
+        # replaces-with-space), so each collapses to "yes" -> MATCH. These are
+        # exactly the cases where the old two parsers disagreed. `_` matters:
+        # it is `\w` (kept by a naive [^\w\s] scrub) but IS in
+        # string.punctuation (deleted by the paper).
+        ["ye-s", "ye.s", "y-e-s", "Ye's", "ye_s", "Y.E.S."],
+    )
+    def test_intra_word_punctuation_deleted_like_check_for_prediction(self, answer: str) -> None:
+        """Punctuation is DELETED (paper semantics), so "ye-s" -> "yes" -> MATCH.
+
+        Pins the unified contract against the old ``re.sub(r"[^\\w\\s]", " ", ...)``
+        which replaced punctuation with a space and split these into non-matches.
+        """
+        assert parse_binary_yes_no(answer).score == 1.0
+
+    def test_crude_substring_match_is_deliberate(self) -> None:
+        """Fidelity over cleverness: "Not yes" contains "yes" so it MATCHES.
+
+        This crudeness is inherited from the reference ``check_for_prediction``
+        (substring test, no negation handling). We keep it because reproducing
+        the paper's reported F1 requires the paper's exact parser.
+        """
+        assert parse_binary_yes_no("Not yes").score == 1.0
+
+    def test_is_total_never_returns_none(self) -> None:
+        """No 'yes' is a confident non-match (0.0), never a parse failure (None)."""
+        v = parse_binary_yes_no("Absolutely not, different entities entirely.")
+        assert v.score == 0.0
+        assert v.score is not None
+
+    def test_totality_means_raise_mode_never_fires(self) -> None:
+        """Because this parser is total, on_parse_error='raise' can't abort a run."""
+        client = Mock()
+        client.completion.return_value = _response("No, these are different.")
+        judge = _judge(client, response_parser=parse_binary_yes_no, on_parse_error="raise")
+        j = list(judge.forward([_pair()]))[0]  # does NOT raise LLMParseError
+        assert j.score == 0.0
+
 
 class TestDefaultRecordSerializer:
     def test_is_indented_json(self) -> None:

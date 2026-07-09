@@ -95,6 +95,20 @@ def test_parse_binary_answer(answer: str, expected: int) -> None:
     assert parse_binary_answer(answer) == expected
 
 
+@pytest.mark.parametrize("answer", ["ye-s", "ye.s", "y-e-s", "Ye's", "ye_s", "Y.E.S."])
+def test_parse_binary_answer_delegates_to_canonical_parser(answer: str) -> None:
+    """``parse_binary_answer`` is a thin int adapter over ``parse_binary_yes_no``.
+
+    These six intra-word-punctuation cases are exactly where the two historical
+    parsers disagreed; after unification both must agree and return MATCH (the
+    paper's ``check_for_prediction`` deletes punctuation -> "yes").
+    """
+    from langres.core.modules.llm_judge import parse_binary_yes_no
+
+    assert parse_binary_answer(answer) == 1
+    assert parse_binary_answer(answer) == int(parse_binary_yes_no(answer).score)
+
+
 # --------------------------------------------------------------------------- #
 # Serializer (per-field whitespace-token truncation, space-joined)
 # --------------------------------------------------------------------------- #

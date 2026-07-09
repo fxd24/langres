@@ -44,13 +44,13 @@ bibliographic sets) the ``Publication`` noun + bib task prefix.
 from __future__ import annotations
 
 import difflib
-import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
 from langres.core.models import PairwiseJudgement
+from langres.core.modules.llm_judge import parse_binary_yes_no
 from langres.data import _benchmark_utils as _bu
 
 __all__ = [
@@ -245,21 +245,23 @@ def render_prompt(
 
 
 def parse_binary_answer(answer: str) -> int:
-    """Parse a raw model answer into a binary match decision (their parser).
+    """Parse a raw model answer into a binary match decision (``int`` adapter).
 
-    Exactly replicates ``check_for_prediction``: strip, remove ASCII
-    punctuation, lowercase, then ``1`` iff ``"yes"`` appears as a substring
-    (else ``0``). Anything that is not a clear "yes" — including ``"No"``, an
-    empty string, or a refusal — parses to ``0``.
+    Thin ``int`` wrapper over the canonical
+    :func:`langres.core.modules.llm_judge.parse_binary_yes_no`, which owns the
+    exact ``check_for_prediction`` semantics (strip → delete ``string.punctuation``
+    → lowercase → ``"yes" in text``). There is a single code path so the offline
+    ``$0`` replay validates the same parser the paid ``LLMJudge`` run uses.
 
     Args:
         answer: The raw model response.
 
     Returns:
-        ``1`` (match) or ``0`` (non-match).
+        ``1`` (match) or ``0`` (non-match). Anything that is not a clear "yes" —
+        ``"No"``, an empty string, or a refusal — parses to ``0``.
     """
-    processed = answer.strip().translate(str.maketrans("", "", string.punctuation)).lower()
-    return 1 if "yes" in processed else 0
+    # score is always 0.0 or 1.0 here (parse_binary_yes_no is total, never None).
+    return int(parse_binary_yes_no(answer).score)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

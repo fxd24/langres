@@ -75,6 +75,23 @@
   in *their* gold standard's `price` column (e.g. `6.5600000000000005` vs our
   vendored `6.56`), not a serializer bug.
 
+### Fixed
+
+- **Unified the two yes/no answer parsers into one canonical implementation.**
+  `llm_judge.parse_binary_yes_no` and `data.peeters.parse_binary_answer` had
+  shipped independent implementations of the same contract that **diverged on
+  intra-word punctuation**: the judge parser did `re.sub(r"[^\w\s]", " ", …)`
+  (replace punctuation with a space, and keep `_`), while the paper adapter did
+  `str.translate(…, string.punctuation)` (delete punctuation, incl. `_`). They
+  disagreed on e.g. `"ye-s"`, `"y-e-s"`, `"Ye's"`, `"ye_s"`, `"Y.E.S."` (MATCH
+  for the paper, NON-MATCH for the judge). `parse_binary_yes_no` is now the
+  single source of truth and mirrors the reference `check_for_prediction`
+  exactly (strip → **delete** `string.punctuation` → lowercase → `"yes" in
+  text`); `parse_binary_answer` is a thin `int` adapter over it. This matters
+  because the `$0` offline replay validates `parse_binary_answer`, but the paid
+  run goes through `LLMJudge(response_parser=parse_binary_yes_no)` — unification
+  makes the replay validate the exact path the paid run pays for.
+
 ## [0.2.0] - 2026-07-06 — the closed flywheel loop
 
 ### ⚠️ BREAKING
