@@ -106,11 +106,27 @@ class TestJudgementLogAppend:
         for line in lines:
             json.loads(line)  # every line is independently valid JSON
 
-    def test_append_includes_schema_version_v1(self, tmp_path: Path) -> None:
+    def test_append_includes_schema_version_v2(self, tmp_path: Path) -> None:
         log = JudgementLog(tmp_path / "log.jsonl")
         log.append(_judgement(), verdict=True)
         row = log.read()[0]
-        assert row["v"] == 1
+        assert row["v"] == 2
+
+    def test_append_records_usage_vector_in_default_row(self, tmp_path: Path) -> None:
+        """The token-usage vector is in the DEFAULT (features=False) row — it is
+        non-PII (just counts) and is the whole point of logging, like cost_usd."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        usage = {"input_tokens": 120, "output_tokens": 40, "model": "gpt-4o-mini"}
+        log.append(_judgement(provenance={"usage": usage}), verdict=True)
+        row = log.read()[0]
+        assert row["usage"] == usage
+
+    def test_append_usage_is_none_for_non_llm_judge(self, tmp_path: Path) -> None:
+        """A judge with no token usage (string/embedding) logs ``usage: null``."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(provenance={}), verdict=True)
+        row = log.read()[0]
+        assert row["usage"] is None
 
     def test_append_records_pair_ids_score_and_decision_step(self, tmp_path: Path) -> None:
         log = JudgementLog(tmp_path / "log.jsonl")

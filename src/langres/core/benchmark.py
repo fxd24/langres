@@ -729,6 +729,13 @@ class JudgePairEval(BaseModel):
             ``None`` otherwise. This is the honest seen -> unseen view: one global
             cut, reported across data slices, so a degradation cannot be tuned
             away.
+        n_parse_errors: How many judgements the judge flagged as a parse
+            error / abstention (``provenance['parse_error']`` truthy — e.g. an
+            ``LLMJudge`` under ``on_parse_error='abstain'``). These are still
+            graded (as their emitted score), so a non-zero count means the
+            reported P/R/F1 is built partly on abstentions rather than real
+            verdicts — :func:`evaluate_judge_on_candidates` logs a loud warning.
+            ``0`` for judges that never abstain.
     """
 
     pair: PairTrack
@@ -739,6 +746,7 @@ class JudgePairEval(BaseModel):
     best_threshold: float
     truncated: bool
     slices: dict[str, PairTrack] | None = None
+    n_parse_errors: int = 0
 
 
 def _grade_slices(
@@ -864,6 +872,23 @@ def evaluate_judge_on_candidates(
     )
 
     n_judged = len(judgements)
+
+    # Abstention accounting: judgements the judge flagged as a parse error /
+    # abstention (``provenance['parse_error']``) are still graded, so surface the
+    # count and warn loudly -- otherwise a table of P/R/F1 could be built partly
+    # on non-verdicts (e.g. a naive replication of a paper prompt the judge could
+    # not parse) with no visible signal.
+    n_parse_errors = sum(1 for j in judgements if j.provenance.get("parse_error"))
+    if n_parse_errors > 0:
+        logger.warning(
+            "%d of %d judgements were parse-error abstentions "
+            "(provenance['parse_error']); the reported P/R/F1 is graded on their "
+            "emitted (abstained) scores, NOT real verdicts. Inspect the judge's "
+            "response_parser / prompt before trusting these numbers.",
+            n_parse_errors,
+            n_judged,
+        )
+
     latency = LatencyTrack(seconds_per_pair=elapsed / n_judged if n_judged > 0 else 0.0)
     result = JudgePairEval(
         pair=pair,
@@ -874,6 +899,7 @@ def evaluate_judge_on_candidates(
         best_threshold=best.threshold,
         truncated=n_judged < len(candidates),
         slices=slices,
+        n_parse_errors=n_parse_errors,
     )
     return result, judgements
 

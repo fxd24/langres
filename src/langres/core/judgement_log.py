@@ -15,13 +15,16 @@ the wrap entirely -- no file, no extra generator layer, byte-identical to
 pre-W0.2 behavior.
 
 Privacy (adopted DX): record content is OFF by default. Each line carries
-only ids, score, verdict, model, cost, decision_step, timestamp, the
-enclosing run's ``run_id`` (the active ``capture_run`` attempt id, or
-``null`` outside one -- the join key to the ``RunRecord``/trace, W1 S5), and
-the schema-version field ``"v": 1`` -- never the underlying record fields or
-the judge's free-text reasoning. Pass ``features=True`` to additionally log
-``reasoning`` and the judge's raw ``provenance`` dict (comparison levels,
-similarities, token counts, ...): **this may contain PII** -- the record
+only ids, score, verdict, model, cost, the typed ``usage`` token vector
+(``LLMUsage.model_dump()``, or ``null`` for non-LLM judges), decision_step,
+timestamp, the enclosing run's ``run_id`` (the active ``capture_run`` attempt
+id, or ``null`` outside one -- the join key to the ``RunRecord``/trace, W1 S5),
+and the schema-version field ``"v": 2`` -- never the underlying record fields
+or the judge's free-text reasoning. The ``usage`` vector is non-PII (token
+counts only), so it belongs in the default row alongside ``cost_usd``/``model``
+-- capturing token spend is the whole point of the log. Pass ``features=True``
+to additionally log ``reasoning`` and the judge's raw ``provenance`` dict
+(comparison levels, similarities, ...): **this may contain PII** -- the record
 content a judge reasoned over, verbatim -- and JSONL is plaintext on disk.
 
 Serialization: excluded from Resolver artifacts (decided for W0.2, per E10).
@@ -50,7 +53,8 @@ __all__ = ["JudgementLog", "LoggingModule"]
 
 #: Schema-version tag written into every line (CEO #15) -- lets a future
 #: harvester (W2.4) or format-migration branch on it instead of guessing.
-_SCHEMA_VERSION = 1
+#: Bumped 1 -> 2 when the default row gained the ``usage`` token-usage vector.
+_SCHEMA_VERSION = 2
 
 
 class JudgementLog:
@@ -81,6 +85,10 @@ class JudgementLog:
             "verdict": verdict,
             "model": judgement.provenance.get("model"),
             "cost_usd": judgement.provenance.get("cost_usd", 0.0),
+            # The typed token-usage vector (LLMUsage.model_dump()) when the judge
+            # is an LLM; ``None`` for non-LLM judges. Non-PII counts, so it stays
+            # in the DEFAULT (features=False) row alongside cost_usd/model.
+            "usage": judgement.provenance.get("usage"),
             "decision_step": judgement.decision_step,
             "timestamp": datetime.now(UTC).isoformat(),
         }
