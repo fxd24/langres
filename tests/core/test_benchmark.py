@@ -1099,6 +1099,36 @@ def test_evaluate_judge_skips_warns_but_never_raises_even_under_raise_mode() -> 
     assert result.n_judged == 2
 
 
+def test_evaluate_raises_when_every_candidate_fails_despite_judge_skips_reason() -> None:
+    # A judge that fails on EVERY candidate produces zero judgements. Reporting
+    # precision/recall/F1 of 0.0 there is the dishonest cell: it is
+    # indistinguishable from a healthy judge that matched nothing. So a zero-
+    # judgement run raises even though its reason is "judge_skips", which
+    # otherwise only ever warns.
+    cands = _candidates(3)
+    module = _FakeModule(cost=0.0, boom_ids=frozenset({"l0", "l1", "l2"}))
+    with pytest.raises(benchmark_module.EvaluationTruncatedError) as exc:
+        benchmark_module.evaluate(module, cands, set(), grid=(0.5,), threshold=0.5)
+    assert "0 judgements" in str(exc.value)
+    # The partial result is still attached, so a caller can inspect the wreckage.
+    partial = exc.value.partial
+    assert partial is not None
+    assert partial.n_judged == 0
+    assert partial.n_candidates == 3
+
+
+def test_evaluate_zero_judgements_returns_silently_under_on_truncation_return() -> None:
+    # "return" means "I know it may be partial, give me what you have" -- an
+    # empty result is then a deliberate, opted-into outcome rather than a lie.
+    cands = _candidates(3)
+    module = _FakeModule(cost=0.0, boom_ids=frozenset({"l0", "l1", "l2"}))
+    result = benchmark_module.evaluate(
+        module, cands, set(), grid=(0.5,), threshold=0.5, on_truncation="return"
+    )
+    assert result.n_judged == 0
+    assert result.truncated is True
+
+
 # ---------------------------------------------------------------------------
 # complete_partition (re-homed to core)
 # ---------------------------------------------------------------------------

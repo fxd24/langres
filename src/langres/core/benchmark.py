@@ -1094,9 +1094,13 @@ def evaluate_judge_on_candidates(
 class EvaluationTruncatedError(RuntimeError):
     """Raised by :func:`evaluate` when its internal spend cap truncated the run.
 
-    Only raised for spend-caused truncation (``truncation_reason`` in
+    Raised for spend-caused truncation (``truncation_reason`` in
     ``{"budget_cap", "budget_stop"}``) under the default ``on_truncation="raise"``
-    — a ``"judge_skips"`` truncation only ever warns (see :func:`evaluate`).
+    — a ``"judge_skips"`` truncation only ever warns (see :func:`evaluate`) —
+    and, regardless of the reason, when the judge produced **no judgements at
+    all**: ``n_judged == 0`` over a non-empty candidate set is a failed run, not
+    a partial one, and P/R/F1 of ``0.0`` would be indistinguishable from a judge
+    that genuinely matched nothing.
 
     :attr:`partial` carries the truncated :class:`JudgePairEval` (set by the
     catcher immediately before re-raising, mirroring
@@ -1146,6 +1150,21 @@ def _judge_skips_message(result: JudgePairEval) -> str:
     )
 
 
+def _empty_run_message(result: JudgePairEval) -> str:
+    """Message for a run that produced no judgements at all — a failed run, not a partial one."""
+    return (
+        f"evaluate(): the judge produced 0 judgements over {result.n_candidates} "
+        f'candidates (truncation_reason="{result.truncation_reason}"). Nothing was '
+        "graded, so the reported precision/recall/F1 of 0.0 would mean 'the run "
+        "never happened', not 'the judge matched nothing' -- and the two are "
+        "indistinguishable in a results table.\n"
+        "Fix A: inspect the judge -- every candidate raised, or it yielded no verdict.\n"
+        "Fix B: raise budget_usd if the very first pair exhausted the spend cap.\n"
+        'Fix C: pass on_truncation="return" to accept the empty result deliberately '
+        "(.n_judged=0, .truncated=True) instead of raising."
+    )
+
+
 def _apply_truncation_policy(
     result: JudgePairEval,
     *,
@@ -1159,10 +1178,20 @@ def _apply_truncation_policy(
     candidate must not blow up a run); a spend-caused reason (``"budget_cap"`` /
     ``"budget_stop"``) warns under ``"warn"`` and raises
     :class:`EvaluationTruncatedError` under ``"raise"`` (the default).
+
+    The one exception to "judge_skips only warns": if the judge produced *zero*
+    judgements over a non-empty candidate set, there is no partial result to
+    salvage -- ``pair.f1`` would be ``0.0``, indistinguishable from a judge that
+    ran fine and matched nothing. That raises under both ``"raise"`` and
+    ``"warn"``.
     """
     reason = result.truncation_reason
     if reason == "none" or on_truncation == "return":
         return
+    if result.n_judged == 0 and result.n_candidates > 0:
+        error = EvaluationTruncatedError(_empty_run_message(result))
+        error.partial = result
+        raise error
     if reason == "judge_skips":
         warnings.warn(_judge_skips_message(result), UserWarning, stacklevel=3)
         return
@@ -1217,7 +1246,11 @@ def evaluate(
       fewer judgements than candidates (one call raised, or yielded nothing) is
       a DIFFERENT, non-spend truncation (``truncation_reason="judge_skips"``)
       and only ever warns — never raises, even under ``on_truncation="raise"``
-      — since one bad candidate must not blow up a run.
+      — since one bad candidate must not blow up a run. The sole exception:
+      **zero** judgements over a non-empty candidate set raises regardless of
+      the reason (unless ``on_truncation="return"``). Nothing was graded, so a
+      reported F1 of ``0.0`` would be indistinguishable from a healthy judge
+      that matched nothing — the dishonest cell this policy exists to prevent.
 
     For a paid or compiled judge that needs a caller-supplied price, a
     caller-owned runner, custom cost accounting (e.g. cascade escalation
