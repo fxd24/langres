@@ -48,6 +48,7 @@ def test_dir_and_all_list_the_curated_surface() -> None:
     """``dir()`` and ``__all__`` advertise exactly the curated surface."""
     surface = {
         "evaluate",
+        "EvalReport",
         "DEFAULT_PAIR_GRID",
         "list_benchmarks",
         "get_benchmark",
