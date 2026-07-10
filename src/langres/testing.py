@@ -2,21 +2,30 @@
 
 ``langres.testing`` is a small, dependency-light home for scripted stand-ins
 for the library's abstract components -- currently :class:`ScriptedJudge`, a
-``Module`` that returns pre-scripted scores instead of computing them. It
-exists because hand-rolled ``Module`` doubles had already accumulated across
-the test suite -- ``DummyModule`` re-implemented four separate times in
-``tests/core/test_module.py``, a ``ScriptedJudge`` local to
-``tests/core/modules/test_cascade_judge.py``, a ``DummyBlocker`` in
-``tests/core/test_blocker.py`` -- demonstrated reuse that earns a public,
-shared double.
-
-It is also the safe way to exercise judge-shaped code (``CascadeJudge``,
+``Module`` that returns pre-scripted scores instead of computing them. It is
+the safe way to exercise judge-shaped code (``CascadeJudge``,
 :func:`~langres.core.benchmark.evaluate`, the review/harvest flywheel, ...) in
 tests and examples with no network, no API key, and no spend. A real
 ``LLMJudge`` picks up ``OPENROUTER_API_KEY`` from the repo's ``.env`` via
 litellm's import-time ``load_dotenv()`` and would make a real, billed call;
 ``ScriptedJudge`` never imports litellm (or any other heavy/optional
 dependency) at all.
+
+It also replaces one genuine hand-rolled duplicate: a near-identical
+``ScriptedJudge`` that used to live in
+``tests/core/modules/test_cascade_judge.py`` (same name, same purpose, same
+``seen`` escalation-laziness spy, same ``inspect_scores`` delegation to
+``_inspect_scores_impl``) now imports this class instead. Two other
+``Module``-shaped test doubles were deliberately left in place, not migrated:
+
+- ``DummyBlocker`` in ``tests/core/test_blocker.py`` subclasses
+  :class:`~langres.core.blocker.Blocker`, not ``Module`` -- a ``Module``
+  double cannot structurally replace it.
+- The four ``DummyModule`` classes in ``tests/core/test_module.py`` test the
+  ``Module`` abstract base class's own contract (it can't be instantiated
+  directly, a concrete subclass's ``forward()`` is a lazy iterator, etc.);
+  using a library-provided ``Module`` subclass to test the ABC itself would
+  be circular, so they stay as minimal, from-scratch stubs.
 
 Not part of the core import graph: a bare ``import langres`` does not import
 this module (use ``from langres.testing import ScriptedJudge`` explicitly),
