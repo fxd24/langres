@@ -259,9 +259,7 @@ def test_review_renders_a_decider_without_a_score(tmp_path: Path) -> None:
 
 def test_export_csv_emits_empty_score_for_a_decider(tmp_path: Path) -> None:
     """A score-less (decider) item exports an empty score cell, not the literal 'None'."""
-    decider = ReviewItem(
-        left_id="a", right_id="b", score=None, verdict=True, reason="uncertainty"
-    )
+    decider = ReviewItem(left_id="a", right_id="b", score=None, verdict=True, reason="uncertainty")
     queue = _write_queue(tmp_path / "q.jsonl", [decider])
     csv_path = tmp_path / "out.csv"
     rc, _ = _run(["export-csv", str(queue), str(csv_path)])
