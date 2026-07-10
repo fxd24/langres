@@ -16,28 +16,50 @@ langres exposes a **three-layer API** — each layer a thin shell over the one b
 
 A primary goal of langres is to act as a powerful "glue" framework, simplifying and abstracting best-in-class libraries into a single, cohesive workflow. For contributors and advanced users, it's important to understand what langres is managing under the hood.
 
-### core.Optimizer (Optimization Harness)
+### What each dependency actually does
 
-The Optimizer is a sophisticated abstraction over several powerful optimization libraries:
+langres keeps a **small always-installed core** and pushes every heavy library
+behind an opt-in extra. Nothing below is auto-orchestrated by a magic
+"Optimizer"; the map is simply which library backs which component.
 
-- **Optuna:** Used as the engine for Hyperparameter Optimization (HPO). langres abstracts the entire study and trial process, allowing you to simply define a metric and let the optimizer find the best numeric thresholds in your Flow.
-- **DSPy:** Used as the preferred engine for prompt optimization. When a Flow includes an LLM-based component, the Optimizer can automatically run a DSPy compilation loop to find the optimal prompt templates and few-shot examples.
+**Core (always installed, `uv sync`):**
 
-### core.Blocker (Candidate Generation)
+- **pydantic** — every schema, `ERCandidate`, and `PairwiseJudgement` is a
+  Pydantic model; all validation and (de)serialization runs through it.
+- **rapidfuzz** — string similarity behind `StringComparator` and the default
+  `WeightedAverageJudge` scorer (the `judge="string"` path).
+- **networkx** — `Clusterer` builds an undirected graph from the judgements that
+  clear the threshold and takes connected components (transitive closure). This
+  is the *only* clustering backend — there is no scipy / hierarchical path.
+- **numpy** — vector math shared by the embedding helpers.
 
-The Blocker abstracts the complex logic of high-recall candidate generation:
+**Opt-in extras** (`pip install langres[<extra>]`):
 
-- **ANN Libraries:** In-memory blocking (e.g., blockers.EmbedBlocker) abstracts libraries like faiss-cpu or hnswlib, managing index creation and ANN search.
-- **External Frameworks:** We plan to provide wrappers for powerful, dedicated blocking libraries like BlockingPy to offer advanced strategies (e.g., Q-gram, Sorted-Neighborhood) as pre-built Blocker types.
+- **`[semantic]`** — sentence-transformers / torch / faiss-cpu / qdrant-client
+  (plus onnxruntime/optimum, fastembed): the embedding + ANN stack behind
+  `VectorBlocker`, `EmbeddingScoreJudge`, and `judge="embedding"`.
+- **`[llm]`** — litellm / dspy-ai / openai: `LLMJudge`, the DSPy-compiled
+  `DSPyJudge`, and `judge="zero_shot_llm"` / `judge="auto"`. DSPy prompt
+  optimization is real, but it lives *inside* `DSPyJudge` — it is not an
+  automatic compile pass over a whole pipeline.
+- **`[trained]`** — scikit-learn: `RandomForestJudge` and
+  `core.calibration.derive_threshold`. Note the BCubed / pairwise metrics in
+  `core.metrics` are a **vetted internal implementation** (Amigó et al. 2009),
+  *not* sklearn — sklearn is pulled in only by these trained-judge / calibration
+  paths.
+- **`[eval]`** — ranx: the ranking metrics (MRR / NDCG / MAP) in
+  `core.metrics.evaluate_blocking_with_ranking`, imported lazily so the rest of
+  `core.metrics` / `core.benchmark` stays importable without it. (There is no
+  `pytrec_eval` anywhere in the tree.)
 
-### core.Clusterer & core.Evaluator (Metrics & Graph)
+Hyperparameter search is opt-in too: `core.optimizers.BlockerOptimizer` (Optuna)
+tunes *blocker* parameters — see §5. A general `Optimizer` over full pipelines is
+roadmap (`docs/ROADMAP.md`), not implemented.
 
-These components abstract the standard libraries for graph math and metrics:
-
-- **networkx & scipy.cluster.hierarchy:** The Clusterer uses these libraries to perform the actual graph clustering.
-- **scikit-learn.metrics:** The Evaluator uses sklearn for all standard pairwise metrics (Precision, Recall, F1).
-- **BCubed F1:** We use a vetted internal implementation (or er-metrics) for this critical cluster-level metric.
-- **pytrec_eval:** This IR library is used internally by the Optimizer for the specialized sub-task of tuning Blocker recall.
+**Lazy loading.** These heavy symbols resolve through a PEP 562 `__getattr__`
+seam in `langres/core/__init__.py` and `langres/clients/__init__.py`, so a bare
+`import langres` never drags torch / litellm / faiss / scikit-learn / ranx into
+`sys.modules`. `tests/test_import_budget.py` guards this.
 
 ### core.review.ReviewQueue (Human-in-the-Loop)
 
@@ -144,9 +166,10 @@ This is the low-level "PyTorch" layer. You use these base classes to build your 
 **Example (Custom Blocker):**
 
 ```python
-from langres.core import Blocker, PydanticBaseModel
+from pydantic import BaseModel
+from langres.core import Blocker, ERCandidate
 
-class MyInternalSchema(PydanticBaseModel):
+class MyInternalSchema(BaseModel):
     id: str
     name_field: str
     text_field: str
@@ -184,52 +207,54 @@ class MyCustomBlocker(Blocker):
 
 **What it's not:** It is not a data loader. It must operate on the clean, normalized schema provided by the Blocker. This separation of concerns is what makes it reusable.
 
-**Key Methods:**
+**Key Methods (both are `abstractmethod`s — a subclass must implement both):**
 
-- `__init__(self)`: Define your components (e.g., `self.embed_sim = EmbedSim()`, `self.model = MyTorchModel()`).
-- `forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]`: Your custom comparison logic.
+- `forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]`: your custom comparison logic — one judgement per pair.
+- `inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> ScoreInspectionReport`: label-free exploration of a run's score distribution (used before you have ground truth).
 
-**Example (Custom Flow):**
+**Example (Custom Judge):**
+
+`MyProductJudge` is a *user-defined* `Module` subclass — `Module` is the base
+class; there is no `Flow` type in langres. This one combines two rapidfuzz
+similarities with a tunable weight (no torch, no learnable model — see
+`WeightedAverageJudge` / `EmbeddingScoreJudge` in `langres.core.judges` for the
+shipped judges):
 
 ```python
-from langres.core import Module, PairwiseJudgement
+from collections.abc import Iterator
+
 import rapidfuzz.fuzz
-import torch.nn as nn
 
-class MyCombiner(nn.Module):
-    # ... (PyTorch logic to combine 3 features) ...
+from langres.core import ERCandidate, Module, PairwiseJudgement
+from langres.core.reports import ScoreInspectionReport
 
-class MyProductFlow(Module):
-    def __init__(self):
-        # Init all components, from classical to learnable
-        self.embed_sim = EmbedSim(model="e5-small")
-        self.combiner_model = MyCombiner() # PyTorch weights
-        self.name_weight = 0.5 # A tunable hyperparameter
+class MyProductJudge(Module[MyInternalSchema]):
+    def __init__(self, name_weight: float = 0.5) -> None:
+        self.name_weight = name_weight  # a tunable hyperparameter
 
-    def _calculate_features(self, pair: ERCandidate[MyInternalSchema]):
-        name_sim = rapidfuzz.fuzz.WRatio(pair.left.name_field, pair.right.name_field)
-        desc_sim = self.embed_sim(pair.left.text_field, pair.right.text_field)
-        # ... any other custom logic ...
-        return torch.tensor([name_sim, desc_sim])
+    def forward(
+        self, candidates: Iterator[ERCandidate[MyInternalSchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for pair in candidates:
+            name_sim = rapidfuzz.fuzz.WRatio(pair.left.name_field, pair.right.name_field) / 100.0
+            text_sim = rapidfuzz.fuzz.token_set_ratio(pair.left.text_field, pair.right.text_field) / 100.0
+            score = self.name_weight * name_sim + (1.0 - self.name_weight) * text_sim
+            yield PairwiseJudgement(
+                left_id=pair.left.id,
+                right_id=pair.right.id,
+                score=score,
+                score_type="heuristic",
+                decision_step="weighted_rapidfuzz",
+                provenance={"name_sim": name_sim, "text_sim": text_sim},
+            )
 
-    def forward(self, candidates: Iterator[ERCandidate[MyInternalSchema]]) -> Iterator[PairwiseJudgement]:
-        self.combiner_model.eval()
-        with torch.no_grad():
-            for pair in candidates:
-                # 1. Get features
-                features = self._calculate_features(pair)
-
-                # 2. Run learnable model
-                combined_score = self.combiner_model(features).item()
-
-                yield PairwiseJudgement(
-                    left_id=pair.left.id,
-                    right_id=pair.right.id,
-                    score=combined_score,
-                    score_type="calibrated_prob",
-                    decision_step="combiner_model",
-                    provenance={"model_version": "v1.2"}
-                )
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        # Required alongside forward(): summarize the score distribution and
+        # suggest a threshold before you have labels. Body elided — the shipped
+        # judges delegate to a shared implementation.
+        ...
 ```
 
 ### core.Clusterer (Base Class)
@@ -238,62 +263,69 @@ class MyProductFlow(Module):
 
 **Key Methods:**
 
-- `cluster(self, judgements: Iterator[PairwiseJudgement], constraints: List[CannotLinkPair] = None) -> List[Set[str]]`
+- `__init__(self, threshold: float = 0.5)`
+- `cluster(self, judgements: Iterator[PairwiseJudgement] | list[PairwiseJudgement]) -> list[set[str]]`
 
-**Features:**
-
-- **method:** Use "connected_components" (fast, default, uses networkx) or "hierarchical" (more noise-robust, uses scipy.cluster.hierarchy).
-- **constraints:** Pass a list of `(id_a, id_b)` tuples that are known non-matches (Use Case 9). The clusterer will respect these, even if the score is high.
+**Behavior:** builds an undirected graph from every judgement whose `score >= threshold` and returns the connected components (full transitive closure, via networkx) — so a chain A–B, B–C merges A, B, and C even with no direct A–C edge. This is the single built-in strategy; there is no `method`/`hierarchical` option and no cannot-link `constraints` argument. For a merge-resistant alternative that resists that transitive over-merge, use `CorrelationClusterer` (§9).
 
 **Example:**
 
 ```python
 from langres.core import Clusterer
 
-clusterer = Clusterer(method="hierarchical", threshold=0.75)
-
-# Define known non-matches
-constraints = [("id_123", "id_456")]
-
-clusters = clusterer.cluster(judgements_stream, constraints=constraints)
+clusterer = Clusterer(threshold=0.75)
+clusters = clusterer.cluster(judgements_stream)   # -> list[set[str]]
 ```
 
-### core.Optimizer (Base Class)
+### core.optimizers.BlockerOptimizer (Optuna)
 
-**Definition:** The "Compiler" for your Flow. It's a multi-stage harness that automates training and tuning.
+**Definition:** The one optimizer that ships today. It runs an Optuna study over
+a **blocker's** hyperparameters (e.g. embedding model, `k_neighbors`) to maximize
+a metric you compute in an objective function.
 
-**What it does:** It runs your Flow over the gold_data many times to find the settings that maximize your chosen metric.
+> There is **no** general `Optimizer` that "compiles"/"finetunes" a whole
+> pipeline — no `compile()`, no `finetune()`, no PyTorch training loop. A general
+> `Optimizer` over full pipelines is roadmap (`docs/ROADMAP.md`), not
+> implemented. DSPy prompt optimization exists separately, inside `DSPyJudge`
+> (`[llm]` extra).
 
-**Key Methods:**
+**Constructor:**
 
-**`compile(self, flow: Module, gold_data: List[GoldPair]) -> CompiledFlow`:**
+- `BlockerOptimizer(objective_fn, search_space, primary_metric="value", direction="maximize", n_trials=50, wandb_kwargs=None)`
+  - `objective_fn(trial, params) -> dict[str, float]` builds a blocker from
+    `params`, runs the pipeline, and returns a metrics dict; `primary_metric`
+    names which key to optimize.
+  - `search_space`: `{"param": [choices...]}` for categorical, `{"param": (lo, hi)}` for integer ranges.
 
-- **Role:** Hyperparameter Optimization (HPO).
-- **Under the Hood:** Uses Optuna to tune any numeric parameters in your flow (e.g., `self.name_weight`, `self.string_threshold`).
-- **Also:** Uses DSPy to tune any prompts in your flow (if using LlmJudge).
-
-**`finetune(self, flow: Module, gold_data: List[GoldPair]) -> Module`:**
-
-- **Role:** Model Training.
-- **Under the Hood:** Runs a PyTorch training loop to train the weights of any torch.nn.Module (like MyCombiner) found inside your flow.
+**Key Method:** `optimize(self) -> dict` — runs the study and returns the best hyperparameters.
 
 **Example:**
 
 ```python
-from langres.core import Optimizer
+from langres.core.optimizers import BlockerOptimizer
 
-flow = MyProductFlow() # The untrained, untuned flow
-optimizer = Optimizer(metric="bcubed_f1") # Optimize for cluster quality
+search_space = {
+    "embedding_model": ["all-MiniLM-L6-v2", "all-mpnet-base-v2"],
+    "k_neighbors": (5, 50),
+}
 
-# 1. Train the PyTorch weights
-trained_flow = optimizer.finetune(flow, gold_data, epochs=10)
+def objective(trial, params):
+    # build a VectorBlocker from params, run the pipeline, score it
+    # (pipeline/metric computation elided)
+    return {"bcubed_f1": 0.85}
 
-# 2. Tune the hyperparameters (weights, thresholds)
-# The optimizer will find the best value for 'self.name_weight'
-compiled_flow = optimizer.compile(trained_flow, gold_data)
-
-# compiled_flow now contains the trained model AND the best HPs
+optimizer = BlockerOptimizer(
+    objective_fn=objective,
+    search_space=search_space,
+    primary_metric="bcubed_f1",
+    direction="maximize",
+    n_trials=20,
+)
+best_params = optimizer.optimize()   # -> {"embedding_model": ..., "k_neighbors": ...}
 ```
+
+(Optuna lives in the dev dependency group, not a runtime extra — `BlockerOptimizer`
+is an eval-time tool, not part of the `link()`/`dedupe()` path.)
 
 ### core.Canonicalizer (`langres.core.canonicalizer`, M5/W2.3) — ✅ ships today
 
@@ -349,23 +381,26 @@ golden = canon.enrich(golden, new_mention)       # fold in a linked sparse menti
 
 ## 6. Core API: langres.data
 
-This module provides utilities for creating and managing the data that powers the Optimizer and Tasks.
+`langres.data` is the **benchmark dataset layer** — an import-light registry over the
+bundled entity-resolution benchmark loaders that the eval harness runs against.
+(There is no synthetic-data generator; `SyntheticGenerator` was never built.)
 
-### data.SyntheticGenerator
-
-**Definition:** A utility that uses LLMs to create a gold_data set for training and compiling your Flow. It creates realistic variations (typos, synonyms, abbreviations) of your data.
-
-**Example:**
+- `list_benchmarks() -> list[BenchmarkEntry]` returns each registered benchmark's metadata (name, task, domain, `loadable`) **without importing any loader**.
+- `get_benchmark(name)` imports only the selected loader lazily and returns a ready `Benchmark` (records + gold clusters).
 
 ```python
-from langres.data import SyntheticGenerator
+from langres.data import list_benchmarks, get_benchmark
 
-# 'Company' is your Pydantic schema
-gen = SyntheticGenerator(schema=Company, hints={"name": "add typos"})
+for entry in list_benchmarks():
+    print(entry.name, entry.task, entry.loadable)
+    # fodors_zagat linkage True / amazon_google linkage True / abt_buy linkage True / ...
 
-# Creates 5000 (candidate_pair, label) tuples
-gold_data = gen.generate(n_pairs=5000)
+bench = get_benchmark("fodors_zagat")   # loads just this one dataset
 ```
+
+See [BENCHMARKS.md](BENCHMARKS.md) for the full portfolio (each dataset, why it's a
+target, and its caveats), the `list_benchmarks` / `get_benchmark` discoverability
+seam, and the bring-your-own-data `evaluate()` walkthrough.
 
 ### core.review.ReviewQueue
 
