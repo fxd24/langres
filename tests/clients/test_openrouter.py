@@ -231,6 +231,29 @@ class TestMakeTokenCostTrackHonesty:
         assert result.usage.input_tokens == 1000 + 200
         assert result.usage.output_tokens == 500 + 100
 
+    def test_malformed_usage_dict_degrades_to_zero_vector(self) -> None:
+        # A corrupt/foreign "usage" payload must not crash pricing -- usage
+        # capture is observability, never a hard failure (mirrors
+        # benchmark.py::_judgement_usage's own degrade-to-zero contract).
+        judgement = PairwiseJudgement(
+            left_id="a",
+            right_id="b",
+            score=0.5,
+            score_type="prob_llm",
+            decision_step="llm_judgment",
+            provenance={
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "usage": {"input_tokens": "not-a-number"},
+            },
+        )
+
+        result = make_token_cost_track(GLM)([judgement])
+
+        assert result.usd_total > 0.0  # pricing still runs off the legacy keys
+        assert result.usage.input_tokens == 0
+        assert result.usage.output_tokens == 0
+
     def test_empty_judgements_has_none_cost_basis(self) -> None:
         result = make_token_cost_track(GLM)([])
         assert result.usd_total == 0.0
