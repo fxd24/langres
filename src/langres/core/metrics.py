@@ -1046,13 +1046,31 @@ def matthews_corrcoef(y_true: list[bool], y_pred: list[bool]) -> float:
 
 
 def _validate_binary_scores(y_true: Sequence[bool], scores: Sequence[float]) -> None:
-    """Validate a boolean label vector and a float score vector share length.
+    """Validate a boolean label vector and a float score vector share length,
+    and that every score is finite.
 
     Sibling of :func:`_validate_binary` for the (bool labels, float scores)
     shape used by ranking metrics, rather than two boolean vectors.
 
+    A ``NaN``/``+-inf`` score makes a ranking undefined -- ``NaN`` in
+    particular sorts inconsistently (``NaN != NaN`` and every comparison
+    involving it is ``False``), so it silently produces an input-order-
+    dependent result rather than a well-defined one. Returning a confident
+    finite number for that case would be worse than raising: these metrics
+    exist to measure a judge's confidence, and a judge that emits a
+    non-finite score is exactly the broken case this must catch.
+
+    This is a distinct concept from the ``nan`` *return value*
+    :func:`roc_auc_score` and :func:`average_precision_score` give for a
+    single-class ``y_true`` with otherwise-finite scores -- that ``nan`` is a
+    deliberate, documented "undefined statistic" result, not an error. A
+    non-finite score in ``scores`` always raises here, regardless of
+    ``y_true``'s class balance; it is never the cause of that other, valid
+    ``nan`` return.
+
     Raises:
-        ValueError: If the inputs differ in length or are empty.
+        ValueError: If the inputs differ in length, are empty, or ``scores``
+            contains a non-finite value (``NaN``, ``+inf``, or ``-inf``).
     """
     if len(y_true) != len(scores):
         raise ValueError(
@@ -1060,6 +1078,9 @@ def _validate_binary_scores(y_true: Sequence[bool], scores: Sequence[float]) -> 
         )
     if not y_true:
         raise ValueError("y_true and scores must be non-empty")
+    for i, s in enumerate(scores):
+        if not math.isfinite(s):
+            raise ValueError(f"scores must be finite, got {s!r} at index {i}")
 
 
 def _midranks(scores: Sequence[float]) -> list[float]:
