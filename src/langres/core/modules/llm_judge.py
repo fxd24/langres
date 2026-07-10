@@ -8,6 +8,7 @@ Supports both direct OpenAI client and LiteLLM for enhanced observability.
 
 import asyncio
 import logging
+import math
 import re
 import string
 import time
@@ -138,6 +139,23 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
     cleaned = content.strip().translate(str.maketrans("", "", string.punctuation)).lower()
     score = 1.0 if "yes" in cleaned else 0.0
     return ParsedVerdict(score=score, reasoning=content.strip() or None)
+
+
+#: Below this combined yes+no probability mass, a first-token credence is refused
+#: (``p_yes=None``) rather than manufactured from noise — see
+#: :meth:`LLMJudge._confidence_from_response`.
+_CONFIDENCE_MASS_FLOOR = 1e-9
+
+
+def _normalize_answer_token(token: str) -> str:
+    """Normalise a logprob token for yes/no matching (mirrors :func:`parse_binary_yes_no`).
+
+    ``strip()`` → delete ``string.punctuation`` → ``lower()``. So ``" Yes"``,
+    ``"YES"``, ``"Yes."`` all collapse to ``"yes"``. Unlike ``parse_binary_yes_no``
+    (a substring test) the caller compares the result for *exact* equality to
+    ``"yes"``/``"no"``, so ``"Yesterday"`` (→ ``"yesterday"``) is NOT counted.
+    """
+    return token.strip().translate(str.maketrans("", "", string.punctuation)).lower()
 
 
 def default_record_serializer(entity: Any) -> str:
@@ -316,6 +334,7 @@ class LLMJudge(Module[SchemaT]):
         response_parser: Callable[[str], ParsedVerdict] | None = None,
         record_serializer: Callable[[Any], str] | None = None,
         on_parse_error: Literal["abstain", "raise"] = "abstain",
+        confidence: Literal["none", "logprob"] = "none",
     ):
         """Initialize LLMJudge.
 
@@ -364,16 +383,30 @@ class LLMJudge(Module[SchemaT]):
                 the count; ``"raise"`` raises :class:`LLMParseError` immediately.
                 The default abstains because aborting a long paid run on a single
                 flaky response is worse than a surfaced, counted abstention.
+            confidence: First-token credence probe. ``"none"`` (default) is a
+                no-op — the request and judgement are byte-identical to before.
+                ``"logprob"`` requests ``logprobs`` + ``top_logprobs`` on every
+                completion and records a first-token P(Yes) credence in each
+                judgement's ``provenance`` (keys ``p_yes``,
+                ``confidence_leaked_mass``, ``p_yes_is_bound``) — see
+                :meth:`_confidence_from_response`. Nothing is added to
+                :class:`PairwiseJudgement`; this is an evidence-gathering probe,
+                not a schema change. Only meaningful for a binary yes/no protocol
+                (e.g. ``response_parser=parse_binary_yes_no``). NOT serialized
+                (see :attr:`config`).
 
         Raises:
             ValueError: If temperature out of range, ``on_parse_error`` is not
-                ``"abstain"``/``"raise"``, or ``prompt_template`` lacks
+                ``"abstain"``/``"raise"``, ``confidence`` is not
+                ``"none"``/``"logprob"``, or ``prompt_template`` lacks
                 ``{left}``/``{right}``.
         """
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
         if on_parse_error not in ("abstain", "raise"):
             raise ValueError("on_parse_error must be 'abstain' or 'raise'")
+        if confidence not in ("none", "logprob"):
+            raise ValueError("confidence must be 'none' or 'logprob'")
 
         self.client = client
         self.model = model
@@ -382,6 +415,7 @@ class LLMJudge(Module[SchemaT]):
         self.provider = provider
         self.system_prompt = system_prompt
         self.on_parse_error = on_parse_error
+        self.confidence = confidence
         self._parse = response_parser if response_parser is not None else parse_score_response
         self._serialize = (
             record_serializer if record_serializer is not None else default_record_serializer
@@ -476,6 +510,73 @@ class LLMJudge(Module[SchemaT]):
             extra_body["provider"] = self.provider
         return {"extra_body": extra_body}
 
+    def _logprobs_kwargs(self) -> dict[str, Any]:
+        """Top-level ``logprobs``/``top_logprobs`` request when the credence probe is on.
+
+        Returns ``{"logprobs": True, "top_logprobs": 20}`` when
+        ``confidence == "logprob"``, else ``{}``. These are **standard** OpenAI
+        chat-completion params, so this is merged at the completion call sites
+        directly and deliberately kept **out** of :meth:`_completion_kwargs` —
+        that method early-returns ``{}`` for any non-``openrouter/`` model, so
+        folding logprobs into it would silently never request them on plain
+        OpenAI/Azure. ``top_logprobs=20`` is the API maximum, widening the
+        two-way yes/no subspace we can attribute mass to (less leaked mass).
+        """
+        if self.confidence != "logprob":
+            return {}
+        return {"logprobs": True, "top_logprobs": 20}
+
+    def _confidence_from_response(self, response: Any) -> dict[str, Any] | None:
+        """First-token P(Yes) credence from logprobs, or ``None`` when unavailable.
+
+        Off (``confidence != "logprob"``) or when the response carries no
+        logprobs, returns ``None`` — no confidence, no crash, provenance
+        unchanged. Otherwise reads ``choices[0].logprobs.content``, takes the
+        first non-whitespace generated token, and over ITS ``top_logprobs`` sums
+        the probability mass (``exp(logprob)``) on tokens normalising to ``"yes"``
+        vs ``"no"`` (:func:`_normalize_answer_token`). Returns a provenance
+        fragment:
+
+        - ``p_yes``: ``yes_mass / (yes_mass + no_mass)`` — renormalised over the
+          yes/no **two-way subspace only**. ``None`` when the combined mass is
+          below :data:`_CONFIDENCE_MASS_FLOOR` (don't manufacture credence from
+          noise).
+        - ``confidence_leaked_mass``: ``1 - (yes_mass + no_mass)`` — the mass that
+          went to NEITHER yes nor no (other tokens in the top-k, plus everything
+          below the top-k cutoff). **Never** normalised away; it is the honest
+          record of how much of the first-token distribution this two-way credence
+          ignores.
+        - ``p_yes_is_bound``: ``True`` when exactly one side has zero mass, so
+          ``p_yes`` (``0.0`` or ``1.0``) is a one-sided **bound**, not a point —
+          the other side's true mass is merely below the top-k cutoff, not zero.
+        """
+        if self.confidence != "logprob":
+            return None
+        logprobs = getattr(response.choices[0], "logprobs", None)
+        content = getattr(logprobs, "content", None) if logprobs is not None else None
+        if not content:
+            return None
+        first = next((tok for tok in content if tok.token.strip()), None)
+        if first is None:
+            return None
+        yes_mass = 0.0
+        no_mass = 0.0
+        for alt in getattr(first, "top_logprobs", None) or []:
+            norm = _normalize_answer_token(alt.token)
+            if norm == "yes":
+                yes_mass += math.exp(alt.logprob)
+            elif norm == "no":
+                no_mass += math.exp(alt.logprob)
+        two_way = yes_mass + no_mass
+        leaked = 1.0 - two_way
+        if two_way < _CONFIDENCE_MASS_FLOOR:
+            return {"p_yes": None, "confidence_leaked_mass": leaked, "p_yes_is_bound": False}
+        return {
+            "p_yes": yes_mass / two_way,
+            "confidence_leaked_mass": leaked,
+            "p_yes_is_bound": yes_mass == 0.0 or no_mass == 0.0,
+        }
+
     def _billing(self, response: Any) -> tuple[float, str | None, bool]:
         """Return ``(cost_usd, serving_provider, cost_is_real)`` for a response.
 
@@ -544,6 +645,10 @@ class LLMJudge(Module[SchemaT]):
             # Call client (works for both LiteLLM and OpenAI)
             client = self._get_client()
             completion_kwargs = self._completion_kwargs()
+            # Standard top-level logprobs request (credence probe). Merged here,
+            # NOT inside _completion_kwargs (which returns {} off openrouter/ and
+            # would drop logprobs on plain OpenAI). {} when confidence is off.
+            completion_kwargs.update(self._logprobs_kwargs())
             # Run correlation (S5): stamp the active tracking run + pair identity
             # into litellm's ``metadata`` param (shared with the async path via
             # ``_run_correlation_metadata``). ``None`` off a run keeps the call
@@ -580,7 +685,12 @@ class LLMJudge(Module[SchemaT]):
                 decision_step="llm_judgment",
                 reasoning=reasoning,
                 provenance=self._build_provenance(
-                    cost_usd, cost_is_real, provider, usage, parse_error=parse_error
+                    cost_usd,
+                    cost_is_real,
+                    provider,
+                    usage,
+                    parse_error=parse_error,
+                    confidence=self._confidence_from_response(response),
                 ),
             )
 
@@ -739,6 +849,7 @@ class LLMJudge(Module[SchemaT]):
                     usage,
                     parse_error=parse_error,
                     method="async_batch",
+                    confidence=self._confidence_from_response(response),
                 ),
             )
 
@@ -768,6 +879,9 @@ class LLMJudge(Module[SchemaT]):
         """
         client = self._get_client()
         completion_kwargs = self._completion_kwargs()
+        # Standard top-level logprobs request (credence probe) — mirror the sync
+        # merge. Kept out of _completion_kwargs so it also reaches plain OpenAI.
+        completion_kwargs.update(self._logprobs_kwargs())
         # Run correlation (S5): mirror forward()'s litellm ``metadata`` injection
         # on the async path -- async judging inside ``capture_run`` would otherwise
         # lose trace correlation. ``None`` off a run keeps the call byte-identical.
@@ -858,6 +972,7 @@ class LLMJudge(Module[SchemaT]):
         *,
         parse_error: bool,
         method: str | None = None,
+        confidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assemble the judgement provenance (shared by the sync + async paths).
 
@@ -865,6 +980,10 @@ class LLMJudge(Module[SchemaT]):
         such as ``JudgementLog``, ``bootstrap.labelers`` and
         ``openrouter.make_token_cost_track`` depend on them) alongside the new
         typed ``usage`` vector, and flags ``parse_error`` only when it fired.
+        ``confidence`` (from :meth:`_confidence_from_response`) is merged in when
+        the credence probe produced one — adding ``p_yes`` /
+        ``confidence_leaked_mass`` / ``p_yes_is_bound`` — and is ``None`` (a no-op)
+        when the probe is off or logprobs were absent.
         """
         provenance: dict[str, Any] = {
             "model": self.model,
@@ -879,6 +998,8 @@ class LLMJudge(Module[SchemaT]):
             provenance["parse_error"] = True
         if method is not None:
             provenance["method"] = method
+        if confidence is not None:
+            provenance.update(confidence)
         return provenance
 
     def _calculate_cost(self, response) -> float:  # type: ignore[no-untyped-def]
