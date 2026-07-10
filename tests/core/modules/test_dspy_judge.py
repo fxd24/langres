@@ -17,6 +17,7 @@ import dspy
 import pytest
 from dspy.utils.dummies import DummyLM
 
+from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.modules.dspy_judge import (
     DSPyJudge,
@@ -166,22 +167,40 @@ def test_forward_warns_on_uncompiled_program(caplog: pytest.LogCaptureFixture) -
     assert any("UNCOMPILED" in r.message for r in caplog.records)
 
 
-def test_forward_parse_failure_emits_low_confidence_judgement(
+def test_forward_parse_failure_emits_abstention_judgement(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A DSPy parse error yields a 0.5 judgement tagged ``dspy_parse_error`` (never a skip)."""
+    """A DSPy parse error abstains (score=0.0, parse_error flagged) — never a skip.
+
+    Regression: DSPyJudge used to abstain at score=0.5 with NO
+    ``provenance["parse_error"]`` flag. ``classify_pairs``
+    (``langres.core.metrics``, predicted-match iff ``score >= threshold``) then
+    called that abstention a MATCH at any threshold <= 0.5, while LLMJudge's
+    equivalent abstention (score=0.0, ``parse_error=True``) was correctly a
+    non-match at every threshold — two judges disagreeing on the same "I don't
+    know" signal, and ``n_parse_errors``/``n_abstained`` (``core.benchmark``)
+    couldn't see DSPy's abstentions at all. Both the score AND the flag must
+    change together: the flag alone would not fix the verdict.
+    """
     judge = DSPyJudge(lm=DummyLM([{"unexpected": "shape"}]), entity_noun="company")
     with caplog.at_level(logging.WARNING):
         [judgement] = list(judge.forward(iter([_candidate("x", "y")])))
-    assert judgement.score == 0.5
+    assert judgement.score == 0.0
     assert judgement.decision_step == "dspy_parse_error"
     assert judgement.reasoning is None
     assert "error" in judgement.provenance
+    assert judgement.provenance["parse_error"] is True
     # The billed-but-unparseable call is flagged so cost tracking never silently
     # undercounts it (tokens salvaged from history are 0 under DummyLM => $0).
     assert judgement.provenance["cost_untracked"] is True
     assert judgement.provenance["cost_usd"] == 0.0
     assert any("parse failure" in r.message for r in caplog.records)
+
+    # The actual bug: at threshold=0.5 the abstention must NOT be classified a
+    # match (DEFAULT_PAIR_GRID starts at 0.05, so score=0.0 never clears it either).
+    metrics = classify_pairs([judgement], gold_pairs=set(), threshold=0.5)
+    assert metrics.tp == 0
+    assert metrics.fp == 0
 
 
 # ---------------------------------------------------------------------------

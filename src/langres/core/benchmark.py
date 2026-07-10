@@ -28,9 +28,10 @@ contract across methods is a complete resolver.
 import logging
 import math
 import time
+import warnings
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +45,20 @@ from langres.core.metrics import (
 )
 from langres.core.models import PairwiseJudgement
 from langres.core.module import Module
+
+# ``_effective_budget`` resolves budget_usd=None -> presets.DEFAULT_BUDGET_USD, the
+# same default the verbs' spend cap uses (DRY). No import-cycle risk despite
+# presets.py sitting "above" benchmark.py in the module's own layering note:
+# `langres/__init__.py` already imports `langres.core.presets` eagerly (and this
+# module already imports `langres.core.resolver`, which does `import langres`,
+# pulling presets in first regardless), and presets.py's own transitive imports
+# never import `core.benchmark` at runtime (only a `TYPE_CHECKING`-guarded
+# annotation inside `clients/openrouter.py`) -- verified empirically: importing
+# `langres.core.presets` alone never inserts `langres.core.benchmark` into
+# `sys.modules`.
+from langres.core.presets import _effective_budget
 from langres.core.resolver import Resolver
+from langres.core.usage import LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +181,16 @@ class PipelineTrack(BaseModel):
     sanity_floor_f1: float
 
 
+#: How a run's cost was determined. A single ``cost_is_real: bool`` cannot express
+#: a run that mixes real OpenRouter-billed cost, a litellm/pinned-price estimate,
+#: a zero-cost local judge (no cost concept at all), and DSPy's billed-but-
+#: unparseable calls (``cost_untracked``) -- so :func:`_judgement_cost_basis`
+#: classifies each judgement into one of the four leaves, and
+#: :func:`_combined_cost_basis` collapses a run to ``"mixed"`` the moment two
+#: judgements disagree.
+CostBasis = Literal["real", "estimated", "mixed", "untracked", "none"]
+
+
 class CostTrack(BaseModel):
     """Spend accounting for a method run. Zero-spend methods leave the optionals empty.
 
@@ -178,6 +202,12 @@ class CostTrack(BaseModel):
             (cascade methods only); ``None`` for single-stage methods.
         llm_calls_per_candidate: Mean LLM calls per candidate (cascade methods
             only); ``None`` for zero-LLM methods.
+        usage: Token-usage vector summed across every judgement (tokens are the
+            fact; ``usd_total`` is derived from them where a real price is
+            known). All-zero for judges that report no usage (string/embedding,
+            or a judge that never populated ``provenance["usage"]``).
+        cost_basis: How ``usd_total`` was determined -- see :data:`CostBasis`.
+            ``"none"`` for an empty judgement list.
     """
 
     usd_total: float = 0.0
@@ -185,6 +215,20 @@ class CostTrack(BaseModel):
     est_usd_per_100k: float = 0.0
     escalation_rate: float | None = None
     llm_calls_per_candidate: float | None = None
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+    cost_basis: CostBasis = "none"
+
+    @property
+    def cost_is_real(self) -> bool:
+        """Whether ``usd_total`` is entirely real, billed spend (``cost_basis == "real"``).
+
+        Kept for continuity with the pre-Task-3 boolean signal; prefer
+        :attr:`cost_basis` for the full picture (a run can be ``"estimated"``,
+        ``"mixed"``, ``"untracked"``, or ``"none"`` — all of which this reports
+        as ``False``, exactly as the old bool-only signal would have wanted for
+        anything short of "fully real").
+        """
+        return self.cost_basis == "real"
 
 
 class LatencyTrack(BaseModel):
@@ -513,6 +557,77 @@ def _judgement_cost(judgement: PairwiseJudgement) -> float:
     return 0.0
 
 
+def _judgement_usage(judgement: PairwiseJudgement) -> LLMUsage:
+    """The typed usage vector from one judgement's provenance, or all-zeros.
+
+    Reads ``provenance["usage"]`` (the dict ``LLMUsage.model_dump()`` writes --
+    see ``llm_judge.py`` / ``dspy_judge.py``). Absent (string/embedding judges
+    never set it) or malformed (a foreign/corrupt payload) both fall back to an
+    all-zero vector -- usage capture is observability, it must never make
+    evaluation flake (mirrors ``usage.py``'s own ``_as_int`` philosophy).
+    """
+    raw = judgement.provenance.get("usage")
+    if not isinstance(raw, dict):
+        return LLMUsage()
+    try:
+        return LLMUsage(**raw)
+    except (TypeError, ValueError):
+        return LLMUsage()
+
+
+def _sum_usage(usages: list[LLMUsage]) -> LLMUsage:
+    """Sum token counts across ``usages`` into one vector.
+
+    ``model`` / ``provider`` are left at their type defaults (``""`` / ``None``):
+    a sum across judgements that may span several models has no single
+    meaningful value for either.
+    """
+    return LLMUsage(
+        input_tokens=sum(u.input_tokens for u in usages),
+        output_tokens=sum(u.output_tokens for u in usages),
+        cache_read_input_tokens=sum(u.cache_read_input_tokens for u in usages),
+        cache_creation_input_tokens=sum(u.cache_creation_input_tokens for u in usages),
+        reasoning_tokens=sum(u.reasoning_tokens for u in usages),
+    )
+
+
+def _judgement_cost_basis(judgement: PairwiseJudgement) -> CostBasis:
+    """Classify how ONE judgement's cost was determined (never returns ``"mixed"``).
+
+    Checked in order: ``cost_untracked`` (DSPyJudge's billed-but-unparseable
+    call) wins regardless of what else is set; then no ``cost_usd`` key at all
+    means the judge has no cost concept (string/embedding); then
+    ``cost_is_real`` (LLMJudge's real-OpenRouter-billing vs litellm-estimate
+    flag) distinguishes real from estimated -- a judge that sets ``cost_usd``
+    without ``cost_is_real`` (DSPyJudge's normal, non-error path: tokens times a
+    pinned price) is also an estimate, never a real billed amount.
+    """
+    prov = judgement.provenance
+    if prov.get("cost_untracked"):
+        return "untracked"
+    if "cost_usd" not in prov:
+        return "none"
+    if prov.get("cost_is_real") is True:
+        return "real"
+    return "estimated"
+
+
+def _combined_cost_basis(judgements: list[PairwiseJudgement]) -> CostBasis:
+    """Combine every judgement's :func:`_judgement_cost_basis` into one label.
+
+    ``"none"`` for an empty list; a single shared basis passes through; two or
+    more DIFFERENT bases collapse to ``"mixed"`` -- a run that blends, say, real
+    OpenRouter spend with a zero-cost local judge is neither wholly real nor
+    wholly untracked, and pretending otherwise would misrepresent it.
+    """
+    if not judgements:
+        return "none"
+    bases = {_judgement_cost_basis(j) for j in judgements}
+    if len(bases) == 1:
+        return bases.pop()
+    return "mixed"
+
+
 def _cost_track(judgements: list[PairwiseJudgement]) -> CostTrack:
     """Aggregate per-judgement spend into a :class:`CostTrack`.
 
@@ -526,6 +641,8 @@ def _cost_track(judgements: list[PairwiseJudgement]) -> CostTrack:
         usd_total=usd_total,
         usd_per_1k_pairs=per_pair * 1_000.0,
         est_usd_per_100k=per_pair * 100_000.0,
+        usage=_sum_usage([_judgement_usage(j) for j in judgements]),
+        cost_basis=_combined_cost_basis(judgements),
     )
 
 
@@ -695,9 +812,9 @@ def run_methods(
 
 
 #: Default score-threshold grid for :func:`evaluate` — the fine ``0.05..0.95``
-#: sweep (19 points) a pair-level argmax wants. ``core.benchmark`` is
-#: deliberately free of any ``langres.data`` import (the harness is
-#: dataset-agnostic), so this mirrors
+#: sweep (19 points) a pair-level argmax wants when no fixed ``threshold=`` is
+#: given (the default). ``core.benchmark`` is deliberately free of any
+#: ``langres.data`` import (the harness is dataset-agnostic), so this mirrors
 #: ``langres.data.fixed_split_pair_benchmark.DEFAULT_ARGMAX_GRID`` by value rather
 #: than importing it.
 DEFAULT_PAIR_GRID: tuple[float, ...] = tuple(round(i * 0.05, 2) for i in range(1, 20))
@@ -713,29 +830,48 @@ class JudgePairEval(BaseModel):
     SOTA without any blocking-recall ceiling or clustering amplification.
 
     Attributes:
-        pair: Pair-level P/R/F1 at the best-F1 threshold over the grid, plus the
-            full PR curve.
+        pair: Pair-level P/R/F1 at ``graded_threshold`` — the grid's best-F1
+            argmax when ``best_threshold`` is set, or the caller's fixed
+            ``threshold=`` (:func:`evaluate` only) otherwise — plus the full PR
+            curve (``pr_curve``, populated in both modes).
         cost: Spend accounting over the judgements actually produced.
         latency: Wall-clock per judged pair.
         n_candidates: Candidate pairs handed to the judge.
         n_judged: Judgements actually produced (``< n_candidates`` when a budget
             runner truncates or a call is skipped).
-        best_threshold: The grid threshold maximizing pair-level F1.
+        best_threshold: The grid threshold maximizing pair-level F1, or ``None``
+            when :func:`evaluate` was given a fixed ``threshold=`` — setting it
+            to the argmax in that case would misrepresent an honest fixed cut as
+            a tuned one.
+        graded_threshold: The threshold ``pair`` (and ``slices``, if present)
+            were actually graded at — ALWAYS populated, equal to
+            ``best_threshold`` in argmax mode or the caller's fixed
+            ``threshold=`` otherwise.
         truncated: ``True`` when fewer pairs were judged than supplied (a budget
             cap fired or calls were skipped) — the cell is partial.
+        truncation_reason: Why ``truncated`` is ``True`` (``"none"`` otherwise):
+            ``"budget_cap"`` / ``"budget_stop"`` for the two ways a
+            :class:`BudgetedModuleRunner` can stop early (spend-caused), or
+            ``"judge_skips"`` when the judge itself produced fewer judgements
+            than candidates (a call raised or yielded nothing — NOT a spend
+            issue). :func:`evaluate` treats the two very differently via
+            ``on_truncation``.
         slices: Optional per-slice pair tracks, each graded at the SAME fixed
-            ``best_threshold`` as ``pair`` (never a per-slice argmax). Populated
+            ``graded_threshold`` as ``pair`` (never a per-slice argmax). Populated
             only when :func:`evaluate_judge_on_candidates` is given a ``slice_fn``;
             ``None`` otherwise. This is the honest seen -> unseen view: one global
             cut, reported across data slices, so a degradation cannot be tuned
             away.
         n_parse_errors: How many judgements the judge flagged as a parse
             error / abstention (``provenance['parse_error']`` truthy — e.g. an
-            ``LLMJudge`` under ``on_parse_error='abstain'``). These are still
-            graded (as their emitted score), so a non-zero count means the
-            reported P/R/F1 is built partly on abstentions rather than real
-            verdicts — :func:`evaluate_judge_on_candidates` logs a loud warning.
-            ``0`` for judges that never abstain.
+            ``LLMJudge`` under ``on_parse_error='abstain'``, or a ``DSPyJudge``
+            parse failure). Kept for backward compatibility; identical to
+            :attr:`n_abstained`. ``0`` for judges that never abstain.
+        n_abstained: Same count as :attr:`n_parse_errors`, under the more
+            general name — an abstention isn't necessarily a "parse" error for
+            every judge kind.
+        abstention_rate: ``n_abstained / n_judged`` (``0.0`` when ``n_judged``
+            is ``0``) — the normalized companion to the raw count.
     """
 
     pair: PairTrack
@@ -743,10 +879,14 @@ class JudgePairEval(BaseModel):
     latency: LatencyTrack
     n_candidates: int
     n_judged: int
-    best_threshold: float
+    best_threshold: float | None
+    graded_threshold: float
     truncated: bool
+    truncation_reason: Literal["none", "budget_cap", "budget_stop", "judge_skips"] = "none"
     slices: dict[str, PairTrack] | None = None
     n_parse_errors: int = 0
+    n_abstained: int = 0
+    abstention_rate: float = 0.0
 
 
 def _grade_slices(
@@ -795,6 +935,46 @@ def _grade_slices(
         metrics = classify_pairs(judged_by_tag.get(tag, []), gold_by_tag.get(tag, set()), threshold)
         slices[tag] = PairTrack(precision=metrics.precision, recall=metrics.recall, f1=metrics.f1)
     return slices
+
+
+def _gold_in_scope(
+    candidates: Sequence[Any], gold_pairs: set[frozenset[str]]
+) -> set[frozenset[str]]:
+    """Restrict ``gold_pairs`` to pairs realizable from ``candidates``.
+
+    When ``candidates`` is a subsample of a larger fixed-pair set, a gold pair
+    whose candidate was not sampled is a blocking-style miss, not a judge error
+    — counting it would cap recall artificially (e.g. a 600-pair subsample
+    holding 61 of 234 gold pairs caps recall at 61/234≈0.26 for *every* method).
+    Restricting gold to candidate-realizable pairs keeps grading a pure judge
+    metric, and is a no-op when the candidates already cover all of
+    ``gold_pairs``. Shared by :func:`evaluate_judge_on_candidates` and
+    :func:`evaluate` so the two can never compute this differently.
+    """
+    candidate_pairs = {frozenset((cand.left.id, cand.right.id)) for cand in candidates}
+    return gold_pairs & candidate_pairs
+
+
+def _truncation_reason(
+    n_judged: int, n_candidates: int, runner: "BudgetedModuleRunner | None"
+) -> Literal["none", "budget_cap", "budget_stop", "judge_skips"]:
+    """Classify WHY fewer pairs were judged than supplied (``"none"`` if not truncated).
+
+    Spend-caused truncation (a runner's pre-flight cap or per-pair budget stop)
+    is distinguished from the judge itself simply producing fewer judgements
+    than candidates (an internal skip-continue with no runner at all, or a
+    runner catching a per-call exception/empty yield) — :func:`evaluate`'s
+    ``on_truncation`` policy treats the two very differently: spend causes may
+    raise; a judge skip only ever warns.
+    """
+    if n_judged >= n_candidates:
+        return "none"
+    if runner is not None:
+        if runner.dropped_by_cap_count > 0:
+            return "budget_cap"
+        if runner.budget_stopped:
+            return "budget_stop"
+    return "judge_skips"
 
 
 def evaluate_judge_on_candidates(
@@ -851,15 +1031,8 @@ def evaluate_judge_on_candidates(
         judgements = list(module.forward(iter(candidates)))
     elapsed = time.perf_counter() - start
 
-    # Grade the judge only on pairs it was actually given. When ``candidates`` is a
-    # subsample of a larger fixed-pair set, gold pairs whose candidate was not
-    # sampled are blocking-style misses, not judge errors — counting them would cap
-    # recall artificially (e.g. a 600-pair subsample holding 61 of 234 gold pairs
-    # caps recall at 61/234≈0.26 for *every* method). Restricting gold to
-    # candidate-realizable pairs keeps this a pure judge metric, and is a no-op when
-    # the candidates already cover all of ``gold_pairs``.
-    candidate_pairs = {frozenset((cand.left.id, cand.right.id)) for cand in candidates}
-    gold_in_scope = gold_pairs & candidate_pairs
+    # Grade the judge only on pairs it was actually given (see _gold_in_scope).
+    gold_in_scope = _gold_in_scope(candidates, gold_pairs)
     curve = pair_pr_curve(judgements, gold_in_scope, grid)
     best = max(curve, key=lambda m: m.f1)
     pair = PairTrack(precision=best.precision, recall=best.recall, f1=best.f1, pr_curve=curve)
@@ -871,22 +1044,32 @@ def evaluate_judge_on_candidates(
         else None
     )
 
+    n_candidates = len(candidates)
     n_judged = len(judgements)
+    truncated = n_judged < n_candidates
+    truncation_reason = _truncation_reason(n_judged, n_candidates, runner)
 
     # Abstention accounting: judgements the judge flagged as a parse error /
-    # abstention (``provenance['parse_error']``) are still graded, so surface the
-    # count and warn loudly -- otherwise a table of P/R/F1 could be built partly
-    # on non-verdicts (e.g. a naive replication of a paper prompt the judge could
-    # not parse) with no visible signal.
-    n_parse_errors = sum(1 for j in judgements if j.provenance.get("parse_error"))
-    if n_parse_errors > 0:
+    # abstention (``provenance['parse_error']``) are still graded at their
+    # emitted score=0.0, so surface the count and warn loudly -- otherwise a
+    # table of P/R/F1 could be built partly on non-verdicts (e.g. a naive
+    # replication of a paper prompt the judge could not parse) with no visible
+    # signal.
+    n_abstained = sum(1 for j in judgements if j.provenance.get("parse_error"))
+    abstention_rate = n_abstained / n_judged if n_judged > 0 else 0.0
+    if n_abstained > 0:
         logger.warning(
-            "%d of %d judgements were parse-error abstentions "
-            "(provenance['parse_error']); the reported P/R/F1 is graded on their "
-            "emitted (abstained) scores, NOT real verdicts. Inspect the judge's "
-            "response_parser / prompt before trusting these numbers.",
-            n_parse_errors,
+            "%d of %d judgements (%.1f%%) were parse-error abstentions "
+            "(provenance['parse_error']); each is graded at its abstained "
+            "score=0.0, which classify_pairs() (predicted match iff "
+            "score >= threshold) always resolves to a NON-match at any positive "
+            "grid threshold -- so an abstention on a true gold pair silently "
+            "becomes a false negative in the reported P/R/F1, never a real "
+            "verdict. Inspect the judge's response_parser / prompt before "
+            "trusting these numbers.",
+            n_abstained,
             n_judged,
+            abstention_rate * 100.0,
         )
 
     latency = LatencyTrack(seconds_per_pair=elapsed / n_judged if n_judged > 0 else 0.0)
@@ -894,14 +1077,101 @@ def evaluate_judge_on_candidates(
         pair=pair,
         cost=cost_track_fn(judgements),
         latency=latency,
-        n_candidates=len(candidates),
+        n_candidates=n_candidates,
         n_judged=n_judged,
         best_threshold=best.threshold,
-        truncated=n_judged < len(candidates),
+        graded_threshold=best.threshold,
+        truncated=truncated,
+        truncation_reason=truncation_reason,
         slices=slices,
-        n_parse_errors=n_parse_errors,
+        n_parse_errors=n_abstained,
+        n_abstained=n_abstained,
+        abstention_rate=abstention_rate,
     )
     return result, judgements
+
+
+class EvaluationTruncatedError(RuntimeError):
+    """Raised by :func:`evaluate` when its internal spend cap truncated the run.
+
+    Only raised for spend-caused truncation (``truncation_reason`` in
+    ``{"budget_cap", "budget_stop"}``) under the default ``on_truncation="raise"``
+    — a ``"judge_skips"`` truncation only ever warns (see :func:`evaluate`).
+
+    :attr:`partial` carries the truncated :class:`JudgePairEval` (set by the
+    catcher immediately before re-raising, mirroring
+    :class:`BlindCostError`.partial and
+    :class:`~langres.clients.openrouter.BudgetExceeded`.partial_judgements) so a
+    caller can recover the partial result instead of losing already-paid work.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.partial: JudgePairEval | None = None
+
+
+#: Deliberately negligible "worst-case per pair" price for evaluate()'s internal
+#: BudgetedModuleRunner. evaluate() accepts ANY Module and has no way to know its
+#: real per-pair price (only evaluate_judge_on_candidates's explicit
+#: price_per_token_or_pair= knob does), so the runner's pre-flight worst-case cap
+#: is effectively disabled by this near-zero price -- it exists only to avoid
+#: BlindCostError, never to model a real price. The per-pair "budget stop" still
+#: works correctly because it tallies REAL, already-measured cost
+#: (provenance["cost_usd"]) after each judged pair, so the cap tracks actual
+#: spend, not a guessed one -- exactly why a free judge (string/embedding, which
+#: never sets cost_usd) can never reach it.
+_NEGLIGIBLE_WORST_CASE_PRICE = 1e-9
+
+
+def _budget_truncation_message(result: JudgePairEval, budget_usd: float) -> str:
+    """Actionable message for a spend-caused truncation (modelled on NoJudgeAvailableError)."""
+    return (
+        f"evaluate() stopped early ({result.truncation_reason}): judged "
+        f"{result.n_judged}/{result.n_candidates} pairs before the ${budget_usd:.2f} "
+        "budget_usd cap.\n"
+        "Fix A: pass a larger budget_usd= to judge the full candidate set.\n"
+        'Fix B: pass on_truncation="return" to accept the partial result silently '
+        f"(.n_judged={result.n_judged}, .truncated=True) instead of raising.\n"
+        'Fix C: pass on_truncation="warn" to log instead of raising.'
+    )
+
+
+def _judge_skips_message(result: JudgePairEval) -> str:
+    """Message for a non-spend truncation (the judge itself produced fewer judgements)."""
+    return (
+        f"evaluate(): the judge produced only {result.n_judged}/{result.n_candidates} "
+        'judgements (truncation_reason="judge_skips") -- one or more candidates '
+        "raised or yielded no verdict. This is not a spend issue, so evaluate() never "
+        "raises for it; inspect the judge for the failing candidate(s)."
+    )
+
+
+def _apply_truncation_policy(
+    result: JudgePairEval,
+    *,
+    on_truncation: Literal["raise", "warn", "return"],
+    budget_usd: float,
+) -> None:
+    """Warn or raise per ``on_truncation``, based on ``result.truncation_reason``.
+
+    ``"return"`` is silent for every reason. Otherwise ``"judge_skips"`` only
+    ever warns (never raises, even under ``on_truncation="raise"`` -- one bad
+    candidate must not blow up a run); a spend-caused reason (``"budget_cap"`` /
+    ``"budget_stop"``) warns under ``"warn"`` and raises
+    :class:`EvaluationTruncatedError` under ``"raise"`` (the default).
+    """
+    reason = result.truncation_reason
+    if reason == "none" or on_truncation == "return":
+        return
+    if reason == "judge_skips":
+        warnings.warn(_judge_skips_message(result), UserWarning, stacklevel=3)
+        return
+    if on_truncation == "warn":
+        warnings.warn(_budget_truncation_message(result, budget_usd), UserWarning, stacklevel=3)
+        return
+    error = EvaluationTruncatedError(_budget_truncation_message(result, budget_usd))
+    error.partial = result
+    raise error
 
 
 def evaluate(
@@ -910,35 +1180,129 @@ def evaluate(
     gold_pairs: set[frozenset[str]],
     *,
     grid: Sequence[float] = DEFAULT_PAIR_GRID,
+    threshold: float | None = None,
+    budget_usd: float | None = None,
+    on_truncation: Literal["raise", "warn", "return"] = "raise",
     slice_fn: Callable[[frozenset[str]], str | None] | None = None,
 ) -> JudgePairEval:
-    """Score any judge over a fixed candidate set against gold — the BYO-data one-liner.
+    """Score any judge over a fixed candidate set against gold — the honest, spend-capped one-liner.
 
-    A thin wrapper over :func:`evaluate_judge_on_candidates` that drops the raw
-    judgements (and the paid-judge ``runner`` / cost knobs) so the common
-    bring-your-own-data case is a single call returning honest pair-level
-    Precision/Recall/F1 at the best-F1 grid threshold, plus the full PR curve. For
-    a paid or compiled judge that needs a spend cap, custom cost accounting, or the
-    raw judgements back, call :func:`evaluate_judge_on_candidates` directly.
+    A thin wrapper over :func:`evaluate_judge_on_candidates` for the common
+    bring-your-own-data case: pass a module, its candidates, and gold pairs, and
+    get back pair-level Precision/Recall/F1, the full PR curve, cost, and
+    latency. Two things distinguish it from calling
+    :func:`evaluate_judge_on_candidates` directly:
+
+    - **Honest by construction.** With the default ``threshold=None`` the
+      reported ``pair`` is graded at the grid's best-F1 threshold — but that
+      argmax is fitted to the SAME ``gold_pairs`` the result reports F1
+      against, so the number is optimistically biased (an upper bound, not a
+      held-out estimate) — and a ``UserWarning`` says so on every such call.
+      Pass ``threshold=<float>`` for an honest fixed cut instead: ``pair`` is
+      graded ONCE at that threshold (no argmax), ``best_threshold`` is ``None``
+      (setting it would be a lie), and ``graded_threshold`` names the cut used.
+      ``pair.pr_curve`` stays populated in both modes (it is cheap, from the
+      sweep, and a later PR needs it).
+    - **Spend-capped by default.** Every call runs the judge through an
+      internal :class:`BudgetedModuleRunner`, capped at ``budget_usd``
+      (``None`` resolves to
+      :data:`~langres.core.presets.DEFAULT_BUDGET_USD`, the same default the
+      verbs use) — so a paid judge can never run away, and a free judge
+      (string/embedding, which never sets ``provenance["cost_usd"]``) never
+      approaches the cap. If the cap truncates the run, ``on_truncation``
+      controls what happens: ``"raise"`` (default) raises
+      :class:`EvaluationTruncatedError` carrying the partial result on
+      ``.partial``; ``"warn"`` logs a ``UserWarning`` and returns the partial
+      result; ``"return"`` returns it silently. A judge that itself produces
+      fewer judgements than candidates (one call raised, or yielded nothing) is
+      a DIFFERENT, non-spend truncation (``truncation_reason="judge_skips"``)
+      and only ever warns — never raises, even under ``on_truncation="raise"``
+      — since one bad candidate must not blow up a run.
+
+    For a paid or compiled judge that needs a caller-supplied price, a
+    caller-owned runner, custom cost accounting (e.g. cascade escalation
+    diagnostics), or the raw judgements back, call
+    :func:`evaluate_judge_on_candidates` directly — its ``runner`` /
+    ``price_per_token_or_pair`` / ``cost_track_fn`` knobs stay there, not here.
 
     Args:
         module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
-        grid: Score thresholds to sweep for the pair-level PR curve (defaults to
-            :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep).
-        slice_fn: Optional pair-key tagger forwarded verbatim to
-            :func:`evaluate_judge_on_candidates`; when given, the result's
-            ``slices`` are graded at the one global best-F1 threshold (the honest
-            seen -> unseen view). ``None`` (default) leaves ``slices`` unset.
+        grid: Score thresholds to sweep for the pair-level PR curve and (when
+            ``threshold=None``) the best-F1 argmax. Defaults to
+            :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep.
+        threshold: ``None`` (default) grades at the grid's best-F1 argmax
+            (optimistically biased, warned about); a float grades ONCE at that
+            fixed cut (honest, no warning).
+        budget_usd: Hard spend ceiling for the internal runner; ``None``
+            (default) resolves to
+            :data:`~langres.core.presets.DEFAULT_BUDGET_USD`.
+        on_truncation: What to do when the run is truncated — see above.
+        slice_fn: Optional pair-key tagger forwarded to
+            :func:`evaluate_judge_on_candidates`; when given, ``slices`` are
+            graded at the SAME cut as ``pair`` (the fixed ``threshold`` in fixed
+            mode, or the grid's best-F1 threshold in sweep mode).
 
     Returns:
-        A :class:`JudgePairEval` — pair P/R/F1 at the best-F1 threshold, the PR
+        A :class:`JudgePairEval` — pair P/R/F1 at ``graded_threshold``, the PR
         curve, cost, latency, and (when ``slice_fn`` is given) per-slice tracks.
+
+    Raises:
+        EvaluationTruncatedError: If ``on_truncation="raise"`` (the default) and
+            the internal spend cap truncated the run.
     """
-    result, _ = evaluate_judge_on_candidates(
-        module, candidates, gold_pairs, grid, slice_fn=slice_fn
+    if threshold is None:
+        warnings.warn(
+            "evaluate() with threshold=None (the default) reports best_threshold "
+            "chosen by argmax-F1 over `grid` -- fitted to the SAME gold_pairs this "
+            "result's precision/recall/F1 are graded against. The reported F1 is "
+            "therefore optimistically biased (an upper bound, not a held-out "
+            "estimate). Pass threshold=<float> for an honest fixed cut.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    resolved_budget = _effective_budget(budget_usd)
+    runner = BudgetedModuleRunner(
+        module,
+        budget_usd=resolved_budget,
+        budget_soft_usd=resolved_budget,
+        worst_case_units_per_pair=1.0,
     )
+    result, judgements = evaluate_judge_on_candidates(
+        module,
+        candidates,
+        gold_pairs,
+        grid,
+        slice_fn=slice_fn,
+        runner=runner,
+        price_per_token_or_pair=_NEGLIGIBLE_WORST_CASE_PRICE,
+    )
+
+    if threshold is not None:
+        gold_in_scope = _gold_in_scope(candidates, gold_pairs)
+        graded = classify_pairs(judgements, gold_in_scope, threshold)
+        fixed_slices = (
+            _grade_slices(judgements, gold_in_scope, slice_fn, threshold)
+            if slice_fn is not None
+            else None
+        )
+        result = result.model_copy(
+            update={
+                "pair": PairTrack(
+                    precision=graded.precision,
+                    recall=graded.recall,
+                    f1=graded.f1,
+                    pr_curve=result.pair.pr_curve,
+                ),
+                "best_threshold": None,
+                "graded_threshold": threshold,
+                "slices": fixed_slices,
+            }
+        )
+
+    _apply_truncation_policy(result, on_truncation=on_truncation, budget_usd=resolved_budget)
     return result
 
 
@@ -973,7 +1337,10 @@ class BudgetedModuleRunner:
 
     Live run statistics are reset at the start of every :meth:`run` call and so
     describe only the most recent call: :attr:`total_spent_usd`,
-    :attr:`labeled_count`, :attr:`skipped_count`, :attr:`dropped_by_cap_count`.
+    :attr:`labeled_count`, :attr:`skipped_count`, :attr:`dropped_by_cap_count`,
+    :attr:`budget_stopped` (``True`` iff the per-pair stop in point 2 fired --
+    the pre-flight cap in point 1 has no equivalent flag since
+    ``dropped_by_cap_count > 0`` already says so).
 
     Group-call atomicity (W1.0, E5): :meth:`run` scores exactly ONE candidate
     per ``module.forward()`` call (see point 3 above). A
@@ -1028,6 +1395,7 @@ class BudgetedModuleRunner:
         self.labeled_count: int = 0
         self.skipped_count: int = 0
         self.dropped_by_cap_count: int = 0
+        self.budget_stopped: bool = False
 
     def run(
         self,
@@ -1058,6 +1426,7 @@ class BudgetedModuleRunner:
         self.labeled_count = 0
         self.skipped_count = 0
         self.dropped_by_cap_count = 0
+        self.budget_stopped = False
 
         worst_case_per_pair = self.worst_case_units_per_pair * price_per_token_or_pair
         if worst_case_per_pair <= 0.0:
@@ -1071,6 +1440,7 @@ class BudgetedModuleRunner:
         for candidate in capped:
             projected = self.total_spent_usd + worst_case_per_pair
             if projected > self.budget_usd:
+                self.budget_stopped = True
                 logger.info(
                     "Budget stop: spent=$%.4f + next worst-case $%.6f would exceed "
                     "budget $%.2f; returning %d judgements",
