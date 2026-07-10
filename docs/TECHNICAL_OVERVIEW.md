@@ -104,7 +104,7 @@ print(result.judge_used, result.score_type)   # "string" "heuristic"
 
 **Definition:** Decide whether **two records** are the same entity — a single pairwise verdict.
 
-`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score`, `.judge_used`, `.score_type`, and `.reasoning`.
+`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMJudge`, has no score), `.judge_used`, `.score_type`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMJudge` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `JudgeAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
 
 ```python
 from langres import link
@@ -266,7 +266,7 @@ class MyProductJudge(Module[MyInternalSchema]):
 - `__init__(self, threshold: float = 0.5)`
 - `cluster(self, judgements: Iterator[PairwiseJudgement] | list[PairwiseJudgement]) -> list[set[str]]`
 
-**Behavior:** builds an undirected graph from every judgement whose `score >= threshold` and returns the connected components (full transitive closure, via networkx) — so a chain A–B, B–C merges A, B, and C even with no direct A–C edge. This is the single built-in strategy; there is no `method`/`hierarchical` option and no cannot-link `constraints` argument. For a merge-resistant alternative that resists that transitive over-merge, use `CorrelationClusterer` (§9).
+**Behavior:** builds an undirected graph from every judgement that `predicted_match` marks a match — a *decider*'s `decision`, else `score >= threshold`; an abstention (neither set) is excluded — and returns the connected components (full transitive closure, via networkx) — so a chain A–B, B–C merges A, B, and C even with no direct A–C edge. This is the single built-in strategy; there is no `method`/`hierarchical` option and no cannot-link `constraints` argument. For a merge-resistant alternative that resists that transitive over-merge, use `CorrelationClusterer` (§9).
 
 **Example:**
 
@@ -408,7 +408,7 @@ seam, and the bring-your-own-data `evaluate()` walkthrough.
 
 **What it does:**
 
-- `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`.
+- `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`. `"uncertainty"` ranks by the logged **`confidence`** when present (`|confidence − 0.5|`, most-uncertain first), else falls back to `|score − threshold|`; a decision-only/binary log with neither a usable `confidence` nor a non-degenerate `score` now **raises** `ValueError` (naming `strategy="disagreement"` or `LLMJudge(confidence="logprob")` as the fix) rather than silently returning `[]`. `ReviewItem` also carries `reasoning` / `confidence` / `confidence_source`.
 - `ReviewQueue(path).write(items)` snapshots that selection to `review_queue.jsonl`; items are ids-only unless you pass `records=` to `select_for_review`.
 - The `langres` CLI labels the queue (`export-csv` → spreadsheet → `import-csv` → `corrections.jsonl`, or the `langres review` terminal loop). `core.harvest` folds those corrections back into `core.calibration.derive_threshold` / `fit()` — the active-learning loop.
 
@@ -446,15 +446,21 @@ The internal data wrapper passed into a Flow.
 
 The rich data object passed out of a Flow. This is the auditable log of a decision.
 
+A judge is one of two shapes (and a logprob judge may be both): a **decider** emits a boolean `decision` directly (a binary LLM answers Yes/No; the threshold is irrelevant to it), a **ranker** emits a confidence-ordered `score` (the caller's threshold turns it into a match). Neither set = an **abstention**.
+
 - `left_id: str`
 - `right_id: str`
-- `score: float`: The combined score (0.0 to 1.0).
-- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Critical for calibration and clustering. `prob_fs`/`prob_rf`/`prob_group_llm` (added W1.0) are reserved for a Fellegi-Sunter judge, an sklearn RandomForest judge, and a set-wise (group) judge respectively — none are implemented in core yet, but the literal is open for the branches that add them.
+- `decision: bool | None` (default `None`): The judge's explicit match verdict, set by a *decider*. `None` when the judge only ranks (emits a `score`) or abstains. **Takes precedence over `score`** in `predicted_match`.
+- `score: float | None` (default `None`, 0.0 to 1.0): The confidence-ordered match score for a *ranker*, else `None`. **Widened from a required `float`:** a decider has no score, so `None` means "this judge does not rank", *not* "score of zero" — a fabricated `0.0`/`1.0` would lie.
+- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Stays **required** even when `score` is `None`: it doubles as the judge-*family* tag, so it names the family (e.g. `"prob_llm"` for a binary LLM judge) rather than a score. Critical for calibration and clustering. `prob_fs`/`prob_rf`/`prob_group_llm` (added W1.0) are reserved for a Fellegi-Sunter judge, an sklearn RandomForest judge, and a set-wise (group) judge respectively — none are implemented in core yet, but the literal is open for the branches that add them.
+- `confidence: float | None` (default `None`, 0.0 to 1.0): Optional "how sure am I", orthogonal to the decision. Set today only by `LLMJudge(confidence="logprob")` (the OpenAI-family first-token credence probe); `None` for every other judge.
+- `confidence_source: Literal["none", "unrequested", "logprob", "calibrated", "heuristic"]` (default `"none"`): Provenance of `confidence`. `"none"` = this judge structurally has no confidence to give; `"unrequested"` = it *could* (a decision judge that can expose logprobs) but was not asked; `"logprob"` = an earned first-token credence. The literal set is provisional, not a frozen API.
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
 
-<!-- TODO(parse-error): another agent is revising the parse-error / evaluate() behaviour described in this paragraph (the score-0.0 abstain path). Do not edit this paragraph here. -->
+**Is this pair a match?** Ask `predicted_match(judgement, threshold) -> bool | None` (a module function in `langres.core.models`, exported from `langres.core`) — never a raw `score >= threshold`. It gives `decision` precedence over `score` (a decider already decided; the threshold never overrides it), applies `score >= threshold` to a ranker, and returns `None` for an abstention (neither set). The `is_abstain` property is `True` in exactly that neither-set case. An abstention is **not** a "no": `classify_pairs` and the clusterers *exclude* it from the predicted set rather than grading it a confident non-match.
+
 **LLM-judge provenance keys.** `LLMJudge` / `DSPyJudge` / `SelectJudge` write
 `model`, `cost_usd`, `provider`, the legacy `prompt_tokens` / `completion_tokens`
 (kept for `JudgementLog`, `bootstrap.labelers`, `openrouter.make_token_cost_track`),
@@ -464,12 +470,18 @@ SUBSET semantics): `input_tokens` / `output_tokens` are the *inclusive* totals
 (`input_tokens` == `prompt_tokens`), and `cache_read_input_tokens`,
 `cache_creation_input_tokens`, `reasoning_tokens` are subsets of them, plus the
 serving `provider` and `model` id. LiteLLM already normalizes Anthropic's raw
-`input_tokens` up to the inclusive total, so the subsets are never re-added. An
-`LLMJudge` under `on_parse_error="abstain"` (the default) also sets
-`provenance["parse_error"] = True` on a response its `response_parser` could not
-parse (score `0.0`, distinguishable downstream); `evaluate()` /
-`evaluate_judge_on_candidates()` surface the count as `JudgePairEval.n_parse_errors`
-and warn when non-zero.
+`input_tokens` up to the inclusive total, so the subsets are never re-added.
+
+**Abstention (parse error).** An `LLMJudge` under `on_parse_error="abstain"` (the
+default) whose `response_parser` could not parse a verdict — and a `DSPyJudge` on
+a parse/validation error — now emits `decision=None, score=None` (so `is_abstain
+== True`, **not** the old `score=0.0`) with `provenance["parse_error"] = True`.
+Both judges abstain identically. `predicted_match` returns `None` for it, so
+`classify_pairs` (and the clusterers) *exclude* the pair from the predicted set —
+it is no longer graded a confident "no". `evaluate()` /
+`evaluate_judge_on_candidates()` surface the count as
+`JudgePairEval.n_parse_errors` / `.n_abstained` and warn when non-zero;
+`on_parse_error="raise"` turns the same case into an immediate `LLMParseError`.
 
 **`LLMJudge` paper-replication seams (constructor).** To run a published paper's
 prompt without subclassing: `response_parser` (default `parse_score_response`; the
@@ -716,6 +728,12 @@ its *direct* neighbours `>= threshold`. A node with only an indirect path to
 a cluster is never pulled in by transitivity alone — merge-resistant relative
 to the base `Clusterer` — while a genuinely well-connected clique (every pair
 directly compared and matched) still merges fully under both.
+
+Both clusterers gate edges through `predicted_match` (a *decider*'s `decision`,
+else `score >= threshold`). For the confidence-ordered edge **weight** that drives
+its pivot order, `CorrelationClusterer` uses the judgement's `score`, falling back
+to `confidence`, then a unit `1.0` — so a bare "Yes" decision (no score) is still a
+full-strength edge, never a silent zero that would drop the merge.
 
 **Not the default.** Benchmarked head-to-head against the base `Clusterer` on
 Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the

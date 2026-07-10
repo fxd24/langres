@@ -156,12 +156,21 @@ class SomeJudge(Module):
             yield PairwiseJudgement(
                 left_id=pair.left.id,
                 right_id=pair.right.id,
-                score=score,
-                score_type="calibrated_prob",  # one of the models.py literals
+                score=score,                    # a *ranker*: the caller's threshold decides
+                score_type="calibrated_prob",   # one of the models.py literals (a required
+                                                # family tag even when score is None)
                 decision_step="some_judge",
                 provenance={},
             )
 ```
+
+A judge is a *ranker* (emits `score`, threshold decides) **or** a *decider* (a
+binary Yes/No judge: emit `decision=True/False` and leave `score=None` — a
+fabricated `0.0`/`1.0` would lie). Setting neither is an **abstention**
+(`is_abstain`). Never test `score >= threshold` yourself — ask
+`langres.core.predicted_match(judgement, threshold)`, the one place that answers
+"is this a match" (decision wins over score; an abstention returns `None`, and is
+excluded from the predicted set — never graded a confident "no").
 
 ### Wiring it into a pipeline
 
