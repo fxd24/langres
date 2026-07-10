@@ -12,6 +12,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
 
@@ -249,6 +250,26 @@ def test_candidates_for_returns_list_and_set_of_frozensets() -> None:
     assert isinstance(candidates, list)
     assert isinstance(gold_pairs, set)
     assert all(isinstance(pair, frozenset) for pair in gold_pairs)
+
+
+def test_candidates_for_rejects_an_unknown_split() -> None:
+    # Before the guard, anything but "test" fell through to the TRAIN split, so a
+    # typo ("valid", "Test") silently produced a report graded on the wrong
+    # partition. `Literal` only protects type-checked callers -- a CLI flag or a
+    # dict lookup reaches here untyped.
+    for bad in ("valid", "validation", "Test", ""):
+        with pytest.raises(ValueError, match="split must be 'train' or 'test'"):
+            ev.candidates_for(_FakeSplitBenchmark(), split=cast(Any, bad))
+
+
+def test_candidates_for_train_and_test_golds_actually_differ() -> None:
+    # Gives the guard above its teeth: if a silent train-fallback ever returned,
+    # this asserts the two splits are distinguishable, so the wrong one is a
+    # detectable wrong answer rather than a coincidence.
+    _, train_gold = ev.candidates_for(_FakeSplitBenchmark(), split="train")
+    _, test_gold = ev.candidates_for(_FakeSplitBenchmark(), split="test")
+
+    assert train_gold != test_gold
 
 
 def test_candidates_for_gold_is_nonempty_and_ids_are_real() -> None:

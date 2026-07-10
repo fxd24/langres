@@ -137,9 +137,19 @@ def candidates_for(
     Returns:
         ``(candidates, gold_pairs)`` -- the blocked, comparison-attached
         candidates for ``split``, and its order-independent gold match pairs.
+
+    Raises:
+        ValueError: If ``split`` is neither ``"train"`` nor ``"test"``.
     """
     from langres.core.benchmark import gold_pairs_from_clusters
     from langres.core.resolver import Resolver
+
+    if split not in ("train", "test"):
+        # Without this, any typo ("valid", "validation", "Test") falls through the
+        # `if split == "test"` below and silently grades the TRAIN split -- a report
+        # that looks valid while scoring the wrong partition. `Literal` only protects
+        # type-checked callers; a CLI flag or a dict lookup reaches here untyped.
+        raise ValueError(f"candidates_for(): split must be 'train' or 'test', got {split!r}")
 
     corpus, gold_clusters, _ = bench.load()
     train_records, test_records, train_clusters, test_clusters = bench.split(

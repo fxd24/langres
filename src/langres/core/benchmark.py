@@ -549,6 +549,27 @@ def tune_threshold_on_train(
 #: "this judgement has a cost" (previously `_judgement_cost_basis` only checked
 #: ``"cost_usd"``, so real spend written under ``"llm_cost_usd"`` -- the key
 #: ``CascadeModule`` writes -- was misclassified ``cost_basis="none"``).
+def _validate_cut(label: str, value: float) -> None:
+    """Reject a match cut outside ``(0.0, 1.0]``.
+
+    ``classify_pairs`` predicts a match iff ``score >= cut``. A cut of ``0.0``
+    (or below) therefore predicts EVERY pair a match -- including an abstention,
+    which both ``LLMJudge`` and ``DSPyJudge`` emit as ``score=0.0``. The judge's
+    "I could not decide" would silently become "yes, a match", inflating recall
+    off a parse failure. A cut above ``1.0`` is unreachable for the
+    ``ge=0.0, le=1.0`` score field: nothing ever matches, and F1 is a
+    structural ``0.0`` rather than a measurement. Both are degenerate cuts that
+    produce a plausible-looking number, so both are errors, not defaults.
+    """
+    if not math.isfinite(value) or not (0.0 < value <= 1.0):
+        raise ValueError(
+            f"evaluate(): {label} must be in (0.0, 1.0], got {value!r}. A cut of "
+            "0.0 or less predicts every pair a match -- including an abstention "
+            "(score=0.0), turning a judge's parse failure into a confident YES. "
+            "A cut above 1.0 can never be reached by a score in [0, 1]."
+        )
+
+
 _COST_KEYS: tuple[str, ...] = ("cost_usd", "llm_cost_usd")
 
 
@@ -1322,10 +1343,13 @@ def evaluate(
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
         grid: Score thresholds to sweep for the pair-level PR curve and (when
             ``threshold=None``) the best-F1 argmax. Defaults to
-            :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep.
+            :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep. Every point
+            must lie in ``(0.0, 1.0]``.
         threshold: ``None`` (default) grades at the grid's best-F1 argmax
             (optimistically biased, warned about); a float grades ONCE at that
-            fixed cut (honest, no warning).
+            fixed cut (honest, no warning). Must lie in ``(0.0, 1.0]`` — a cut of
+            ``0.0`` would predict an abstention (``score=0.0``) a MATCH, and a
+            cut above ``1.0`` is unreachable for a score in ``[0, 1]``.
         budget_usd: Spend ceiling for the internal runner, enforced BETWEEN
             calls (see above — NOT a hard ceiling on a single call's own cost);
             ``None`` (default) resolves to
@@ -1342,7 +1366,8 @@ def evaluate(
         given) per-slice tracks.
 
     Raises:
-        ValueError: If ``candidates`` is empty.
+        ValueError: If ``candidates`` is empty, or if ``threshold`` / any ``grid``
+            point falls outside ``(0.0, 1.0]``.
         EvaluationTruncatedError: If ``on_truncation="raise"`` (the default) and
             the internal spend cap truncated the run.
     """
@@ -1355,6 +1380,11 @@ def evaluate(
             "upstream blocker producing zero candidates; inspect that before "
             "calling evaluate()."
         )
+
+    if threshold is not None:
+        _validate_cut("threshold", threshold)
+    for point in grid:
+        _validate_cut("grid point", point)
 
     if threshold is None:
         warnings.warn(

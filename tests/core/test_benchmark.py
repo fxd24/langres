@@ -1053,6 +1053,53 @@ def test_evaluate_raises_on_empty_candidates() -> None:
         benchmark_module.evaluate(_ScoreModule({}), [], set(), threshold=0.5)
 
 
+def test_classify_pairs_grades_an_abstention_as_a_match_at_threshold_zero() -> None:
+    # The reason evaluate() rejects a cut of 0.0: `classify_pairs` predicts a
+    # match iff `score >= cut`, and BOTH judges abstain at score=0.0. At cut 0.0
+    # the abstention is scored a confident YES. This test pins the underlying
+    # behavior so the guard below can never be "fixed" by loosening the range.
+    abstain = PairwiseJudgement(
+        left_id="l0",
+        right_id="r0",
+        score=0.0,
+        score_type="prob_llm",
+        decision_step="parse_error",
+        provenance={"parse_error": True},
+    )
+    gold = {frozenset({"l0", "r0"})}
+    assert classify_pairs([abstain], gold, 0.0).tp == 1  # abstention -> MATCH
+    assert classify_pairs([abstain], gold, 0.05).tp == 0  # any positive cut -> not a match
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.1, 1.5, float("nan"), float("inf")])
+def test_evaluate_rejects_a_degenerate_threshold(bad: float) -> None:
+    # A cut <= 0.0 turns every abstention into a match (see the test above); a cut
+    # above 1.0 can never be reached by a score in [0, 1], making F1 a structural
+    # 0.0 rather than a measurement. Both yield a plausible-looking number.
+    cands = _candidates(2)
+    with pytest.raises(ValueError, match=r"threshold must be in \(0\.0, 1\.0\]"):
+        benchmark_module.evaluate(_ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), threshold=bad)
+
+
+def test_evaluate_rejects_a_degenerate_grid_point() -> None:
+    # The same invariant, for the swept path: a caller-supplied grid containing
+    # 0.0 would put an "everything matches" point into the argmax.
+    cands = _candidates(2)
+    with pytest.raises(ValueError, match=r"grid point must be in \(0\.0, 1\.0\]"):
+        benchmark_module.evaluate(
+            _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), grid=[0.0, 0.5]
+        )
+
+
+def test_evaluate_accepts_a_threshold_of_exactly_one() -> None:
+    # 1.0 is a legitimate cut: a binary judge emitting score=1.0 matches at it.
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    result = benchmark_module.evaluate(_ScoreModule({"l0": 1.0}), cands, gold, threshold=1.0)
+    assert result.graded_threshold == 1.0
+    assert result.pair.f1 == pytest.approx(1.0)
+
+
 def test_evaluate_passes_slice_fn_through() -> None:
     # slice_fn is forwarded: the result carries per-slice tracks graded at the one
     # global best-F1 threshold (evaluate() is a thin passthrough, so this just
