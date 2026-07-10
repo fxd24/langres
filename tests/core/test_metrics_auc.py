@@ -59,6 +59,37 @@ def test_validate_binary_scores_empty_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _validate_binary_scores -- non-finite scores must raise
+#
+# A ranking containing NaN/+-inf is undefined; returning a confident finite
+# number for it is worse than raising, since these metrics exist to measure a
+# judge's confidence and a judge that emits a non-finite score is exactly the
+# broken case that must be caught, not silently scored.
+# ---------------------------------------------------------------------------
+
+
+def test_validate_binary_scores_nan_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        _validate_binary_scores([True, False], [1.0, float("nan")])
+
+
+def test_validate_binary_scores_positive_inf_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        _validate_binary_scores([True, False], [1.0, float("inf")])
+
+
+def test_validate_binary_scores_negative_inf_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        _validate_binary_scores([True, False], [float("-inf"), 1.0])
+
+
+def test_validate_binary_scores_nan_error_names_index_and_value() -> None:
+    with pytest.raises(ValueError, match=r"index 1") as exc_info:
+        _validate_binary_scores([True, False], [1.0, float("nan")])
+    assert "nan" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # roc_auc_score -- edge-case contract
 # ---------------------------------------------------------------------------
 
@@ -71,6 +102,62 @@ def test_roc_auc_empty_raises() -> None:
 def test_roc_auc_length_mismatch_raises() -> None:
     with pytest.raises(ValueError, match="equal length"):
         roc_auc_score([True, False], [1.0])
+
+
+# ---------------------------------------------------------------------------
+# roc_auc_score -- non-finite scores must raise (empirically-reproduced bug:
+# NaN sorts inconsistently because NaN != NaN and all NaN comparisons are
+# False, so the same multiset of scores in a different input order used to
+# produce different AUC values -- a confident-looking but meaningless number
+# -- instead of raising)
+# ---------------------------------------------------------------------------
+
+
+def test_roc_auc_nan_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score([True, False, True, False], [0.9, float("nan"), 0.2, 0.1])
+
+
+def test_roc_auc_positive_inf_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score([True, False], [float("inf"), 1.0])
+
+
+def test_roc_auc_negative_inf_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score([True, False], [float("-inf"), 1.0])
+
+
+def test_roc_auc_nan_order_dependence_regression() -> None:
+    """Regression for the reproduced bug: the same multiset of scores,
+    reordered, used to silently return two different AUC values (0.75 vs
+    0.5) instead of raising. Both orderings must now raise.
+    """
+    y_true = [True, False, True, False]
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score(y_true, [0.9, float("nan"), 0.2, 0.1])
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score(y_true, [float("nan"), 0.9, 0.2, 0.1])
+
+
+def test_roc_auc_nan_score_raises_even_for_single_class_y_true() -> None:
+    """A NaN *score* always raises -- regardless of class balance. This is
+    distinct from the single-class *y_true* contract below
+    (test_roc_auc_only_positives_is_nan), where finite scores with a
+    single-class y_true *return* ``nan`` rather than raising. The two must
+    not be conflated: a NaN in ``scores`` is invalid input; a ``nan``
+    *return value* from a degenerate single-class ``y_true`` is the
+    documented, deliberate contract.
+    """
+    with pytest.raises(ValueError, match="finite"):
+        roc_auc_score([True, True, True], [1.0, float("nan"), 3.0])
+
+
+# ---------------------------------------------------------------------------
+# roc_auc_score -- edge-case contract (preserved: single-class y_true still
+# *returns* nan, never raises -- see the non-finite-scores tests above for
+# the contrast)
+# ---------------------------------------------------------------------------
 
 
 def test_roc_auc_only_positives_is_nan() -> None:
@@ -190,6 +277,45 @@ def test_ap_empty_raises() -> None:
 def test_ap_length_mismatch_raises() -> None:
     with pytest.raises(ValueError, match="equal length"):
         average_precision_score([True, False], [1.0])
+
+
+# ---------------------------------------------------------------------------
+# average_precision_score -- non-finite scores must raise (same
+# order-dependence bug as roc_auc_score: NaN sorts inconsistently)
+# ---------------------------------------------------------------------------
+
+
+def test_ap_nan_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        average_precision_score([True, False, True, False], [0.9, float("nan"), 0.2, 0.1])
+
+
+def test_ap_positive_inf_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        average_precision_score([True, False], [float("inf"), 1.0])
+
+
+def test_ap_negative_inf_score_raises() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        average_precision_score([True, False], [float("-inf"), 1.0])
+
+
+def test_ap_nan_score_raises_even_when_n_neg_is_zero() -> None:
+    """A NaN *score* always raises -- regardless of class balance. This is
+    distinct from the ``n_neg == 0`` contract below (test_ap_only_positives_is_one),
+    where finite scores with an all-positive y_true *return* ``1.0`` rather
+    than raising. The two must not be conflated: a NaN in ``scores`` is
+    invalid input; ``1.0`` from a degenerate all-positive ``y_true`` is the
+    documented, deliberate contract.
+    """
+    with pytest.raises(ValueError, match="finite"):
+        average_precision_score([True, True, True], [1.0, float("nan"), 3.0])
+
+
+# ---------------------------------------------------------------------------
+# average_precision_score -- edge-case contract (preserved: n_neg == 0 still
+# *returns* 1.0, never raises -- see the non-finite-scores tests above)
+# ---------------------------------------------------------------------------
 
 
 def test_ap_only_positives_is_one() -> None:
