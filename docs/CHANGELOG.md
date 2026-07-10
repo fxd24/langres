@@ -48,12 +48,16 @@ pieces that can regress money or silently report a wrong number.
 ### Added
 
 - **`langres.core.metrics.roc_auc_score` / `average_precision_score`** — pure
-  Python (`math` only, no numpy, no sklearn in `src/`). Tie-aware: ROC-AUC uses
-  the Mann-Whitney-U form over midranks, so an all-equal score vector yields
-  exactly `0.5` and a tie straddling the pos/neg boundary gets half credit —
-  the exact point a naive rank-AUC silently diverges from sklearn. Single-class
-  input returns `nan` rather than raising, so one degenerate slice blanks a cell
-  instead of killing a whole report.
+  Python: `math` only, adding no numpy or sklearn dependency (`metrics.py` stays
+  import-light; sklearn remains confined to the `[trained]` extra). Tie-aware:
+  ROC-AUC uses the Mann-Whitney-U form over midranks, so an all-equal score
+  vector yields exactly `0.5` and a tie straddling the pos/neg boundary gets
+  half credit — the exact point a naive rank-AUC silently diverges from sklearn.
+  Single-class input **returns** `nan` rather than raising, so one degenerate
+  slice blanks a cell instead of killing a whole report. A non-finite *score*
+  (`NaN`/`±inf`), by contrast, **raises** — a ranking containing `NaN` is
+  undefined, and returning a confident, order-dependent number for it is worse
+  than failing.
 - **`Resolver.candidates(records) -> list[ERCandidate]`** — the public seam
   replacing reaches into `Resolver._candidates`. It returns a **materialised
   list**, because `evaluate_judge_on_candidates` calls `len()` and iterates
@@ -67,13 +71,19 @@ pieces that can regress money or silently report a wrong number.
 - **`JudgePairEval.n_abstained` / `.abstention_rate` / `.graded_threshold`** —
   `graded_threshold` is always populated and always states which cut `pair` was
   graded at.
-- **`langres.testing.ScriptedJudge`** — a public `Module` test double replacing
-  six hand-rolled copies across three test files. Deliberately **not**
-  `@register`-ed (a test double must never enter `Resolver.load` dispatch) and
-  **not** imported by `langres/__init__.py`; an import-budget test asserts
-  `import langres` leaves `langres.testing` out of `sys.modules`. It lets tests
-  exercise the spend-cap and abstain paths without ever constructing a real
-  `LLMJudge`, which would lazily build a live client from the environment.
+- **`langres.testing.ScriptedJudge`** — a public `Module` test double. It lets
+  tests and examples exercise judge-shaped code (`CascadeJudge`, `evaluate()`,
+  the review/harvest flywheel) with no network, no API key, and no spend —
+  which matters because a real `LLMJudge` picks up `OPENROUTER_API_KEY` from the
+  repo `.env` via litellm's import-time `load_dotenv()` and makes a real, billed
+  call. It replaces the hand-rolled `ScriptedJudge` in
+  `tests/core/modules/test_cascade_judge.py`. The four `DummyModule` copies in
+  `tests/core/test_module.py` stay put on purpose: those tests exercise the
+  `Module` ABC itself, and testing the ABC through a library-provided subclass
+  of it would be circular. Deliberately **not** `@register`-ed (a test double
+  must never enter `Resolver.load` dispatch) and **not** imported by
+  `langres/__init__.py`; an import-budget test asserts `import langres` leaves
+  `langres.testing` out of `sys.modules`.
 
 ### Docs
 

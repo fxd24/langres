@@ -27,7 +27,12 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     # Only reached by mypy -- keeps every lazy name visible to `mypy --strict`
     # without importing the owning modules at runtime.
-    from langres.core.benchmark import DEFAULT_PAIR_GRID, Benchmark, evaluate
+    from langres.core.benchmark import (
+        DEFAULT_PAIR_GRID,
+        Benchmark,
+        evaluate,
+        gold_pairs_from_clusters,
+    )
     from langres.core.metrics import (
         average_precision_score,
         calculate_bcubed_metrics,

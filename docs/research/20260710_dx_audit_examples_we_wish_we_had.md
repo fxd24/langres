@@ -4,6 +4,21 @@
 replication landed (#102). Every claim below was verified by running the code or
 reading the named file — none is inferred from a name.*
 
+> **Status (updated when the PR-1 "eval honesty" branch landed).** This is a
+> point-in-time audit; the gaps below were real when written. Since then:
+>
+> | Gap | Status |
+> |---|---|
+> | **G1** — `evaluate()` reports dollars, no tokens, no spend cap | **Addressed.** `CostTrack.usage` carries the summed token vector; `evaluate()` is spend-capped by default (`budget_usd`, `DEFAULT_BUDGET_USD = $1.00`) and reports `budget_exceeded` when a single in-flight call overruns the cap. |
+> | **G2** — no public seam from a benchmark to candidates | **Addressed.** `Resolver.candidates()` and `langres.eval.candidates_for()`. |
+> | **G3** — the eval path always sweeps, and selects the threshold on the test labels | **Addressed.** The sweep stays the default (a fixed cut serves no judge family), but it now warns that `best_threshold` is an argmax fitted to the reported gold, and `threshold=` grades honestly at a fixed cut. |
+> | **G4** — langres ships no test double | **Addressed.** `langres.testing.ScriptedJudge`. |
+> | **G5** — the verbs cannot express "use this prompt" | **Open** — tracked as issue #103. |
+> | **G6** — the docs describe modules that do not exist | **Addressed.** `langres.tasks`/`flows`/`ui`, `core.Optimizer`, `core.Evaluator`, `EmbedBlocker`, `EmbedSim`, `SyntheticGenerator` removed from `docs/TECHNICAL_OVERVIEW.md`. |
+>
+> Leaving the original text unedited: the audit's value is the evidence trail for
+> *why* those seams exist, and rewriting it in place would erase that.
+
 ---
 
 ## 0. The finding, in one number
