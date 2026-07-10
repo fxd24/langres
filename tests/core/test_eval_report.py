@@ -288,3 +288,75 @@ def test_eval_error_is_frozen() -> None:
     )
     with pytest.raises(Exception):  # noqa: B017 - pydantic frozen -> ValidationError
         err.left_id = "z"  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# Edge cases and robustness (the core contract tier)                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_empty_judgements_render_cleanly() -> None:
+    """No judgements -> every metric is undefined, but nothing raises or leaks NaN."""
+    report = EvalReport.from_judgements([], _GOLD, threshold=0.5)
+
+    assert report.n_candidates == 0
+    assert report.tp == report.fp == report.tn == 0
+    # fn is |gold - predicted|: with nothing predicted, every gold pair is missed.
+    assert report.fn == report.n_gold == 2
+    assert math.isnan(report.roc_auc)
+    assert report.roc_curve == []
+    assert report.brier is None and report.ece is None
+    out = report.to_html()
+    assert "NaN" not in out and "Infinity" not in out
+
+
+def test_all_scores_equal_gives_chance_auc() -> None:
+    """A ranker that scores every pair identically is pure chance: ROC-AUC 0.5."""
+    judgements = [
+        _j("a", "b", score=0.5),  # gold
+        _j("c", "d", score=0.5),  # gold
+        _j("e", "f", score=0.5),  # non-gold
+        _j("g", "h", score=0.5),  # non-gold
+    ]
+    report = EvalReport.from_judgements(judgements, _GOLD, threshold=0.5)
+
+    assert report.roc_auc == pytest.approx(0.5)
+    assert report.roc_curve[0] == (0.0, 0.0)
+    assert report.roc_curve[-1] == (1.0, 1.0)
+
+
+def test_duplicate_pair_rows_are_collapsed_last_wins_and_not_double_counted() -> None:
+    """A log with two rows for one pair counts it once; the later row wins.
+
+    The reviewer's scenario: without dedup a non-gold pair logged both above and
+    below threshold is simultaneously an FP (set-based ``classify_pairs``) and a TN
+    (the per-judgement walk) -- and it inflates ``n_ranked``/histogram/ROC. Dedup
+    (last write wins, as a re-run supersedes) makes the low row the single verdict.
+    """
+    judgements = [
+        _j("e", "f", score=0.9),  # non-gold, high (row 1) -> would be an FP
+        _j("e", "f", score=0.3),  # SAME non-gold pair, re-judged low -> supersedes -> TN
+        _j("a", "b", score=0.9),  # gold, high -> TP
+    ]
+    report = EvalReport.from_judgements(judgements, _GOLD, threshold=0.5)
+
+    assert report.n_candidates == 2  # (e,f) collapsed, plus (a,b)
+    assert report.n_ranked == 2  # not 3 -- the duplicate score is not double-ranked
+    assert report.fp == 0  # last (e,f) row (0.3) wins, so no false positive
+    assert report.tn == 1  # (e,f) counted once as a true negative, not also an FP
+    assert report.tp == 1  # (a,b)
+    # (a,b) is a judged gold that IS predicted, so no judged pair falls into fn:
+    # the four cells + abstains then account for exactly the judged pairs.
+    assert report.tp + report.fp + report.tn + report.n_abstained == report.n_candidates
+
+
+def test_to_markdown_escapes_a_pipe_in_a_record_id() -> None:
+    """A ``|`` in an id must not break the error-table's column alignment."""
+    judgements = [_j("a|b", "c", score=0.99)]  # hostile id, non-gold -> FP
+    report = EvalReport.from_judgements(judgements, set(), threshold=0.5)
+
+    md = report.to_markdown()
+    assert r"a\|b" in md
+    # after removing the escaped pipe, the row has exactly the 6-column borders.
+    error_row = next(line for line in md.splitlines() if r"a\|b" in line)
+    assert error_row.replace(r"\|", "").count("|") == 7

@@ -74,6 +74,17 @@ def _num(value: float | None, digits: int = 3) -> str:
     return f"{value:.{digits}f}"
 
 
+def _md_cell(text: str) -> str:
+    """Make a value safe inside a Markdown table cell.
+
+    A record id may contain a ``|`` (the column delimiter) or a newline; either
+    silently corrupts table alignment. Escape the pipe and flatten newlines --
+    the HTML render already escapes ids via :func:`html.escape`, so this keeps
+    the two render paths symmetric.
+    """
+    return str(text).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
 def _histogram(values: Sequence[float], edges: Sequence[float]) -> list[float]:
     """Count ``values`` into the half-open bins defined by ascending ``edges``.
 
@@ -271,10 +282,19 @@ class EvalReport(BaseModel):
             costs: Optional per-judgement cost (aligned with ``judgements``); the
                 sum becomes :attr:`total_cost_usd`. ``None`` -> ``0.0``.
 
+        Duplicate rows for the same pair are collapsed to the last one (a resumed
+        run's re-judgement supersedes), so every pair is counted exactly once and
+        the confusion cells reconcile.
+
         Returns:
             A frozen :class:`EvalReport`.
         """
-        judged = list(judgements)
+        # One judgement per pair: a persisted log can carry duplicate rows for the
+        # same pair (a resumed run re-judging it). Keep the last -- last write wins,
+        # as a re-run supersedes the earlier verdict -- so the set-based tp/fp/fn
+        # (classify_pairs already dedupes by pair) and the per-judgement
+        # tn/histogram/ROC below count each pair once and the confusion cells reconcile.
+        judged = list({_pair_key(j.left_id, j.right_id): j for j in judgements}.values())
         n_candidates = len(judged)
 
         base = classify_pairs(judged, gold_pairs, threshold)
@@ -312,11 +332,16 @@ class EvalReport(BaseModel):
 
             if predicted is not None and predicted != is_gold:
                 # "how confident in the wrong answer": a self-reported confidence
-                # if present, else distance of the score past the threshold.
+                # if present, else the score's distance past the threshold. The
+                # distance is normalised to [0, 1] (divided by the widest possible
+                # distance) so the two families stay comparable when a log mixes
+                # confidence-bearing and score-only errors -- within one family the
+                # order is unchanged (a monotone rescale).
                 if judgement.confidence is not None:
                     sort_key = judgement.confidence
                 elif judgement.score is not None:
-                    sort_key = abs(judgement.score - threshold)
+                    span = max(threshold, 1.0 - threshold) or 1.0
+                    sort_key = abs(judgement.score - threshold) / span
                 else:
                     sort_key = 0.0
                 errors.append(
@@ -492,8 +517,10 @@ class EvalReport(BaseModel):
             for error in self.top_errors:
                 kind = "match" if error.predicted else "non-match"
                 gold = "match" if error.is_gold else "non-match"
+                left = _md_cell(error.left_id)
+                right = _md_cell(error.right_id)
                 lines.append(
-                    f"| {error.left_id} | {error.right_id} | {kind} | {gold} | "
+                    f"| {left} | {right} | {kind} | {gold} | "
                     f"{_num(error.score)} | {_num(error.confidence)} |"
                 )
         return "\n".join(lines)
