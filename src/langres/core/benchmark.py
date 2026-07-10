@@ -542,18 +542,27 @@ def tune_threshold_on_train(
     return best_threshold
 
 
+#: Provenance keys that carry a judgement's USD cost, in fallback order.
+#: :func:`_judgement_cost` sums whichever is present; :func:`_judgement_cost_basis`
+#: uses the SAME set to decide whether a judgement has a cost concept at all --
+#: sharing one constant means the two can never disagree about what counts as
+#: "this judgement has a cost" (previously `_judgement_cost_basis` only checked
+#: ``"cost_usd"``, so real spend written under ``"llm_cost_usd"`` -- the key
+#: ``CascadeModule`` writes -- was misclassified ``cost_basis="none"``).
+_COST_KEYS: tuple[str, ...] = ("cost_usd", "llm_cost_usd")
+
+
 def _judgement_cost(judgement: PairwiseJudgement) -> float:
     """Measured USD cost of one judgement from its provenance.
 
-    Reads ``provenance["cost_usd"]`` first, falling back to
-    ``provenance["llm_cost_usd"]`` (the key ``CascadeModule`` writes). Zero-spend
-    judges set neither, so this returns ``0.0`` for them.
+    Reads :data:`_COST_KEYS` in order (``"cost_usd"`` first, falling back to
+    ``"llm_cost_usd"``, the key ``CascadeModule`` writes). Zero-spend judges set
+    neither, so this returns ``0.0`` for them.
     """
     prov = judgement.provenance
-    if "cost_usd" in prov:
-        return float(prov["cost_usd"])
-    if "llm_cost_usd" in prov:
-        return float(prov["llm_cost_usd"])
+    for key in _COST_KEYS:
+        if key in prov:
+            return float(prov[key])
     return 0.0
 
 
@@ -595,17 +604,17 @@ def _judgement_cost_basis(judgement: PairwiseJudgement) -> CostBasis:
     """Classify how ONE judgement's cost was determined (never returns ``"mixed"``).
 
     Checked in order: ``cost_untracked`` (DSPyJudge's billed-but-unparseable
-    call) wins regardless of what else is set; then no ``cost_usd`` key at all
-    means the judge has no cost concept (string/embedding); then
+    call) wins regardless of what else is set; then none of :data:`_COST_KEYS`
+    present means the judge has no cost concept at all (string/embedding); then
     ``cost_is_real`` (LLMJudge's real-OpenRouter-billing vs litellm-estimate
-    flag) distinguishes real from estimated -- a judge that sets ``cost_usd``
+    flag) distinguishes real from estimated -- a judge that sets a cost key
     without ``cost_is_real`` (DSPyJudge's normal, non-error path: tokens times a
     pinned price) is also an estimate, never a real billed amount.
     """
     prov = judgement.provenance
     if prov.get("cost_untracked"):
         return "untracked"
-    if "cost_usd" not in prov:
+    if not any(key in prov for key in _COST_KEYS):
         return "none"
     if prov.get("cost_is_real") is True:
         return "real"
@@ -856,6 +865,18 @@ class JudgePairEval(BaseModel):
             than candidates (a call raised or yielded nothing — NOT a spend
             issue). :func:`evaluate` treats the two very differently via
             ``on_truncation``.
+        budget_exceeded: ``True`` when measured spend (:attr:`cost`'s
+            ``usd_total``) crossed ``budget_usd`` DURING a call — detected only
+            AFTER that call's real cost was tallied, since the runner's per-pair
+            cap projects on a worst-case *estimate*, not the real cost a call
+            turns out to have. This is deliberately independent of
+            :attr:`truncated`: a breach on the LAST candidate still judges every
+            pair (``n_judged == n_candidates``, ``truncated=False``) while
+            ``budget_exceeded`` is ``True`` — the run is complete, but it cost
+            more than the requested ceiling. :func:`evaluate` always warns
+            loudly when this is ``True`` (never raises solely for it — the money
+            is already spent). ``False`` when no :class:`BudgetedModuleRunner`
+            was used (``runner=None`` in :func:`evaluate_judge_on_candidates`).
         slices: Optional per-slice pair tracks, each graded at the SAME fixed
             ``graded_threshold`` as ``pair`` (never a per-slice argmax). Populated
             only when :func:`evaluate_judge_on_candidates` is given a ``slice_fn``;
@@ -883,6 +904,7 @@ class JudgePairEval(BaseModel):
     graded_threshold: float
     truncated: bool
     truncation_reason: Literal["none", "budget_cap", "budget_stop", "judge_skips"] = "none"
+    budget_exceeded: bool = False
     slices: dict[str, PairTrack] | None = None
     n_parse_errors: int = 0
     n_abstained: int = 0
@@ -960,19 +982,24 @@ def _truncation_reason(
 ) -> Literal["none", "budget_cap", "budget_stop", "judge_skips"]:
     """Classify WHY fewer pairs were judged than supplied (``"none"`` if not truncated).
 
-    Spend-caused truncation (a runner's pre-flight cap or per-pair budget stop)
-    is distinguished from the judge itself simply producing fewer judgements
-    than candidates (an internal skip-continue with no runner at all, or a
-    runner catching a per-call exception/empty yield) — :func:`evaluate`'s
-    ``on_truncation`` policy treats the two very differently: spend causes may
-    raise; a judge skip only ever warns.
+    Spend-caused truncation (a runner's pre-flight cap, per-pair projected-spend
+    stop, or post-call real-spend breach) is distinguished from the judge itself
+    simply producing fewer judgements than candidates (an internal skip-continue
+    with no runner at all, or a runner catching a per-call exception/empty
+    yield) — :func:`evaluate`'s ``on_truncation`` policy treats the two very
+    differently: spend causes may raise; a judge skip only ever warns.
+    ``runner.budget_exceeded`` (the post-call breach a single call's real cost
+    can cause -- see :class:`BudgetedModuleRunner`) is checked alongside
+    ``runner.budget_stopped`` (the pre-call projected-spend stop): both are
+    "the runner decided to stop because of money", so both classify as
+    ``"budget_stop"`` here.
     """
     if n_judged >= n_candidates:
         return "none"
     if runner is not None:
         if runner.dropped_by_cap_count > 0:
             return "budget_cap"
-        if runner.budget_stopped:
+        if runner.budget_stopped or runner.budget_exceeded:
             return "budget_stop"
     return "judge_skips"
 
@@ -1083,6 +1110,7 @@ def evaluate_judge_on_candidates(
         graded_threshold=best.threshold,
         truncated=truncated,
         truncation_reason=truncation_reason,
+        budget_exceeded=runner.budget_exceeded if runner is not None else False,
         slices=slices,
         n_parse_errors=n_abstained,
         n_abstained=n_abstained,
@@ -1137,6 +1165,25 @@ def _budget_truncation_message(result: JudgePairEval, budget_usd: float) -> str:
         'Fix B: pass on_truncation="return" to accept the partial result silently '
         f"(.n_judged={result.n_judged}, .truncated=True) instead of raising.\n"
         'Fix C: pass on_truncation="warn" to log instead of raising.'
+    )
+
+
+def _budget_exceeded_message(result: JudgePairEval, budget_usd: float) -> str:
+    """Actionable message when a single in-flight call pushed spend past the cap.
+
+    Distinct from :func:`_budget_truncation_message`: this fires whenever
+    ``result.budget_exceeded`` is ``True``, REGARDLESS of ``truncated`` -- a
+    breach on the last candidate still judges every pair, so there is nothing
+    to "fix" by raising the budget or retrying; this is purely informational
+    (the money is already spent and the result is otherwise valid).
+    """
+    return (
+        f"evaluate(): spend exceeded budget_usd mid-call -- measured usd_total="
+        f"${result.cost.usd_total:.4f} against a ${budget_usd:.2f} cap. The runner's "
+        "cap is enforced BETWEEN calls, so a single in-flight call can push total "
+        "spend past it by that call's own cost. The run completed "
+        f"({result.n_judged}/{result.n_candidates} pairs judged) and its metrics "
+        "are valid -- this is a report, not an error."
     )
 
 
@@ -1232,25 +1279,34 @@ def evaluate(
       (setting it would be a lie), and ``graded_threshold`` names the cut used.
       ``pair.pr_curve`` stays populated in both modes (it is cheap, from the
       sweep, and a later PR needs it).
-    - **Spend-capped by default.** Every call runs the judge through an
-      internal :class:`BudgetedModuleRunner`, capped at ``budget_usd``
+    - **Spend-capped by default, honestly.** Every call runs the judge through
+      an internal :class:`BudgetedModuleRunner`, capped at ``budget_usd``
       (``None`` resolves to
       :data:`~langres.core.presets.DEFAULT_BUDGET_USD`, the same default the
-      verbs use) — so a paid judge can never run away, and a free judge
-      (string/embedding, which never sets ``provenance["cost_usd"]``) never
-      approaches the cap. If the cap truncates the run, ``on_truncation``
-      controls what happens: ``"raise"`` (default) raises
-      :class:`EvaluationTruncatedError` carrying the partial result on
-      ``.partial``; ``"warn"`` logs a ``UserWarning`` and returns the partial
-      result; ``"return"`` returns it silently. A judge that itself produces
-      fewer judgements than candidates (one call raised, or yielded nothing) is
-      a DIFFERENT, non-spend truncation (``truncation_reason="judge_skips"``)
-      and only ever warns — never raises, even under ``on_truncation="raise"``
-      — since one bad candidate must not blow up a run. The sole exception:
-      **zero** judgements over a non-empty candidate set raises regardless of
-      the reason (unless ``on_truncation="return"``). Nothing was graded, so a
-      reported F1 of ``0.0`` would be indistinguishable from a healthy judge
-      that matched nothing — the dishonest cell this policy exists to prevent.
+      verbs use). **This is not a hard ceiling**: the cap is enforced BETWEEN
+      calls, so a single in-flight call can still push total spend past it by
+      that call's own cost (a free judge — string/embedding, which never sets
+      ``provenance["cost_usd"]`` — never approaches the cap regardless). When
+      that happens, ``JudgePairEval.budget_exceeded`` is ``True`` and
+      ``evaluate()`` always warns loudly naming the actual spend and the cap —
+      it never raises solely for this, since the run already completed and the
+      money is already spent. Separately, if the cap TRUNCATES the run (fewer
+      pairs judged than supplied), ``on_truncation`` controls what happens:
+      ``"raise"`` (default) raises :class:`EvaluationTruncatedError` carrying
+      the partial result on ``.partial``; ``"warn"`` logs a ``UserWarning`` and
+      returns the partial result; ``"return"`` returns it silently. A judge
+      that itself produces fewer judgements than candidates (one call raised,
+      or yielded nothing) is a DIFFERENT, non-spend truncation
+      (``truncation_reason="judge_skips"``) and only ever warns — never raises,
+      even under ``on_truncation="raise"`` — since one bad candidate must not
+      blow up a run. The sole exception: **zero** judgements over a non-empty
+      candidate set raises regardless of the reason (unless
+      ``on_truncation="return"``). Nothing was graded, so a reported F1 of
+      ``0.0`` would be indistinguishable from a healthy judge that matched
+      nothing — the dishonest cell this policy exists to prevent. An EMPTY
+      ``candidates`` sequence (zero pairs to grade at all — usually an upstream
+      blocker that produced nothing) raises ``ValueError`` immediately, before
+      any of the above.
 
     For a paid or compiled judge that needs a caller-supplied price, a
     caller-owned runner, custom cost accounting (e.g. cascade escalation
@@ -1261,6 +1317,7 @@ def evaluate(
     Args:
         module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
+            Must be non-empty.
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
         grid: Score thresholds to sweep for the pair-level PR curve and (when
             ``threshold=None``) the best-F1 argmax. Defaults to
@@ -1268,8 +1325,9 @@ def evaluate(
         threshold: ``None`` (default) grades at the grid's best-F1 argmax
             (optimistically biased, warned about); a float grades ONCE at that
             fixed cut (honest, no warning).
-        budget_usd: Hard spend ceiling for the internal runner; ``None``
-            (default) resolves to
+        budget_usd: Spend ceiling for the internal runner, enforced BETWEEN
+            calls (see above — NOT a hard ceiling on a single call's own cost);
+            ``None`` (default) resolves to
             :data:`~langres.core.presets.DEFAULT_BUDGET_USD`.
         on_truncation: What to do when the run is truncated — see above.
         slice_fn: Optional pair-key tagger forwarded to
@@ -1279,12 +1337,24 @@ def evaluate(
 
     Returns:
         A :class:`JudgePairEval` — pair P/R/F1 at ``graded_threshold``, the PR
-        curve, cost, latency, and (when ``slice_fn`` is given) per-slice tracks.
+        curve, cost, latency, ``budget_exceeded``, and (when ``slice_fn`` is
+        given) per-slice tracks.
 
     Raises:
+        ValueError: If ``candidates`` is empty.
         EvaluationTruncatedError: If ``on_truncation="raise"`` (the default) and
             the internal spend cap truncated the run.
     """
+    if not candidates:
+        raise ValueError(
+            "evaluate(): candidates is empty -- there is nothing to grade. "
+            "precision/recall/F1 of 0.0 over zero candidates would be "
+            "indistinguishable from 'the judge matched nothing', which is not "
+            "what an empty candidate set means. This is almost always an "
+            "upstream blocker producing zero candidates; inspect that before "
+            "calling evaluate()."
+        )
+
     if threshold is None:
         warnings.warn(
             "evaluate() with threshold=None (the default) reports best_threshold "
@@ -1335,6 +1405,13 @@ def evaluate(
             }
         )
 
+    # Always warn on a real breach, independent of on_truncation and of
+    # whether the run was truncated (a last-pair breach still judges every
+    # candidate) -- the money is spent either way, and the caller must not be
+    # able to silence this the way they can silence a truncation warning.
+    if result.budget_exceeded:
+        warnings.warn(_budget_exceeded_message(result, resolved_budget), UserWarning, stacklevel=2)
+
     _apply_truncation_policy(result, on_truncation=on_truncation, budget_usd=resolved_budget)
     return result
 
@@ -1345,16 +1422,18 @@ def evaluate(
 
 
 class BudgetedModuleRunner:
-    """Run any :class:`~langres.core.module.Module` under a hard spend cap.
+    """Run any :class:`~langres.core.module.Module` under a spend cap.
 
-    Wraps a module and scores candidate pairs one at a time, never letting the
-    worst-case spend cross ``budget_usd``. The same three-layer guarantee proven
-    by :class:`~langres.bootstrap.labelers.TeacherLabeler`, but as a clean,
+    Wraps a module and scores candidate pairs one at a time, keeping the
+    worst-case *projected* spend under ``budget_usd`` between calls, and
+    stopping immediately once a call's *real*, measured cost pushes the running
+    total past it. The same three-layer guarantee proven by
+    :class:`~langres.bootstrap.labelers.TeacherLabeler`, but as a clean,
     ``Module``-typed component returning :class:`PairwiseJudgement` (the teacher
     is welded to ``LLMJudge`` and returns ``GoldPair``, so it cannot be reused
     directly):
 
-    1. **Pre-flight hard cap.** Truncate the input to
+    1. **Pre-flight cap.** Truncate the input to
        ``floor(budget_soft_usd / worst_case_per_pair)`` pairs, where
        ``worst_case_per_pair = worst_case_units_per_pair * price`` (``price`` is
        per token or per pair, set ``worst_case_units_per_pair=1`` for a flat
@@ -1364,16 +1443,30 @@ class BudgetedModuleRunner:
        ``provenance["cost_usd"]`` (falling back to ``provenance["llm_cost_usd"]``).
        Before scoring *each* pair, if the worst-case projected spend would cross
        ``budget_usd`` the run stops and returns what was scored so far.
-    3. **Per-call resilience.** Each pair is scored in its own ``forward`` call
+    3. **Post-call breach detection.** The cap in point 2 projects on a
+       worst-case *estimate*; the estimate can be wrong (or deliberately
+       negligible, as :func:`evaluate` uses to avoid :class:`BlindCostError`
+       while still measuring real cost). So immediately AFTER each call's real
+       cost is added to the running total, the runner checks the total against
+       ``budget_usd`` again and, if it now exceeds it, sets
+       :attr:`budget_exceeded` and stops before starting another call. **This
+       is not a hard ceiling**: a single in-flight call can still push total
+       spend past ``budget_usd`` by that call's own cost — the cap is enforced
+       *between* calls, never *within* one. :attr:`budget_exceeded` is how a
+       caller learns a breach happened even when every candidate was still
+       judged (see :attr:`~JudgePairEval.budget_exceeded` for the full
+       semantics).
+    4. **Per-call resilience.** Each pair is scored in its own ``forward`` call
        wrapped in ``try/except``; one failed call skips that pair and the loop
        continues, so a single error never discards already-paid results.
 
     Live run statistics are reset at the start of every :meth:`run` call and so
     describe only the most recent call: :attr:`total_spent_usd`,
     :attr:`labeled_count`, :attr:`skipped_count`, :attr:`dropped_by_cap_count`,
-    :attr:`budget_stopped` (``True`` iff the per-pair stop in point 2 fired --
-    the pre-flight cap in point 1 has no equivalent flag since
-    ``dropped_by_cap_count > 0`` already says so).
+    :attr:`budget_stopped` (``True`` iff the pre-call projected-spend stop in
+    point 2 fired -- the pre-flight cap in point 1 has no equivalent flag since
+    ``dropped_by_cap_count > 0`` already says so), :attr:`budget_exceeded`
+    (``True`` iff the post-call real-spend check in point 3 fired).
 
     Group-call atomicity (W1.0, E5): :meth:`run` scores exactly ONE candidate
     per ``module.forward()`` call (see point 3 above). A
@@ -1402,7 +1495,11 @@ class BudgetedModuleRunner:
 
         Args:
             module: The wrapped scorer.
-            budget_usd: Hard spend ceiling — the run stops before crossing it.
+            budget_usd: Spend ceiling enforced BETWEEN calls (pre-call projected
+                stop, point 2) and re-checked immediately AFTER each call's real
+                cost lands (post-call breach, point 3) — not a hard ceiling: a
+                single in-flight call can still push total spend past this by
+                that call's own cost (see :attr:`budget_exceeded`).
             budget_soft_usd: Soft ceiling used to size the pre-flight cap, giving
                 headroom below ``budget_usd``.
             worst_case_units_per_pair: Worst-case priced units (e.g. tokens) for
@@ -1429,6 +1526,7 @@ class BudgetedModuleRunner:
         self.skipped_count: int = 0
         self.dropped_by_cap_count: int = 0
         self.budget_stopped: bool = False
+        self.budget_exceeded: bool = False
 
     def run(
         self,
@@ -1446,7 +1544,10 @@ class BudgetedModuleRunner:
         Returns:
             The judgements produced. May be fewer than the input: dropped by the
             pre-flight cap, skipped on a failed call, or truncated when the
-            per-pair budget stop fires.
+            per-pair budget stop fires. Even when NOT fewer (every candidate was
+            judged), check :attr:`budget_exceeded` — a breach on the last
+            candidate still judges everything but still cost more than
+            ``budget_usd``.
 
         Raises:
             BlindCostError: If the resolved worst-case per-pair price is ``$0``
@@ -1460,6 +1561,7 @@ class BudgetedModuleRunner:
         self.skipped_count = 0
         self.dropped_by_cap_count = 0
         self.budget_stopped = False
+        self.budget_exceeded = False
 
         worst_case_per_pair = self.worst_case_units_per_pair * price_per_token_or_pair
         if worst_case_per_pair <= 0.0:
@@ -1492,6 +1594,22 @@ class BudgetedModuleRunner:
                 raise
             if judgement is not None:
                 judgements.append(judgement)
+            # Post-call breach: the pre-call check above projects on a
+            # worst-case ESTIMATE, so it cannot catch a call whose REAL cost
+            # (just tallied into total_spent_usd by _score_one) turns out to
+            # exceed budget_usd on its own. Check again now, immediately, and
+            # stop before starting another call -- this is the fix for the
+            # "single $10 pair under a $1 cap sails through unnoticed" bug.
+            if self.total_spent_usd > self.budget_usd:
+                self.budget_exceeded = True
+                logger.warning(
+                    "Budget exceeded mid-call: spent=$%.4f > budget $%.2f after a "
+                    "single call; stopping immediately (the cap is enforced "
+                    "BETWEEN calls, not within one)",
+                    self.total_spent_usd,
+                    self.budget_usd,
+                )
+                break
         return judgements
 
     def _apply_preflight_cap(self, candidates: list[Any], worst_case_per_pair: float) -> list[Any]:

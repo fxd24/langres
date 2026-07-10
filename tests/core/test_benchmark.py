@@ -153,6 +153,58 @@ def test_runner_budget_stop_returns_paid_work_before_crossing() -> None:
     assert runner.labeled_count == 2
 
 
+class _CountingCostModule(Module[CompanySchema]):
+    """Fixed real-cost judge that counts ``forward()`` calls.
+
+    Under ``BudgetedModuleRunner`` each call scores exactly one candidate (see
+    the runner's "per-call resilience" point), so ``call_count`` is a direct,
+    accounting-independent proof of how many candidates were actually scored --
+    used to prove a post-call budget breach stops the loop immediately rather
+    than continuing on to the next candidate.
+    """
+
+    def __init__(self, cost: float) -> None:
+        self._cost = cost
+        self.call_count = 0
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        self.call_count += 1
+        for cand in candidates:
+            yield PairwiseJudgement(
+                left_id=cand.left.id,
+                right_id=cand.right.id,
+                score=1.0,
+                score_type="heuristic",
+                decision_step="fake",
+                provenance={"cost_usd": self._cost},
+            )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError  # pragma: no cover — unused by the runner
+
+
+def test_runner_stops_immediately_after_post_call_budget_breach() -> None:
+    # BUG 1: real cost lands only AFTER a call completes. A judge charging $2/pair
+    # under a $1 cap must be caught the moment its real cost is tallied -- not
+    # after starting (or finishing) a second call. price_per_token_or_pair is
+    # negligible (mirrors evaluate()'s own _NEGLIGIBLE_WORST_CASE_PRICE) so
+    # neither the pre-flight cap nor the pre-call projected-spend check can fire
+    # first -- the ONLY thing able to stop this loop is the post-call real-spend
+    # check the fix adds.
+    module = _CountingCostModule(cost=2.0)
+    runner = BudgetedModuleRunner(module, budget_usd=1.0, budget_soft_usd=1.0)
+    out = runner.run(_candidates(5), price_per_token_or_pair=1e-9)
+
+    assert len(out) == 1
+    assert module.call_count == 1  # must not start a second call after breaching
+    assert runner.budget_exceeded is True
+    assert runner.total_spent_usd == pytest.approx(2.0)
+
+
 def test_runner_tallies_llm_cost_usd_key() -> None:
     # CascadeModule writes ``llm_cost_usd``; the tally must read it as a fallback.
     runner = BudgetedModuleRunner(
@@ -570,6 +622,65 @@ def test_cost_track_basis_mixed_when_judgements_disagree() -> None:
     assert track.cost_is_real is False
 
 
+def test_cost_track_llm_cost_usd_basis_real_when_cost_is_real() -> None:
+    # BUG 2: llm_cost_usd is CascadeModule's cost key. usd_total already sums it
+    # (see _judgement_cost), but _judgement_cost_basis only recognized cost_usd
+    # -- so real spend written under llm_cost_usd was mislabeled cost_basis="none".
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="cascade",
+        provenance={"llm_cost_usd": 0.001, "cost_is_real": True},
+    )
+    track = _cost_track([j])
+    assert track.usd_total == pytest.approx(0.001)
+    assert track.cost_basis == "real"
+    assert track.cost_is_real is True
+
+
+def test_cost_track_llm_cost_usd_basis_estimated_when_not_real() -> None:
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="cascade",
+        provenance={"llm_cost_usd": 0.001},
+    )
+    track = _cost_track([j])
+    assert track.usd_total == pytest.approx(0.001)
+    assert track.cost_basis == "estimated"
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {"cost_usd": 0.01, "cost_is_real": True},
+        {"cost_usd": 0.01, "cost_is_real": False},
+        {"llm_cost_usd": 0.01, "cost_is_real": True},
+        {"llm_cost_usd": 0.01},
+    ],
+)
+def test_cost_basis_invariant_never_none_when_spend_is_positive(
+    provenance: dict[str, Any],
+) -> None:
+    # Invariant: usd_total > 0 must never coexist with cost_basis == "none" --
+    # that combination IS the "real spend labelled as no cost" bug (BUG 2).
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="fake",
+        provenance=provenance,
+    )
+    track = _cost_track([j])
+    assert track.usd_total > 0.0
+    assert track.cost_basis != "none"
+
+
 def test_cost_track_usage_malformed_falls_back_to_zero_vector() -> None:
     # A corrupt/foreign 'usage' payload (e.g. from a future schema or a buggy
     # custom judge) must not crash cost accounting -- observability never flakes
@@ -934,6 +1045,14 @@ def test_evaluate_returns_pair_eval_with_sane_metrics() -> None:
     assert result.slices is None  # no slice_fn passed
 
 
+def test_evaluate_raises_on_empty_candidates() -> None:
+    # BUG 3: an empty candidate list has no meaning to grade -- pair.f1 == 0.0
+    # would be indistinguishable from "the judge matched nothing". This is
+    # almost always an upstream blocker that produced zero candidates.
+    with pytest.raises(ValueError, match="empty"):
+        benchmark_module.evaluate(_ScoreModule({}), [], set(), threshold=0.5)
+
+
 def test_evaluate_passes_slice_fn_through() -> None:
     # slice_fn is forwarded: the result carries per-slice tracks graded at the one
     # global best-F1 threshold (evaluate() is a thin passthrough, so this just
@@ -1047,6 +1166,67 @@ def test_evaluate_raises_on_budget_truncation_by_default() -> None:
     assert err.partial.truncated is True
     assert err.partial.n_judged < err.partial.n_candidates
     assert err.partial.truncation_reason in ("budget_cap", "budget_stop")
+    # BUG 1: this is an early breach (candidate 1's real cost alone exceeds the
+    # $0.05 cap) -- budget_exceeded must be True on the partial result too.
+    assert err.partial.budget_exceeded is True
+
+
+def test_evaluate_single_pair_way_over_budget_flags_exceeded_without_raising() -> None:
+    # BUG 1: a single $10 pair under a $1 cap must never slip through silently.
+    # n_judged == n_candidates == 1, so nothing was dropped (not a truncation) --
+    # but real money was spent past the cap, and evaluate() must say so loudly,
+    # without raising (the run completed and the result is valid).
+    cands, gold = _labeled_candidates({"p0": 0.9})
+    with pytest.warns(UserWarning, match=r"exceed"):
+        result = benchmark_module.evaluate(
+            _ScoreModule({"p0": 0.9}, cost=10.0),
+            cands,
+            gold,
+            grid=(0.5,),
+            budget_usd=1.0,
+            threshold=0.5,
+        )
+    assert result.budget_exceeded is True
+    assert result.cost.usd_total == pytest.approx(10.0)
+    assert result.truncated is False
+    assert result.n_judged == result.n_candidates == 1
+
+
+def test_evaluate_last_pair_breach_flags_exceeded_but_not_truncated() -> None:
+    # 3 pairs at $0.40 under a $1.00 cap: the breach lands on the LAST pair, so
+    # every candidate is still judged (truncated=False, n_judged==n_candidates)
+    # -- but total spend ($1.20) crossed the cap, and that must be visible.
+    scores = {"p0": 0.9, "p1": 0.9, "p2": 0.9}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.40),
+        cands,
+        gold,
+        grid=(0.5,),
+        budget_usd=1.0,
+        threshold=0.5,
+    )
+    assert result.budget_exceeded is True
+    assert result.truncated is False
+    assert result.n_judged == result.n_candidates == 3
+    assert result.cost.usd_total == pytest.approx(1.20)
+
+
+def test_evaluate_free_judge_never_flags_budget_exceeded(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    scores = {f"p{i}": 0.9 for i in range(10)}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.0),
+        cands,
+        gold,
+        grid=(0.5,),
+        budget_usd=0.0001,
+        threshold=0.5,
+    )
+    assert result.budget_exceeded is False
+    assert len(recwarn) == 0
 
 
 def test_evaluate_on_truncation_return_gives_partial_silently(
@@ -1065,7 +1245,13 @@ def test_evaluate_on_truncation_return_gives_partial_silently(
     )
     assert result.truncated is True
     assert result.truncation_reason in ("budget_cap", "budget_stop")
-    assert len(recwarn) == 0  # "return" is silent
+    # BUG 1 fix: on_truncation="return" silences the TRUNCATION warning
+    # specifically, but a real mid-call budget breach (money already spent) is
+    # a separate, always-on signal that on_truncation does not govern -- the
+    # sole warning here is that one, not a truncation warning.
+    assert result.budget_exceeded is True
+    assert len(recwarn) == 1
+    assert "exceed" in str(recwarn[0].message).lower()
 
 
 def test_evaluate_on_truncation_warn_logs_and_returns_partial() -> None:
