@@ -170,22 +170,28 @@ def test_forward_warns_on_uncompiled_program(caplog: pytest.LogCaptureFixture) -
 def test_forward_parse_failure_emits_abstention_judgement(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A DSPy parse error abstains (score=0.0, parse_error flagged) — never a skip.
+    """A DSPy parse error emits a Wave-1 abstention — is_abstain, excluded from predicted.
 
-    Regression: DSPyJudge used to abstain at score=0.5 with NO
-    ``provenance["parse_error"]`` flag. ``classify_pairs``
-    (``langres.core.metrics``, predicted-match iff ``score >= threshold``) then
-    called that abstention a MATCH at any threshold <= 0.5, while LLMJudge's
-    equivalent abstention (score=0.0, ``parse_error=True``) was correctly a
-    non-match at every threshold — two judges disagreeing on the same "I don't
-    know" signal, and ``n_parse_errors``/``n_abstained`` (``core.benchmark``)
-    couldn't see DSPy's abstentions at all. Both the score AND the flag must
-    change together: the flag alone would not fix the verdict.
+    Regression chain: DSPyJudge first abstained at score=0.5 with NO
+    ``provenance["parse_error"]`` flag (``classify_pairs`` called it a MATCH at
+    any threshold <= 0.5), then at score=0.0 with the flag — better, but still
+    not the Wave-1 contract: score=0.0 is a *confident non-match*, so
+    ``is_abstain`` was ``False`` and the pair was graded a "no" rather than
+    excluded. The contract-correct abstention nulls the verdict
+    (``decision=None, score=None``): ``is_abstain`` is ``True``,
+    ``predicted_match`` returns ``None``, and ``classify_pairs`` *excludes* the
+    pair from the predicted set — a false negative on a gold pair (recall is not
+    flattered), a true negative otherwise, never a match. The oracle below
+    asserts those confusion-matrix counts move, not merely that the flag exists.
     """
     judge = DSPyJudge(lm=DummyLM([{"unexpected": "shape"}]), entity_noun="company")
     with caplog.at_level(logging.WARNING):
         [judgement] = list(judge.forward(iter([_candidate("x", "y")])))
-    assert judgement.score == 0.0
+    # Wave-1 abstain shape: no decision, no score -> is_abstain (score=0.0 would
+    # NOT satisfy is_abstain and would be graded a confident non-match).
+    assert judgement.decision is None
+    assert judgement.score is None
+    assert judgement.is_abstain is True
     assert judgement.decision_step == "dspy_parse_error"
     assert judgement.reasoning is None
     assert "error" in judgement.provenance
@@ -196,11 +202,13 @@ def test_forward_parse_failure_emits_abstention_judgement(
     assert judgement.provenance["cost_usd"] == 0.0
     assert any("parse failure" in r.message for r in caplog.records)
 
-    # The actual bug: at threshold=0.5 the abstention must NOT be classified a
-    # match (DEFAULT_PAIR_GRID starts at 0.05, so score=0.0 never clears it either).
-    metrics = classify_pairs([judgement], gold_pairs=set(), threshold=0.5)
-    assert metrics.tp == 0
-    assert metrics.fp == 0
+    # Oracle — the confusion matrix must move, not just carry a flag. The pair is
+    # {x, y}; grade it once as gold and once as non-gold at a positive threshold.
+    pair = frozenset({"x", "y"})
+    when_gold = classify_pairs([judgement], gold_pairs={pair}, threshold=0.5)
+    assert (when_gold.tp, when_gold.fp, when_gold.fn) == (0, 0, 1)  # excluded -> FN
+    when_not_gold = classify_pairs([judgement], gold_pairs=set(), threshold=0.5)
+    assert (when_not_gold.tp, when_not_gold.fp, when_not_gold.fn) == (0, 0, 0)  # excluded -> TN
 
 
 # ---------------------------------------------------------------------------

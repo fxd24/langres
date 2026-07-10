@@ -951,14 +951,18 @@ class JudgePairEval(BaseModel):
             ``None`` otherwise. This is the honest seen -> unseen view: one global
             cut, reported across data slices, so a degradation cannot be tuned
             away.
-        n_parse_errors: How many judgements the judge flagged as a parse
-            error / abstention (``provenance['parse_error']`` truthy — e.g. an
-            ``LLMJudge`` under ``on_parse_error='abstain'``, or a ``DSPyJudge``
-            parse failure). Kept for backward compatibility; identical to
-            :attr:`n_abstained`. ``0`` for judges that never abstain.
+        n_parse_errors: How many judgements were abstentions, detected
+            belt-and-suspenders — either the Wave-1 abstain shape
+            (:attr:`~langres.core.models.PairwiseJudgement.is_abstain`, i.e.
+            ``decision is None and score is None``) OR a judge that flagged
+            ``provenance['parse_error']`` (truthy) — e.g. an ``LLMJudge`` under
+            ``on_parse_error='abstain'`` or a ``DSPyJudge`` parse failure. Kept
+            for backward compatibility; identical to :attr:`n_abstained`. ``0``
+            for judges that never abstain.
         n_abstained: Same count as :attr:`n_parse_errors`, under the more
             general name — an abstention isn't necessarily a "parse" error for
-            every judge kind.
+            every judge kind (a judge may simply emit the ``None``/``None``
+            abstain shape without setting ``parse_error``).
         abstention_rate: ``n_abstained / n_judged`` (``0.0`` when ``n_judged``
             is ``0``) — the normalized companion to the raw count.
     """
@@ -1156,24 +1160,28 @@ def evaluate_judge_on_candidates(
     truncated = n_judged < n_candidates
     truncation_reason = _truncation_reason(n_judged, n_candidates, runner)
 
-    # Abstention accounting: judgements the judge flagged as a parse error /
-    # abstention (``provenance['parse_error']``) are still graded at their
-    # emitted score=0.0, so surface the count and warn loudly -- otherwise a
-    # table of P/R/F1 could be built partly on non-verdicts (e.g. a naive
-    # replication of a paper prompt the judge could not parse) with no visible
-    # signal.
-    n_abstained = sum(1 for j in judgements if j.provenance.get("parse_error"))
+    # Abstention accounting: an abstention carries no actionable verdict, so
+    # surface the count and warn loudly -- otherwise a table of P/R/F1 could be
+    # built partly on non-verdicts (e.g. a naive replication of a paper prompt
+    # the judge could not parse) with no visible signal. Detect an abstention
+    # belt-and-suspenders: the Wave-1 abstain shape (``is_abstain`` -> decision
+    # is None and score is None) OR a judge that flagged
+    # ``provenance['parse_error']`` -- a judge may null the verdict, set the
+    # flag, or (like a fixed DSPyJudge parse failure) do both.
+    n_abstained = sum(1 for j in judgements if j.is_abstain or j.provenance.get("parse_error"))
     abstention_rate = n_abstained / n_judged if n_judged > 0 else 0.0
     if n_abstained > 0:
         logger.warning(
-            "%d of %d judgements (%.1f%%) were parse-error abstentions "
-            "(provenance['parse_error']); each is graded at its abstained "
-            "score=0.0, which classify_pairs() (predicted match iff "
-            "score >= threshold) always resolves to a NON-match at any positive "
-            "grid threshold -- so an abstention on a true gold pair silently "
-            "becomes a false negative in the reported P/R/F1, never a real "
-            "verdict. Inspect the judge's response_parser / prompt before "
-            "trusting these numbers.",
+            "%d of %d judgements (%.1f%%) were abstentions (is_abstain -- "
+            "decision=None and score=None -- or provenance['parse_error']). A "
+            "contract-correct abstention is EXCLUDED from the predicted set: "
+            "classify_pairs() routes through predicted_match(), which returns "
+            "None (never True) for an abstain, so it is counted neither as a "
+            "confident match nor as a graded 'no'. This does NOT flatter recall "
+            "-- an abstention on a true gold pair still lands in "
+            "gold_pairs - predicted and is counted as a false negative, so the "
+            "missing verdict costs recall exactly as it should. Inspect the "
+            "judge's response_parser / prompt before trusting these numbers.",
             n_abstained,
             n_judged,
             abstention_rate * 100.0,
