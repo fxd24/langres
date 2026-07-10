@@ -1091,6 +1091,29 @@ def test_evaluate_rejects_a_degenerate_grid_point() -> None:
         )
 
 
+def test_evaluate_accepts_a_generator_grid() -> None:
+    # Validating `grid` by iteration would consume a generator and leave the sweep
+    # an empty grid (which dies in `max()` with an opaque message). evaluate()
+    # materialises it once, so a generator behaves exactly like a list.
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    with pytest.warns(UserWarning, match="optimistically biased"):
+        result = benchmark_module.evaluate(
+            _ScoreModule({"l0": 0.9}), cands, gold, grid=(x for x in [0.3, 0.5, 0.7])
+        )
+    assert result.best_threshold == 0.3  # argmax over a grid that survived validation
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == 3
+
+
+def test_evaluate_rejects_an_empty_grid() -> None:
+    # An empty grid has no threshold to sweep; `max()` over it raises an opaque
+    # "max() iterable argument is empty" from deep inside the harness.
+    cands = _candidates(1)
+    with pytest.raises(ValueError, match="grid is empty"):
+        benchmark_module.evaluate(_ScoreModule({"l0": 0.9}), cands, set(), grid=[])
+
+
 def test_evaluate_accepts_a_threshold_of_exactly_one() -> None:
     # 1.0 is a legitimate cut: a binary judge emitting score=1.0 matches at it.
     cands = _candidates(1)

@@ -1383,8 +1383,15 @@ def evaluate(
 
     if threshold is not None:
         _validate_cut("threshold", threshold)
+    # Materialise before validating: `grid` is typed Sequence[float], but an untyped
+    # caller can hand us a generator, and validating it by iteration would consume it
+    # -- leaving the sweep below an empty grid. Same hazard Resolver.candidates()
+    # exists to close.
+    grid = list(grid)
     for point in grid:
         _validate_cut("grid point", point)
+    if not grid:
+        raise ValueError("evaluate(): grid is empty -- there are no thresholds to sweep")
 
     if threshold is None:
         warnings.warn(
