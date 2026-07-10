@@ -165,6 +165,49 @@ def test_import_langres_testing_stays_import_light() -> None:
     )
 
 
+# The EvalReport tearsheet (``langres.core.eval_report``) and its SVG backend
+# (``langres.core._svg``) render entirely from stdlib + numpy (a core dep). They
+# must NEVER pull the heavy/optional stack -- that is the permanent guarantee a
+# $0 report can always be built on a bare core-only install (no torch, no
+# matplotlib, no litellm). Same fresh-process subprocess pattern as above.
+_EVAL_REPORT_HEAVY_DEPS = [
+    "torch",
+    "litellm",
+    "faiss",
+    "sentence_transformers",
+    "sklearn",
+    "ranx",
+    "mlflow",
+    "wandb",
+    "matplotlib",
+    "dspy",
+]
+
+_EVAL_REPORT_IMPORT_LIGHT_SCRIPT = (
+    "import sys; import langres.core.eval_report; import langres.core._svg; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'eval_report/_svg leaked heavy modules: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_EVAL_REPORT_HEAVY_DEPS)
+
+
+def test_eval_report_stays_import_light() -> None:
+    """``import langres.core.eval_report`` (+ ``_svg``) must not pull a heavy dep.
+
+    The tearsheet is dependency-free by construction: inline SVG, no matplotlib,
+    no ML stack. This locks it so a future edit can never regress the $0,
+    core-only path.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _EVAL_REPORT_IMPORT_LIGHT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"eval_report import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # ``langres.data.registry.list_methods`` is a public, import-light discovery API
 # (exported from ``langres.data``): it must return the method NAMES without
 # pulling ``langres.methods`` — which imports VectorBlocker / RandomForestJudge /

@@ -54,6 +54,9 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Eval tearsheet written by examples/quickstart_eval.py
+tearsheet.html
+
 # Unit test / coverage reports
 htmlcov/
 .tox/

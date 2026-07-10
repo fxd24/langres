@@ -243,3 +243,54 @@ class TestScriptedJudgeAbstain:
         [judgement] = list(judge.forward(iter([_pair("a", "b")])))
 
         assert judgement.is_abstain is False
+
+
+class TestScriptedJudgeConfidence:
+    """The optional ``confidence`` provider lets the double model a logprob judge."""
+
+    def test_callable_confidence_and_source_are_stamped(self) -> None:
+        judge = ScriptedJudge(
+            lambda c: 0.9,
+            confidence=lambda c: 0.7,
+            confidence_source="logprob",
+        )
+
+        [judgement] = list(judge.forward(iter([_pair("a", "b")])))
+
+        assert judgement.confidence == 0.7
+        assert judgement.confidence_source == "logprob"
+
+    def test_dict_confidence_is_order_independent(self) -> None:
+        judge = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9},
+            confidence={frozenset({"a", "b"}): 0.6},
+            confidence_source="logprob",
+        )
+
+        forward = next(iter(judge.forward(iter([_pair("a", "b")]))))
+        reverse = next(iter(judge.forward(iter([_pair("b", "a")]))))
+
+        assert forward.confidence == reverse.confidence == 0.6
+
+    def test_no_confidence_leaves_field_none_and_source_none(self) -> None:
+        judge = ScriptedJudge({frozenset({"a", "b"}): 0.9})
+
+        [judgement] = list(judge.forward(iter([_pair("a", "b")])))
+
+        assert judgement.confidence is None
+        assert judgement.confidence_source == "none"
+
+    def test_confidence_returning_none_leaves_source_none(self) -> None:
+        """A per-pair ``None`` confidence must NOT stamp the source -- an unmapped
+        pair (dict miss) carries no credence, so ``confidence_source`` stays
+        ``"none"`` even though the source kwarg was set."""
+        judge = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9},
+            confidence={frozenset({"c", "d"}): 0.6},  # only c,d mapped
+            confidence_source="logprob",
+        )
+
+        [judgement] = list(judge.forward(iter([_pair("a", "b")])))
+
+        assert judgement.confidence is None
+        assert judgement.confidence_source == "none"
