@@ -81,9 +81,21 @@ pieces that can regress money or silently report a wrong number.
 - **`evaluate()` accepted a degenerate match cut.** `classify_pairs` predicts a
   match iff `score >= cut`, and both `LLMJudge` and `DSPyJudge` abstain at
   `score=0.0` — so `evaluate(threshold=0.0)` graded **every abstention as a
-  confident YES**, inflating recall off parse failures. A cut above `1.0` is
-  unreachable for a `[0, 1]` score, making F1 a structural `0.0` rather than a
-  measurement. `threshold` and every `grid` point must now lie in `(0.0, 1.0]`.
+  confident YES**. A cut above `1.0` is unreachable for a `[0, 1]` score, making
+  F1 a structural `0.0` rather than a measurement. A fixed `threshold` must now
+  lie in `(0.0, 1.0]`.
+  A **swept `grid`** is held to the looser `[0.0, 1.0]`: `0.0` is a PR curve's
+  legitimate predict-all anchor (recall `1.0`, precision = prevalence), and
+  banning it would outlaw an honest ranking-judge sweep to defend against an
+  abstaining judge's convention. Instead, `evaluate()` **warns when the argmax
+  lands on `0.0`** — that judge does not beat predicting every pair a match, and
+  `best_threshold=0.0` must never reach production.
+- **The same invariant now holds on `evaluate_judge_on_candidates()`**, the
+  lower-level public path documented for paid and compiled judges. It validates
+  (and materialises) `grid` **before** the judge runs, so a bad grid never costs
+  an API call. `run_method()` holds a dataset-supplied `threshold_grid` to the
+  same rule. An empty grid is its own `ValueError` instead of an opaque
+  `max() iterable argument is empty` from inside the sweep.
 - **`langres.eval.candidates_for()` silently graded the wrong split.** Any
   `split` value other than exactly `"test"` fell through to the **train** split,
   so a typo (`"valid"`, `"Test"`) produced a report that looked valid while

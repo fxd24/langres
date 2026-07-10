@@ -11,6 +11,7 @@ structured accessors, and the import-cycle guard (core must not import
 import logging
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterator
 from typing import Any
 
@@ -45,6 +46,7 @@ from langres.core.module import GroupwiseModule, Module
 from langres.core.presets import DEFAULT_BUDGET_USD
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
+from langres.testing import ScriptedJudge
 from langres.core.usage import LLMUsage
 from langres.methods import ZERO_SPEND_METHODS
 
@@ -1081,14 +1083,43 @@ def test_evaluate_rejects_a_degenerate_threshold(bad: float) -> None:
         benchmark_module.evaluate(_ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), threshold=bad)
 
 
-def test_evaluate_rejects_a_degenerate_grid_point() -> None:
-    # The same invariant, for the swept path: a caller-supplied grid containing
-    # 0.0 would put an "everything matches" point into the argmax.
+def test_evaluate_rejects_an_out_of_range_grid_point() -> None:
+    # A grid point outside [0, 1] can never be a meaningful cut for a [0, 1] score.
     cands = _candidates(2)
-    with pytest.raises(ValueError, match=r"grid point must be in \(0\.0, 1\.0\]"):
-        benchmark_module.evaluate(
-            _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), grid=[0.0, 0.5]
+    for bad in (-0.1, 1.5, float("nan")):
+        with pytest.raises(ValueError, match=r"grid point must be in \[0\.0, 1\.0\]"):
+            benchmark_module.evaluate(
+                _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), grid=[bad, 0.5]
+            )
+
+
+def test_evaluate_allows_a_grid_anchored_at_zero_but_warns_if_argmax_lands_there() -> None:
+    # 0.0 is the PR curve's legitimate predict-all anchor (recall 1.0), so a full
+    # 0.00..1.00 sweep must remain legal -- tests/data/test_wdc_computers.py draws
+    # its curve exactly that way. What must not pass silently is the argmax LANDING
+    # on it: that judge does not beat "say yes to everything", and at that cut an
+    # abstention (score=0.0) is graded a match.
+    cands = _candidates(2)
+    gold = {frozenset({"l0", "r0"}), frozenset({"l1", "r1"})}
+    useless = _ScoreModule({"l0": 0.0, "l1": 0.0})  # scores nothing above 0
+
+    with pytest.warns(UserWarning, match="predict-all point"):
+        result = benchmark_module.evaluate(useless, cands, gold, grid=[0.0, 0.5])
+
+    assert result.best_threshold == 0.0
+    assert result.pair.recall == pytest.approx(1.0)  # trivially, by predicting all
+
+
+def test_evaluate_does_not_warn_predict_all_when_argmax_is_non_trivial() -> None:
+    cands = _candidates(2)
+    gold = {frozenset({"l0", "r0"})}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = benchmark_module.evaluate(
+            _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, gold, grid=[0.0, 0.5]
         )
+    assert result.best_threshold == 0.5
+    assert not any("predict-all" in str(w.message) for w in caught)
 
 
 def test_evaluate_accepts_a_generator_grid() -> None:
@@ -1112,6 +1143,42 @@ def test_evaluate_rejects_an_empty_grid() -> None:
     cands = _candidates(1)
     with pytest.raises(ValueError, match="grid is empty"):
         benchmark_module.evaluate(_ScoreModule({"l0": 0.9}), cands, set(), grid=[])
+
+
+def test_evaluate_judge_on_candidates_rejects_a_degenerate_grid() -> None:
+    # The lower-level public path -- the one documented for paid/compiled judges and
+    # used by the research examples -- must hold the same invariant as evaluate().
+    cands = _candidates(2)
+    with pytest.raises(ValueError, match=r"grid point must be in \[0\.0, 1\.0\]"):
+        benchmark_module.evaluate_judge_on_candidates(
+            _ScoreModule({"l0": 0.0, "l1": 0.0}), cands, set(), (1.5,)
+        )
+    with pytest.raises(ValueError, match="grid is empty"):
+        benchmark_module.evaluate_judge_on_candidates(_ScoreModule({}), cands, set(), [])
+
+
+def test_evaluate_judge_on_candidates_validates_the_grid_before_judging() -> None:
+    # An invalid grid must not cost an API call to discover. ScriptedJudge.seen is
+    # the spy: it must be empty, i.e. forward() was never reached.
+    judge: ScriptedJudge[CompanySchema] = ScriptedJudge(lambda c: 0.9)
+    cands = _candidates(3)
+
+    with pytest.raises(ValueError, match=r"grid point must be in"):
+        benchmark_module.evaluate_judge_on_candidates(judge, cands, set(), [-0.1, 0.5])
+
+    assert judge.seen == []  # not one pair was judged
+
+
+def test_evaluate_judge_on_candidates_accepts_a_generator_grid() -> None:
+    # Materialised, so the sweep still sees the points (a consumed generator would
+    # leave `curve` empty and die in max()).
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule({"l0": 0.9}), cands, gold, (x for x in [0.3, 0.5, 0.7])
+    )
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == 3
 
 
 def test_evaluate_accepts_a_threshold_of_exactly_one() -> None:

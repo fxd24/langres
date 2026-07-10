@@ -550,24 +550,69 @@ def tune_threshold_on_train(
 #: ``"cost_usd"``, so real spend written under ``"llm_cost_usd"`` -- the key
 #: ``CascadeModule`` writes -- was misclassified ``cost_basis="none"``).
 def _validate_cut(label: str, value: float) -> None:
-    """Reject a match cut outside ``(0.0, 1.0]``.
+    """Reject a fixed grading cut outside ``(0.0, 1.0]``.
 
     ``classify_pairs`` predicts a match iff ``score >= cut``. A cut of ``0.0``
     (or below) therefore predicts EVERY pair a match -- including an abstention,
     which both ``LLMJudge`` and ``DSPyJudge`` emit as ``score=0.0``. The judge's
-    "I could not decide" would silently become "yes, a match", inflating recall
-    off a parse failure. A cut above ``1.0`` is unreachable for the
-    ``ge=0.0, le=1.0`` score field: nothing ever matches, and F1 is a
-    structural ``0.0`` rather than a measurement. Both are degenerate cuts that
-    produce a plausible-looking number, so both are errors, not defaults.
+    "I could not decide" would silently become "yes, a match". A cut above
+    ``1.0`` is unreachable for the ``ge=0.0, le=1.0`` score field: nothing ever
+    matches, and F1 is a structural ``0.0`` rather than a measurement.
+
+    This is the rule for a cut a caller *grades at* and may carry into
+    production. It is deliberately STRICTER than :func:`_validate_grid_point` --
+    a swept curve may legitimately anchor at ``0.0`` (see there).
     """
     if not math.isfinite(value) or not (0.0 < value <= 1.0):
         raise ValueError(
-            f"evaluate(): {label} must be in (0.0, 1.0], got {value!r}. A cut of "
+            f"{label} must be in (0.0, 1.0], got {value!r}. A cut of "
             "0.0 or less predicts every pair a match -- including an abstention "
             "(score=0.0), turning a judge's parse failure into a confident YES. "
             "A cut above 1.0 can never be reached by a score in [0, 1]."
         )
+
+
+def _validate_grid_point(value: float) -> None:
+    """Reject a swept threshold outside ``[0.0, 1.0]``.
+
+    Looser than :func:`_validate_cut` by exactly one point: ``0.0`` is allowed.
+    A PR curve's left anchor *is* the predict-all point (recall ``1.0``,
+    precision equal to prevalence), and a full ``0.00..1.00`` sweep is a normal,
+    honest way to draw one -- ``tests/data/test_wdc_computers.py`` does exactly
+    that. Banning ``0.0`` here would outlaw a legitimate ranking-judge sweep in
+    order to defend against an abstaining judge's convention, which is the
+    layering mistake this module otherwise avoids (the generic pair primitives
+    must not learn an LLM-specific dialect).
+
+    What ``0.0`` must never become is a *reported* cut a caller then grades or
+    ships at -- that is :func:`_validate_cut`'s job, and :func:`evaluate` warns
+    when the argmax lands there.
+    """
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        raise ValueError(
+            f"grid point must be in [0.0, 1.0], got {value!r}. A score is "
+            "constrained to [0, 1], so a threshold outside it can never be a "
+            "meaningful point on a PR curve."
+        )
+
+
+def _validated_grid(grid: Sequence[float]) -> list[float]:
+    """Materialise ``grid`` and reject an empty or out-of-range one.
+
+    Materialising first is load-bearing: ``grid`` is typed ``Sequence[float]``,
+    but an untyped caller can hand over a generator, and validating it by
+    iteration would consume it -- leaving the sweep below an empty grid. Same
+    hazard :meth:`~langres.core.resolver.Resolver.candidates` exists to close.
+
+    An empty grid is its own error rather than an opaque
+    ``max() iterable argument is empty`` from deep inside the sweep.
+    """
+    points = list(grid)
+    if not points:
+        raise ValueError("grid is empty -- there are no thresholds to sweep")
+    for point in points:
+        _validate_grid_point(point)
+    return points
 
 
 _COST_KEYS: tuple[str, ...] = ("cost_usd", "llm_cost_usd")
@@ -717,7 +762,9 @@ def run_method(
         corpus, gold_clusters, seed=seed
     )
 
-    grid = benchmark.threshold_grid
+    # A dataset conformer supplies this grid; hold it to the same invariant as a
+    # caller-supplied one (every bundled benchmark's grid starts at 0.3).
+    grid = _validated_grid(benchmark.threshold_grid)
 
     # (2) Pipeline threshold on TRAIN.
     threshold = tune_threshold_on_train(
@@ -1049,7 +1096,10 @@ def evaluate_judge_on_candidates(
         module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
-        grid: Score thresholds to sweep for the pair-level PR curve.
+        grid: Score thresholds to sweep for the pair-level PR curve. Every point
+            must lie in ``[0.0, 1.0]`` (``0.0`` is the curve's predict-all anchor).
+            Validated — and materialised, so a generator is safe — BEFORE the judge
+            runs, so a bad grid never costs an API call.
         slice_fn: Optional tagger mapping a pair key (``frozenset({left_id,
             right_id})``) to a slice tag, or ``None`` to exclude the pair. When
             given, the judged pairs and the in-scope gold are grouped by tag and
@@ -1068,11 +1118,19 @@ def evaluate_judge_on_candidates(
             :func:`~langres.methods.cascade_cost_track` for cascade escalation
             diagnostics.
 
+    Raises:
+        ValueError: If ``grid`` is empty or holds a point outside ``(0.0, 1.0]``.
+
     Returns:
         ``(JudgePairEval, judgements)`` — the graded summary plus the raw
         judgements (kept in-process for error-map analysis; not part of the
         summary so a persisted result stays small).
     """
+    # Validate BEFORE judging: this is the paid path, and a degenerate grid must
+    # not cost money to discover. `grid=(0.0,)` would let classify_pairs count an
+    # abstention (score=0.0) as a true match, inflating P/R/F1.
+    grid = _validated_grid(grid)
+
     start = time.perf_counter()
     if runner is not None:
         judgements = runner.run(candidates, price_per_token_or_pair)
@@ -1344,7 +1402,8 @@ def evaluate(
         grid: Score thresholds to sweep for the pair-level PR curve and (when
             ``threshold=None``) the best-F1 argmax. Defaults to
             :data:`DEFAULT_PAIR_GRID`, the fine ``0.05..0.95`` sweep. Every point
-            must lie in ``(0.0, 1.0]``.
+            must lie in ``[0.0, 1.0]``; ``0.0`` is allowed as the curve's
+            predict-all anchor, but ``evaluate()`` warns if the argmax lands there.
         threshold: ``None`` (default) grades at the grid's best-F1 argmax
             (optimistically biased, warned about); a float grades ONCE at that
             fixed cut (honest, no warning). Must lie in ``(0.0, 1.0]`` — a cut of
@@ -1366,8 +1425,9 @@ def evaluate(
         given) per-slice tracks.
 
     Raises:
-        ValueError: If ``candidates`` is empty, or if ``threshold`` / any ``grid``
-            point falls outside ``(0.0, 1.0]``.
+        ValueError: If ``candidates`` is empty, if ``threshold`` falls outside
+            ``(0.0, 1.0]``, or if ``grid`` is empty or holds a point outside
+            ``[0.0, 1.0]``.
         EvaluationTruncatedError: If ``on_truncation="raise"`` (the default) and
             the internal spend cap truncated the run.
     """
@@ -1383,15 +1443,10 @@ def evaluate(
 
     if threshold is not None:
         _validate_cut("threshold", threshold)
-    # Materialise before validating: `grid` is typed Sequence[float], but an untyped
-    # caller can hand us a generator, and validating it by iteration would consume it
-    # -- leaving the sweep below an empty grid. Same hazard Resolver.candidates()
-    # exists to close.
-    grid = list(grid)
-    for point in grid:
-        _validate_cut("grid point", point)
-    if not grid:
-        raise ValueError("evaluate(): grid is empty -- there are no thresholds to sweep")
+    # Validate our own inputs up front, before the argmax warning fires -- a bad
+    # grid should not be announced, it should be rejected. evaluate_judge_on_candidates
+    # validates again for callers who reach it directly; _validated_grid is idempotent.
+    grid = _validated_grid(grid)
 
     if threshold is None:
         warnings.warn(
@@ -1420,6 +1475,21 @@ def evaluate(
         runner=runner,
         price_per_token_or_pair=_NEGLIGIBLE_WORST_CASE_PRICE,
     )
+
+    if threshold is None and result.best_threshold == 0.0:
+        # The argmax landed on the PR curve's predict-all anchor. Legal as a curve
+        # point, useless as a decision rule: it calls EVERY pair a match, so recall
+        # is 1.0 by construction and an abstention (score=0.0) is graded a YES.
+        # A judge whose best F1 is here is not beating "say yes to everything".
+        warnings.warn(
+            "evaluate(): the best-F1 threshold is 0.0 -- the predict-all point, "
+            "where every candidate (including an abstention at score=0.0) counts "
+            "as a match and recall is trivially 1.0. This judge does not beat "
+            "predicting every pair a match. Do not carry best_threshold=0.0 into "
+            "production; drop 0.0 from `grid` to see the best non-trivial cut.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if threshold is not None:
         gold_in_scope = _gold_in_scope(candidates, gold_pairs)
