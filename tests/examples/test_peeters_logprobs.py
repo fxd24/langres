@@ -1,4 +1,4 @@
-"""$0 tests for the Peeters harness `--logprobs` credence probe + v2 rows.
+"""$0 tests for the Peeters harness `--logprobs` credence probe + v2/v3 rows.
 
 Every test runs at **$0** with an injected fake client (returning canned answers
 WITH a logprobs block) — no API key, no network, no real model call. Covers:
@@ -6,8 +6,10 @@ WITH a logprobs block) — no API key, no network, no real model call. Covers:
 * the ``results_path_for`` variant token (contamination firewall),
 * ``_build_live_judge(confidence="logprob")`` staying byte-identical apart from
   the logprob request,
-* the v2 ``_row_from_judgement`` columns (``correct`` always; credence keys only
-  when the probe was on),
+* the ``_row_from_judgement`` columns: ``correct`` always + credence keys only
+  when the probe was on (v2), and the ``score`` column now carrying the judge's
+  own ``decision``-derived value — ``None`` (plain) / ``p_yes`` (logprob) — with
+  ``verdict`` unchanged (v3),
 * the spend cap still firing with logprobs on,
 * resume skipping already-committed pairs,
 * ``--report-only`` still reading the old **v1** rows (the key regression), and
@@ -138,15 +140,19 @@ def test_build_live_judge_confidence_logprob() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# v2 row schema: `correct` always; credence keys only when the probe was on.
+# Row schema: `correct` always + credence keys only when the probe was on (v2);
+# `score` = the decision-derived None/p_yes, `verdict` = int(decision) (v3).
 # --------------------------------------------------------------------------- #
 
 
 def test_row_from_judgement_v2_with_credence() -> None:
+    # A logprob run's judgement: it DECIDES (decision) and its score is the
+    # continuous p_yes (not a 0/1 verdict copy) -- see the v3 schema note.
     judgement = SimpleNamespace(
         left_id="a1",
         right_id="b1",
-        score=1.0,
+        decision=True,
+        score=0.84,
         reasoning="Yes",
         provenance={
             "cost_usd": 1e-5,
@@ -161,8 +167,9 @@ def test_row_from_judgement_v2_with_credence() -> None:
     row = _row_from_judgement(
         judgement, model=_MODEL, dataset="abt-buy", prompt_design="domain-complex-force", gold=1
     )
-    assert row["v"] == 2
-    assert row["verdict"] == 1
+    assert row["v"] == 3
+    assert row["verdict"] == 1  # int(decision)
+    assert row["score"] == 0.84  # the judge's own p_yes, persisted
     assert row["correct"] == 1  # verdict == gold
     assert row["p_yes"] == 0.84
     assert row["leaked_mass"] == 0.02
@@ -170,13 +177,20 @@ def test_row_from_judgement_v2_with_credence() -> None:
 
 
 def test_row_from_judgement_correct_flag_tracks_gold() -> None:
+    # Probe off: the binary judge decides, score is None (no fabricated 0/1).
     judgement = SimpleNamespace(
-        left_id="a1", right_id="b1", score=0.0, reasoning="No", provenance={"cost_usd": 0.0}
+        left_id="a1",
+        right_id="b1",
+        decision=False,
+        score=None,
+        reasoning="No",
+        provenance={"cost_usd": 0.0},
     )
     row = _row_from_judgement(
         judgement, model=_MODEL, dataset="abt-buy", prompt_design="dc", gold=1
     )
     assert row["verdict"] == 0 and row["correct"] == 0  # said No on a gold match => wrong
+    assert row["score"] is None  # binary judge, probe off -> no score
     # Probe off => NO credence keys written (not null), only `correct`.
     assert "p_yes" not in row and "leaked_mass" not in row and "p_yes_is_bound" not in row
 
@@ -205,10 +219,14 @@ def test_run_live_logprobs_persists_credence(tmp_path: Path) -> None:
     rows = store.rows()
     assert len(rows) == 3
     for r in rows:
-        assert r["v"] == 2
+        assert r["v"] == 3
         assert "p_yes" in r and "leaked_mass" in r and "correct" in r
         # p_yes = 0.9 / (0.9 + 0.08) for the "Yes"-dominant fake.
         assert r["p_yes"] == pytest.approx(0.9 / 0.98)
+        # v3: on a logprob run the persisted ``score`` column IS the continuous
+        # p_yes (the judge's own score field), not a 0/1 copy of ``verdict``.
+        assert r["verdict"] == 1  # int(decision) from the "Yes" answer
+        assert r["score"] == pytest.approx(0.9 / 0.98)
 
 
 def test_spend_cap_fires_with_logprobs_on() -> None:

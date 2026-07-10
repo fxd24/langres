@@ -78,15 +78,26 @@ class LLMParseError(ValueError):
 class ParsedVerdict(BaseModel):
     """The output of an :class:`LLMJudge` ``response_parser``.
 
-    ``score`` is the match confidence in ``[0, 1]``, or ``None`` to signal a
-    *parse failure* — the parser could not read a verdict from the response.
-    ``None`` is the load-bearing distinction the old silent-0.5 fallback erased:
-    the judge routes a ``None`` through its ``on_parse_error`` policy rather than
-    emitting it as a real mid-confidence score. ``reasoning`` is the optional
-    free-text justification the parser extracted (``None`` when absent).
+    A parser returns EITHER a ``decision`` (the binary yes/no family) XOR a
+    ``score`` (the rating family) — never both:
+
+    - ``decision`` is an explicit match verdict (``True``/``False``), for a
+      binary judge that decides directly and does not rank. ``score`` stays
+      ``None`` — a binary judge has no meaningful score, so a fabricated
+      ``0.0``/``1.0`` would lie.
+    - ``score`` is the match confidence in ``[0, 1]`` for a ranking judge;
+      ``decision`` stays ``None``.
+
+    **Both ``None`` signals a parse failure / abstain** — the parser could read
+    neither a decision nor a score from the response. That ``None``/``None`` case
+    is the load-bearing distinction the old silent-0.5 fallback erased: the judge
+    routes it through its ``on_parse_error`` policy rather than emitting a real
+    mid-confidence verdict. ``reasoning`` is the optional free-text justification
+    the parser extracted (``None`` when absent).
     """
 
-    score: float | None
+    decision: bool | None = None
+    score: float | None = None
     reasoning: str | None = None
 
 
@@ -111,14 +122,19 @@ def parse_score_response(content: str) -> ParsedVerdict:
 def parse_binary_yes_no(content: str) -> ParsedVerdict:
     """Canonical parser for the published yes/no ER-prompt family.
 
+    Yields a **decision** (``True``/``False``), not a score: a binary judge
+    decides directly, so ``score`` stays ``None`` and downstream code
+    (``predicted_match`` / ``classify_pairs`` / ``select_for_review``) sees a real
+    verdict instead of a fabricated ``0.0``/``1.0``.
+
     This is the single source of truth for the yes/no contract: it deliberately
     mirrors the reference ``check_for_prediction`` from Peeters, Steiner & Bizer
     (*Entity Matching using Large Language Models*, arXiv 2310.11244) **exactly**
     — ``strip()`` → **delete** ``string.punctuation`` → ``lower()`` →
-    ``"yes" in text`` maps to ``1.0`` else ``0.0``. ``langres.data.peeters.
-    parse_binary_answer`` is a thin ``int`` adapter over this function; there is
-    only one code path so the ``$0`` offline replay validates the exact parser
-    the paid ``LLMJudge(response_parser=...)`` run will use.
+    ``"yes" in text`` maps to ``True`` (MATCH) else ``False``. ``langres.data.
+    peeters.parse_binary_answer`` is a thin ``int`` adapter over this function;
+    there is only one code path so the ``$0`` offline replay validates the exact
+    parser the paid ``LLMJudge(response_parser=...)`` run will use.
 
     Fidelity to the reference beats cleverness, so the crudeness is preserved on
     purpose:
@@ -130,15 +146,16 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
       contains ``"yes"`` and therefore MATCHES. Reproducing the paper's reported
       F1 requires the paper's parser, warts included.
 
-    It is deliberately **total**: absence of "yes" is a confident non-match
-    (``0.0``), never a parse failure (``score is None``). So ``on_parse_error``
-    never fires for this family and a long *paid* run cannot abort on one flaky
-    response. Pass a custom parser that returns ``score=None`` if you want strict
+    It is deliberately **total**: ``decision`` is always ``True``/``False`` and
+    never ``None`` — absence of "yes" is a confident non-match (``decision=False``),
+    never a parse failure/abstain. So ``on_parse_error`` never fires for this
+    family and a long *paid* run cannot abort on one flaky response. Pass a custom
+    parser that returns an all-``None`` :class:`ParsedVerdict` if you want strict
     abstention instead.
     """
     cleaned = content.strip().translate(str.maketrans("", "", string.punctuation)).lower()
-    score = 1.0 if "yes" in cleaned else 0.0
-    return ParsedVerdict(score=score, reasoning=content.strip() or None)
+    decision = "yes" in cleaned
+    return ParsedVerdict(decision=decision, score=None, reasoning=content.strip() or None)
 
 
 #: Below this combined yes+no probability mass, a first-token credence is refused
@@ -384,16 +401,20 @@ class LLMJudge(Module[SchemaT]):
                 The default abstains because aborting a long paid run on a single
                 flaky response is worse than a surfaced, counted abstention.
             confidence: First-token credence probe. ``"none"`` (default) is a
-                no-op — the request and judgement are byte-identical to before.
+                no-op — the request and judgement are byte-identical to before,
+                except a decision judge is tagged ``confidence_source=
+                "unrequested"`` (it *could* expose logprobs; you did not ask).
                 ``"logprob"`` requests ``logprobs`` + ``top_logprobs`` on every
-                completion and records a first-token P(Yes) credence in each
+                completion and records the first-token P(Yes) credence in each
                 judgement's ``provenance`` (keys ``p_yes``,
-                ``confidence_leaked_mass``, ``p_yes_is_bound``) — see
-                :meth:`_confidence_from_response`. Nothing is added to
-                :class:`PairwiseJudgement`; this is an evidence-gathering probe,
-                not a schema change. Only meaningful for a binary yes/no protocol
-                (e.g. ``response_parser=parse_binary_yes_no``). NOT serialized
-                (see :attr:`config`).
+                ``confidence_leaked_mass``, ``p_yes_is_bound`` — see
+                :meth:`_confidence_from_response`) AND, when a usable ``p_yes`` was
+                produced, promotes it onto the judgement itself: ``score = p_yes``
+                (an honest continuous ranking signal), ``confidence = max(p_yes,
+                1 - p_yes)``, ``confidence_source = "logprob"`` (see
+                :meth:`_map_verdict`). Only meaningful for a binary yes/no protocol
+                (e.g. ``response_parser=parse_binary_yes_no``). Serialized in
+                :attr:`config` so a saved logprob judge reloads as one.
 
         Raises:
             ValueError: If temperature out of range, ``on_parse_error`` is not
@@ -457,12 +478,15 @@ class LLMJudge(Module[SchemaT]):
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the client or secrets).
 
-        Carries the ``system_prompt`` and ``on_parse_error`` policy so a saved
-        paper-replication judge reloads with them. The ``response_parser`` and
-        ``record_serializer`` callables are **not** serialized (there is no
-        no-pickle way to persist an arbitrary callable) — like the ``client``,
-        they revert to the defaults on :meth:`from_config`/``Resolver.load``.
-        Re-inject a custom parser/serializer after load if you need it.
+        Carries the ``system_prompt``, ``on_parse_error`` policy and the
+        ``confidence`` credence mode so a saved paper-replication / logprob judge
+        reloads with them — without ``confidence`` a ``save``/``load`` would
+        silently revert a logprob judge to ``confidence="none"`` (PR #105 review).
+        The ``response_parser`` and ``record_serializer`` callables are **not**
+        serialized (there is no no-pickle way to persist an arbitrary callable) —
+        like the ``client``, they revert to the defaults on
+        :meth:`from_config`/``Resolver.load``. Re-inject a custom
+        parser/serializer after load if you need it.
         """
         return {
             "model": self.model,
@@ -472,14 +496,16 @@ class LLMJudge(Module[SchemaT]):
             "provider": self.provider,
             "system_prompt": self.system_prompt,
             "on_parse_error": self.on_parse_error,
+            "confidence": self.confidence,
         }
 
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
         """Rebuild from :attr:`config` via the lazy-client path (client from env).
 
-        Older artifacts without ``system_prompt`` / ``on_parse_error`` fall back
-        to the constructor defaults (``None`` / ``"abstain"``).
+        Older artifacts without ``system_prompt`` / ``on_parse_error`` /
+        ``confidence`` fall back to the constructor defaults (``None`` /
+        ``"abstain"`` / ``"none"``).
         """
         provider = config.get("provider")
         return cls(
@@ -491,6 +517,7 @@ class LLMJudge(Module[SchemaT]):
             provider=provider,  # type: ignore[arg-type]
             system_prompt=config.get("system_prompt"),  # type: ignore[arg-type]
             on_parse_error=config.get("on_parse_error", "abstain"),  # type: ignore[arg-type]
+            confidence=config.get("confidence", "none"),  # type: ignore[arg-type]
         )
 
     def _completion_kwargs(self) -> dict[str, Any]:
@@ -569,6 +596,9 @@ class LLMJudge(Module[SchemaT]):
                 no_mass += math.exp(alt.logprob)
         two_way = yes_mass + no_mass
         leaked = 1.0 - two_way
+        # NOTE: this ``confidence_leaked_mass`` provenance key is persisted by the
+        # Peeters harness's ``_row_from_judgement`` under the column name
+        # ``leaked_mass`` (renamed there) -- a grep for either name finds the other.
         if two_way < _CONFIDENCE_MASS_FLOOR:
             return {"p_yes": None, "confidence_leaked_mass": leaked, "p_yes_is_bound": False}
         return {
@@ -668,10 +698,14 @@ class LLMJudge(Module[SchemaT]):
                 **completion_kwargs,
             )
 
-            # Parse the verdict via the injectable parser; a parse failure is
-            # routed through ``on_parse_error`` (never a silent 0.5).
+            # Parse the verdict + fold in the optional first-token logprob
+            # credence; an abstain routes through ``on_parse_error`` (never a
+            # fabricated verdict). See :meth:`_map_verdict`.
             content = response.choices[0].message.content or ""
-            score, reasoning, parse_error = self._resolve_verdict(content)
+            confidence_fragment = self._confidence_from_response(response)
+            decision, score, confidence, confidence_source, reasoning, parse_error = (
+                self._map_verdict(content, confidence_fragment)
+            )
 
             # Cost: OpenRouter's real billed cost when available, else the estimate.
             cost_usd, provider, cost_is_real = self._billing(response)
@@ -680,8 +714,11 @@ class LLMJudge(Module[SchemaT]):
             yield PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
                 right_id=candidate.right.id,  # type: ignore[attr-defined]
+                decision=decision,
                 score=score,
                 score_type="prob_llm",
+                confidence=confidence,
+                confidence_source=confidence_source,
                 decision_step="llm_judgment",
                 reasoning=reasoning,
                 provenance=self._build_provenance(
@@ -690,7 +727,7 @@ class LLMJudge(Module[SchemaT]):
                     provider,
                     usage,
                     parse_error=parse_error,
-                    confidence=self._confidence_from_response(response),
+                    confidence=confidence_fragment,
                 ),
             )
 
@@ -826,10 +863,14 @@ class LLMJudge(Module[SchemaT]):
                 actual_tokens = response.usage.prompt_tokens + response.usage.completion_tokens
                 await rate_limiter.record_usage_async(actual_tokens)
 
-            # Parse the verdict via the injectable parser; a parse failure is
-            # routed through ``on_parse_error`` (never a silent 0.5).
+            # Parse the verdict + fold in the optional first-token logprob
+            # credence; an abstain routes through ``on_parse_error`` (never a
+            # fabricated verdict). See :meth:`_map_verdict`.
             content = response.choices[0].message.content or ""
-            score, reasoning, parse_error = self._resolve_verdict(content)
+            confidence_fragment = self._confidence_from_response(response)
+            decision, score, confidence, confidence_source, reasoning, parse_error = (
+                self._map_verdict(content, confidence_fragment)
+            )
 
             # Cost: OpenRouter's real billed cost when available, else the estimate.
             cost_usd, provider, cost_is_real = self._billing(response)
@@ -838,8 +879,11 @@ class LLMJudge(Module[SchemaT]):
             return PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
                 right_id=candidate.right.id,  # type: ignore[attr-defined]
+                decision=decision,
                 score=score,
                 score_type="prob_llm",
+                confidence=confidence,
+                confidence_source=confidence_source,
                 decision_step="llm_judgment_async",
                 reasoning=reasoning,
                 provenance=self._build_provenance(
@@ -849,7 +893,7 @@ class LLMJudge(Module[SchemaT]):
                     usage,
                     parse_error=parse_error,
                     method="async_batch",
-                    confidence=self._confidence_from_response(response),
+                    confidence=confidence_fragment,
                 ),
             )
 
@@ -939,29 +983,70 @@ class LLMJudge(Module[SchemaT]):
             ]
         return [{"role": "user", "content": prompt}]
 
-    def _resolve_verdict(self, content: str) -> tuple[float, str | None, bool]:
-        """Parse ``content`` and apply the parse-failure policy.
+    def _map_verdict(
+        self, content: str, confidence_fragment: dict[str, Any] | None
+    ) -> tuple[
+        bool | None,
+        float | None,
+        float | None,
+        Literal["none", "unrequested", "logprob"],
+        str | None,
+        bool,
+    ]:
+        """Map a parsed response (+ optional logprob credence) to judgement fields.
 
-        Returns ``(score, reasoning, parse_error)``. On a successful parse the
-        parser's score/reasoning pass through with ``parse_error=False``. On a
-        parse failure (``ParsedVerdict.score is None``) either raises
-        :class:`LLMParseError` (``on_parse_error='raise'``) or abstains —
-        ``(0.0, reasoning, True)`` — flagged so downstream can distinguish it
-        from a real low-confidence score.
+        Returns ``(decision, score, confidence, confidence_source, reasoning,
+        parse_error)`` for the :class:`PairwiseJudgement`:
+
+        - **Decision family** (:func:`parse_binary_yes_no`): ``decision`` is the
+          verdict and ``score`` is ``None`` — a binary judge does not rank, so a
+          fabricated ``0.0``/``1.0`` would lie (the whole point of this change).
+        - **Ranking family** (:func:`parse_score_response`): ``score`` is the
+          float and ``decision`` is ``None``.
+        - **Logprob credence on** (``confidence="logprob"`` with usable first-token
+          yes/no mass): ``score`` becomes the honest continuous ``p_yes`` ranking
+          signal, ``confidence`` is ``max(p_yes, 1 - p_yes)`` (the model's credence
+          in its OWN answer — what the roc_auc-0.95 probe gated on) and
+          ``confidence_source="logprob"``.
+        - **Abstain** (parser read neither a decision nor a score): routed through
+          ``on_parse_error`` — ``"raise"`` raises :class:`LLMParseError`; the
+          default ``"abstain"`` returns all-``None`` (``is_abstain``) flagged
+          ``parse_error=True``, never a fabricated verdict.
+
+        ``confidence_source`` keeps three distinct meanings: ``"logprob"`` = an
+        earned first-token credence; ``"unrequested"`` = a decision judge that
+        *could* expose logprobs but was not asked (``confidence="none"``);
+        ``"none"`` = no confidence notion here (the ranking-score parser, or a
+        logprob run whose first token carried no usable yes/no mass).
         """
-        verdict = self._parse(content)
-        if verdict.score is not None:
-            return verdict.score, verdict.reasoning, False
-        if self.on_parse_error == "raise":
-            raise LLMParseError(
-                f"response_parser could not parse a score from response: {content!r}"
+        parsed = self._parse(content)
+        if parsed.decision is None and parsed.score is None:
+            # Abstain: the parser read no verdict at all -> on_parse_error policy.
+            if self.on_parse_error == "raise":
+                raise LLMParseError(
+                    f"response_parser could not parse a verdict from response: {content!r}"
+                )
+            logger.warning(
+                "response_parser could not parse a verdict; abstaining "
+                "(decision=None, score=None, parse_error flagged). Raw response: %r",
+                content,
             )
-        logger.warning(
-            "response_parser could not parse a score; abstaining (score=0.0, "
-            "parse_error flagged). Raw response: %r",
-            content,
-        )
-        return 0.0, verdict.reasoning, True
+            return None, None, None, "none", parsed.reasoning, True
+
+        p_yes = confidence_fragment.get("p_yes") if confidence_fragment is not None else None
+        if p_yes is not None:
+            # Earned credence: p_yes is an honest continuous ranking signal; the
+            # credence in the model's OWN answer is max(p_yes, 1 - p_yes).
+            confidence = max(p_yes, 1.0 - p_yes)
+            return parsed.decision, p_yes, confidence, "logprob", parsed.reasoning, False
+
+        source: Literal["none", "unrequested"]
+        if self.confidence == "none" and parsed.decision is not None:
+            # A decision judge that could expose logprobs but was not asked.
+            source = "unrequested"
+        else:
+            source = "none"
+        return parsed.decision, parsed.score, None, source, parsed.reasoning, False
 
     def _build_provenance(
         self,

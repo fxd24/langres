@@ -277,6 +277,46 @@ def test_sync_forward_requests_logprobs_on_non_openrouter_and_records_pyes() -> 
     assert prov["p_yes_is_bound"] is False
 
 
+def test_logprob_forward_promotes_pyes_onto_the_judgement() -> None:
+    """A usable p_yes becomes the judgement's score + a max(p_yes,1-p_yes) confidence."""
+    p_yes = 0.8 / 0.95
+    resp = _response([("Yes", [("Yes", 0.8), (" No", 0.15)])], message="Yes")
+    j = LLMJudge[CompanySchema](
+        client=_FakeClient(resp),
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_binary_yes_no,
+    )
+    out = list(j.forward(iter([_candidate()])))[0]
+    # decision from the "Yes" text; score is the honest continuous p_yes.
+    assert out.decision is True
+    assert out.score == pytest.approx(p_yes)
+    # confidence = credence in its OWN answer (the roc_auc-0.95 probe quantity).
+    assert out.confidence == pytest.approx(max(p_yes, 1.0 - p_yes))
+    assert out.confidence_source == "logprob"
+
+
+def test_logprob_run_with_no_usable_mass_falls_back_to_decision_only() -> None:
+    """logprob requested but the first token carried no yes/no mass -> p_yes None.
+
+    The judge still decides (from the text), score stays None (binary family, no
+    p_yes to promote), and confidence_source is "none" (no earned credence).
+    """
+    resp = _response([("Maybe", [("Maybe", 0.6), ("Unsure", 0.3)])], message="Yes")
+    j = LLMJudge[CompanySchema](
+        client=_FakeClient(resp),
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_binary_yes_no,
+    )
+    out = list(j.forward(iter([_candidate()])))[0]
+    assert out.decision is True
+    assert out.score is None
+    assert out.confidence is None
+    assert out.confidence_source == "none"
+    assert out.provenance["p_yes"] is None  # the fragment is still recorded
+
+
 def test_sync_forward_openrouter_sends_both_extra_body_and_logprobs() -> None:
     resp = _response([("Yes", [("Yes", 0.9), ("No", 0.05)])])
     client = _FakeClient(resp)
