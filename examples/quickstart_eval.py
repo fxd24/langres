@@ -30,6 +30,10 @@ from langres.core.models import CompanySchema
 from langres.testing import ScriptedJudge
 
 # A toy dataset and the true clustering (what a small labeled sample gives you).
+# The last pair is a deliberately HARD true match -- "IBM" and its full legal
+# name share almost no characters, so a string-similarity judge scores it low and
+# misses it. That one honest error is what gives the tearsheet something to show:
+# a non-trivial ROC/PR curve and a populated "most-confident errors" panel.
 records = [
     {"id": "1", "name": "Acme Corporation"},
     {"id": "2", "name": "Acme Corp"},
@@ -38,8 +42,10 @@ records = [
     {"id": "5", "name": "Initech"},
     {"id": "6", "name": "Initech LLC"},
     {"id": "7", "name": "Unrelated Bakery"},
+    {"id": "8", "name": "IBM"},
+    {"id": "9", "name": "International Business Machines"},
 ]
-gold_clusters = [{"1", "2"}, {"3", "4"}, {"5", "6"}, {"7"}]
+gold_clusters = [{"1", "2"}, {"3", "4"}, {"5", "6"}, {"7"}, {"8", "9"}]
 
 # 1. BLOCK: generate candidate pairs to judge (no judge, no spend yet).
 resolver = Resolver.from_schema(CompanySchema, judge="string")
