@@ -541,7 +541,9 @@ class TeacherLabeler(Labeler):
             right_id=judgement.right_id,
             label=label,
             source="teacher",
-            confidence=judgement.confidence if judgement.confidence is not None else judgement.score,
+            confidence=judgement.confidence
+            if judgement.confidence is not None
+            else judgement.score,
             reasoning=judgement.reasoning,
             provenance={
                 "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},

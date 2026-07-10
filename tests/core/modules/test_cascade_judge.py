@@ -662,3 +662,36 @@ class TestInspectScores:
         judgements = list(cascade.forward(iter([_pair("a", "b")])))
         report = cascade.inspect_scores(judgements)
         assert isinstance(report, ScoreInspectionReport)
+
+
+class AbstainingStudent(ScriptedJudge[CompanySchema]):
+    """A student that abstains: emits a judgement with no score and no decision."""
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            self.seen.append(frozenset({candidate.left.id, candidate.right.id}))
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                score_type="prob_rf",  # no score/decision -> abstain
+                decision_step="student_abstain",
+                provenance={},
+            )
+
+
+class TestAbstainingStudentEscalates:
+    """An abstaining student is maximally uncertain -> the cascade escalates it."""
+
+    def test_abstaining_student_escalates_to_teacher(self) -> None:
+        student = AbstainingStudent({})
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="prob_llm")
+        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+
+        [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
+
+        # The escalation ran (its .seen records the pair) and its judgement wins.
+        assert escalation.seen == [frozenset({"a", "b"})]
+        assert judgement.decision_step == CASCADE_ESCALATED_STEP
+        assert judgement.score == 0.8

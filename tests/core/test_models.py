@@ -584,7 +584,9 @@ class TestPairwiseJudgementDecisionContract:
         from langres.core.models import PairwiseJudgement
 
         with pytest.raises(ValidationError) as exc_info:
-            PairwiseJudgement(left_id="a", right_id="b", decision=True, decision_step="t", provenance={})
+            PairwiseJudgement(
+                left_id="a", right_id="b", decision=True, decision_step="t", provenance={}
+            )
         assert "score_type" in str(exc_info.value)
 
     def test_decision_accepts_bool_or_none(self):

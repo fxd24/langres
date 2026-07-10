@@ -147,9 +147,7 @@ class PairwiseJudgement(BaseModel):
         "prob_group_llm",
     ]
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    confidence_source: Literal[
-        "none", "unrequested", "logprob", "calibrated", "heuristic"
-    ] = "none"
+    confidence_source: Literal["none", "unrequested", "logprob", "calibrated", "heuristic"] = "none"
     decision_step: str
     reasoning: str | None = None
     provenance: dict[str, Any]
