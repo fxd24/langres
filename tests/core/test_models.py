@@ -428,16 +428,10 @@ class TestPairwiseJudgement:
             )
         assert "right_id" in str(exc_info.value)
 
-        # Missing score
-        with pytest.raises(ValidationError) as exc_info:
-            PairwiseJudgement(
-                left_id="c1",
-                right_id="c2",
-                score_type="heuristic",
-                decision_step="test",
-                provenance={},
-            )
-        assert "score" in str(exc_info.value)
+        # NOTE: ``score`` is deliberately NOT tested here -- it was widened from a
+        # required float to ``float | None`` (a decider has no score), so omitting
+        # it is now valid and defaults to ``None``. See
+        # ``TestPairwiseJudgementDecisionContract`` below.
 
         # Missing decision_step
         with pytest.raises(ValidationError) as exc_info:
@@ -551,3 +545,123 @@ class TestPairwiseJudgement:
         assert judgement.decision_step == "embedding_filter"
         assert judgement.reasoning is None
         assert judgement.provenance["embedding_model"] == "bge-large"
+
+
+def _judgement(**overrides):
+    """Build a PairwiseJudgement with sensible required-field defaults."""
+    from langres.core.models import PairwiseJudgement
+
+    fields = {
+        "left_id": "a",
+        "right_id": "b",
+        "score_type": "prob_llm",
+        "decision_step": "test",
+        "provenance": {},
+    }
+    fields.update(overrides)
+    return PairwiseJudgement(**fields)
+
+
+class TestPairwiseJudgementDecisionContract:
+    """The decision/score/confidence split added in the judgement-contract wave."""
+
+    def test_new_fields_default_to_the_no_signal_state(self):
+        """A judge that sets only score gets decision=None, confidence=None, source='none'."""
+        j = _judgement(score=0.7)
+        assert j.decision is None
+        assert j.score == 0.7
+        assert j.confidence is None
+        assert j.confidence_source == "none"
+
+    def test_score_is_optional_and_defaults_to_none(self):
+        """score was widened from required float to float | None (a decider has no score)."""
+        j = _judgement(decision=True)  # score omitted
+        assert j.score is None
+        assert j.decision is True
+
+    def test_score_type_stays_required(self):
+        """score_type doubles as the judge-family tag and stays required even with no score."""
+        from langres.core.models import PairwiseJudgement
+
+        with pytest.raises(ValidationError) as exc_info:
+            PairwiseJudgement(
+                left_id="a", right_id="b", decision=True, decision_step="t", provenance={}
+            )
+        assert "score_type" in str(exc_info.value)
+
+    def test_decision_accepts_bool_or_none(self):
+        assert _judgement(decision=True).decision is True
+        assert _judgement(decision=False).decision is False
+        assert _judgement(score=0.5).decision is None
+
+    def test_confidence_bounds_enforced(self):
+        assert _judgement(score=0.5, confidence=0.0).confidence == 0.0
+        assert _judgement(score=0.5, confidence=1.0).confidence == 1.0
+        with pytest.raises(ValidationError):
+            _judgement(score=0.5, confidence=-0.01)
+        with pytest.raises(ValidationError):
+            _judgement(score=0.5, confidence=1.01)
+
+    def test_confidence_source_literals(self):
+        for source in ["none", "unrequested", "logprob", "calibrated", "heuristic"]:
+            assert _judgement(score=0.5, confidence_source=source).confidence_source == source
+
+    def test_confidence_source_rejects_unknown(self):
+        with pytest.raises(ValidationError):
+            _judgement(score=0.5, confidence_source="vibes")
+
+    def test_both_score_and_decision_may_be_set(self):
+        """No XOR validator: a ranker that also decides is allowed."""
+        j = _judgement(score=0.9, decision=True)
+        assert j.score == 0.9
+        assert j.decision is True
+
+
+class TestIsAbstain:
+    """PairwiseJudgement.is_abstain -- no decision AND no score."""
+
+    def test_abstain_when_neither_set(self):
+        assert _judgement().is_abstain is True
+
+    def test_not_abstain_when_score_set(self):
+        assert _judgement(score=0.0).is_abstain is False
+
+    def test_not_abstain_when_decision_set(self):
+        assert _judgement(decision=False).is_abstain is False
+
+    def test_not_abstain_when_both_set(self):
+        assert _judgement(score=0.3, decision=False).is_abstain is False
+
+
+class TestPredictedMatch:
+    """predicted_match -- the ONE place that answers 'is this pair a match'."""
+
+    def test_decision_takes_precedence_over_score(self):
+        from langres.core.models import predicted_match
+
+        # decision=False wins even though score would clear the threshold
+        j = _judgement(score=0.99, decision=False)
+        assert predicted_match(j, threshold=0.5) is False
+        # decision=True wins even though score would fail the threshold
+        j2 = _judgement(score=0.01, decision=True)
+        assert predicted_match(j2, threshold=0.5) is True
+
+    def test_ranker_uses_threshold(self):
+        from langres.core.models import predicted_match
+
+        j = _judgement(score=0.5)
+        assert predicted_match(j, threshold=0.5) is True  # >= is inclusive
+        assert predicted_match(j, threshold=0.51) is False
+
+    def test_abstain_returns_none_not_false(self):
+        from langres.core.models import predicted_match
+
+        j = _judgement()  # neither score nor decision
+        assert predicted_match(j, threshold=0.5) is None
+
+    def test_decider_ignores_threshold(self):
+        from langres.core.models import predicted_match
+
+        j = _judgement(decision=True)  # no score
+        assert predicted_match(j, threshold=0.99) is True
+        assert predicted_match(j, threshold=0.0) is True

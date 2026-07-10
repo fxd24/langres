@@ -384,3 +384,45 @@ def test_random_forest_floor_runs_honestly_on_amazon_google() -> None:
     assert 0.0 < result.honest.f1 <= 1.0
     assert result.argmax_on_test.f1 >= result.honest.f1
     assert result.honesty_delta_f1 >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# A decision-only (binary) judge has no scores to derive a threshold from
+# ---------------------------------------------------------------------------
+
+
+class _DecisionOnlyJudge(Module[_ToySchema]):
+    """A binary judge: it decides directly and emits NO score."""
+
+    def __init__(self, decisions: dict[frozenset[str], bool]) -> None:
+        self._decisions = decisions
+
+    def forward(self, candidates: Iterator[ERCandidate[_ToySchema]]) -> Iterator[PairwiseJudgement]:
+        for cand in candidates:
+            key = frozenset({cand.left.id, cand.right.id})
+            yield PairwiseJudgement(
+                left_id=cand.left.id,
+                right_id=cand.right.id,
+                decision=self._decisions.get(key, False),
+                score_type="prob_llm",  # no score
+                decision_step="decision_only",
+                provenance={},
+            )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        return _inspect_scores_impl(judgements, sample_size)
+
+
+def test_decision_only_judge_cannot_derive_a_threshold() -> None:
+    """Deriving a threshold needs scores; a decision-only judge has none.
+
+    The eval must fail loudly and name the judge rather than silently dropping
+    its score-less judgements.
+    """
+    bench = _honest_benchmark()
+    judge = _DecisionOnlyJudge({})
+
+    with pytest.raises(ValueError, match="_DecisionOnlyJudge"):
+        evaluate_fixed_split_honest(judge, bench, derive_on="train")

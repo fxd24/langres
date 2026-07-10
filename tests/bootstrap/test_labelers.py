@@ -69,6 +69,7 @@ class FakeJudge:
         fail_ids: frozenset[str] = frozenset(),
         empty_ids: frozenset[str] = frozenset(),
         blind_ids: frozenset[str] = frozenset(),
+        abstain_ids: frozenset[str] = frozenset(),
     ) -> None:
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
@@ -77,6 +78,7 @@ class FakeJudge:
         self.fail_ids = fail_ids
         self.empty_ids = empty_ids
         self.blind_ids = blind_ids
+        self.abstain_ids = abstain_ids
 
     def forward(
         self, candidates: Iterator[ERCandidate[CompanySchema]]
@@ -90,6 +92,22 @@ class FakeJudge:
                 # with single-item iterators, so stopping the generator here is
                 # equivalent to "no judgement for this one pair".
                 return
+            if cid in self.abstain_ids:
+                # A judgement that neither scored nor decided (an abstention), but
+                # WITH real token usage -- it still cost money to produce.
+                yield PairwiseJudgement(
+                    left_id=cand.left.id,
+                    right_id=cand.right.id,
+                    score_type="prob_llm",
+                    decision_step="fake",
+                    provenance={
+                        "model": "fake",
+                        "cost_usd": self.cost_usd,
+                        "prompt_tokens": self.prompt_tokens,
+                        "completion_tokens": self.completion_tokens,
+                    },
+                )
+                continue
             if cid in self.blind_ids:
                 provenance: dict[str, object] = {"model": "fake", "cost_usd": 0.0}
             else:
@@ -293,6 +311,20 @@ def test_empty_judgement_is_skipped() -> None:
     assert teacher.labeled_count == 1
     assert teacher.skipped_count == 1
     assert out[0].left_id == "l1"
+
+
+def test_abstaining_judgement_is_skipped_but_its_spend_is_counted() -> None:
+    # A teacher that neither scored nor decided produced no usable label: the pair
+    # is skipped (like a missing judgement) rather than mislabeled False -- but its
+    # spend still counts, because the call cost money.
+    teacher = _teacher(FakeJudge(abstain_ids=frozenset({"l0"})))
+    out = teacher.label([_cand("l0", "r0"), _cand("l1", "r1")])
+    assert teacher.labeled_count == 1
+    assert teacher.skipped_count == 1
+    assert {p.left_id for p in out} == {"l1"}
+    # Both pairs cost 0.002 (1000 prompt @1/M + 500 completion @2/M); l0's counts
+    # even though it was skipped.
+    assert teacher.total_spent_usd == pytest.approx(0.004)
 
 
 # --- TeacherLabeler: blind-cap abort ----------------------------------------

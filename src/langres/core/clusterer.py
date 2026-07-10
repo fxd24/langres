@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Generic, TypeVar
 
 import networkx as nx
 
-from langres.core.models import PairwiseJudgement
+from langres.core.models import PairwiseJudgement, predicted_match
 from langres.core.registry import register
 from langres.core.reports import ClusterInspectionReport
 
@@ -91,7 +91,7 @@ class Clusterer:
         G: Any = nx.Graph()
 
         for judgement in judgements:
-            if judgement.score >= self.threshold:
+            if predicted_match(judgement, self.threshold) is True:
                 G.add_edge(judgement.left_id, judgement.right_id)
 
         # Get connected components (transitive closure)
