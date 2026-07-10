@@ -19,13 +19,23 @@ import pytest
 from pydantic import BaseModel
 
 from langres.core.harvest import Correction
-from langres.core.review import ReviewItem, ReviewQueue, select_for_review
+from langres.core.judgement_log import JudgementLog, LoggingModule
+from langres.core.models import CompanySchema, ERCandidate
+from langres.core.review import ReviewItem, ReviewQueue, _is_well_formed, select_for_review
+from langres.testing import ScriptedJudge
 
 _LOGGER_NAME = "langres.core.review"
 
 
-def _row(left: str, right: str, score: float, verdict: bool, **overrides: Any) -> dict[str, Any]:
-    """A minimal JudgementLog-format row (the keys the selector actually reads)."""
+def _row(
+    left: str, right: str, score: float | None, verdict: bool, **overrides: Any
+) -> dict[str, Any]:
+    """A minimal JudgementLog-format row (the keys the selector actually reads).
+
+    ``score=None`` builds a decider row (a binary judge that emits a decision and
+    no score); pass ``decision=``/``confidence=``/``confidence_source=`` via
+    ``overrides`` to model the v3 columns.
+    """
     row: dict[str, Any] = {
         "v": 1,
         "left_id": left,
@@ -226,6 +236,145 @@ def test_disagreement_details_carry_the_against_side() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Binary / decision judge: the flywheel must actually run (A3c)                #
+# --------------------------------------------------------------------------- #
+
+
+def test_binary_decision_row_is_well_formed_signal_less_row_is_not() -> None:
+    """A binary decider (score None, bool decision/verdict) is usable; a pure
+    ranker (finite score, no verdict) is usable; a row with no ids or no
+    actionable signal is not. This is the relaxed ``_is_well_formed`` contract."""
+    assert _is_well_formed({"left_id": "a", "right_id": "b", "score": None, "decision": True})
+    assert _is_well_formed({"left_id": "a", "right_id": "b", "score": None, "verdict": False})
+    assert _is_well_formed({"left_id": "a", "right_id": "b", "score": 0.6})  # ranker, no verdict
+    assert not _is_well_formed({"right_id": "b", "decision": True})  # no left_id
+    assert not _is_well_formed({"left_id": "a", "right_id": "b"})  # ids only, no signal
+    assert not _is_well_formed(  # non-bool verdict AND unusable score
+        {"left_id": "a", "right_id": "b", "score": float("nan"), "verdict": "yes"}
+    )
+
+
+def test_uncertainty_on_confidenceless_binary_log_raises_not_empty() -> None:
+    """THE flagship fix. A binary decider log (every score None, no confidence)
+    has nothing to rank by uncertainty. It must RAISE a ValueError naming the fix
+    -- never return [], which is indistinguishable from a finished loop and let
+    the bug hide forever behind ``[] == []``."""
+    binary_log = [
+        _row("a", "b", None, True, decision=True),
+        _row("c", "d", None, False, decision=False),
+        _row("e", "f", None, True, decision=True),
+    ]
+    with pytest.raises(ValueError) as excinfo:
+        select_for_review(binary_log, strategy="uncertainty", threshold=0.5)
+    message = str(excinfo.value)
+    assert "disagreement" in message
+    assert 'confidence="logprob"' in message
+
+
+def test_uncertainty_on_logged_binary_judge_raises_end_to_end(tmp_path: Path) -> None:
+    """The real flywheel path: a binary judge whose 0/1 scores are logged by
+    LoggingModule produces a log the uncertainty selector cannot rank -- proving
+    the no-op bug is caught on the actual logged shape, not just hand-written rows."""
+    candidates = [
+        ERCandidate(
+            left=CompanySchema(id="a", name="Acme"),
+            right=CompanySchema(id="b", name="Acme Inc"),
+            blocker_name="t",
+        ),
+        ERCandidate(
+            left=CompanySchema(id="c", name="Beta"),
+            right=CompanySchema(id="d", name="Gamma"),
+            blocker_name="t",
+        ),
+    ]
+    log = JudgementLog(tmp_path / "judgements.jsonl")
+    # A binary decider: every pair is scored exactly 1.0 or 0.0, never a middling
+    # value -- so |score - threshold| is a constant and there is no gradient.
+    judge: ScriptedJudge[CompanySchema] = ScriptedJudge(
+        lambda cand: 1.0 if cand.left.id == "a" else 0.0
+    )
+    list(LoggingModule(judge, log=log, threshold=0.5).forward(iter(candidates)))
+
+    rows = log.read()
+    assert rows and all(row["score"] in (0.0, 1.0) for row in rows)  # genuinely binary
+    with pytest.raises(ValueError, match="disagreement"):
+        select_for_review(rows, strategy="uncertainty", threshold=0.5)
+
+
+def test_uncertainty_ranks_by_confidence_least_confident_first() -> None:
+    """With a logged confidence (the confidence='logprob' path) rank by
+    |confidence - 0.5| -- least confident (closest to 0.5) first -- not by score.
+    Deciders carry score None; the credence and its source surface on the item."""
+    rows = [
+        # insertion order deliberately NOT the output order, so the sort is exercised
+        _row("c", "d", None, False, decision=False, confidence=0.95, confidence_source="logprob"),
+        _row("a", "b", None, True, decision=True, confidence=0.52, confidence_source="logprob"),
+        _row("e", "f", None, True, decision=True, confidence=0.60, confidence_source="logprob"),
+    ]
+    items = select_for_review(
+        rows, strategy="uncertainty", threshold=0.5, margin=0.15, audit_fraction=0.0
+    )
+    assert _pairs(items) == [("a", "b"), ("e", "f")]  # 0.95 is outside the |.5|+/-.15 band
+    assert all(item.reason == "uncertainty" for item in items)
+    first = items[0]
+    assert first.score is None  # a decider has no score
+    assert first.confidence == 0.52
+    assert first.confidence_source == "logprob"
+    assert first.verdict is True
+    assert first.details["distance"] == pytest.approx(0.02)
+
+
+def test_uncertainty_confident_about_everything_returns_empty_not_raise() -> None:
+    """Confidence present but all far from 0.5 -> band empty -> [] (a genuinely
+    finished loop). This is the *signal-exists* case: distinct from the no-signal
+    RAISE. It must NOT raise -- nothing is uncertain enough to review."""
+    rows = [
+        _row("a", "b", None, True, decision=True, confidence=0.97, confidence_source="logprob"),
+        _row("c", "d", None, False, decision=False, confidence=0.99, confidence_source="logprob"),
+    ]
+    items = select_for_review(
+        rows, strategy="uncertainty", threshold=0.5, margin=0.1, audit_fraction=0.5
+    )
+    assert items == []
+
+
+def test_disagreement_works_on_two_binary_logs() -> None:
+    """The fallback the uncertainty raise points at must work on a binary/decision
+    log (score None): compare decisions, skip agreements, and don't crash on the
+    absent score gap."""
+    student = [
+        _row("a", "b", None, True, decision=True),  # match
+        _row("c", "d", None, True, decision=True),  # both agree -> skipped
+        _row("e", "f", None, False, decision=False),  # no-match
+    ]
+    teacher = [
+        _row("a", "b", None, False, decision=False),  # disagrees with student
+        _row("c", "d", None, True, decision=True),
+        _row("e", "f", None, True, decision=True),  # disagrees with student
+    ]
+    items = select_for_review(student, strategy="disagreement", against=teacher, audit_fraction=0.0)
+    assert {(item.left_id, item.right_id) for item in items} == {("a", "b"), ("e", "f")}
+    assert all(item.reason == "disagreement" for item in items)
+    ab = next(item for item in items if (item.left_id, item.right_id) == ("a", "b"))
+    assert ab.verdict is True  # student's own decision, on the item
+    assert ab.score is None  # a decider has no score
+    assert ab.details["against_verdict"] is False  # teacher's decision
+    assert ab.details["against_score"] is None
+
+
+def test_item_surfaces_reasoning_and_defaults_missing_credence() -> None:
+    """_build_item lifts reasoning onto the item (the reviewer sees *why*), and a
+    v1/v2 row lacking the credence columns leaves them None -- not a crash. The
+    score path itself is unchanged."""
+    rows = [_row("a", "b", 0.55, True, reasoning="names match modulo the Corp suffix")]
+    (item,) = select_for_review(rows, strategy="uncertainty", threshold=0.5, audit_fraction=0.0)
+    assert item.reasoning == "names match modulo the Corp suffix"
+    assert item.confidence is None
+    assert item.confidence_source is None
+    assert item.score == 0.55  # score path unchanged for a continuous judge
+
+
+# --------------------------------------------------------------------------- #
 # Audit: first-class strategy, mix-in, determinism                            #
 # --------------------------------------------------------------------------- #
 
@@ -327,21 +476,23 @@ def test_empty_log_returns_empty() -> None:
 def test_malformed_rows_are_skipped_with_one_summary_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Every malformed shape is dropped; exactly ONE warning carries the count."""
+    """A row needs ids AND one actionable signal (a bool decision/verdict OR a
+    finite score). Only rows with *neither* signal (or no ids) are dropped; ONE
+    warning carries the count. A missing score alone (a decider) or a missing
+    verdict alone (a ranker) is now usable, not malformed.
+    """
     good = _row("a", "b", 0.5, True)
     malformed: list[dict[str, Any]] = [
-        {k: v for k, v in _row("m1", "x", 0.5, True).items() if k != "left_id"},
-        {k: v for k, v in _row("m2", "x", 0.5, True).items() if k != "right_id"},
-        {k: v for k, v in _row("m3", "x", 0.5, True).items() if k != "score"},
-        {k: v for k, v in _row("m4", "x", 0.5, True).items() if k != "verdict"},
-        _row("m5", "x", float("nan"), True),
-        _row("m6", "x", float("inf"), True),
-        _row("m7", "x", 1.5, True),
-        _row("m8", "x", -0.1, True),
-        _row("m9", "x", cast(Any, "0.5"), True),  # non-numeric score
-        _row("m10", "x", 0.5, cast(Any, "yes")),  # non-bool verdict
-        _row("m11", "x", 0.5, cast(Any, 1)),  # int is not a verdict
-        _row("m12", "x", cast(Any, True), True),  # bool is not a score
+        {k: v for k, v in _row("m1", "x", 0.5, True).items() if k != "left_id"},  # no left_id
+        {k: v for k, v in _row("m2", "x", 0.5, True).items() if k != "right_id"},  # no right_id
+        # ids present, but non-bool verdict AND an unusable score => no signal at all:
+        _row("m3", "x", float("nan"), cast(Any, "yes")),  # nan score, str verdict
+        _row("m4", "x", float("inf"), cast(Any, 1)),  # inf score, int (not bool) verdict
+        _row("m5", "x", 1.5, cast(Any, "no")),  # out-of-range score, str verdict
+        _row("m6", "x", -0.1, cast(Any, None)),  # out-of-range score, None verdict
+        _row("m7", "x", cast(Any, "0.5"), cast(Any, 0)),  # non-numeric score, int verdict
+        # neither score nor verdict, and no decision => nothing actionable:
+        {k: v for k, v in _row("m8", "x", 0.5, True).items() if k not in ("score", "verdict")},
     ]
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         items = select_for_review(
@@ -354,7 +505,7 @@ def test_malformed_rows_are_skipped_with_one_summary_warning(
     assert _pairs(items) == [("a", "b")]
     warnings = _warnings(caplog)
     assert len(warnings) == 1
-    assert "12" in warnings[0].getMessage()
+    assert "8" in warnings[0].getMessage()
 
 
 def test_malformed_rows_in_the_against_log_are_also_skipped(
@@ -363,7 +514,10 @@ def test_malformed_rows_in_the_against_log_are_also_skipped(
     """The second log gets the same sanitation (and its own summary warning)."""
     rows = [_row("a", "b", 0.9, True)]
     against = [
-        _row("a", "b", float("nan"), False),  # malformed -- would have disagreed
+        # malformed: non-bool verdict AND unusable score => no signal (a bare
+        # nan score with a valid verdict would now be usable, so make it truly
+        # signal-less). Would have disagreed with rows if it had a real verdict.
+        _row("a", "b", float("nan"), cast(Any, "no")),
         _row("c", "d", 0.5, True),
     ]
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
