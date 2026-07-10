@@ -4,6 +4,7 @@ This module provides metrics for evaluating different pipeline stages:
 - Blocking stage: evaluate_blocking(), evaluate_blocking_with_ranking()
 - Clustering stage: evaluate_clustering(), calculate_bcubed_metrics(), calculate_pairwise_metrics()
 - Agreement (rater-vs-rater): cohens_kappa(), matthews_corrcoef()
+- Ranking (score-vs-label): roc_auc_score(), average_precision_score()
 - Calibration (confidence-vs-outcome): brier_score(), expected_calibration_error(),
   reliability_bins()
 
@@ -1025,6 +1026,165 @@ def matthews_corrcoef(y_true: list[bool], y_pred: list[bool]) -> float:
     if denominator == 0.0:
         return 0.0
     return (tp * tn - fp * fn) / denominator
+
+
+# ---------------------------------------------------------------------------
+# Ranking metrics (score-vs-label)
+# ---------------------------------------------------------------------------
+#
+# These score how well a single continuous score vector ranks a boolean label
+# vector -- e.g. a judge's raw score against the gold match/non-match label --
+# independent of any decision threshold. They differ from the agreement
+# metrics above (which compare two already-thresholded boolean vectors) and
+# from :func:`evaluate_blocking_with_ranking` (which scores a *blocker's*
+# per-entity candidate rankings against gold pairs via ranx). Both functions
+# return ``float('nan')`` -- not an exception -- when the label vector is a
+# single class, because the statistic is undefined there; callers must
+# display ``n/a`` for a ``nan`` result and must never fold it into an
+# aggregate (e.g. ``statistics.mean`` silently propagates ``nan`` rather than
+# raising).
+
+
+def _validate_binary_scores(y_true: Sequence[bool], scores: Sequence[float]) -> None:
+    """Validate a boolean label vector and a float score vector share length.
+
+    Sibling of :func:`_validate_binary` for the (bool labels, float scores)
+    shape used by ranking metrics, rather than two boolean vectors.
+
+    Raises:
+        ValueError: If the inputs differ in length or are empty.
+    """
+    if len(y_true) != len(scores):
+        raise ValueError(
+            f"y_true and scores must have equal length, got {len(y_true)} and {len(scores)}"
+        )
+    if not y_true:
+        raise ValueError("y_true and scores must be non-empty")
+
+
+def _midranks(scores: Sequence[float]) -> list[float]:
+    """1-indexed midranks: a tied group of scores shares the average of the ranks it spans.
+
+    E.g. three lowest-scoring items tied for ranks 1-3 all get midrank
+    ``2.0`` (the average of 1, 2, 3), not three distinct ordinal ranks. This
+    is what makes :func:`roc_auc_score` tie-aware: a naive ordinal rank would
+    instead break the tie by array position, silently scoring a
+    positive/negative tie as a full win or loss.
+    """
+    n = len(scores)
+    order = sorted(range(n), key=lambda i: scores[i])
+    midranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2 + 1  # 1-indexed average of ranks i+1 .. j+1
+        for k in range(i, j + 1):
+            midranks[order[k]] = avg_rank
+        i = j + 1
+    return midranks
+
+
+def roc_auc_score(y_true: Sequence[bool], scores: Sequence[float]) -> float:
+    """Area under the ROC curve via the tie-aware Mann-Whitney U statistic.
+
+    ``AUC = U / (n_pos * n_neg)`` where ``U = sum(midrank_i for i in
+    positives) - n_pos*(n_pos+1)/2`` and midranks (see :func:`_midranks`)
+    give every tied score group the *average* of the ranks it spans -- the
+    textbook equivalence between AUC and the Wilcoxon-Mann-Whitney statistic.
+    Midranks (not naive ordinal ranks) are required: ordinal ranks score a
+    positive/negative tie as a full win or loss instead of the correct
+    half-credit, silently biasing AUC whenever ties straddle the class
+    boundary -- exactly the failure mode this implementation avoids.
+
+    Args:
+        y_true: Ground-truth boolean labels (positive class is ``True``).
+        scores: Continuous scores, aligned with ``y_true``. Higher is assumed
+            to indicate the positive class.
+
+    Returns:
+        AUC in ``[0.0, 1.0]``. Returns ``float('nan')`` when ``y_true`` is a
+        single class (no positives or no negatives), where AUC is undefined.
+        An all-identical-score input falls out to exactly ``0.5`` with no
+        special-cased branch, because every item ties into one group spanning
+        the full ``1..n`` rank range.
+
+    Raises:
+        ValueError: If ``y_true`` and ``scores`` differ in length or are empty.
+
+    Example:
+        >>> roc_auc_score([False, False, True, True], [1.0, 2.0, 3.0, 4.0])
+        1.0
+    """
+    _validate_binary_scores(y_true, scores)
+    n = len(y_true)
+    n_pos = sum(1 for t in y_true if t)
+    n_neg = n - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    midranks = _midranks(scores)
+    rank_sum_pos = sum(r for r, t in zip(midranks, y_true, strict=True) if t)
+    u_statistic = rank_sum_pos - n_pos * (n_pos + 1) / 2
+    return u_statistic / (n_pos * n_neg)
+
+
+def average_precision_score(y_true: Sequence[bool], scores: Sequence[float]) -> float:
+    """Average Precision: the step-summed area under the precision-recall curve.
+
+    Sorts by ``scores`` descending and walks cut points, computing ``AP =
+    sum((R_k - R_{k-1}) * P_k)`` over the *distinct* score values. A group of
+    tied scores is processed as a single cut, using the cumulative TP/FP
+    count after the *whole* block -- not accumulated per item within the
+    block, which would overstate precision by crediting early items in a tie
+    group with a higher precision than the block as a whole actually earns.
+
+    Args:
+        y_true: Ground-truth boolean labels (positive class is ``True``).
+        scores: Continuous scores, aligned with ``y_true``. Higher is assumed
+            to indicate the positive class.
+
+    Returns:
+        AP in ``[0.0, 1.0]``. Returns ``1.0`` when every label is positive
+        (no negatives to rank against, so any ordering is trivially
+        perfect). Returns ``float('nan')`` when there are no positives at
+        all, where AP is undefined. An all-identical-score input degenerates
+        to one tie block spanning every item, so AP collapses to exactly the
+        class prevalence ``n_pos / n``.
+
+    Raises:
+        ValueError: If ``y_true`` and ``scores`` differ in length or are empty.
+
+    Example:
+        >>> average_precision_score([False, False, True, True], [1.0, 2.0, 3.0, 4.0])
+        1.0
+    """
+    _validate_binary_scores(y_true, scores)
+    n = len(y_true)
+    n_pos = sum(1 for t in y_true if t)
+    if n_pos == 0:
+        return float("nan")
+    n_neg = n - n_pos
+    if n_neg == 0:
+        return 1.0
+
+    order = sorted(range(n), key=lambda i: scores[i], reverse=True)
+    average_precision = 0.0
+    true_positives = 0
+    previous_recall = 0.0
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        true_positives += sum(1 for k in range(i, j + 1) if y_true[order[k]])
+        cumulative_count = j + 1
+        recall = true_positives / n_pos
+        precision = true_positives / cumulative_count
+        average_precision += (recall - previous_recall) * precision
+        previous_recall = recall
+        i = j + 1
+    return average_precision
 
 
 # ---------------------------------------------------------------------------
