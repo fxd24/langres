@@ -104,6 +104,32 @@ def _candidate() -> ERCandidate[CompanySchema]:
     )
 
 
+def test_p_yes_does_not_clobber_a_rating_parsers_score() -> None:
+    """A rating parser (decision=None, score=<float>) + logprobs must keep its rating.
+
+    p_yes from first-token yes/no mass is meaningless for a "rate 0-1" response;
+    promoting it to `score` would silently discard the parsed rating. The promotion
+    is gated on `parsed.decision is not None` (a binary decider), so a rating flows
+    through untouched.
+    """
+    from langres.core.modules.llm_judge import parse_score_response
+
+    judge = LLMJudge[CompanySchema](
+        client=object(),  # sentinel; _map_verdict never touches the client
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_score_response,
+    )
+    decision, score, confidence, source, _reasoning, parse_error = judge._map_verdict(
+        "Score: 0.42", {"p_yes": 0.9}
+    )
+    assert decision is None  # a ranker, not a decider
+    assert score == pytest.approx(0.42)  # the parsed rating, NOT p_yes=0.9
+    assert confidence is None
+    assert source == "none"
+    assert parse_error is False
+
+
 # --------------------------------------------------------------------------- #
 # _normalize_answer_token — casing/whitespace/punctuation collapse.
 # --------------------------------------------------------------------------- #

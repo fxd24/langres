@@ -274,7 +274,9 @@ def _prompt(in_stream: TextIO, out_stream: TextIO) -> str | None:
 
 def _render_item(item: ReviewItem, index: int, total: int) -> str:
     """Render one pair side by side for terminal review (record content sanitized)."""
-    verdict = "MATCH" if item.verdict else "NO-MATCH"
+    # verdict can be None for a score-only row that recorded no verdict/decision;
+    # render "?" rather than silently showing an unknown as NO-MATCH.
+    verdict = {True: "MATCH", False: "NO-MATCH", None: "?"}[item.verdict]
     # A decider (binary judge) has no score -- render "n/a" rather than crash on
     # None. Surface its credence instead, which is the signal that queued it.
     signal = "n/a" if item.score is None else f"{item.score:.3f}"
@@ -332,7 +334,8 @@ def _export_csv(queue_path: Path, out_path: Path, out_stream: TextIO) -> int:
             row += [
                 # A decider has no score: emit an empty cell, not the literal "None".
                 _escape_formula("" if item.score is None else str(item.score)),
-                _escape_formula(str(item.verdict).lower()),
+                # verdict None (a score-only row) -> empty cell, not the string "none".
+                _escape_formula("" if item.verdict is None else str(item.verdict).lower()),
                 _escape_formula(item.reason),
                 "",  # label: left blank for the reviewer to fill
             ]

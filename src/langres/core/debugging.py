@@ -326,6 +326,22 @@ class PipelineDebugger(Generic[SchemaT]):
         # signal, so they are omitted rather than coerced to a fake 0.0.
         scores = np.array([j.score for j in judgements if j.score is not None])
 
+        if scores.size == 0:
+            # A binary/decision judge (or an all-abstained run) has judgements
+            # but no scores; np.mean/percentile on an empty array raises. Return
+            # zero stats rather than crash (mirrors the empty-judgements guard).
+            return ScoreStats(
+                mean_score=0.0,
+                median_score=0.0,
+                std_score=0.0,
+                p25=0.0,
+                p75=0.0,
+                p95=0.0,
+                true_match_mean=0.0,
+                non_match_mean=0.0,
+                separation=0.0,
+            )
+
         # Calculate overall statistics
         mean_score = float(np.mean(scores))
         median_score = float(np.median(scores))

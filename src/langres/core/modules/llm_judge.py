@@ -1034,9 +1034,12 @@ class LLMJudge(Module[SchemaT]):
             return None, None, None, "none", parsed.reasoning, True
 
         p_yes = confidence_fragment.get("p_yes") if confidence_fragment is not None else None
-        if p_yes is not None:
-            # Earned credence: p_yes is an honest continuous ranking signal; the
-            # credence in the model's OWN answer is max(p_yes, 1 - p_yes).
+        if p_yes is not None and parsed.decision is not None:
+            # Earned credence, only for a binary DECISION judge: p_yes is an honest
+            # continuous ranking signal and the credence in the model's OWN answer
+            # is max(p_yes, 1 - p_yes). A rating parser (decision=None, score=<float>)
+            # must NOT have its parsed rating clobbered by first-token yes/no mass,
+            # which is meaningless for a "rate 0-1" response.
             confidence = max(p_yes, 1.0 - p_yes)
             return parsed.decision, p_yes, confidence, "logprob", parsed.reasoning, False
 

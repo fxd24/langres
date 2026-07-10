@@ -269,6 +269,22 @@ def test_export_csv_emits_empty_score_for_a_decider(tmp_path: Path) -> None:
     assert first["score"] == ""  # empty cell, never "None"
 
 
+def test_none_verdict_renders_as_unknown_not_no_match(tmp_path: Path) -> None:
+    """A score-only row can have verdict=None: show '?' / empty, not a silent NO-MATCH."""
+    unknown = ReviewItem(left_id="a", right_id="b", score=0.5, verdict=None, reason="uncertainty")
+    queue = _write_queue(tmp_path / "q.jsonl", [unknown])
+    rc, out = _run(["review", str(queue)], stdin="q\n")
+    assert rc == 0
+    assert "judge: ?" in out
+    assert "NO-MATCH" not in out
+    csv_path = tmp_path / "out.csv"
+    rc, _ = _run(["export-csv", str(queue), str(csv_path)])
+    assert rc == 0
+    rows = list(_read_csv(csv_path))
+    first = dict(zip(rows[0], rows[1]))
+    assert first["verdict"] == ""  # empty cell, never "none"
+
+
 # --------------------------------------------------------------------------- #
 # export-csv                                                                   #
 # --------------------------------------------------------------------------- #

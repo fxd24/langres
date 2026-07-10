@@ -8,11 +8,56 @@ This module tests the three report models used for component inspection:
 
 import pytest
 
+from langres.core.models import PairwiseJudgement
 from langres.core.reports import (
     CandidateInspectionReport,
     ClusterInspectionReport,
     ScoreInspectionReport,
+    _inspect_scores_impl,
 )
+
+
+def _decider(left_id: str, right_id: str, *, decision: bool) -> PairwiseJudgement:
+    """A binary decider: a decision and no score (score=None)."""
+    return PairwiseJudgement(
+        left_id=left_id,
+        right_id=right_id,
+        decision=decision,
+        score=None,
+        score_type="prob_llm",
+        decision_step="binary_llm",
+        provenance={},
+    )
+
+
+class TestInspectScoresWithNoScores:
+    """A binary/decision judge yields judgements with NO scores -- must not crash."""
+
+    def test_all_none_scores_returns_an_honest_scoreless_report(self) -> None:
+        # Non-empty judgements, every score None: np.percentile([], ...) would raise.
+        judgements = [
+            _decider("a", "b", decision=True),
+            _decider("c", "d", decision=False),
+        ]
+        report = _inspect_scores_impl(judgements)
+        assert report.total_judgements == 2
+        assert report.score_distribution == {}
+        assert report.high_scoring_examples == []
+        assert report.low_scoring_examples == []
+        assert any("decision-only" in r or "no score" in r for r in report.recommendations)
+
+    def test_mixed_scored_and_scoreless_still_summarizes_the_scored(self) -> None:
+        scored = PairwiseJudgement(
+            left_id="e",
+            right_id="f",
+            score=0.8,
+            score_type="heuristic",
+            decision_step="x",
+            provenance={},
+        )
+        report = _inspect_scores_impl([scored, _decider("a", "b", decision=True)])
+        assert report.total_judgements == 2
+        assert report.score_distribution["mean"] == 0.8  # the one real score
 
 
 class TestCandidateInspectionReport:

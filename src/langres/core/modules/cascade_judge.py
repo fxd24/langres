@@ -162,9 +162,12 @@ class CascadeJudge(Module[SchemaT]):
             One PairwiseJudgement per candidate: the escalation judgement
             (``decision_step=CASCADE_ESCALATED_STEP``) for pairs whose student
             score (or, absent a score, ``confidence``) falls inside the band
-            (inclusive) -- and for pairs where the student abstained (neither),
-            since an abstention is maximally uncertain -- the student judgement
-            (``decision_step=CASCADE_STUDENT_STEP``) otherwise. Cascade
+            (inclusive), and for pairs where the student *abstained*
+            (``is_abstain`` -- neither a decision nor a score), since an
+            abstention is maximally uncertain. Otherwise the student judgement
+            is trusted (``decision_step=CASCADE_STUDENT_STEP``) -- including a
+            binary decider that confidently decided with no score and no
+            confidence, which is trusted rather than escalated. Cascade
             provenance keys (``cascade_tier``, ``student_score``, the inner
             ``decision_step`` values) merge into the winning child's provenance.
 
@@ -191,14 +194,20 @@ class CascadeJudge(Module[SchemaT]):
             )
             self._check_score_type(student_judgement)
             # The band is applied to the student's confidence-ordered value: its
-            # ``score`` if it ranked, else its ``confidence``. If the student
-            # abstained (neither), it is maximally uncertain -> escalate.
+            # ``score`` if it ranked, else its ``confidence``. A student that
+            # abstained (is_abstain) is maximally uncertain -> escalate. But a
+            # student that *confidently decided* with no score and no confidence
+            # (a binary decider: decision set, score=None, confidence=None) has
+            # band_value=None yet is NOT uncertain -- trust its decision rather
+            # than escalate every pair and erase the cascade's cost savings.
             band_value = (
                 student_judgement.score
                 if student_judgement.score is not None
                 else student_judgement.confidence
             )
-            if band_value is None or low <= band_value <= high:
+            if student_judgement.is_abstain or (
+                band_value is not None and low <= band_value <= high
+            ):
                 try:
                     raw = list(self.escalation.forward(iter([candidate])))
                 except BudgetExceeded as exc:

@@ -1014,6 +1014,22 @@ def _inspect_scores_impl(
     scores = [score for _, score in scored]
     total = len(judgements)
 
+    # A binary/decision judge (or an all-abstained run) has judgements but NO
+    # scores. np.mean/percentile on an empty list raises -- return an honest
+    # score-less report instead of crashing the public inspect_scores() API.
+    if not scores:
+        return ScoreInspectionReport(
+            total_judgements=total,
+            score_distribution={},
+            high_scoring_examples=[],
+            low_scoring_examples=[],
+            recommendations=[
+                f"All {total} judgement(s) are decision-only or abstained (no score "
+                "to summarize). This is expected for a binary decision judge; "
+                "inspect `decision` / `confidence` instead of the score distribution.",
+            ],
+        )
+
     # Compute statistics
     score_distribution = {
         "mean": float(np.mean(scores)),
