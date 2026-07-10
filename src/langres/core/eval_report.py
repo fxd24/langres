@@ -286,9 +286,19 @@ class EvalReport(BaseModel):
         run's re-judgement supersedes), so every pair is counted exactly once and
         the confusion cells reconcile.
 
+        Raises:
+            ValueError: If ``costs`` is given but its length differs from
+                ``judgements`` -- a misaligned list would silently mis-sum the
+                total spend rather than fail.
+
         Returns:
             A frozen :class:`EvalReport`.
         """
+        if costs is not None and len(costs) != len(judgements):
+            raise ValueError(
+                f"costs must align with judgements: got {len(costs)} costs for "
+                f"{len(judgements)} judgements"
+            )
         # One judgement per pair: a persisted log can carry duplicate rows for the
         # same pair (a resumed run re-judging it). Keep the last -- last write wins,
         # as a re-run supersedes the earlier verdict -- so the set-based tp/fp/fn
@@ -427,9 +437,11 @@ class EvalReport(BaseModel):
         """Build a report from persisted ``JudgementLog.read()`` rows plus gold.
 
         The default mental model: judging already happened and was logged; this
-        recomputes the whole tearsheet at $0. Per-row ``cost_usd`` (falling back
-        to ``llm_cost_usd``, the cascade key) is summed into
-        :attr:`total_cost_usd`.
+        recomputes the whole tearsheet at $0. Per-row ``cost_usd`` is summed into
+        :attr:`total_cost_usd`, falling back to the legacy ``llm_cost_usd`` key for
+        rows not produced by the current ``JudgementLog.append()`` (which resolves
+        cost to a single top-level ``cost_usd``) -- e.g. a hand-built row dict or a
+        pre-normalisation log. This mirrors ``_COST_KEYS``' first-present-wins.
 
         Args:
             rows: Rows as produced by

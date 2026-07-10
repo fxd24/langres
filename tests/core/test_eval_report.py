@@ -212,9 +212,14 @@ def test_from_log_reconstructs_and_sums_cost() -> None:
     assert report.total_cost_usd == pytest.approx(0.003)
 
 
-def test_from_log_falls_back_to_llm_cost_usd_key() -> None:
-    """Cascade rows persist cost under llm_cost_usd, not cost_usd -- sum must
-    still see them (the cost regression this contract also fixed)."""
+def test_from_log_falls_back_to_legacy_llm_cost_usd_key() -> None:
+    """`from_log` accepts arbitrary row dicts, not only current `read()` output.
+
+    Current `JudgementLog.append()` normalises cost to a single top-level
+    `cost_usd`, so `read()` rows never carry a top-level `llm_cost_usd`. But a
+    hand-built row (or a pre-normalisation log) may put cost under the legacy
+    `llm_cost_usd` key; the sum must still see it, mirroring `_COST_KEYS`.
+    """
     rows = [_row("a", "b", score=0.9, decision=True, verdict=True, cost_usd=0.0, llm_cost_usd=0.05)]
     report = EvalReport.from_log(rows, _GOLD, threshold=0.5)
     assert report.total_cost_usd == pytest.approx(0.05)
@@ -348,6 +353,13 @@ def test_duplicate_pair_rows_are_collapsed_last_wins_and_not_double_counted() ->
     # (a,b) is a judged gold that IS predicted, so no judged pair falls into fn:
     # the four cells + abstains then account for exactly the judged pairs.
     assert report.tp + report.fp + report.tn + report.n_abstained == report.n_candidates
+
+
+def test_misaligned_costs_raises_rather_than_mis_summing() -> None:
+    """A costs list of the wrong length is a caller bug, not a silent wrong total."""
+    judgements = [_j("a", "b", score=0.9), _j("c", "d", score=0.8)]
+    with pytest.raises(ValueError, match="costs must align"):
+        EvalReport.from_judgements(judgements, _GOLD, threshold=0.5, costs=[0.01])
 
 
 def test_to_markdown_escapes_a_pipe_in_a_record_id() -> None:
