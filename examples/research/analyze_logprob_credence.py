@@ -29,9 +29,6 @@ from typing import Any
 
 from langres.core.metrics import average_precision_score, roc_auc_score
 
-# A judge that says "yes" and "no" with equal credence carries no signal at all.
-_CHANCE = 0.5
-
 
 def _load(path: Path) -> list[dict[str, Any]]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
