@@ -78,6 +78,17 @@ pieces that can regress money or silently report a wrong number.
   `n_parse_errors` could not see it, so DSPy abstentions were invisible in every
   eval report. Both judges now abstain at `score=0.0` with `parse_error=True`.
 
+- **`evaluate()` accepted a degenerate match cut.** `classify_pairs` predicts a
+  match iff `score >= cut`, and both `LLMJudge` and `DSPyJudge` abstain at
+  `score=0.0` — so `evaluate(threshold=0.0)` graded **every abstention as a
+  confident YES**, inflating recall off parse failures. A cut above `1.0` is
+  unreachable for a `[0, 1]` score, making F1 a structural `0.0` rather than a
+  measurement. `threshold` and every `grid` point must now lie in `(0.0, 1.0]`.
+- **`langres.eval.candidates_for()` silently graded the wrong split.** Any
+  `split` value other than exactly `"test"` fell through to the **train** split,
+  so a typo (`"valid"`, `"Test"`) produced a report that looked valid while
+  scoring the wrong partition. `Literal` only protects type-checked callers; a
+  CLI flag or a dict lookup reaches it untyped. Unknown splits now raise.
 - **`judge="auto"` told users their spend was "hard-capped".** Both user-facing
   messages in `core/presets.py` (the `NoJudgeAvailableError` guidance and the
   paid-judge notice) promised a hard cap the `BudgetedModuleRunner` does not
