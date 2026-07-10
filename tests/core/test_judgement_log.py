@@ -13,7 +13,7 @@ import json
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -28,16 +28,24 @@ from langres.core.runs import RunContext, capture_run
 def _judgement(
     left_id: str = "a",
     right_id: str = "b",
-    score: float = 0.9,
+    score: float | None = 0.9,
     *,
+    decision: bool | None = None,
+    confidence: float | None = None,
+    confidence_source: Literal[
+        "none", "unrequested", "logprob", "calibrated", "heuristic"
+    ] = "none",
     reasoning: str | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> PairwiseJudgement:
     return PairwiseJudgement(
         left_id=left_id,
         right_id=right_id,
+        decision=decision,
         score=score,
         score_type="heuristic",
+        confidence=confidence,
+        confidence_source=confidence_source,
         decision_step="test_step",
         reasoning=reasoning,
         provenance=provenance if provenance is not None else {},
@@ -106,11 +114,59 @@ class TestJudgementLogAppend:
         for line in lines:
             json.loads(line)  # every line is independently valid JSON
 
-    def test_append_includes_schema_version_v2(self, tmp_path: Path) -> None:
+    def test_append_includes_schema_version_v3(self, tmp_path: Path) -> None:
         log = JudgementLog(tmp_path / "log.jsonl")
         log.append(_judgement(), verdict=True)
         row = log.read()[0]
-        assert row["v"] == 2
+        assert row["v"] == 3
+
+    def test_append_records_decision_confidence_and_source_from_judgement(
+        self, tmp_path: Path
+    ) -> None:
+        """The v3 contract columns come straight off the judgement (not derived
+        from ``verdict``): a decider's ``decision`` plus its earned confidence."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(
+            _judgement(
+                score=None,
+                decision=True,
+                confidence=0.82,
+                confidence_source="logprob",
+            ),
+            verdict=True,
+        )
+        row = log.read()[0]
+        assert row["decision"] is True
+        assert row["score"] is None
+        assert row["confidence"] == pytest.approx(0.82)
+        assert row["confidence_source"] == "logprob"
+
+    def test_append_defaults_decision_none_confidence_none_source_none(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain ranker (no decision, no confidence) logs the honest defaults."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(score=0.9), verdict=True)
+        row = log.read()[0]
+        assert row["decision"] is None
+        assert row["confidence"] is None
+        assert row["confidence_source"] == "none"
+
+    def test_append_reads_cost_from_llm_cost_usd_key(self, tmp_path: Path) -> None:
+        """The cost bug: CascadeModule writes spend under ``llm_cost_usd`` (not
+        ``cost_usd``), so a bare ``.get("cost_usd")`` persisted 0.0 for every
+        cascade row. The row must carry the real cost."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(provenance={"llm_cost_usd": 0.0042, "model": "glm"}), verdict=True)
+        row = log.read()[0]
+        assert row["cost_usd"] == pytest.approx(0.0042)
+
+    def test_append_cost_prefers_cost_usd_over_llm_cost_usd(self, tmp_path: Path) -> None:
+        """First of ``_COST_KEYS`` present wins: ``cost_usd`` takes precedence."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(provenance={"cost_usd": 0.01, "llm_cost_usd": 0.99}), verdict=True)
+        row = log.read()[0]
+        assert row["cost_usd"] == pytest.approx(0.01)
 
     def test_append_records_usage_vector_in_default_row(self, tmp_path: Path) -> None:
         """The token-usage vector is in the DEFAULT (features=False) row — it is
@@ -270,6 +326,73 @@ class TestJudgementLogRead:
         log = JudgementLog(path)
         rows = log.read()
         assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# JudgementLog.read decision-contract backfill (v1/v2 -> v3)
+# ---------------------------------------------------------------------------
+
+
+class TestJudgementLogDecisionBackfill:
+    """Additive v2 -> v3: a pre-decision-contract row (no ``decision`` column)
+    reads back with ``decision`` backfilled from its ``verdict`` and
+    ``confidence``/``confidence_source`` defaulted -- asserting the exact
+    backfilled VALUES, not merely that it parses."""
+
+    def test_v2_row_with_true_verdict_backfills_decision_true(self, tmp_path: Path) -> None:
+        path = tmp_path / "log.jsonl"
+        path.write_text(
+            '{"v": 2, "left_id": "a", "right_id": "b", "verdict": true, "score": 1.0}\n',
+            encoding="utf-8",
+        )
+        row = JudgementLog(path).read()[0]
+        assert row["decision"] is True
+        assert row["confidence"] is None
+        assert row["confidence_source"] == "none"
+
+    def test_v2_row_with_false_verdict_backfills_decision_false(self, tmp_path: Path) -> None:
+        path = tmp_path / "log.jsonl"
+        path.write_text(
+            '{"v": 2, "left_id": "a", "right_id": "b", "verdict": false, "score": 0.1}\n',
+            encoding="utf-8",
+        )
+        row = JudgementLog(path).read()[0]
+        assert row["decision"] is False
+
+    def test_v1_row_without_verdict_backfills_decision_none(self, tmp_path: Path) -> None:
+        """No ``verdict`` to backfill from -> ``decision`` is an honest ``None``
+        (an abstain), never a coerced ``False``."""
+        path = tmp_path / "log.jsonl"
+        path.write_text(
+            '{"v": 1, "left_id": "a", "right_id": "b", "score": 0.9}\n', encoding="utf-8"
+        )
+        row = JudgementLog(path).read()[0]
+        assert row["decision"] is None
+        assert row["confidence"] is None
+        assert row["confidence_source"] == "none"
+
+    def test_v3_row_carries_decision_directly_untouched(self, tmp_path: Path) -> None:
+        """A v3 row is trusted as written -- its ``decision`` is NOT re-derived
+        from ``verdict`` (here decision=False while verdict=True)."""
+        path = tmp_path / "log.jsonl"
+        path.write_text(
+            '{"v": 3, "left_id": "a", "right_id": "b", "decision": false, '
+            '"verdict": true, "score": null, "confidence": 0.4, '
+            '"confidence_source": "logprob"}\n',
+            encoding="utf-8",
+        )
+        row = JudgementLog(path).read()[0]
+        assert row["decision"] is False  # trusted, not overwritten by verdict
+        assert row["confidence"] == pytest.approx(0.4)
+        assert row["confidence_source"] == "logprob"
+
+    def test_appended_v3_row_round_trips_decision(self, tmp_path: Path) -> None:
+        """End-to-end: a decision-only judgement appended and read back keeps its
+        ``decision`` (the v>=3 pass-through branch)."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(score=None, decision=False), verdict=False)
+        row = log.read()[0]
+        assert row["decision"] is False
 
 
 # ---------------------------------------------------------------------------

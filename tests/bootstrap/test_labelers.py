@@ -66,6 +66,7 @@ class FakeJudge:
         completion_tokens: int = 500,
         cost_usd: float = 0.0,
         score: float = 0.9,
+        confidence: float | None = None,
         fail_ids: frozenset[str] = frozenset(),
         empty_ids: frozenset[str] = frozenset(),
         blind_ids: frozenset[str] = frozenset(),
@@ -75,6 +76,7 @@ class FakeJudge:
         self.completion_tokens = completion_tokens
         self.cost_usd = cost_usd
         self.score = score
+        self.confidence = confidence
         self.fail_ids = fail_ids
         self.empty_ids = empty_ids
         self.blind_ids = blind_ids
@@ -122,6 +124,8 @@ class FakeJudge:
                 right_id=cand.right.id,
                 score=self.score,
                 score_type="prob_llm",
+                confidence=self.confidence,
+                confidence_source="logprob" if self.confidence is not None else "none",
                 decision_step="fake",
                 reasoning="fake reasoning",
                 provenance=provenance,
@@ -170,6 +174,25 @@ def test_cost_uses_max_of_token_and_reported_cost() -> None:
     teacher = _teacher(FakeJudge(cost_usd=1.0))
     teacher.label([_cand("a", "b")])
     assert teacher.total_spent_usd == pytest.approx(1.0)
+
+
+def test_confidence_flows_from_judgement_confidence_not_score() -> None:
+    # A teacher emitting its own confidence (e.g. A3a's logprob path) propagates
+    # THAT confidence into the GoldPair -- distinct from the score. The split
+    # (label from predicted_match, confidence from judgement.confidence) means a
+    # score of 0.9 and a confidence of 0.72 no longer collapse into one number.
+    teacher = _teacher(FakeJudge(score=0.9, confidence=0.72))
+    out = teacher.label([_cand("a", "b")])
+    assert out[0].label is True  # from score 0.9 >= threshold
+    assert out[0].confidence == pytest.approx(0.72)  # the confidence, not 0.9
+
+
+def test_confidence_falls_back_to_score_when_judge_gives_none() -> None:
+    # No judge-supplied confidence -> the labeler falls back to the score as
+    # P(match), so the GoldPair still carries a usable confidence.
+    teacher = _teacher(FakeJudge(score=0.9, confidence=None))
+    out = teacher.label([_cand("a", "b")])
+    assert out[0].confidence == pytest.approx(0.9)
 
 
 # --- TeacherLabeler: pre-flight cap -----------------------------------------

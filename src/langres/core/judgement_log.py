@@ -15,12 +15,14 @@ the wrap entirely -- no file, no extra generator layer, byte-identical to
 pre-W0.2 behavior.
 
 Privacy (adopted DX): record content is OFF by default. Each line carries
-only ids, score, verdict, model, cost, the typed ``usage`` token vector
-(``LLMUsage.model_dump()``, or ``null`` for non-LLM judges), decision_step,
-timestamp, the enclosing run's ``run_id`` (the active ``capture_run`` attempt
-id, or ``null`` outside one -- the join key to the ``RunRecord``/trace, W1 S5),
-and the schema-version field ``"v": 2`` -- never the underlying record fields
-or the judge's free-text reasoning. The ``usage`` vector is non-PII (token
+only ids, score, the judge's own ``decision`` plus the caller's ``verdict``, the
+judge's ``confidence``/``confidence_source``, model, cost, the typed ``usage``
+token vector (``LLMUsage.model_dump()``, or ``null`` for non-LLM judges),
+decision_step, timestamp, the enclosing run's ``run_id`` (the active
+``capture_run`` attempt id, or ``null`` outside one -- the join key to the
+``RunRecord``/trace, W1 S5), and the schema-version field ``"v": 3`` -- never
+the underlying record fields or the judge's free-text reasoning. The ``usage``
+vector is non-PII (token
 counts only), so it belongs in the default row alongside ``cost_usd``/``model``
 -- capturing token spend is the whole point of the log. Pass ``features=True``
 to additionally log ``reasoning`` and the judge's raw ``provenance`` dict
@@ -53,8 +55,65 @@ __all__ = ["JudgementLog", "LoggingModule"]
 
 #: Schema-version tag written into every line (CEO #15) -- lets a future
 #: harvester (W2.4) or format-migration branch on it instead of guessing.
-#: Bumped 1 -> 2 when the default row gained the ``usage`` token-usage vector.
-_SCHEMA_VERSION = 2
+#: Bumped 1 -> 2 when the default row gained the ``usage`` token-usage vector,
+#: 2 -> 3 when it gained the decision-contract columns (``decision`` /
+#: ``confidence`` / ``confidence_source``).
+_SCHEMA_VERSION = 3
+
+#: The schema version at which :meth:`JudgementLog.append` began writing the
+#: decision-contract columns natively. :meth:`JudgementLog.read` trusts any row
+#: at or above this version to carry them (a missing column there is a genuine
+#: corruption, surfaced on access -- never silently defaulted) and backfills them
+#: onto older rows from ``verdict``. Anchored at 3 rather than ``_SCHEMA_VERSION``
+#: so a later additive bump cannot retro-backfill and clobber a real logged
+#: ``decision``.
+_DECISION_CONTRACT_VERSION = 3
+
+#: Provenance keys carrying a judgement's USD cost, in priority order (first
+#: present wins). Twin of ``benchmark._COST_KEYS`` -- a deliberate local copy, not
+#: an import, to avoid a ``judgement_log`` <- ``benchmark`` cycle (``benchmark``
+#: imports log-adjacent things). ``CascadeModule`` writes cost under
+#: ``llm_cost_usd``, so a plain ``.get("cost_usd")`` would persist 0.0 for every
+#: cascade row.
+_COST_KEYS: tuple[str, ...] = ("cost_usd", "llm_cost_usd")
+
+
+def _judgement_cost(judgement: PairwiseJudgement) -> float:
+    """Measured USD cost of one judgement from its provenance.
+
+    Reads :data:`_COST_KEYS` in order (``"cost_usd"`` first, then
+    ``"llm_cost_usd"`` -- the key ``CascadeModule`` writes). Zero-spend judges
+    set neither, so this returns ``0.0`` for them. Twin of
+    ``benchmark._judgement_cost``.
+    """
+    prov = judgement.provenance
+    for key in _COST_KEYS:
+        if key in prov:
+            return float(prov[key])
+    return 0.0
+
+
+def _backfill_decision_contract(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a read-back row to the v3 decision-contract shape (in place).
+
+    A row at :data:`_DECISION_CONTRACT_VERSION` or newer carries ``decision`` /
+    ``confidence`` / ``confidence_source`` natively (written by
+    :meth:`JudgementLog.append`) and is returned untouched -- a row that new
+    *missing* one of those columns is a genuine corruption, surfaced on access
+    rather than masked by a silent default. Older (v1/v2, or unversioned) rows
+    predate the contract: ``decision`` is backfilled from the logged ``verdict``
+    (``bool(verdict)`` for a real bool, else ``None`` -- an honest abstain, never
+    a coerced ``False``), and ``confidence`` / ``confidence_source`` default to
+    ``None`` / ``"none"``.
+    """
+    v = row.get("v")
+    if isinstance(v, int) and v >= _DECISION_CONTRACT_VERSION:
+        return row
+    verdict = row.get("verdict")
+    row["decision"] = bool(verdict) if isinstance(verdict, bool) else None
+    row.setdefault("confidence", None)
+    row.setdefault("confidence_source", "none")
+    return row
 
 
 class JudgementLog:
@@ -87,9 +146,18 @@ class JudgementLog:
             "left_id": judgement.left_id,
             "right_id": judgement.right_id,
             "score": judgement.score,
+            # The decision-contract columns (v3): the judge's own ``decision``
+            # (``None`` when it only ranked or abstained) plus the ``confidence``
+            # it earned and where that came from -- logged alongside, and never
+            # derived from, the caller's ``verdict`` (its ``predicted_match``).
+            "decision": judgement.decision,
             "verdict": verdict,
+            "confidence": judgement.confidence,
+            "confidence_source": judgement.confidence_source,
             "model": judgement.provenance.get("model"),
-            "cost_usd": judgement.provenance.get("cost_usd", 0.0),
+            # First of _COST_KEYS present wins: CascadeModule logs ``llm_cost_usd``,
+            # so a bare ``.get("cost_usd")`` would persist 0.0 for every cascade row.
+            "cost_usd": _judgement_cost(judgement),
             # The typed token-usage vector (LLMUsage.model_dump()) when the judge
             # is an LLM; ``None`` for non-LLM judges. Non-PII counts, so it stays
             # in the DEFAULT (features=False) row alongside cost_usd/model.
@@ -108,9 +176,12 @@ class JudgementLog:
         """Reload every line written so far -- the round-trip reader.
 
         Each line is independently valid JSON (one row per :meth:`append`
-        call); this just parses them back into a list of plain dicts in
-        write order. Returns ``[]`` if the file was never created (e.g. a
-        ``dedupe()``/``link()`` call that scored zero pairs).
+        call); this parses them back into a list of plain dicts in write order,
+        version-dispatching each through :func:`_backfill_decision_contract` so
+        pre-v3 rows read back with ``decision`` / ``confidence`` /
+        ``confidence_source`` present (backfilled from ``verdict``). Returns
+        ``[]`` if the file was never created (e.g. a ``dedupe()``/``link()`` call
+        that scored zero pairs).
         """
         if not self.path.exists():
             return []
@@ -119,7 +190,7 @@ class JudgementLog:
             for line in fh:
                 stripped = line.strip()
                 if stripped:
-                    rows.append(json.loads(stripped))
+                    rows.append(_backfill_decision_contract(json.loads(stripped)))
         return rows
 
 
