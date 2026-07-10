@@ -162,6 +162,23 @@ class PairwiseJudgement(BaseModel):
         return self.decision is None and self.score is None
 
 
+class JudgeAbstainedError(RuntimeError):
+    """A judge abstained where the caller needs a verdict.
+
+    Raised by :func:`~langres.link` when the judge neither decided nor scored
+    (``PairwiseJudgement.is_abstain``) — e.g. an ``LLMJudge`` whose response
+    failed to parse under the default ``on_parse_error="abstain"``.
+
+    This is deliberately an exception rather than a ``match=None`` verdict: a
+    caller writing the obvious ``if verdict.match:`` would read ``None`` as "not
+    a match", silently turning "I don't know" back into a confident no — the very
+    conflation the decision/score split exists to remove. An exception cannot be
+    ignored by accident. It subclasses ``RuntimeError`` (like
+    ``NoJudgeAvailableError``) so existing ``except RuntimeError`` handlers still
+    catch it.
+    """
+
+
 def predicted_match(judgement: PairwiseJudgement, threshold: float) -> bool | None:
     """The ONE place that answers 'is this pair a match'.
 

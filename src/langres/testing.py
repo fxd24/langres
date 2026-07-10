@@ -94,6 +94,7 @@ class ScriptedJudge(Module[SchemaT]):
         reasoning: str | None = None,
         provenance: dict[str, Any] | None = None,
         default_score: float = 0.5,
+        abstain: Callable[[ERCandidate[SchemaT]], bool] | None = None,
     ) -> None:
         """Build a scripted judge.
 
@@ -115,6 +116,12 @@ class ScriptedJudge(Module[SchemaT]):
                 has something real to sum).
             default_score: Score returned for a pair not present in a ``dict``
                 ``scores`` map. Ignored when ``scores`` is a callable.
+            abstain: Optional predicate; when it returns ``True`` for a
+                candidate the judge yields an abstention (``decision=None,
+                score=None``) instead of a scored judgement, so the abstain
+                paths of downstream code (``predicted_match``, ``link``'s
+                ``JudgeAbstainedError``, the review flywheel) are exercisable
+                with no network. Evaluated before ``scores``.
         """
         self.scores = scores
         self.score_type = score_type
@@ -122,6 +129,7 @@ class ScriptedJudge(Module[SchemaT]):
         self.reasoning = reasoning
         self.provenance: dict[str, Any] = dict(provenance) if provenance is not None else {}
         self.default_score = default_score
+        self.abstain = abstain
         self.seen: list[frozenset[str]] = []
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
@@ -135,6 +143,17 @@ class ScriptedJudge(Module[SchemaT]):
                 {candidate.left.id, candidate.right.id}  # type: ignore[attr-defined]
             )
             self.seen.append(key)
+            if self.abstain is not None and self.abstain(candidate):
+                yield PairwiseJudgement(
+                    left_id=candidate.left.id,  # type: ignore[attr-defined]
+                    right_id=candidate.right.id,  # type: ignore[attr-defined]
+                    score=None,
+                    score_type=self.score_type,  # type: ignore[arg-type]
+                    decision_step=self.decision_step,
+                    reasoning=self.reasoning,
+                    provenance=dict(self.provenance),
+                )
+                continue
             if isinstance(self.scores, dict):
                 score = self.scores.get(key, self.default_score)
             else:

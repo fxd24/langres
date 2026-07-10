@@ -58,7 +58,12 @@ from pydantic import BaseModel, Field, create_model
 from langres.core.blockers.all_pairs import schema_to_factory
 from langres.core.comparator import Comparator
 from langres.core.judgement_log import JudgementLog, LoggingModule
-from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
+from langres.core.models import (
+    ERCandidate,
+    JudgeAbstainedError,
+    PairwiseJudgement,
+    predicted_match,
+)
 from langres.core.module import Module
 from langres.core.presets import (
     JudgeName,
@@ -354,9 +359,12 @@ def link(
     if predicted is None:
         # A judge that neither scored nor decided abstained; link() owes the
         # caller a match/no-match verdict and cannot honestly fabricate one.
-        raise RuntimeError(
+        raise JudgeAbstainedError(
             f"the {judge_used!r} judge abstained (no decision and no score) on "
-            "this pair, so link() cannot return a match verdict."
+            "this pair, so link() cannot return a match verdict. An LLMJudge "
+            "abstains when its response fails to parse (the default "
+            "on_parse_error='abstain'); pass on_parse_error='raise' to surface "
+            "the parse failure itself, or catch JudgeAbstainedError."
         )
 
     return LinkVerdict(

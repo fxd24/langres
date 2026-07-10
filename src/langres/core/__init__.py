@@ -59,7 +59,9 @@ from langres.core.models import (
     CompanySchema,
     EntityProtocol,
     ERCandidate,
+    JudgeAbstainedError,
     PairwiseJudgement,
+    predicted_match,
 )
 from langres.core.module import GroupwiseModule, Module, stamp_group_cost
 from langres.core.modules.cascade_judge import CascadeJudge
@@ -162,6 +164,7 @@ __all__ = [
     "GLinkerAdapter",
     "GroupwiseModule",
     "harvest_labeled_pairs",
+    "JudgeAbstainedError",
     "JudgementLog",
     "KeyBlocker",
     "LabeledPair",
@@ -172,6 +175,7 @@ __all__ = [
     "optimizers",
     "PairwiseJudgement",
     "PipelineDebugger",
+    "predicted_match",
     "QdrantHybridIndex",
     "register",
     "register_schema",

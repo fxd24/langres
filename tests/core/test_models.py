@@ -665,3 +665,21 @@ class TestPredictedMatch:
         j = _judgement(decision=True)  # no score
         assert predicted_match(j, threshold=0.99) is True
         assert predicted_match(j, threshold=0.0) is True
+
+
+class TestJudgeAbstainedError:
+    """The exception link() raises when a judge gives no verdict to return."""
+
+    def test_subclasses_runtime_error(self):
+        """So existing ``except RuntimeError`` handlers still catch it."""
+        from langres.core.models import JudgeAbstainedError
+
+        assert issubclass(JudgeAbstainedError, RuntimeError)
+
+    def test_exported_from_top_level_and_core(self):
+        import langres
+        from langres.core import JudgeAbstainedError as core_cls
+        from langres.core.models import JudgeAbstainedError as models_cls
+
+        assert langres.JudgeAbstainedError is models_cls
+        assert core_cls is models_cls
