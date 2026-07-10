@@ -240,6 +240,37 @@ def test_review_strips_ansi_escapes_from_ids(tmp_path: Path) -> None:
     assert "left-id" in out
 
 
+def test_review_renders_a_decider_without_a_score(tmp_path: Path) -> None:
+    """A binary judge's queued item has score=None: render 'n/a' + its confidence, never crash."""
+    decider = ReviewItem(
+        left_id="a",
+        right_id="b",
+        score=None,  # a decider carries a decision, not a score
+        verdict=True,
+        confidence=0.55,
+        reason="uncertainty",
+    )
+    queue = _write_queue(tmp_path / "q.jsonl", [decider])
+    rc, out = _run(["review", str(queue)], stdin="q\n")
+    assert rc == 0
+    assert "score: n/a" in out  # not a crash, not "None"
+    assert "confidence: 0.550" in out  # the signal that actually queued it
+
+
+def test_export_csv_emits_empty_score_for_a_decider(tmp_path: Path) -> None:
+    """A score-less (decider) item exports an empty score cell, not the literal 'None'."""
+    decider = ReviewItem(
+        left_id="a", right_id="b", score=None, verdict=True, reason="uncertainty"
+    )
+    queue = _write_queue(tmp_path / "q.jsonl", [decider])
+    csv_path = tmp_path / "out.csv"
+    rc, _ = _run(["export-csv", str(queue), str(csv_path)])
+    assert rc == 0
+    rows = list(_read_csv(csv_path))
+    first = dict(zip(rows[0], rows[1]))
+    assert first["score"] == ""  # empty cell, never "None"
+
+
 # --------------------------------------------------------------------------- #
 # export-csv                                                                   #
 # --------------------------------------------------------------------------- #

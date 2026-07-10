@@ -275,12 +275,17 @@ def _prompt(in_stream: TextIO, out_stream: TextIO) -> str | None:
 def _render_item(item: ReviewItem, index: int, total: int) -> str:
     """Render one pair side by side for terminal review (record content sanitized)."""
     verdict = "MATCH" if item.verdict else "NO-MATCH"
+    # A decider (binary judge) has no score -- render "n/a" rather than crash on
+    # None. Surface its credence instead, which is the signal that queued it.
+    signal = "n/a" if item.score is None else f"{item.score:.3f}"
+    if item.confidence is not None:
+        signal += f"  |  confidence: {item.confidence:.3f}"
     return (
         "\n"
         + "-" * 60
         + "\n"
         + f"Pair {index}/{total}  |  reason: {item.reason}"
-        + f"  |  score: {item.score:.3f}  |  judge: {verdict}\n"
+        + f"  |  score: {signal}  |  judge: {verdict}\n"
         + f"  left  [{_sanitize(item.left_id)}]:  {_render_record(item.left_record)}\n"
         + f"  right [{_sanitize(item.right_id)}]:  {_render_record(item.right_record)}\n"
         + "-" * 60
@@ -325,7 +330,8 @@ def _export_csv(queue_path: Path, out_path: Path, out_stream: TextIO) -> int:
             row += [_escape_formula(_cell(item.left_record, key)) for key in left_keys]
             row += [_escape_formula(_cell(item.right_record, key)) for key in right_keys]
             row += [
-                _escape_formula(str(item.score)),
+                # A decider has no score: emit an empty cell, not the literal "None".
+                _escape_formula("" if item.score is None else str(item.score)),
                 _escape_formula(str(item.verdict).lower()),
                 _escape_formula(item.reason),
                 "",  # label: left blank for the reviewer to fill
