@@ -802,6 +802,11 @@ class BlockerEvaluationReport(BaseModel):
     # for a clean `pip install langres`. Fix = add a real [viz] extra
     # (matplotlib + seaborn) or drop these methods; tracked separately, its own
     # blast radius. Do not "fix" by changing the logic here.
+    #
+    # The supported, dependency-free visualization path is
+    # `langres.core.eval_report.EvalReport.to_html()`: it renders a full eval
+    # tearsheet as one self-contained HTML file with inline SVG (no matplotlib,
+    # no external assets). Prefer it over these matplotlib stubs.
     def plot_score_distribution(self, ax=None, **kwargs):  # type: ignore[no-untyped-def]
         """Plot score distribution (delegates to plotting module).
 

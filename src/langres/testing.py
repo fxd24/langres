@@ -95,6 +95,10 @@ class ScriptedJudge(Module[SchemaT]):
         provenance: dict[str, Any] | None = None,
         default_score: float = 0.5,
         abstain: Callable[[ERCandidate[SchemaT]], bool] | None = None,
+        confidence: dict[frozenset[str], float]
+        | Callable[[ERCandidate[SchemaT]], float | None]
+        | None = None,
+        confidence_source: str = "none",
     ) -> None:
         """Build a scripted judge.
 
@@ -122,6 +126,17 @@ class ScriptedJudge(Module[SchemaT]):
                 paths of downstream code (``predicted_match``, ``link``'s
                 ``JudgeAbstainedError``, the review flywheel) are exercisable
                 with no network. Evaluated before ``scores``.
+            confidence: Optional per-pair confidence (credence in [0, 1]),
+                mirroring ``scores`` -- a ``dict`` keyed by the unordered pair or
+                a callable returning a ``float | None``. Lets the double model a
+                logprob judge offline, so the calibration panel of an
+                :class:`~langres.core.eval_report.EvalReport` has a real signal to
+                plot. A callable/dict returning ``None`` for a pair leaves that
+                judgement's ``confidence`` unset. ``None`` (default): no
+                confidence on any judgement.
+            confidence_source: ``PairwiseJudgement.confidence_source`` stamped on
+                a judgement that gets a confidence (e.g. ``"logprob"``). Ignored
+                when ``confidence`` is ``None`` or yields ``None`` for the pair.
         """
         self.scores = scores
         self.score_type = score_type
@@ -130,7 +145,17 @@ class ScriptedJudge(Module[SchemaT]):
         self.provenance: dict[str, Any] = dict(provenance) if provenance is not None else {}
         self.default_score = default_score
         self.abstain = abstain
+        self.confidence = confidence
+        self.confidence_source = confidence_source
         self.seen: list[frozenset[str]] = []
+
+    def _confidence_for(self, candidate: ERCandidate[SchemaT], key: frozenset[str]) -> float | None:
+        """Resolve the scripted confidence for one candidate, or ``None``."""
+        if self.confidence is None:
+            return None
+        if isinstance(self.confidence, dict):
+            return self.confidence.get(key)
+        return self.confidence(candidate)
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Yield one scripted :class:`PairwiseJudgement` per candidate, in order.
@@ -158,11 +183,14 @@ class ScriptedJudge(Module[SchemaT]):
                 score = self.scores.get(key, self.default_score)
             else:
                 score = self.scores(candidate)
+            conf = self._confidence_for(candidate, key)
             yield PairwiseJudgement(
                 left_id=candidate.left.id,  # type: ignore[attr-defined]
                 right_id=candidate.right.id,  # type: ignore[attr-defined]
                 score=score,
                 score_type=self.score_type,  # type: ignore[arg-type]
+                confidence=conf,
+                confidence_source=(self.confidence_source if conf is not None else "none"),  # type: ignore[arg-type]
                 decision_step=self.decision_step,
                 reasoning=self.reasoning,
                 provenance=dict(self.provenance),

@@ -49,8 +49,36 @@ earned `confidence`. Builds directly on the eval-honesty groundwork below.
 - **`JudgementLog` persisted `$0` for every cascade row.** `append` / `read` only
   read `provenance["cost_usd"]`, but `CascadeModule` writes `llm_cost_usd`; the
   logged cost is now the first of `("cost_usd", "llm_cost_usd")` present.
+- **`harvest_labeled_pairs` coerced an abstention into a `False` silver label.**
+  A v3 abstention row (`verdict=None`) has no verdict to harvest; it is now
+  **skipped** (unless a human correction supplies a label) rather than seeding
+  training data with a non-match the judge never gave — the label-side twin of
+  never coercing a null score to `0.0`.
+- **`select_for_review("uncertainty")` dropped score-only rows in a mixed log.**
+  Once any row carried a `confidence`, the selector returned only the
+  confidence-bearing rows, silently discarding uncertain score-only rows (a
+  `CascadeJudge` log mixes both). It now folds the score band back in, so no
+  uncertain pair vanishes.
 
 ### Added
+
+- **`EvalReport` — a $0 evaluation tearsheet** (`langres.core.eval_report`, also
+  re-exported from `langres.eval`). `EvalReport.from_log(rows, gold_pairs)` (from
+  persisted `JudgementLog.read()` output) or `EvalReport.from_judgements(...)`
+  (in-process) computes pair precision/recall/F1, the PR and ROC curves +
+  ROC-AUC/AP, a gold-vs-non-gold score histogram, confidence calibration
+  (reliability diagram + Brier + ECE), and the most-confident errors — all at
+  **zero** API cost from already-logged judgements. `to_html()` renders a single
+  self-contained document with inline SVG (`langres.core._svg`): no matplotlib, no
+  external assets, theme-aware. A leaf module — nothing in `reports.py`/`module.py`
+  imports it, and an import-budget test locks that it never pulls a heavy
+  dependency. See `examples/quickstart_eval.py` (fully offline, in CI's
+  core-only job). This is the supported, dependency-free replacement for the
+  dead `plot_*`/`langres[viz]` matplotlib path.
+- **`langres.testing.ScriptedJudge` gained an optional `confidence` provider**
+  (dict or callable) + `confidence_source`, so the test double can model a
+  logprob judge offline (e.g. to populate an `EvalReport` calibration panel with
+  no API calls).
 
 - **`JudgementLog` schema v3.** Rows now carry `decision` / `confidence` /
   `confidence_source` natively; `read()` backfills `decision` from the logged
