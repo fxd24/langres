@@ -1,5 +1,172 @@
 # Changelog
 
+## [Unreleased] — eval honesty: spend cap by default, argmax warning, ROC-AUC, public seams
+
+Groundwork for the judgement-contract change (`decision` / abstain / optional
+`confidence`). Nothing here touches `PairwiseJudgement`'s schema; this lands the
+pieces that can regress money or silently report a wrong number.
+
+### ⚠️ Behavior changes
+
+- **`evaluate()` now caps spend by default.** It builds a `BudgetedModuleRunner`
+  internally; `budget_usd=` overrides it and omitting it resolves to
+  `DEFAULT_BUDGET_USD` (`$1.00`). Previously `evaluate()` had *no* cap at all —
+  a paid judge over a large candidate set billed until it finished. Free judges
+  never reach the cap. `evaluate_judge_on_candidates()` keeps its lower-level
+  `runner=` / `price_per_token_or_pair=` / `cost_track_fn=` knobs unchanged.
+  **The cap is enforced *between* calls**, so a single in-flight call can push
+  total spend past it by that call's own cost. When that happens the run stops
+  before starting another call and reports `JudgePairEval.budget_exceeded`,
+  and `evaluate()` warns naming the measured spend and the cap. It does not
+  raise: the run completed, its metrics are valid, and the money is already
+  spent — raising would only discard work the user paid for.
+- **`evaluate()` raises `ValueError` on an empty candidate list.** It used to
+  report `precision = recall = f1 = 0.0`, which is indistinguishable from a
+  judge that ran fine and matched nothing.
+- **`evaluate()` warns that `best_threshold` is fitted to the gold it reports
+  on.** The default still sweeps `DEFAULT_PAIR_GRID` and the returned number is
+  unchanged — but it is an argmax over the same gold used to score, i.e.
+  optimistically biased, not a held-out estimate. It now says so once, via
+  `UserWarning`. Pass `threshold=<float>` to grade honestly at a fixed cut:
+  `graded_threshold` is set and `best_threshold` becomes `None`.
+  The default was deliberately *not* flipped to a fixed `0.5` — a global cut
+  collapses an embedding judge from F1 1.000 to 0.667, because cosine
+  non-matches sit at 0.70–0.80. No single constant serves `sim_cos`,
+  `heuristic`, and a binary LLM judge alike.
+- **`evaluate(on_truncation=...)`** (`"raise"` default) raises
+  `EvaluationTruncatedError` **only when the spend cap caused the truncation**,
+  carrying the partial judgements on the exception. A judge that skips a pair
+  only warns: one bad call must not blow up a run and discard results already
+  paid for. `JudgePairEval.truncation_reason` records which happened.
+- **`CostTrack.cost_is_real` is now a derived property, not a stored bool.**
+  A single run can mix provider-billed cost, litellm-estimated cost, free local
+  judges, and untracked DSPy parse failures — a bool cannot say "mixed". The
+  stored field is `cost_basis: Literal["real","estimated","mixed","untracked","none"]`,
+  and `CostTrack.usage` now carries the summed `LLMUsage` token vector.
+  *Tokens are the fact; dollars are derived.*
+
+### Fixed
+
+- **The spend cap could not detect being breached.** `evaluate()` checked the
+  budget only *before* the next call, against a placeholder worst-case price, and
+  never compared the real post-call cost against the cap. A single `$10.00` call
+  under a `budget_usd=1.00` cap returned `truncated=False`,
+  `truncation_reason="none"` and no warning at all; a breach on the final pair
+  left the run looking complete and clean. The runner now compares measured spend
+  against the cap after every call. (Found by adversarial review, not by tests —
+  the branch was fully green when this shipped.)
+- **`cost_basis` disagreed with `usd_total` about whether money was spent.**
+  `_judgement_cost()` sums both `provenance["cost_usd"]` and
+  `provenance["llm_cost_usd"]` (the key `CascadeModule` writes), but the basis
+  classifier only recognized the first — so a real cascade run reported
+  `usd_total > 0` alongside `cost_basis="none"`, `cost_is_real=False`. Both now
+  read one shared key set.
+- **`make_token_cost_track` (`langres.clients.openrouter`) never set `cost_basis`
+  or `usage`.** The second `CostTrack` producer priced judgements from a token
+  table and returned a real dollar figure labelled `cost_basis="none"` with an
+  all-zero token vector. It now reports `"estimated"` (a price table is not a
+  provider-billed amount, so never `"real"`) and sums the token vectors.
+- **`roc_auc_score` / `average_precision_score` accepted non-finite scores.**
+  A `NaN` score returned `0.75` or `0.5` for the same multiset depending on input
+  order, because `NaN` breaks both `sorted()` and the equality-based tie grouping.
+  A ranking containing `NaN` is undefined; it now raises `ValueError` naming the
+  offending index.
+- **`DSPyJudge` abstained to the opposite verdict from `LLMJudge`.** On a parse
+  or validation error it emitted `score=0.5` with **no** `provenance["parse_error"]`
+  key. At any threshold ≤ 0.5 that abstention was predicted a **match** — while
+  `LLMJudge`'s abstention (`score=0.0`) was predicted a non-match — and
+  `n_parse_errors` could not see it, so DSPy abstentions were invisible in every
+  eval report. Both judges now abstain at `score=0.0` with `parse_error=True`.
+
+- **`evaluate()` accepted a degenerate match cut.** `classify_pairs` predicts a
+  match iff `score >= cut`, and both `LLMJudge` and `DSPyJudge` abstain at
+  `score=0.0` — so `evaluate(threshold=0.0)` graded **every abstention as a
+  confident YES**. A cut above `1.0` is unreachable for a `[0, 1]` score, making
+  F1 a structural `0.0` rather than a measurement. A fixed `threshold` must now
+  lie in `(0.0, 1.0]`.
+  A **swept `grid`** is held to the looser `[0.0, 1.0]`: `0.0` is a PR curve's
+  legitimate predict-all anchor (recall `1.0`, precision = prevalence), and
+  banning it would outlaw an honest ranking-judge sweep to defend against an
+  abstaining judge's convention. Instead, `evaluate()` **warns when the argmax
+  lands on `0.0`** — that judge does not beat predicting every pair a match, and
+  `best_threshold=0.0` must never reach production.
+- **The same invariant now holds on `evaluate_judge_on_candidates()`**, the
+  lower-level public path documented for paid and compiled judges. It validates
+  (and materialises) `grid` **before** the judge runs, so a bad grid never costs
+  an API call. `run_method()` holds a dataset-supplied `threshold_grid` to the
+  same rule. An empty grid is its own `ValueError` instead of an opaque
+  `max() iterable argument is empty` from inside the sweep.
+- **`langres.eval.candidates_for()` silently graded the wrong split.** Any
+  `split` value other than exactly `"test"` fell through to the **train** split,
+  so a typo (`"valid"`, `"Test"`) produced a report that looked valid while
+  scoring the wrong partition. `Literal` only protects type-checked callers; a
+  CLI flag or a dict lookup reaches it untyped. Unknown splits now raise.
+- **`judge="auto"` told users their spend was "hard-capped".** Both user-facing
+  messages in `core/presets.py` (the `NoJudgeAvailableError` guidance and the
+  paid-judge notice) promised a hard cap the `BudgetedModuleRunner` does not
+  provide: it stops *between* calls, so one in-flight call can overrun the cap
+  by its own cost. Same overstatement corrected in `benchmark.py`; the verbs
+  path now says what it actually does.
+
+### Added
+
+- **`langres.core.metrics.roc_auc_score` / `average_precision_score`** — pure
+  Python: `math` only, adding no numpy or sklearn dependency (`metrics.py` stays
+  import-light; sklearn remains confined to the `[trained]` extra). Tie-aware:
+  ROC-AUC uses the Mann-Whitney-U form over midranks, so an all-equal score
+  vector yields exactly `0.5` and a tie straddling the pos/neg boundary gets
+  half credit — the exact point a naive rank-AUC silently diverges from sklearn.
+  Single-class input **returns** `nan` rather than raising, so one degenerate
+  slice blanks a cell instead of killing a whole report. A non-finite *score*
+  (`NaN`/`±inf`), by contrast, **raises** — a ranking containing `NaN` is
+  undefined, and returning a confident, order-dependent number for it is worse
+  than failing.
+- **`Resolver.candidates(records) -> list[ERCandidate]`** — the public seam
+  replacing reaches into `Resolver._candidates`. It returns a **materialised
+  list**, because `evaluate_judge_on_candidates` calls `len()` and iterates
+  twice; handing it a generator would make the second pass yield nothing and
+  produce a plausible-but-wrong F1 off an empty gold set. Comparison vectors
+  are attached (a raw `blocker.stream()` does not attach them).
+- **`langres.eval.candidates_for(bench, *, split, seed)`** — returns
+  `(candidates, gold_pairs)` together, so scoring a benchmark never requires a
+  private API. Facade also now exports `roc_auc_score`, `average_precision_score`,
+  and `gold_pairs_from_clusters`.
+- **`JudgePairEval.n_abstained` / `.abstention_rate` / `.graded_threshold`** —
+  `graded_threshold` is always populated and always states which cut `pair` was
+  graded at.
+- **`langres.testing.ScriptedJudge`** — a public `Module` test double. It lets
+  tests and examples exercise judge-shaped code (`CascadeJudge`, `evaluate()`,
+  the review/harvest flywheel) with no network, no API key, and no spend —
+  which matters because a real `LLMJudge` picks up `OPENROUTER_API_KEY` from the
+  repo `.env` via litellm's import-time `load_dotenv()` and makes a real, billed
+  call. It replaces the hand-rolled `ScriptedJudge` in
+  `tests/core/modules/test_cascade_judge.py`. The four `DummyModule` copies in
+  `tests/core/test_module.py` stay put on purpose: those tests exercise the
+  `Module` ABC itself, and testing the ABC through a library-provided subclass
+  of it would be circular. Deliberately **not** `@register`-ed (a test double
+  must never enter `Resolver.load` dispatch) and **not** imported by
+  `langres/__init__.py`; an import-budget test asserts `import langres` leaves
+  `langres.testing` out of `sys.modules`.
+
+### Docs
+
+- Deleted a **false** README claim that `import langres` is heavy and "eagerly
+  pulls in `torch`/`litellm`". Measured: **207 ms, zero heavy modules** in
+  `sys.modules`; `tests/test_import_budget.py` enforces it.
+- `docs/TECHNICAL_OVERVIEW.md` documented `langres.tasks`, `langres.flows`,
+  `langres.ui`, `core.Optimizer`, `core.Evaluator`, `blockers.EmbedBlocker`,
+  `EmbedSim`, and `data.SyntheticGenerator` — **none of which exist**. It also
+  claimed metrics come from `sklearn.metrics` (`metrics.py` imports only `math`)
+  and that `pytrec_eval` is used (it appears nowhere; ranx backs the ranking
+  metrics, lazily, behind the `[eval]` extra). All rewritten against the real
+  verbs → `Resolver` → `core` layering, and §8's claim that the trained judges
+  had not shipped corrected — both `FellegiSunterJudge` and `RandomForestJudge`
+  exist and implement the W1.0 fit hooks.
+- Flagged that `reports.py`'s `plot_*` methods tell users to
+  `pip install 'langres[viz]'` — **an extra that does not exist**. matplotlib is
+  undeclared and arrives only transitively via `mlflow` or `seaborn ← ranx`.
+  Left in place; declaring or deleting it is a separate decision.
+
 ## [Unreleased] — paper replication: usage vector, LLM-judge seams, Peeters LLM-EM
 
 ### ⚠️ Behavior changes

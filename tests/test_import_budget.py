@@ -108,6 +108,63 @@ def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
     )
 
 
+# ``langres.testing`` (the public ``ScriptedJudge`` test/example double) must
+# stay out of the core import graph: a bare ``import langres`` should never
+# pull it in (it's an explicit ``from langres.testing import ScriptedJudge``
+# opt-in), and importing it directly must stay light -- no
+# torch/litellm/faiss/sentence-transformers/scikit-learn/dspy/ranx. Same
+# subprocess pattern as the ranx-decoupling check above, since the whole point
+# is a fresh, unpolluted ``sys.modules``.
+_TESTING_MODULE_NOT_EAGER_SCRIPT = (
+    "import sys; import langres; "
+    "assert 'langres.testing' not in sys.modules, "
+    "'langres.testing was eagerly imported by a bare import langres'; "
+    "print('OK')"
+)
+
+
+def test_import_langres_does_not_eagerly_import_testing_module() -> None:
+    """A bare ``import langres`` must not pull in ``langres.testing``."""
+    result = subprocess.run(
+        [sys.executable, "-c", _TESTING_MODULE_NOT_EAGER_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"langres.testing eager-import check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
+_TESTING_MODULE_HEAVY_DEPS = [
+    "torch",
+    "litellm",
+    "faiss",
+    "sentence_transformers",
+    "sklearn",
+    "dspy",
+    "ranx",
+]
+
+_TESTING_MODULE_IMPORT_LIGHT_SCRIPT = (
+    "import sys; import langres.testing; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'langres.testing leaked heavy modules: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_TESTING_MODULE_HEAVY_DEPS)
+
+
+def test_import_langres_testing_stays_import_light() -> None:
+    """``import langres.testing`` alone must not pull the heavy/optional stack."""
+    result = subprocess.run(
+        [sys.executable, "-c", _TESTING_MODULE_IMPORT_LIGHT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"langres.testing import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # ``langres.data.registry.list_methods`` is a public, import-light discovery API
 # (exported from ``langres.data``): it must return the method NAMES without
 # pulling ``langres.methods`` — which imports VectorBlocker / RandomForestJudge /

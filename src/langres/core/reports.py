@@ -573,6 +573,15 @@ class BlockerEvaluationReport(BaseModel):
         >>> print(f"MAP: {report.ranking.map:.3f}")
         >>> print(f"Score separation: {report.scores.separation:.2f}")
         >>> report.plot_all(save_path="blocker_eval.png")
+
+    Note:
+        The ``plot_*`` methods below need matplotlib, but there is **no**
+        ``[viz]`` extra (their own ImportError message advertises one that does
+        not exist) and matplotlib is not a declared dependency -- it is present
+        only transitively via ``[mlflow]`` or ``[eval]`` (``seaborn`` <- ``ranx``).
+        So plotting is unreachable for a clean ``pip install langres`` and works
+        only by accident when one of those extras happens to be installed. See
+        the ``TODO(viz)`` above ``plot_score_distribution``.
     """
 
     # Metric categories
@@ -785,6 +794,14 @@ class BlockerEvaluationReport(BaseModel):
         """
         return self.recall_curve.optimal_k(target_recall=target_recall)
 
+    # TODO(viz): the four plot_* methods below (and their ImportError messages)
+    # reference a `langres[viz]` extra that does NOT exist -- pyproject declares
+    # only semantic/llm/trained/eval/mlflow/wandb. matplotlib is undeclared and
+    # arrives only transitively via [mlflow] or [eval] (seaborn <- ranx), so
+    # `pip install 'langres[viz]'` fails and this whole branch is unreachable
+    # for a clean `pip install langres`. Fix = add a real [viz] extra
+    # (matplotlib + seaborn) or drop these methods; tracked separately, its own
+    # blast radius. Do not "fix" by changing the logic here.
     def plot_score_distribution(self, ax=None, **kwargs):  # type: ignore[no-untyped-def]
         """Plot score distribution (delegates to plotting module).
 

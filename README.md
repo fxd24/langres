@@ -200,9 +200,6 @@ are tracked in [TODOS.md](TODOS.md).
   constrains the blast radius but does **not** eliminate it. **Do not feed
   untrusted third-party record content to an LLM judge without review.** The
   free `"string"` and `"embedding"` judges are not affected.
-- **`import langres` is heavy.** Importing the package eagerly pulls in
-  `torch`/`litellm` today (only `dspy` is lazy), so first import is slow. The
-  extras split above is the planned fix.
 - **Inferred-schema artifacts don't reload in a fresh process.** When `dedupe`
   infers a schema from your records, the resulting `Resolver` can't be
   `save`/`load`-ed across processes — pass an explicit Pydantic schema (via

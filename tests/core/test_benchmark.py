@@ -11,6 +11,7 @@ structured accessors, and the import-cycle guard (core must not import
 import logging
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterator
 from typing import Any
 
@@ -42,8 +43,11 @@ from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.module import GroupwiseModule, Module
+from langres.core.presets import DEFAULT_BUDGET_USD
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
+from langres.testing import ScriptedJudge
+from langres.core.usage import LLMUsage
 from langres.methods import ZERO_SPEND_METHODS
 
 # ---------------------------------------------------------------------------
@@ -149,6 +153,58 @@ def test_runner_budget_stop_returns_paid_work_before_crossing() -> None:
     assert runner.total_spent_usd == pytest.approx(1.0)
     assert runner.dropped_by_cap_count == 1  # 4 input -> 3 preflight
     assert runner.labeled_count == 2
+
+
+class _CountingCostModule(Module[CompanySchema]):
+    """Fixed real-cost judge that counts ``forward()`` calls.
+
+    Under ``BudgetedModuleRunner`` each call scores exactly one candidate (see
+    the runner's "per-call resilience" point), so ``call_count`` is a direct,
+    accounting-independent proof of how many candidates were actually scored --
+    used to prove a post-call budget breach stops the loop immediately rather
+    than continuing on to the next candidate.
+    """
+
+    def __init__(self, cost: float) -> None:
+        self._cost = cost
+        self.call_count = 0
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        self.call_count += 1
+        for cand in candidates:
+            yield PairwiseJudgement(
+                left_id=cand.left.id,
+                right_id=cand.right.id,
+                score=1.0,
+                score_type="heuristic",
+                decision_step="fake",
+                provenance={"cost_usd": self._cost},
+            )
+
+    def inspect_scores(
+        self, judgements: list[PairwiseJudgement], sample_size: int = 10
+    ) -> ScoreInspectionReport:
+        raise NotImplementedError  # pragma: no cover — unused by the runner
+
+
+def test_runner_stops_immediately_after_post_call_budget_breach() -> None:
+    # BUG 1: real cost lands only AFTER a call completes. A judge charging $2/pair
+    # under a $1 cap must be caught the moment its real cost is tallied -- not
+    # after starting (or finishing) a second call. price_per_token_or_pair is
+    # negligible (mirrors evaluate()'s own _NEGLIGIBLE_WORST_CASE_PRICE) so
+    # neither the pre-flight cap nor the pre-call projected-spend check can fire
+    # first -- the ONLY thing able to stop this loop is the post-call real-spend
+    # check the fix adds.
+    module = _CountingCostModule(cost=2.0)
+    runner = BudgetedModuleRunner(module, budget_usd=1.0, budget_soft_usd=1.0)
+    out = runner.run(_candidates(5), price_per_token_or_pair=1e-9)
+
+    assert len(out) == 1
+    assert module.call_count == 1  # must not start a second call after breaching
+    assert runner.budget_exceeded is True
+    assert runner.total_spent_usd == pytest.approx(2.0)
 
 
 def test_runner_tallies_llm_cost_usd_key() -> None:
@@ -463,6 +519,184 @@ def test_cost_track_empty_judgements_is_zero() -> None:
     assert track.usd_total == 0.0
     assert track.usd_per_1k_pairs == 0.0
     assert track.est_usd_per_100k == 0.0
+    assert track.usage == LLMUsage()
+    assert track.cost_basis == "none"
+    assert track.cost_is_real is False
+
+
+def test_cost_track_backward_compatible_construction_still_works() -> None:
+    # ``CostTrack`` is a plain (non-frozen) BaseModel: the new fields are
+    # additive-with-defaults, so an existing call site passing only usd_total
+    # (see test_evaluate_judge_on_candidates_custom_cost_track below) must not break.
+    track = CostTrack(usd_total=99.0)
+    assert track.usd_total == 99.0
+    assert track.usage == LLMUsage()
+    assert track.cost_basis == "none"
+
+
+# ---------------------------------------------------------------------------
+# CostTrack.usage / cost_basis (Task 3: tokens are the fact, dollars derived)
+# ---------------------------------------------------------------------------
+
+
+def _llm_judgement(
+    *, lid: str = "a", rid: str = "b", cost_usd: float, cost_is_real: bool, tokens: int = 10
+) -> PairwiseJudgement:
+    """A judgement shaped like LLMJudge's / DSPyJudge's real provenance."""
+    usage = LLMUsage(input_tokens=tokens, output_tokens=tokens, model="m")
+    return PairwiseJudgement(
+        left_id=lid,
+        right_id=rid,
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="fake",
+        provenance={
+            "cost_usd": cost_usd,
+            "cost_is_real": cost_is_real,
+            "usage": usage.model_dump(),
+        },
+    )
+
+
+def test_cost_track_usage_sums_token_vectors_across_judgements() -> None:
+    j1 = _llm_judgement(cost_usd=0.01, cost_is_real=True, tokens=10)
+    j2 = _llm_judgement(lid="c", rid="d", cost_usd=0.02, cost_is_real=True, tokens=20)
+    track = _cost_track([j1, j2])
+    assert track.usage.input_tokens == 30
+    assert track.usage.output_tokens == 30
+    assert track.cost_basis == "real"
+    assert track.cost_is_real is True
+
+
+def test_cost_track_basis_estimated_when_cost_is_real_false() -> None:
+    # LLMJudge's litellm-estimate fallback, or DSPyJudge's normal (non-error)
+    # self-reported cost -- neither claims to be the real billed amount.
+    j = _llm_judgement(cost_usd=0.01, cost_is_real=False)
+    track = _cost_track([j])
+    assert track.cost_basis == "estimated"
+    assert track.cost_is_real is False
+
+
+def test_cost_track_basis_untracked_for_dspy_parse_error_path() -> None:
+    # DSPyJudge's billed-but-unparseable call: cost_untracked=True regardless of
+    # whether cost_usd/cost_is_real are also present.
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.0,
+        score_type="prob_llm",
+        decision_step="dspy_parse_error",
+        provenance={"cost_usd": 0.0, "cost_untracked": True, "parse_error": True},
+    )
+    track = _cost_track([j])
+    assert track.cost_basis == "untracked"
+    assert track.cost_is_real is False
+
+
+def test_cost_track_basis_none_for_judge_with_no_cost_concept() -> None:
+    # string/embedding judges never write cost_usd at all.
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.8,
+        score_type="sim_cos",
+        decision_step="embedding",
+        provenance={"similarity_score": 0.8},
+    )
+    track = _cost_track([j])
+    assert track.cost_basis == "none"
+    assert track.usage == LLMUsage()
+
+
+def test_cost_track_basis_mixed_when_judgements_disagree() -> None:
+    real = _llm_judgement(cost_usd=0.01, cost_is_real=True)
+    estimated = _llm_judgement(lid="c", rid="d", cost_usd=0.01, cost_is_real=False)
+    free = PairwiseJudgement(
+        left_id="e",
+        right_id="f",
+        score=0.5,
+        score_type="heuristic",
+        decision_step="string",
+        provenance={},
+    )
+    track = _cost_track([real, estimated, free])
+    assert track.cost_basis == "mixed"
+    assert track.cost_is_real is False
+
+
+def test_cost_track_llm_cost_usd_basis_real_when_cost_is_real() -> None:
+    # BUG 2: llm_cost_usd is CascadeModule's cost key. usd_total already sums it
+    # (see _judgement_cost), but _judgement_cost_basis only recognized cost_usd
+    # -- so real spend written under llm_cost_usd was mislabeled cost_basis="none".
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="cascade",
+        provenance={"llm_cost_usd": 0.001, "cost_is_real": True},
+    )
+    track = _cost_track([j])
+    assert track.usd_total == pytest.approx(0.001)
+    assert track.cost_basis == "real"
+    assert track.cost_is_real is True
+
+
+def test_cost_track_llm_cost_usd_basis_estimated_when_not_real() -> None:
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="cascade",
+        provenance={"llm_cost_usd": 0.001},
+    )
+    track = _cost_track([j])
+    assert track.usd_total == pytest.approx(0.001)
+    assert track.cost_basis == "estimated"
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {"cost_usd": 0.01, "cost_is_real": True},
+        {"cost_usd": 0.01, "cost_is_real": False},
+        {"llm_cost_usd": 0.01, "cost_is_real": True},
+        {"llm_cost_usd": 0.01},
+    ],
+)
+def test_cost_basis_invariant_never_none_when_spend_is_positive(
+    provenance: dict[str, Any],
+) -> None:
+    # Invariant: usd_total > 0 must never coexist with cost_basis == "none" --
+    # that combination IS the "real spend labelled as no cost" bug (BUG 2).
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="fake",
+        provenance=provenance,
+    )
+    track = _cost_track([j])
+    assert track.usd_total > 0.0
+    assert track.cost_basis != "none"
+
+
+def test_cost_track_usage_malformed_falls_back_to_zero_vector() -> None:
+    # A corrupt/foreign 'usage' payload (e.g. from a future schema or a buggy
+    # custom judge) must not crash cost accounting -- observability never flakes
+    # evaluation (mirrors usage.py's own _as_int philosophy).
+    j = PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.9,
+        score_type="prob_llm",
+        decision_step="fake",
+        provenance={"cost_usd": 0.0, "usage": {"input_tokens": "not-a-number"}},
+    )
+    track = _cost_track([j])
+    assert track.usage == LLMUsage()
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +794,7 @@ def test_evaluate_judge_on_candidates_runs_under_budget_runner() -> None:
     assert result.n_candidates == 5
     assert result.n_judged == 2  # preflight cap kept 2
     assert result.truncated
+    assert result.truncation_reason == "budget_cap"  # runner.dropped_by_cap_count > 0
     assert result.cost.usd_total == pytest.approx(0.2)
 
 
@@ -586,6 +821,7 @@ def test_evaluate_judge_on_candidates_handles_empty_candidates() -> None:
     assert result.n_judged == 0
     assert result.latency.seconds_per_pair == 0.0
     assert not result.truncated
+    assert result.truncation_reason == "none"
 
 
 class _AbstainingModule(Module[CompanySchema]):
@@ -632,9 +868,17 @@ def test_evaluate_surfaces_parse_error_count_and_warns(
             _AbstainingModule(scores, abstain=frozenset({"p1"})), cands, gold, grid=(0.5,)
         )
     assert result.n_parse_errors == 1
+    assert result.n_abstained == 1
+    assert result.abstention_rate == pytest.approx(1 / 2)  # 1 of 2 judged
     assert any(
         "parse" in r.message.lower() or "abstention" in r.message.lower() for r in caplog.records
     )
+    # The warning must be truthful about what actually happens: an abstention's
+    # score=0.0 always resolves to a non-match at any positive grid threshold, so
+    # it silently becomes a false negative on a true gold pair -- never a graded
+    # "verdict". The old wording ("graded on their emitted (abstained) scores")
+    # didn't say this.
+    assert any("false negative" in r.message.lower() for r in caplog.records)
 
 
 def test_evaluate_no_parse_errors_is_zero_and_quiet(
@@ -643,8 +887,12 @@ def test_evaluate_no_parse_errors_is_zero_and_quiet(
     scores = {"p0": 0.9}
     cands, gold = _labeled_candidates(scores)
     with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
-        result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold, grid=(0.5,))
+        result = benchmark_module.evaluate(
+            _ScoreModule(scores), cands, gold, grid=(0.5,), threshold=0.5
+        )
     assert result.n_parse_errors == 0
+    assert result.n_abstained == 0
+    assert result.abstention_rate == 0.0
     assert not any("parse" in r.message.lower() for r in caplog.records)
 
 
@@ -799,6 +1047,149 @@ def test_evaluate_returns_pair_eval_with_sane_metrics() -> None:
     assert result.slices is None  # no slice_fn passed
 
 
+def test_evaluate_raises_on_empty_candidates() -> None:
+    # BUG 3: an empty candidate list has no meaning to grade -- pair.f1 == 0.0
+    # would be indistinguishable from "the judge matched nothing". This is
+    # almost always an upstream blocker that produced zero candidates.
+    with pytest.raises(ValueError, match="empty"):
+        benchmark_module.evaluate(_ScoreModule({}), [], set(), threshold=0.5)
+
+
+def test_classify_pairs_grades_an_abstention_as_a_match_at_threshold_zero() -> None:
+    # The reason evaluate() rejects a cut of 0.0: `classify_pairs` predicts a
+    # match iff `score >= cut`, and BOTH judges abstain at score=0.0. At cut 0.0
+    # the abstention is scored a confident YES. This test pins the underlying
+    # behavior so the guard below can never be "fixed" by loosening the range.
+    abstain = PairwiseJudgement(
+        left_id="l0",
+        right_id="r0",
+        score=0.0,
+        score_type="prob_llm",
+        decision_step="parse_error",
+        provenance={"parse_error": True},
+    )
+    gold = {frozenset({"l0", "r0"})}
+    assert classify_pairs([abstain], gold, 0.0).tp == 1  # abstention -> MATCH
+    assert classify_pairs([abstain], gold, 0.05).tp == 0  # any positive cut -> not a match
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.1, 1.5, float("nan"), float("inf")])
+def test_evaluate_rejects_a_degenerate_threshold(bad: float) -> None:
+    # A cut <= 0.0 turns every abstention into a match (see the test above); a cut
+    # above 1.0 can never be reached by a score in [0, 1], making F1 a structural
+    # 0.0 rather than a measurement. Both yield a plausible-looking number.
+    cands = _candidates(2)
+    with pytest.raises(ValueError, match=r"threshold must be in \(0\.0, 1\.0\]"):
+        benchmark_module.evaluate(_ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), threshold=bad)
+
+
+def test_evaluate_rejects_an_out_of_range_grid_point() -> None:
+    # A grid point outside [0, 1] can never be a meaningful cut for a [0, 1] score.
+    cands = _candidates(2)
+    for bad in (-0.1, 1.5, float("nan")):
+        with pytest.raises(ValueError, match=r"grid point must be in \[0\.0, 1\.0\]"):
+            benchmark_module.evaluate(
+                _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, set(), grid=[bad, 0.5]
+            )
+
+
+def test_evaluate_allows_a_grid_anchored_at_zero_but_warns_if_argmax_lands_there() -> None:
+    # 0.0 is the PR curve's legitimate predict-all anchor (recall 1.0), so a full
+    # 0.00..1.00 sweep must remain legal -- tests/data/test_wdc_computers.py draws
+    # its curve exactly that way. What must not pass silently is the argmax LANDING
+    # on it: that judge does not beat "say yes to everything", and at that cut an
+    # abstention (score=0.0) is graded a match.
+    cands = _candidates(2)
+    gold = {frozenset({"l0", "r0"}), frozenset({"l1", "r1"})}
+    useless = _ScoreModule({"l0": 0.0, "l1": 0.0})  # scores nothing above 0
+
+    with pytest.warns(UserWarning, match="predict-all point"):
+        result = benchmark_module.evaluate(useless, cands, gold, grid=[0.0, 0.5])
+
+    assert result.best_threshold == 0.0
+    assert result.pair.recall == pytest.approx(1.0)  # trivially, by predicting all
+
+
+def test_evaluate_does_not_warn_predict_all_when_argmax_is_non_trivial() -> None:
+    cands = _candidates(2)
+    gold = {frozenset({"l0", "r0"})}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = benchmark_module.evaluate(
+            _ScoreModule({"l0": 0.9, "l1": 0.1}), cands, gold, grid=[0.0, 0.5]
+        )
+    assert result.best_threshold == 0.5
+    assert not any("predict-all" in str(w.message) for w in caught)
+
+
+def test_evaluate_accepts_a_generator_grid() -> None:
+    # Validating `grid` by iteration would consume a generator and leave the sweep
+    # an empty grid (which dies in `max()` with an opaque message). evaluate()
+    # materialises it once, so a generator behaves exactly like a list.
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    with pytest.warns(UserWarning, match="optimistically biased"):
+        result = benchmark_module.evaluate(
+            _ScoreModule({"l0": 0.9}), cands, gold, grid=(x for x in [0.3, 0.5, 0.7])
+        )
+    assert result.best_threshold == 0.3  # argmax over a grid that survived validation
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == 3
+
+
+def test_evaluate_rejects_an_empty_grid() -> None:
+    # An empty grid has no threshold to sweep; `max()` over it raises an opaque
+    # "max() iterable argument is empty" from deep inside the harness.
+    cands = _candidates(1)
+    with pytest.raises(ValueError, match="grid is empty"):
+        benchmark_module.evaluate(_ScoreModule({"l0": 0.9}), cands, set(), grid=[])
+
+
+def test_evaluate_judge_on_candidates_rejects_a_degenerate_grid() -> None:
+    # The lower-level public path -- the one documented for paid/compiled judges and
+    # used by the research examples -- must hold the same invariant as evaluate().
+    cands = _candidates(2)
+    with pytest.raises(ValueError, match=r"grid point must be in \[0\.0, 1\.0\]"):
+        benchmark_module.evaluate_judge_on_candidates(
+            _ScoreModule({"l0": 0.0, "l1": 0.0}), cands, set(), (1.5,)
+        )
+    with pytest.raises(ValueError, match="grid is empty"):
+        benchmark_module.evaluate_judge_on_candidates(_ScoreModule({}), cands, set(), [])
+
+
+def test_evaluate_judge_on_candidates_validates_the_grid_before_judging() -> None:
+    # An invalid grid must not cost an API call to discover. ScriptedJudge.seen is
+    # the spy: it must be empty, i.e. forward() was never reached.
+    judge: ScriptedJudge[CompanySchema] = ScriptedJudge(lambda c: 0.9)
+    cands = _candidates(3)
+
+    with pytest.raises(ValueError, match=r"grid point must be in"):
+        benchmark_module.evaluate_judge_on_candidates(judge, cands, set(), [-0.1, 0.5])
+
+    assert judge.seen == []  # not one pair was judged
+
+
+def test_evaluate_judge_on_candidates_accepts_a_generator_grid() -> None:
+    # Materialised, so the sweep still sees the points (a consumed generator would
+    # leave `curve` empty and die in max()).
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    result, _ = benchmark_module.evaluate_judge_on_candidates(
+        _ScoreModule({"l0": 0.9}), cands, gold, (x for x in [0.3, 0.5, 0.7])
+    )
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == 3
+
+
+def test_evaluate_accepts_a_threshold_of_exactly_one() -> None:
+    # 1.0 is a legitimate cut: a binary judge emitting score=1.0 matches at it.
+    cands = _candidates(1)
+    gold = {frozenset({"l0", "r0"})}
+    result = benchmark_module.evaluate(_ScoreModule({"l0": 1.0}), cands, gold, threshold=1.0)
+    assert result.graded_threshold == 1.0
+    assert result.pair.f1 == pytest.approx(1.0)
+
+
 def test_evaluate_passes_slice_fn_through() -> None:
     # slice_fn is forwarded: the result carries per-slice tracks graded at the one
     # global best-F1 threshold (evaluate() is a thin passthrough, so this just
@@ -815,13 +1206,250 @@ def test_evaluate_passes_slice_fn_through() -> None:
 def test_evaluate_uses_default_pair_grid_when_grid_omitted() -> None:
     # Omitting grid= sweeps DEFAULT_PAIR_GRID (the fine 0.05..0.95, 19 points), so
     # the PR curve has one point per grid threshold and the tuned cut lands inside it.
+    # threshold= is also omitted (the sweep/argmax default), which now fires a
+    # one-shot UserWarning about the optimistic bias -- assert it does.
     scores = {"p0": 0.9, "p1": 0.85, "n0": 0.1}
     cands, gold = _labeled_candidates(scores)
-    result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold)
+    with pytest.warns(UserWarning, match="argmax|biased|optimistic"):
+        result = benchmark_module.evaluate(_ScoreModule(scores), cands, gold)
     assert result.pair.pr_curve is not None
     assert len(result.pair.pr_curve) == len(benchmark_module.DEFAULT_PAIR_GRID) == 19
     assert result.best_threshold in benchmark_module.DEFAULT_PAIR_GRID
+    assert result.graded_threshold == result.best_threshold
     assert result.pair.f1 == pytest.approx(1.0)  # matches separable from the non-match
+
+
+# ---------------------------------------------------------------------------
+# evaluate() — Task 1: threshold=<float> is an honest fixed cut, no argmax
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_fixed_threshold_grades_once_no_argmax() -> None:
+    # p0(0.9) clears 0.5, p1(0.3) does not, n0(0.2) correctly excluded.
+    scores = {"p0": 0.9, "p1": 0.3, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores), cands, gold, grid=(0.05, 0.5, 0.85), threshold=0.5
+    )
+    assert result.best_threshold is None  # never lie about an argmax that didn't happen
+    assert result.graded_threshold == 0.5
+    assert result.pair.precision == pytest.approx(1.0)
+    assert result.pair.recall == pytest.approx(0.5)  # p1 missed at the fixed cut
+    # pr_curve stays populated in fixed mode too (cheap, a later PR needs it).
+    assert result.pair.pr_curve is not None
+    assert len(result.pair.pr_curve) == 3
+
+
+def test_evaluate_fixed_threshold_emits_no_bias_warning(recwarn: pytest.WarningsRecorder) -> None:
+    scores = {"p0": 0.9, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    benchmark_module.evaluate(_ScoreModule(scores), cands, gold, grid=(0.5,), threshold=0.5)
+    assert len(recwarn) == 0
+
+
+def test_evaluate_sweep_mode_warns_about_optimistic_bias() -> None:
+    scores = {"p0": 0.9, "n0": 0.2}
+    cands, gold = _labeled_candidates(scores)
+    with pytest.warns(UserWarning, match="argmax|biased|optimistic"):
+        benchmark_module.evaluate(_ScoreModule(scores), cands, gold, grid=(0.5,))
+
+
+# ---------------------------------------------------------------------------
+# evaluate() — Task 1/2: internal spend cap (default $1, budget_usd=, on_truncation=)
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_default_budget_usd_resolves_to_presets_default() -> None:
+    # budget_usd omitted -> resolves to presets.DEFAULT_BUDGET_USD ($1) without
+    # the caller passing it: a judge costing exactly that per pair is stopped
+    # after the first pair (evaluate() is spend-capped by default, not opt-in).
+    scores = {f"p{i}": 0.9 for i in range(3)}
+    cands, gold = _labeled_candidates(scores)
+    module = _ScoreModule(scores, cost=DEFAULT_BUDGET_USD)
+    with pytest.raises(benchmark_module.EvaluationTruncatedError):
+        benchmark_module.evaluate(module, cands, gold, grid=(0.5,), threshold=0.5)
+
+
+def test_evaluate_free_judge_never_truncated_by_tiny_budget() -> None:
+    # A zero-cost judge (string/embedding-shaped) never approaches ANY budget,
+    # however small -- its real, measured spend stays $0 forever.
+    scores = {f"p{i}": 0.9 for i in range(50)}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.0), cands, gold, grid=(0.5,), budget_usd=0.0001, threshold=0.5
+    )
+    assert result.truncated is False
+    assert result.n_judged == 50
+    assert result.truncation_reason == "none"
+
+
+def test_evaluate_raises_on_budget_truncation_by_default() -> None:
+    scores = {f"p{i}": 0.9 for i in range(4)}
+    cands, gold = _labeled_candidates(scores)
+    with pytest.raises(benchmark_module.EvaluationTruncatedError) as excinfo:
+        benchmark_module.evaluate(
+            _ScoreModule(scores, cost=0.1),
+            cands,
+            gold,
+            grid=(0.5,),
+            budget_usd=0.05,
+            threshold=0.5,
+        )
+    err = excinfo.value
+    message = str(err)
+    assert "budget_usd" in message
+    assert 'on_truncation="return"' in message
+    assert err.partial is not None
+    assert err.partial.truncated is True
+    assert err.partial.n_judged < err.partial.n_candidates
+    assert err.partial.truncation_reason in ("budget_cap", "budget_stop")
+    # BUG 1: this is an early breach (candidate 1's real cost alone exceeds the
+    # $0.05 cap) -- budget_exceeded must be True on the partial result too.
+    assert err.partial.budget_exceeded is True
+
+
+def test_evaluate_single_pair_way_over_budget_flags_exceeded_without_raising() -> None:
+    # BUG 1: a single $10 pair under a $1 cap must never slip through silently.
+    # n_judged == n_candidates == 1, so nothing was dropped (not a truncation) --
+    # but real money was spent past the cap, and evaluate() must say so loudly,
+    # without raising (the run completed and the result is valid).
+    cands, gold = _labeled_candidates({"p0": 0.9})
+    with pytest.warns(UserWarning, match=r"exceed"):
+        result = benchmark_module.evaluate(
+            _ScoreModule({"p0": 0.9}, cost=10.0),
+            cands,
+            gold,
+            grid=(0.5,),
+            budget_usd=1.0,
+            threshold=0.5,
+        )
+    assert result.budget_exceeded is True
+    assert result.cost.usd_total == pytest.approx(10.0)
+    assert result.truncated is False
+    assert result.n_judged == result.n_candidates == 1
+
+
+def test_evaluate_last_pair_breach_flags_exceeded_but_not_truncated() -> None:
+    # 3 pairs at $0.40 under a $1.00 cap: the breach lands on the LAST pair, so
+    # every candidate is still judged (truncated=False, n_judged==n_candidates)
+    # -- but total spend ($1.20) crossed the cap, and that must be visible.
+    scores = {"p0": 0.9, "p1": 0.9, "p2": 0.9}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.40),
+        cands,
+        gold,
+        grid=(0.5,),
+        budget_usd=1.0,
+        threshold=0.5,
+    )
+    assert result.budget_exceeded is True
+    assert result.truncated is False
+    assert result.n_judged == result.n_candidates == 3
+    assert result.cost.usd_total == pytest.approx(1.20)
+
+
+def test_evaluate_free_judge_never_flags_budget_exceeded(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    scores = {f"p{i}": 0.9 for i in range(10)}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.0),
+        cands,
+        gold,
+        grid=(0.5,),
+        budget_usd=0.0001,
+        threshold=0.5,
+    )
+    assert result.budget_exceeded is False
+    assert len(recwarn) == 0
+
+
+def test_evaluate_on_truncation_return_gives_partial_silently(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    scores = {f"p{i}": 0.9 for i in range(4)}
+    cands, gold = _labeled_candidates(scores)
+    result = benchmark_module.evaluate(
+        _ScoreModule(scores, cost=0.1),
+        cands,
+        gold,
+        grid=(0.5,),
+        budget_usd=0.05,
+        on_truncation="return",
+        threshold=0.5,
+    )
+    assert result.truncated is True
+    assert result.truncation_reason in ("budget_cap", "budget_stop")
+    # BUG 1 fix: on_truncation="return" silences the TRUNCATION warning
+    # specifically, but a real mid-call budget breach (money already spent) is
+    # a separate, always-on signal that on_truncation does not govern -- the
+    # sole warning here is that one, not a truncation warning.
+    assert result.budget_exceeded is True
+    assert len(recwarn) == 1
+    assert "exceed" in str(recwarn[0].message).lower()
+
+
+def test_evaluate_on_truncation_warn_logs_and_returns_partial() -> None:
+    scores = {f"p{i}": 0.9 for i in range(4)}
+    cands, gold = _labeled_candidates(scores)
+    with pytest.warns(UserWarning, match="budget_usd"):
+        result = benchmark_module.evaluate(
+            _ScoreModule(scores, cost=0.1),
+            cands,
+            gold,
+            grid=(0.5,),
+            budget_usd=0.05,
+            on_truncation="warn",
+            threshold=0.5,
+        )
+    assert result.truncated is True
+    assert result.truncation_reason in ("budget_cap", "budget_stop")
+
+
+def test_evaluate_judge_skips_warns_but_never_raises_even_under_raise_mode() -> None:
+    # A candidate whose module call raises is a NON-spend truncation
+    # (truncation_reason="judge_skips"): it must only ever warn, never raise --
+    # even under the default on_truncation="raise" -- so one bad candidate
+    # cannot blow up a run.
+    cands = _candidates(3)
+    module = _FakeModule(cost=0.0, boom_ids=frozenset({"l1"}))
+    with pytest.warns(UserWarning):
+        result = benchmark_module.evaluate(module, cands, set(), grid=(0.5,), threshold=0.5)
+    assert result.truncated is True
+    assert result.truncation_reason == "judge_skips"
+    assert result.n_judged == 2
+
+
+def test_evaluate_raises_when_every_candidate_fails_despite_judge_skips_reason() -> None:
+    # A judge that fails on EVERY candidate produces zero judgements. Reporting
+    # precision/recall/F1 of 0.0 there is the dishonest cell: it is
+    # indistinguishable from a healthy judge that matched nothing. So a zero-
+    # judgement run raises even though its reason is "judge_skips", which
+    # otherwise only ever warns.
+    cands = _candidates(3)
+    module = _FakeModule(cost=0.0, boom_ids=frozenset({"l0", "l1", "l2"}))
+    with pytest.raises(benchmark_module.EvaluationTruncatedError) as exc:
+        benchmark_module.evaluate(module, cands, set(), grid=(0.5,), threshold=0.5)
+    assert "0 judgements" in str(exc.value)
+    # The partial result is still attached, so a caller can inspect the wreckage.
+    partial = exc.value.partial
+    assert partial is not None
+    assert partial.n_judged == 0
+    assert partial.n_candidates == 3
+
+
+def test_evaluate_zero_judgements_returns_silently_under_on_truncation_return() -> None:
+    # "return" means "I know it may be partial, give me what you have" -- an
+    # empty result is then a deliberate, opted-into outcome rather than a lie.
+    cands = _candidates(3)
+    module = _FakeModule(cost=0.0, boom_ids=frozenset({"l0", "l1", "l2"}))
+    result = benchmark_module.evaluate(
+        module, cands, set(), grid=(0.5,), threshold=0.5, on_truncation="return"
+    )
+    assert result.n_judged == 0
+    assert result.truncated is True
 
 
 # ---------------------------------------------------------------------------

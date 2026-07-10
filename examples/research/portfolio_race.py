@@ -205,7 +205,7 @@ def race_paid_llm(
         resolver = make_resolver_factory("llm_judge", bench, llm_client=client, llm_model=model)(
             0.5
         )
-        candidates = list(resolver._candidates([r.model_dump() for r in test_records]))
+        candidates = resolver.candidates([r.model_dump() for r in test_records])
         gold_pairs = gold_pairs_from_clusters(test_clusters)
 
         # Bound both budgets by what's actually left — never mint fresh budget. Hard

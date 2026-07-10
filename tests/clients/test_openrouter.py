@@ -20,6 +20,7 @@ from langres.clients.openrouter import (
     register_runtime_model_price,
 )
 from langres.core.models import PairwiseJudgement
+from langres.core.usage import LLMUsage
 
 GLM = "openrouter/z-ai/glm-5.2"
 
@@ -61,6 +62,29 @@ def _judgement(prompt_tokens: object, completion_tokens: object) -> PairwiseJudg
         score_type="prob_llm",
         decision_step="llm_judgment",
         provenance={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+    )
+
+
+def _judgement_with_usage(prompt_tokens: int, completion_tokens: int) -> PairwiseJudgement:
+    """A judgement carrying both the legacy token keys and the nested usage vector.
+
+    Mirrors what ``LLMJudge``/``DSPyJudge`` actually write (see
+    ``llm_judge.py::_build_provenance``): the legacy ``prompt_tokens``/
+    ``completion_tokens`` keys plus the full ``LLMUsage.model_dump()`` under
+    ``"usage"``.
+    """
+    usage = LLMUsage(input_tokens=prompt_tokens, output_tokens=completion_tokens)
+    return PairwiseJudgement(
+        left_id="a",
+        right_id="b",
+        score=0.5,
+        score_type="prob_llm",
+        decision_step="llm_judgment",
+        provenance={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "usage": usage.model_dump(),
+        },
     )
 
 
@@ -174,6 +198,79 @@ class TestMakeTokenCostTrack:
         # ``None`` (and absent keys) must coerce to 0 via the ``or 0`` guard.
         result = make_token_cost_track(GLM)([_judgement(None, None)])
         assert result.usd_total == 0.0
+
+
+class TestMakeTokenCostTrackHonesty:
+    """cost_basis/usage: this tracker prices from a pinned table, never real billing.
+
+    Regression coverage for the bug this PR fixes: ``make_token_cost_track``
+    priced a real dollar amount but left ``cost_basis``/``usage`` at their
+    all-``"none"``/all-zero defaults, so a costed run reported ``usd_total >
+    0`` alongside ``cost_basis == "none"`` and ``cost_is_real == False`` --
+    the exact dishonest cell ``CostTrack.cost_basis`` exists to eliminate.
+    """
+
+    def test_real_token_counts_are_estimated_never_real(self) -> None:
+        # This tracker multiplies token counts by PRICES_PER_1M -- it never
+        # reads a provider-billed amount off a response -- so a nonzero total
+        # must be "estimated", and cost_is_real (== cost_basis == "real")
+        # must be False.
+        track = make_token_cost_track(GLM)
+        result = track([_judgement(1000, 500), _judgement(200, 100)])
+
+        assert result.usd_total > 0.0
+        assert result.cost_basis == "estimated"
+        assert result.cost_is_real is False
+
+    def test_usage_vector_sums_token_counts_from_provenance(self) -> None:
+        track = make_token_cost_track(GLM)
+        judgements = [_judgement_with_usage(1000, 500), _judgement_with_usage(200, 100)]
+
+        result = track(judgements)
+
+        assert result.usage.input_tokens == 1000 + 200
+        assert result.usage.output_tokens == 500 + 100
+
+    def test_malformed_usage_dict_degrades_to_zero_vector(self) -> None:
+        # A corrupt/foreign "usage" payload must not crash pricing -- usage
+        # capture is observability, never a hard failure (mirrors
+        # benchmark.py::_judgement_usage's own degrade-to-zero contract).
+        judgement = PairwiseJudgement(
+            left_id="a",
+            right_id="b",
+            score=0.5,
+            score_type="prob_llm",
+            decision_step="llm_judgment",
+            provenance={
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "usage": {"input_tokens": "not-a-number"},
+            },
+        )
+
+        result = make_token_cost_track(GLM)([judgement])
+
+        assert result.usd_total > 0.0  # pricing still runs off the legacy keys
+        assert result.usage.input_tokens == 0
+        assert result.usage.output_tokens == 0
+
+    def test_empty_judgements_has_none_cost_basis(self) -> None:
+        result = make_token_cost_track(GLM)([])
+        assert result.usd_total == 0.0
+        assert result.cost_basis == "none"
+
+    def test_zero_tokens_has_none_cost_basis_no_divide_by_zero(self) -> None:
+        result = make_token_cost_track(GLM)([_judgement(None, None)])
+        assert result.usd_total == 0.0
+        assert result.cost_basis == "none"
+
+    def test_nonzero_cost_implies_non_none_basis(self) -> None:
+        # The invariant that matters: a run that reports real dollars can
+        # never carry cost_basis == "none" -- that combination is exactly the
+        # dishonest cell this PR eliminates.
+        result = make_token_cost_track(GLM)([_judgement(1000, 500)])
+        assert result.usd_total > 0.0
+        assert result.cost_basis != "none"
 
 
 class TestNoKeepaliveHttpClient:

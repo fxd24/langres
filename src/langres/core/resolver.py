@@ -493,6 +493,36 @@ class Resolver:
             )
         return candidates
 
+    def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
+        """Block records into a materialized list of judge-ready candidates.
+
+        The public counterpart to :meth:`_candidates`: same blocking (building
+        any index-backed blocker's index transparently) and the same
+        comparison-attachment behavior, but returns a **list** rather than a
+        generator. Comparison vectors ARE attached whenever this Resolver has a
+        comparator configured (the default for ``Resolver.from_schema``) --
+        a caller that instead reaches into e.g. ``bench.build_blocker().stream(records)``
+        directly gets candidates WITHOUT comparison vectors, which silently
+        changes what a comparison-reading judge (e.g. ``WeightedAverageJudge``)
+        sees.
+
+        Prefer this over a raw ``blocker.stream(...)`` generator whenever the
+        candidates are consumed more than once -- e.g.
+        :func:`~langres.core.benchmark.evaluate_judge_on_candidates` both calls
+        ``len(candidates)`` and iterates the sequence twice (once to judge, once
+        to build the graded candidate pairs). Handing a generator to a caller
+        that iterates twice makes ``len()`` fail and the second pass silently
+        yield nothing.
+
+        Args:
+            records: Raw records (dicts) in a stable list order, same shape as
+                ``resolve()``/``predict()`` accept.
+
+        Returns:
+            The blocked candidates, materialized as a list (never a generator).
+        """
+        return list(self._candidates(records))
+
     def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
         """Block records into candidates and score them into judgements."""
         return self.module.forward(self._candidates(records))
