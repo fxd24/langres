@@ -303,7 +303,10 @@ def _cand(left: str, right: str) -> SimpleNamespace:
 
 
 def _judg(score: float, reasoning: str) -> SimpleNamespace:
-    return SimpleNamespace(score=score, reasoning=reasoning)
+    # A binary live judge DECIDES; ``build_compared_pairs`` reads ``.decision``
+    # (its ``score`` is now None/p_yes). Derive the decision from the intended
+    # verdict so existing call sites (_judg(1.0, "Yes") / _judg(0.0, "No")) hold.
+    return SimpleNamespace(decision=score >= 0.5, score=None, reasoning=reasoning)
 
 
 def test_build_compared_pairs_and_confusion_with_deliberate_disagreement() -> None:
