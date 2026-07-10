@@ -1,4 +1,4 @@
-"""$0 tests for the Peeters harness `--logprobs` credence probe + v2 rows.
+"""$0 tests for the Peeters harness `--logprobs` credence probe + v2/v3 rows.
 
 Every test runs at **$0** with an injected fake client (returning canned answers
 WITH a logprobs block) — no API key, no network, no real model call. Covers:
@@ -6,8 +6,10 @@ WITH a logprobs block) — no API key, no network, no real model call. Covers:
 * the ``results_path_for`` variant token (contamination firewall),
 * ``_build_live_judge(confidence="logprob")`` staying byte-identical apart from
   the logprob request,
-* the v2 ``_row_from_judgement`` columns (``correct`` always; credence keys only
-  when the probe was on),
+* the ``_row_from_judgement`` columns: ``correct`` always + credence keys only
+  when the probe was on (v2), and the ``score`` column now carrying the judge's
+  own ``decision``-derived value — ``None`` (plain) / ``p_yes`` (logprob) — with
+  ``verdict`` unchanged (v3),
 * the spend cap still firing with logprobs on,
 * resume skipping already-committed pairs,
 * ``--report-only`` still reading the old **v1** rows (the key regression), and
@@ -138,7 +140,8 @@ def test_build_live_judge_confidence_logprob() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# v2 row schema: `correct` always; credence keys only when the probe was on.
+# Row schema: `correct` always + credence keys only when the probe was on (v2);
+# `score` = the decision-derived None/p_yes, `verdict` = int(decision) (v3).
 # --------------------------------------------------------------------------- #
 
 
@@ -176,7 +179,11 @@ def test_row_from_judgement_v2_with_credence() -> None:
 def test_row_from_judgement_correct_flag_tracks_gold() -> None:
     # Probe off: the binary judge decides, score is None (no fabricated 0/1).
     judgement = SimpleNamespace(
-        left_id="a1", right_id="b1", decision=False, score=None, reasoning="No",
+        left_id="a1",
+        right_id="b1",
+        decision=False,
+        score=None,
+        reasoning="No",
         provenance={"cost_usd": 0.0},
     )
     row = _row_from_judgement(
