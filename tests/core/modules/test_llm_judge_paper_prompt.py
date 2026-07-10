@@ -77,18 +77,22 @@ class TestScoreParser:
 
 
 class TestBinaryYesNoParser:
-    def test_yes_maps_to_one(self) -> None:
-        assert parse_binary_yes_no("Yes, they are the same.").score == 1.0
+    def test_yes_maps_to_true_decision(self) -> None:
+        v = parse_binary_yes_no("Yes, they are the same.")
+        assert v.decision is True
+        assert v.score is None  # a decider does not rank -> no fabricated score
 
-    def test_no_maps_to_zero(self) -> None:
-        assert parse_binary_yes_no("No.").score == 0.0
+    def test_no_maps_to_false_decision(self) -> None:
+        v = parse_binary_yes_no("No.")
+        assert v.decision is False
+        assert v.score is None
 
     def test_strips_punctuation_and_is_case_insensitive(self) -> None:
-        assert parse_binary_yes_no("YES!").score == 1.0
+        assert parse_binary_yes_no("YES!").decision is True
 
-    def test_absence_of_yes_is_zero(self) -> None:
-        """The published yes/no family is total: no 'yes' => 0.0 (not a match)."""
-        assert parse_binary_yes_no("These are different products.").score == 0.0
+    def test_absence_of_yes_is_false(self) -> None:
+        """The published yes/no family is total: no 'yes' => False (not a match)."""
+        assert parse_binary_yes_no("These are different products.").decision is False
 
     @pytest.mark.parametrize(
         "answer",
@@ -105,7 +109,7 @@ class TestBinaryYesNoParser:
         Pins the unified contract against the old ``re.sub(r"[^\\w\\s]", " ", ...)``
         which replaced punctuation with a space and split these into non-matches.
         """
-        assert parse_binary_yes_no(answer).score == 1.0
+        assert parse_binary_yes_no(answer).decision is True
 
     def test_crude_substring_match_is_deliberate(self) -> None:
         """Fidelity over cleverness: "Not yes" contains "yes" so it MATCHES.
@@ -114,13 +118,14 @@ class TestBinaryYesNoParser:
         (substring test, no negation handling). We keep it because reproducing
         the paper's reported F1 requires the paper's exact parser.
         """
-        assert parse_binary_yes_no("Not yes").score == 1.0
+        assert parse_binary_yes_no("Not yes").decision is True
 
     def test_is_total_never_returns_none(self) -> None:
-        """No 'yes' is a confident non-match (0.0), never a parse failure (None)."""
+        """No 'yes' is a confident non-match (decision=False), never abstain (None)."""
         v = parse_binary_yes_no("Absolutely not, different entities entirely.")
-        assert v.score == 0.0
-        assert v.score is not None
+        assert v.decision is False
+        assert v.decision is not None  # totality is about the DECISION now
+        assert v.score is None
 
     def test_totality_means_raise_mode_never_fires(self) -> None:
         """Because this parser is total, on_parse_error='raise' can't abort a run."""
@@ -128,7 +133,8 @@ class TestBinaryYesNoParser:
         client.completion.return_value = _response("No, these are different.")
         judge = _judge(client, response_parser=parse_binary_yes_no, on_parse_error="raise")
         j = list(judge.forward([_pair()]))[0]  # does NOT raise LLMParseError
-        assert j.score == 0.0
+        assert j.decision is False
+        assert j.score is None
 
 
 class TestDefaultRecordSerializer:
@@ -144,26 +150,36 @@ class TestDefaultRecordSerializer:
 
 
 class TestResponseParserWiring:
-    def test_binary_parser_yields_match(self) -> None:
+    def test_binary_parser_yields_match_decision(self) -> None:
         client = Mock()
         client.completion.return_value = _response("Yes")
         judge = _judge(client, response_parser=parse_binary_yes_no)
         j = list(judge.forward([_pair()]))[0]
-        assert j.score == 1.0
+        # A binary judge decides; it does not fabricate a 0/1 score.
+        assert j.decision is True
+        assert j.score is None
+        # confidence not requested, but a decision judge COULD expose logprobs.
+        assert j.confidence is None
+        assert j.confidence_source == "unrequested"
         assert "parse_error" not in j.provenance
 
-    def test_binary_parser_yields_no_match(self) -> None:
+    def test_binary_parser_yields_no_match_decision(self) -> None:
         client = Mock()
         client.completion.return_value = _response("No, these are different.")
         judge = _judge(client, response_parser=parse_binary_yes_no)
         j = list(judge.forward([_pair()]))[0]
-        assert j.score == 0.0
+        assert j.decision is False
+        assert j.score is None
 
     def test_default_parser_still_reads_score(self) -> None:
         client = Mock()
         client.completion.return_value = _response("MATCH\nScore: 0.42\nReasoning: x")
         j = list(_judge(client).forward([_pair()]))[0]
+        # The rating family ranks (score) and does not decide; it has no
+        # confidence notion, so confidence_source is "none".
         assert j.score == 0.42
+        assert j.decision is None
+        assert j.confidence_source == "none"
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +189,15 @@ class TestResponseParserWiring:
 
 class TestParseFailureSemantics:
     def test_default_abstains_with_flag_not_silent_half(self) -> None:
-        """Default ``on_parse_error='abstain'`` => flagged score 0.0, distinguishable."""
+        """Default ``on_parse_error='abstain'`` => all-None abstain, flagged and distinguishable."""
         client = Mock()
         client.completion.return_value = _response("I cannot tell.")  # no Score:
         j = list(_judge(client).forward([_pair()]))[0]
-        assert j.score == 0.0
+        # An abstain is neither a decision nor a score -> is_abstain, not a fake 0.0.
+        assert j.is_abstain
+        assert j.decision is None
+        assert j.score is None
+        assert j.confidence is None
         assert j.provenance["parse_error"] is True
         assert j.decision_step == "llm_judgment"
 
@@ -378,9 +398,16 @@ class TestParsedVerdictModel:
     def test_holds_score_and_reasoning(self) -> None:
         v = ParsedVerdict(score=0.5, reasoning="because")
         assert v.score == 0.5
+        assert v.decision is None  # rating family: score XOR decision
         assert v.reasoning == "because"
 
-    def test_score_none_means_parse_failure(self) -> None:
-        v = ParsedVerdict(score=None)
+    def test_holds_decision_for_the_binary_family(self) -> None:
+        v = ParsedVerdict(decision=True, reasoning="Yes")
+        assert v.decision is True
+        assert v.score is None  # decider does not rank
+
+    def test_both_none_means_parse_failure_abstain(self) -> None:
+        v = ParsedVerdict()
         assert v.score is None
+        assert v.decision is None
         assert v.reasoning is None

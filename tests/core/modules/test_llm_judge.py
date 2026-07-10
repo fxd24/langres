@@ -261,12 +261,13 @@ def test_llm_judge_uses_custom_prompt(mock_llm_client):
 
 
 def test_llm_judge_score_extraction_abstains_with_flag():
-    """An unparseable score now ABSTAINS (flagged 0.0), never a silent 0.5.
+    """An unparseable score now ABSTAINS (all-None), never a silent 0.5.
 
     Behavior change (defect fix): the old code returned a real-looking 0.5 that
     was indistinguishable downstream from a genuine mid-confidence verdict. The
-    default ``on_parse_error='abstain'`` policy instead emits score 0.0 flagged
-    with ``provenance['parse_error']`` so the abstention is visible.
+    default ``on_parse_error='abstain'`` policy instead emits an all-None
+    judgement (``is_abstain``) flagged with ``provenance['parse_error']`` so the
+    abstention is visible and never coerced into a fake verdict.
     """
     mock_client = Mock()
     mock_response = Mock()
@@ -291,7 +292,9 @@ def test_llm_judge_score_extraction_abstains_with_flag():
 
     judgements = list(module.forward([candidate]))
     assert len(judgements) == 1
-    assert judgements[0].score == 0.0
+    assert judgements[0].is_abstain
+    assert judgements[0].score is None
+    assert judgements[0].decision is None
     assert judgements[0].provenance["parse_error"] is True
 
 

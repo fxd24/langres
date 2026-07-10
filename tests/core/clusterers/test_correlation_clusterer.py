@@ -210,3 +210,64 @@ def test_correlation_clusterer_from_config_round_trips() -> None:
 
     assert isinstance(rebuilt, CorrelationClusterer)
     assert rebuilt.threshold == 0.42
+
+
+# ---------------------------------------------------------------------------
+# Edge weight for score-less (decider) and abstaining judgements
+# (the judgement-contract wave: score is now float | None, and score doubles
+# as the edge weight -- a binary "yes" must not collapse to a zero-weight edge)
+# ---------------------------------------------------------------------------
+
+
+def _decision_j(
+    left: str,
+    right: str,
+    *,
+    decision: bool | None = None,
+    score: float | None = None,
+    confidence: float | None = None,
+) -> PairwiseJudgement:
+    return PairwiseJudgement(
+        left_id=left,
+        right_id=right,
+        decision=decision,
+        score=score,
+        confidence=confidence,
+        score_type="prob_llm",
+        decision_step="test",
+        provenance={},
+    )
+
+
+def test_score_less_decider_edge_uses_unit_weight_not_zero() -> None:
+    """A binary "yes" with no score gets a full-strength 1.0 edge, never a silent 0.0.
+
+    Without the fallback, ``edges[key] = judgement.score`` would write ``None``
+    (or, coerced, ``0.0``) and the merge would be silently lost.
+    """
+    judgement = _decision_j("A", "B", decision=True)
+    adjacency = CorrelationClusterer(threshold=0.5)._build_adjacency([judgement])
+    assert adjacency["A"]["B"] == 1.0
+
+
+def test_edge_weight_falls_back_to_confidence_when_no_score() -> None:
+    judgement = _decision_j("A", "B", decision=True, confidence=0.8)
+    adjacency = CorrelationClusterer(threshold=0.5)._build_adjacency([judgement])
+    assert adjacency["A"]["B"] == 0.8
+
+
+def test_score_is_the_edge_weight_when_present() -> None:
+    """Score wins over confidence for the weight (score is the confidence-ordered value)."""
+    judgement = _decision_j("A", "B", decision=True, score=0.9, confidence=0.3)
+    adjacency = CorrelationClusterer(threshold=0.5)._build_adjacency([judgement])
+    assert adjacency["A"]["B"] == 0.9
+
+
+def test_negative_decision_and_abstain_are_excluded_from_edges() -> None:
+    """A "no" (decision=False) and an abstention (neither set) form no edge."""
+    judgements = [
+        _decision_j("A", "B", decision=False),  # explicit no
+        _decision_j("C", "D"),  # abstain: no decision, no score
+    ]
+    adjacency = CorrelationClusterer(threshold=0.5)._build_adjacency(judgements)
+    assert adjacency == {}

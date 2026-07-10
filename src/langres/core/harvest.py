@@ -1,8 +1,9 @@
 """The flywheel's harvest half: logged verdicts + human corrections -> labeled pairs.
 
 ``JudgementLog`` (W0.2, :mod:`langres.core.judgement_log`) is the flywheel's
-*inlet* -- an opt-in JSONL log of every judge call (ids, score, verdict, model,
-cost, ``"v": 1``). This module is the *outlet*: it turns those logged judgements,
+*inlet* -- an opt-in JSONL log of every judge call (ids, score, decision, verdict,
+model, cost, ``"v": 3``). This module is the *outlet*: it turns those logged
+judgements,
 plus a review tool's human corrections, into **labeled pairs** that feed
 :func:`langres.core.calibration.derive_threshold` (its first production caller)
 and, where applicable, a judge's ``fit()``.
@@ -108,7 +109,11 @@ class LabeledPair(BaseModel):
     Attributes:
         left_id: Identifier of the left entity (as logged by the judge).
         right_id: Identifier of the right entity (as logged by the judge).
-        score: The judge's score for the pair (from the judgement log).
+        score: The judge's score for the pair (from the judgement log), or
+            ``None`` for a decision-only judge that logged no score. The label is
+            still usable, but a score-less pair cannot contribute to a *score*
+            threshold -- :func:`derive_threshold_from_pairs` rejects such input
+            rather than calibrating on the self-selected scored subset.
         label: The weak/corrected match label -- ``True`` for a match.
         source: Where ``label`` came from -- ``"verdict"`` (the judge's logged
             verdict, a weak label) or ``"correction"`` (a human override).
@@ -116,7 +121,7 @@ class LabeledPair(BaseModel):
 
     left_id: str
     right_id: str
-    score: float
+    score: float | None
     label: bool
     source: Literal["verdict", "correction"]
 
@@ -181,14 +186,31 @@ def harvest_labeled_pairs(
     with a warning: a correction carries no score, so without a logged score for
     the pair it cannot become a calibration example.
 
+    A decision-only row (``score: null`` -- a judge that decided but did not
+    rank) yields a :class:`LabeledPair` with ``score=None``: the label is still
+    usable, but the pair carries no score for a *score* threshold, so
+    :func:`derive_threshold_from_pairs` rejects it rather than dropping it into a
+    biased scored-only subset. The score is carried as-is (never coerced to
+    ``0.0``), so a genuine ``score == 0.0`` and a missing score stay distinct.
+
+    An *abstention* row (``verdict: null`` -- the judge neither decided nor
+    scored) carries no usable label and is **skipped** unless a human correction
+    supplies one. Coercing a null verdict to a ``False`` non-match would seed
+    silver-label training with a label the judge never gave -- the label-side
+    twin of never coercing a null score to ``0.0``. So the output has one
+    :class:`LabeledPair` per *labeled* row, not necessarily per input row.
+
     Args:
         judgement_rows: Logged judge calls as mappings with at least ``left_id``,
-            ``right_id``, ``score`` and ``verdict`` keys.
+            ``right_id``, ``score`` and ``verdict`` keys. ``score`` may be
+            ``None`` for a decision-only judge.
         corrections: Human corrections to overlay. Later corrections for the same
             pair win (last-write-wins).
 
     Returns:
-        One :class:`LabeledPair` per judgement row, in row order.
+        One :class:`LabeledPair` per *labeled* judgement row, in row order. An
+        abstention row (``verdict`` null) with no correction carries no usable
+        label and is omitted, so the output may be shorter than the input.
     """
     corrections_by_pair: dict[frozenset[str], Correction] = {}
     for correction in corrections:
@@ -209,13 +231,25 @@ def harvest_labeled_pairs(
             label = override.label
             source: Literal["verdict", "correction"] = "correction"
         else:
-            label = bool(row["verdict"])
+            verdict = row["verdict"]
+            if verdict is None:
+                # An abstention (decision=None -> verdict=None): the judge gave
+                # no verdict, so there is no label to harvest. Skip it rather
+                # than coerce None to a False non-match -- a fabricated
+                # "not a match" would poison silver labels exactly as a
+                # fabricated 0.0 would poison a score threshold.
+                continue
+            label = bool(verdict)
             source = "verdict"
+        raw_score = row["score"]
         pairs.append(
             LabeledPair(
                 left_id=left_id,
                 right_id=right_id,
-                score=float(row["score"]),
+                # Carry a decision-only row's null score as None (never coerce to
+                # 0.0): the label is usable, but calibration must see the score is
+                # absent, not a real 0.0.
+                score=None if raw_score is None else float(raw_score),
                 label=label,
                 source=source,
             )
@@ -261,7 +295,10 @@ def derive_threshold_from_pairs(
         The derived threshold as a plain ``float``.
 
     Raises:
-        ValueError: Propagated from
+        ValueError: If any pair has ``score is None`` (a decision-only judge has
+            no scores to derive a *score* threshold from) -- raised here, naming
+            the offending pair, rather than dropping the score-less pairs into a
+            biased scored-only subset. Also propagated from
             :func:`~langres.core.calibration.derive_threshold` (empty input,
             single-class labels under ``"youden"``, bad ``percentile``, ...).
 
@@ -270,6 +307,20 @@ def derive_threshold_from_pairs(
             (``source == "verdict"``) -- silver-only calibration is circular
             (see above). Suppress deliberately via :mod:`warnings` filters.
     """
+    # A score-less pair (decision-only judge) has no score to calibrate on;
+    # collect the scores while checking, so mypy sees a list[float] below.
+    scores: list[float] = []
+    for pair in pairs:
+        if pair.score is None:
+            raise ValueError(
+                "cannot derive a score threshold: pair "
+                f"{pair.left_id}/{pair.right_id} has no score (a decision-only "
+                "judge logged score=null); a decision-only judge has no scores to "
+                "derive a score threshold from. Drop these pairs or calibrate on "
+                "a scoring judge's output."
+            )
+        scores.append(pair.score)
+
     if pairs and all(pair.source == "verdict" for pair in pairs):
         warnings.warn(
             "silver-only calibration is circular -- deriving a threshold from "
@@ -284,7 +335,7 @@ def derive_threshold_from_pairs(
     from langres.core.calibration import derive_threshold
 
     return derive_threshold(
-        [pair.score for pair in pairs],
+        scores,
         [pair.label for pair in pairs],
         method=method,
         percentile=percentile,

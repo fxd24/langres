@@ -322,8 +322,25 @@ class PipelineDebugger(Generic[SchemaT]):
                 separation=0.0,
             )
 
-        # Extract scores
-        scores = np.array([j.score for j in judgements])
+        # Extract scores. Abstaining judgements (no score) carry no distribution
+        # signal, so they are omitted rather than coerced to a fake 0.0.
+        scores = np.array([j.score for j in judgements if j.score is not None])
+
+        if scores.size == 0:
+            # A binary/decision judge (or an all-abstained run) has judgements
+            # but no scores; np.mean/percentile on an empty array raises. Return
+            # zero stats rather than crash (mirrors the empty-judgements guard).
+            return ScoreStats(
+                mean_score=0.0,
+                median_score=0.0,
+                std_score=0.0,
+                p25=0.0,
+                p75=0.0,
+                p95=0.0,
+                true_match_mean=0.0,
+                non_match_mean=0.0,
+                separation=0.0,
+            )
 
         # Calculate overall statistics
         mean_score = float(np.mean(scores))
@@ -338,6 +355,8 @@ class PipelineDebugger(Generic[SchemaT]):
         non_match_scores: list[float] = []
 
         for j in judgements:
+            if j.score is None:
+                continue
             pair = tuple(sorted([j.left_id, j.right_id]))
             is_true_match = pair in self.true_matches
 
@@ -358,6 +377,8 @@ class PipelineDebugger(Generic[SchemaT]):
             if high_nonmatch_count >= self.sample_size:
                 break
 
+            if j.score is None:
+                continue
             pair = tuple(sorted([j.left_id, j.right_id]))
             if pair not in self.true_matches and j.score > 0.7:
                 e1 = self._entities_map.get(j.left_id)
@@ -387,6 +408,8 @@ class PipelineDebugger(Generic[SchemaT]):
             if low_match_count >= self.sample_size:
                 break
 
+            if j.score is None:
+                continue
             pair = tuple(sorted([j.left_id, j.right_id]))
             if pair in self.true_matches and j.score < 0.3:
                 e1 = self._entities_map.get(j.left_id)

@@ -58,7 +58,12 @@ from pydantic import BaseModel, Field, create_model
 from langres.core.blockers.all_pairs import schema_to_factory
 from langres.core.comparator import Comparator
 from langres.core.judgement_log import JudgementLog, LoggingModule
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import (
+    ERCandidate,
+    JudgeAbstainedError,
+    PairwiseJudgement,
+    predicted_match,
+)
 from langres.core.module import Module
 from langres.core.presets import (
     JudgeName,
@@ -81,7 +86,7 @@ class LinkVerdict(BaseModel):
     """
 
     match: bool
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
     reasoning: str | None = None
     judge_used: str
     score_type: str
@@ -92,7 +97,8 @@ class LinkVerdict(BaseModel):
 
     def __repr__(self) -> str:
         verdict = "MATCH" if self.match else "NO MATCH"
-        return f"LinkVerdict({verdict}, score={self.score:.3f}, judge={self.judge_used!r})"
+        score = "n/a" if self.score is None else f"{self.score:.3f}"
+        return f"LinkVerdict({verdict}, score={score}, judge={self.judge_used!r})"
 
 
 class DedupeResult(list[set[str]]):
@@ -349,8 +355,20 @@ def link(
         )
     judgement = judgements[0]
 
+    predicted = predicted_match(judgement, resolved_threshold)
+    if predicted is None:
+        # A judge that neither scored nor decided abstained; link() owes the
+        # caller a match/no-match verdict and cannot honestly fabricate one.
+        raise JudgeAbstainedError(
+            f"the {judge_used!r} judge abstained (no decision and no score) on "
+            "this pair, so link() cannot return a match verdict. An LLMJudge "
+            "abstains when its response fails to parse (the default "
+            "on_parse_error='abstain'); pass on_parse_error='raise' to surface "
+            "the parse failure itself, or catch JudgeAbstainedError."
+        )
+
     return LinkVerdict(
-        match=judgement.score >= resolved_threshold,
+        match=predicted,
         score=judgement.score,
         reasoning=judgement.reasoning,
         judge_used=judge_used,
@@ -376,6 +394,15 @@ def dedupe(
     log: JudgementLog | str | Path | None = None,
 ) -> DedupeResult:
     """Group a batch of records into entity clusters.
+
+    Abstentions are handled differently here than in :func:`link`. ``link``
+    judges one pair and *raises* :class:`~langres.core.models.JudgeAbstainedError`
+    on an abstain, because a single caller needs a verdict. ``dedupe`` judges
+    many pairs to build clusters, and an abstained pair is left **unmerged** (the
+    conservative default -- the same as "not a match" for edge-building) rather
+    than aborting the whole batch: one unparseable judgement among thousands
+    should not sink an entire dedupe run. Inspect the ``log`` if you need to see
+    which pairs the judge declined.
 
     Args:
         records: The records to dedupe (plain dicts). ``[]`` -> ``[]``; a

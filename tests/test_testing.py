@@ -218,3 +218,28 @@ class TestScriptedJudgeIntegrationWithEvaluate:
         result = next(iter(judge.forward(iter([_pair("a", "b")]))))
 
         assert isinstance(result, PairwiseJudgement)
+
+
+class TestScriptedJudgeAbstain:
+    """The ``abstain`` predicate yields a score-less, decision-less judgement."""
+
+    def test_abstain_predicate_yields_an_abstention(self) -> None:
+        judge = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.9},
+            abstain=lambda cand: cand.left.id == "c",
+        )
+
+        judgements = list(judge.forward(iter([_pair("a", "b"), _pair("c", "d")])))
+
+        assert judgements[0].score == 0.9
+        assert judgements[0].is_abstain is False
+        assert judgements[1].is_abstain is True
+        assert judgements[1].score is None
+        assert judgements[1].decision is None
+
+    def test_no_abstain_predicate_never_abstains(self) -> None:
+        judge = ScriptedJudge({frozenset({"a", "b"}): 0.9})
+
+        [judgement] = list(judge.forward(iter([_pair("a", "b")])))
+
+        assert judgement.is_abstain is False

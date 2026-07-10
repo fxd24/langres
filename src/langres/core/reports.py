@@ -1008,9 +1008,27 @@ def _inspect_scores_impl(
             ],
         )
 
-    # Extract scores
-    scores = [j.score for j in judgements]
+    # Extract scores. Abstaining judgements (no score) carry no distribution
+    # signal, so they are omitted here rather than coerced to a fake 0.0.
+    scored = [(j, j.score) for j in judgements if j.score is not None]
+    scores = [score for _, score in scored]
     total = len(judgements)
+
+    # A binary/decision judge (or an all-abstained run) has judgements but NO
+    # scores. np.mean/percentile on an empty list raises -- return an honest
+    # score-less report instead of crashing the public inspect_scores() API.
+    if not scores:
+        return ScoreInspectionReport(
+            total_judgements=total,
+            score_distribution={},
+            high_scoring_examples=[],
+            low_scoring_examples=[],
+            recommendations=[
+                f"All {total} judgement(s) are decision-only or abstained (no score "
+                "to summarize). This is expected for a binary decision judge; "
+                "inspect `decision` / `confidence` instead of the score distribution.",
+            ],
+        )
 
     # Compute statistics
     score_distribution = {
@@ -1027,27 +1045,27 @@ def _inspect_scores_impl(
     }
 
     # Extract high-scoring examples (top sample_size)
-    sorted_by_score_desc = sorted(judgements, key=lambda j: j.score, reverse=True)
+    sorted_by_score_desc = sorted(scored, key=lambda pair: pair[1], reverse=True)
     high_scoring_examples = [
         {
             "left_id": j.left_id,
             "right_id": j.right_id,
-            "score": j.score,
+            "score": score,
             "reasoning": j.reasoning if j.reasoning else "",
         }
-        for j in sorted_by_score_desc[:sample_size]
+        for j, score in sorted_by_score_desc[:sample_size]
     ]
 
     # Extract low-scoring examples (bottom sample_size)
-    sorted_by_score_asc = sorted(judgements, key=lambda j: j.score)
+    sorted_by_score_asc = sorted(scored, key=lambda pair: pair[1])
     low_scoring_examples = [
         {
             "left_id": j.left_id,
             "right_id": j.right_id,
-            "score": j.score,
+            "score": score,
             "reasoning": j.reasoning if j.reasoning else "",
         }
-        for j in sorted_by_score_asc[:sample_size]
+        for j, score in sorted_by_score_asc[:sample_size]
     ]
 
     # Generate recommendations

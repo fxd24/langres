@@ -60,6 +60,24 @@ class _EmptyModule(Module[object]):
         raise NotImplementedError
 
 
+class _AbstainingModule(Module[object]):
+    """Yields one abstention (no decision, no score) -- exercises link()'s abstain guard."""
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,  # type: ignore[attr-defined]
+                right_id=candidate.right.id,  # type: ignore[attr-defined]
+                score=None,
+                score_type="prob_llm",
+                decision_step="parse_error",
+                provenance={"parse_error": True},
+            )
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
 class _CostlyModule(Module[object]):
     """Yields N judgements at a fixed cost each -- for cap-breach tests."""
 
@@ -339,6 +357,25 @@ class TestDedupe:
         assert result.judge_used == "custom"
         assert {"1", "2"} in result
 
+    def test_abstaining_judge_leaves_pair_unmerged_and_does_not_raise(self) -> None:
+        """dedupe()'s abstain contract, the deliberate asymmetry with link().
+
+        link() raises JudgeAbstainedError on an abstain (one caller needs a
+        verdict). dedupe() judges many pairs to build clusters, so an abstained
+        pair is conservatively left UNMERGED rather than aborting the whole
+        batch -- one unparseable judgement must not sink a dedupe run. Here the
+        only pair abstains, so the two records stay unclustered and no exception
+        is raised.
+        """
+        records = [
+            {"id": "a", "name": "Acme Corporation"},
+            {"id": "b", "name": "Acme Corp"},
+        ]
+        result = dedupe(records, judge=_AbstainingModule(), threshold=0.5)
+        # No merge, no crash: the abstained pair simply did not connect a, b.
+        assert {"a", "b"} not in result
+        assert all(len(cluster) == 1 for cluster in result)
+
     def test_cap_breach_mid_stream_raises_with_partial_judgements(self) -> None:
         records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
         with pytest.raises(BudgetExceeded) as excinfo:
@@ -419,6 +456,25 @@ class TestLink:
     def test_no_judgement_produced_raises_runtime_error(self) -> None:
         with pytest.raises(RuntimeError, match="produced no judgement"):
             link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_EmptyModule())
+
+    def test_abstaining_judge_raises_judge_abstained_error(self) -> None:
+        """A judge that neither decided nor scored gives link() no verdict to return.
+
+        link() must raise rather than fabricate a match: a ``match=None`` verdict
+        would be read as "no match" by the obvious ``if verdict.match:`` and
+        silently recreate the confident-no bug the contract exists to remove.
+        """
+        from langres import JudgeAbstainedError
+
+        with pytest.raises(JudgeAbstainedError, match="abstained"):
+            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_AbstainingModule())
+
+    def test_judge_abstained_error_is_a_runtime_error(self) -> None:
+        """It subclasses RuntimeError so ``except RuntimeError`` still catches it."""
+        from langres import JudgeAbstainedError
+
+        with pytest.raises(RuntimeError):
+            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_AbstainingModule())
 
     def test_no_key_raises_no_judge_available_error(self) -> None:
         """link() fails fast on the keyless auto path exactly like dedupe()."""
@@ -647,7 +703,7 @@ class TestDedupeWithLog:
 
         rows = JudgementLog(log_path).read()
         assert len(rows) == 3  # C(3,2) all-pairs candidates
-        assert all(row["v"] == 2 for row in rows)
+        assert all(row["v"] == 3 for row in rows)
         # A string judge carries no token usage — the vector is logged as null.
         assert all(row["usage"] is None for row in rows)
         assert {"1", "2"} in result

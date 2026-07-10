@@ -348,10 +348,15 @@ LIVE_PROMPT_DESIGN = "domain-complex-force"
 #: JSONL result-row schema version (independent of ``JudgementLog``'s ``v``).
 #: v2 adds ``correct`` (verdict==gold) always and, on a ``--logprobs`` run, the
 #: first-token credence columns (``p_yes``/``leaked_mass``/``p_yes_is_bound``).
-#: v1 rows (no credence, no ``correct``) still load — the readers use ``.get()``
-#: and never gate on ``v``, so ``--report-only`` on the committed v1 rows is
-#: byte-for-byte unaffected.
-_RESULT_SCHEMA_VERSION = 2
+#: v3 changes what the ``score`` column *means*: a binary judge now emits a
+#: ``decision`` (not a fabricated ``0.0``/``1.0`` score), so ``score`` is ``None``
+#: on a plain run and the continuous ``p_yes`` on a ``--logprobs`` run — whereas
+#: v1/v2's ``score`` was a redundant ``0.0``/``1.0`` copy of ``verdict``. The
+#: ``verdict`` column (0/1) is unchanged across all versions, and grading always
+#: reads ``verdict`` (never ``score``). v1/v2 rows still load — the readers use
+#: ``.get()`` and never gate on ``v``, so ``--report-only`` on the committed
+#: v1/v2 rows is byte-for-byte unaffected.
+_RESULT_SCHEMA_VERSION = 3
 
 #: Filename ``variant`` token for the ``--logprobs`` credence probe. It is the
 #: contamination firewall: probe rows land in ``…__logprobs.jsonl``, a DIFFERENT
@@ -688,7 +693,15 @@ def _row_from_judgement(
     identical to v1 apart from ``v`` and ``correct``.
     """
     prov = judgement.provenance
-    verdict = int(judgement.score)
+    # A binary judge decides (parse_binary_yes_no is total, so a live judge always
+    # sets ``decision``); ``decision is None`` would mean it abstained. Surface that
+    # loudly rather than coerce it to a fake "no" (0) -- the whole point of A3a.
+    if judgement.decision is None:
+        raise ValueError(
+            f"binary judge abstained (decision=None) for {judgement.left_id} vs "
+            f"{judgement.right_id}; parse_binary_yes_no is total, so this is unreachable"
+        )
+    verdict = int(judgement.decision)
     row: dict[str, Any] = {
         "v": _RESULT_SCHEMA_VERSION,
         "model": model,
@@ -699,7 +712,10 @@ def _row_from_judgement(
         "gold": int(gold),
         "response_text": judgement.reasoning or "",
         "verdict": verdict,
-        "score": float(judgement.score),
+        # ``score`` is now the judge's own ``score`` field: ``None`` on a plain
+        # binary run, the continuous ``p_yes`` on a ``--logprobs`` run (not a
+        # 0/1 copy of ``verdict`` -- grading reads ``verdict``). See v3 note above.
+        "score": judgement.score,
         "correct": int(verdict == int(gold)),
         "cost_usd": float(prov.get("cost_usd") or 0.0),
         "cost_is_real": bool(prov.get("cost_is_real")),
@@ -776,9 +792,10 @@ def _judge_stream(
         n_done += 1
         running_cost += row["cost_usd"]
         monitor.add(row["cost_usd"])
-        if their_verdict_by_pair is not None and int(judgement.score) == their_verdict_by_pair.get(
-            key
-        ):
+        # ``row["verdict"]`` is the judge's decision (0/1), already guarded against
+        # abstain in ``_row_from_judgement`` above -- reuse it instead of re-reading
+        # ``judgement.decision`` (which the binary ``score`` column no longer holds).
+        if their_verdict_by_pair is not None and row["verdict"] == their_verdict_by_pair.get(key):
             agree += 1
         if progress_every and n_done % progress_every == 0:
             msg = f"[live] {model}  judged {n_done}/{total}  spend ${running_cost:.4f}"
@@ -795,12 +812,19 @@ def _judge_stream(
 
 
 def _metrics_from_rows(rows: Sequence[dict[str, Any]]) -> Any:
-    """Pairwise P/R/F1 (via ``classify_pairs``) from persisted rows' verdict vs. gold."""
+    """Pairwise P/R/F1 (via ``classify_pairs``) from persisted rows' verdict vs. gold.
+
+    Grades off the ``verdict`` column (present in every v1/v2/v3 row) as an
+    explicit ``decision`` -- ``classify_pairs``/``predicted_match`` reads the
+    decision directly, so the pinned regression is byte-for-byte identical to the
+    old ``score=float(verdict)`` + ``threshold=0.5`` path, and it never touches the
+    ``score`` column (now ``None``/``p_yes``, not a 0/1 verdict copy).
+    """
     judgements = [
         PairwiseJudgement(
             left_id=r["left_id"],
             right_id=r["right_id"],
-            score=float(r["verdict"]),
+            decision=bool(int(r["verdict"])),
             score_type="prob_llm",
             decision_step="peeters_live",
             provenance={},
@@ -1055,7 +1079,11 @@ def build_compared_pairs(
                 right=serializer(candidates[i].right),
                 label=prompts[i].label,
                 our_answer=our_answer,
-                our_verdict=int(our_judgements[i].score),
+                # The binary judge's verdict is its ``decision`` (its ``score`` is
+                # now None/p_yes). Both sources supply ``.decision``: the live judge
+                # directly, the --report-only reconstruction via the SimpleNamespace
+                # shim below (decision backfilled from the persisted ``verdict``).
+                our_verdict=int(our_judgements[i].decision),
                 their_answer=their_answer,
                 their_verdict=parse_binary_answer(their_answer),
             )
@@ -1228,8 +1256,13 @@ def _compare_report_from_rows(
         key = frozenset({r["left_id"], r["right_id"]})
         prompts_sub.append(prompt_by_pair[key])
         cands_sub.append(cand_by_pair[key])
+        # Backfill the judge's ``decision`` from the persisted ``verdict`` column
+        # (v1/v2/v3 all carry ``verdict``; ``decision`` is not a persisted column).
+        # ``build_compared_pairs`` reads ``.decision`` + ``.reasoning`` only.
         our_js.append(
-            SimpleNamespace(score=float(r["verdict"]), reasoning=r.get("response_text") or "")
+            SimpleNamespace(
+                decision=bool(int(r["verdict"])), reasoning=r.get("response_text") or ""
+            )
         )
         arch_sub.append(archived_by_pair[key])
 

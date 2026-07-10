@@ -106,7 +106,7 @@ def test_parse_binary_answer_delegates_to_canonical_parser(answer: str) -> None:
     from langres.core.modules.llm_judge import parse_binary_yes_no
 
     assert parse_binary_answer(answer) == 1
-    assert parse_binary_answer(answer) == int(parse_binary_yes_no(answer).score)
+    assert parse_binary_answer(answer) == int(parse_binary_yes_no(answer).decision)
 
 
 # --------------------------------------------------------------------------- #

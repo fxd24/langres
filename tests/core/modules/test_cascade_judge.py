@@ -92,6 +92,25 @@ class RaisingJudge(ScriptedJudge[CompanySchema]):
         raise RuntimeError("escalation backend unavailable")
 
 
+class BinaryDeciderJudge(ScriptedJudge[CompanySchema]):
+    """A binary student: emits a confident decision, no score, no confidence."""
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                decision=True,
+                score=None,
+                confidence=None,
+                score_type="prob_llm",
+                decision_step="binary_student",
+                provenance={},
+            )
+
+
 class GroupwiseStub(GroupwiseModule[CompanySchema]):
     """Minimal GroupwiseModule — must be rejected by the CascadeJudge ctor."""
 
@@ -190,6 +209,34 @@ class TestBandRouting:
             CASCADE_STUDENT_STEP,  # just below low: student
             CASCADE_STUDENT_STEP,  # just above high: student
         ]
+
+    def test_a_confident_binary_student_is_trusted_not_escalated(self) -> None:
+        """A decider with score=None, confidence=None is confident -- do NOT escalate it.
+
+        band_value is None for such a student, but is_abstain is False. Escalating
+        it (the pre-fix behavior) would erase the cascade's cost savings: every pair
+        goes to the expensive escalation judge. Trust its decision instead.
+        """
+        student = BinaryDeciderJudge({})  # scores dict unused; it emits a decision
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_llm")
+        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+
+        [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
+
+        assert judgement.decision_step == CASCADE_STUDENT_STEP  # trusted, not escalated
+        assert judgement.decision is True
+        assert escalation.seen == []  # the expensive judge was never called
+
+    def test_an_abstaining_student_is_still_escalated(self) -> None:
+        """The contrast: a real abstention (is_abstain) IS maximally uncertain -> escalate."""
+        student = ScriptedJudge({}, abstain=lambda _c: True)  # yields decision=None, score=None
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_llm")
+        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+
+        [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
+
+        assert judgement.decision_step == CASCADE_ESCALATED_STEP  # abstain -> escalate
+        assert escalation.seen == [frozenset({"a", "b"})]
 
     def test_escalation_is_lazy_and_per_pair(self) -> None:
         student = ScriptedJudge(
@@ -662,3 +709,36 @@ class TestInspectScores:
         judgements = list(cascade.forward(iter([_pair("a", "b")])))
         report = cascade.inspect_scores(judgements)
         assert isinstance(report, ScoreInspectionReport)
+
+
+class AbstainingStudent(ScriptedJudge[CompanySchema]):
+    """A student that abstains: emits a judgement with no score and no decision."""
+
+    def forward(
+        self, candidates: Iterator[ERCandidate[CompanySchema]]
+    ) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            self.seen.append(frozenset({candidate.left.id, candidate.right.id}))
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                score_type="prob_rf",  # no score/decision -> abstain
+                decision_step="student_abstain",
+                provenance={},
+            )
+
+
+class TestAbstainingStudentEscalates:
+    """An abstaining student is maximally uncertain -> the cascade escalates it."""
+
+    def test_abstaining_student_escalates_to_teacher(self) -> None:
+        student = AbstainingStudent({})
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="prob_llm")
+        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+
+        [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
+
+        # The escalation ran (its .seen records the pair) and its judgement wins.
+        assert escalation.seen == [frozenset({"a", "b"})]
+        assert judgement.decision_step == CASCADE_ESCALATED_STEP
+        assert judgement.score == 0.8

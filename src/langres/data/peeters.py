@@ -265,8 +265,10 @@ def parse_binary_answer(answer: str) -> int:
         ``1`` (match) or ``0`` (non-match). Anything that is not a clear "yes" —
         ``"No"``, an empty string, or a refusal — parses to ``0``.
     """
-    # score is always 0.0 or 1.0 here (parse_binary_yes_no is total, never None).
-    return int(parse_binary_yes_no(answer).score)  # type: ignore[arg-type]
+    # parse_binary_yes_no is total: decision is always True/False, never None.
+    decision = parse_binary_yes_no(answer).decision
+    assert decision is not None  # totality invariant (documented above)
+    return int(decision)
 
 
 # ---------------------------------------------------------------------------

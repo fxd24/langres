@@ -1,5 +1,90 @@
 # Changelog
 
+## [Unreleased] — the judgement contract: decisions, abstentions, optional confidence
+
+`PairwiseJudgement` now separates *deciding* from *ranking*, makes an abstention a
+first-class "I don't know" (never a fabricated verdict), and carries an optional,
+earned `confidence`. Builds directly on the eval-honesty groundwork below.
+
+### ⚠️ Behavior changes
+
+- **`PairwiseJudgement.score` widened `float` → `float | None`**, and the model
+  gained `decision: bool | None`, `confidence: float | None`, and
+  `confidence_source: Literal["none","unrequested","logprob","calibrated","heuristic"]`.
+  A judge is now a *ranker* (emits `score`) **or** a *decider* (emits a boolean
+  `decision` — a binary Yes/No LLM has no meaningful score, so a fabricated
+  `0.0`/`1.0` would lie); a logprob judge may set both. `score_type` stays
+  **required**: it doubles as the judge-family tag even when `score` is `None`.
+  `LinkVerdict.score` widened the same way.
+- **Ask `predicted_match(judgement, threshold) -> bool | None`** — a new module
+  function in `langres.core.models` (exported from `langres.core`), never a raw
+  `score >= threshold`. `decision` wins over `score`; neither set → abstention →
+  `None`. `classify_pairs`, the base `Clusterer`, and `CorrelationClusterer` all
+  route through it, so an **abstention is excluded from the predicted set** — no
+  longer graded a confident "no". `PairwiseJudgement.is_abstain` is the property
+  for that neither-set case.
+- **An abstention now emits `decision=None, score=None`** (was `score=0.0`) with
+  `provenance["parse_error"] = True`. `LLMJudge` (default
+  `on_parse_error="abstain"`, unparseable response) and `DSPyJudge` (parse /
+  validation error) now abstain **identically**. `link()` raises the new
+  **`JudgeAbstainedError`** (root-exported, subclasses `RuntimeError`) instead of
+  a `match=None` verdict a caller's `if verdict.match:` would silently read as
+  "no".
+- **`DSPyJudge` no longer abstains to the opposite verdict from `LLMJudge`.** It
+  previously emitted `score=0.5` — predicted a **MATCH** at any threshold ≤ 0.5,
+  and invisible to the abstention count. It now abstains as the null verdict
+  above, excluded from the predicted set. (The interim `score=0.0` fix from the
+  eval-honesty groundwork below is superseded by this null-verdict shape.)
+
+### Fixed
+
+- **The review flywheel ran as a silent no-op on a binary judge.**
+  `select_for_review(strategy="uncertainty")` ranked by distance-to-threshold on
+  a `score`; a decision-only log has no score to rank, so it returned `[]` — an
+  empty queue that looked like "nothing to review". It now ranks by the logged
+  **`confidence`** when present (`|confidence − 0.5|`), and **raises** `ValueError`
+  (naming `strategy="disagreement"` or `LLMJudge(confidence="logprob")` as the
+  fix) when there is no rankable signal, instead of silently returning nothing.
+  `ReviewItem` gained `reasoning` / `confidence` / `confidence_source`.
+- **`JudgementLog` persisted `$0` for every cascade row.** `append` / `read` only
+  read `provenance["cost_usd"]`, but `CascadeModule` writes `llm_cost_usd`; the
+  logged cost is now the first of `("cost_usd", "llm_cost_usd")` present.
+
+### Added
+
+- **`JudgementLog` schema v3.** Rows now carry `decision` / `confidence` /
+  `confidence_source` natively; `read()` backfills `decision` from the logged
+  `verdict` for older v1/v2 rows (`bool(verdict)` for a real bool, else an honest
+  `None` — never a coerced `False`). The logged `verdict` is the caller's
+  `predicted_match`.
+- **`LLMJudge(confidence="logprob")` now promotes its credence onto the
+  judgement** (the eval-honesty groundwork left it in `provenance` only). With a
+  usable first-token yes/no mass it sets `score = p_yes` (an honest continuous
+  ranking signal), `confidence = max(p_yes, 1 − p_yes)`, and
+  `confidence_source = "logprob"`, and it is now serialized in `config` so a saved
+  logprob judge reloads as one. `confidence="none"` (default) tags a decision
+  judge `confidence_source="unrequested"` (it *could* expose logprobs; you did not
+  ask).
+
+### Why `confidence` is a permanent field
+
+The field earned its place on evidence, not anticipation. On all 1206 Abt-Buy
+pairs (`gpt-4o-mini`, `temperature=0`, provider-billed), the model's first-token
+credence in its **own** answer scored
+`roc_auc(answer_was_correct, credence) = 0.95` (Brier 0.024) — it predicts its own
+errors, exactly what the flywheel needs to route the uncertain margin to review.
+Had that come back ≈ 0.5, the contract would have shipped `decision` + abstain
+**without** `confidence`. See `docs/research/20260710_logprob_credence_probe.md`.
+
+**Scope — honest limits.** `confidence` is **logprob-only** and an
+**OpenAI-family feature** today (`gpt-4o-mini`, one dataset, one prompt design);
+it is **unverified for GLM / DeepSeek / Qwen** — the models our own paid runs use
+— which is exactly why `confidence_source` separates `"none"` (structurally can't)
+from `"unrequested"` (could, wasn't asked). It is free **only in output tokens, at
+`explain=False`, on a logprob-returning model** — *not* free in general (generated
+reasoning costs ~3.75× on the same data). Never write "confidence is free"
+unqualified.
+
 ## [Unreleased] — eval honesty: spend cap by default, argmax warning, ROC-AUC, public seams
 
 Groundwork for the judgement-contract change (`decision` / abstain / optional

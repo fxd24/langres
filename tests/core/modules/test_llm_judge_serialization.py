@@ -50,6 +50,7 @@ def test_config_excludes_client_and_secrets() -> None:
         "provider",
         "system_prompt",
         "on_parse_error",
+        "confidence",
     }
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
     assert config["temperature"] == 0.3
@@ -80,6 +81,29 @@ def test_from_config_round_trips_via_lazy_client_path() -> None:
     assert rebuilt.temperature == 0.7
     assert rebuilt.entity_noun == "product"
     assert rebuilt.prompt_template == original.prompt_template
+
+
+def test_confidence_round_trips_through_config() -> None:
+    """A ``confidence="logprob"`` judge survives ``from_config`` (PR #105 review).
+
+    Without ``confidence`` in ``config``, ``Resolver.save``/``load`` would silently
+    revert a logprob judge to ``confidence="none"`` -- dropping the credence probe.
+    """
+    original = LLMJudge(
+        model="openrouter/openai/gpt-4o-mini",
+        client=object(),
+        confidence="logprob",
+    )
+    assert original.config["confidence"] == "logprob"
+
+    rebuilt = LLMJudge.from_config(original.config)
+    assert rebuilt.confidence == "logprob"
+    assert rebuilt.config == original.config
+
+    # An older artifact with no ``confidence`` key falls back to "none".
+    legacy = dict(original.config)
+    del legacy["confidence"]
+    assert LLMJudge.from_config(legacy).confidence == "none"
 
 
 def test_provider_pin_round_trips_through_config() -> None:

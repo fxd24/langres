@@ -104,6 +104,32 @@ def _candidate() -> ERCandidate[CompanySchema]:
     )
 
 
+def test_p_yes_does_not_clobber_a_rating_parsers_score() -> None:
+    """A rating parser (decision=None, score=<float>) + logprobs must keep its rating.
+
+    p_yes from first-token yes/no mass is meaningless for a "rate 0-1" response;
+    promoting it to `score` would silently discard the parsed rating. The promotion
+    is gated on `parsed.decision is not None` (a binary decider), so a rating flows
+    through untouched.
+    """
+    from langres.core.modules.llm_judge import parse_score_response
+
+    judge = LLMJudge[CompanySchema](
+        client=object(),  # sentinel; _map_verdict never touches the client
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_score_response,
+    )
+    decision, score, confidence, source, _reasoning, parse_error = judge._map_verdict(
+        "Score: 0.42", {"p_yes": 0.9}
+    )
+    assert decision is None  # a ranker, not a decider
+    assert score == pytest.approx(0.42)  # the parsed rating, NOT p_yes=0.9
+    assert confidence is None
+    assert source == "none"
+    assert parse_error is False
+
+
 # --------------------------------------------------------------------------- #
 # _normalize_answer_token — casing/whitespace/punctuation collapse.
 # --------------------------------------------------------------------------- #
@@ -275,6 +301,46 @@ def test_sync_forward_requests_logprobs_on_non_openrouter_and_records_pyes() -> 
     assert prov["p_yes"] == pytest.approx(0.8 / 0.95)
     assert prov["confidence_leaked_mass"] == pytest.approx(1.0 - 0.95)
     assert prov["p_yes_is_bound"] is False
+
+
+def test_logprob_forward_promotes_pyes_onto_the_judgement() -> None:
+    """A usable p_yes becomes the judgement's score + a max(p_yes,1-p_yes) confidence."""
+    p_yes = 0.8 / 0.95
+    resp = _response([("Yes", [("Yes", 0.8), (" No", 0.15)])], message="Yes")
+    j = LLMJudge[CompanySchema](
+        client=_FakeClient(resp),
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_binary_yes_no,
+    )
+    out = list(j.forward(iter([_candidate()])))[0]
+    # decision from the "Yes" text; score is the honest continuous p_yes.
+    assert out.decision is True
+    assert out.score == pytest.approx(p_yes)
+    # confidence = credence in its OWN answer (the roc_auc-0.95 probe quantity).
+    assert out.confidence == pytest.approx(max(p_yes, 1.0 - p_yes))
+    assert out.confidence_source == "logprob"
+
+
+def test_logprob_run_with_no_usable_mass_falls_back_to_decision_only() -> None:
+    """logprob requested but the first token carried no yes/no mass -> p_yes None.
+
+    The judge still decides (from the text), score stays None (binary family, no
+    p_yes to promote), and confidence_source is "none" (no earned credence).
+    """
+    resp = _response([("Maybe", [("Maybe", 0.6), ("Unsure", 0.3)])], message="Yes")
+    j = LLMJudge[CompanySchema](
+        client=_FakeClient(resp),
+        model="gpt-4o-mini",
+        confidence="logprob",
+        response_parser=parse_binary_yes_no,
+    )
+    out = list(j.forward(iter([_candidate()])))[0]
+    assert out.decision is True
+    assert out.score is None
+    assert out.confidence is None
+    assert out.confidence_source == "none"
+    assert out.provenance["p_yes"] is None  # the fragment is still recorded
 
 
 def test_sync_forward_openrouter_sends_both_extra_body_and_logprobs() -> None:

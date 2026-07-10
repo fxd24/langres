@@ -896,6 +896,43 @@ def test_evaluate_no_parse_errors_is_zero_and_quiet(
     assert not any("parse" in r.message.lower() for r in caplog.records)
 
 
+def test_evaluate_counts_is_abstain_abstention_without_parse_error_flag(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Wave-1 abstain (is_abstain, score=None, NO parse_error flag) is counted
+    and excluded from predicted — the ``is_abstain`` arm of the detector.
+
+    ``ScriptedJudge(abstain=...)`` yields ``decision=None, score=None`` with no
+    ``provenance['parse_error']``, so the ``parse_error``-only detector would be
+    blind to it. The belt-and-suspenders detector must still count it, and
+    ``classify_pairs`` must *exclude* it from the predicted set: an abstained
+    gold pair becomes a false negative (recall is not flattered), never a
+    fabricated verdict. Asserting the confusion-matrix counts move is the oracle
+    that a flag-only "fix" cannot pass.
+    """
+    scores = {"p0": 0.9, "p1": 0.9}  # ids starting with 'p' are gold pairs
+    cands, gold = _labeled_candidates(scores)
+    # Abstain on p1's pair only; p0 stays a confident match.
+    judge: ScriptedJudge[CompanySchema] = ScriptedJudge(
+        lambda c: 0.9, abstain=lambda c: c.left.id == "p1"
+    )
+    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+        result, judgements = benchmark_module.evaluate_judge_on_candidates(
+            judge, cands, gold, grid=(0.5,)
+        )
+    # The count comes purely from the is_abstain arm: no judgement is flagged.
+    assert all(not j.provenance.get("parse_error") for j in judgements)
+    assert result.n_abstained == 1
+    assert result.n_parse_errors == 1
+    assert result.abstention_rate == pytest.approx(1 / 2)  # 1 of 2 judged
+    assert any("abstention" in r.message.lower() for r in caplog.records)
+
+    # Oracle: p0 (confident match) is a TP; p1 (abstained gold) is EXCLUDED from
+    # predicted and so counts as a false negative — not a graded "no", not a match.
+    metrics = classify_pairs(judgements, gold, threshold=0.5)
+    assert (metrics.tp, metrics.fp, metrics.fn) == (1, 0, 1)
+
+
 def test_evaluate_judge_on_candidates_ignores_gold_outside_candidates() -> None:
     # A gold pair whose candidate was never supplied (a subsample/blocking miss)
     # must not count against the judge: recall is graded only over in-scope pairs.
@@ -1057,8 +1094,10 @@ def test_evaluate_raises_on_empty_candidates() -> None:
 
 def test_classify_pairs_grades_an_abstention_as_a_match_at_threshold_zero() -> None:
     # The reason evaluate() rejects a cut of 0.0: `classify_pairs` predicts a
-    # match iff `score >= cut`, and BOTH judges abstain at score=0.0. At cut 0.0
-    # the abstention is scored a confident YES. This test pins the underlying
+    # match iff `score >= cut`, so a score=0.0 abstention (e.g. LLMJudge under
+    # on_parse_error='abstain') is scored a confident YES at cut 0.0. (A Wave-1
+    # abstain nulls the score instead -- score=None -> excluded -- so this
+    # pins the score=0.0 shape specifically.) This test pins the underlying
     # behavior so the guard below can never be "fixed" by loosening the range.
     abstain = PairwiseJudgement(
         left_id="l0",

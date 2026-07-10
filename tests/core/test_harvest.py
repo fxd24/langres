@@ -194,6 +194,50 @@ def test_harvest_coerces_row_field_types() -> None:
     assert pairs[0].label is True
 
 
+def test_harvest_decision_only_row_carries_score_none() -> None:
+    """A v3 decision-only row (``score: null``) yields a LabeledPair with
+    ``score=None`` -- the label is still usable, but there is no score for
+    calibration. The null is carried as-is, never coerced to 0.0."""
+    rows: list[dict[str, Any]] = [
+        {"v": 3, "left_id": "a", "right_id": "b", "score": None, "verdict": True}
+    ]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    assert pairs[0].score is None
+    assert pairs[0].label is True
+
+
+def test_harvest_abstention_row_is_skipped_not_labeled_false() -> None:
+    """A v3 abstention row (verdict=None: the judge neither decided nor scored)
+    carries NO usable label and must be omitted -- never coerced to a False
+    non-match. Fabricating a "not a match" would seed silver labels with a
+    verdict the judge never gave, the label-side twin of coercing a null score
+    to 0.0. A real verdict row alongside it still passes through."""
+    rows: list[dict[str, Any]] = [
+        {"v": 3, "left_id": "a", "right_id": "b", "score": None, "verdict": None},
+        {"v": 3, "left_id": "c", "right_id": "d", "score": 0.9, "verdict": True},
+    ]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    # The abstention is dropped; only the decided pair survives.
+    assert [(p.left_id, p.right_id) for p in pairs] == [("c", "d")]
+    assert pairs[0].label is True
+
+
+def test_harvest_correction_rescues_an_abstention_row() -> None:
+    """A human correction supplies the label an abstention lacked, so the pair
+    IS harvested (from the correction), proving the skip is verdict-only, not a
+    blanket drop of the pair."""
+    rows: list[dict[str, Any]] = [
+        {"v": 3, "left_id": "a", "right_id": "b", "score": None, "verdict": None},
+    ]
+    pairs = harvest_labeled_pairs(
+        rows, corrections=[Correction(left_id="a", right_id="b", label=True)]
+    )
+    assert len(pairs) == 1
+    assert pairs[0].label is True
+    assert pairs[0].source == "correction"
+    assert pairs[0].score is None
+
+
 # --------------------------------------------------------------------------- #
 # derive_threshold_from_pairs wiring                                          #
 # --------------------------------------------------------------------------- #
@@ -219,6 +263,20 @@ def test_derive_threshold_from_pairs_percentile_passthrough() -> None:
     assert derive_threshold_from_pairs(
         pairs, method="percentile", percentile=50.0
     ) == pytest.approx(0.5)
+
+
+def test_derive_threshold_from_pairs_raises_on_scoreless_pair() -> None:
+    """A score-less pair (decision-only judge, score=None) makes a *score*
+    threshold underivable. The guard raises a clear ValueError naming the
+    offending pair and the cause -- rather than silently calibrating on the
+    biased subset that happens to have scores."""
+    pairs = [
+        LabeledPair(left_id="a", right_id="b", score=0.2, label=False, source="verdict"),
+        LabeledPair(left_id="c", right_id="d", score=None, label=True, source="correction"),
+    ]
+    with pytest.raises(ValueError, match="decision-only judge has no scores") as excinfo:
+        derive_threshold_from_pairs(pairs)
+    assert "c/d" in str(excinfo.value)  # the offending pair is named
 
 
 def test_derive_threshold_from_pairs_propagates_single_class_error() -> None:

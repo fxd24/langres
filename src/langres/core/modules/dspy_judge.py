@@ -240,11 +240,13 @@ class DSPyJudge(Module[SchemaT]):
         Each call runs the program under ``dspy.context(lm=..., track_usage=True)``
         — never ``dspy.settings.configure`` — so the global LM is left untouched and
         real token usage is captured for honest cost. A DSPy parse/validation error
-        does not skip the pair: it yields an abstention (``score=0.0``,
-        ``provenance["parse_error"] = True``) tagged ``dspy_parse_error`` with the
-        error recorded in provenance — mirroring ``LLMJudge``'s abstention shape so
-        both judges' "I don't know" signals classify identically (never a match) at
-        every downstream threshold.
+        does not skip the pair: it yields a contract-correct abstention
+        (``decision=None, score=None`` — so ``is_abstain`` is ``True`` — with
+        ``provenance["parse_error"] = True``) tagged ``dspy_parse_error`` and the
+        error recorded in provenance. ``predicted_match`` therefore *excludes* the
+        pair from the predicted set (never a silent match), and the evaluator's
+        abstention accounting (``core.benchmark``, ``n_abstained``) counts it — an
+        honest "I don't know", not a fabricated verdict.
         """
         if not self._compiled:
             logger.warning(
@@ -276,7 +278,10 @@ class DSPyJudge(Module[SchemaT]):
                 yield PairwiseJudgement(
                     left_id=left_id,
                     right_id=right_id,
-                    score=0.0,
+                    # A parse failure is a genuine abstention: null the verdict
+                    # (decision=None default, score=None) so is_abstain is True and
+                    # predicted_match excludes it -- never a silent 0.0/0.5 match.
+                    score=None,
                     score_type="prob_llm",
                     decision_step="dspy_parse_error",
                     reasoning=None,
