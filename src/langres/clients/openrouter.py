@@ -253,6 +253,13 @@ def make_token_cost_track(
     we price the run deterministically from those counts against the pinned
     per-1M rates. This is the honest, source-of-truth cost for paid cells.
 
+    The returned ``CostTrack.cost_basis`` is ``"estimated"`` whenever any spend
+    is priced (this tracker multiplies token counts by a pinned price table —
+    it never reads a provider-billed amount off a response, so it can never be
+    ``"real"``) and ``"none"`` when no tokens were seen at all.
+    ``CostTrack.usage`` sums each judgement's typed token vector, mirroring
+    ``benchmark.py::_cost_track``.
+
     Args:
         model: The routing model id. Must be a key of ``prices``.
         prices: Per-1M-token ``(input, output)`` price table. Defaults to
@@ -262,22 +269,53 @@ def make_token_cost_track(
         A ``track(judgements) -> CostTrack`` closure priced against ``model``.
     """
     from langres.core.benchmark import CostTrack
+    from langres.core.usage import LLMUsage
 
     in_per_1m, out_per_1m = _price_for(model, prices)
     in_per_tok, out_per_tok = in_per_1m / 1_000_000.0, out_per_1m / 1_000_000.0
 
+    def _usage(judgement: PairwiseJudgement) -> LLMUsage:
+        """One judgement's typed usage vector, or all-zero if absent/malformed.
+
+        Reads ``provenance["usage"]`` — the full ``LLMUsage.model_dump()`` a
+        judge writes alongside the legacy ``prompt_tokens``/``completion_tokens``
+        keys (see ``llm_judge.py``/``dspy_judge.py`` ``_build_provenance``) — so
+        the summed vector below captures the cache/reasoning subsets too, not
+        just the two scalars this tracker prices from. Mirrors
+        ``benchmark.py::_judgement_usage``: absent or malformed usage is an
+        all-zero vector, never a hard failure — usage capture is observability.
+        """
+        raw = judgement.provenance.get("usage")
+        if not isinstance(raw, dict):
+            return LLMUsage()
+        try:
+            return LLMUsage(**raw)
+        except (TypeError, ValueError):
+            return LLMUsage()
+
     def track(judgements: list[PairwiseJudgement]) -> CostTrack:
         usd_total = 0.0
+        usages: list[LLMUsage] = []
         for j in judgements:
             prov = j.provenance
             usd_total += int(prov.get("prompt_tokens", 0) or 0) * in_per_tok
             usd_total += int(prov.get("completion_tokens", 0) or 0) * out_per_tok
+            usages.append(_usage(j))
         n = len(judgements)
         per_pair = usd_total / n if n > 0 else 0.0
+        summed_usage = LLMUsage(
+            input_tokens=sum(u.input_tokens for u in usages),
+            output_tokens=sum(u.output_tokens for u in usages),
+            cache_read_input_tokens=sum(u.cache_read_input_tokens for u in usages),
+            cache_creation_input_tokens=sum(u.cache_creation_input_tokens for u in usages),
+            reasoning_tokens=sum(u.reasoning_tokens for u in usages),
+        )
         return CostTrack(
             usd_total=usd_total,
             usd_per_1k_pairs=per_pair * 1_000.0,
             est_usd_per_100k=per_pair * 100_000.0,
+            usage=summed_usage,
+            cost_basis="estimated" if usd_total > 0 else "none",
         )
 
     return track
