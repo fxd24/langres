@@ -1,5 +1,99 @@
 # Changelog
 
+## [Unreleased] — eval honesty: spend cap by default, argmax warning, ROC-AUC, public seams
+
+Groundwork for the judgement-contract change (`decision` / abstain / optional
+`confidence`). Nothing here touches `PairwiseJudgement`'s schema; this lands the
+pieces that can regress money or silently report a wrong number.
+
+### ⚠️ Behavior changes
+
+- **`evaluate()` now caps spend by default.** It builds a `BudgetedModuleRunner`
+  internally; `budget_usd=` overrides it and omitting it resolves to
+  `DEFAULT_BUDGET_USD` (`$1.00`). Previously `evaluate()` had *no* cap at all —
+  a paid judge over a large candidate set billed until it finished. Free judges
+  never reach the cap. `evaluate_judge_on_candidates()` keeps its lower-level
+  `runner=` / `price_per_token_or_pair=` / `cost_track_fn=` knobs unchanged.
+- **`evaluate()` warns that `best_threshold` is fitted to the gold it reports
+  on.** The default still sweeps `DEFAULT_PAIR_GRID` and the returned number is
+  unchanged — but it is an argmax over the same gold used to score, i.e.
+  optimistically biased, not a held-out estimate. It now says so once, via
+  `UserWarning`. Pass `threshold=<float>` to grade honestly at a fixed cut:
+  `graded_threshold` is set and `best_threshold` becomes `None`.
+  The default was deliberately *not* flipped to a fixed `0.5` — a global cut
+  collapses an embedding judge from F1 1.000 to 0.667, because cosine
+  non-matches sit at 0.70–0.80. No single constant serves `sim_cos`,
+  `heuristic`, and a binary LLM judge alike.
+- **`evaluate(on_truncation=...)`** (`"raise"` default) raises
+  `EvaluationTruncatedError` **only when the spend cap caused the truncation**,
+  carrying the partial judgements on the exception. A judge that skips a pair
+  only warns: one bad call must not blow up a run and discard results already
+  paid for. `JudgePairEval.truncation_reason` records which happened.
+- **`CostTrack.cost_is_real` is now a derived property, not a stored bool.**
+  A single run can mix provider-billed cost, litellm-estimated cost, free local
+  judges, and untracked DSPy parse failures — a bool cannot say "mixed". The
+  stored field is `cost_basis: Literal["real","estimated","mixed","untracked","none"]`,
+  and `CostTrack.usage` now carries the summed `LLMUsage` token vector.
+  *Tokens are the fact; dollars are derived.*
+
+### Fixed
+
+- **`DSPyJudge` abstained to the opposite verdict from `LLMJudge`.** On a parse
+  or validation error it emitted `score=0.5` with **no** `provenance["parse_error"]`
+  key. At any threshold ≤ 0.5 that abstention was predicted a **match** — while
+  `LLMJudge`'s abstention (`score=0.0`) was predicted a non-match — and
+  `n_parse_errors` could not see it, so DSPy abstentions were invisible in every
+  eval report. Both judges now abstain at `score=0.0` with `parse_error=True`.
+
+### Added
+
+- **`langres.core.metrics.roc_auc_score` / `average_precision_score`** — pure
+  Python (`math` only, no numpy, no sklearn in `src/`). Tie-aware: ROC-AUC uses
+  the Mann-Whitney-U form over midranks, so an all-equal score vector yields
+  exactly `0.5` and a tie straddling the pos/neg boundary gets half credit —
+  the exact point a naive rank-AUC silently diverges from sklearn. Single-class
+  input returns `nan` rather than raising, so one degenerate slice blanks a cell
+  instead of killing a whole report.
+- **`Resolver.candidates(records) -> list[ERCandidate]`** — the public seam
+  replacing reaches into `Resolver._candidates`. It returns a **materialised
+  list**, because `evaluate_judge_on_candidates` calls `len()` and iterates
+  twice; handing it a generator would make the second pass yield nothing and
+  produce a plausible-but-wrong F1 off an empty gold set. Comparison vectors
+  are attached (a raw `blocker.stream()` does not attach them).
+- **`langres.eval.candidates_for(bench, *, split, seed)`** — returns
+  `(candidates, gold_pairs)` together, so scoring a benchmark never requires a
+  private API. Facade also now exports `roc_auc_score`, `average_precision_score`,
+  and `gold_pairs_from_clusters`.
+- **`JudgePairEval.n_abstained` / `.abstention_rate` / `.graded_threshold`** —
+  `graded_threshold` is always populated and always states which cut `pair` was
+  graded at.
+- **`langres.testing.ScriptedJudge`** — a public `Module` test double replacing
+  six hand-rolled copies across three test files. Deliberately **not**
+  `@register`-ed (a test double must never enter `Resolver.load` dispatch) and
+  **not** imported by `langres/__init__.py`; an import-budget test asserts
+  `import langres` leaves `langres.testing` out of `sys.modules`. It lets tests
+  exercise the spend-cap and abstain paths without ever constructing a real
+  `LLMJudge`, which would lazily build a live client from the environment.
+
+### Docs
+
+- Deleted a **false** README claim that `import langres` is heavy and "eagerly
+  pulls in `torch`/`litellm`". Measured: **207 ms, zero heavy modules** in
+  `sys.modules`; `tests/test_import_budget.py` enforces it.
+- `docs/TECHNICAL_OVERVIEW.md` documented `langres.tasks`, `langres.flows`,
+  `langres.ui`, `core.Optimizer`, `core.Evaluator`, `blockers.EmbedBlocker`,
+  `EmbedSim`, and `data.SyntheticGenerator` — **none of which exist**. It also
+  claimed metrics come from `sklearn.metrics` (`metrics.py` imports only `math`)
+  and that `pytrec_eval` is used (it appears nowhere; ranx backs the ranking
+  metrics, lazily, behind the `[eval]` extra). All rewritten against the real
+  verbs → `Resolver` → `core` layering, and §8's claim that the trained judges
+  had not shipped corrected — both `FellegiSunterJudge` and `RandomForestJudge`
+  exist and implement the W1.0 fit hooks.
+- Flagged that `reports.py`'s `plot_*` methods tell users to
+  `pip install 'langres[viz]'` — **an extra that does not exist**. matplotlib is
+  undeclared and arrives only transitively via `mlflow` or `seaborn ← ranx`.
+  Left in place; declaring or deleting it is a separate decision.
+
 ## [Unreleased] — paper replication: usage vector, LLM-judge seams, Peeters LLM-EM
 
 ### ⚠️ Behavior changes
