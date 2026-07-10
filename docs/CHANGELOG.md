@@ -14,6 +14,15 @@ pieces that can regress money or silently report a wrong number.
   a paid judge over a large candidate set billed until it finished. Free judges
   never reach the cap. `evaluate_judge_on_candidates()` keeps its lower-level
   `runner=` / `price_per_token_or_pair=` / `cost_track_fn=` knobs unchanged.
+  **The cap is enforced *between* calls**, so a single in-flight call can push
+  total spend past it by that call's own cost. When that happens the run stops
+  before starting another call and reports `JudgePairEval.budget_exceeded`,
+  and `evaluate()` warns naming the measured spend and the cap. It does not
+  raise: the run completed, its metrics are valid, and the money is already
+  spent — raising would only discard work the user paid for.
+- **`evaluate()` raises `ValueError` on an empty candidate list.** It used to
+  report `precision = recall = f1 = 0.0`, which is indistinguishable from a
+  judge that ran fine and matched nothing.
 - **`evaluate()` warns that `best_threshold` is fitted to the gold it reports
   on.** The default still sweeps `DEFAULT_PAIR_GRID` and the returned number is
   unchanged — but it is an argmax over the same gold used to score, i.e.
@@ -38,6 +47,30 @@ pieces that can regress money or silently report a wrong number.
 
 ### Fixed
 
+- **The spend cap could not detect being breached.** `evaluate()` checked the
+  budget only *before* the next call, against a placeholder worst-case price, and
+  never compared the real post-call cost against the cap. A single `$10.00` call
+  under a `budget_usd=1.00` cap returned `truncated=False`,
+  `truncation_reason="none"` and no warning at all; a breach on the final pair
+  left the run looking complete and clean. The runner now compares measured spend
+  against the cap after every call. (Found by adversarial review, not by tests —
+  the branch was fully green when this shipped.)
+- **`cost_basis` disagreed with `usd_total` about whether money was spent.**
+  `_judgement_cost()` sums both `provenance["cost_usd"]` and
+  `provenance["llm_cost_usd"]` (the key `CascadeModule` writes), but the basis
+  classifier only recognized the first — so a real cascade run reported
+  `usd_total > 0` alongside `cost_basis="none"`, `cost_is_real=False`. Both now
+  read one shared key set.
+- **`make_token_cost_track` (`langres.clients.openrouter`) never set `cost_basis`
+  or `usage`.** The second `CostTrack` producer priced judgements from a token
+  table and returned a real dollar figure labelled `cost_basis="none"` with an
+  all-zero token vector. It now reports `"estimated"` (a price table is not a
+  provider-billed amount, so never `"real"`) and sums the token vectors.
+- **`roc_auc_score` / `average_precision_score` accepted non-finite scores.**
+  A `NaN` score returned `0.75` or `0.5` for the same multiset depending on input
+  order, because `NaN` breaks both `sorted()` and the equality-based tie grouping.
+  A ranking containing `NaN` is undefined; it now raises `ValueError` naming the
+  offending index.
 - **`DSPyJudge` abstained to the opposite verdict from `LLMJudge`.** On a parse
   or validation error it emitted `score=0.5` with **no** `provenance["parse_error"]`
   key. At any threshold ≤ 0.5 that abstention was predicted a **match** — while

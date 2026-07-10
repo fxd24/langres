@@ -1036,9 +1036,10 @@ def evaluate_judge_on_candidates(
             per-slice argmax), populating ``JudgePairEval.slices``. When ``None``
             (default), ``slices`` stays ``None`` and the result is unchanged.
         runner: Optional budget runner. When given, the judge runs through it (its
-            ``module`` must be ``module``) so spend is hard-capped; the run may
-            therefore judge fewer pairs than supplied. When ``None``, the judge is
-            run directly (zero-spend path).
+            ``module`` must be ``module``) so spend is capped BETWEEN calls -- a
+            single in-flight call can still overrun the cap by its own cost; the
+            run may therefore judge fewer pairs than supplied. When ``None``, the
+            judge is run directly (zero-spend path).
         price_per_token_or_pair: Worst-case price passed to ``runner.run`` (ignored
             without a runner). Must be ``> 0`` when a runner is given.
         cost_track_fn: Aggregator from judgements to a :class:`CostTrack`. Defaults

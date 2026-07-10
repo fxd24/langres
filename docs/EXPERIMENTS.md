@@ -59,7 +59,8 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
   graded summary plus the raw judgements (kept in-process for error-map analysis).
 - **When to use:** a **compiled and/or paid** scorer — this is the **DSPy
   experimentation surface** and the SOTA-comparable precision measurement. For a
-  paid judge, pass a `BudgetedModuleRunner` via `runner=` to hard-cap spend; this
+  paid judge, pass a `BudgetedModuleRunner` via `runner=` to cap spend (enforced
+  between calls — one in-flight call can overrun the cap by its own cost); this
   surface keeps the full cost knobs (`runner=` / `price_per_token_or_pair=` /
   `cost_track_fn=`) and hands you the raw judgements back. The `evaluate()`
   one-liner below is spend-capped too, but takes the simpler `budget_usd=` and
