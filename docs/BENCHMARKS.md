@@ -296,6 +296,27 @@ uv run python examples/research/peeters_llm_em_replication.py --mode live \
     --compare-archived --yes-spend-money
 ```
 
+### 4c. First-token credence probe (`--logprobs`)
+
+`--logprobs` (`--mode live`) runs the *same* live judge with
+`LLMJudge(confidence="logprob")`: it requests first-token logprobs and records a
+P(Yes) credence per pair — `p_yes` (renormalised over the yes/no two-way subspace),
+`leaked_mass` (never normalised away), `p_yes_is_bound`, and `correct = verdict ==
+gold` — in **v2** result rows, so "does the model's own first-token credence predict
+its errors?" is answerable from the rows alone. It is an evidence-gathering probe:
+**nothing is added to `PairwiseJudgement`**. Because the binary protocol answers with
+a single output token, `top_logprobs` adds **zero** output tokens, so the probe
+re-runs at ~the replication cost (~$0.016 gpt-4o-mini, ~$0.27 gpt-4o). Probe rows
+land in a distinct `…__logprobs.jsonl` (a contamination firewall — it cannot
+overwrite the committed replication rows) and `--results-dir` defaults to the
+**committed** `examples/research/results/peeters` so the paid probe's rows are durable.
+
+```bash
+# PAID credence probe over both models (writes …__logprobs.jsonl to the committed dir):
+uv run python examples/research/peeters_llm_em_replication.py --mode live --logprobs \
+    --yes-spend-money
+```
+
 ---
 
 ## See also

@@ -95,6 +95,20 @@ Crash-safe & resumable (paid runs never lose a billed call):
   archive-agreement). Drive the script with ``python -u`` (or it line-buffers stdout
   itself) so that progress is not lost on a kill.
 
+Credence probe (``--logprobs``):
+
+* ``--logprobs`` (``--mode live``) runs the SAME live judge with
+  ``LLMJudge(confidence="logprob")`` — it requests first-token logprobs and records
+  a P(Yes) credence (``p_yes`` / ``leaked_mass`` / ``p_yes_is_bound``, plus
+  ``correct = verdict == gold``) in each **v2** row, so "does the model's own
+  first-token credence predict its errors?" is answerable from the rows alone. It
+  is an evidence-gathering probe: **nothing is added to ``PairwiseJudgement``**. On
+  the single-token "Yes"/"No" answer, ``top_logprobs`` adds zero output tokens, so
+  the probe re-runs at ~the replication cost. Probe rows land in a distinct
+  ``…__logprobs.jsonl`` (a contamination firewall — it cannot overwrite the
+  committed replication rows) and ``--results-dir`` defaults to the **committed**
+  ``examples/research/results/peeters`` so the paid probe's rows are durable.
+
 Data licensing: MatchGPT ships no LICENSE (``license: null``); langres is
 Apache-2.0. Nothing from MatchGPT is vendored — the ~186 MB answer archive is
 downloaded transiently to a cache dir (``--cache-dir``) and never committed. Our
@@ -118,6 +132,9 @@ Usage::
     python -u examples/research/peeters_llm_em_replication.py --mode live \\
         --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150 \\
         --compare-archived --yes-spend-money
+    # PAID credence probe over both models (writes …__logprobs.jsonl to the committed dir):
+    python -u examples/research/peeters_llm_em_replication.py --mode live --logprobs \\
+        --yes-spend-money
 
 ``print`` is allowed in examples (this is an operator tool).
 """

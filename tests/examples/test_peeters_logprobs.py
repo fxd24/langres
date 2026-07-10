@@ -192,7 +192,12 @@ def test_run_live_logprobs_persists_credence(tmp_path: Path) -> None:
     store = PeetersResultStore(tmp_path / "probe.jsonl")
     client = _FakeLogprobClient(answer="Yes", cost_per_call=0.0)
     run_live(
-        spec, _MODEL, budget_usd=1.0, client=client, indices=[0, 1, 2], store=store,
+        spec,
+        _MODEL,
+        budget_usd=1.0,
+        client=client,
+        indices=[0, 1, 2],
+        store=store,
         confidence="logprob",
     )
     assert client.last_kwargs is not None
