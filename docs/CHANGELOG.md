@@ -147,6 +147,28 @@ pieces that can regress money or silently report a wrong number.
   must never enter `Resolver.load` dispatch) and **not** imported by
   `langres/__init__.py`; an import-budget test asserts `import langres` leaves
   `langres.testing` out of `sys.modules`.
+- **`LLMJudge(confidence="logprob")`** — an opt-in first-token credence probe.
+  It requests `logprobs` + `top_logprobs=20` (merged at **both** the sync and
+  async completion call sites as standard top-level chat params — deliberately
+  **not** inside `_completion_kwargs`, which early-returns `{}` off `openrouter/`
+  and would silently drop logprobs on plain OpenAI) and records, **in provenance
+  only**, a `p_yes` renormalised over the yes/no two-way subspace, a
+  `confidence_leaked_mass` that is never normalised away, and a `p_yes_is_bound`
+  flag when one side's mass is entirely below the top-k cutoff. Below a tiny
+  combined-mass floor `p_yes` is `None` (credence is refused, not manufactured
+  from noise). `confidence="none"` (the default) is a byte-identical no-op.
+  **Nothing is added to `PairwiseJudgement`** — the probe gathers evidence
+  *before* any permanent judgement-schema change. Not serialized in `config`.
+- **`examples/research/peeters_llm_em_replication.py --logprobs`** — runs the
+  Peeters live judge with the credence probe on via the single `_build_live_judge`
+  site (byte-identical to the replication judge apart from the logprob request).
+  Probe rows are **v2** (`_RESULT_SCHEMA_VERSION` 1→2: adds `correct` always, plus
+  `p_yes`/`leaked_mass`/`p_yes_is_bound`) and land in a distinct
+  `…__logprobs.jsonl` — a contamination firewall that cannot overwrite the
+  committed replication rows — with `--results-dir` defaulting to the committed
+  `examples/research/results/peeters`. `--report-only` still reads the old **v1**
+  rows unchanged (the `$0` `--compare-archived` replay still reproduces F1 92.09 /
+  90.71 at 99.25% per-pair archive agreement).
 
 ### Docs
 

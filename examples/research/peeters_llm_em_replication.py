@@ -95,6 +95,20 @@ Crash-safe & resumable (paid runs never lose a billed call):
   archive-agreement). Drive the script with ``python -u`` (or it line-buffers stdout
   itself) so that progress is not lost on a kill.
 
+Credence probe (``--logprobs``):
+
+* ``--logprobs`` (``--mode live``) runs the SAME live judge with
+  ``LLMJudge(confidence="logprob")`` — it requests first-token logprobs and records
+  a P(Yes) credence (``p_yes`` / ``leaked_mass`` / ``p_yes_is_bound``, plus
+  ``correct = verdict == gold``) in each **v2** row, so "does the model's own
+  first-token credence predict its errors?" is answerable from the rows alone. It
+  is an evidence-gathering probe: **nothing is added to ``PairwiseJudgement``**. On
+  the single-token "Yes"/"No" answer, ``top_logprobs`` adds zero output tokens, so
+  the probe re-runs at ~the replication cost. Probe rows land in a distinct
+  ``…__logprobs.jsonl`` (a contamination firewall — it cannot overwrite the
+  committed replication rows) and ``--results-dir`` defaults to the **committed**
+  ``examples/research/results/peeters`` so the paid probe's rows are durable.
+
 Data licensing: MatchGPT ships no LICENSE (``license: null``); langres is
 Apache-2.0. Nothing from MatchGPT is vendored — the ~186 MB answer archive is
 downloaded transiently to a cache dir (``--cache-dir``) and never committed. Our
@@ -118,6 +132,9 @@ Usage::
     python -u examples/research/peeters_llm_em_replication.py --mode live \\
         --model openrouter/openai/gpt-4o-mini-2024-07-18 --limit 150 \\
         --compare-archived --yes-spend-money
+    # PAID credence probe over both models (writes …__logprobs.jsonl to the committed dir):
+    python -u examples/research/peeters_llm_em_replication.py --mode live --logprobs \\
+        --yes-spend-money
 
 ``print`` is allowed in examples (this is an operator tool).
 """
@@ -329,7 +346,26 @@ DEFAULT_PROGRESS_EVERY = 50
 LIVE_PROMPT_DESIGN = "domain-complex-force"
 
 #: JSONL result-row schema version (independent of ``JudgementLog``'s ``v``).
-_RESULT_SCHEMA_VERSION = 1
+#: v2 adds ``correct`` (verdict==gold) always and, on a ``--logprobs`` run, the
+#: first-token credence columns (``p_yes``/``leaked_mass``/``p_yes_is_bound``).
+#: v1 rows (no credence, no ``correct``) still load — the readers use ``.get()``
+#: and never gate on ``v``, so ``--report-only`` on the committed v1 rows is
+#: byte-for-byte unaffected.
+_RESULT_SCHEMA_VERSION = 2
+
+#: Filename ``variant`` token for the ``--logprobs`` credence probe. It is the
+#: contamination firewall: probe rows land in ``…__logprobs.jsonl``, a DIFFERENT
+#: file from the committed replication rows, so the probe is physically incapable
+#: of overwriting them even when pointed at the same ``--results-dir``.
+LOGPROBS_VARIANT = "logprobs"
+
+#: Default results dir for the plain (v1-style) live run — gitignored tmp.
+DEFAULT_RESULTS_DIR = Path("tmp/peeters")
+
+#: Results dir the ``--logprobs`` probe defaults to: the COMMITTED results tree
+#: (never gitignored ``tmp/``), so the paid probe's rows are durable + committable
+#: right beside the replication rows they sit next to (distinct filename).
+COMMITTED_RESULTS_DIR = Path("examples/research/results/peeters")
 
 
 # ---------------------------------------------------------------------------
@@ -360,8 +396,9 @@ def results_path_for(
     *,
     limit: int | None = None,
     seed: int = 0,
+    variant: str = "",
 ) -> Path:
-    """The per-(model, dataset, prompt-design, subset) JSONL path under ``results_dir``.
+    """The per-(model, dataset, prompt-design, subset, variant) JSONL path under ``results_dir``.
 
     The ``openrouter/...`` model id's slashes are flattened so nothing creates a
     stray subdirectory; the fields keep each race cell in its own file, so a crash
@@ -373,10 +410,17 @@ def results_path_for(
     would let a trial's rows leak into the full report (wrong ``n_judged``, cost and
     F1) and let unrelated prior spend eat the budget cap. A full run (``limit=None``)
     keeps the plain three-field name.
+
+    ``variant`` (e.g. :data:`LOGPROBS_VARIANT`) is the **contamination firewall**:
+    it appends ``__{variant}`` to the filename so the ``--logprobs`` credence probe
+    writes to ``…__logprobs.jsonl`` — a physically distinct file from the committed
+    replication rows — and therefore cannot overwrite them even when both share a
+    ``--results-dir``. Empty (the default) keeps the plain replication filename.
     """
     slug = model.replace("/", "_")
     subset = "" if limit is None else f"__limit{limit}-seed{seed}"
-    return Path(results_dir) / f"{dataset}__{prompt_design}__{slug}{subset}.jsonl"
+    variant_token = f"__{variant}" if variant else ""
+    return Path(results_dir) / f"{dataset}__{prompt_design}__{slug}{subset}{variant_token}.jsonl"
 
 
 class PeetersResultStore:
@@ -586,7 +630,11 @@ def _aggregate_usage(judgements: Sequence[Any], model: str) -> LLMUsage:
 
 
 def _build_live_judge(
-    spec: PeetersReplicationSpec, model: str, client: Any = None
+    spec: PeetersReplicationSpec,
+    model: str,
+    client: Any = None,
+    *,
+    confidence: str = "none",
 ) -> LLMJudge[Any]:
     """The live ``LLMJudge`` for a Peeters slice — the single build site.
 
@@ -597,6 +645,12 @@ def _build_live_judge(
     hop). Shared by :func:`run_live` and :func:`run_compare_archived` so the two
     paid paths judge with a byte-identical judge. ``client`` is injectable (a
     fake) so the whole flow is exercised at **$0** in tests.
+
+    ``confidence="logprob"`` (the ``--logprobs`` probe) additionally requests
+    first-token logprobs and records a P(Yes) credence in provenance. It is the
+    ONLY difference from the replication judge, so the probe stays byte-identical
+    to the replication run apart from the logprob request (which, on the single
+    "Yes"/"No" output token, adds zero output tokens and so ~zero cost).
     """
     return LLMJudge(
         client=client,
@@ -606,6 +660,7 @@ def _build_live_judge(
         record_serializer=make_record_serializer(spec),
         response_parser=parse_binary_yes_no,
         provider=LIVE_PROVIDER,
+        confidence="logprob" if confidence == "logprob" else "none",
     )
 
 
@@ -623,9 +678,18 @@ def _row_from_judgement(
     answer (``response_text``), our parsed ``verdict``, the per-call ``LLMUsage``
     vector and ``cost_usd``/``cost_is_real``/``provider``/``model`` — the columns
     ``JudgementLog`` either lacks (``gold``) or buries in ``provenance``.
+
+    v2 also records ``correct`` (``verdict == gold``) on every row and, when the
+    ``--logprobs`` credence probe was on (``provenance`` carries ``p_yes``), the
+    first-token credence columns ``p_yes`` / ``leaked_mass`` / ``p_yes_is_bound``.
+    Together they make "does the model's own first-token credence predict its
+    errors?" answerable from the rows ALONE. The credence keys are omitted (not
+    written as ``null``) when the probe was off, keeping a plain live run's row
+    identical to v1 apart from ``v`` and ``correct``.
     """
     prov = judgement.provenance
-    return {
+    verdict = int(judgement.score)
+    row: dict[str, Any] = {
         "v": _RESULT_SCHEMA_VERSION,
         "model": model,
         "dataset": dataset,
@@ -634,13 +698,19 @@ def _row_from_judgement(
         "right_id": judgement.right_id,
         "gold": int(gold),
         "response_text": judgement.reasoning or "",
-        "verdict": int(judgement.score),
+        "verdict": verdict,
         "score": float(judgement.score),
+        "correct": int(verdict == int(gold)),
         "cost_usd": float(prov.get("cost_usd") or 0.0),
         "cost_is_real": bool(prov.get("cost_is_real")),
         "provider": prov.get("provider"),
         "usage": prov.get("usage"),
     }
+    if "p_yes" in prov:  # the credence probe was on for this judgement
+        row["p_yes"] = prov.get("p_yes")
+        row["leaked_mass"] = prov.get("confidence_leaked_mass")
+        row["p_yes_is_bound"] = prov.get("p_yes_is_bound")
+    return row
 
 
 def _judge_stream(
@@ -657,6 +727,7 @@ def _judge_stream(
     dataset: str,
     prompt_design: str,
     their_verdict_by_pair: dict[frozenset[str], int] | None = None,
+    confidence: str = "none",
 ) -> tuple[list[dict[str, Any]], bool]:
     """Judge ``candidates`` under an AGGREGATE cap, persisting each row as it lands.
 
@@ -684,7 +755,7 @@ def _judge_stream(
     if not candidates:
         return rows, False
 
-    judge = _build_live_judge(spec, model, client)
+    judge = _build_live_judge(spec, model, client, confidence=confidence)
     running_cost = prior_spent
     agree = 0
     n_done = 0
@@ -810,6 +881,7 @@ def run_live(
     indices: Sequence[int] | None = None,
     store: PeetersResultStore | None = None,
     progress_every: int = DEFAULT_PROGRESS_EVERY,
+    confidence: str = "none",
 ) -> dict[str, Any]:
     """Judge every sampled pair with a live ``LLMJudge`` under a hard spend cap.
 
@@ -865,6 +937,7 @@ def run_live(
         prior_spent=prior_spent,
         dataset=spec.name,
         prompt_design=LIVE_PROMPT_DESIGN,
+        confidence=confidence,
     )
 
     report_rows = store.rows() if store is not None else rows_this_pass
@@ -1022,6 +1095,7 @@ def run_compare_archived(
     seed: int = 0,
     store: PeetersResultStore | None = None,
     progress_every: int = DEFAULT_PROGRESS_EVERY,
+    confidence: str = "none",
 ) -> dict[str, Any]:
     """Judge a (optionally ``--limit``-ed) subset live and compare pair-by-pair to the archive.
 
@@ -1106,6 +1180,7 @@ def run_compare_archived(
         dataset=spec.name,
         prompt_design=prompt_design,
         their_verdict_by_pair=their_verdict_by_pair,
+        confidence=confidence,
     )
 
     report_rows = store.rows() if store is not None else _rows_this_pass
@@ -1392,7 +1467,11 @@ def _run_dry_run_mode(args: argparse.Namespace) -> int:
 
 
 def _store_for(args: argparse.Namespace, dataset: str, model: str) -> PeetersResultStore:
-    """The durable results store for this race cell, partitioned by its pair subset."""
+    """The durable results store for this race cell, partitioned by its pair subset.
+
+    A ``--logprobs`` run carries the :data:`LOGPROBS_VARIANT` token so its rows land
+    in a file physically distinct from the committed replication rows (firewall).
+    """
     return PeetersResultStore(
         results_path_for(
             args.results_dir,
@@ -1401,6 +1480,7 @@ def _store_for(args: argparse.Namespace, dataset: str, model: str) -> PeetersRes
             model,
             limit=args.limit,
             seed=args.seed,
+            variant=LOGPROBS_VARIANT if args.logprobs else "",
         )
     )
 
@@ -1494,6 +1574,7 @@ def _run_live_mode(args: argparse.Namespace) -> int:
                     seed=args.seed,
                     store=store,
                     progress_every=args.progress_every,
+                    confidence="logprob" if args.logprobs else "none",
                 )
                 _print_archived_comparison(report)
             else:
@@ -1508,6 +1589,7 @@ def _run_live_mode(args: argparse.Namespace) -> int:
                     indices=indices,
                     store=store,
                     progress_every=args.progress_every,
+                    confidence="logprob" if args.logprobs else "none",
                 )
             results.append(report)
     except BudgetExceeded as exc:
@@ -1602,11 +1684,24 @@ def main() -> int:
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default=Path("tmp/peeters"),
+        default=None,
         help=(
             "Directory for the crash-safe per-pair JSONL results (one file per model). "
-            "A live run appends here as it goes; resume + --report-only read it. Gitignored "
-            "(default tmp/peeters)."
+            "A live run appends here as it goes; resume + --report-only read it. Defaults to "
+            "the gitignored tmp/peeters, EXCEPT a --logprobs run defaults to the committed "
+            "examples/research/results/peeters (so the paid probe's rows are durable)."
+        ),
+    )
+    parser.add_argument(
+        "--logprobs",
+        action="store_true",
+        help=(
+            "Credence probe: run the live judge with LLMJudge(confidence='logprob'), which "
+            "requests first-token logprobs and records a P(Yes) credence per pair "
+            "(p_yes/leaked_mass/p_yes_is_bound, plus correct=verdict==gold) in the v2 rows. "
+            "Writes to a distinct …__logprobs.jsonl (never overwrites the replication rows) and "
+            "defaults --results-dir to the committed tree. On the 1-token Yes/No answer it adds "
+            "zero output tokens, so cost ≈ the plain replication run."
         ),
     )
     parser.add_argument(
@@ -1630,8 +1725,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Resolve the results dir: the --logprobs probe defaults to the COMMITTED tree
+    # (durable paid rows), everything else to the gitignored tmp default. An
+    # explicit --results-dir always wins.
+    if args.results_dir is None:
+        args.results_dir = COMMITTED_RESULTS_DIR if args.logprobs else DEFAULT_RESULTS_DIR
+
     if args.limit is not None and args.limit <= 0:
         print(f"[fatal] --limit must be a positive integer (got {args.limit}).")
+        return 1
+
+    if args.logprobs and args.mode != "live" and not args.report_only:
+        print(
+            "[fatal] --logprobs is a paid live probe: use it with --mode live (or "
+            "--report-only to read a probe's rows). It is a no-op for --mode replay/dry-run."
+        )
         return 1
 
     # Report-only reads persisted results ($0) — it is orthogonal to --mode and may
