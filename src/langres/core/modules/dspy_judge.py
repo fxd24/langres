@@ -240,8 +240,11 @@ class DSPyJudge(Module[SchemaT]):
         Each call runs the program under ``dspy.context(lm=..., track_usage=True)``
         — never ``dspy.settings.configure`` — so the global LM is left untouched and
         real token usage is captured for honest cost. A DSPy parse/validation error
-        does not skip the pair: it yields a low-confidence (0.5) judgement tagged
-        ``dspy_parse_error`` with the error recorded in provenance.
+        does not skip the pair: it yields an abstention (``score=0.0``,
+        ``provenance["parse_error"] = True``) tagged ``dspy_parse_error`` with the
+        error recorded in provenance — mirroring ``LLMJudge``'s abstention shape so
+        both judges' "I don't know" signals classify identically (never a match) at
+        every downstream threshold.
         """
         if not self._compiled:
             logger.warning(
@@ -273,7 +276,7 @@ class DSPyJudge(Module[SchemaT]):
                 yield PairwiseJudgement(
                     left_id=left_id,
                     right_id=right_id,
-                    score=0.5,
+                    score=0.0,
                     score_type="prob_llm",
                     decision_step="dspy_parse_error",
                     reasoning=None,
@@ -283,6 +286,7 @@ class DSPyJudge(Module[SchemaT]):
                         "prompt_tokens": err_prompt_tokens,
                         "completion_tokens": err_completion_tokens,
                         "cost_untracked": True,
+                        "parse_error": True,
                         "error": str(error),
                         "usage": err_usage.model_dump(),
                     },
