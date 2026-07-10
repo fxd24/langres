@@ -1,13 +1,16 @@
 # langres: Technical Documentation & API Reference
 
-Welcome to the langres documentation. This document provides a deep dive into the two-layer API, the core architectural pillars, and the data contracts that power the library.
+Welcome to the langres documentation. This document provides a deep dive into the layered API, the core architectural pillars, and the data contracts that power the library.
 
-## 1. The langres Two-Layer API
+## 1. The langres Layered API
 
-langres is designed with a two-layer API to be both easy to use for common tasks and fully extensible for complex, bespoke problems.
+langres exposes a **three-layer API** — each layer a thin shell over the one below — so common tasks are one-liners while bespoke pipelines stay fully composable:
 
-- **langres.tasks** (High-Level): The "out-of-the-box" API. You compose pre-built components to solve a specific task (e.g., DeduplicationTask). This is the recommended entry point.
-- **langres.core** (Low-Level): The "power-user" API. This gives you direct access to the base classes (Module, Blocker, etc.) to build entirely new logic from scratch.
+- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `judge="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `score_type`).
+- **`langres.Resolver`** (Mid-Level): the declarative pipeline. `Resolver.from_schema(schema, judge=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
+- **`langres.core`** (Low-Level): the "power-user" API — the base classes (`Module`, `Blocker`, `Comparator`, `Clusterer`, judges) you compose into entirely new logic from scratch.
+
+> There is **no** `langres.tasks` / `langres.flows` module — those names were never built. The real layering is verbs → `Resolver` → `langres.core`.
 
 ## 2. The Abstraction Layer: langres as a "Glue" Framework
 
@@ -36,121 +39,88 @@ These components abstract the standard libraries for graph math and metrics:
 - **BCubed F1:** We use a vetted internal implementation (or er-metrics) for this critical cluster-level metric.
 - **pytrec_eval:** This IR library is used internally by the Optimizer for the specialized sub-task of tuning Blocker recall.
 
-### data.ReviewQueue (Human-in-the-Loop)
+### core.review.ReviewQueue (Human-in-the-Loop)
 
-The HITL system is abstracted into two parts:
+The HITL system splits a storage backend from a labeling surface:
 
-- **data.ReviewQueue:** This is the storage backend (e.g., a simple SQLite database) that Tasks write to.
-- **langres.ui (Coming Soon):** langres will provide a pre-built, standalone Streamlit application that reads from this queue, provides a clean UI for human labelers, and writes decisions back. This separates the storage logic from the visual application.
+- **`core.review.ReviewQueue`:** the storage backend — it writes the selected pairs to a plain `review_queue.jsonl` snapshot (one JSON line per pair; ids-only unless you pass `records=` to join content back on). `core.review.select_for_review` picks *which* pairs are worth a human's attention (uncertainty / disagreement / audit strategies).
+- **The `langres` CLI:** the labeling surface. `langres export-csv` turns a queue into a spreadsheet, a reviewer fills the `label` column, and `langres import-csv` reads it back into a `corrections.jsonl` log; `langres review` is the equivalent quick terminal loop. The harvested corrections feed `core.harvest` and `core.calibration.derive_threshold` back into the pipeline.
 
 ### Observability & Tracing (TBD)
 
 The design for full tracing (e.g., via OpenTelemetry) is still to be determined. The foundation for this is the PairwiseJudgement's provenance field, which is designed to capture all necessary metadata for a future tracing system.
 
-## 3. High-Level API: langres.tasks
+## 3. High-Level API: the verbs (`dedupe` / `link`)
 
-The tasks layer provides pre-wired orchestrators that handle the plumbing of a full ER pipeline (blocking, optimizing, clustering, etc.).
+The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](../examples/quickstart_verbs.py).
 
-You instantiate a Task and provide it with several components:
+### dedupe
 
-- **Blocker:** The component responsible for finding candidate pairs and normalizing their data.
-- **Flow:** The "brain" responsible for comparing the normalized pairs.
-- **ReviewQueue (Optional):** A utility to handle Human-in-the-Loop (HITL) for uncertain matches.
+**Definition:** Group a batch of records into entity clusters (single-source deduplication).
 
-### tasks.DeduplicationTask
+`dedupe(records, *, judge="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used` and `score_type`.
 
-**Definition:** A task orchestrator for deduplicating a single dataset (Use Case 1).
-
-**What it does:**
-
-- Uses the provided Blocker's `.stream(data)` method to generate candidate pairs from within the dataset.
-- Uses the Optimizer (via `.compile()`) to tune the provided Flow for this task.
-- Uses the Clusterer (via `.run()`) to generate the final entity clusters.
-- If a `review_queue` and `review_threshold` are provided, it flags uncertain pairs (e.g., scores between 0.6 and 0.8) and sends them to the queue for manual review instead of auto-clustering them.
-
-**Example:**
+**Example** (offline — `judge="string"` pins the zero-spend judge, no API key or network needed):
 
 ```python
-from langres.tasks import DeduplicationTask
-from langres.flows import CompanyFlow
-from langres.blockers import DedupeBlocker
-from langres.data import SyntheticGenerator, ReviewQueue
+from langres import dedupe
 
-# 1. Load the pre-built brain (Flow) and a simple Blocker
-flow = CompanyFlow()
-blocker = DedupeBlocker() # Assumes a single, clean schema
+records = [
+    {"id": "1", "name": "Acme Corporation", "city": "New York"},
+    {"id": "2", "name": "Acme Corp", "city": "New York"},
+    {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
+]
 
-# 2. (Optional) Set up a review queue for HITL
-review_queue = ReviewQueue(db_path="./reviews.sqlite")
+result = dedupe(records, judge="string", threshold=0.6)
+# result -> [{'1', '2'}]   (singleton "3" is dropped)
+print(result.judge_used, result.score_type)   # "string" "heuristic"
+```
 
-# 3. Instantiate the task
-task = DeduplicationTask(
-    flow=flow,
-    blocker=blocker,
-    review_queue=review_queue,
-    review_threshold=(0.6, 0.8) # Flag scores in this range for HITL
+`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+
+### link
+
+**Definition:** Decide whether **two records** are the same entity — a single pairwise verdict.
+
+`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score`, `.judge_used`, `.score_type`, and `.reasoning`.
+
+```python
+from langres import link
+
+verdict = link(
+    {"id": "a", "name": "Acme Corp", "city": "New York"},
+    {"id": "b", "name": "Acme Corporation", "city": "New York"},
+    judge="string",
 )
-
-# 4. Compile (optimize) the task using synthetic data
-gold_data = SyntheticGenerator(Company).generate(5000)
-task.compile(gold_data, metric="bcubed_f1")
-
-# 5. Run the task
-# This will create clusters AND populate 'reviews.sqlite'
-clusters = task.run(all_my_company_data)
+if verdict:                       # LinkVerdict is truthy iff it's a match
+    print(verdict.score, verdict.judge_used)
 ```
 
-### tasks.EntityLinkingTask
+> **Cross-source / incremental linking is not built yet.** `link()` above compares a single pair, not two datasets. The dataset-to-dataset methods `Resolver.link` / `Resolver.stream_against` are reserved `NotImplementedError` stubs (roadmap M5) — do not treat them as working.
 
-**Definition:** A task orchestrator for linking one source dataset to one target (authoritative) dataset (Use Case 2).
+## 4. Mid-Level API: the `Resolver`
 
-**What it does:**
-
-- Uses the provided Blocker's `.stream_against(source, target)` method. This is where schema mapping logic lives.
-- Composes and optimizes the pipeline just like the DeduplicationTask.
-- The final output is a set of matches (links), not clusters.
-- Also supports ReviewQueue for HITL on uncertain links.
-
-**Example:**
+The verbs are thin sugar over `Resolver`. Drop to it directly when you want an explicit, serializable pipeline built from a Pydantic schema.
 
 ```python
-from langres.tasks import EntityLinkingTask
-from langres.flows import CompanyFlow
-from langres.blockers import LinkingBlocker # A smart, schema-mapping blocker
+from pydantic import BaseModel
+from langres import Resolver
 
-# 1. Load the same brain, but a different blocker
-flow = CompanyFlow() # <-- The brain is reusable!
+class Company(BaseModel):
+    id: str
+    name: str
+    city: str
 
-# 2. Configure the blocker with the schema mapping "trick"
-sfdc_map = {"sfdc_name": "name", "sfdc_addr": "address"}
-internal_map = {"name": "name", "address": "address"}
-blocker = LinkingBlocker(source_map=sfdc_map, target_map=internal_map)
-
-# 3. Instantiate the task
-task = EntityLinkingTask(flow=flow, blocker=blocker)
-
-# 4. Compile and run
-task.compile(linking_gold_data, metric="pairwise_f1")
-matches = task.run(source_data=sfdc_records, target_data=all_my_company_data)
+resolver = Resolver.from_schema(Company, judge="string", threshold=0.6)
+clusters = resolver.resolve(records)      # -> list[set[str]]
+resolver.save("company_resolver.json")    # config-registry serialization (no pickle)
+# later, in a fresh process:
+resolver = Resolver.load("company_resolver.json")
 ```
 
-## 4. High-Level API: langres.flows & langres.blockers
+`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageJudge` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `judge="embedding"`), and a `Clusterer`. `judge=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, or a `Module` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution and **no** spend cap (that magic lives in the verbs), so a paid judge built here runs uncapped.
 
-These are the pre-built "pluggable" components for the tasks layer.
-
-### langres.flows
-
-These are pre-written subclasses of `langres.core.Module`.
-
-- **flows.CompanyFlow:** A pre-built "brain" for matching company entities. Its `forward()` pass already knows how to compare names (using rapidfuzz), addresses (using EmbedSim), and other common fields.
-- **flows.ProductFlow:** A pre-built "brain" for matching products. Its `forward()` pass knows how to compare titles, descriptions, categories, and prices (using numeric logic).
-
-### langres.blockers
-
-These are pre-written subclasses of `langres.core.Blocker`.
-
-- **blockers.DedupeBlocker:** A simple blocker for the deduplication task. It assumes a single schema and generates internal pairs.
-- **blockers.LinkingBlocker:** A sophisticated blocker for linking tasks. Its `__init__` method accepts `source_map` and `target_map` dictionaries to perform schema normalization before data is passed to the Flow.
+See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 
 ## 5. Core API: The Five Pillars (langres.core)
 
@@ -397,47 +367,34 @@ gen = SyntheticGenerator(schema=Company, hints={"name": "add typos"})
 gold_data = gen.generate(n_pairs=5000)
 ```
 
-### data.ReviewQueue
+### core.review.ReviewQueue
 
-**Definition:** A utility for managing the Human-in-the-Loop (HITL) workflow. It provides a simple storage backend (like SQLite or a file) for uncertain pairs flagged by a Task.
+**Definition:** The flywheel's Human-in-the-Loop half. `core.review.ReviewQueue` is a JSONL-file-backed **snapshot** of a review selection — `write(items)` truncates and rewrites `review_queue.jsonl` so the queue always reflects exactly one selection (regenerate it, never hand-edit it). `core.review.select_for_review` reads `JudgementLog` rows and picks the pairs worth a human's attention.
 
 **What it does:**
 
-- Receives uncertain pairs from a Task (based on the `review_threshold`).
-- Stores them persistently.
-- Allows an external UI (e.g., a Streamlit app you build) to read these pairs, display them to a human, and save the labels. Note: A pre-built `langres.ui` app will be provided for this.
-- Lets you export these verified labels to be added back into your `gold_data` set, creating an "active learning" loop.
+- `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`.
+- `ReviewQueue(path).write(items)` snapshots that selection to `review_queue.jsonl`; items are ids-only unless you pass `records=` to `select_for_review`.
+- The `langres` CLI labels the queue (`export-csv` → spreadsheet → `import-csv` → `corrections.jsonl`, or the `langres review` terminal loop). `core.harvest` folds those corrections back into `core.calibration.derive_threshold` / `fit()` — the active-learning loop.
 
 **Example:**
 
 ```python
-from langres.data import ReviewQueue
+from langres import dedupe
+from langres.core.judgement_log import JudgementLog
+from langres.core.review import ReviewQueue, select_for_review
 
-# 1. Init queue (in your main task script)
-review_queue = ReviewQueue(db_path="./reviews.sqlite")
+# 1. Log every judge call while resolving (the flywheel inlet).
+dedupe(records, judge="string", threshold=0.6, log="judgements.jsonl")
 
-# ... (task is configured with this queue and run) ...
+# 2. Select the pairs worth a human's attention, near the decision margin.
+rows = JudgementLog("judgements.jsonl").read()
+items = select_for_review(rows, strategy="uncertainty", threshold=0.6)
 
-# 2. In a separate review app (e.g., app.py):
-# You can run the pre-built: $ langres-ui --db-path ./reviews.sqlite
-# Or build your own:
-queue = ReviewQueue(db_path="./reviews.sqlite")
-
-# Get one pair for a human to label
-pair_to_review = queue.get_unlabeled_pair()
-
-# ... (display pair_to_review in a UI) ...
-
-# Save the human's decision
-human_label = True # (from a button click)
-queue.submit_label(pair_to_review.id, human_label)
-
-# 3. Back in your main script, export labels to retrain
-verified_pairs = queue.get_labeled_data()
-gold_data.add(verified_pairs)
-
-# Re-compile the task with the new, human-verified data
-task.compile(gold_data, metric="bcubed_f1")
+# 3. Snapshot them to a queue the CLI can label.
+ReviewQueue("review_queue.jsonl").write(items)
+# $ langres export-csv review_queue.jsonl to_label.csv   # label in a spreadsheet
+# $ langres import-csv  to_label.csv review_queue.jsonl  # -> corrections.jsonl
 ```
 
 ## 7. Core Data Contracts (Pydantic Models)
@@ -462,6 +419,7 @@ The rich data object passed out of a Flow. This is the auditable log of a decisi
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
 - `provenance: Dict[str, Any]`: A full audit trail (e.g., `{"model": "e5-small", "rapidfuzz_score": 0.85}`).
 
+<!-- TODO(parse-error): another agent is revising the parse-error / evaluate() behaviour described in this paragraph (the score-0.0 abstain path). Do not edit this paragraph here. -->
 **LLM-judge provenance keys.** `LLMJudge` / `DSPyJudge` / `SelectJudge` write
 `model`, `cost_usd`, `provider`, the legacy `prompt_tokens` / `completion_tokens`
 (kept for `JudgementLog`, `bootstrap.labelers`, `openrouter.make_token_cost_track`),
