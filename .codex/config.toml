@@ -1,7 +1,0 @@
-sandbox_mode = "workspace-write"
-
-[shell_environment_policy]
-inherit = "core"
-
-[shell_environment_policy.set]
-PYTHONPATH = "${workspaceFolder}/src"
