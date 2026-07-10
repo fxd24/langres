@@ -1245,7 +1245,13 @@ def test_evaluate_on_truncation_return_gives_partial_silently(
     )
     assert result.truncated is True
     assert result.truncation_reason in ("budget_cap", "budget_stop")
-    assert len(recwarn) == 0  # "return" is silent
+    # BUG 1 fix: on_truncation="return" silences the TRUNCATION warning
+    # specifically, but a real mid-call budget breach (money already spent) is
+    # a separate, always-on signal that on_truncation does not govern -- the
+    # sole warning here is that one, not a truncation warning.
+    assert result.budget_exceeded is True
+    assert len(recwarn) == 1
+    assert "exceed" in str(recwarn[0].message).lower()
 
 
 def test_evaluate_on_truncation_warn_logs_and_returns_partial() -> None:
