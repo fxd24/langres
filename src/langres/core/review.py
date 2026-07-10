@@ -10,9 +10,15 @@ downstream web UI) can render.
 
 Three selection strategies:
 
-- ``"uncertainty"`` -- pairs whose score falls within ``margin`` of the
-  decision ``threshold``, most uncertain first. The bread-and-butter strategy:
-  label where the judge itself was least sure.
+- ``"uncertainty"`` -- pairs where the judge itself was least sure, most
+  uncertain first. The bread-and-butter strategy. Two signals, in order of
+  preference: a logged ``confidence`` (credence in the judge's own answer,
+  ``0.5`` = maximally uncertain -- ranked by ``|confidence - 0.5|``), else a
+  ``score`` within ``margin`` of the decision ``threshold`` (ranked by
+  ``|score - threshold|``). A decision-only/binary log carrying *neither* -- a
+  raw Yes/No judge with no ``confidence="logprob"`` signal -- has nothing to
+  rank by uncertainty and raises ``ValueError`` naming the fix, rather than
+  silently returning ``[]`` as if the loop had finished.
 - ``"disagreement"`` -- pairs where two judgement logs (e.g. a cheap student
   vs a frontier teacher) reached opposite verdicts, largest score gap first.
 - ``"audit"`` -- a seeded random governance sample over all judged pairs, no
@@ -82,31 +88,50 @@ class ReviewItem(BaseModel):
         v: Schema-version tag (mirrors ``JudgementLog``'s ``"v"``). Default ``1``.
         left_id: Identifier of one entity in the judged pair.
         right_id: Identifier of the other entity in the judged pair.
-        score: The judge's logged score for the pair.
-        verdict: The judge's logged verdict being reviewed.
+        score: The judge's logged score for the pair, or ``None`` for a decider
+            (a binary judge that emits a ``decision`` and no score -- widened
+            from a required float to match ``PairwiseJudgement.score``; a
+            fabricated ``0.0``/``1.0`` would lie about a judge that does not rank).
+        verdict: The judge's logged verdict being reviewed (``decision`` when the
+            row carries one, else the thresholded ``verdict``). ``None`` only for
+            a row usable by its score alone that recorded no verdict/decision.
         reason: Why this pair was selected -- the strategy that picked it
             (``"audit"`` items also appear inside uncertainty/disagreement
             batches via the audit mix-in).
         decision_step: The logged ``decision_step``, if present (which pipeline
             step produced the judgement -- e.g. a cascade tier).
         model: The logged model name, if present.
+        reasoning: The judge's logged natural-language explanation, if the log
+            recorded one (``features=True``). ``None`` for the default ids-only
+            rows and for v1/v2 rows that predate the field -- so the reviewer can
+            see *why* the judge answered as it did.
+        confidence: The judge's logged credence in its own answer (``[0, 1]``,
+            ``0.5`` = maximally uncertain), if the log carries one (the
+            ``confidence="logprob"`` path). ``None`` for judges that give no
+            confidence and for rows that predate the field.
+        confidence_source: Provenance of ``confidence`` (e.g. ``"logprob"``),
+            if the row records it -- so the reviewer can see *how sure* and on
+            what basis.
         left_record: The joined content of the left record, or ``None`` when
             ``records=`` was not passed to :func:`select_for_review` (the
             ids-only privacy posture) or the id was not found.
         right_record: Same as ``left_record``, for the right record.
-        details: Strategy-specific context -- uncertainty: ``threshold`` and
-            ``distance``; disagreement: ``against_*`` (the second log's score,
-            verdict, model, decision_step).
+        details: Strategy-specific context -- uncertainty: ``distance`` (and
+            ``threshold`` on the score path); disagreement: ``against_*`` (the
+            second log's score, verdict, model, decision_step).
     """
 
     v: int = _REVIEW_SCHEMA_VERSION
     left_id: str
     right_id: str
-    score: float = Field(ge=0.0, le=1.0)
-    verdict: bool
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    verdict: bool | None = None
     reason: ReviewReason
     decision_step: str | None = None
     model: str | None = None
+    reasoning: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence_source: str | None = None
     left_record: dict[str, Any] | None = None
     right_record: dict[str, Any] | None = None
     details: dict[str, Any] = Field(default_factory=dict)
@@ -197,8 +222,13 @@ def select_for_review(
     It then drops every pair already answered in ``corrections`` (a corrected
     pair is never re-asked), and applies ``strategy``:
 
-    - ``"uncertainty"``: pairs with ``|score - threshold| <= margin``, sorted
-      most-uncertain first. Requires ``threshold``.
+    - ``"uncertainty"``: the pairs the judge was least sure about, sorted
+      most-uncertain first. Prefers a logged ``confidence`` (ranked by
+      ``|confidence - 0.5| <= margin``); falls back to ``score`` (ranked by
+      ``|score - threshold| <= margin``, unchanged). Requires ``threshold``.
+      A decision-only/binary log with neither a usable ``confidence`` nor a
+      non-degenerate ``score`` raises ``ValueError`` (see below) instead of
+      returning ``[]``.
     - ``"disagreement"``: pairs whose verdict differs between
       ``judgement_rows`` and ``against``, sorted by largest score gap first
       (scores, ids and verdicts are taken from ``judgement_rows``; the second
@@ -216,10 +246,13 @@ def select_for_review(
     Deterministic throughout: same inputs and ``seed`` produce the same items
     in the same order (all randomness flows through ``random.Random(seed)``).
 
-    Malformed rows (missing ``left_id``/``right_id``/``score``/``verdict``, a
-    non-finite or out-of-``[0, 1]`` score, a non-bool verdict) are skipped with
-    one summary ``logger.warning`` -- a hand-edited JSONL line degrades the
-    batch, never crashes it.
+    A row is usable when it names a pair (``left_id`` and ``right_id``) AND
+    carries at least one actionable signal: a bool ``decision``/``verdict`` OR a
+    finite ``score`` in ``[0, 1]``. This admits a binary decider (``decision``
+    set, ``score`` ``None``) as well as a pure ranker. Rows failing that -- no
+    ids, or nothing but non-bool verdicts and a non-finite/out-of-range score --
+    are skipped with one summary ``logger.warning``, so a hand-edited JSONL line
+    degrades the batch, never crashes it.
 
     Privacy posture: with ``records=`` omitted (the default) items carry ids
     only -- record content is never copied into the queue unless asked. Pass
@@ -254,7 +287,13 @@ def select_for_review(
 
     Raises:
         ValueError: Unknown ``strategy``, ``strategy="uncertainty"`` without
-            ``threshold``, or ``strategy="disagreement"`` without ``against``.
+            ``threshold``, ``strategy="disagreement"`` without ``against``, or
+            ``strategy="uncertainty"`` over a decision-only/binary log with no
+            rankable uncertainty signal (no usable ``confidence`` and every
+            ``score`` ``None`` or a ``0``/``1`` decision). That last case used to
+            silently return ``[]`` -- indistinguishable from a finished loop --
+            so it now fails loud, naming ``strategy="disagreement"`` or
+            ``LLMJudge(confidence="logprob")`` as the fix.
 
     Example:
         >>> rows = [
@@ -340,7 +379,8 @@ def _clean_rows(rows: Sequence[Mapping[str, Any]], *, source: str) -> list[Mappi
     if skipped:
         logger.warning(
             "Skipped %d malformed judgement row(s) from %s (each row needs left_id, "
-            "right_id, a finite score in [0, 1] and a bool verdict).",
+            "right_id and at least one actionable signal: a bool decision/verdict "
+            "or a finite score in [0, 1]).",
             skipped,
             source,
         )
@@ -348,15 +388,48 @@ def _clean_rows(rows: Sequence[Mapping[str, Any]], *, source: str) -> list[Mappi
 
 
 def _is_well_formed(row: Mapping[str, Any]) -> bool:
-    """True if ``row`` carries usable ids, score and verdict."""
+    """True if ``row`` names a pair AND carries at least one actionable signal.
+
+    Actionable = a bool ``decision``/``verdict`` (a decider's or ranker's
+    call) OR a finite ``score`` in ``[0, 1]`` (a ranker's number). A binary
+    decider (``score`` ``None``, ``decision``/``verdict`` bool) passes; a row
+    with no ids, or with nothing but non-bool verdicts and a
+    non-finite/out-of-range score, fails.
+    """
     if row.get("left_id") is None or row.get("right_id") is None:
         return False
-    if not isinstance(row.get("verdict"), bool):
-        return False
-    score = row.get("score")
-    if isinstance(score, bool) or not isinstance(score, int | float):
-        return False
-    return math.isfinite(score) and 0.0 <= score <= 1.0
+    return _row_verdict(row) is not None or _finite_unit(row.get("score")) is not None
+
+
+def _finite_unit(value: Any) -> float | None:
+    """``value`` as a float in ``[0, 1]`` if it is a finite real number, else ``None``.
+
+    The single sanitizer for both ``score`` and ``confidence``: ``bool`` is not
+    a number here (``True``/``False`` are decisions, not scores), and ``NaN``,
+    ``inf`` and out-of-range values degrade to ``None`` rather than crashing a
+    later ``float(...)`` or Pydantic ``ge/le`` bound.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and 0.0 <= number <= 1.0 else None
+
+
+def _row_verdict(row: Mapping[str, Any]) -> bool | None:
+    """The row's bool verdict: ``decision`` (v3) when present, else ``verdict``.
+
+    ``decision`` is the judge's own call (A3b logs it first-class); ``verdict``
+    is the thresholded predicted-match the older format recorded. Prefer the
+    former, fall back to the latter, and return ``None`` when neither is a bool
+    (an abstain, or a score-only/foreign row) so callers can skip it.
+    """
+    decision = row.get("decision")
+    if isinstance(decision, bool):
+        return decision
+    verdict = row.get("verdict")
+    if isinstance(verdict, bool):
+        return verdict
+    return None
 
 
 def _dedupe_by_pair(rows: Sequence[Mapping[str, Any]]) -> dict[frozenset[str], Mapping[str, Any]]:
@@ -373,12 +446,48 @@ def _select_uncertainty(
     threshold: float,
     margin: float,
 ) -> list[ReviewItem]:
-    """Pairs within ``margin`` of ``threshold``, most uncertain first."""
-    in_band: list[tuple[float, Mapping[str, Any]]] = []
-    for row in eligible.values():
-        distance = abs(float(row["score"]) - threshold)
-        if distance <= margin:
-            in_band.append((distance, row))
+    """The pairs the judge was least sure about, most uncertain first.
+
+    Prefers a logged ``confidence`` (credence in the judge's own answer, ranked
+    by ``|confidence - 0.5|`` -- ``0.5`` is maximally uncertain); falls back to
+    ``score`` (ranked by ``|score - threshold|``, exactly as before). A
+    decision-only/binary log carrying neither a usable confidence nor a
+    non-degenerate score has *nothing* to rank by uncertainty and raises,
+    rather than silently returning ``[]`` (see :func:`select_for_review`).
+    """
+    rows = list(eligible.values())
+    if not rows:
+        # Nothing judged yet (or every pair already corrected): a genuinely
+        # finished loop, not a broken one -- return [], never raise.
+        return []
+
+    # A real credence signal wins when the log has one (the confidence="logprob"
+    # path): rank by distance from 0.5 -- maximal uncertainty -- least sure first.
+    confident = [(c, row) for row in rows if (c := _finite_unit(row.get("confidence"))) is not None]
+    if confident:
+        in_band = [(abs(c - 0.5), row) for c, row in confident if abs(c - 0.5) <= margin]
+        in_band.sort(key=lambda entry: entry[0])
+        return [
+            _build_item(row, reason="uncertainty", details={"distance": distance})
+            for distance, row in in_band
+        ]
+
+    # No confidence: fall back to score-distance. A binary/decision log has no
+    # continuous score to rank (every score is None or a 0/1 decision), so
+    # |score - threshold| is a constant and the band is *always* empty -- the
+    # silent no-op this function used to hide behind a "[]". Fail loud instead.
+    scored = [(s, row) for row in rows if (s := _finite_unit(row.get("score"))) is not None]
+    if not any(0.0 < s < 1.0 for s, _ in scored):
+        raise ValueError(
+            "strategy='uncertainty' has no signal to rank this judgement log by: "
+            "no row carries a usable confidence and every score is None or a 0/1 "
+            "decision, so the uncertainty band is always empty (this used to "
+            "silently return [], indistinguishable from a finished loop). For a "
+            "binary/decision judge, either use strategy='disagreement' to compare "
+            'it against a second judge, or run LLMJudge(confidence="logprob") so '
+            "each judgement carries a real uncertainty signal."
+        )
+    in_band = [(distance, row) for s, row in scored if (distance := abs(s - threshold)) <= margin]
     in_band.sort(key=lambda entry: entry[0])
     return [
         _build_item(
@@ -392,24 +501,34 @@ def _select_disagreement(
     eligible: Mapping[frozenset[str], Mapping[str, Any]],
     against_by_pair: Mapping[frozenset[str], Mapping[str, Any]],
 ) -> list[ReviewItem]:
-    """Pairs whose verdict differs across the two logs, largest score gap first."""
+    """Pairs whose verdict differs across the two logs, largest score gap first.
+
+    Compares each side's ``decision`` (v3) or ``verdict`` via
+    :func:`_row_verdict`, so a binary/decision log -- the fallback the
+    uncertainty raise points at -- disagrees correctly. A row with no bool
+    verdict on either side (an abstain, a score-only row) cannot disagree and is
+    skipped. The largest-gap sort uses ``_score_gap``, which is ``0.0`` when
+    either score is ``None`` (a decider has no score), so a binary log keeps
+    insertion order (a stable sort) instead of crashing on ``float(None)``.
+    """
     differing: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for key, row in eligible.items():
         other = against_by_pair.get(key)
-        if other is None or bool(other["verdict"]) == bool(row["verdict"]):
+        if other is None:
+            continue
+        row_verdict = _row_verdict(row)
+        other_verdict = _row_verdict(other)
+        if row_verdict is None or other_verdict is None or row_verdict == other_verdict:
             continue
         differing.append((row, other))
-    differing.sort(
-        key=lambda pair: abs(float(pair[0]["score"]) - float(pair[1]["score"])),
-        reverse=True,
-    )
+    differing.sort(key=lambda pair: _score_gap(pair[0], pair[1]), reverse=True)
     return [
         _build_item(
             row,
             reason="disagreement",
             details={
-                "against_score": float(other["score"]),
-                "against_verdict": bool(other["verdict"]),
+                "against_score": _finite_unit(other.get("score")),
+                "against_verdict": _row_verdict(other),
                 "against_model": _opt_str(other.get("model")),
                 "against_decision_step": _opt_str(other.get("decision_step")),
             },
@@ -418,21 +537,39 @@ def _select_disagreement(
     ]
 
 
+def _score_gap(row: Mapping[str, Any], other: Mapping[str, Any]) -> float:
+    """Absolute score gap between two rows, or ``0.0`` when either has no score."""
+    left = _finite_unit(row.get("score"))
+    right = _finite_unit(other.get("score"))
+    if left is None or right is None:
+        return 0.0
+    return abs(left - right)
+
+
 def _build_item(
     row: Mapping[str, Any],
     *,
     reason: ReviewReason,
     details: Mapping[str, Any] | None = None,
 ) -> ReviewItem:
-    """One :class:`ReviewItem` from a well-formed judgement row (ids-only)."""
+    """One :class:`ReviewItem` from a well-formed judgement row (ids-only).
+
+    Reads ``score``/``verdict``/``confidence`` through the same sanitizers the
+    selection used, so a decider row (``score`` ``None``) and v1/v2 rows lacking
+    the ``reasoning``/``confidence``/``confidence_source`` columns build a valid
+    item instead of tripping a ``float(None)`` or a Pydantic bound.
+    """
     return ReviewItem(
         left_id=str(row["left_id"]),
         right_id=str(row["right_id"]),
-        score=float(row["score"]),
-        verdict=bool(row["verdict"]),
+        score=_finite_unit(row.get("score")),
+        verdict=_row_verdict(row),
         reason=reason,
         decision_step=_opt_str(row.get("decision_step")),
         model=_opt_str(row.get("model")),
+        reasoning=_opt_str(row.get("reasoning")),
+        confidence=_finite_unit(row.get("confidence")),
+        confidence_source=_opt_str(row.get("confidence_source")),
         details=dict(details) if details is not None else {},
     )
 
