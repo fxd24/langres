@@ -440,6 +440,30 @@ def _dedupe_by_pair(rows: Sequence[Mapping[str, Any]]) -> dict[frozenset[str], M
     return by_pair
 
 
+def _uncertainty_by_score(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    threshold: float,
+    margin: float,
+) -> list[ReviewItem]:
+    """Score-distance uncertainty band: rows within ``margin`` of ``threshold``.
+
+    The fallback ranking when a row carries no credence -- ``|score - threshold|``,
+    least sure first. Rows with no usable score contribute nothing. Raises
+    nothing: the "no gradient at all" decision is the caller's (see
+    :func:`_select_uncertainty`).
+    """
+    scored = [(s, row) for row in rows if (s := _finite_unit(row.get("score"))) is not None]
+    in_band = [(distance, row) for s, row in scored if (distance := abs(s - threshold)) <= margin]
+    in_band.sort(key=lambda entry: entry[0])
+    return [
+        _build_item(
+            row, reason="uncertainty", details={"threshold": threshold, "distance": distance}
+        )
+        for distance, row in in_band
+    ]
+
+
 def _select_uncertainty(
     eligible: Mapping[frozenset[str], Mapping[str, Any]],
     *,
@@ -454,6 +478,14 @@ def _select_uncertainty(
     decision-only/binary log carrying neither a usable confidence nor a
     non-degenerate score has *nothing* to rank by uncertainty and raises,
     rather than silently returning ``[]`` (see :func:`select_for_review`).
+
+    A *mixed* log (some rows carry confidence, some only a score -- e.g. a
+    :class:`~langres.core.modules.cascade_judge.CascadeJudge` whose cheap-student
+    rows are score-only and whose escalated rows carry a logprob confidence)
+    yields both bands: credence-ranked rows first (a real self-reported
+    uncertainty), then score-ranked rows for the rows that lacked confidence, so
+    an uncertain score-only pair is never silently dropped just because some
+    other row happens to carry a confidence.
     """
     rows = list(eligible.values())
     if not rows:
@@ -467,10 +499,17 @@ def _select_uncertainty(
     if confident:
         in_band = [(abs(c - 0.5), row) for c, row in confident if abs(c - 0.5) <= margin]
         in_band.sort(key=lambda entry: entry[0])
-        return [
+        items = [
             _build_item(row, reason="uncertainty", details={"distance": distance})
             for distance, row in in_band
         ]
+        # Fold in the score-only rows (those with no usable confidence) via the
+        # score-distance fallback -- otherwise they vanish from the queue the
+        # instant one row carries a confidence, the same silent no-op this
+        # function exists to kill, just relocated to a mixed log.
+        score_only = [row for row in rows if _finite_unit(row.get("confidence")) is None]
+        items.extend(_uncertainty_by_score(score_only, threshold=threshold, margin=margin))
+        return items
 
     # No confidence: fall back to score-distance. A binary/decision log has no
     # continuous score to rank (every score is None or a 0/1 decision), so
@@ -487,14 +526,7 @@ def _select_uncertainty(
             'it against a second judge, or run LLMJudge(confidence="logprob") so '
             "each judgement carries a real uncertainty signal."
         )
-    in_band = [(distance, row) for s, row in scored if (distance := abs(s - threshold)) <= margin]
-    in_band.sort(key=lambda entry: entry[0])
-    return [
-        _build_item(
-            row, reason="uncertainty", details={"threshold": threshold, "distance": distance}
-        )
-        for distance, row in in_band
-    ]
+    return _uncertainty_by_score(rows, threshold=threshold, margin=margin)
 
 
 def _select_disagreement(

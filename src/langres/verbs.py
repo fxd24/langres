@@ -395,6 +395,15 @@ def dedupe(
 ) -> DedupeResult:
     """Group a batch of records into entity clusters.
 
+    Abstentions are handled differently here than in :func:`link`. ``link``
+    judges one pair and *raises* :class:`~langres.core.models.JudgeAbstainedError`
+    on an abstain, because a single caller needs a verdict. ``dedupe`` judges
+    many pairs to build clusters, and an abstained pair is left **unmerged** (the
+    conservative default -- the same as "not a match" for edge-building) rather
+    than aborting the whole batch: one unparseable judgement among thousands
+    should not sink an entire dedupe run. Inspect the ``log`` if you need to see
+    which pairs the judge declined.
+
     Args:
         records: The records to dedupe (plain dicts). ``[]`` -> ``[]``; a
             single record -> ``[]`` (no pair possible) -- both short-circuit

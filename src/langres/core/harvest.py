@@ -193,6 +193,13 @@ def harvest_labeled_pairs(
     biased scored-only subset. The score is carried as-is (never coerced to
     ``0.0``), so a genuine ``score == 0.0`` and a missing score stay distinct.
 
+    An *abstention* row (``verdict: null`` -- the judge neither decided nor
+    scored) carries no usable label and is **skipped** unless a human correction
+    supplies one. Coercing a null verdict to a ``False`` non-match would seed
+    silver-label training with a label the judge never gave -- the label-side
+    twin of never coercing a null score to ``0.0``. So the output has one
+    :class:`LabeledPair` per *labeled* row, not necessarily per input row.
+
     Args:
         judgement_rows: Logged judge calls as mappings with at least ``left_id``,
             ``right_id``, ``score`` and ``verdict`` keys. ``score`` may be
@@ -201,7 +208,9 @@ def harvest_labeled_pairs(
             pair win (last-write-wins).
 
     Returns:
-        One :class:`LabeledPair` per judgement row, in row order.
+        One :class:`LabeledPair` per *labeled* judgement row, in row order. An
+        abstention row (``verdict`` null) with no correction carries no usable
+        label and is omitted, so the output may be shorter than the input.
     """
     corrections_by_pair: dict[frozenset[str], Correction] = {}
     for correction in corrections:
@@ -222,7 +231,15 @@ def harvest_labeled_pairs(
             label = override.label
             source: Literal["verdict", "correction"] = "correction"
         else:
-            label = bool(row["verdict"])
+            verdict = row["verdict"]
+            if verdict is None:
+                # An abstention (decision=None -> verdict=None): the judge gave
+                # no verdict, so there is no label to harvest. Skip it rather
+                # than coerce None to a False non-match -- a fabricated
+                # "not a match" would poison silver labels exactly as a
+                # fabricated 0.0 would poison a score threshold.
+                continue
+            label = bool(verdict)
             source = "verdict"
         raw_score = row["score"]
         pairs.append(

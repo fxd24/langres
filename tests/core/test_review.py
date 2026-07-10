@@ -324,6 +324,30 @@ def test_uncertainty_ranks_by_confidence_least_confident_first() -> None:
     assert first.details["distance"] == pytest.approx(0.02)
 
 
+def test_uncertainty_mixed_log_does_not_drop_score_only_rows() -> None:
+    """A MIXED log -- some rows carry a logprob confidence, some only a score
+    (a CascadeJudge: cheap-student score-only rows + escalated logprob rows) --
+    must review BOTH bands. The score-only uncertain pair must not vanish just
+    because a confidence-bearing row exists (the silent no-op, relocated). The
+    credence-ranked row comes first, then the score-ranked one."""
+    rows = [
+        # escalated, carries a real credence near 0.5 (maximally uncertain)
+        _row("a", "b", None, True, decision=True, confidence=0.52, confidence_source="logprob"),
+        # cheap student, score-only, sits right on the threshold (uncertain)
+        _row("c", "d", 0.51, True),
+        # cheap student, score-only, far from threshold -> outside the band
+        _row("e", "f", 0.99, True),
+    ]
+    items = select_for_review(
+        rows, strategy="uncertainty", threshold=0.5, margin=0.1, audit_fraction=0.0
+    )
+    pairs = _pairs(items)
+    assert ("a", "b") in pairs  # credence-bearing uncertain row kept
+    assert ("c", "d") in pairs  # score-only uncertain row NOT dropped
+    assert ("e", "f") not in pairs  # score-only but outside the band
+    assert pairs == [("a", "b"), ("c", "d")]  # credence band first, then score band
+
+
 def test_uncertainty_confident_about_everything_returns_empty_not_raise() -> None:
     """Confidence present but all far from 0.5 -> band empty -> [] (a genuinely
     finished loop). This is the *signal-exists* case: distinct from the no-signal

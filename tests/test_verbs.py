@@ -357,6 +357,25 @@ class TestDedupe:
         assert result.judge_used == "custom"
         assert {"1", "2"} in result
 
+    def test_abstaining_judge_leaves_pair_unmerged_and_does_not_raise(self) -> None:
+        """dedupe()'s abstain contract, the deliberate asymmetry with link().
+
+        link() raises JudgeAbstainedError on an abstain (one caller needs a
+        verdict). dedupe() judges many pairs to build clusters, so an abstained
+        pair is conservatively left UNMERGED rather than aborting the whole
+        batch -- one unparseable judgement must not sink a dedupe run. Here the
+        only pair abstains, so the two records stay unclustered and no exception
+        is raised.
+        """
+        records = [
+            {"id": "a", "name": "Acme Corporation"},
+            {"id": "b", "name": "Acme Corp"},
+        ]
+        result = dedupe(records, judge=_AbstainingModule(), threshold=0.5)
+        # No merge, no crash: the abstained pair simply did not connect a, b.
+        assert {"a", "b"} not in result
+        assert all(len(cluster) == 1 for cluster in result)
+
     def test_cap_breach_mid_stream_raises_with_partial_judgements(self) -> None:
         records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
         with pytest.raises(BudgetExceeded) as excinfo:

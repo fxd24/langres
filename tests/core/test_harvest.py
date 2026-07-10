@@ -206,6 +206,38 @@ def test_harvest_decision_only_row_carries_score_none() -> None:
     assert pairs[0].label is True
 
 
+def test_harvest_abstention_row_is_skipped_not_labeled_false() -> None:
+    """A v3 abstention row (verdict=None: the judge neither decided nor scored)
+    carries NO usable label and must be omitted -- never coerced to a False
+    non-match. Fabricating a "not a match" would seed silver labels with a
+    verdict the judge never gave, the label-side twin of coercing a null score
+    to 0.0. A real verdict row alongside it still passes through."""
+    rows: list[dict[str, Any]] = [
+        {"v": 3, "left_id": "a", "right_id": "b", "score": None, "verdict": None},
+        {"v": 3, "left_id": "c", "right_id": "d", "score": 0.9, "verdict": True},
+    ]
+    pairs = harvest_labeled_pairs(rows, corrections=[])
+    # The abstention is dropped; only the decided pair survives.
+    assert [(p.left_id, p.right_id) for p in pairs] == [("c", "d")]
+    assert pairs[0].label is True
+
+
+def test_harvest_correction_rescues_an_abstention_row() -> None:
+    """A human correction supplies the label an abstention lacked, so the pair
+    IS harvested (from the correction), proving the skip is verdict-only, not a
+    blanket drop of the pair."""
+    rows: list[dict[str, Any]] = [
+        {"v": 3, "left_id": "a", "right_id": "b", "score": None, "verdict": None},
+    ]
+    pairs = harvest_labeled_pairs(
+        rows, corrections=[Correction(left_id="a", right_id="b", label=True)]
+    )
+    assert len(pairs) == 1
+    assert pairs[0].label is True
+    assert pairs[0].source == "correction"
+    assert pairs[0].score is None
+
+
 # --------------------------------------------------------------------------- #
 # derive_threshold_from_pairs wiring                                          #
 # --------------------------------------------------------------------------- #
