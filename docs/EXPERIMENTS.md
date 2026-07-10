@@ -328,10 +328,12 @@ result = dedupe(records, judge="string", threshold=0.6, log=log)
 rows = log.read()  # round-trips every line written
 ```
 
-Every judge call appends one JSON line: pair ids, `score`, `verdict`
-(`score >= threshold`, the same cutoff the verb itself used), `model`,
-`cost_usd`, `decision_step`, `timestamp`, and a schema-version field `"v": 1`
-(so a future format change can branch on it). Record content is **off by
+Every judge call appends one JSON line: pair ids, `score`, the judge's own
+`decision` plus the caller's `verdict` (its `predicted_match` — a decider's
+`decision`, else `score >= threshold`), the judge's `confidence` /
+`confidence_source`, `model`, `cost_usd`, `decision_step`, `timestamp`, and a
+schema-version field `"v": 3` (bumped 1→2→3 when it gained the decision-contract
+columns; `read()` backfills `decision` from `verdict` for older v1/v2 rows). Record content is **off by
 default** — pass `JudgementLog(path, features=True)` to additionally log
 `reasoning` and the judge's raw `provenance` (comparison levels,
 similarities, token counts, ...): this may contain PII (the record content a
