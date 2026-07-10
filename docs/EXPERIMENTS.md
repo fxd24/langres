@@ -59,15 +59,26 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
   graded summary plus the raw judgements (kept in-process for error-map analysis).
 - **When to use:** a **compiled and/or paid** scorer — this is the **DSPy
   experimentation surface** and the SOTA-comparable precision measurement. For a
-  paid judge, pass a `BudgetedModuleRunner` via `runner=` to hard-cap spend.
+  paid judge, pass a `BudgetedModuleRunner` via `runner=` to hard-cap spend; this
+  surface keeps the full cost knobs (`runner=` / `price_per_token_or_pair=` /
+  `cost_track_fn=`) and hands you the raw judgements back. The `evaluate()`
+  one-liner below is spend-capped too, but takes the simpler `budget_usd=` and
+  builds the runner for you — a one-liner shouldn't make you construct one.
 
 > **One-liner for the common case.** When you just want honest pair-level P/R/F1
-> for a judge over a fixed candidate set — no spend cap, no raw judgements back —
-> `evaluate(judge, candidates, gold_pairs)` — import it from the curated
-> `langres.eval` facade (`from langres.eval import evaluate`; re-exported from
-> `langres.core.benchmark`) — is the thin wrapper over
-> `evaluate_judge_on_candidates` that returns only the `JudgePairEval`
-> (default grid `DEFAULT_PAIR_GRID`; `slice_fn=` forwarded). See
+> for a judge over a fixed candidate set — spend-capped by default, no raw
+> judgements back — `evaluate(judge, candidates, gold_pairs)` — import it from the
+> curated `langres.eval` facade (`from langres.eval import evaluate`; re-exported
+> from `langres.core.benchmark`) — is the thin wrapper over
+> `evaluate_judge_on_candidates` that returns only the `JudgePairEval` (default
+> grid `DEFAULT_PAIR_GRID`; `slice_fn=` forwarded). The spend cap is the
+> **default**, not an opt-in: `budget_usd=` resolves to `DEFAULT_BUDGET_USD` =
+> $1.00 (free string/embedding judges never reach it). And with the default
+> `threshold=None` it sweeps the grid for `best_threshold` while emitting a
+> one-shot `UserWarning` that the number is argmax-fitted to the same gold it
+> reports on (optimistically biased) — pass `threshold=<float>` to grade once at
+> a fixed, honest cut. Reach for `evaluate_judge_on_candidates` when you need the
+> raw judgements back or a caller-owned runner / custom cost. See
 > [`docs/BENCHMARKS.md`](BENCHMARKS.md#3-score-your-own-data) for the
 > bring-your-own-data walkthrough.
 

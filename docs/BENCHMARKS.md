@@ -93,10 +93,19 @@ OpenSanctions.
 Have your own records plus some labeled `(id_a, id_b, match?)` pairs? Score any
 judge over them at honest pair-level Precision/Recall/F1 with the one-liner
 `evaluate(judge, candidates, gold_pairs)` (`langres.eval`, re-exported from
-`langres.core.benchmark`). It grades
-the judge at the best-F1 threshold over a grid and returns a `JudgePairEval` — no
-blocking-recall ceiling, no clustering amplification, so the number is directly
-comparable to pairwise-F1 SOTA.
+`langres.core.benchmark`) — no blocking-recall ceiling, no clustering
+amplification, so the number is directly comparable to pairwise-F1 SOTA. By
+default (`threshold=None`) it sweeps a grid and returns `best_threshold`, the
+best-F1 cut — but that argmax is fitted to the very `gold_pairs` it then reports
+F1 against, so the number is optimistically biased (an upper bound, not a
+held-out estimate), and the call emits a one-shot `UserWarning` saying exactly
+that. Pass `threshold=<float>` to grade once at a fixed, honest cut instead:
+`graded_threshold` records the cut used and `best_threshold` is `None`. The sweep
+stays the default deliberately — there is no single fixed cut that serves every
+judge, because an embedding judge's cosine non-matches sit well above 0.5 (around
+0.70–0.80), so a global 0.5 would call them all matches and wreck its F1, while a
+binary LLM judge wants 0.5. Honesty comes from the warning and the `threshold=`
+opt-out, not from imposing one universal default.
 
 The reusable bridge from raw `(id_a, id_b, label)` rows to scored candidates is
 `FixedSplitPairBenchmark.from_loaders` (`langres.data.fixed_split_pair_benchmark`):
@@ -133,17 +142,34 @@ data = bench.build("test")                          # candidates (comparison att
 # comparison vector using the auto-derived StringComparator's features.
 judge = WeightedAverageJudge(feature_specs=bench.feature_specs)
 
+# Default: sweep the grid. Warns that best_threshold is argmax-fitted to gold.
 result = evaluate(judge, data.candidates, data.gold)
-print(result.pair.precision, result.pair.recall, result.pair.f1, result.best_threshold)
+print(result.pair.precision, result.pair.recall, result.pair.f1,
+      result.best_threshold, result.graded_threshold)
+
+# Honest fixed cut: grade once at a chosen threshold — no warning, no argmax.
+fixed = evaluate(judge, data.candidates, data.gold, threshold=0.5)
+print(fixed.pair.f1, fixed.best_threshold, fixed.graded_threshold)  # best_threshold is None
 ```
 
 Swap the judge for anything else — an `EmbeddingScoreJudge`, an `LLMJudge`, a
-fitted `RandomForestJudge` — and the call is identical. For a **paid or compiled**
-judge that needs a spend cap or the raw judgements back, call the fuller
-`evaluate_judge_on_candidates` directly (pass a `BudgetedModuleRunner` via
-`runner=`); `evaluate()` is the thin, common-case one-liner over it. To reflect a
-seen → unseen split, pass `slice_fn=` — every slice is graded at the one global
-best-F1 threshold (never a per-slice argmax).
+fitted `RandomForestJudge` — and the call is identical. `evaluate()` is already
+spend-capped by default (`budget_usd=`, resolving to `DEFAULT_BUDGET_USD` =
+$1.00), so a **paid or compiled** judge can't run away; reach for the fuller
+`evaluate_judge_on_candidates` only when you need the **raw judgements** back, a
+**caller-owned runner**, or **custom cost accounting** — its `runner=` /
+`price_per_token_or_pair=` / `cost_track_fn=` knobs live there, and it returns
+`(JudgePairEval, judgements)`. To reflect a seen → unseen split, pass `slice_fn=`
+— every slice is graded at the one global cut (`graded_threshold`), never a
+per-slice argmax.
+
+**Scoring against a *bundled* benchmark instead of your own pairs?** Skip the
+`FixedSplitPairBenchmark` construction: `candidates_for` (also on `langres.eval`)
+blocks any registered benchmark's split into the same `(candidates, gold_pairs)`
+pair `evaluate` wants — `candidates, gold = candidates_for(get_benchmark("dblp_acm"),
+split="test")`, then `evaluate(judge, candidates, gold)`. That is the seam that
+keeps this walkthrough out of `Resolver`'s private candidate generator: you never
+block a split by hand.
 
 ---
 
