@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from langres.clients.openrouter import BudgetExceeded
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 from langres.core.module import Module
 from langres.core.reports import ScoreInspectionReport
 from langres.core.runs import current_run
@@ -72,8 +72,13 @@ class JudgementLog:
         self.path = Path(path)
         self.features = features
 
-    def append(self, judgement: PairwiseJudgement, *, verdict: bool) -> None:
-        """Append one JSON line for ``judgement`` (called by :class:`LoggingModule`)."""
+    def append(self, judgement: PairwiseJudgement, *, verdict: bool | None) -> None:
+        """Append one JSON line for ``judgement`` (called by :class:`LoggingModule`).
+
+        ``verdict`` is the caller's predicted-match decision (see
+        :func:`~langres.core.models.predicted_match`); ``None`` records an
+        abstention honestly rather than coercing it to a match/no-match.
+        """
         row: dict[str, Any] = {
             "v": _SCHEMA_VERSION,
             # The enclosing tracking run (S5): joins this row to its RunRecord
@@ -154,12 +159,12 @@ class LoggingModule(Module[Any]):
         logged = 0
         try:
             for judgement in self._module.forward(candidates):
-                self._log.append(judgement, verdict=judgement.score >= self._threshold)
+                self._log.append(judgement, verdict=predicted_match(judgement, self._threshold))
                 logged += 1
                 yield judgement
         except BudgetExceeded as exc:
             for judgement in exc.partial_judgements[logged:]:
-                self._log.append(judgement, verdict=judgement.score >= self._threshold)
+                self._log.append(judgement, verdict=predicted_match(judgement, self._threshold))
             raise
 
     def inspect_scores(

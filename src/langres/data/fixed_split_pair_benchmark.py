@@ -293,7 +293,18 @@ def evaluate_fixed_split_honest(
     test_data = benchmark.build("test")
 
     derive_judgements = list(judge.forward(iter(derive_data.candidates)))
-    derive_scores = [j.score for j in derive_judgements]
+    # A threshold is derived from scores; a decision-only judge has none to derive
+    # from, so name it and fail loudly rather than silently dropping its pairs.
+    derive_scores: list[float] = []
+    for j in derive_judgements:
+        if j.score is None:
+            raise ValueError(
+                f"cannot derive a threshold for {benchmark.name!r}: judge "
+                f"{type(judge).__name__} produced a score-less judgement for pair "
+                f"{j.left_id}/{j.right_id}; a decision-only judge has no scores to "
+                "derive a threshold from."
+            )
+        derive_scores.append(j.score)
     threshold = derive_threshold(derive_scores, derive_data.labels, method=method)
 
     test_judgements = list(judge.forward(iter(test_data.candidates)))

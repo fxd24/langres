@@ -161,7 +161,9 @@ class CascadeJudge(Module[SchemaT]):
         Yields:
             One PairwiseJudgement per candidate: the escalation judgement
             (``decision_step=CASCADE_ESCALATED_STEP``) for pairs whose student
-            score falls inside the band (inclusive), the student judgement
+            score (or, absent a score, ``confidence``) falls inside the band
+            (inclusive) -- and for pairs where the student abstained (neither),
+            since an abstention is maximally uncertain -- the student judgement
             (``decision_step=CASCADE_STUDENT_STEP``) otherwise. Cascade
             provenance keys (``cascade_tier``, ``student_score``, the inner
             ``decision_step`` values) merge into the winning child's provenance.
@@ -188,7 +190,15 @@ class CascadeJudge(Module[SchemaT]):
                 list(self.student.forward(iter([candidate]))), tier="student"
             )
             self._check_score_type(student_judgement)
-            if low <= student_judgement.score <= high:
+            # The band is applied to the student's confidence-ordered value: its
+            # ``score`` if it ranked, else its ``confidence``. If the student
+            # abstained (neither), it is maximally uncertain -> escalate.
+            band_value = (
+                student_judgement.score
+                if student_judgement.score is not None
+                else student_judgement.confidence
+            )
+            if band_value is None or low <= band_value <= high:
                 try:
                     raw = list(self.escalation.forward(iter([candidate])))
                 except BudgetExceeded as exc:

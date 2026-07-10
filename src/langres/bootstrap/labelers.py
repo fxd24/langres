@@ -21,7 +21,7 @@ from langres.bootstrap._pairs import canonical_pair_key
 from langres.bootstrap.base import Labeler
 from langres.bootstrap.models import GoldPair
 from langres.core.benchmark import BlindCostError
-from langres.core.models import ERCandidate
+from langres.core.models import ERCandidate, predicted_match
 from langres.core.modules.llm_judge import LLMJudge
 
 logger = logging.getLogger(__name__)
@@ -519,14 +519,29 @@ class TeacherLabeler(Labeler):
 
         spent = max(token_cost, reported_cost)
         self.total_spent_usd += spent
+
+        # Split the conflated float: the LABEL is the predicted-match decision
+        # (decision, else score >= threshold); the CONFIDENCE is P(match) from the
+        # judge's own confidence, falling back to its score. A teacher that neither
+        # scored nor decided gives no usable label -- count its spend (it still
+        # cost money) but skip it rather than fabricate a False.
+        label = predicted_match(judgement, self.threshold)
+        if label is None:
+            self.skipped_count += 1
+            logger.warning(
+                "Teacher abstained (no score, no decision) for pair %s/%s; skipping",
+                judgement.left_id,
+                judgement.right_id,
+            )
+            return None
         self.labeled_count += 1
 
         return GoldPair(
             left_id=judgement.left_id,
             right_id=judgement.right_id,
-            label=judgement.score >= self.threshold,
+            label=label,
             source="teacher",
-            confidence=judgement.score,
+            confidence=judgement.confidence if judgement.confidence is not None else judgement.score,
             reasoning=judgement.reasoning,
             provenance={
                 "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},

@@ -22,7 +22,7 @@ from collections.abc import Iterator
 from typing import ClassVar
 
 from langres.core.clusterer import Clusterer
-from langres.core.models import PairwiseJudgement
+from langres.core.models import PairwiseJudgement, predicted_match
 from langres.core.registry import register
 
 
@@ -90,11 +90,22 @@ class CorrelationClusterer(Clusterer):
         for judgement in judgements:
             if judgement.left_id == judgement.right_id:
                 continue
-            if judgement.score < self.threshold:
+            if predicted_match(judgement, self.threshold) is not True:
                 continue
+            # The edge weight is the confidence-ordered value. A ranker's ``score``
+            # is it; a decider that carries no score falls back to ``confidence``,
+            # else a unit weight (a bare "yes" is still a full-strength edge, never
+            # a silent zero that would drop the merge).
+            weight = (
+                judgement.score
+                if judgement.score is not None
+                else judgement.confidence
+                if judgement.confidence is not None
+                else 1.0
+            )
             key = frozenset((judgement.left_id, judgement.right_id))
-            if key not in edges or judgement.score > edges[key]:
-                edges[key] = judgement.score
+            if key not in edges or weight > edges[key]:
+                edges[key] = weight
 
         adjacency: dict[str, dict[str, float]] = {}
         for key, score in edges.items():

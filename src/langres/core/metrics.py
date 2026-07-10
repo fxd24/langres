@@ -21,7 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from langres.core.debugging import CandidateStats
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 
 BinStrategy = Literal["quantile", "uniform"]
 """Binning strategy for calibration metrics: equal-mass quantile bins or equal-width bins."""
@@ -285,12 +285,15 @@ def classify_pairs(
 ) -> PairMetrics:
     """Classify candidate judgements against gold match pairs at one threshold.
 
-    Each judgement is a predicted match iff ``score >= threshold``. A judgement's
-    pair is identified order-independently by ``frozenset({left_id, right_id})``,
-    so candidate ordering never affects the counts. ``fn`` counts gold pairs that
-    were *not* predicted — covering both pairs the blocker never surfaced as a
-    judgement and pairs scored below ``threshold`` — because ``gold_pairs - {predicted}``
-    is exactly the set of unrecovered true matches.
+    A judgement is a predicted match iff :func:`~langres.core.models.predicted_match`
+    returns ``True`` — a decider's ``decision``, else ``score >= threshold``. An
+    abstention (neither set → ``None``) is *excluded* from the predicted set: no
+    actionable signal is NOT a confident "no". A judgement's pair is identified
+    order-independently by ``frozenset({left_id, right_id})``, so candidate
+    ordering never affects the counts. ``fn`` counts gold pairs that were *not*
+    predicted — covering pairs the blocker never surfaced, pairs scored below
+    ``threshold``, and abstentions — because ``gold_pairs - {predicted}`` is
+    exactly the set of unrecovered true matches.
 
     Args:
         judgements: Candidate judgements from a scorer (pre-clustering).
@@ -301,7 +304,9 @@ def classify_pairs(
         A :class:`PairMetrics` for this threshold.
     """
     predicted: set[frozenset[str]] = {
-        frozenset({j.left_id, j.right_id}) for j in judgements if j.score >= threshold
+        frozenset({j.left_id, j.right_id})
+        for j in judgements
+        if predicted_match(j, threshold) is True
     }
     tp = len(predicted & gold_pairs)
     fp = len(predicted - gold_pairs)

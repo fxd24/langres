@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 
 if TYPE_CHECKING:
     from langres.core.resolver import Resolver
@@ -379,8 +379,11 @@ class AnchorStore:
         matched_anchor_ids: list[str] = []
         best_score: float | None = None
         for judgement in judgements:
-            best_score = judgement.score if best_score is None else max(best_score, judgement.score)
-            if judgement.score >= threshold:
+            if judgement.score is not None:
+                best_score = (
+                    judgement.score if best_score is None else max(best_score, judgement.score)
+                )
+            if predicted_match(judgement, threshold) is True:
                 anchor_id = (
                     judgement.right_id if judgement.left_id == record_id else judgement.left_id
                 )
