@@ -78,6 +78,13 @@ pieces that can regress money or silently report a wrong number.
   `n_parse_errors` could not see it, so DSPy abstentions were invisible in every
   eval report. Both judges now abstain at `score=0.0` with `parse_error=True`.
 
+- **`judge="auto"` told users their spend was "hard-capped".** Both user-facing
+  messages in `core/presets.py` (the `NoJudgeAvailableError` guidance and the
+  paid-judge notice) promised a hard cap the `BudgetedModuleRunner` does not
+  provide: it stops *between* calls, so one in-flight call can overrun the cap
+  by its own cost. Same overstatement corrected in `benchmark.py`; the verbs
+  path now says what it actually does.
+
 ### Added
 
 - **`langres.core.metrics.roc_auc_score` / `average_precision_score`** — pure

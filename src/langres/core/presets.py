@@ -203,7 +203,7 @@ def choose_auto_judge(
             f"({_INSTALL_LLM_EXTRA}).\n"
             'Fix B: pass judge="string" to opt into offline fuzzy matching (lower quality; '
             "calibrate its threshold with langres.core.calibration.derive_threshold).\n"
-            f"LLM spend is hard-capped at ${DEFAULT_BUDGET_USD:.2f} by default (budget_usd=). "
+            f"LLM spend is capped at ${DEFAULT_BUDGET_USD:.2f} by default (budget_usd=). "
             f"Guide: {_GETTING_STARTED_URL}"
         )
     resolved_model = model or (_OPENROUTER_MODEL if settings.openrouter_api_key else _OPENAI_MODEL)
@@ -219,7 +219,8 @@ def choose_auto_judge(
         )
     _notice(
         f'judge="auto" selected the LLM judge {resolved_model!r}: scoring makes PAID '
-        f"API calls, hard-capped at ${_effective_budget(budget_usd):.2f} (budget_usd=)."
+        f"API calls, capped at ${_effective_budget(budget_usd):.2f} (budget_usd=). The cap "
+        "is enforced between calls, so one in-flight call can overrun it by its own cost."
     )
     return "zero_shot_llm", resolved_model
 
