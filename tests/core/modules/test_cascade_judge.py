@@ -35,6 +35,7 @@ from langres.core.modules.cascade_judge import (
 from langres.core.presets import _SpendCappedModule
 from langres.core.registry import get_component
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
+from langres.testing import ScriptedJudge
 
 # ---------------------------------------------------------------------------
 # Helpers: candidates + stub judges
@@ -49,51 +50,7 @@ def _pair(left_id: str, right_id: str) -> ERCandidate[CompanySchema]:
     )
 
 
-class ScriptedJudge(Module[CompanySchema]):
-    """Stub pairwise judge: one judgement per pair with a scripted score.
-
-    Records every pair it sees in ``seen`` (the escalation-laziness spy).
-    """
-
-    def __init__(
-        self,
-        scores: dict[tuple[str, str], float],
-        *,
-        score_type: str = "prob_rf",
-        decision_step: str = "scripted",
-        reasoning: str | None = None,
-        provenance: dict[str, Any] | None = None,
-    ) -> None:
-        self.scores = scores
-        self.score_type = score_type
-        self.decision_step = decision_step
-        self.reasoning = reasoning
-        self.provenance = provenance or {}
-        self.seen: list[tuple[str, str]] = []
-
-    def forward(
-        self, candidates: Iterator[ERCandidate[CompanySchema]]
-    ) -> Iterator[PairwiseJudgement]:
-        for candidate in candidates:
-            key = (candidate.left.id, candidate.right.id)
-            self.seen.append(key)
-            yield PairwiseJudgement(
-                left_id=candidate.left.id,
-                right_id=candidate.right.id,
-                score=self.scores[key],
-                score_type=self.score_type,  # type: ignore[arg-type]
-                decision_step=self.decision_step,
-                reasoning=self.reasoning,
-                provenance=dict(self.provenance),
-            )
-
-    def inspect_scores(
-        self, judgements: list[PairwiseJudgement], sample_size: int = 10
-    ) -> ScoreInspectionReport:
-        return _inspect_scores_impl(judgements, sample_size)
-
-
-class ZeroJudge(ScriptedJudge):
+class ZeroJudge(ScriptedJudge[CompanySchema]):
     """Contract violator: yields NO judgement for a candidate."""
 
     def forward(
@@ -104,7 +61,7 @@ class ZeroJudge(ScriptedJudge):
         yield from ()
 
 
-class DoubleJudge(ScriptedJudge):
+class DoubleJudge(ScriptedJudge[CompanySchema]):
     """Contract violator: yields TWO judgements for a candidate."""
 
     def forward(
@@ -122,7 +79,7 @@ class DoubleJudge(ScriptedJudge):
                 )
 
 
-class RaisingJudge(ScriptedJudge):
+class RaisingJudge(ScriptedJudge[CompanySchema]):
     """Stub escalation judge: raises a plain (non-BudgetExceeded) exception.
 
     Represents a network/rate-limit/API failure -- unlike BudgetExceeded, it
@@ -149,7 +106,7 @@ class GroupwiseStub(GroupwiseModule[CompanySchema]):
         return _inspect_scores_impl(judgements, sample_size)
 
 
-class StatefulStubJudge(ScriptedJudge):
+class StatefulStubJudge(ScriptedJudge[CompanySchema]):
     """ScriptedJudge that also implements SerializableState (a ``state.txt`` file).
 
     An empty ``value`` writes nothing — mirrors an unfit RandomForestJudge's
@@ -209,14 +166,22 @@ class TestCtorValidation:
 
 class TestBandRouting:
     def test_band_edges_are_inclusive(self) -> None:
-        scores = {("a", "b"): 0.3, ("c", "d"): 0.7, ("e", "f"): 0.29, ("g", "h"): 0.71}
-        student = ScriptedJudge(scores)
+        id_pairs = [("a", "b"), ("c", "d"), ("e", "f"), ("g", "h")]
+        scores = {
+            frozenset({"a", "b"}): 0.3,
+            frozenset({"c", "d"}): 0.7,
+            frozenset({"e", "f"}): 0.29,
+            frozenset({"g", "h"}): 0.71,
+        }
+        student = ScriptedJudge(scores, score_type="prob_rf")
         escalation = ScriptedJudge(
-            {("a", "b"): 0.9, ("c", "d"): 0.1}, score_type="prob_llm", decision_step="frontier"
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.1},
+            score_type="prob_llm",
+            decision_step="frontier",
         )
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
-        pairs = [_pair(*key) for key in scores]
+        pairs = [_pair(*ids) for ids in id_pairs]
         steps = [j.decision_step for j in cascade.forward(iter(pairs))]
 
         assert steps == [
@@ -227,19 +192,28 @@ class TestBandRouting:
         ]
 
     def test_escalation_is_lazy_and_per_pair(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.9, ("c", "d"): 0.5, ("e", "f"): 0.1})
-        escalation = ScriptedJudge({("c", "d"): 0.8}, score_type="prob_llm")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.5, frozenset({"e", "f"}): 0.1},
+            score_type="prob_rf",
+        )
+        escalation = ScriptedJudge({frozenset({"c", "d"}): 0.8}, score_type="prob_llm")
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
         list(cascade.forward(iter([_pair("a", "b"), _pair("c", "d"), _pair("e", "f")])))
 
-        assert student.seen == [("a", "b"), ("c", "d"), ("e", "f")]
-        assert escalation.seen == [("c", "d")]  # ONLY the band pair
+        assert student.seen == [
+            frozenset({"a", "b"}),
+            frozenset({"c", "d"}),
+            frozenset({"e", "f"}),
+        ]
+        assert escalation.seen == [frozenset({"c", "d"})]  # ONLY the band pair
 
     def test_escalation_judgement_wins_fields(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.5}, decision_step="stub_student")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.5}, score_type="prob_rf", decision_step="stub_student"
+        )
         escalation = ScriptedJudge(
-            {("a", "b"): 0.92},
+            {frozenset({"a", "b"}): 0.92},
             score_type="prob_llm",
             decision_step="frontier",
             reasoning="same company, different branding",
@@ -255,7 +229,9 @@ class TestBandRouting:
         assert judgement.left_id == "a" and judgement.right_id == "b"
 
     def test_student_judgement_passes_through(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.95}, decision_step="stub_student")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.95}, score_type="prob_rf", decision_step="stub_student"
+        )
         escalation = ScriptedJudge({}, score_type="prob_llm")
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
@@ -274,9 +250,11 @@ class TestBandRouting:
 
 class TestProvenanceMerge:
     def test_escalated_provenance_merges_into_childs_dict(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.5}, decision_step="stub_student")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.5}, score_type="prob_rf", decision_step="stub_student"
+        )
         escalation = ScriptedJudge(
-            {("a", "b"): 0.9},
+            {frozenset({"a", "b"}): 0.9},
             score_type="prob_llm",
             decision_step="frontier",
             provenance={"cost_usd": 0.002, "model": "frontier-x", "tokens": 42},
@@ -298,7 +276,10 @@ class TestProvenanceMerge:
 
     def test_student_provenance_carries_cascade_keys(self) -> None:
         student = ScriptedJudge(
-            {("a", "b"): 0.9}, decision_step="stub_student", provenance={"n_estimators": 10}
+            {frozenset({"a", "b"}): 0.9},
+            score_type="prob_rf",
+            decision_step="stub_student",
+            provenance={"n_estimators": 10},
         )
         cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
 
@@ -323,7 +304,7 @@ class TestOneGuard:
 
     def test_escalation_yielding_two_judgements_raises(self) -> None:
         cascade = CascadeJudge(
-            student=ScriptedJudge({("a", "b"): 0.5}),
+            student=ScriptedJudge({frozenset({"a", "b"}): 0.5}, score_type="prob_rf"),
             escalation=DoubleJudge({}),
             band=(0.3, 0.7),
         )
@@ -338,7 +319,9 @@ class TestOneGuard:
 
 class TestScoreTypeWarning:
     def test_non_probability_student_warns_once(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.9, ("c", "d"): 0.95}, score_type="heuristic")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.95}, score_type="heuristic"
+        )
         cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
 
         with warnings.catch_warnings(record=True) as caught:
@@ -358,16 +341,24 @@ class TestScoreTypeWarning:
         assert not [w for w in caught_again if "score_type" in str(w.message)]
 
     def test_non_probability_escalation_warns(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.5})
-        escalation = ScriptedJudge({("a", "b"): 0.8}, score_type="sim_cos")
+        # student must stay a probability score_type here -- CascadeJudge's
+        # one-time warning fires on the FIRST non-probability score_type it
+        # sees, and the student is always checked before the escalation
+        # child. A non-probability student would consume the one-time
+        # warning itself and this test's `match="sim_cos"` would never see
+        # the escalation child's warning at all.
+        student = ScriptedJudge({frozenset({"a", "b"}): 0.5}, score_type="prob_rf")
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="sim_cos")
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
         with pytest.warns(UserWarning, match="sim_cos"):
             list(cascade.forward(iter([_pair("a", "b")])))
 
     def test_probability_score_types_stay_silent(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.5, ("c", "d"): 0.9}, score_type="prob_rf")
-        escalation = ScriptedJudge({("a", "b"): 0.8}, score_type="prob_llm")
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.5, frozenset({"c", "d"}): 0.9}, score_type="prob_rf"
+        )
+        escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="prob_llm")
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
         with warnings.catch_warnings(record=True) as caught:
@@ -384,9 +375,10 @@ class TestScoreTypeWarning:
 class TestMixedStreamClustering:
     def test_mixed_prob_rf_and_prob_llm_cut_by_one_threshold(self) -> None:
         student = ScriptedJudge(
-            {("a", "b"): 0.95, ("c", "d"): 0.5, ("e", "f"): 0.05}, score_type="prob_rf"
+            {frozenset({"a", "b"}): 0.95, frozenset({"c", "d"}): 0.5, frozenset({"e", "f"}): 0.05},
+            score_type="prob_rf",
         )
-        escalation = ScriptedJudge({("c", "d"): 0.9}, score_type="prob_llm")
+        escalation = ScriptedJudge({frozenset({"c", "d"}): 0.9}, score_type="prob_llm")
         cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
 
         judgements = list(
@@ -414,10 +406,12 @@ class TestBudgetExceededComposition:
         escalation child under LoggingModule must NOT drop the paid judgement
         from the log (judgement_log.py's ``[logged:]`` slice)."""
         student = ScriptedJudge(
-            {("a", "b"): 0.9, ("c", "d"): 0.1, ("e", "f"): 0.5}, decision_step="stub_student"
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.1, frozenset({"e", "f"}): 0.5},
+            score_type="prob_rf",
+            decision_step="stub_student",
         )
         expensive = ScriptedJudge(
-            {("e", "f"): 0.8},
+            {frozenset({"e", "f"}): 0.8},
             score_type="prob_llm",
             decision_step="frontier",
             provenance={"cost_usd": 1.0, "model": "frontier-x"},
@@ -454,9 +448,11 @@ class TestBudgetExceededComposition:
     def test_outer_spend_cap_sees_escalated_cost(self) -> None:
         """cost_usd passes through the merge, so an OUTER _SpendCappedModule
         wrapping the whole cascade trips on escalation spend unchanged."""
-        student = ScriptedJudge({("a", "b"): 0.9, ("c", "d"): 0.5})
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.5}, score_type="prob_rf"
+        )
         escalation = ScriptedJudge(
-            {("c", "d"): 0.8},
+            {frozenset({"c", "d"}): 0.8},
             score_type="prob_llm",
             provenance={"cost_usd": 1.0, "model": "frontier-x"},
         )
@@ -483,7 +479,9 @@ class TestNonBudgetExceededPropagation:
         """Only BudgetExceeded gets partial_judgements rewritten; a generic
         failure (e.g. network/rate-limit/API error) from the escalation child
         must propagate as-is -- not swallowed, not converted."""
-        student = ScriptedJudge({("a", "b"): 0.5})  # in-band -> escalates
+        student = ScriptedJudge(
+            {frozenset({"a", "b"}): 0.5}, score_type="prob_rf"
+        )  # in-band -> escalates
         cascade = CascadeJudge(student=student, escalation=RaisingJudge({}), band=(0.3, 0.7))
 
         with pytest.raises(RuntimeError, match="escalation backend unavailable"):
@@ -659,7 +657,7 @@ class TestSerialization:
 
 class TestInspectScores:
     def test_inspect_scores_returns_report(self) -> None:
-        student = ScriptedJudge({("a", "b"): 0.9})
+        student = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_rf")
         cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
         judgements = list(cascade.forward(iter([_pair("a", "b")])))
         report = cascade.inspect_scores(judgements)
