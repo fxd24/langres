@@ -6,34 +6,42 @@ Every step below carries a short runnable snippet **inline**; the links point
 *down* to the mechanics (they are for depth, never for the code you need to get
 moving).
 
-langres closes a loop most ER tools leave open: an expensive judge bootstraps
-*silver* labels, a human reviews only the uncertain margin, those labels train a
-*cheap* student, and a **cascade** runs the student everywhere while escalating
-only the still-uncertain pairs back to the expensive judge.
+langres closes a loop most ER tools leave open: a frontier LLM bootstraps
+*silver* labels with just a prompt, a human reviews only the uncertain margin,
+those labels tune a **cheaper judge** — in production a DSPy prompt-tuned
+smaller LLM, in this page's $0 demo a classical student — and a **cascade**
+runs the cheap judge everywhere while escalating only the still-uncertain
+pairs back to the frontier.
 
 ```
-   ┌─────────────────────────────────────────────────────────────────────┐
-   │                          THE DATA FLYWHEEL                           │
-   │                                                                     │
-   │   day 1: LLM judge  ──►  log every call  ──►  select the margin     │
-   │   (dedupe, capped)       (log="…jsonl")       (select_for_review)   │
-   │        ▲                                             │              │
-   │        │                                             ▼              │
-   │   cascade: cheap  ◄──  train cheap student  ◄──  human review       │
-   │   student + escalate    (RandomForestJudge.fit +           (langres review /  │
-   │   only in the band       derive_threshold)        CSV round-trip)   │
-   │        │                       ▲                                     │
-   │        └───────────────────────┘  save / load the whole pipeline    │
-   └─────────────────────────────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────────────────────────┐
+   │                         THE DATA FLYWHEEL                          │
+   │                                                                    │
+   │   day 1: LLM judge  ──►  log every call  ──►  select the margin    │
+   │   (dedupe, capped)       (log="…jsonl")       (select_for_review)  │
+   │        ▲                                             │             │
+   │        │                                             ▼             │
+   │   cascade: cheap    ◄──  tune a cheaper judge ◄──  human review    │
+   │   judge everywhere,      (DSPy prompt-tune a       (langres review │
+   │   LLM only in band        smaller LLM / .fit)       / CSV export)  │
+   │        │                        ▲                                  │
+   │        └────────────────────────┘   save/load the whole pipeline   │
+   └────────────────────────────────────────────────────────────────────┘
 ```
 
-**Its runnable twin is [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)** —
-the same eight stages against committed fixtures, at **$0** (a deterministic
-local stand-in plays the frontier judge). Run it end to end while you read:
+**Its runnable twin is [`examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py)** —
+the core of the loop (steps 1–4: log → review the margin → CSV round-trip →
+harvest → data-driven threshold → re-run → tearsheet) in ~90 lines, offline at
+**$0**. Run it while you read:
 
 ```bash
-uv run python examples/flywheel_closed_loop.py
+uv run python examples/flywheel_min.py
 ```
+
+The **full** seven steps — including the trained student and the cascade —
+run at $0 in [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py),
+a deeper fixture-driven harness that drives the `langres.core` primitives
+directly, bypassing the verbs and the CLI.
 
 ---
 
@@ -119,7 +127,9 @@ uv sync --extra trained     # [trained]: scikit-learn behind RandomForestJudge +
 The steps below tell one continuous story. `records` is a list of dicts, each
 with a **stable `id`** (see [operating notes](#two-operating-notes-for-the-loop)
 — this matters). Snippets are minimal excerpts of the real API; the
-[runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) wires them all together.
+runnable twins wire them together: [`flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py)
+covers steps 1–4; [`flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
+covers all seven.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
@@ -207,9 +217,10 @@ Depth: [`EXPERIMENTS.md` § Flywheel harvest](EXPERIMENTS.md) and
 
 ### 5. Train the cheap student
 
-Now imitate the expensive teacher cheaply. Fit a `RandomForestJudge` — a **trainable
-judge** — on the harvested labels, then calibrate *its own* threshold on *its
-own* scores:
+Now spend the harvested labels on making the judgement cheaper. This demo fits
+a `RandomForestJudge` — a **trainable judge**, the loop's $0 stand-in for the
+cheaper model — on the harvested labels, then calibrates *its own* threshold on
+*its own* scores:
 
 ```python
 from langres.core.modules.random_forest_judge import RandomForestJudge
@@ -220,15 +231,20 @@ student.fit(iter(train_candidates), train_labels)          # labels from step 4
 student_threshold = derive_threshold(student_scores, heldout_labels)
 ```
 
-> **This is Magellan-style supervised matching, not LLM distillation.** langres
-> trains a small classical model on the harvested labels — it does **not**
-> compile or distill the LLM's prompt (that path was measured and cut; see
-> `docs/ROADMAP.md`). Calibrate the student on **student** scores, never the
+> **The classical student is the $0 plumbing demo — the production rung is a
+> cheaper LLM.** This step's `RandomForestJudge` is Magellan-style supervised
+> matching, shipped as an honest baseline and free plumbing for the loop. The
+> LLM-native pattern is to spend the same harvested labels on **prompt-tuning a
+> smaller LLM** (`DSPyJudge`): a precision-tuned DSPy signature let a cheap
+> model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
+> automatic MIPROv2 *compilation* was measured and cut — the signature is the
+> lever). Fine-tuning a small LM on these labels is the roadmap's next rung.
+> Whichever student you pick, calibrate it on **its own** scores, never the
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
-Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and the
-[runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) (which builds
-`train_candidates` / `student_scores` for you).
+Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and
+[`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
+(the deeper harness, which builds `train_candidates` / `student_scores` for you).
 
 ### 6. Cascade — cheap everywhere, frontier only at the margin
 
@@ -245,10 +261,10 @@ result = dedupe(records, judge=cascade, threshold=student_threshold)
 ```
 
 > **Derive the band from data, don't hard-code it.** A `±0.15` constant is the
-> same magic-number mistake step 4 just killed. The
-> [runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) widens the band around
-> the student threshold until it captures ~20% of calibration-split scores, and
-> prints the derivation. Beyond pairwise cascading, **set-wise judging**
+> same magic-number mistake step 4 just killed.
+> [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
+> widens the band around the student threshold until it captures ~20% of
+> calibration-split scores, and prints the derivation. Beyond pairwise cascading, **set-wise judging**
 > (`SelectJudge`) is the direction that judges a whole candidate group at once —
 > see [`docs/ADDING_A_METHOD.md`](ADDING_A_METHOD.md).
 
@@ -338,7 +354,9 @@ Two things the flywheel depends on that are easy to miss:
   in 15 minutes, with threshold calibration and save/load.
 - [`EXPERIMENTS.md`](EXPERIMENTS.md) — the experimentation DX: racing judges,
   the signal log, the harvest, the budget seam.
+- [`../examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py) —
+  the loop's core (steps 1–4: log → review → harvest → threshold → tearsheet),
+  runnable at $0.
 - [`../examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) —
-  this whole page, runnable at $0.
-</content>
-</invoke>
+  this whole page — all seven steps including student + cascade — at $0
+  (core primitives directly; bypasses the verbs and the CLI).

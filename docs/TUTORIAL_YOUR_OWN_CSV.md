@@ -180,7 +180,7 @@ under the default `"youden"` method (it raises on a single class); pass
 > with `langres.core.harvest` — which feeds this exact `derive_threshold`, and
 > then a cheap trained student behind a cascade. The end-to-end story is in
 > [`docs/GETTING_STARTED.md`](GETTING_STARTED.md), runnable at $0 in
-> [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py); the
+> [`examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py); the
 > harvest-only slice is [`examples/flywheel_threshold_harvest.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_threshold_harvest.py)
 > and [`docs/EXPERIMENTS.md`](EXPERIMENTS.md).
 

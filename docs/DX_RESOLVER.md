@@ -130,7 +130,7 @@ Resolver(
 
 Runnable end-to-end: [`examples/resolver_company_dedup.py`](https://github.com/fxd24/langres/blob/main/examples/resolver_company_dedup.py).
 
-## Consuming a saved artifact (M2 — this is all brainsquad writes)
+## Consuming a saved artifact
 
 The M2 walking skeleton (`examples/research/m2_walking_skeleton_fodors_zagat.py`) builds,
 tunes, and **saves** a Resolver artifact. The integrator who *consumes* that
@@ -154,10 +154,14 @@ manifest's `schema_type_name` won't resolve. A fresh-process identity proof
 (`tests/data/test_m2_artifact_slow.py`) asserts the reloaded artifact produces
 clusters identical to the in-process run.
 
-**Two consumption modes, one line each:**
+**Three consumption modes:**
 
-- **Batch dedup of a corpus** (available now, M2): `resolver.resolve(records)` —
-  cluster a record list into entities.
-- **Incremental linking of new records against a saved corpus** (M5, not yet
-  available): `.link()` / `.stream_against()` raise `NotImplementedError` today;
-  the incremental contract lands in M5.
+- **Batch dedup of a corpus**: `resolver.resolve(records)` — cluster a record
+  list into entities.
+- **Incremental single-record assignment** (shipped):
+  `resolver.build_anchor_store(records)` once, then `resolver.assign(new_record)`
+  → `ClusterDelta` (`link` to a stable entity id, or `new`); the serializable
+  `AnchorStore` persists alongside the artifact. Runnable:
+  [`examples/incremental_assign.py`](https://github.com/fxd24/langres/blob/main/examples/incremental_assign.py).
+- **Cross-source linking** (not yet available): `.link()` / `.stream_against()`
+  raise `NotImplementedError` today — reserved stubs on the roadmap.
