@@ -18,10 +18,15 @@ similarity, embeddings, an LLM judge, a trained classifier — is implemented
 
 ## The flywheel: zero labels → a cheap, self-improving matcher
 
-langres closes a loop most ER tools leave open: an expensive LLM judge
-bootstraps *silver* labels, a human reviews only the uncertain margin, those
-labels train a *cheap* student, and a **cascade** runs the student everywhere
-while escalating only the still-uncertain pairs back to the expensive judge.
+langres closes a loop most ER tools leave open — and the loop is **LLM-native**
+end to end. A frontier LLM gets you far out of the box with just a prompt and
+bootstraps *silver* labels; a human reviews only the uncertain margin; the
+harvested labels then buy the **same judgement cheaper** — the production
+pattern is prompt-tuning a *smaller* LLM with DSPy (`DSPyJudge`), with
+fine-tuning a small LM as the roadmap's next rung — and a **cascade** runs the
+cheap judge everywhere, escalating only the still-uncertain pairs back to the
+frontier. The point is reusing the knowledge already encoded in LLMs and
+pushing it further.
 
 ```
    ┌────────────────────────────────────────────────────────────────────┐
@@ -31,9 +36,9 @@ while escalating only the still-uncertain pairs back to the expensive judge.
    │   (dedupe, capped)       (log="…jsonl")       (select_for_review)  │
    │        ▲                                             │             │
    │        │                                             ▼             │
-   │   cascade: student  ◄──  train cheap student  ◄──  human review    │
-   │   everywhere, LLM        (RandomForestJudge        (langres review │
-   │   only in the band        .fit + calibrate)         / CSV export)  │
+   │   cascade: cheap    ◄──  tune a cheaper judge ◄──  human review    │
+   │   judge everywhere,      (DSPy prompt-tune a       (langres review │
+   │   LLM only in band        smaller LLM / .fit)       / CSV export)  │
    │        │                        ▲                                  │
    │        └────────────────────────┘   save/load the whole pipeline   │
    └────────────────────────────────────────────────────────────────────┘
@@ -42,14 +47,19 @@ while escalating only the still-uncertain pairs back to the expensive judge.
 Every stage is shipped API, not roadmap: `dedupe(records, log=…)` (the signal
 inlet), `select_for_review` + `ReviewQueue` + the `langres review` / CSV
 round-trip CLI, `harvest_labeled_pairs` → `derive_threshold_from_pairs`,
-`RandomForestJudge.fit`, `CascadeJudge`, and `Resolver.save`/`load` for the
-whole fitted pipeline. Run the entire loop offline at **$0** (a deterministic
-stand-in plays the LLM):
+DSPy prompt-tuned judges (`DSPyJudge` — a precision-tuned signature let a
+cheap model **beat an uncompiled frontier model at lower cost** on our paid
+benchmark), `CascadeJudge`, and `Resolver.save`/`load` for the whole fitted
+pipeline. Classical students (`RandomForestJudge.fit`) ship too — as honest
+baselines and as the loop's **$0 plumbing demo**: a deterministic stand-in
+plays the frontier judge so the entire loop runs offline for free:
 
 ```bash
 uv run python examples/flywheel_min.py
 ```
 
+Blocking gets the modern treatment too: `VectorBlocker` recalls candidates
+with LLM-based embedders.
 [**docs/GETTING_STARTED.md**](docs/GETTING_STARTED.md) walks the lifecycle step
 by step, with a runnable snippet inline at every stage.
 
@@ -191,12 +201,14 @@ custom pipelines. See [docs/DX_RESOLVER.md](docs/DX_RESOLVER.md) and
 | String / embedding / zero-shot-LLM judges; fail-fast, spend-capped `"auto"` | ✅ shipped |
 | Schema-driven `Resolver` with `save`/`load` (no pickle) | ✅ shipped |
 | **The flywheel loop**: judgement log, review queue + `langres` CLI, silver/gold harvest, threshold calibration | ✅ shipped |
-| Trained & probabilistic judges (`RandomForestJudge`, `FellegiSunterJudge`), `CascadeJudge`, set-wise `SelectJudge` | ✅ shipped |
+| DSPy prompt-tuned judges (`DSPyJudge`) — tune a smaller, cheaper LLM on harvested labels | ✅ shipped |
+| Classical/probabilistic baseline judges (`RandomForestJudge`, `FellegiSunterJudge`), `CascadeJudge`, set-wise `SelectJudge` | ✅ shipped |
 | Blocking algebra (`KeyBlocker`, `CompositeBlocker` union/intersection/difference) | ✅ shipped |
 | **Incremental single-record assignment** (`Resolver.build_anchor_store` / `assign`, serializable `AnchorStore`) | ✅ shipped |
 | **Golden records / canonicalization** (`Canonicalizer` survivorship + `enrich`) | ✅ shipped |
 | Evaluation instrument: benchmark registry, `evaluate()`, `EvalReport` tearsheet | ✅ shipped |
 | Cross-source linking (`Resolver.link`, `stream_against`) | 🚧 reserved stubs (raise `NotImplementedError`) — roadmap |
+| Fine-tuning a small LM on harvested labels (the next cost rung) | 🚧 roadmap |
 | Negative constraints (cannot-link clustering) | 🚧 roadmap |
 | Streaming / temporal resolution | ⚪ out of scope (see [docs/USE_CASES.md](docs/USE_CASES.md)) |
 
@@ -260,7 +272,8 @@ invented that loop. The delta:
   the human reviews only the uncertain margin.
 - **One seam, every method.** String ↔ embedding ↔ LLM ↔ trained ↔ cascade
   share a single judge interface: start free and offline, swap in an LLM by
-  changing one argument, graduate to a trained student without a rewrite.
+  changing one argument, then make it cheaper by prompt-tuning a smaller LLM
+  on your own harvested labels — no rewrite.
 - **Honest cost accounting.** Every LLM call is spend-capped and reports its
   real per-call cost; quality and dollars land side by side in the tearsheet.
 - **Code-first & testable.** Matching logic is Python you can unit-test like

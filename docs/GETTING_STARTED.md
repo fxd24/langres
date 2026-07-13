@@ -6,10 +6,12 @@ Every step below carries a short runnable snippet **inline**; the links point
 *down* to the mechanics (they are for depth, never for the code you need to get
 moving).
 
-langres closes a loop most ER tools leave open: an expensive judge bootstraps
-*silver* labels, a human reviews only the uncertain margin, those labels train a
-*cheap* student, and a **cascade** runs the student everywhere while escalating
-only the still-uncertain pairs back to the expensive judge.
+langres closes a loop most ER tools leave open: a frontier LLM bootstraps
+*silver* labels with just a prompt, a human reviews only the uncertain margin,
+those labels tune a **cheaper judge** — in production a DSPy prompt-tuned
+smaller LLM, in this page's $0 demo a classical student — and a **cascade**
+runs the cheap judge everywhere while escalating only the still-uncertain
+pairs back to the frontier.
 
 ```
    ┌────────────────────────────────────────────────────────────────────┐
@@ -19,9 +21,9 @@ only the still-uncertain pairs back to the expensive judge.
    │   (dedupe, capped)       (log="…jsonl")       (select_for_review)  │
    │        ▲                                             │             │
    │        │                                             ▼             │
-   │   cascade: student  ◄──  train cheap student  ◄──  human review    │
-   │   everywhere, LLM        (RandomForestJudge        (langres review │
-   │   only in the band        .fit + calibrate)         / CSV export)  │
+   │   cascade: cheap    ◄──  tune a cheaper judge ◄──  human review    │
+   │   judge everywhere,      (DSPy prompt-tune a       (langres review │
+   │   LLM only in band        smaller LLM / .fit)       / CSV export)  │
    │        │                        ▲                                  │
    │        └────────────────────────┘   save/load the whole pipeline   │
    └────────────────────────────────────────────────────────────────────┘
@@ -201,9 +203,10 @@ Depth: [`EXPERIMENTS.md` § Flywheel harvest](EXPERIMENTS.md) and
 
 ### 5. Train the cheap student
 
-Now imitate the expensive teacher cheaply. Fit a `RandomForestJudge` — a **trainable
-judge** — on the harvested labels, then calibrate *its own* threshold on *its
-own* scores:
+Now spend the harvested labels on making the judgement cheaper. This demo fits
+a `RandomForestJudge` — a **trainable judge**, the loop's $0 stand-in for the
+cheaper model — on the harvested labels, then calibrates *its own* threshold on
+*its own* scores:
 
 ```python
 from langres.core.modules.random_forest_judge import RandomForestJudge
@@ -214,10 +217,15 @@ student.fit(iter(train_candidates), train_labels)          # labels from step 4
 student_threshold = derive_threshold(student_scores, heldout_labels)
 ```
 
-> **This is Magellan-style supervised matching, not LLM distillation.** langres
-> trains a small classical model on the harvested labels — it does **not**
-> compile or distill the LLM's prompt (that path was measured and cut; see
-> `docs/ROADMAP.md`). Calibrate the student on **student** scores, never the
+> **The classical student is the $0 plumbing demo — the production rung is a
+> cheaper LLM.** This step's `RandomForestJudge` is Magellan-style supervised
+> matching, shipped as an honest baseline and free plumbing for the loop. The
+> LLM-native pattern is to spend the same harvested labels on **prompt-tuning a
+> smaller LLM** (`DSPyJudge`): a precision-tuned DSPy signature let a cheap
+> model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
+> automatic MIPROv2 *compilation* was measured and cut — the signature is the
+> lever). Fine-tuning a small LM on these labels is the roadmap's next rung.
+> Whichever student you pick, calibrate it on **its own** scores, never the
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
 Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and
