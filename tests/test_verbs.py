@@ -132,6 +132,7 @@ class TestLinkVerdict:
             reasoning=None,
             judge_used="string",
             score_type="heuristic",
+            threshold=0.5,
             judgement=judgement,
         )
         assert bool(verdict) is True
@@ -155,6 +156,7 @@ class TestLinkVerdict:
             reasoning=None,
             judge_used="string",
             score_type="heuristic",
+            threshold=0.5,
             judgement=judgement,
         )
         text = repr(verdict)
@@ -165,19 +167,23 @@ class TestLinkVerdict:
 
 class TestDedupeResult:
     def test_behaves_like_a_plain_list(self) -> None:
-        result = DedupeResult([{"a", "b"}], judge_used="string", score_type="heuristic")
+        result = DedupeResult(
+            [{"a", "b"}], judge_used="string", score_type="heuristic", threshold=0.5
+        )
         assert result == [{"a", "b"}]
         assert len(result) == 1
         assert list(result) == [{"a", "b"}]
 
     def test_carries_judge_metadata(self) -> None:
-        result = DedupeResult([], judge_used="embedding", score_type="sim_cos")
+        result = DedupeResult([], judge_used="embedding", score_type="sim_cos", threshold=0.7)
         assert result.judge_used == "embedding"
         assert result.score_type == "sim_cos"
+        assert result.threshold == 0.7
 
-    def test_repr_includes_judge_used(self) -> None:
-        result = DedupeResult([], judge_used="string", score_type="heuristic")
+    def test_repr_includes_judge_used_and_threshold(self) -> None:
+        result = DedupeResult([], judge_used="string", score_type="heuristic", threshold=0.5)
         assert "judge_used='string'" in repr(result)
+        assert "threshold=0.5" in repr(result)
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +330,24 @@ class TestDedupe:
         assert result.judge_used == "string"
         assert result.score_type == "heuristic"
 
+    def test_result_threshold_reports_the_explicit_cut(self) -> None:
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme"}]
+        result = dedupe(records, judge="string", threshold=0.8)
+        assert result.threshold == 0.8
+
+    def test_result_threshold_reports_the_resolved_default(self) -> None:
+        """threshold=None resolves to the string judge's 0.5 default -- and the
+        result must report the RESOLVED value, ready for select_for_review,
+        not echo the None back."""
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme"}]
+        result = dedupe(records, judge="string")
+        assert result.threshold == 0.5
+
+    def test_short_circuit_result_threshold_is_none(self) -> None:
+        """The <2-records short-circuit resolves no judge, hence no cut."""
+        result = dedupe([{"id": "a", "name": "Solo"}], judge="string")
+        assert result.threshold is None
+
     def test_explicit_schema_used_verbatim(self) -> None:
         records = [
             {"id": "1", "name": "Acme Corporation", "address": "1 Main St"},
@@ -452,6 +476,18 @@ class TestLink:
     def test_default_threshold_used_when_none(self) -> None:
         verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string")
         assert verdict.score >= 0.0  # threshold resolved without raising
+        # The verdict reports the RESOLVED cut (the string judge's 0.5
+        # default), not the None the caller passed.
+        assert verdict.threshold == 0.5
+
+    def test_verdict_threshold_reports_the_explicit_cut(self) -> None:
+        verdict = link(
+            {"id": "a", "name": "Acme"},
+            {"id": "b", "name": "Acme"},
+            judge="string",
+            threshold=0.9,
+        )
+        assert verdict.threshold == 0.9
 
     def test_no_judgement_produced_raises_runtime_error(self) -> None:
         with pytest.raises(RuntimeError, match="produced no judgement"):

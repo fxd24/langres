@@ -274,7 +274,11 @@ class EvalReport(BaseModel):
 
         Args:
             judgements: The scorer's output (pre-clustering).
-            gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
+            gold_pairs: True match pairs, shaped ``set[frozenset[str]]`` --
+                each element a two-id ``frozenset`` so pair identity is
+                order-independent. Build it from labeled clusters with
+                :func:`~langres.core.benchmark.gold_pairs_from_clusters`
+                (root-exported as ``langres.gold_pairs_from_clusters``).
             threshold: Match cut every pair-level number is graded at.
             grid: Threshold grid for the PR curve.
             hist_bins: Number of score-histogram bins over ``[0, 1]``.
@@ -446,7 +450,12 @@ class EvalReport(BaseModel):
         Args:
             rows: Rows as produced by
                 :meth:`~langres.core.judgement_log.JudgementLog.read`.
-            gold_pairs: True match pairs (never present in the log).
+            gold_pairs: True match pairs (never present in the log), shaped
+                ``set[frozenset[str]]`` -- each element a two-id ``frozenset``
+                so pair identity is order-independent. Build it from labeled
+                clusters with
+                :func:`~langres.core.benchmark.gold_pairs_from_clusters`
+                (root-exported as ``langres.gold_pairs_from_clusters``).
             threshold: Match cut every pair-level number is graded at.
             grid: Threshold grid for the PR curve.
             hist_bins: Number of score-histogram bins over ``[0, 1]``.
