@@ -1,0 +1,50 @@
+name: OpenSSF Scorecard
+
+# Supply-chain security posture scoring (free for public repos). Results feed
+# the Security tab (code scanning) and, with publish_results, the public
+# OpenSSF REST API that backs the README badge:
+#   https://securityscorecards.dev/viewer/?uri=github.com/fxd24/langres
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly on Tuesday at 07:00 UTC
+    - cron: "0 7 * * 2"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # to upload SARIF results
+      id-token: write # to publish results (publish_results: true)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish to the OpenSSF API so the README badge and the public
+          # viewer work. Publishing needs no secret on public repos (OIDC).
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
