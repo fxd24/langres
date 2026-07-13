@@ -4,8 +4,8 @@ name: Security
 # gate) and their findings are reviewed on the weekly cadence -- see the step
 # comments below. Running them on every push/PR paid for the repo's heaviest
 # install (`uv sync --all-extras`: torch/litellm/faiss/scikit-learn) plus a
-# full guarddog scan on every commit for zero gate value, which was the main
-# Blacksmith cost driver. So this runs on the weekly schedule + on demand only.
+# full guarddog scan on every commit for zero gate value (historically the
+# main CI cost driver). So this runs on the weekly schedule + on demand only.
 on:
   schedule:
     # Weekly on Monday at 08:00 UTC
@@ -14,10 +14,8 @@ on:
 
 jobs:
   security:
-    # 2-vCPU (smallest): uv sync + pip-audit + guarddog are network/single-
-    # threaded and don't parallelize across cores, so a bigger runner just adds
-    # idle, paid-for cores.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Standard GitHub runner: free with unlimited minutes on public repos.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
