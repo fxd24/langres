@@ -131,6 +131,13 @@ dev = [
     "types-networkx>=3.5.0.20251001",
     "wandb>=0.22.3",
 ]
+# Documentation-site toolchain (mkdocs.yml + .github/workflows/docs.yml).
+# A dependency group, not a runtime extra: `uv sync` stays core-only; build
+# the site with `uv run --group docs mkdocs build --strict`.
+docs = [
+    "mkdocs-material>=9.7.6",
+    "mkdocstrings[python]>=1.0.4",
+]
 
 [tool.uv]
 # 7-day supply-chain quarantine: resolution only picks packages published at
