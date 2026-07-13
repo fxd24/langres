@@ -180,7 +180,9 @@ class TestKeyDiscoveryContract:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         assert Settings().openrouter_api_key == "fake-from-dotenv"
 
-    def test_env_var_beats_dotenv_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_var_beats_dotenv_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-dotenv\n")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-from-env")

@@ -555,9 +555,7 @@ class TestResolveJudge:
         wins over the .env file (no dotenv patching here) and counts as
         absent, so ``OPENROUTER_API_KEY="" OPENAI_API_KEY=""`` fails fast."""
         with (
-            patch.dict(
-                "os.environ", {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=True
-            ),
+            patch.dict("os.environ", {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=True),
             pytest.raises(NoJudgeAvailableError, match="no API key"),
         ):
             resolve_judge("auto", PresetCompany)
