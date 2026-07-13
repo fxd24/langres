@@ -8,11 +8,13 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-**langres** is a composable entity resolution (ER) framework for Python: the same
-matching "brain" (a swappable **judge**) behind one seam, tunable with zero
-labeled data. Its thesis is to be the place where any ER method — string
-similarity, embeddings, an LLM judge, a trained classifier — is implemented
-**once** and stays usable/swappable/tunable by anyone.
+**langres** is a composable entity resolution (ER) framework for Python: it
+finds records that refer to the same real-world entity. The matching "brain" —
+a swappable **judge**, the component that scores whether two records match —
+sits behind one interface and is tunable with zero labeled data. Its thesis is
+to be the place where any ER method — string similarity, embeddings, an LLM
+judge, a trained classifier — is implemented **once** and stays
+usable/swappable/tunable by anyone.
 
 ---
 
@@ -20,9 +22,12 @@ similarity, embeddings, an LLM judge, a trained classifier — is implemented
 
 langres closes a loop most ER tools leave open — and the loop is **LLM-native**
 end to end. A frontier LLM gets you far out of the box with just a prompt and
-bootstraps *silver* labels; a human reviews only the uncertain margin; the
-harvested labels then buy the **same judgement cheaper** — the production
-pattern is prompt-tuning a *smaller* LLM with DSPy (`DSPyJudge`), with
+bootstraps *silver* labels (machine-generated, not yet human-verified); a human
+reviews only the **uncertain margin** — the candidate pairs whose scores fall
+closest to the decision threshold, i.e. the ones the judge is least sure about
+and the only ones worth human eyes; the harvested labels then buy the **same
+judgement cheaper** — the production pattern is prompt-tuning a *smaller* LLM
+with DSPy (`DSPyJudge`), with
 fine-tuning a small LM as the roadmap's next rung — and a **cascade** runs the
 cheap judge everywhere, escalating only the still-uncertain pairs back to the
 frontier. The point is reusing the knowledge already encoded in LLMs and
@@ -45,14 +50,18 @@ pushing it further.
 ```
 
 Every stage is shipped API, not roadmap: `dedupe(records, log=…)` (the signal
-inlet), `select_for_review` + `ReviewQueue` + the `langres review` / CSV
-round-trip CLI, `harvest_labeled_pairs` → `derive_threshold_from_pairs`,
-DSPy prompt-tuned judges (`DSPyJudge` — a precision-tuned signature let a
+inlet), `select_for_review` + `ReviewQueue` + the `langres review` CLI with its
+CSV round-trip (`langres export-csv` writes the uncertain pairs to a `.csv`
+file you label in any spreadsheet; `langres import-csv` reads the answers
+back), `harvest_labeled_pairs` → `derive_threshold_from_pairs`,
+DSPy prompt-tuned judges (`DSPyJudge` — a precision-tuned prompt signature let a
 cheap model **beat an uncompiled frontier model at lower cost** on our paid
 benchmark), `CascadeJudge`, and `Resolver.save`/`load` for the whole fitted
-pipeline. Classical students (`RandomForestJudge.fit`) ship too, as honest
+pipeline. Classical *students* (cheap judges trained on the harvested labels —
+`RandomForestJudge.fit`) ship too, as honest
 baselines and **$0 plumbing**. Run the loop's core offline for free — dedupe →
-log → review → harvest → tuned threshold → tearsheet:
+log → review → harvest → tuned threshold → tearsheet (a one-page HTML quality
+report):
 
 ```bash
 uv run python examples/flywheel_min.py
@@ -60,8 +69,9 @@ uv run python examples/flywheel_min.py
 
 The full student-and-cascade lifecycle runs at $0 in
 [`examples/flywheel_closed_loop.py`](examples/flywheel_closed_loop.py).
-Blocking gets the modern treatment too: `VectorBlocker` recalls candidates
-with LLM-based embedders.
+Blocking — the cheap pre-filter that decides which record pairs are worth
+judging at all — gets the modern treatment too: `VectorBlocker` recalls
+candidates with LLM-based embedders.
 [**docs/GETTING_STARTED.md**](docs/GETTING_STARTED.md) walks the lifecycle step
 by step, with a runnable snippet inline at every stage.
 
@@ -203,7 +213,7 @@ custom pipelines. See [docs/DX_RESOLVER.md](docs/DX_RESOLVER.md) and
 | Pairwise **link verdict** (`link`) | ✅ shipped |
 | String / embedding / zero-shot-LLM judges; fail-fast, spend-capped `"auto"` | ✅ shipped |
 | Schema-driven `Resolver` with `save`/`load` (no pickle) | ✅ shipped |
-| **The flywheel loop**: judgement log, review queue + `langres` CLI, silver/gold harvest, threshold calibration | ✅ shipped |
+| **The flywheel loop**: judgement log, review queue + `langres` CLI, silver/gold label harvest, threshold calibration | ✅ shipped |
 | DSPy prompt-tuned judges (`DSPyJudge`) — tune a smaller, cheaper LLM on harvested labels | ✅ shipped |
 | Classical/probabilistic baseline judges (`RandomForestJudge`, `FellegiSunterJudge`), `CascadeJudge`, set-wise `SelectJudge` | ✅ shipped |
 | Blocking algebra (`KeyBlocker`, `CompositeBlocker` union/intersection/difference) | ✅ shipped |
@@ -250,7 +260,7 @@ real per-call cost in provenance, and every verb runs under a spend cap.
 
 The Peeters, Steiner & Bizer LLM entity-matching study
 ([arXiv 2310.11244](https://arxiv.org/abs/2310.11244), EDBT 2025) is replicated
-behind the langres seam. The **offline replay** parses the authors' archived
+inside langres. The **offline replay** parses the authors' archived
 model answers through langres' own prompt renderer, parser, and metrics and
 **reproduces the published F1 exactly**, at $0, with a byte-exact prompt
 round-trip. **Live re-runs** of two GPT-4o-family cells over all 1,206 Abt-Buy
