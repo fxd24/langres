@@ -1,8 +1,8 @@
 # langres
 
-[![Status](https://img.shields.io/badge/status-0.x%20beta-blue.svg)](https://github.com/raisesquad/langres)
-[![Tests](https://github.com/raisesquad/langres/actions/workflows/test.yml/badge.svg)](https://github.com/raisesquad/langres/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/raisesquad/langres/branch/main/graph/badge.svg)](https://codecov.io/gh/raisesquad/langres)
+[![Status](https://img.shields.io/badge/status-0.x%20beta-blue.svg)](https://github.com/fxd24/langres)
+[![Tests](https://github.com/fxd24/langres/actions/workflows/test.yml/badge.svg)](https://github.com/fxd24/langres/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/fxd24/langres/branch/main/graph/badge.svg)](https://codecov.io/gh/fxd24/langres)
 [![PyPI](https://img.shields.io/pypi/v/langres.svg)](https://pypi.org/project/langres/)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
@@ -108,7 +108,7 @@ pip install 'langres[eval]'        # + ranking metrics for blocker evaluation (r
 ```
 
 Or from source with [`uv`](https://docs.astral.sh/uv/):
-`git clone https://github.com/raisesquad/langres.git && cd langres && uv sync`,
+`git clone https://github.com/fxd24/langres.git && cd langres && uv sync`,
 then `uv run python examples/quickstart_verbs.py`.
 
 > **Lean by construction.** A bare `import langres` / `import langres.core`

@@ -6,10 +6,10 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
-    { name = "David Graf", email = "david@raisesquad.com" }
+    { name = "David Graf", email = "hire@grafdavid.com" }
 ]
 maintainers = [
-    { name = "David Graf", email = "david@raisesquad.com" }
+    { name = "David Graf", email = "hire@grafdavid.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [

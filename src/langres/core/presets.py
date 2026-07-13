@@ -159,7 +159,7 @@ class NoJudgeAvailableError(RuntimeError):
 #: funnels a user onto the LLM-judge path (the keyed path dead-ends without it:
 #: ``dspy`` is imported at dspy_judge.py module level but ships in the extra).
 _INSTALL_LLM_EXTRA = "`uv sync --extra llm` or `pip install 'langres[llm]'`"
-_GETTING_STARTED_URL = "https://github.com/raisesquad/langres/blob/main/docs/GETTING_STARTED.md"
+_GETTING_STARTED_URL = "https://github.com/fxd24/langres/blob/main/docs/GETTING_STARTED.md"
 
 
 def choose_auto_judge(
