@@ -39,7 +39,7 @@ from __future__ import annotations
 import difflib
 import warnings
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -400,10 +400,13 @@ def _build_fellegi_sunter(
     comparator: Comparator[Any] | None = None,
 ) -> Module[Any]:
     """``fellegi_sunter``: unsupervised EM-fit probabilistic record linkage."""
+    from langres.core.comparator import StringComparator
     from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 
     fs_comparator = comparator if comparator is not None else Comparator.from_schema(schema)
-    return FellegiSunterJudge(comparator=fs_comparator)
+    # FellegiSunterJudge is typed against StringComparator, the concrete class
+    # Comparator.from_schema returns (Comparator is its alias-in-spirit here).
+    return FellegiSunterJudge(comparator=cast(StringComparator[Any], fs_comparator))
 
 
 def _build_random_forest(

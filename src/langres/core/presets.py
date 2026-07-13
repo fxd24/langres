@@ -6,14 +6,15 @@ picking a judge from available API keys (failing fast with
 silent fallback to fuzzy matching), building its scorer Module, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import
-back from here -- see ``Resolver.from_schema``'s own, deliberately duplicated,
-low-level judge switch) and BELOW :mod:`langres.verbs`:
+back from here -- ``Resolver.from_schema`` keeps its own thin policy switch
+over the shared :mod:`~langres.core.method_registry`) and BELOW
+:mod:`langres.verbs`:
 
     verbs.py -> core/presets.py -> Resolver -> {Blocker, Comparator, Module, Clusterer}
 
 Nothing here is domain-specific: every function takes a Pydantic ``schema``
-type and works for any schema (see ``build_judge``'s ``"string"``/``"embedding"``
-branches, which derive their fields from the schema, never a hard-coded name).
+type and works for any schema (the registry's ``"string"``/``"embedding"``
+builders derive their fields from the schema, never a hard-coded name).
 
 Threshold semantics differ across judges (E12): ``"heuristic"`` (string),
 ``"sim_cos"`` (embedding), and ``"prob_llm"`` (zero_shot_llm / prompt_llm) are
@@ -163,6 +164,7 @@ def _score_type_for(judge_used: str) -> str:
         return get_method(judge_used).score_type
     except UnknownMethodError:
         return "unknown"
+
 
 #: Rough, deliberately worst-case-biased token count for the pre-scoring cost
 #: estimate (``notice_pre_scoring_cost``). The real, metered cost is what the
