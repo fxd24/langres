@@ -55,6 +55,20 @@ CandidateT = TypeVar("CandidateT", bound=ERCandidate[Any])
 _EMBED_MODEL = "all-MiniLM-L6-v2"
 
 
+class BenchmarkDataNotFoundError(FileNotFoundError):
+    """A packaged benchmark CSV is missing from this install.
+
+    Raised by :func:`read_csv_rows` when the requested file is not present in
+    the installed ``langres`` package. This is the expected state of every
+    pip/uv install from PyPI: the large third-party benchmark corpora
+    (DeepMatcher/Magellan — Abt-Buy, Amazon-Google, DBLP-ACM, DBLP-Scholar,
+    Walmart-Amazon, WDC Computers) are excluded from the wheel/sdist (see
+    ``[tool.hatch.build].exclude`` in ``pyproject.toml``) and ship in the git
+    repository only. Subclasses :class:`FileNotFoundError` so callers that
+    already catch the generic error keep working.
+    """
+
+
 def read_csv_rows(package: str, filename: str) -> list[dict[str, str]]:
     """Read a packaged benchmark CSV into a list of header-keyed row dicts.
 
@@ -65,8 +79,30 @@ def read_csv_rows(package: str, filename: str) -> list[dict[str, str]]:
 
     Returns:
         One dict per data row, keyed by the CSV header.
+
+    Raises:
+        BenchmarkDataNotFoundError: If the file is not present in this install.
+            The large benchmark corpora are not bundled in the PyPI package;
+            they are available from a git checkout only.
     """
-    text = resources.files(package).joinpath(filename).read_text(encoding="utf-8")
+    try:
+        text = resources.files(package).joinpath(filename).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, NotADirectoryError) as exc:
+        # ModuleNotFoundError: the whole dataset directory is absent (its files
+        # were all excluded from the wheel, so the namespace package is gone).
+        # FileNotFoundError/NotADirectoryError: the directory survived (e.g.
+        # peeters_sampled_test.csv is still bundled) but this file did not.
+        raise BenchmarkDataNotFoundError(
+            f"Benchmark file {filename!r} in {package!r} is not available in this "
+            "install. The third-party benchmark corpora are not bundled in the PyPI "
+            "package (they are ~14 MB and carry no explicit redistribution license); "
+            "they ship in the git repository only. To use this benchmark, install "
+            "langres from a git checkout:\n"
+            "    git clone https://github.com/fxd24/langres\n"
+            "    pip install -e ./langres  # or, inside the checkout: uv sync\n"
+            "Datasets whose data IS bundled: tiny_fixture (loads on a core install), "
+            "fodors_zagat and febrl_person (their loaders need the [semantic] extra)."
+        ) from exc
     reader = csv.DictReader(text.splitlines())
     return [dict(row) for row in reader]
 

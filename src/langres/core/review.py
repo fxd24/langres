@@ -295,7 +295,7 @@ def select_for_review(
             so it now fails loud, naming ``strategy="disagreement"`` or
             ``LLMJudge(confidence="logprob")`` as the fix.
 
-    Example:
+    Examples:
         >>> rows = [
         ...     {"left_id": "a", "right_id": "b", "score": 0.62, "verdict": True},
         ...     {"left_id": "a", "right_id": "c", "score": 0.05, "verdict": False},

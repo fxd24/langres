@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use langres in your research, please cite it as below."
+title: "langres"
+type: software
+authors:
+  - family-names: "Graf"
+    given-names: "David"
+    email: "david@raisesquad.com"
+repository-code: "https://github.com/fxd24/langres"
+url: "https://github.com/fxd24/langres"
+license: Apache-2.0
+version: 0.3.0
+date-released: 2026-07-13
+abstract: >-
+  A modern, lightweight and composable entity resolution library for Python:
+  one swappable matching "brain" (a judge) behind one seam — string
+  similarity, embeddings, or an LLM judge — tunable with zero labeled data.
+keywords:
+  - entity-resolution
+  - record-linkage
+  - deduplication
+  - data-matching
+  - llm

@@ -519,7 +519,7 @@ class VectorBlocker(Blocker[SchemaT]):
             ERCandidateGroup[SchemaT] objects containing:
             - anchor: One entity from ``data``
             - members: Its nearest neighbors not already claimed by an
-              earlier anchor's group (see the dedup note below)
+                earlier anchor's group (see the dedup note below)
             - group_id: The anchor's ``id``
 
         Raises:
