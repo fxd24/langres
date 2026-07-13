@@ -46,6 +46,7 @@ BenchmarkTask = Literal["linkage", "dedup"]
 #: Optional-dependency package -> the extra that ships it, for actionable errors.
 _EXTRA_FOR_MODULE: dict[str, str] = {
     "faiss": "semantic",
+    "qdrant_client": "semantic",
     "sentence_transformers": "semantic",
     "torch": "semantic",
     "litellm": "llm",
