@@ -218,15 +218,20 @@ ceiling is explained, not mysterious.
    serializes ad hoc).
 6. **Trained artifacts get an identity** — cross-reference the parallel design
    doc `docs/research/20260713_model_identity_and_hub.md` (branch
-   `docs/hub-model-identity`, being written now): a checkpoint is a first-class
-   artifact whose identity must capture base model, data recipe (**including
+   `docs/hub-model-identity`, PR #108): a checkpoint is a first-class artifact
+   whose identity must capture base model, data recipe (**including
    silver-teacher identity and license chain**), and eval provenance. This plan
    supplies the hub design's first real customers (T1/T2 checkpoints); the hub
-   doc supplies where they live beyond `state_dir` and how they're named.
-   Reconcile cross-references when both docs land. Training runs should also
-   record the `recipe_id`/`attempt_id` identity from the experiment-tracking
-   plan (`docs/plans/20260708_tracking_observability_plan.md`) — coordinate,
-   don't duplicate.
+   doc supplies where they live beyond `state_dir` and how they're named — its
+   model-card schema carries these four requirements (cross-references
+   reconciled both directions, 2026-07-13). **Vocabulary alignment (agreed with
+   the hub design):** silver-teacher identity on harvested pairs reuses the hub
+   doc's v0.3 **method-id + model-id stamp** on `JudgementLog`/RunRecord — one
+   lineage vocabulary from harvest to published artifact, not a parallel field.
+   Training runs should also record the `recipe_id`/`attempt_id` identity from
+   the experiment-tracking plan
+   (`docs/plans/20260708_tracking_observability_plan.md`) — coordinate, don't
+   duplicate.
 
 ## 4. Success criteria & honest-protocol rules
 
