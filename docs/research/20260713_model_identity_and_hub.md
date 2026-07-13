@@ -464,14 +464,18 @@ Gaps, in dependency order:
 
 ## 5. Adjacent work: the training loop (dependency runs both ways)
 
-A parallel planning session is scoping the training loop (no committed plan
-doc exists yet — `docs/plans/` holds only the eval-readiness and
-tracking-observability plans as of `53a08ed`). Two dependencies, both ways:
+A parallel plan is scoping the training loop —
+`docs/plans/20260713_training_loop_plan.md` (PR #109, in flight alongside this
+note; its §3.6 "Framework deltas" references this doc as the design that
+decides where trained checkpoints live and how they are named/versioned). Two
+dependencies, both ways:
 
-- **Training → publishing.** Trained students (fitted `RandomForestJudge`,
-  compiled `DSPyJudge` programs, future fine-tuned small LMs) are the
-  artifacts that make O2's hub worth visiting — prompt+threshold bundles alone
-  are thin (§2.1.4). The publishing seam should not front-run its payload.
+- **Training → publishing.** Trained students are the artifacts that make
+  O2's hub worth visiting — prompt+threshold bundles alone are thin (§2.1.4).
+  The training plan's concrete outputs are this design's **first real
+  artifact customers**: fine-tuned judge checkpoints (CrossEncoderJudge
+  safetensors in a `state_dir` sidecar; Qwen3 QLoRA adapters). The publishing
+  seam should not front-run this payload.
 - **Publishing → training.** The training loop should *target the existing
   artifact contract* (config + `SerializableState` sidecars,
   `resolver.py:722-755`) so its outputs are publishable without rework — the
@@ -480,6 +484,25 @@ tracking-observability plans as of `53a08ed`). Two dependencies, both ways:
   `RunRecord` at birth, so training-data lineage can say *which named method*
   produced each silver label. Deciding the id grammar in v0.3 (§3-O1) is what
   makes that stamp stable.
+
+The trained-artifact case also sharpens what O2's model card must capture,
+beyond §2's config+prompt+threshold bundle (requirements per the training
+plan; carried here as the card's target schema, not re-derived):
+
+1. **Base-model identity** (which pretrained weights the checkpoint adapts).
+2. **Data recipe including silver-teacher identity** — which LLM harvested
+   the labels, at what threshold: exactly the `JudgementLog` lineage stamp
+   above, closing the loop.
+3. **The full license chain** — base weights *and* training data (e.g. a
+   CC-BY-4.0 instruct set is shippable; teacher outputs need provenance).
+4. **Eval provenance** — dataset/split and the honest-protocol threshold
+   (§4.4's protocol-pinning fields).
+
+One load-path constraint follows: training-only dependencies (unsloth / trl /
+peft) stay dev-group-only, so the artifact format must not require them at
+load time — inference-side loading rides the existing `[semantic]` extra
+(sentence-transformers/torch), consistent with the lazy-extras discipline the
+registry already enforces (`registry.py:61-75`).
 
 ---
 
