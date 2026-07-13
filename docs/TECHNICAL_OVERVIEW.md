@@ -68,9 +68,20 @@ The HITL system splits a storage backend from a labeling surface:
 - **`core.review.ReviewQueue`:** the storage backend — it writes the selected pairs to a plain `review_queue.jsonl` snapshot (one JSON line per pair; ids-only unless you pass `records=` to join content back on). `core.review.select_for_review` picks *which* pairs are worth a human's attention (uncertainty / disagreement / audit strategies).
 - **The `langres` CLI:** the labeling surface. `langres export-csv` turns a queue into a spreadsheet, a reviewer fills the `label` column, and `langres import-csv` reads it back into a `corrections.jsonl` log; `langres review` is the equivalent quick terminal loop. The harvested corrections feed `core.harvest` and `core.calibration.derive_threshold` back into the pipeline.
 
-### Observability & Tracing (TBD)
+### Observability & Tracing
 
-The design for full tracing (e.g., via OpenTelemetry) is still to be determined. The foundation for this is the PairwiseJudgement's provenance field, which is designed to capture all necessary metadata for a future tracing system.
+Three shipped layers, all built on `PairwiseJudgement.provenance`:
+
+- **Per-call provenance:** every LLM judge writes `model`, `cost_usd`,
+  `provider`, and a typed `LLMUsage` token vector following the OpenTelemetry
+  GenAI vocabulary into provenance (see §7, "LLM-judge provenance keys").
+- **The judgement log:** `core.judgement_log.JudgementLog` / `LoggingModule`
+  persist every judge call (ids, score, verdict, model, cost) to JSONL — the
+  flywheel's signal inlet.
+- **Experiment tracking:** `core.runs` (`RunContext`/`RunRecord`, content-
+  addressed `recipe_id`, JSONL `RunStore`) plus the pluggable
+  `core.trackers.ExperimentTracker` seam with lazy `MlflowTracker` /
+  `WandbTracker` adapters.
 
 ## 3. High-Level API: the verbs (`dedupe` / `link`)
 
@@ -452,7 +463,7 @@ A judge is one of two shapes (and a logprob judge may be both): a **decider** em
 - `right_id: str`
 - `decision: bool | None` (default `None`): The judge's explicit match verdict, set by a *decider*. `None` when the judge only ranks (emits a `score`) or abstains. **Takes precedence over `score`** in `predicted_match`.
 - `score: float | None` (default `None`, 0.0 to 1.0): The confidence-ordered match score for a *ranker*, else `None`. **Widened from a required `float`:** a decider has no score, so `None` means "this judge does not rank", *not* "score of zero" — a fabricated `0.0`/`1.0` would lie.
-- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Stays **required** even when `score` is `None`: it doubles as the judge-*family* tag, so it names the family (e.g. `"prob_llm"` for a binary LLM judge) rather than a score. Critical for calibration and clustering. `prob_fs`/`prob_rf`/`prob_group_llm` (added W1.0) are reserved for a Fellegi-Sunter judge, an sklearn RandomForest judge, and a set-wise (group) judge respectively — none are implemented in core yet, but the literal is open for the branches that add them.
+- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Stays **required** even when `score` is `None`: it doubles as the judge-*family* tag, so it names the family (e.g. `"prob_llm"` for a binary LLM judge) rather than a score. Critical for calibration and clustering. `prob_fs`, `prob_rf`, and `prob_group_llm` are emitted by `FellegiSunterJudge`, `RandomForestJudge`, and the set-wise `SelectJudge` respectively.
 - `confidence: float | None` (default `None`, 0.0 to 1.0): Optional "how sure am I", orthogonal to the decision. Set today only by `LLMJudge(confidence="logprob")` (the OpenAI-family first-token credence probe); `None` for every other judge.
 - `confidence_source: Literal["none", "unrequested", "logprob", "calibrated", "heuristic"]` (default `"none"`): Provenance of `confidence`. `"none"` = this judge structurally has no confidence to give; `"unrequested"` = it *could* (a decision judge that can expose logprobs) but was not asked; `"logprob"` = an earned first-token credence. The literal set is provisional, not a frozen API.
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").

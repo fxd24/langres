@@ -1,8 +1,12 @@
 # langres: Proof of Concept
 
-> **See [ROADMAP.md](ROADMAP.md) for the post-POC direction** (vision, the
-> feature-bag architecture, the use-case compass, and milestones M0–M6). This
-> document remains the record of the original POC validation plan.
+> **📦 Archived — historical record.** This is the original POC validation
+> plan; the POC concluded and development moved well past it. Its 4-week
+> timeline and Go/No-Go gates are long done, and the `docs/POC_RESULTS.md`
+> deliverable it names was never written as a separate file — the results and
+> everything shipped since are recorded in [CHANGELOG.md](CHANGELOG.md). For
+> the current direction see [ROADMAP.md](ROADMAP.md); for what runs today, the
+> [README](../README.md). Nothing below is updated anymore.
 
 ## TODO Add as well the idea of training a classifier (classical) after the blocker to decide whether is a match or not.
 

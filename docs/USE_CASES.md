@@ -6,24 +6,30 @@
 > (`DeduplicationTask`, `EntityLinkingTask`, `RecordLinkageTask`),
 > `langres.flows.*` / `blockers.*` (`CompanyFlow`, `DedupeBlocker`,
 > `LinkingBlocker`), `core.Optimizer`,
-> `data.ReviewQueue`, `data.SyntheticGenerator`, `Clusterer(constraints=...)`,
+> `data.SyntheticGenerator`, `Clusterer(constraints=...)`,
 > and `Blocker.stream_against` / `Resolver.link` **as working code**.
+> (A review queue *did* later ship for real — as `core.review.ReviewQueue`,
+> not the fictional `data.ReviewQueue` — see below.)
 >
 > **What actually ships today** for the use cases below is the verb DX layer
-> (`link` / `dedupe` — two verbs; a third, incremental one is roadmap for M5) +
-> `Resolver` + `langres.core` primitives:
+> (`link` / `dedupe`) + `Resolver` + `langres.core` primitives:
 >
 > - **Deduplication (UC1):** ✅ `langres.dedupe(records)` or
 >   `Resolver.from_schema(schema).resolve(records)`.
 > - **Pairwise match:** ✅ `langres.link(left, right)` → `LinkVerdict`.
-> - **Incremental single-record assignment (UC10):** ✅ (M5/W2.2)
+> - **Incremental single-record assignment (UC10):** ✅
 >   `resolver.build_anchor_store(records)` then `resolver.assign(new_record)`
 >   → `ClusterDelta` (`link` to a stable entity id, or `new`); the
 >   serializable `AnchorStore` persists it. See `examples/incremental_assign.py`.
+> - **Human-in-the-loop review:** ✅ `core.review.select_for_review` +
+>   `core.review.ReviewQueue`, labeled via the `langres` CLI
+>   (`review` / `export-csv` / `import-csv`), harvested by `core.harvest`
+>   into `derive_threshold` / judge `fit()` — the flywheel loop
+>   (see [GETTING_STARTED.md](GETTING_STARTED.md)).
 > - **Cross-source entity linking (UC2, UC3):** 🚧 `Resolver.link()` and
 >   `Resolver.stream_against()` remain `NotImplementedError` stubs reserved for
->   later **M5** waves (distinct from the single-record `assign` above).
-> - **Master Data / golden records (UC4):** ✅ (M5/W2.3)
+>   later roadmap waves (distinct from the single-record `assign` above).
+> - **Master Data / golden records (UC4):** ✅
 >   `core.Canonicalizer` merges an entity's records into one golden record via
 >   named survivorship strategies (`most_complete` default + per-field
 >   overrides); `enrich(golden, mention)` is the sparse-mention → golden-record
@@ -92,12 +98,12 @@ This is the primary "hello world" use case for langres.
 - **Authority Model:** The target dataset T is the fixed "source of truth."
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation — 🚧 roadmap (M5):**
+**langres Implementation — 🚧 roadmap:**
 
 Cross-source, asymmetric linking is **not yet built**. `Resolver.link(left,
 right)` and `Resolver.stream_against(records)` exist only as
-`NotImplementedError` stubs reserved for later M5 waves. What *does* ship (M5/
-W2.2) is **single-record incremental assignment against an anchor store**:
+`NotImplementedError` stubs reserved for a later roadmap wave. What *does*
+ship is **single-record incremental assignment against an anchor store**:
 `resolver.build_anchor_store(target_records)` then `resolver.assign(new_record)`
 → `ClusterDelta` (`link` to a stable entity id in T, or `new`). For a *pairwise*
 match decision today, use `langres.link(left, right)` → `LinkVerdict`; for
@@ -115,9 +121,9 @@ A specialized sub-type of Entity Linking (Use Case 2).
 - **Authority Model:** Target table T is the authority.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation — 🚧 roadmap (M5):**
+**langres Implementation — 🚧 roadmap:**
 
-A special case of Entity Linking (UC2); it lands with the same M5
+A special case of Entity Linking (UC2); it lands with the same
 `Resolver.link` / `stream_against` work. Not available today.
 
 ### Use Case 3: Record Linkage (Multi-Source Symmetric Resolution)
@@ -130,11 +136,11 @@ A special case of Entity Linking (UC2); it lands with the same M5
 - **Authority Model:** All datasets are equal peers; no single source of truth.
 - **Temporal Aspect:** Static snapshot.
 
-**langres Implementation — 🚧 roadmap (post-M5):**
+**langres Implementation — 🚧 roadmap:**
 
 A natural extension of the core architecture, but **not built**. It would need a
 multi-source blocker; `core.Clusterer` already produces clusters from whatever
-pairs it is given. Tracked as post-M5/config work in
+pairs it is given. Tracked as follow-on work in
 [ROADMAP.md](ROADMAP.md).
 
 ### Use Case 4: Master Data Creation (Consolidation)
@@ -147,7 +153,7 @@ pairs it is given. Tracked as post-M5/config work in
 - **Authority Model:** The new master dataset M becomes the authoritative source.
 - **Temporal Aspect:** Static (creates a new snapshot).
 
-**langres Implementation — ✅ ships today (M5/W2.3):**
+**langres Implementation — ✅ ships today:**
 
 The "last mile" of ER. `core.Canonicalizer` merges a group of records (a
 `resolve` cluster, an `AnchorStore` entity, or any `list[dict]`) into one golden
@@ -250,14 +256,14 @@ exists, and the intended (not-yet-built) design otherwise.
 | 1. Deduplication | `dedupe(records)` / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
 | Pairwise match verdict | `link(left, right)` → `LinkVerdict` | ✅ **Shipping** |
 | Optimization / calibration | `core.calibration.derive_threshold`, `core.optimizers.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
-| 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap (M5) |
-| 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** (M5/W2.2) |
-| 4. Master Data Creation | `core.Canonicalizer` (survivorship + `enrich` loop) | ✅ **Shipping** (M5/W2.3) |
-| Set-wise / trained judge families | SelectJudge, Fellegi–Sunter, RandomForest — not built | 🚧 Roadmap (M4.5) |
+| 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap |
+| 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** |
+| 4. Master Data Creation | `core.Canonicalizer` (survivorship + `enrich` loop) | ✅ **Shipping** |
+| Set-wise / trained judge families | `SelectJudge` (set-wise), `FellegiSunterJudge`, `RandomForestJudge`, `CascadeJudge` | ✅ **Shipping** |
 | 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |
-| Human-in-the-Loop | correction-harvest contract (`Correction`/`CorrectionLog`) + `harvest_labeled_pairs` → `derive_threshold`; review-queue UX stays downstream | 🟡 **Harvest shipping** (M5/W2.4); `fit()` wiring next |
+| Human-in-the-Loop | `select_for_review` + `ReviewQueue` + the `langres` CLI (`review`/`export-csv`/`import-csv`); harvest (`Correction`/`CorrectionLog`, `harvest_labeled_pairs`) → `derive_threshold` / judge `fit()` | ✅ **Shipping** |
 | Data Generation | synthetic generator — not built | 🚧 Roadmap |
-| 3. Record Linkage | multi-source blocker — not built | 🚧 Roadmap (post-M5) |
+| 3. Record Linkage | multi-source blocker — not built | 🚧 Roadmap |
 | 8. Privacy-Preserving (PPRL) | custom PPRL blocker + judge | ⚪ Future / out of scope |
 | 7. Collective (Graph) | graph-native clusterer | ⚪ Out of scope |
 | 5. Streaming Resolution | (architectural mismatch — see note) | ⚪ Out of scope |
