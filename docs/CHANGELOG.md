@@ -38,6 +38,18 @@ earned `confidence`. Builds directly on the eval-honesty groundwork below.
 
 ### Fixed
 
+- **`judge="auto"`'s keyless fail-fast contract was unforceable in-repo.**
+  Popping `OPENROUTER_API_KEY`/`OPENAI_API_KEY` from the environment did NOT
+  produce a keyless run: `Settings` reads the `.env` in the CWD directly, so
+  auto-discovery still found a key and made a real paid call where the
+  documented `NoJudgeAvailableError` was expected. Two deterministic switches
+  now exist — **`LANGRES_OFFLINE=1`** (`Settings.langres_offline`) makes
+  `judge="auto"` treat every key as absent (scoped to auto-discovery; an
+  explicit `judge=` in code bypasses it), and an env var set to the **empty
+  string** wins over `.env` and counts as absent (now documented +
+  regression-locked). The full discovery order (kwargs > process env > CWD
+  `.env`, no walk-up; decided before litellm's own walk-up `load_dotenv` can
+  run) is documented on `choose_auto_judge` and `Settings`.
 - **The review flywheel ran as a silent no-op on a binary judge.**
   `select_for_review(strategy="uncertainty")` ranked by distance-to-threshold on
   a `score`; a decision-only log has no score to rank, so it returned `[]` — an

@@ -85,6 +85,16 @@ matching is always available, but only as the *explicit* `judge="string"`
 opt-in. A spend-cap breach likewise raises `BudgetExceeded` (also root-exported)
 carrying the partial judgements — never a silent bill.
 
+**Forcing the keyless path (tests, CI, offline runs).** Merely *unsetting* the
+key variables does not make a run keyless inside a project whose `.env` carries
+a key — langres reads the `.env` in the current working directory (env vars win
+over it; there is no parent-directory walk-up). Two deterministic switches:
+set `LANGRES_OFFLINE=1` and `judge="auto"` treats every key as absent (an
+explicit `judge=` choice in code is unaffected), or set the key variables to
+the **empty string** (`OPENROUTER_API_KEY="" OPENAI_API_KEY=""`) — an empty
+env var wins over `.env` and counts as absent. Full discovery order:
+`langres.core.presets.choose_auto_judge`.
+
 > **You cannot bootstrap ER from nothing.** With zero labels and no LLM, there
 > is no honest signal to separate true duplicates from look-alikes. The keyed
 > lane is the real starting point for a new entity type; the keyless lane is the
