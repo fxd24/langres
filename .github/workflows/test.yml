@@ -88,6 +88,12 @@ jobs:
       - name: Verify the core-only eval tearsheet ($0 EvalReport -> to_html) works
         run: uv run python examples/quickstart_eval.py
 
+      # The paved-road flywheel loop (dedupe -> review -> CLI CSV round-trip ->
+      # harvest -> tuned threshold -> tearsheet) must work on a bare `uv sync`
+      # from a clean checkout -- string judge only, $0, no extras.
+      - name: Verify the core-only flywheel loop (examples/flywheel_min.py) works
+        run: uv run python examples/flywheel_min.py
+
   # Full suite INCLUDING the slow embedding/ML tests, plus the 95% coverage gate
   # (inherited from pyproject addopts). Runs weekly + on demand only -- NOT per
   # PR -- so ML regressions and the coverage floor are still enforced on a
