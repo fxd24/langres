@@ -126,4 +126,18 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run full suite incl. slow tests (95% coverage gate)
-        run: uv run pytest -m "not integration"
+        # --cov-report=xml (on top of the pyproject default term/html reports)
+        # emits coverage.xml for the Codecov upload below. This is the ONLY job
+        # that runs the full suite, so it's the only place coverage is honest --
+        # the per-PR `test` job deliberately excludes the slow ML tests, so
+        # uploading its partial numbers would understate real coverage.
+        run: uv run pytest -m "not integration" --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        # Advisory, never a merge gate: fail_ci_if_error stays false so a Codecov
+        # hiccup can't turn this weekly run red. Token is required for uploads.
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
