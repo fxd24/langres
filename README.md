@@ -216,6 +216,7 @@ to produce** right next to the quality numbers (side by side, on purpose:
 there is no blended "cost-per-precision" metric to hide behind):
 
 ```python
+from pathlib import Path
 from langres.core.eval_report import EvalReport
 
 report = EvalReport.from_judgements(judgements, gold_pairs, threshold=0.6, costs=costs)
