@@ -128,7 +128,7 @@ Resolver(
 )
 ```
 
-Runnable end-to-end: [`examples/resolver_company_dedup.py`](../examples/resolver_company_dedup.py).
+Runnable end-to-end: [`examples/resolver_company_dedup.py`](https://github.com/fxd24/langres/blob/main/examples/resolver_company_dedup.py).
 
 ## Consuming a saved artifact (M2 — this is all brainsquad writes)
 

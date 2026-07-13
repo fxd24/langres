@@ -3,7 +3,7 @@
 **Status:** M3 shipped. A real-money, budget-capped race (total **$2.1778** / $15 cap)
 over an *easy* (Fodors-Zagat) and a *hard* (Amazon-Google) ER dataset, comparing free
 scorers against an open-source (GLM-5.2) and a frontier (gpt-4o) LLM judge. Full table:
-[`data/benchmarks/m3/M3_RESULTS.md`](../data/benchmarks/m3/M3_RESULTS.md). This memo is
+[`data/benchmarks/m3/M3_RESULTS.md`](https://github.com/fxd24/langres/blob/main/data/benchmarks/m3/M3_RESULTS.md). This memo is
 the decision layer: cost/quality frontier, error map, the M4 teacher-selection rule,
 what we deliberately did **not** learn, and a plain "are we good?".
 

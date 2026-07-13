@@ -27,7 +27,7 @@ only the still-uncertain pairs back to the expensive judge.
    └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Its runnable twin is [`examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py)** —
+**Its runnable twin is [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)** —
 the same eight stages against committed fixtures, at **$0** (a deterministic
 local stand-in plays the frontier judge). Run it end to end while you read:
 
@@ -109,7 +109,7 @@ uv sync --extra trained     # [trained]: scikit-learn behind RandomForestJudge +
 The steps below tell one continuous story. `records` is a list of dicts, each
 with a **stable `id`** (see [operating notes](#two-operating-notes-for-the-loop)
 — this matters). Snippets are minimal excerpts of the real API; the
-[runnable twin](../examples/flywheel_closed_loop.py) wires them all together.
+[runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) wires them all together.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
@@ -122,7 +122,7 @@ result = dedupe(records)                    # judge="auto", $1 cap by default
 ```
 
 Depth: the verb layer and its contract live in
-[`../README.md`](../README.md#quickstart-dedupe-and-link).
+[`../README.md`](https://github.com/fxd24/langres/blob/main/README.md#quickstart-dedupe-and-link).
 
 ### 2. Log every judgement from day 1
 
@@ -217,7 +217,7 @@ student_threshold = derive_threshold(student_scores, heldout_labels)
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
 Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and the
-[runnable twin](../examples/flywheel_closed_loop.py) (which builds
+[runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) (which builds
 `train_candidates` / `student_scores` for you).
 
 ### 6. Cascade — cheap everywhere, frontier only at the margin
@@ -236,7 +236,7 @@ result = dedupe(records, judge=cascade, threshold=student_threshold)
 
 > **Derive the band from data, don't hard-code it.** A `±0.15` constant is the
 > same magic-number mistake step 4 just killed. The
-> [runnable twin](../examples/flywheel_closed_loop.py) widens the band around
+> [runnable twin](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) widens the band around
 > the student threshold until it captures ~20% of calibration-split scores, and
 > prints the derivation. Beyond pairwise cascading, **set-wise judging**
 > (`SelectJudge`) is the direction that judges a whole candidate group at once —
@@ -323,12 +323,12 @@ Two things the flywheel depends on that are easy to miss:
 
 ## Next
 
-- [`../README.md`](../README.md) — the verbs, install, and API-stability table.
+- [`../README.md`](https://github.com/fxd24/langres/blob/main/README.md) — the verbs, install, and API-stability table.
 - [`TUTORIAL_YOUR_OWN_CSV.md`](TUTORIAL_YOUR_OWN_CSV.md) — a messy CSV → clusters
   in 15 minutes, with threshold calibration and save/load.
 - [`EXPERIMENTS.md`](EXPERIMENTS.md) — the experimentation DX: racing judges,
   the signal log, the harvest, the budget seam.
-- [`../examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py) —
+- [`../examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) —
   this whole page, runnable at $0.
 </content>
 </invoke>

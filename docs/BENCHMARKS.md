@@ -46,7 +46,7 @@ contract), so it drops straight into the race harness. A non-loadable entry
 load.
 
 **Race the whole portfolio** with the offline, zero-spend methods via
-[`examples/research/portfolio_race.py`](../examples/research/portfolio_race.py) —
+[`examples/research/portfolio_race.py`](https://github.com/fxd24/langres/blob/main/examples/research/portfolio_race.py) —
 it iterates the registry so a newly-registered dataset appears automatically,
 with no edit to the script:
 
@@ -214,7 +214,7 @@ print(m.precision, m.recall, m.f1)             # binary pairwise P/R/F1
 
 Run the full replay — regenerate the sample, render every prompt, diff it against
 the archived prompt, parse the answers, and score — with
-[`examples/research/peeters_llm_em_replication.py`](../examples/research/peeters_llm_em_replication.py):
+[`examples/research/peeters_llm_em_replication.py`](https://github.com/fxd24/langres/blob/main/examples/research/peeters_llm_em_replication.py):
 
 ```bash
 uv run python examples/research/peeters_llm_em_replication.py   # abt-buy / gpt-4-0613
@@ -326,7 +326,7 @@ uv run python examples/research/peeters_llm_em_replication.py --mode live --logp
   and the `SpendMonitor` budget seam.
 - [`docs/TUTORIAL_YOUR_OWN_CSV.md`](TUTORIAL_YOUR_OWN_CSV.md) — the *clustering*
   counterpart: a messy CSV → entity clusters via `dedupe`, at $0.
-- [`examples/research/portfolio_race.py`](../examples/research/portfolio_race.py)
+- [`examples/research/portfolio_race.py`](https://github.com/fxd24/langres/blob/main/examples/research/portfolio_race.py)
   — the registry-driven race this doc describes.
-- [`examples/research/peeters_llm_em_replication.py`](../examples/research/peeters_llm_em_replication.py)
+- [`examples/research/peeters_llm_em_replication.py`](https://github.com/fxd24/langres/blob/main/examples/research/peeters_llm_em_replication.py)
   — the offline Peeters et al. LLM-EM replay (§4).

@@ -7,8 +7,8 @@ the real LLM for a **`DummyLM`**-backed judge that replays canned answers
 offline, deterministically, and for **$0**.
 
 This is the same seam the project's own test suite runs on (see
-[`tests/test_verbs.py`](../tests/test_verbs.py) and
-[`tests/core/modules/test_dspy_judge.py`](../tests/core/modules/test_dspy_judge.py)).
+[`tests/test_verbs.py`](https://github.com/fxd24/langres/blob/main/tests/test_verbs.py) and
+[`tests/core/modules/test_dspy_judge.py`](https://github.com/fxd24/langres/blob/main/tests/core/modules/test_dspy_judge.py)).
 
 > **Why this matters — the spend footgun.** `import langres` eagerly imports
 > litellm, whose `load_dotenv()` side effect can silently load an

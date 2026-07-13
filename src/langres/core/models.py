@@ -63,8 +63,9 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
     The Blocker is responsible for normalizing raw data into this schema
     and generating candidate pairs.
 
-    Type Parameters:
-        SchemaT: The Pydantic schema type for both entities (e.g., CompanySchema)
+    Note:
+        ``SchemaT`` is the Pydantic schema type for both entities
+        (e.g., ``CompanySchema``).
 
     Attributes:
         left: The left entity in the pair
