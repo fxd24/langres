@@ -1,4 +1,5 @@
-# Changelog
-
-Moved to [`CHANGELOG.md`](../CHANGELOG.md) at the repository root (the
-community-standard location, and where the PyPI `Changelog` project URL points).
+<!--
+GitHub viewers: the changelog lives at ../CHANGELOG.md (repo root).
+The published docs site inlines that file below via pymdownx.snippets.
+-->
+--8<-- "CHANGELOG.md"
