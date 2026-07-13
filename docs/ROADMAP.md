@@ -22,15 +22,14 @@ Three stacked definitions of "usable", all true at once:
 2. **Training framework** — you `fit` / `optimize` / `distill` a pipeline and it
    produces a **versioned artifact** (extractors + blocking funnel + judge +
    thresholds + compiled prompt).
-3. **Inference** — a consumer (brainsquad) `load`s that artifact and runs it on
+3. **Inference** — a consumer application `load`s that artifact and runs it on
    its own infra. *Engine intelligence in langres; data, persistence, visibility
    in the consumer.*
 
-**General by design, proven by one real use case.** brainsquad
-([raisesquad/brainsquad#1051](https://github.com/raisesquad/brainsquad/issues/1051))
-is our first and only real consumer — Person (hard, multilingual), Program/Project
-(easy), Geography (external authority), Grant (later). We prove the framework on
-it, while keeping every abstraction entity-agnostic.
+**General by design, proven by one real use case.** A private downstream data
+product is our first and only real consumer — Person (hard, multilingual),
+Program/Project (easy), Geography (external authority), Grant (later). We prove
+the framework on it, while keeping every abstraction entity-agnostic.
 
 ---
 
@@ -85,11 +84,11 @@ raw → [enrich: extractors / GLiNER / (later) web-search] → feature bag
 
 - **Dedup / batch** — resolve a dataset against itself → clusters. (Have the parts.)
 - **Incremental / linking** — probe a *new* record against an existing entity
-  store → matched entity id or "new". (`stream_against`; brainsquad's runtime op.)
+  store → matched entity id or "new". (`stream_against`; the consumer's runtime op.)
 
 ### 2.4 The flagship loop — build a golden label, then grow it over time
 
-The core brainsquad pattern (and the most common real ER loop): we first *see* a
+The consumer's core pattern (and the most common real ER loop): we first *see* a
 sparse mention (often just a name — a person extracted from a document, an org
 name), optionally **enrich** it (e.g. add a LinkedIn URL, a registry id, web-search
 content), and mint it as a **golden label**. Then every future appearance of that
@@ -116,21 +115,21 @@ Two properties make this work and must be designed in:
 
 This is **UC2 (Entity Linking) ⊕ UC4 (Master Data Creation), run incrementally** —
 see §2.5. langres provides the *brain* (the linker + the canonicalization rules,
-as a versioned artifact); brainsquad provides the *body* (the persistent golden
-store, the event log, reversibility — exactly its #1051 design).
+as a versioned artifact); the consumer provides the *body* (the persistent golden
+store, the event log, reversibility).
 
 ### 2.5 Use-case coverage — the compass
 
 We track direction against the documented taxonomy in `USE_CASES.md`. Each use
 case must end up either **filled by a milestone** or **deliberately delegated to
-the consumer** (brainsquad owns the stateful "body"; langres owns the "brain").
+the consumer** (the consumer owns the stateful "body"; langres owns the "brain").
 
 | Use case (`USE_CASES.md`) | Where it lands | Status |
 |---|---|---|
 | **UC1 Deduplication** (batch → clusters) | M2 | **shipped** (M2 + `dedupe()` verb) |
 | **UC2 Entity Linking** (link to a target store) | M5 (incremental `assign`) | **shipped** — incremental `assign`; cross-source `stream_against` reserved |
 | **UC10 Fuzzy FK** (special case of UC2) | via M5 | **shipped** via `assign` |
-| **UC4 Master Data Creation** (golden records / survivorship) | M5 — **promoted** (brainsquad needs golden labels *now*, not V1.1) | **shipped** (`Canonicalizer` + enrichment) |
+| **UC4 Master Data Creation** (golden records / survivorship) | M5 — **promoted** (the consumer needs golden labels *now*, not V1.1) | **shipped** (`Canonicalizer` + enrichment) |
 | ⭐ **Flagship: incremental linking + progressive golden-record enrichment** (§2.4) | M5 (= UC2 ⊕ UC4 + Enricher loop) | **shipped** — `assign` ⊕ `Canonicalizer.enrich`, verified end-to-end |
 | **UC9 Negative constraints** (cannot-link) | M6 (constrained clustering) | on path |
 | **Human-in-the-loop** labeling | M1 (bootstrapper labeler — human option) | on path |
@@ -139,12 +138,12 @@ the consumer** (brainsquad owns the stateful "body"; langres owns the "brain").
 | **UC3 Record Linkage** (multi-source) | post-M5, config | deferred (V1.1) |
 | **Enrichment via web-search / Exa** | Enricher plug-in (§2.2) | **deferred, slotted** — out of scope now |
 | **UC8 PPRL** (privacy-preserving) | consumer strips private features *before* langres sees them (§5) | delegated |
-| **UC7 Collective / graph** | langres = pairwise brain; brainsquad builds the graph/network layer on resolved nodes | delegated |
-| **UC5 Streaming** | langres compiles the artifact (brain); brainsquad runs it real-time (body) — matches #1051 | delegated |
-| **UC6 Temporal evolution** | langres emits reversible judgements; brainsquad owns the temporal store + event log (#1051) | delegated |
+| **UC7 Collective / graph** | langres = pairwise brain; the consumer builds the graph/network layer on resolved nodes | delegated |
+| **UC5 Streaming** | langres compiles the artifact (brain); the consumer runs it real-time (body) | delegated |
+| **UC6 Temporal evolution** | langres emits reversible judgements; the consumer owns the temporal store + event log | delegated |
 
 The "delegated" rows are not gaps — they are the **clean brain/body seam** the
-#1051 design already assumes. *Follow-up: once direction is locked, formalize the
+consumer's design already assumes. *Follow-up: once direction is locked, formalize the
 flagship loop (§2.4) as a named use case in `USE_CASES.md` and promote UC4 there.*
 
 ---
@@ -161,7 +160,7 @@ flagship loop (§2.4) as a named use case in `USE_CASES.md` and promote UC4 ther
 | **GLinker** (`gliner-linker`, pg_trgm retrieval) | Blocker + Module | candidate — fit for record↔record is **unverified** (trained on mention↔description; see §8), benchmarked as one option in M3 |
 | Fellegi-Sunter / logistic | Module | learned weighted comparison |
 
-**Benchmark on two axes:** (a) brainsquad's own Person/Program gold sets
+**Benchmark on two axes:** (a) the consumer's own Person/Program gold sets
 (dogfood + real validity), and (b) standard ER benchmarks (DBLP-ACM, Abt-Buy,
 etc.) for external validity and method sanity-checks.
 
@@ -185,13 +184,13 @@ The bootstrapper is the unlock.
 
 ---
 
-## 5. The artifact (brainsquad integration contract)
+## 5. The artifact (the consumer integration contract)
 
 A `Resolver` serialises to a **versioned artifact**: feature extractors +
 blocking funnel config + judge (incl. compiled DSPy prompt / model ref) +
-thresholds + metric provenance. brainsquad `Resolver.load("person_v1")` and calls
+thresholds + metric provenance. The consumer runs `Resolver.load("person_v1")` and calls
 `.resolve(records)` (batch) or `.link(record)` (incremental). langres owns engine
-intelligence; brainsquad owns persistence, visibility (public/private feature
+intelligence; the consumer owns persistence, visibility (public/private feature
 stripping happens consumer-side before features reach langres), and the cluster
 store.
 
@@ -210,7 +209,7 @@ Build the `Resolver` container (compose Blocker+Comparator+Module+Clusterer;
 
 ### M1 — Person gold set (cold-start, LLM-teacher)
 Bootstrapper: hard-negative mining from the Blocker + LLM-teacher labeler +
-coverage report. Produce the brainsquad **People (board-members) gold set**.
+coverage report. Produce the consumer's **People (board-members) gold set**.
 - **Exit:** a Person gold set exists with measured teacher-vs-human agreement on
   a spot-check sample; blocking **Pair-Completeness reported** (target ≥ 0.95).
 
@@ -218,9 +217,9 @@ coverage report. Produce the brainsquad **People (board-members) gold set**.
 feature bag → block → baseline judge → cluster → eval → **artifact**. The shipped
 baseline judge is the zero-spend `WeightedAverageJudge` over the feature bag;
 richer judges (embedding cascade, `gliner-linker`, LLM) are raced in M3. Shipped on
-Fodors-Zagat (Person artifact + brainsquad load-and-run is M5, see below).
+Fodors-Zagat (Person artifact + consumer load-and-run is M5, see below).
 - **Exit (SHIPPED):** **BCubed F1 baseline reported** on held-out gold; the saved
-  artifact runs a brainsquad-style **`.resolve()`** call end-to-end in a fresh
+  artifact runs a consumer-style **`.resolve()`** call end-to-end in a fresh
   process (identical clusters). Measured on Fodors-Zagat (seed=0, threshold 0.8):
   held-out BCubed P/R/F1 = 0.991/0.969/0.980 vs merge-nothing floor 0.932,
   Pair-Completeness 1.0. The M2 consumption contract is `resolve()`-only;
@@ -383,9 +382,9 @@ model/version registry, production/operability guidance, cannot-link clustering.
 
 ---
 
-## 7. Mapping to brainsquad (#1051)
+## 7. Mapping to the first production consumer
 
-| brainsquad task (#1051) | langres milestone |
+| Consumer task | langres milestone |
 |---|---|
 | Build People gold set (teacher set) | **M1** |
 | Walking skeleton: features → blocking → judge → clusters → persist | **M2** (langres half) |

@@ -116,7 +116,7 @@ Prioritized. Each is additive and backward-compatible; the common pairwise/froze
 
 10. **`CollectiveClusterer`** (inverts control: clusterer owns the merge loop, calls back a scorer with mutable `ClusterContext`) for relational/collective ER — a genuinely new stateful primitive, plus relational `FeatureSpec` fields.
 
-11. **Incremental `link(record, existing_anchors) → {matched_id | new} + ClusterDelta`** with stable-ID merge/split, and an optional live-corpus-stats provider on the judge, so brainsquad's living-cluster loop and Senzing-style frequency weighting are expressible without langres owning the store.
+11. **Incremental `link(record, existing_anchors) → {matched_id | new} + ClusterDelta`** with stable-ID merge/split, and an optional live-corpus-stats provider on the judge, so the consumer's living-cluster loop and Senzing-style frequency weighting are expressible without langres owning the store.
 
 **Explicitly out of scope / delegate:** schema-matching/attribute-alignment (Alaska — data integration, upstream of the seam); scale-out blocking execution (SQL/Spark pushdown — delegate to the body); owning GPU training loops for heavy transformers (wrap/delegate, don't reimplement the DL design space).
 
@@ -220,7 +220,7 @@ Sequenced and mapped to milestones, separating cheap high-leverage wins from big
 | S3 | **`DSPyJudge` + MIPROCompiler + gold/metric adapters** (state via SerializableState) | M4 | The M4 cheap-precise-judge target as designed |
 | S4 | **`LabelModelLabeler` (~40-line numpy MeTaL) + LabelingFunction protocol** | M4/M5 | Weak-supervision cold-start, API-free; combine-LFs-with-LLM hypothesis |
 | S5 | **`TrainableEmbeddingProvider.fit()` + SerializableState embedder + `UnionBlocker` + BlockingPy adapter + `ContrastiveEncoderTrainer`** | M5 | DeepBlocker, SC-Block, Sudowoodo blocker, per-feature union |
-| S6 | **Incremental `link(record, anchors) → ClusterDelta`** with stable-ID merge/split | M5 | brainsquad living-cluster loop; production credibility |
+| S6 | **Incremental `link(record, anchors) → ClusterDelta`** with stable-ID merge/split | M5 | the consumer's living-cluster loop; production credibility |
 
 ### Big bets (M5 → M6, only when a real target demands)
 

@@ -8,10 +8,10 @@ Each worktree works on a phase (or milestone) independently. There is no central
 coordinator, no COORDINATION.yaml, no orchestrator branch. Git is the coordinator.
 
 ```
-Worktree A (brainsquad-1):  discuss -> research -> plan -> execute -> review -> verify -> push -> reflect
+Worktree A (worktree-a):  discuss -> research -> plan -> execute -> review -> verify -> push -> reflect
                              Creates branch, does work, creates PR, merges to main.
 
-Worktree B (brainsquad-2):  discuss -> research -> plan -> execute -> review -> verify -> push -> reflect
+Worktree B (worktree-b):  discuss -> research -> plan -> execute -> review -> verify -> push -> reflect
                              Pulls main (sees A's merged work), creates its own branch, works, merges.
 ```
 
@@ -43,13 +43,13 @@ Worktree B (brainsquad-2):  discuss -> research -> plan -> execute -> review -> 
 
 ```bash
 # Worktree 1: Phase 3 (PDF extraction)
-cd brainsquad-1
+cd worktree-a
 git fetch origin && git checkout -B feature/phase-3-pdf origin/main
 # Run Dave workflow: discuss, research, plan, execute, review, verify, push
 # PR merges to main
 
 # Worktree 2: Phase 5 (web search integration) -- independent of Phase 3
-cd brainsquad-2
+cd worktree-b
 git fetch origin && git checkout -B feature/phase-5-web-search origin/main
 # Run Dave workflow in parallel with worktree 1
 # PR merges to main independently
@@ -59,12 +59,12 @@ git fetch origin && git checkout -B feature/phase-5-web-search origin/main
 
 ```bash
 # Worktree 1: Phase 3
-cd brainsquad-1
+cd worktree-a
 git fetch origin && git checkout -B feature/phase-3 origin/main
 # Complete phase 3, merge PR to main
 
 # Worktree 2: Phase 4 (depends on Phase 3)
-cd brainsquad-2
+cd worktree-b
 git fetch origin && git checkout -B feature/phase-4 origin/main  # Now includes Phase 3
 # Phase 4 sees Phase 3's artifacts and code via main
 ```

@@ -1,7 +1,7 @@
-"""M2 EXIT — fresh-process artifact identity proof (the brainsquad contract).
+"""M2 EXIT — fresh-process artifact identity proof (the consumer contract).
 
 Proves the second half of the M2 exit criterion: a saved Resolver artifact runs
-a brainsquad-style ``.resolve()`` call end-to-end **in a fresh process** and
+a consumer-style ``.resolve()`` call end-to-end **in a fresh process** and
 yields *identical* clusters to the in-process run. ``resolve()`` is the ONLY M2
 consumption call — ``.link()`` / ``.stream_against()`` are M5 stubs and are never
 touched here.
@@ -77,7 +77,7 @@ def test_m2_artifact_resolve_identity_fresh_process(tmp_path: Path) -> None:
     best_threshold = tune_threshold_on_train(train_records, train_clusters)
     resolver = build_restaurant_resolver(best_threshold)
 
-    # In-process resolve over the held-out test dicts (the brainsquad call shape).
+    # In-process resolve over the held-out test dicts (the consumer call shape).
     test_dicts = [r.model_dump() for r in test_records]
     clusters_a = resolver.resolve(test_dicts)
     assert clusters_a, "expected the baseline to find at least one multi-record cluster"
