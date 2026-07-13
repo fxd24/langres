@@ -9,6 +9,11 @@ and fine-tuned small **LLMs**; Ditto/Magellan-class methods and the RF floor
 are yardstick baselines kept for completeness, not methods to emulate — and a
 new blocking-side experiment (**T4**: instruction transfer to the embedder) is
 added and ranked.
+Amended 2026-07-14: the training *surface* (vocabulary: judge→**Matcher** rename;
+API shape: explicit-components + declare-then-fit with FitReport/describe(); seam
+extensions incl. pairs→candidates bridge) is decided in
+`docs/research/20260714_training_surface_design.md` — it amends §3 of this plan;
+targets/waves unchanged, with T2 (AnyMatch) leading Wave 1 per maintainer decision.
 
 ## Context — why this, why now
 
