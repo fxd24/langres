@@ -1,6 +1,6 @@
 [project]
 name = "langres"
-version = "0.2.0"
+version = "0.3.0"
 description = "A two-layer entity resolution framework with optimization, blocking, and human-in-the-loop capabilities"
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,9 +42,9 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/raisesquad/langres"
-Issues = "https://github.com/raisesquad/langres/issues"
-Changelog = "https://github.com/raisesquad/langres/blob/main/CHANGELOG.md"
+Repository = "https://github.com/fxd24/langres"
+Issues = "https://github.com/fxd24/langres/issues"
+Changelog = "https://github.com/fxd24/langres/blob/main/CHANGELOG.md"
 
 [project.scripts]
 # Console-script entry point for the `langres` CLI (review / export-csv /
@@ -101,6 +101,36 @@ wandb = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Hand-edited: uv does not manage [tool.hatch.*] tables.
+# Keep the PyPI artifacts slim and license-clean: the large third-party
+# DeepMatcher/Magellan benchmark corpora (vendored for research
+# reproducibility; ATTRIBUTION.md but no explicit redistribution license) ship
+# in the git repository only -- they were ~14.1 MB of the 15.6 MB uncompressed
+# wheel. Loading an excluded dataset from a pip/uv install raises
+# BenchmarkDataNotFoundError (langres/data/_benchmark_utils.py) pointing at a
+# git checkout. Still bundled: tiny_fixture (synthetic), febrl_person
+# (synthetic, BSD-3), fodors_zagat (small), and the peeters_sampled_test.csv
+# pair sets (id/label triples only -- no third-party record text, and the
+# replication seam's sampling stays inspectable from the wheel).
+exclude = [
+    "src/langres/data/datasets/dblp_acm/*.csv",
+    "src/langres/data/datasets/dblp_scholar/*.csv",
+    "src/langres/data/datasets/walmart_amazon/*.csv",
+    "src/langres/data/datasets/wdc_computers/*.csv",
+    # abt_buy / amazon_google: keep peeters_sampled_test.csv, drop tables + splits
+    "src/langres/data/datasets/abt_buy/tableA.csv",
+    "src/langres/data/datasets/abt_buy/tableB.csv",
+    "src/langres/data/datasets/abt_buy/train.csv",
+    "src/langres/data/datasets/abt_buy/valid.csv",
+    "src/langres/data/datasets/abt_buy/test.csv",
+    "src/langres/data/datasets/amazon_google/tableA.csv",
+    "src/langres/data/datasets/amazon_google/tableB.csv",
+    "src/langres/data/datasets/amazon_google/train.csv",
+    "src/langres/data/datasets/amazon_google/valid.csv",
+    "src/langres/data/datasets/amazon_google/test.csv",
+]
 
 [dependency-groups]
 dev = [
