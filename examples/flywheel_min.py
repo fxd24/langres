@@ -87,7 +87,8 @@ second = dedupe(records, judge="string", threshold=tuned, log=JudgementLog(WORK 
 print(f"[5] clusters @ {second.threshold:.3f}: {sorted(sorted(c) for c in second)}")
 
 # [6] Grade both passes against gold at $0 and write the HTML tearsheet.
-print(f"[6] BEFORE {EvalReport.from_log(rows, gold, threshold=0.5).summary}")
+before = EvalReport.from_log(rows, gold, threshold=first.threshold)
+print(f"[6] BEFORE {before.summary}")
 after = EvalReport.from_log(rows, gold, threshold=tuned)
 print(f"[6] AFTER  {after.summary}")
 (WORK / "tearsheet.html").write_text(after.to_html(title="flywheel: tuned"), encoding="utf-8")
