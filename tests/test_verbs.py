@@ -615,6 +615,7 @@ class TestLinkEmbeddingJudge:
         assert verdict.score > 0.99
         assert verdict.score_type == "sim_cos"
         assert verdict.judge_used == "embedding"
+        assert verdict.model == "all-MiniLM-L6-v2"
 
 
 # ---------------------------------------------------------------------------
