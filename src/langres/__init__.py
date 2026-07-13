@@ -47,7 +47,7 @@ from langres.core import (
     select_for_review,
 )
 from langres.core.models import JudgeAbstainedError
-from langres.core.presets import NoJudgeAvailableError
+from langres.core.presets import DEFAULT_AUTO_MODEL, NoJudgeAvailableError
 from langres.verbs import LinkVerdict, dedupe, link
 
 if TYPE_CHECKING:
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BudgetExceeded",
     "CompanySchema",
+    "DEFAULT_AUTO_MODEL",
     "Correction",
     "CorrectionLog",
     "ERCandidate",

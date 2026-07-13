@@ -76,49 +76,49 @@ _MANIFEST_FILENAME = "resolver.json"
 #: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
 #: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
 #: constructor argument.
-_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm"]
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm"]
 
 
 def _build_module_for_judge(
     judge: "_FromSchemaJudge | Module[Any]",
+    schema: type[BaseModel],
     comparator: Comparator[Any],
     *,
     model: str | None,
     entity_noun: str,
+    judge_params: dict[str, Any] | None = None,
 ) -> Module[Any]:
     """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
 
-    A small, deliberately self-contained switch: ``langres.core.presets``
-    (which builds on top of ``Resolver``) is NOT imported here, since that
-    would create a ``Resolver -> presets -> Resolver`` cycle -- see the
-    dependency diagram in this module's docstring. The three branches below
-    duplicate a little of ``presets.build_judge``'s logic; that duplication is
-    the price of keeping the layering one-directional (``verbs -> presets ->
-    Resolver``), not an oversight.
+    Construction is delegated to the one
+    :mod:`~langres.core.method_registry` (a core leaf, so no
+    ``Resolver -> presets`` cycle -- the pre-registry duplication this switch
+    used to carry is gone); this function keeps only ``from_schema``'s policy:
+    the allowed names (no ``"auto"``) and the uncapped-spend warning below.
+    ``comparator`` is passed to the spec builder so custom
+    ``weights=``/``exclude=`` flow into feature-spec-driven judges.
     """
     if isinstance(judge, Module):
         return judge
-    if judge == "string":
-        return WeightedAverageJudge(feature_specs=comparator.feature_specs)
-    if judge == "embedding":
-        from langres.core.judges.embedding_score import EmbeddingScoreJudge
+    if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm"):
+        raise ValueError(
+            f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
+            "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', or pass a "
+            "Module instance. 'auto' key-based resolution is a verbs-layer "
+            "feature -- use langres.link/langres.dedupe for that."
+        )
+    from langres.core.method_registry import get_method
 
-        return EmbeddingScoreJudge()
     if judge == "zero_shot_llm":
-        # Lazy: dspy must stay out of sys.modules unless this judge is chosen.
         from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
-        from langres.core.modules.dspy_judge import DSPyJudge
 
         resolved_model = model or DEFAULT_OPENROUTER_MODEL
-        dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
-        price = dspy_price_per_1k(resolved_model)
-        if price == 0.0:
+        if dspy_price_per_1k(resolved_model) == 0.0:
             # An unpinned model self-reports $0/pair -- honest, not reassuring
-            # (mirrors core.presets.notice_pre_scoring_cost's identical check;
-            # duplicated here for the same layering reason as the rest of this
-            # function). Resolver.from_schema has no spend cap at all (see its
-            # judge= docstring), so this is strictly worse than the verbs'
-            # blind-cap case: nothing would ever stop a runaway bill.
+            # (mirrors core.presets.notice_pre_scoring_cost's identical check).
+            # Resolver.from_schema has no spend cap at all (see its judge=
+            # docstring), so this is strictly worse than the verbs' blind-cap
+            # case: nothing would ever stop a runaway bill.
             warnings.warn(
                 f"model {resolved_model!r} has no pinned price in "
                 "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
@@ -127,13 +127,13 @@ def _build_module_for_judge(
                 "langres.link/langres.dedupe for the built-in spend cap.",
                 stacklevel=3,
             )
-        dspy_module.price_per_1k_tokens = price
-        return dspy_module
-    raise ValueError(
-        f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
-        "'string', 'embedding', 'zero_shot_llm', or pass a Module instance. "
-        "'auto' key-based resolution is a verbs-layer feature -- use "
-        "langres.link/langres.dedupe for that."
+    return get_method(judge).build(
+        schema,
+        model=model,
+        entity_noun=entity_noun,
+        client=None,
+        comparator=comparator,
+        **(judge_params or {}),
     )
 
 
@@ -159,7 +159,9 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
         parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
         return " ".join(parts)
 
-    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    from langres.core.method_registry import DEFAULT_EMBEDDING_MODEL
+
+    embedder = SentenceTransformerEmbedder(DEFAULT_EMBEDDING_MODEL)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     return VectorBlocker(
         vector_index=index, schema=schema, text_field_extractor=extract, k_neighbors=10
@@ -351,6 +353,9 @@ class Resolver:
         judge: "_FromSchemaJudge | Module[Any]" = "string",
         model: str | None = None,
         entity_noun: str = "entity",
+        prompt_template: str | None = None,
+        system_prompt: str | None = None,
+        response_parser: str | None = None,
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
@@ -374,27 +379,63 @@ class Resolver:
                 ``{"id"}`` (handled by the comparator).
             judge: ``"string"`` (default -- identical to pre-existing
                 behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
-                above), ``"zero_shot_llm"``, or a ``Module`` instance. This is
-                the low-level, explicit switch (no ``"auto"`` key-based
+                above), ``"zero_shot_llm"``, ``"prompt_llm"`` (the
+                bring-your-own-prompt ``LLMJudge`` -- with a *registered*
+                ``response_parser`` name the whole judge, prompt included,
+                ``save``/``load`` round-trips), or a ``Module`` instance. This
+                is the low-level, explicit switch (no ``"auto"`` key-based
                 resolution and no spend cap -- that magic lives in
                 ``langres.link``/``langres.dedupe``). **Caution**:
-                ``judge="zero_shot_llm"`` (or any other paid ``Module``) built
-                here runs UNCAPPED -- there is no ``budget_usd`` on this
-                method and nothing stops a runaway bill. Use
-                ``langres.link``/``langres.dedupe`` for the built-in
-                ``SpendMonitor`` cap.
-            model: Model id override for ``judge="zero_shot_llm"``.
+                ``judge="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
+                ``Module``) built here runs UNCAPPED -- there is no
+                ``budget_usd`` on this method and nothing stops a runaway
+                bill. Use ``langres.link``/``langres.dedupe`` for the
+                built-in ``SpendMonitor`` cap.
+            model: Model id override for ``judge="zero_shot_llm"``/``"prompt_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
+            prompt_template: ``judge="prompt_llm"`` only: custom prompt with
+                ``{left}``/``{right}`` placeholders (see
+                :class:`~langres.core.modules.llm_judge.LLMJudge`).
+            system_prompt: ``judge="prompt_llm"`` only: optional system message.
+            response_parser: ``judge="prompt_llm"`` only: a *registered*
+                parser name (``"score"`` / ``"binary_yes_no"`` -- see
+                ``llm_judge.RESPONSE_PARSERS``), serialized in the artifact.
 
         Returns:
             A ready-to-run Resolver.
+
+        Raises:
+            ValueError: For an unsupported ``judge`` name, or a prompt-seam
+                kwarg with a non-``"prompt_llm"`` judge (never silently
+                ignored).
         """
         from langres.core.blockers.all_pairs import AllPairsBlocker
 
+        judge_params = {
+            key: value
+            for key, value in {
+                "prompt_template": prompt_template,
+                "system_prompt": system_prompt,
+                "response_parser": response_parser,
+            }.items()
+            if value is not None
+        }
+        if judge_params and judge != "prompt_llm":
+            raise ValueError(
+                f"{', '.join(sorted(judge_params))}: only valid with judge='prompt_llm' "
+                f"(got judge={judge!r})."
+            )
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
-        module = _build_module_for_judge(judge, comparator, model=model, entity_noun=entity_noun)
+        module = _build_module_for_judge(
+            judge,
+            schema,
+            comparator,
+            model=model,
+            entity_noun=entity_noun,
+            judge_params=judge_params or None,
+        )
         blocker: Blocker[Any] = (
             _build_embedding_blocker(schema)
             if judge == "embedding"

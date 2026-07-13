@@ -51,6 +51,8 @@ def test_config_excludes_client_and_secrets() -> None:
         "system_prompt",
         "on_parse_error",
         "confidence",
+        "response_parser",
+        "record_serializer",
     }
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
     assert config["temperature"] == 0.3

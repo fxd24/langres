@@ -131,12 +131,20 @@ class JudgementLog:
         self.path = Path(path)
         self.features = features
 
-    def append(self, judgement: PairwiseJudgement, *, verdict: bool | None) -> None:
+    def append(
+        self, judgement: PairwiseJudgement, *, verdict: bool | None, model: str | None = None
+    ) -> None:
         """Append one JSON line for ``judgement`` (called by :class:`LoggingModule`).
 
         ``verdict`` is the caller's predicted-match decision (see
         :func:`~langres.core.models.predicted_match`); ``None`` records an
         abstention honestly rather than coercing it to a match/no-match.
+        ``model`` is the caller's resolved pipeline model id, used as the
+        row's ``model`` when the judgement's own ``provenance["model"]`` is
+        absent -- the judge's per-call stamp wins (e.g. a cascade's per-step
+        models), so the logged identity is always what actually ran, and a
+        non-LLM pipeline (the embedding judge) still logs the model the verbs
+        report on the result.
         """
         row: dict[str, Any] = {
             "v": _SCHEMA_VERSION,
@@ -154,7 +162,7 @@ class JudgementLog:
             "verdict": verdict,
             "confidence": judgement.confidence,
             "confidence_source": judgement.confidence_source,
-            "model": judgement.provenance.get("model"),
+            "model": judgement.provenance.get("model") or model,
             # First of _COST_KEYS present wins: CascadeModule logs ``llm_cost_usd``,
             # so a bare ``.get("cost_usd")`` would persist 0.0 for every cascade row.
             "cost_usd": _judgement_cost(judgement),
@@ -221,21 +229,45 @@ class LoggingModule(Module[Any]):
     twice) before re-raising the exception unmodified.
     """
 
-    def __init__(self, module: Module[Any], *, log: JudgementLog, threshold: float) -> None:
+    def __init__(
+        self,
+        module: Module[Any],
+        *,
+        log: JudgementLog,
+        threshold: float,
+        model: str | None = None,
+    ) -> None:
+        """Wrap ``module``, logging every judgement to ``log``.
+
+        ``threshold`` and ``model`` are the calling verb's *resolved* values --
+        the same ones it reports on the result -- so log rows and results
+        cannot drift apart. ``model`` only backfills rows whose judgement
+        carries no ``provenance["model"]`` of its own (see
+        :meth:`JudgementLog.append`).
+        """
         self._module = module
         self._log = log
         self._threshold = threshold
+        self._model = model
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         logged = 0
         try:
             for judgement in self._module.forward(candidates):
-                self._log.append(judgement, verdict=predicted_match(judgement, self._threshold))
+                self._log.append(
+                    judgement,
+                    verdict=predicted_match(judgement, self._threshold),
+                    model=self._model,
+                )
                 logged += 1
                 yield judgement
         except BudgetExceeded as exc:
             for judgement in exc.partial_judgements[logged:]:
-                self._log.append(judgement, verdict=predicted_match(judgement, self._threshold))
+                self._log.append(
+                    judgement,
+                    verdict=predicted_match(judgement, self._threshold),
+                    model=self._model,
+                )
             raise
 
     def inspect_scores(
