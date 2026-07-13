@@ -246,7 +246,7 @@ LLM) — now raced head-to-head behind one interface instead of run in sequence.
 - **Exit (SHIPPED):** a reproducible **method-comparison table** with a real-money
   race (total **$2.18** / $15 cap) over an *easy* (Fodors-Zagat) and a *hard*
   (Amazon-Google) dataset. Full results
-  [`data/benchmarks/m3/M3_RESULTS.md`](../data/benchmarks/m3/M3_RESULTS.md);
+  [`data/benchmarks/m3/M3_RESULTS.md`](https://github.com/fxd24/langres/blob/main/data/benchmarks/m3/M3_RESULTS.md);
   decision [`docs/M3_DIRECTION_MEMO.md`](M3_DIRECTION_MEMO.md). Headline (AG hard,
   pair-F1): **gpt-4o `llm_judge` 0.667** (SOTA band, beats free embedding 0.471) >
   embedding 0.471 > **GLM-5.2 `llm_judge` 0.409** (high-recall/low-precision,

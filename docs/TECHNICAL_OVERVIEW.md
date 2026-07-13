@@ -74,7 +74,7 @@ The design for full tracing (e.g., via OpenTelemetry) is still to be determined.
 
 ## 3. High-Level API: the verbs (`dedupe` / `link`)
 
-The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](../examples/quickstart_verbs.py).
+The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](https://github.com/fxd24/langres/blob/main/examples/quickstart_verbs.py).
 
 ### dedupe
 

@@ -1,0 +1,75 @@
+name: Docs
+
+# Build the MkDocs site on PRs that touch it (strict mode -- broken links or
+# docstring warnings fail the build) and deploy it to GitHub Pages on every
+# push to main, via the Pages-native artifact flow (actions/deploy-pages).
+#
+# One-time setup: Settings -> Pages -> Build and deployment -> Source =
+# "GitHub Actions". Until that is set, the deploy job fails with a Pages
+# configuration error.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**" # API reference is generated from docstrings
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel an in-flight main deploy; superseded PR builds may be.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.24"
+          python-version: "3.13"
+
+      - name: Build site (strict)
+        # Core deps + the docs group only -- the dev group (mlflow, wandb,
+        # optuna, ...) is not needed to render the site; mkdocstrings reads
+        # src/ statically via griffe.
+        run: uv run --no-dev --group docs mkdocs build --strict
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
