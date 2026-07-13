@@ -5,8 +5,8 @@ This is the durable home for "we decided not to do this now" so it doesn't only
 live in a planning doc. Each item points to its tracking issue or milestone.
 
 Detail lives in the M4.5/M5 plan, the ROADMAP, and the seam-audit epic
-([#20](https://github.com/raisesquad/langres/issues/20)) with method-delta
-backlog in [#55](https://github.com/raisesquad/langres/issues/55).
+([#20](https://github.com/fxd24/langres/issues/20)) with method-delta
+backlog in [#55](https://github.com/fxd24/langres/issues/55).
 
 ## Flywheel loop follow-ons (deferred from the closed-loop phase, 0.2.0)
 
@@ -46,12 +46,12 @@ backlog in [#55](https://github.com/raisesquad/langres/issues/55).
 ## Method families & extensibility
 
 - **Splink adapter as a Fellegi–Sunter feature-store row** — wrap Splink behind the
-  seam instead of only the native FS-EM judge. ([#55](https://github.com/raisesquad/langres/issues/55))
+  seam instead of only the native FS-EM judge. ([#55](https://github.com/fxd24/langres/issues/55))
 - **Full C1 six-dataset replication portfolio** — only FZ/AG (+ Abt-Buy in M4.5) are
-  in scope now; the rest of the benchmark portfolio is deferred. ([#55](https://github.com/raisesquad/langres/issues/55))
+  in scope now; the rest of the benchmark portfolio is deferred. ([#55](https://github.com/fxd24/langres/issues/55))
 - **Public method-registration API** — a supported, documented way for third parties
   to register a new judge/method (beyond editing `methods.py:_make_module_builder`
-  in-tree). ([#55](https://github.com/raisesquad/langres/issues/55))
+  in-tree). ([#55](https://github.com/fxd24/langres/issues/55))
 
 ## Hardening
 

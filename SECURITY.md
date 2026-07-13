@@ -10,7 +10,7 @@ Please report vulnerabilities **privately** — do not open a public issue:
 
 - Preferred: [GitHub private vulnerability reporting](https://github.com/fxd24/langres/security/advisories/new)
   (Security tab → "Report a vulnerability").
-- Or email **david@raisesquad.com** with a description, reproduction steps,
+- Or email **hire@grafdavid.com** with a description, reproduction steps,
   and impact.
 
 You should receive an acknowledgement within a few days. Please allow a
