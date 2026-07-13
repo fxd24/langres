@@ -270,6 +270,38 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
     )
 
 
+# The flywheel's back half is root-exported, but its three lazy names
+# (``EvalReport``, ``gold_pairs_from_clusters``, ``derive_threshold``) must not
+# drag their owning modules into a bare ``import langres``: ``core.eval_report``
+# pulls ``core.benchmark``/``core.metrics`` (kept out of the eager graph on
+# purpose), and ``core.calibration`` imports scikit-learn ([trained]) at module
+# scope. Same fresh-process subprocess pattern as above.
+_ROOT_LAZY_MODULES = [
+    "langres.core.eval_report",
+    "langres.core.benchmark",
+    "langres.core.calibration",
+]
+
+_ROOT_LAZY_SCRIPT = (
+    "import sys; import langres; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'lazy root-export modules were eagerly imported: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_ROOT_LAZY_MODULES)
+
+
+def test_import_langres_does_not_eagerly_import_lazy_root_export_modules() -> None:
+    """The lazy root exports must stay lazy: bare import pulls none of their modules."""
+    result = subprocess.run(
+        [sys.executable, "-c", _ROOT_LAZY_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"root-export laziness check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 def test_import_langres_is_fast() -> None:
     """Soft timing budget: a warm ``import langres`` should be well under a second.
 
@@ -487,6 +519,86 @@ class TestCoreLazyGetattr:
         monkeypatch.setattr(core.importlib, "import_module", _fail_for_faiss)
         with pytest.raises(ImportError, match=r"langres\.core\.FAISSIndex.*langres\[semantic\]"):
             core.FAISSIndex  # noqa: B018
+
+
+class TestRootLazyGetattr:
+    """``langres.__getattr__``: the flywheel root exports (paved road).
+
+    The loop's back half is importable from ``langres`` directly -- eagerly
+    where free (the harvest surface is already in the eager import graph via
+    ``langres.core``), lazily where it would add import weight (see
+    ``test_import_langres_does_not_eagerly_import_lazy_root_export_modules``).
+    """
+
+    def test_harvest_surface_is_eagerly_root_exported(self) -> None:
+        import langres
+        from langres.core import harvest
+
+        assert langres.Correction is harvest.Correction
+        assert langres.CorrectionLog is harvest.CorrectionLog
+        assert langres.harvest_labeled_pairs is harvest.harvest_labeled_pairs
+        assert langres.derive_threshold_from_pairs is harvest.derive_threshold_from_pairs
+
+    def test_eval_report_resolves_and_caches(self) -> None:
+        import langres
+        from langres.core.eval_report import EvalReport
+
+        assert langres.EvalReport is EvalReport
+        # Cached on the module namespace -- a second access must not re-hit
+        # __getattr__ (it's now a plain module attribute).
+        assert vars(langres)["EvalReport"] is EvalReport
+
+    def test_gold_pairs_from_clusters_resolves(self) -> None:
+        import langres
+        from langres.core.benchmark import gold_pairs_from_clusters
+
+        assert langres.gold_pairs_from_clusters is gold_pairs_from_clusters
+
+    def test_derive_threshold_resolves(self) -> None:
+        pytest.importorskip("sklearn", reason="requires the [trained] extra")
+        import langres
+
+        from langres.core.calibration import derive_threshold
+
+        assert langres.derive_threshold is derive_threshold
+
+    def test_unknown_attribute_raises_attribute_error(self) -> None:
+        import langres
+
+        with pytest.raises(AttributeError, match="not_a_real_attribute"):
+            langres.not_a_real_attribute  # noqa: B018
+
+    def test_derive_threshold_missing_sklearn_raises_actionable_import_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing [trained] extra surfaces a 'pip install' hint, not a raw traceback."""
+        import langres
+
+        # Clear any cached resolution from an earlier test so __getattr__ runs.
+        monkeypatch.delitem(vars(langres), "derive_threshold", raising=False)
+
+        def _fail(name: str) -> object:
+            raise ModuleNotFoundError("No module named 'sklearn'")
+
+        monkeypatch.setattr(langres.importlib, "import_module", _fail)
+        with pytest.raises(ImportError, match=r"langres\.derive_threshold.*langres\[trained\]"):
+            langres.derive_threshold  # noqa: B018
+
+    def test_no_extra_symbol_propagates_import_error_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """EvalReport needs no extra: an ImportError from it is a genuine bug
+        and must propagate as-is, never dressed up as a 'pip install' hint."""
+        import langres
+
+        monkeypatch.delitem(vars(langres), "EvalReport", raising=False)
+
+        def _fail(name: str) -> object:
+            raise ModuleNotFoundError("No module named 'nonsense_dep'")
+
+        monkeypatch.setattr(langres.importlib, "import_module", _fail)
+        with pytest.raises(ModuleNotFoundError, match="nonsense_dep"):
+            langres.EvalReport  # noqa: B018
 
 
 class TestClientsLazyGetattr:
