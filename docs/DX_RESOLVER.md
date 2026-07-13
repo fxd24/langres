@@ -128,7 +128,7 @@ Resolver(
 )
 ```
 
-Runnable end-to-end: [`examples/resolver_company_dedup.py`](../examples/resolver_company_dedup.py).
+Runnable end-to-end: [`examples/resolver_company_dedup.py`](https://github.com/fxd24/langres/blob/main/examples/resolver_company_dedup.py).
 
 ## Consuming a saved artifact
 
@@ -162,6 +162,6 @@ clusters identical to the in-process run.
   `resolver.build_anchor_store(records)` once, then `resolver.assign(new_record)`
   → `ClusterDelta` (`link` to a stable entity id, or `new`); the serializable
   `AnchorStore` persists alongside the artifact. Runnable:
-  [`examples/incremental_assign.py`](../examples/incremental_assign.py).
+  [`examples/incremental_assign.py`](https://github.com/fxd24/langres/blob/main/examples/incremental_assign.py).
 - **Cross-source linking** (not yet available): `.link()` / `.stream_against()`
   raise `NotImplementedError` today — reserved stubs on the roadmap.

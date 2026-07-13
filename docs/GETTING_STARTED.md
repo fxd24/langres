@@ -29,17 +29,19 @@ pairs back to the frontier.
    └────────────────────────────────────────────────────────────────────┘
 ```
 
-**Its runnable twin is [`examples/flywheel_min.py`](../examples/flywheel_min.py)** —
-the whole loop, end to end, at **$0** (a deterministic local stand-in plays the
-frontier judge). Run it while you read:
+**Its runnable twin is [`examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py)** —
+the core of the loop (steps 1–4: log → review the margin → CSV round-trip →
+harvest → data-driven threshold → re-run → tearsheet) in ~90 lines, offline at
+**$0**. Run it while you read:
 
 ```bash
 uv run python examples/flywheel_min.py
 ```
 
-For a deeper, fixture-driven harness of the same stages — it drives the
-`langres.core` primitives directly, bypassing the verbs and the CLI — see
-[`examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py).
+The **full** seven steps — including the trained student and the cascade —
+run at $0 in [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py),
+a deeper fixture-driven harness that drives the `langres.core` primitives
+directly, bypassing the verbs and the CLI.
 
 ---
 
@@ -91,6 +93,16 @@ matching is always available, but only as the *explicit* `judge="string"`
 opt-in. A spend-cap breach likewise raises `BudgetExceeded` (also root-exported)
 carrying the partial judgements — never a silent bill.
 
+**Forcing the keyless path (tests, CI, offline runs).** Merely *unsetting* the
+key variables does not make a run keyless inside a project whose `.env` carries
+a key — langres reads the `.env` in the current working directory (env vars win
+over it; there is no parent-directory walk-up). Two deterministic switches:
+set `LANGRES_OFFLINE=1` and `judge="auto"` treats every key as absent (an
+explicit `judge=` choice in code is unaffected), or set the key variables to
+the **empty string** (`OPENROUTER_API_KEY="" OPENAI_API_KEY=""`) — an empty
+env var wins over `.env` and counts as absent. Full discovery order:
+`langres.core.presets.choose_auto_judge`.
+
 > **You cannot bootstrap ER from nothing.** With zero labels and no LLM, there
 > is no honest signal to separate true duplicates from look-alikes. The keyed
 > lane is the real starting point for a new entity type; the keyless lane is the
@@ -115,7 +127,9 @@ uv sync --extra trained     # [trained]: scikit-learn behind RandomForestJudge +
 The steps below tell one continuous story. `records` is a list of dicts, each
 with a **stable `id`** (see [operating notes](#two-operating-notes-for-the-loop)
 — this matters). Snippets are minimal excerpts of the real API; the
-[runnable twin](../examples/flywheel_min.py) wires them all together.
+runnable twins wire them together: [`flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py)
+covers steps 1–4; [`flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
+covers all seven.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
@@ -128,7 +142,7 @@ result = dedupe(records)                    # judge="auto", $1 cap by default
 ```
 
 Depth: the verb layer and its contract live in
-[`../README.md`](../README.md#quickstart-dedupe-and-link).
+[`../README.md`](https://github.com/fxd24/langres/blob/main/README.md#quickstart-dedupe-and-link).
 
 ### 2. Log every judgement from day 1
 
@@ -229,7 +243,7 @@ student_threshold = derive_threshold(student_scores, heldout_labels)
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
 Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and
-[`examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py)
+[`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
 (the deeper harness, which builds `train_candidates` / `student_scores` for you).
 
 ### 6. Cascade — cheap everywhere, frontier only at the margin
@@ -248,7 +262,7 @@ result = dedupe(records, judge=cascade, threshold=student_threshold)
 
 > **Derive the band from data, don't hard-code it.** A `±0.15` constant is the
 > same magic-number mistake step 4 just killed.
-> [`examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py)
+> [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
 > widens the band around the student threshold until it captures ~20% of
 > calibration-split scores, and prints the derivation. Beyond pairwise cascading, **set-wise judging**
 > (`SelectJudge`) is the direction that judges a whole candidate group at once —
@@ -335,15 +349,14 @@ Two things the flywheel depends on that are easy to miss:
 
 ## Next
 
-- [`../README.md`](../README.md) — the verbs, install, and API-stability table.
+- [`../README.md`](https://github.com/fxd24/langres/blob/main/README.md) — the verbs, install, and API-stability table.
 - [`TUTORIAL_YOUR_OWN_CSV.md`](TUTORIAL_YOUR_OWN_CSV.md) — a messy CSV → clusters
   in 15 minutes, with threshold calibration and save/load.
 - [`EXPERIMENTS.md`](EXPERIMENTS.md) — the experimentation DX: racing judges,
   the signal log, the harvest, the budget seam.
-- [`../examples/flywheel_min.py`](../examples/flywheel_min.py) —
-  this whole page, runnable at $0.
-- [`../examples/flywheel_closed_loop.py`](../examples/flywheel_closed_loop.py) —
-  the deeper fixture-driven harness of the same stages (core primitives
-  directly; bypasses the verbs and the CLI).
-</content>
-</invoke>
+- [`../examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py) —
+  the loop's core (steps 1–4: log → review → harvest → threshold → tearsheet),
+  runnable at $0.
+- [`../examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) —
+  this whole page — all seven steps including student + cascade — at $0
+  (core primitives directly; bypasses the verbs and the CLI).

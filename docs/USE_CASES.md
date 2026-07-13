@@ -40,7 +40,7 @@
 > Below, "langres Implementation" blocks describe the **intended** design and
 > are kept for the taxonomy; treat the API names as roadmap unless listed as
 > shipping above. See **[ROADMAP.md](ROADMAP.md)** (§2 use-case compass) for the
-> milestone-accurate source of truth and **[../README.md](../README.md)** for the
+> milestone-accurate source of truth and **[../README.md](https://github.com/fxd24/langres/blob/main/README.md)** for the
 > real API. The Status column in §3 has been corrected to match the code.
 
 ## 1. Introduction

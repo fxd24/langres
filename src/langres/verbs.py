@@ -12,19 +12,24 @@ Both verbs share one small contract:
 - ``judge="auto"`` (default) picks an LLM judge from the available API key
   (``OPENROUTER_API_KEY``/``OPENAI_API_KEY``) and emits one selection notice
   -- which model, that paid calls follow, the cap -- BEFORE any paid call.
-  With no key it raises :class:`~langres.core.presets.NoJudgeAvailableError`
+  With no key -- or with ``LANGRES_OFFLINE=1``, the deterministic keyless
+  switch -- it raises :class:`~langres.core.presets.NoJudgeAvailableError`
   (root-exported as ``langres.NoJudgeAvailableError``) instead of silently
   falling back: unsupervised fuzzy matching over-merges on unlabeled data,
-  so the offline zero-spend ``"string"`` judge is an explicit opt-in -- see
-  :func:`~langres.core.presets.choose_auto_judge`.
+  so the offline zero-spend ``"string"`` judge is an explicit opt-in. Key
+  discovery order (process env > CWD ``.env``; empty string counts as
+  absent) is documented on :func:`~langres.core.presets.choose_auto_judge`.
 - Every judge, including the free ones, runs under a default $1 spend cap
   (override with ``budget_usd=``); a cap breach raises
   :class:`~langres.clients.openrouter.BudgetExceeded` carrying every
   judgement already produced on ``.partial_judgements`` (E9) -- see
   :mod:`langres.core.presets`'s module docstring for the resume recipe.
 - Results are self-describing (D2): every verb reports which judge actually
-  ran (``judge_used``) and what its raw score means (``score_type`` -- see
-  the threshold-semantics note below).
+  ran (``judge_used``), what its raw score means (``score_type`` -- see the
+  threshold-semantics note below), and the effective ``threshold`` the match
+  cut used -- so downstream flywheel steps (``select_for_review``,
+  ``EvalReport``) can read the cut off the result instead of the caller
+  remembering the float.
 - Threshold semantics differ across ``score_type`` scales (E12): a
   ``"heuristic"`` score, a cosine ``"sim_cos"``, and an LLM ``"prob_llm"`` are
   not comparable on the same 0..1 cut. ``threshold=None`` (the default)
@@ -90,6 +95,10 @@ class LinkVerdict(BaseModel):
     reasoning: str | None = None
     judge_used: str
     score_type: str
+    #: The effective match cut ``match`` was decided at (the caller's
+    #: ``threshold=``, or the judge's default when it was ``None``) -- feed it
+    #: to ``select_for_review(threshold=...)`` instead of remembering the float.
+    threshold: float
     judgement: PairwiseJudgement
 
     def __bool__(self) -> bool:
@@ -105,8 +114,13 @@ class DedupeResult(list[set[str]]):
     """The clusters :func:`dedupe` returns -- a plain ``list[set[str]]``, self-describing.
 
     Behaves exactly like the list :meth:`~langres.core.resolver.Resolver.resolve`
-    returns; additionally carries ``judge_used`` and ``score_type`` (D2) so a
-    caller can inspect what actually ran without a separate call.
+    returns; additionally carries ``judge_used``, ``score_type`` and the
+    effective ``threshold`` (D2) so a caller can inspect what actually ran --
+    and feed ``threshold`` straight to
+    :func:`~langres.core.review.select_for_review` / ``EvalReport`` -- without
+    a separate call or a remembered constant. ``threshold`` is ``None`` only
+    for the ``len(records) < 2`` short-circuit, where no judge (and hence no
+    cut) was ever resolved.
     """
 
     def __init__(
@@ -115,15 +129,17 @@ class DedupeResult(list[set[str]]):
         *,
         judge_used: str,
         score_type: str,
+        threshold: float | None,
     ) -> None:
         super().__init__(clusters)
         self.judge_used = judge_used
         self.score_type = score_type
+        self.threshold = threshold
 
     def __repr__(self) -> str:
         return (
             f"DedupeResult({list.__repr__(self)}, judge_used={self.judge_used!r}, "
-            f"score_type={self.score_type!r})"
+            f"score_type={self.score_type!r}, threshold={self.threshold!r})"
         )
 
 
@@ -297,7 +313,10 @@ def link(
             one from ``left``/``right``'s own keys.
         model: Model id override for ``"zero_shot_llm"``.
         entity_noun: Domain noun woven into the LLM judge's prompt.
-        threshold: Match cutoff; ``None`` resolves to the judge's default.
+        threshold: Match cutoff; ``None`` resolves to the judge's default --
+            for ``judge="string"`` that is ``0.5`` on its ``"heuristic"``
+            score (see ``presets._DEFAULT_THRESHOLDS``). The effective value
+            is reported back on :attr:`LinkVerdict.threshold`.
         budget_usd: Spend cap override (default $1; see
             :mod:`langres.core.presets`).
         log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
@@ -310,8 +329,9 @@ def link(
     Raises:
         ValueError: On schema-inference errors (nested values, inconsistent
             id presence).
-        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
-            an unpinned-price model) -- never a silent fallback.
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
+            ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
+            silent fallback.
         BudgetExceeded: If scoring this pair would cross the spend cap.
     """
     if schema is None:
@@ -373,6 +393,7 @@ def link(
         reasoning=judgement.reasoning,
         judge_used=judge_used,
         score_type=judgement.score_type,
+        threshold=resolved_threshold,
         judgement=judgement,
     )
 
@@ -420,7 +441,10 @@ def dedupe(
         model: Model id override for ``"zero_shot_llm"``.
         entity_noun: Domain noun woven into the LLM judge's prompt.
         threshold: Clusterer threshold; ``None`` resolves to the judge's
-            default.
+            default -- for ``judge="string"`` that is ``0.5`` on its
+            ``"heuristic"`` score (see ``presets._DEFAULT_THRESHOLDS``). The
+            effective value is reported back on the result's ``threshold``,
+            ready for ``select_for_review(threshold=...)``.
         budget_usd: Spend cap override (default $1).
         log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
             or a path (wrapped in a default one). ``None`` (default): no
@@ -432,16 +456,18 @@ def dedupe(
     Raises:
         ValueError: Duplicate ids, inconsistent id presence, or a nested
             value under schema inference.
-        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
-            an unpinned-price model) -- never a silent fallback.
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
+            ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
+            silent fallback.
         BudgetExceeded: If scoring would cross the spend cap; the exception
             carries the judgements already produced on ``.partial_judgements``.
     """
     if len(records) < 2:
         # [] -> [] and [x] -> [] (no pair possible): short-circuit BEFORE
         # judge resolution so a keyless empty/single-record call never raises
-        # NoJudgeAvailableError -- zero spend is possible either way.
-        return DedupeResult([], judge_used="none", score_type="none")
+        # NoJudgeAvailableError -- zero spend is possible either way. No judge
+        # was resolved, so there is no effective threshold to report.
+        return DedupeResult([], judge_used="none", score_type="none", threshold=None)
 
     if schema is None:
         resolved_schema, resolved_records = _infer(records)
@@ -473,4 +499,8 @@ def dedupe(
         clusters,
         judge_used=resolved.judge_used,
         score_type=score_type,
+        # The clusterer's threshold IS the effective cut (threshold=None was
+        # resolved to the judge's default inside build_resolver) -- the same
+        # value the LoggingModule above stamps on every logged verdict.
+        threshold=resolved.resolver.clusterer.threshold,
     )

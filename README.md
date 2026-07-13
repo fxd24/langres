@@ -50,14 +50,16 @@ round-trip CLI, `harvest_labeled_pairs` → `derive_threshold_from_pairs`,
 DSPy prompt-tuned judges (`DSPyJudge` — a precision-tuned signature let a
 cheap model **beat an uncompiled frontier model at lower cost** on our paid
 benchmark), `CascadeJudge`, and `Resolver.save`/`load` for the whole fitted
-pipeline. Classical students (`RandomForestJudge.fit`) ship too — as honest
-baselines and as the loop's **$0 plumbing demo**: a deterministic stand-in
-plays the frontier judge so the entire loop runs offline for free:
+pipeline. Classical students (`RandomForestJudge.fit`) ship too, as honest
+baselines and **$0 plumbing**. Run the loop's core offline for free — dedupe →
+log → review → harvest → tuned threshold → tearsheet:
 
 ```bash
 uv run python examples/flywheel_min.py
 ```
 
+The full student-and-cascade lifecycle runs at $0 in
+[`examples/flywheel_closed_loop.py`](examples/flywheel_closed_loop.py).
 Blocking gets the modern treatment too: `VectorBlocker` recalls candidates
 with LLM-based embedders.
 [**docs/GETTING_STARTED.md**](docs/GETTING_STARTED.md) walks the lifecycle step
@@ -147,7 +149,8 @@ you which model it picked — and that money is involved — *before* any paid
 call. **Without a key it raises `NoJudgeAvailableError`** (root-exported from
 `langres`) instead of silently falling back: unsupervised fuzzy matching
 over-merges on unlabeled data, so offline string matching is an explicit opt-in
-(`judge="string"`), never a default. Every judge — including the free ones —
+(`judge="string"`), never a default. (`LANGRES_OFFLINE=1` deterministically
+forces that keyless fail-fast path — every key is treated as absent.) Every judge — including the free ones —
 runs under a **default $1 spend cap** (override with `budget_usd=`); a breach
 raises `BudgetExceeded` (also root-exported) carrying the partial judgements,
 never a silent bill. Available judges: `"string"` (rapidfuzz), `"embedding"`

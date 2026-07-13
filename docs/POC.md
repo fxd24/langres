@@ -4,10 +4,10 @@
 > plan; the POC concluded and development moved well past it. Its 4-week
 > timeline and Go/No-Go gates are long done, and the `docs/POC_RESULTS.md`
 > deliverable it names was never written as a separate file — the results and
-> everything shipped since are recorded in [CHANGELOG.md](../CHANGELOG.md)
+> everything shipped since are recorded in [CHANGELOG.md](https://github.com/fxd24/langres/blob/main/CHANGELOG.md)
 > (release history; pre-0.2.0 milestone detail lives in git history). For
 > the current direction see [ROADMAP.md](ROADMAP.md); for what runs today, the
-> [README](../README.md). Nothing below is updated anymore.
+> [README](https://github.com/fxd24/langres/blob/main/README.md). Nothing below is updated anymore.
 
 ## TODO Add as well the idea of training a classifier (classical) after the blocker to decide whether is a match or not.
 

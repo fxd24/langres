@@ -6,7 +6,49 @@ Everything since 0.2.0: the judgement contract (`decision` / abstain / optional
 `confidence`), eval honesty (spend caps by default, honest numbers), the $0
 `EvalReport` tearsheet, the Peeters LLM-EM paper-replication seams, the
 evaluation instrument (benchmark registry + bring-your-own-data `evaluate()`),
-experiment tracking, and a slimmer PyPI package.
+experiment tracking, a paved road for the flywheel loop, a deterministic
+keyless contract for `judge="auto"`, and a slimmer PyPI package.
+
+### The flywheel paved road & the auto-judge keyless contract (#112, #113)
+
+#### ⚠️ Behavior changes
+
+- **`DedupeResult.threshold` and `LinkVerdict.threshold` are new required
+  fields** carrying the *resolved* decision cut — the same value the
+  `JudgementLog` stamps on logged verdicts, so result, log, and
+  `select_for_review` can no longer drift apart. `None` only on `dedupe`'s
+  fewer-than-2-records short-circuit (no judge is resolved). External code
+  constructing these models directly must now pass the field (pre-1.0).
+
+#### Fixed
+
+- **`judge="auto"`'s keyless fail-fast contract was unforceable in-repo.**
+  Popping `OPENROUTER_API_KEY`/`OPENAI_API_KEY` from the environment did NOT
+  produce a keyless run: `Settings` reads the `.env` in the CWD directly, so
+  auto-discovery still found a key and made a real paid call where the
+  documented `NoJudgeAvailableError` was expected. Two deterministic switches
+  now exist — **`LANGRES_OFFLINE=1`** (`Settings.langres_offline`) makes
+  `judge="auto"` treat every key as absent (scoped to auto-discovery; an
+  explicit `judge=` in code bypasses it), and an env var set to the **empty
+  string** wins over `.env` and counts as absent (now documented +
+  regression-locked). The full discovery order (kwargs > process env > CWD
+  `.env`, no walk-up; decided before litellm's own walk-up `load_dotenv` can
+  run) is documented on `choose_auto_judge` and `Settings`.
+
+#### Added
+
+- **The flywheel loop's back half is now root-importable.** `Correction`,
+  `CorrectionLog`, `harvest_labeled_pairs`, `derive_threshold_from_pairs`
+  export eagerly; `EvalReport`, `gold_pairs_from_clusters`, and
+  `derive_threshold` resolve lazily (PEP 562) so a bare `import langres` stays
+  light — the whole loop now reads from a single `from langres import (...)`.
+- **`examples/flywheel_min.py`** — the full zero-label loop at $0, offline:
+  `dedupe` + `JudgementLog` → `select_for_review` → the real
+  `langres export-csv` / `import-csv` round-trip → `harvest_labeled_pairs` →
+  `derive_threshold_from_pairs` → re-run → `EvalReport` tearsheet. The toy
+  dataset is crafted so tuning visibly changes the outcome (precision
+  0.600 → 1.000, F1 0.750 → 1.000); it runs in the core-install CI job on
+  every PR, proving the bare-`uv sync` claim.
 
 ### Packaging
 

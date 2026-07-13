@@ -85,7 +85,7 @@ Three shipped layers, all built on `PairwiseJudgement.provenance`:
 
 ## 3. High-Level API: the verbs (`dedupe` / `link`)
 
-The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](../examples/quickstart_verbs.py).
+The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](https://github.com/fxd24/langres/blob/main/examples/quickstart_verbs.py).
 
 ### dedupe
 
@@ -109,7 +109,7 @@ result = dedupe(records, judge="string", threshold=0.6)
 print(result.judge_used, result.score_type)   # "string" "heuristic"
 ```
 
-`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
 
 ### link
 

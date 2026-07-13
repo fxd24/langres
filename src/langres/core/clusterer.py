@@ -315,7 +315,7 @@ class Clusterer:
             - 'bcubed': BCubed metrics (precision, recall, f1)
             - 'pairwise': Pairwise metrics (precision, recall, f1, tp, fp, fn)
 
-        Example:
+        Examples:
             >>> clusterer = Clusterer(threshold=0.7)
             >>> predicted = clusterer.cluster(judgements)
             >>> metrics = clusterer.evaluate(predicted, gold_clusters)
