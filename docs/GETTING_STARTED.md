@@ -12,19 +12,19 @@ langres closes a loop most ER tools leave open: an expensive judge bootstraps
 only the still-uncertain pairs back to the expensive judge.
 
 ```
-   ┌─────────────────────────────────────────────────────────────────────┐
-   │                          THE DATA FLYWHEEL                           │
-   │                                                                     │
-   │   day 1: LLM judge  ──►  log every call  ──►  select the margin     │
-   │   (dedupe, capped)       (log="…jsonl")       (select_for_review)   │
-   │        ▲                                             │              │
-   │        │                                             ▼              │
-   │   cascade: cheap  ◄──  train cheap student  ◄──  human review       │
-   │   student + escalate    (RandomForestJudge.fit +           (langres review /  │
-   │   only in the band       derive_threshold)        CSV round-trip)   │
-   │        │                       ▲                                     │
-   │        └───────────────────────┘  save / load the whole pipeline    │
-   └─────────────────────────────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────────────────────────┐
+   │                         THE DATA FLYWHEEL                          │
+   │                                                                    │
+   │   day 1: LLM judge  ──►  log every call  ──►  select the margin    │
+   │   (dedupe, capped)       (log="…jsonl")       (select_for_review)  │
+   │        ▲                                             │             │
+   │        │                                             ▼             │
+   │   cascade: student  ◄──  train cheap student  ◄──  human review    │
+   │   everywhere, LLM        (RandomForestJudge        (langres review │
+   │   only in the band        .fit + calibrate)         / CSV export)  │
+   │        │                        ▲                                  │
+   │        └────────────────────────┘   save/load the whole pipeline   │
+   └────────────────────────────────────────────────────────────────────┘
 ```
 
 **Its runnable twin is [`examples/flywheel_min.py`](../examples/flywheel_min.py)** —
