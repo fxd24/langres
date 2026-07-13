@@ -16,7 +16,7 @@
 
 **Current Stage**: The initial POC — validating the architecture through three progressively sophisticated approaches (classical rapidfuzz, semantic vectors, hybrid blocking + LLM judge) — is **complete**; `docs/POC.md` is kept as an archived record. langres is now a shipped 0.x beta (on PyPI, Apache-2.0).
 
-**📋 See `docs/ROADMAP.md` for direction and milestones** and `docs/CHANGELOG.md` for what shipped.
+**📋 See `docs/ROADMAP.md` for direction and milestones** and the root `CHANGELOG.md` for what shipped.
 
 **Current focus**: Building production-quality `langres.core` primitives under a **tiered coverage policy** (95–100% on the `core` contract, behavior/smoke on harness code — see `.claude/rules/testing.md`). This is NOT throwaway prototype code—these components will become the foundation of the full library.
 
@@ -110,7 +110,7 @@ The `.agent/` folder contains external expert analyses of the langres project:
 ## Reference Documentation (`docs/`)
 
 - **`docs/ROADMAP.md`** ⭐ **START HERE / DIRECTION** — the vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones. Read before planning new work.
-- **`docs/POC.md`** — **archived** original POC validation plan (historical record; results in `docs/CHANGELOG.md`).
+- **`docs/POC.md`** — **archived** original POC validation plan (historical record; outcomes in the root `CHANGELOG.md` and git history).
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
