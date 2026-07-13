@@ -157,7 +157,7 @@ they are asked:
 > consumer.* (`ROADMAP.md:25-27`)
 
 Streaming, temporal, and the cluster store are all delegated to the consumer
-(brainsquad) on exactly this basis (ROADMAP §2.3, §5). **Cost falls on the same
+(the consumer) on exactly this basis (ROADMAP §2.3, §5). **Cost falls on the same
 fault line**, and it splits into three, not three-of-a-kind:
 
 - **A paid model invocation is engine-side and is langres's job to meter.** An
@@ -466,7 +466,7 @@ The `Resolver` artifact today is components-only (`ArtifactManifest`,
 + blocking funnel config + judge … + thresholds + **metric provenance**"
 (`ROADMAP.md:190-192`) — the metric-provenance half was never built.
 
-**Why it matters:** the artifact is the brainsquad integration contract
+**Why it matters:** the artifact is the consumer integration contract
 (ROADMAP §5). An artifact that declares what it *is* (its components) but not what
 it *achieves and costs* (held-out F1, `$/1k pairs`, the model + price it was
 measured at) is **not choosable** — a consumer picking `person_v1` vs `person_v2`
