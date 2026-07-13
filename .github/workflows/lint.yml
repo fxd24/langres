@@ -12,9 +12,8 @@ concurrency:
 
 jobs:
   lint:
-    # 2-vCPU (smallest): ruff is fast and mypy is single-threaded (the
-    # bottleneck), so extra cores don't speed this job up.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Standard GitHub runner: free with unlimited minutes on public repos.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
