@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`langres.__version__` no longer drifts from the released version.** It was a
+  hardcoded string (still `"0.2.0"` in the published 0.3.0 wheel, while pip
+  metadata correctly said 0.3.0); it now resolves from the installed package
+  metadata (`importlib.metadata`), so pyproject.toml is the single source of
+  truth.
+
 ## [0.3.0] - 2026-07-13
 
 Everything since 0.2.0: the judgement contract (`decision` / abstain / optional
