@@ -165,15 +165,36 @@ def choose_auto_judge(
 ) -> tuple[JudgeName, str]:
     """Resolve ``judge="auto"`` from available API keys -- or refuse, loudly.
 
-    ``OPENROUTER_API_KEY`` set -> the OpenRouter gpt-4o-mini route; else
-    ``OPENAI_API_KEY`` set -> the direct-OpenAI gpt-5-mini route; else ->
-    :class:`NoJudgeAvailableError`. There is deliberately no silent fallback
-    to ``"string"``: unsupervised fuzzy matching over-merges on unlabeled
-    data, so the offline judge is an explicit opt-in, never a default. A
-    caller-supplied ``model=`` overrides the key-derived pick (and runs the
-    same pinned-price check); a model whose price is unpinned -- $0-metered,
-    so the spend cap would be blind -- is refused too (E1; explicit
-    ``judge="zero_shot_llm"`` remains the blind-cap escape hatch).
+    ``LANGRES_OFFLINE`` truthy -> :class:`NoJudgeAvailableError` (every key is
+    treated as absent); else ``OPENROUTER_API_KEY`` set -> the OpenRouter
+    gpt-4o-mini route; else ``OPENAI_API_KEY`` set -> the direct-OpenAI
+    gpt-5-mini route; else -> :class:`NoJudgeAvailableError`. There is
+    deliberately no silent fallback to ``"string"``: unsupervised fuzzy
+    matching over-merges on unlabeled data, so the offline judge is an
+    explicit opt-in, never a default. A caller-supplied ``model=`` overrides
+    the key-derived pick (and runs the same pinned-price check); a model whose
+    price is unpinned -- $0-metered, so the spend cap would be blind -- is
+    refused too (E1; explicit ``judge="zero_shot_llm"`` remains the blind-cap
+    escape hatch).
+
+    Key discovery (what "set" means): each key/flag is read from ``settings``,
+    which resolves, per field, constructor kwargs > process env > ``.env`` in
+    the current working directory (CWD-relative, no parent-directory walk-up
+    -- see :class:`~langres.clients.settings.Settings`). Two consequences:
+
+    - Merely UNSETTING ``OPENROUTER_API_KEY``/``OPENAI_API_KEY`` does not
+      produce a keyless run inside a project whose ``.env`` carries a key --
+      the ``.env`` refills it. To force the keyless fail-fast path
+      deterministically, set ``LANGRES_OFFLINE=1`` (process-wide switch), or
+      set the key variables to the EMPTY string (an empty env var wins over
+      ``.env`` and counts as absent).
+    - The decision is made from ``settings`` alone, BEFORE litellm/dspy is
+      imported -- litellm's own import-time ``load_dotenv()`` (which walks up
+      the directory tree) can never influence it.
+
+    ``LANGRES_OFFLINE`` is scoped to this auto path: an explicit
+    ``judge="zero_shot_llm"``/``"string"``/``"embedding"`` or a ``Module``
+    instance in code bypasses it (explicit code beats ambient environment).
 
     The happy path emits one selection notice via :func:`_notice` -- which
     model was picked, that paid API calls follow, and the cap -- BEFORE any
@@ -181,7 +202,8 @@ def choose_auto_judge(
 
     Args:
         settings: Loaded :class:`~langres.clients.settings.Settings` (reads
-            ``openrouter_api_key`` / ``openai_api_key``).
+            ``langres_offline`` and ``openrouter_api_key`` /
+            ``openai_api_key``).
         model: Caller's model-id override (honored instead of the
             key-derived default).
         budget_usd: Spend cap named in the selection notice; ``None``
@@ -191,9 +213,21 @@ def choose_auto_judge(
         ``("zero_shot_llm", model)`` -- the resolved judge and model id.
 
     Raises:
-        NoJudgeAvailableError: No API key is set, or the selected model has
-            no pinned price in ``PRICES_PER_1M``.
+        NoJudgeAvailableError: ``LANGRES_OFFLINE`` is truthy, no API key is
+            set, or the selected model has no pinned price in
+            ``PRICES_PER_1M``.
     """
+    if settings.langres_offline:
+        raise NoJudgeAvailableError(
+            'judge="auto" is disabled: LANGRES_OFFLINE is set, so every API key is '
+            "treated as absent (deterministic keyless mode -- the process env beats "
+            "any .env file).\n"
+            "Fix A: unset LANGRES_OFFLINE (or set it to 0) to allow key discovery.\n"
+            'Fix B: pass judge="string" to opt into offline fuzzy matching (lower '
+            "quality; calibrate its threshold with "
+            "langres.core.calibration.derive_threshold).\n"
+            f"Guide: {_GETTING_STARTED_URL}"
+        )
     if not settings.openrouter_api_key and not settings.openai_api_key:
         raise NoJudgeAvailableError(
             'judge="auto" found no API key (OPENROUTER_API_KEY / OPENAI_API_KEY are unset).\n'

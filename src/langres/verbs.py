@@ -12,11 +12,13 @@ Both verbs share one small contract:
 - ``judge="auto"`` (default) picks an LLM judge from the available API key
   (``OPENROUTER_API_KEY``/``OPENAI_API_KEY``) and emits one selection notice
   -- which model, that paid calls follow, the cap -- BEFORE any paid call.
-  With no key it raises :class:`~langres.core.presets.NoJudgeAvailableError`
+  With no key -- or with ``LANGRES_OFFLINE=1``, the deterministic keyless
+  switch -- it raises :class:`~langres.core.presets.NoJudgeAvailableError`
   (root-exported as ``langres.NoJudgeAvailableError``) instead of silently
   falling back: unsupervised fuzzy matching over-merges on unlabeled data,
-  so the offline zero-spend ``"string"`` judge is an explicit opt-in -- see
-  :func:`~langres.core.presets.choose_auto_judge`.
+  so the offline zero-spend ``"string"`` judge is an explicit opt-in. Key
+  discovery order (process env > CWD ``.env``; empty string counts as
+  absent) is documented on :func:`~langres.core.presets.choose_auto_judge`.
 - Every judge, including the free ones, runs under a default $1 spend cap
   (override with ``budget_usd=``); a cap breach raises
   :class:`~langres.clients.openrouter.BudgetExceeded` carrying every
@@ -310,8 +312,9 @@ def link(
     Raises:
         ValueError: On schema-inference errors (nested values, inconsistent
             id presence).
-        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
-            an unpinned-price model) -- never a silent fallback.
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
+            ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
+            silent fallback.
         BudgetExceeded: If scoring this pair would cross the spend cap.
     """
     if schema is None:
@@ -432,8 +435,9 @@ def dedupe(
     Raises:
         ValueError: Duplicate ids, inconsistent id presence, or a nested
             value under schema inference.
-        NoJudgeAvailableError: With ``judge="auto"`` and no API key set (or
-            an unpinned-price model) -- never a silent fallback.
+        NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
+            ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
+            silent fallback.
         BudgetExceeded: If scoring would cross the spend cap; the exception
             carries the judgements already produced on ``.partial_judgements``.
     """

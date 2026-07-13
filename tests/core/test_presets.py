@@ -288,6 +288,19 @@ class TestChooseAutoJudge:
         with pytest.warns(UserWarning, match=r"\$2\.50"):
             choose_auto_judge(_settings(openrouter="or-key"), budget_usd=2.5)
 
+    def test_offline_flag_raises_even_with_keys_present(self) -> None:
+        """LANGRES_OFFLINE beats every discoverable key: the deterministic
+        keyless switch must win even when both keys are set, and its error
+        copy must name the flag and the offline opt-in fix."""
+        settings = Settings(
+            langres_offline=True, openrouter_api_key="or-key", openai_api_key="oai-key"
+        )
+        with pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE") as excinfo:
+            choose_auto_judge(settings)
+        message = str(excinfo.value)
+        assert 'judge="string"' in message  # the offline opt-in fix
+        assert "docs/GETTING_STARTED.md" in message
+
 
 def warnings_none() -> "_NoWarnings":
     """Assert the wrapped block emits no warnings at all."""
@@ -517,6 +530,35 @@ class TestResolveJudge:
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
             pytest.raises(NoJudgeAvailableError),
+        ):
+            resolve_judge("auto", PresetCompany)
+
+    def test_auto_resolution_raises_with_langres_offline_env(self) -> None:
+        """LANGRES_OFFLINE=1 forces the keyless fail-fast path WITHOUT any
+        dotenv patching -- hermetic even inside a repo whose .env carries a
+        real key (the process env beats the .env file). This is the
+        documented, deterministic way to test NoJudgeAvailableError; before
+        it existed, no environment manipulation could produce a keyless run
+        in-repo (popping the vars just let .env refill them)."""
+        with (
+            patch.dict(
+                "os.environ",
+                {"LANGRES_OFFLINE": "1", "OPENROUTER_API_KEY": "fake-not-a-real-key"},
+                clear=True,
+            ),
+            pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE"),
+        ):
+            resolve_judge("auto", PresetCompany)
+
+    def test_auto_resolution_raises_with_empty_key_env_vars(self) -> None:
+        """The per-key keyless mechanism: an env var set to the EMPTY string
+        wins over the .env file (no dotenv patching here) and counts as
+        absent, so ``OPENROUTER_API_KEY="" OPENAI_API_KEY=""`` fails fast."""
+        with (
+            patch.dict(
+                "os.environ", {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=True
+            ),
+            pytest.raises(NoJudgeAvailableError, match="no API key"),
         ):
             resolve_judge("auto", PresetCompany)
 

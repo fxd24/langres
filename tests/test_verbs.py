@@ -395,6 +395,26 @@ class TestDedupe:
         ):
             dedupe(records)
 
+    def test_langres_offline_forces_fail_fast_without_dotenv_patching(self) -> None:
+        """Regression (2026-07-13 incident): popping the key env vars did NOT
+        make dedupe() keyless -- Settings read the repo .env and a default
+        dedupe(records) executed a real paid call. LANGRES_OFFLINE=1 is the
+        deterministic fix: it must force NoJudgeAvailableError with NO dotenv
+        patching, even when a key is present in the environment or .env."""
+        records = [
+            {"id": "1", "name": "Acme"},
+            {"id": "2", "name": "Acme"},
+        ]
+        with (
+            patch.dict(
+                "os.environ",
+                {"LANGRES_OFFLINE": "1", "OPENROUTER_API_KEY": "fake-not-a-real-key"},
+                clear=True,
+            ),
+            pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE"),
+        ):
+            dedupe(records)
+
 
 # ---------------------------------------------------------------------------
 # link()

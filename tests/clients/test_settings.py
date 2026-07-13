@@ -1,6 +1,7 @@
 """Tests for langres.clients.settings module."""
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -161,3 +162,76 @@ class TestSettings:
         ):
             settings = Settings()
             assert settings.azure_api_version == "2025-01-01-preview"
+
+
+class TestKeyDiscoveryContract:
+    """The documented key-discovery order (Settings docstring): constructor
+    kwargs > process env (empty string counts as set) > CWD ``.env`` (no
+    walk-up). These tests lock the contract that makes a keyless run
+    forceable at all -- they run against a THROWAWAY .env in tmp_path, never
+    the repo's, and use fake keys only (zero network)."""
+
+    def test_dotenv_file_in_cwd_fills_unset_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The legit dotenv-user path: a key in the project .env is picked up."""
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-dotenv\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert Settings().openrouter_api_key == "fake-from-dotenv"
+
+    def test_env_var_beats_dotenv_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-dotenv\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-from-env")
+        assert Settings().openrouter_api_key == "fake-from-env"
+
+    def test_empty_env_var_beats_dotenv_and_counts_as_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-key keyless mechanism: OPENROUTER_API_KEY="" must WIN over
+        the .env value (env_ignore_empty stays False -- see model_config) and
+        read as falsy, so judge="auto" treats it as no key. If this test ever
+        fails, no environment manipulation can force a keyless run inside a
+        repo whose .env carries a real key."""
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-dotenv\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "")
+        settings = Settings()
+        assert settings.openrouter_api_key == ""
+        assert not settings.openrouter_api_key
+
+    def test_dotenv_lookup_is_cwd_relative_not_walk_up(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Settings' env_file=".env" reads the CURRENT directory only --
+        unlike litellm's import-time load_dotenv(), it never walks up to a
+        parent directory's .env."""
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-parent\n")
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        monkeypatch.chdir(subdir)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert Settings().openrouter_api_key is None
+
+
+class TestLangresOfflineFlag:
+    """LANGRES_OFFLINE parsing: truthy bool strings turn it on; empty string,
+    "0"/"false", and unset mean off (an explicitly empty variable must never
+    crash Settings -- consistent with empty-means-absent for keys)."""
+
+    @pytest.mark.parametrize("raw", ["1", "true", "True", "yes"])
+    def test_truthy_values_enable_offline(self, raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LANGRES_OFFLINE", raw)
+        assert Settings().langres_offline is True
+
+    @pytest.mark.parametrize("raw", ["", "0", "false", "no"])
+    def test_falsy_values_disable_offline(self, raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LANGRES_OFFLINE", raw)
+        assert Settings().langres_offline is False
+
+    def test_unset_defaults_to_off(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # chdir to an empty tmp dir so the repo .env can't feed the field.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("LANGRES_OFFLINE", raising=False)
+        assert Settings().langres_offline is False
