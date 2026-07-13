@@ -5,8 +5,9 @@
 langres resolves records that refer to the same real-world entity — deduplicating
 one dataset or linking two — through a layered API: two user-facing **verbs**
 (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over
-low-level **`langres.core`** primitives (blockers, judges, clusterers) that you
-can swap, tune, and evaluate independently.
+low-level **`langres.core`** primitives — blockers (pick candidate pairs),
+judges (score whether a pair matches), clusterers (group the matches) — that
+you can swap, tune, and evaluate independently.
 
 ```python
 import langres
@@ -23,7 +24,7 @@ pip install "langres @ git+https://github.com/fxd24/langres"
 ## Where to go next
 
 - **[Getting Started](GETTING_STARTED.md)** — install, first dedupe, and the
-  review/harvest/calibrate flywheel.
+  review → harvest → calibrate improvement loop.
 - **[Tutorial: Your Own CSV](TUTORIAL_YOUR_OWN_CSV.md)** — end-to-end walkthrough
   on your own data.
 - **[Technical Overview](TECHNICAL_OVERVIEW.md)** — architecture, data contracts,

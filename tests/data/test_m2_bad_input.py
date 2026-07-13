@@ -1,6 +1,6 @@
 """M2 bad-input contract — the resolver's documented behavior on degenerate input.
 
-These are the DX-hardening assertions from the Wave 3 review: a brainsquad
+These are the DX-hardening assertions from the Wave 3 review: a downstream
 integrator must know exactly what ``resolve`` does at the edges. They run FAST —
 the resolver here mirrors :func:`build_restaurant_resolver` (same
 ``RestaurantSchema`` + ``Comparator.from_schema`` + ``WeightedAverageJudge`` +

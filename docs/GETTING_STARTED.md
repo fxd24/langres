@@ -6,12 +6,16 @@ Every step below carries a short runnable snippet **inline**; the links point
 *down* to the mechanics (they are for depth, never for the code you need to get
 moving).
 
-langres closes a loop most ER tools leave open: a frontier LLM bootstraps
-*silver* labels with just a prompt, a human reviews only the uncertain margin,
-those labels tune a **cheaper judge** — in production a DSPy prompt-tuned
-smaller LLM, in this page's $0 demo a classical student — and a **cascade**
-runs the cheap judge everywhere while escalating only the still-uncertain
-pairs back to the frontier.
+langres closes a loop most entity-resolution (ER) tools leave open: a frontier
+LLM acts as the first **judge** (the component that scores whether two records
+match) and bootstraps *silver* labels — machine-generated, not yet
+human-verified — with just a prompt; a human reviews only the **uncertain
+margin**: the candidate pairs whose scores fall closest to the decision
+threshold, the ones the judge is least sure about and the only ones a human
+needs to look at. Those labels tune a **cheaper judge** — in production a DSPy
+prompt-tuned smaller LLM, in this page's $0 demo a classical *student* model
+trained on them — and a **cascade** runs the cheap judge everywhere while
+escalating only the still-uncertain pairs back to the frontier.
 
 ```
    ┌────────────────────────────────────────────────────────────────────┐
@@ -31,8 +35,8 @@ pairs back to the frontier.
 
 **Its runnable twin is [`examples/flywheel_min.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_min.py)** —
 the core of the loop (steps 1–4: log → review the margin → CSV round-trip →
-harvest → data-driven threshold → re-run → tearsheet) in ~90 lines, offline at
-**$0**. Run it while you read:
+harvest → data-driven threshold → re-run → tearsheet, a one-page HTML quality
+report) in ~90 lines, offline at **$0**. Run it while you read:
 
 ```bash
 uv run python examples/flywheel_min.py
@@ -41,7 +45,8 @@ uv run python examples/flywheel_min.py
 The **full** seven steps — including the trained student and the cascade —
 run at $0 in [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py),
 a deeper fixture-driven harness that drives the `langres.core` primitives
-directly, bypassing the verbs and the CLI.
+directly, bypassing the verbs (`dedupe` / `link`, the one-call entry points)
+and the CLI.
 
 ---
 
@@ -133,8 +138,9 @@ covers all seven.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
-Start with the teacher. `dedupe(records)` (default `judge="auto"`) blocks,
-scores every candidate pair with the LLM, and clusters — spend-capped:
+Start with the teacher. `dedupe(records)` (default `judge="auto"`) blocks
+(pre-selects the record pairs worth comparing), scores every candidate pair
+with the LLM, and clusters — spend-capped:
 
 ```python
 result = dedupe(records)                    # judge="auto", $1 cap by default
@@ -177,7 +183,9 @@ print(f"{len(items)} pairs to review. Next:  uv run langres review queue.jsonl")
 ```
 
 Then a human answers the queue. The **primary review path is the CSV
-round-trip** — export the queue to a spreadsheet, label it, import it back:
+round-trip** — `langres export-csv` writes the queued pairs to a plain `.csv`
+file you can open in any spreadsheet; fill the `label` column with `y`/`n`,
+and `langres import-csv` reads the answers back:
 
 ```bash
 uv run langres export-csv queue.jsonl to_label.csv   # fill the 'label' column (y/n)
@@ -235,7 +243,7 @@ student_threshold = derive_threshold(student_scores, heldout_labels)
 > cheaper LLM.** This step's `RandomForestJudge` is Magellan-style supervised
 > matching, shipped as an honest baseline and free plumbing for the loop. The
 > LLM-native pattern is to spend the same harvested labels on **prompt-tuning a
-> smaller LLM** (`DSPyJudge`): a precision-tuned DSPy signature let a cheap
+> smaller LLM** (`DSPyJudge`): a precision-tuned DSPy prompt signature let a cheap
 > model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
 > automatic MIPROv2 *compilation* was measured and cut — the signature is the
 > lever). Fine-tuning a small LM on these labels is the roadmap's next rung.

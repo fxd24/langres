@@ -69,4 +69,4 @@ backlog in [#55](https://github.com/raisesquad/langres/issues/55).
 
 - **Hosted demo / notebooks / CLI** — deferred until after the distribution decision.
 - **Human correction UX** — langres owns the `corrections.jsonl` contract + harvest
-  only; the review-queue UI stays brainsquad-side.
+  only; the review-queue UI stays in the consuming application.
