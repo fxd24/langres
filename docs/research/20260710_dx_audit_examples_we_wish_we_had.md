@@ -176,7 +176,7 @@ name.** `docs/ROADMAP.md`, the current statement of direction, mentions
 
 `langres.ui` is the one to reject on principle, not just on redundancy. ROADMAP §1:
 *"Engine intelligence in langres; data, persistence, **visibility** in the
-consumer."* A shipped Streamlit app **is** visibility. It belongs to brainsquad, on
+consumer."* A shipped Streamlit app **is** visibility. It belongs to the consumer, on
 the same side of the seam as streaming and temporal support. Shipping it would put
 langres on both sides of its own architectural boundary.
 

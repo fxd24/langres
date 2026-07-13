@@ -11,7 +11,7 @@ and, where applicable, a judge's ``fit()``.
 The division of labor is deliberate: langres owns the **contract**, the
 **harvest**, and the headless + terminal review surfaces (the ``langres review``
 CLI and its CSV round-trip); anything with a rendering loop (a web review UI)
-stays in the downstream application (e.g. brainsquad). :class:`Correction` is the
+stays in the downstream application. :class:`Correction` is the
 stable line schema a review tool writes to ``corrections.jsonl``; :class:`CorrectionLog`
 is the reference reader/writer for that file (mirroring ``JudgementLog`` so the
 two flywheel files are handled the same way); :func:`harvest_labeled_pairs` is
@@ -66,7 +66,7 @@ _CORRECTION_SCHEMA_VERSION = 1
 class Correction(BaseModel):
     """One human verdict-correction for a judged pair: the ``corrections.jsonl`` line.
 
-    This is the stable contract an external review queue (e.g. brainsquad) writes
+    This is the stable contract an external review queue writes
     when a reviewer overrides a judge's verdict. Only ``left_id``/``right_id`` and
     the corrected ``label`` are required; the rest is optional audit context. A
     pair is identified order-independently on harvest (see
