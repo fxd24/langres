@@ -146,10 +146,12 @@ def _effective_budget(budget_usd: float | None) -> float:
 class NoJudgeAvailableError(RuntimeError):
     """``judge="auto"`` refused to pick a judge it cannot run safely.
 
-    Raised (never a silent fallback) when no LLM API key is set, or when the
-    selected model's price is unpinned so the spend cap would be blind. The
-    message carries the exact fixes; the offline escape hatch is an explicit
-    ``judge="string"``. Root-exported as ``langres.NoJudgeAvailableError``.
+    Raised (never a silent fallback) when no LLM API key is set, when
+    ``LANGRES_OFFLINE`` is truthy (the deterministic keyless switch -- every
+    key is treated as absent), or when the selected model's price is unpinned
+    so the spend cap would be blind. The message carries the exact fixes; the
+    offline escape hatch is an explicit ``judge="string"``. Root-exported as
+    ``langres.NoJudgeAvailableError``.
     """
 
 
