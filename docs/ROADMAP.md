@@ -27,7 +27,6 @@ Three stacked definitions of "usable", all true at once:
    in the consumer.*
 
 **General by design, proven by one real use case.** brainsquad
-([raisesquad/brainsquad#1051](https://github.com/raisesquad/brainsquad/issues/1051))
 is our first and only real consumer — Person (hard, multilingual), Program/Project
 (easy), Geography (external authority), Grant (later). We prove the framework on
 it, while keeping every abstraction entity-agnostic.
