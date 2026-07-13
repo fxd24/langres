@@ -3,7 +3,7 @@
 *Design note for the maintainer's direction question — "think of HF transformers:
 anybody can publish their model, and you can use it easily; today `link`/`dedupe`
 don't tell you which model is used, and the verbs should be tied to the type of
-model one uses" — and for [issue #103](https://github.com/raisesquad/langres/issues/103)
+model one uses" — and for [issue #103](https://github.com/fxd24/langres/issues/103)
 (LLMJudge unreachable by name from the verbs). Scope: what "model identity" and
 "publishing" should mean in langres, mapped honestly onto the seams that exist,
 with staged options. Documentation only; no code changes. Written against `main`

@@ -1,6 +1,6 @@
 # Cost accounting in langres — a design note for the tracking layer
 
-*Design note for [issue #100](https://github.com/raisesquad/langres/issues/100)
+*Design note for [issue #100](https://github.com/fxd24/langres/issues/100)
 ("Cost tracking: comprehensive design"). Scope: how langres should account for
 the cost of an experiment run coherently — what it stores, what it derives, where
 each concern lives, and how `RunRecord` evolves. Documentation only; no code
