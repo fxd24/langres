@@ -1,3 +1,13 @@
+# pre-commit.ci (https://pre-commit.ci) is a maintainer-side install: enable it
+# for this repository via the pre-commit.ci GitHub App -- nothing in this file
+# activates it by itself. The ci: block makes this config compatible once it IS
+# enabled: the local `language: system` hooks below (mypy, pytest) need the
+# repo's uv environment and cannot run on pre-commit.ci's runners, so they are
+# skipped there (GitHub Actions lint.yml/test.yml already cover both).
+ci:
+  skip: [mypy, pytest]
+  autoupdate_schedule: monthly
+
 repos:
   # Standard pre-commit hooks for file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks

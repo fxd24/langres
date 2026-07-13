@@ -32,11 +32,8 @@ jobs:
     #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
-    # 2-vCPU (smallest): this job runs an LLM agent that waits on the Claude
-    # API -- it's I/O-bound and uses ~0 CPU (runs in seconds), so extra cores
-    # would be paid-for and idle. (Bigger runners only pay off for jobs that
-    # parallelize across cores -- e.g. the test job with pytest-xdist.)
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Standard GitHub runner: free with unlimited minutes on public repos.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read

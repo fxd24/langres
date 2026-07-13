@@ -23,7 +23,7 @@ jobs:
   # 95% floor is enforced on `test-full` below.
   test:
     if: github.event_name == 'pull_request'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.13"]
@@ -64,7 +64,7 @@ jobs:
     # absent, then a *targeted* subset: the full test suite can't even collect
     # here (many test files import those packages directly to mock them), so
     # this only runs the import-budget file plus a quickstart smoke check.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -105,7 +105,7 @@ jobs:
     # 4-vCPU: the slow ML tests' torch inference uses all 4 cores via torch's
     # intra-op threading. (pytest-xdist `-n auto` was tried and REVERTED -- 4
     # workers x ~4 torch threads oversubscribes the cores and runs slower.)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.13"]
