@@ -1,0 +1,103 @@
+site_name: langres
+site_description: A composable, optimizable entity resolution framework for Python.
+site_url: https://fxd24.github.io/langres/
+repo_url: https://github.com/fxd24/langres
+repo_name: fxd24/langres
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    # Light/dark toggle, following the OS preference by default.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_root_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+
+# DOCS.md is the internal implementation plan for this very site (it contains
+# illustrative example links to pages that intentionally don't exist), so it
+# is excluded from the build rather than published.
+exclude_docs: |
+  DOCS.md
+
+# Internal / historical docs that are built (so intra-doc links keep working
+# and search finds them) but deliberately not part of the curated nav.
+not_in_nav: |
+  /DEPENDENCIES.md
+  /DX_RESOLVER.md
+  /FRICTION_LOG.md
+  /FUTURE.md
+  /ISSUES.md
+  /M3_DIRECTION_MEMO.md
+  /POC.md
+  /RESOURCES.md
+  /TESTING_AT_ZERO_COST.md
+  /plans/
+  /research/
+
+nav:
+  - Home: index.md
+  - Getting Started: GETTING_STARTED.md
+  - Tutorial - Your Own CSV: TUTORIAL_YOUR_OWN_CSV.md
+  - Technical Overview: TECHNICAL_OVERVIEW.md
+  - Experiments: EXPERIMENTS.md
+  - Benchmarks: BENCHMARKS.md
+  - Adding a Method: ADDING_A_METHOD.md
+  - Use Cases: USE_CASES.md
+  - Roadmap: ROADMAP.md
+  - Changelog: CHANGELOG.md
+  - API Reference:
+      - reference/index.md
+      - langres (verbs & root exports): reference/langres.md
+      - langres.eval: reference/eval.md
+      - Resolver: reference/resolver.md
+      - Blockers: reference/blockers.md
+      - Comparators: reference/comparators.md
+      - Judges: reference/judges.md
+      - Clusterers: reference/clusterers.md
+      - Flywheel (log / review / harvest / calibration): reference/flywheel.md
+      - EvalReport: reference/eval-report.md
