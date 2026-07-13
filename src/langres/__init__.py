@@ -28,6 +28,8 @@ which ``derive_threshold`` needs (the ``[trained]`` extra) -- into
 """
 
 import importlib
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _metadata_version
 from typing import TYPE_CHECKING, Any
 
 from langres.clients.openrouter import BudgetExceeded
@@ -78,7 +80,13 @@ __all__ = [
     "select_for_review",
 ]
 
-__version__ = "0.2.0"
+# Single source of truth is pyproject.toml; resolved from installed metadata so
+# a version bump can never miss this string again. Falls back for source trees
+# imported without installation.
+try:
+    __version__ = _metadata_version("langres")
+except PackageNotFoundError:  # pragma: no cover - only hit on uninstalled source trees
+    __version__ = "0.0.0.dev0"
 
 #: ``name -> owning module`` for root exports resolved on first access (PEP
 #: 562, mirroring ``langres.core.__getattr__``). ``EvalReport`` and
