@@ -15,10 +15,10 @@ import langres
 clusters = langres.dedupe(records)  # judge="auto" picks the best available judge
 ```
 
-Install from source (PyPI release pending):
+Install from PyPI:
 
 ```bash
-pip install "langres @ git+https://github.com/fxd24/langres"
+pip install langres
 ```
 
 ## Where to go next
@@ -38,6 +38,7 @@ pip install "langres @ git+https://github.com/fxd24/langres"
 
 ## Project status
 
-langres is in early development (pre-alpha). The verbs / `Resolver` / `core`
-contracts are stable enough to build on, but expect breaking changes between
-releases — see the [Roadmap](ROADMAP.md) and [Changelog](CHANGELOG.md).
+langres is a 0.x beta, [released on PyPI](https://pypi.org/project/langres/)
+under Apache-2.0. The verbs / `Resolver` / `core` contracts are stable enough
+to build on, but expect breaking changes between 0.x releases — see the
+[Roadmap](ROADMAP.md) and [Changelog](CHANGELOG.md).
