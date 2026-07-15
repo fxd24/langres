@@ -276,19 +276,27 @@ def test_finetune_returns_the_model_ref() -> None:
 
 
 @pytest.mark.finetune
-def test_qlora_trainer_cpu_dry_run(tmp_path: Path) -> None:
-    """Real peft+trl LoRA on a tiny model, CPU (no 4-bit) -- the ``[finetune]`` smoke.
+def test_qlora_trainer_cpu_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real peft+trl LoRA on a tiny model, PINNED to CPU (no 4-bit) -- the ``[finetune]`` smoke.
 
     Runs the DEFAULT :class:`QLoRATrainer` end-to-end: imports peft/trl/transformers,
-    fine-tunes a tiny instruct LM on a handful of yes/no pairs on CPU
-    (``load_in_4bit`` is ignored off CUDA), and asserts it produced a servable
-    adapter dir plus honest GPU-seconds. Marked ``finetune`` so it runs only in the
-    dedicated ``test-finetune`` CI job / locally with ``--all-extras`` -- never the
-    fast suite.
+    fine-tunes a tiny instruct LM on a handful of yes/no pairs, and asserts it produced
+    a servable adapter dir plus honest GPU-seconds. **Forces the CPU path** (patches
+    torch's cuda/mps availability to False) so this genuinely exercises CPU precision
+    handling on ANY dev box -- a Mac otherwise auto-detects MPS, which is exactly how
+    the `bf16/gpu` CPU-only regression slipped past local runs and only failed on the
+    linux CI runner. Marked ``finetune`` so it runs only in the dedicated
+    ``test-finetune`` CI job / locally with ``--all-extras`` -- never the fast suite.
     """
     pytest.importorskip("peft")
     pytest.importorskip("trl")
-    pytest.importorskip("torch")
+    torch = pytest.importorskip("torch")
+
+    # Pin CPU: no cuda, no mps -> QLoRATrainer.train detects "cpu" and must configure
+    # SFTConfig for CPU (bf16/fp16 off). Patches the same torch predicates transformers
+    # reads, so the whole stack agrees on CPU.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
 
     pairs = _labeled_pairs()
     method = QLoRA(
@@ -302,7 +310,7 @@ def test_qlora_trainer_cpu_dry_run(tmp_path: Path) -> None:
 
     assert outcome.n_train == len(pairs)
     assert outcome.gpu_seconds > 0.0
-    assert outcome.device in {"cpu", "mps", "cuda"}
+    assert outcome.device == "cpu"  # the pinned path actually ran on CPU
     assert outcome.model_ref.base == "HuggingFaceTB/SmolLM2-135M-Instruct"
     assert outcome.model_ref.adapter is not None
     assert Path(outcome.model_ref.adapter).is_dir()

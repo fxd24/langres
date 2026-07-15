@@ -48,6 +48,11 @@ flywheel harvest → closed-loop flywheel → person:
   (needs the `[trained]` extra).
 - **`person_resolution.py`** — the embeddings + LLM "strong path" on a second
   entity type: semantic blocking (MiniLM + FAISS) feeding an LLM judge.
+- **`finetune_capstone.py`** — the training-surface capstone: **train your own
+  matcher** end to end — fine-tune SmolLM2-135M with LoRA on a real benchmark
+  slice, serve the weightless `model_ref` in-process, and evaluate held-out F1,
+  reporting the honest cost in GPU-seconds. A REAL (small) fine-tune, slow on
+  CPU/MPS; needs the `[finetune,semantic,llm]` extras (see its docstring).
 
 ## Example Data
 
