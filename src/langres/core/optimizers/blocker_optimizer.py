@@ -25,8 +25,10 @@ class BlockerOptimizer:
     Example:
         # Define objective function
         def objective(trial: optuna.Trial, params: dict) -> dict:
+            embedder = SentenceTransformerEmbedder(params["embedding_model"])
+            index = FAISSIndex(embedder=embedder, metric="cosine")
             blocker = VectorBlocker(
-                embedding_model=params["embedding_model"],
+                vector_index=index,
                 k_neighbors=params["k_neighbors"],
                 ...
             )
@@ -146,8 +148,10 @@ class BlockerOptimizer:
             # Returns: {"embedding_model": "all-mpnet-base-v2", "k_neighbors": 35}
 
             # Use best params to create final blocker
+            embedder = SentenceTransformerEmbedder(best_params["embedding_model"])
+            index = FAISSIndex(embedder=embedder, metric="cosine")
             blocker = VectorBlocker(
-                embedding_model=best_params["embedding_model"],
+                vector_index=index,
                 k_neighbors=best_params["k_neighbors"],
                 ...
             )

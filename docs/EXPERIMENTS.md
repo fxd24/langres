@@ -294,6 +294,117 @@ captures a two-threshold sweep, reads it back, and prints the two-run metric dif
 plus the agent two-liner. Run it:
 `uv run python examples/research/experiment_tracking_demo.py`.
 
+## Self-tuning: the autoresearch loop (`langres.optimize`)
+
+Every surface above measures *one* configuration you chose. The **autoresearch
+loop** closes the outer loop: it **propose**s configs from a search space,
+**run**s and **evaluate**s each into metrics, and **keep**s the one an
+`Objective` prefers — a small, deterministic hill-climber. Because ER F1
+saturates near 99%, the loop steers on a **loss-like signal, not a thresholded
+F1**: `candidate_recall@budget`, `log_loss`, or a quality×cost Pareto front.
+
+`langres.optimize` is the one-call facade; it is **import-light** (`optimize` and
+`score_blocking` are root exports, but every heavy import — faiss, the benchmark
+loader — is lazy inside the call, so a bare `import langres` never pulls the
+[semantic] stack; `tests/test_import_budget.py` guards this).
+
+```python
+from langres import optimize
+from langres.core.autoresearch.objective import Objective
+from langres.core.autoresearch.search_space import SearchSpace
+
+# 1. A SearchSpace is a declarative Cartesian grid of blocker configs. k_neighbors
+#    is the INNERMOST axis, so one vector index is built per
+#    (embedding_model, metric, text_field) group and reused across every k.
+space = SearchSpace(
+    blocker=("vector",),
+    embedding_model=("all-MiniLM-L6-v2",),   # local + free ($0, offline)
+    metric=("cosine", "L2"),
+    text_field=("embed_text", "title"),
+    k_neighbors=(5, 10, 20, 40, 80),         # ascending: recall climbs with k
+)
+
+# 2. An Objective is the immutable keep-if-better rule. Maximize a continuous
+#    recall signal subject to a reduction-ratio floor (>=98.5% of the |A|x|B|
+#    comparisons eliminated) — a real recall@budget tradeoff, not a saturated F1.
+objective = Objective.maximize(
+    "candidate_recall", subject_to=[("reduction_ratio", ">=", 0.985)]
+)
+
+# 3. optimize() loads the benchmark once, drives the loop, and persists EVERY
+#    trial (accepted + rejected) to the local JSONL at store=.
+result = optimize(
+    space, objective, "amazon_google",
+    store="tmp/autoresearch/ag_blocking.jsonl",   # gitignored; store=None writes nothing
+    seed=0,
+)
+print(result.best_config, result.best_metrics)     # the winning feasible config
+```
+
+**Defining the `Objective` — three ergonomic constructors.** An `Objective`
+bundles one or more goals with zero or more feasibility constraints
+(`(metric, op, threshold)` triples, `op` in `>= <= > <`). A candidate that
+violates any constraint is never kept; among feasible candidates the incumbent is
+displaced only by a strict Pareto win (`>=` on every goal, `>` on at least one) —
+ties and incomparable trade-offs keep the incumbent, so the loop is monotone.
+
+```python
+# single maximize goal, optionally constrained
+Objective.maximize("candidate_recall", subject_to=[("reduction_ratio", ">=", 0.985)])
+
+# single minimize goal (e.g. log_loss, cost) — the matching vertical's steering signal
+Objective.minimize("log_loss")
+
+# multi-objective Pareto front — never scalarized (recall up, work down)
+Objective.pareto([("candidate_recall", "maximize"), ("reduction_ratio", "maximize")])
+```
+
+**Where results are stored — local JSONL only, today.** `optimize(store=...)`
+appends **every** trial — accepted, over-budget rejects, and scorer failures — as
+one line to a local `RunStore` JSONL (the same `core.runs` spine as
+`capture_run` above), so the full audit trail is durable off-git. `store=None`
+persists **nothing** (the offline path); the same `LoopResult` is returned either
+way. Read the trail back with `RunStore(path).read()`:
+
+```python
+from langres.core.runs import RunStore
+
+records = RunStore("tmp/autoresearch/ag_blocking.jsonl").read()   # last-wins per attempt
+accepted = [r for r in records if (r.metrics or {}).get("accepted") == 1.0]
+```
+
+This persistence is **local-only for now.** A durable, off-laptop dashboard
+(Trackio + Hugging Face, with the winning artifact pushed to the Hub) is
+**deferred** — an optional `tracker=` hook is wired into `optimize`/`run_loop` but
+defaults to a no-op. Also deferred: swapping the exhaustive grid proposer for an
+Optuna/LLAMBO one, and the **matching vertical** (steering a judge on `log_loss` /
+AUC-PR) plus small-LM fine-tuning. **M1 proves the loop on the blocking vertical
+only** (epic #145).
+
+### Worked proof — climbing blocking recall@budget on amazon_google
+
+`examples/research/blocking_recall_autoresearch.py` runs exactly the loop above
+over the 20-config grid at **$0, offline** (local MiniLM embeddings, no LLM; the
+benchmark is vendored). amazon_google is a genuinely hard, *unsaturated* two-source
+linkage benchmark — blocking recall plateaus ~0.84, never reaching a 0.90 gate —
+which is what makes the climb and the budget tradeoff honest rather than a
+foregone conclusion. A measured run:
+
+- The incumbent `candidate_recall` **climbs** as `k` grows within the winning
+  `(metric, text_field)` group: **0.7568 → 0.8129 → 0.8317 → 0.8388** for
+  `k = 5 → 10 → 20 → 40`.
+- `k = 80` is **rejected as over-budget** — it spends ~2× the comparisons for no
+  extra recall, so its `reduction_ratio` (0.9776) breaches the 0.985 floor. The
+  loop keeps the best *feasible* incumbent. The budget is a real gate, not
+  decoration.
+- **20 trials logged (4 accepted / 16 rejected)** to the gitignored
+  `tmp/autoresearch/` JSONL; ~41 s wall-clock, **$0**.
+
+```bash
+uv run --env-file .env python examples/research/blocking_recall_autoresearch.py
+# needs the [semantic] extra: uv sync --all-extras --no-extra finetune
+```
+
 ## W3 paid smoke — SelectMatcher vs pairwise, measured
 
 `examples/research/w3_paid_smoke.py` is the ≤$10, SpendMonitor-capped operator run
@@ -399,6 +510,8 @@ with `examples/data/flywheel/generate_fixtures.py`.
   scoring walkthrough.
 - `examples/research/portfolio_race.py` — registry-driven race over every loadable
   benchmark (offline by default; optional capped LLM row).
+- `examples/research/blocking_recall_autoresearch.py` — the autoresearch loop
+  (`langres.optimize`) hill-climbing blocking recall@budget on amazon_google, $0/offline.
 - `examples/research/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
 - `examples/research/m4_dspy_judge.py` — DSPyMatcher compile + save/load round-trip.
 - `examples/research/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.

@@ -46,6 +46,7 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── optimize.py     # langres.optimize / score_blocking: import-light autoresearch facade over blocking search
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
@@ -62,7 +63,8 @@ langres/
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
 │   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
-│   │   └── optimizers/             # BlockerOptimizer (Optuna)
+│   │   ├── optimizers/             # BlockerOptimizer (Optuna)
+│   │   └── autoresearch/           # the langres.optimize engine: objective (keep-if-better) / search_space / factory / loop (propose→run→eval→keep)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)

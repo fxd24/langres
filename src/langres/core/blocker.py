@@ -244,7 +244,7 @@ class Blocker(ABC, Generic[SchemaT]):
             See BlockerEvaluationReport documentation for full details.
 
         Example:
-            >>> blocker = VectorBlocker(embedding_model, k_neighbors=10)
+            >>> blocker = VectorBlocker(...)
             >>> candidates = list(blocker.stream(data))
             >>> report = blocker.evaluate(candidates, gold_clusters)
             >>> print(f"Blocking recall: {report.candidates.recall:.2%}")

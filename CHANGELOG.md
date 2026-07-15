@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### Autoresearch: the self-tuning loop over blocking (epic #145, M1)
+
+A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pipeline
+against a **loss-like** objective instead of a saturated F1. M1 proves the loop on
+the **blocking** vertical; the matching vertical (`log_loss` / AUC-PR steering) and
+small-LM fine-tuning are deferred, as is a durable off-laptop **Trackio + Hugging
+Face** dashboard (an optional `tracker=` hook is wired but no-op by default) and an
+Optuna/LLAMBO proposer swap.
+
+#### Added
+
+- **`langres.optimize(space, objective, benchmark, *, seed=None, store=None,
+  dedup=True, split="full", embedder=None, tracker=None) -> LoopResult`** — the
+  one-call autoresearch facade over blocking search. Loads the benchmark once,
+  wraps an index-caching scorer (one vector index per
+  `(embedding_model, metric, text_field)` group, reused across every `k`), drives
+  the loop over `space.configs()`, keeps the incumbent the `objective` prefers, and
+  persists **every** trial (accepted, over-budget reject, and scorer failure) to a
+  local `RunStore` JSONL at `store=` (`store=None` writes nothing). **Local-only
+  persistence today.**
+- **`langres.score_blocking(config, benchmark, *, embedder=None, index=None) ->
+  dict[str, float]`** — the concrete one-config blocking scorer `optimize` wraps,
+  returning `candidate_recall` / `reduction_ratio` / `candidate_precision` /
+  `total_candidates`. Both `optimize` and `score_blocking` are **root exports and
+  import-light** (heavy imports are lazy inside the call, so a bare `import langres`
+  never pulls faiss; `tests/test_import_budget.py` guards it).
+- **`Objective`** (`langres.core.autoresearch.objective`) — the immutable
+  keep-if-better scorer: `Objective.maximize` / `minimize` / `pareto`, feasibility
+  `subject_to=[(metric, op, threshold), ...]` constraints, feasibility-first then
+  strict-Pareto-dominance `is_better` (ties keep the incumbent). Pure-stdlib,
+  metric-source-agnostic.
+- **`SearchSpace`** (`langres.core.autoresearch.search_space`) — a frozen,
+  declarative Cartesian grid of blocker configs; `configs()` yields config dicts
+  with `k_neighbors` as the **innermost** axis (the index-reuse ordering contract).
+  Pure-stdlib.
+- **`langres.core.metrics.log_loss(confidences, outcomes)`** — binary
+  cross-entropy, the strictly-proper loss-like steering signal for the loop
+  (penalizes confident mistakes far more than `brier_score`; per-item penalty
+  clamped near `-log(1e-15)` so a confident-and-wrong `p=0/1` is large but finite).
+- **`examples/research/blocking_recall_autoresearch.py`** — the E1 proof: the loop
+  hill-climbs blocking recall@budget on amazon_google at **$0, offline** (measured
+  climb + budget-rejection numbers in `docs/EXPERIMENTS.md`).
+
 ### Model identity + one method registry (v0.3 slice, closes #103)
 
 The maintainer complaint this fixes: *"`langres.dedupe` is too simple — you

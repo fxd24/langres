@@ -380,6 +380,27 @@ model/version registry, production/operability guidance, cannot-link clustering.
 - **Exit:** Person resolver meets **BCubed F1 ≥ 0.85**; documented deploy/rollback
   path; reproducible artifact versioning.
 
+### Autoresearch (epic #145) — the self-tuning loop — M1 LANDED
+The Karpathy-style `propose → run → evaluate → keep-if-better` outer loop, so
+langres *tunes itself* against a **loss-like** objective (`recall@budget`,
+`log_loss`, quality×cost Pareto) instead of a saturated F1. Shipped as the
+import-light `langres.optimize` / `score_blocking` facade over a declarative
+`SearchSpace` + an immutable `Objective`, with every trial (accepted and rejected)
+persisted to a local `RunStore` JSONL.
+
+- **M1 (landed) — proven on the blocking vertical.** The loop hill-climbs blocking
+  recall@budget on the hard, unsaturated amazon_google benchmark at **$0, offline**:
+  incumbent `candidate_recall` climbs `0.7568 → 0.8388` (`k = 5 → 40`) while the
+  over-budget `k = 80` config is correctly rejected — a real recall-vs-cost tradeoff,
+  not a foregone conclusion. See
+  [`docs/EXPERIMENTS.md`](EXPERIMENTS.md#self-tuning-the-autoresearch-loop-langresoptimize)
+  and `examples/research/blocking_recall_autoresearch.py`.
+- **Deferred (do not reference as existing):** the **matching** vertical (steering a
+  judge on `log_loss` / AUC-PR) and small-LM fine-tuning; an Optuna/LLAMBO proposer
+  swap; and a durable off-laptop **Trackio + Hugging Face** dashboard with the
+  winning artifact pushed to the Hub (an optional `tracker=` hook is wired but
+  defaults to a no-op — persistence is **local JSONL only** today).
+
 ---
 
 ## 7. Mapping to the first production consumer
