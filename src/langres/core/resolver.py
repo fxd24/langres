@@ -47,10 +47,14 @@ from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
+from langres.core.fit_report import FitReport
+from langres.core.harvest import Correction, LabeledPair, align_pairs
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
+from langres.core.metrics import PairMetrics, classify_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.registry import get_component
+from langres.core.runs import current_run
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
@@ -334,6 +338,9 @@ class Resolver:
         self.comparator = comparator
         self.module = matcher
         self.clusterer = clusterer
+        # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
+        # None until fit() runs (never serialized -- it is a fit-time artifact).
+        self.fit_report_: FitReport | None = None
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
         # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
         self._anchor_store: "AnchorStore | None" = None
@@ -452,69 +459,173 @@ class Resolver:
     # Running the pipeline
     # ------------------------------------------------------------------
 
-    def fit(self, data: list[Any], labels: Sequence[bool] | None = None) -> Self:
+    def fit(
+        self,
+        data: list[Any],
+        labels: Sequence[bool] | None = None,
+        *,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None = None,
+        split: float | None = None,
+        seed: int = 0,
+    ) -> Self:
         """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
-        Delegates to the module's fit hook when it implements one of the two
-        runtime-checkable Protocols in :mod:`langres.core.fit` (W1.0, E6):
+        Every non-raising path sets :attr:`fit_report_` (an sklearn
+        trailing-underscore, produced-by-fit digest) and returns ``self`` so
+        ``resolver.fit(...).resolve(...)`` still chains. Delegates to the module's
+        fit hook when it implements one of the runtime-checkable Protocols in
+        :mod:`langres.core.fit` (W1.0, E6):
 
         - :class:`~langres.core.fit.UnsupervisedFitMixin`
-          (``fit_unlabeled(candidates)``): called unconditionally with the
-          blocked (and, if a comparator is configured, comparison-attached)
-          candidate stream. ``labels`` is not used by this path.
-        - :class:`~langres.core.fit.SupervisedFitMixin`
-          (``fit(candidates, labels)``): called with ``labels`` when given;
-          **raises** rather than silently skipping training when ``labels``
-          is omitted -- a genuinely trainable module that never gets
-          trained is exactly the silent-no-op footgun this hook exists to
-          prevent.
+          (``fit_unlabeled(candidates)``): called with the blocked (and, if a
+          comparator is configured, comparison-attached) candidate stream.
+          ``labels``/``pairs`` are not used by this path (passing either raises).
+        - :class:`~langres.core.fit.SupervisedFitMixin` (``fit(candidates,
+          labels)``): trained from either pre-aligned ``labels`` or id-keyed
+          ``pairs`` (see below); **raises** rather than silently skipping when
+          neither is given -- a genuinely trainable module that never gets trained
+          is exactly the silent-no-op footgun this hook exists to prevent.
 
-        When the module implements **neither** hook, this is a no-op that
-        returns ``self`` -- unchanged sklearn-style symmetry so callers can
-        write ``resolver.fit(data).resolve(data)`` for non-learnable
-        pipelines (e.g. ``WeightedAverageMatcher``) without branching -- UNLESS
-        ``labels`` was passed, in which case it raises rather than silently
-        discarding them.
+        Two ways to supply supervision for a ``SupervisedFitMixin`` matcher:
+
+        - ``labels``: a ``Sequence[bool]`` the caller has *already* positionally
+          aligned with the blocked candidates (the pre-existing contract). No
+          id-join happens, so the report carries no ``coverage``.
+        - ``pairs``: id-keyed labels (a ``corrections.jsonl`` path, or a
+          ``Sequence`` of :class:`~langres.core.harvest.LabeledPair` /
+          :class:`~langres.core.harvest.Correction`) that
+          :func:`~langres.core.harvest.align_pairs` joins to the candidates for
+          you -- with an optional entity-disjoint ``split`` for held-out metrics
+          and a :class:`~langres.core.harvest.GoldCoverage` guardrail. Pass at
+          most one of ``labels``/``pairs``.
+
+        When the module implements **neither** hook, this is a no-op that returns
+        ``self`` (unchanged sklearn-style symmetry for non-learnable pipelines
+        like ``WeightedAverageMatcher``) with a minimal ``fit_report_`` -- UNLESS
+        ``labels``/``pairs`` was passed, in which case it raises rather than
+        silently discarding them.
 
         Args:
             data: Raw records (dicts) in a stable list order, same shape as
                 ``resolve()``/``predict()`` accept.
-            labels: Gold match/non-match labels, positionally aligned with the
-                blocked candidates. Required (and only used) when the module
-                implements ``SupervisedFitMixin``.
+            labels: Gold labels pre-aligned with the blocked candidates. Only for
+                a ``SupervisedFitMixin`` module; mutually exclusive with ``pairs``.
+            pairs: Id-keyed labels ``align_pairs`` joins to the candidates. Only
+                for a ``SupervisedFitMixin`` module; mutually exclusive with
+                ``labels``.
+            split: Held-out fraction for the entity-disjoint ``pairs`` split
+                (``None`` = train on everything; only meaningful with ``pairs``).
+            seed: Seed for the entity-disjoint split.
 
         Returns:
             ``self``, so ``resolver.fit(data).resolve(data)`` chains.
 
         Raises:
-            ValueError: If the module implements ``SupervisedFitMixin`` and
-                ``labels`` is omitted, or if ``labels`` is given but the
-                module implements neither fit hook.
+            ValueError: If both ``labels`` and ``pairs`` are given; if the module
+                implements ``SupervisedFitMixin`` and neither is given; or if
+                ``labels``/``pairs`` is given to a module that cannot use them.
         """
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (a Sequence[bool] pre-aligned with the blocked "
+                "candidates) or pairs= (id-keyed labels align_pairs() joins for you), "
+                "not both."
+            )
+        if pairs is not None:
+            self.fit_report_ = self._fit_from_pairs(data, pairs, split=split, seed=seed)
+            return self
+
+        matcher_name = type(self.module).__name__
         if isinstance(self.module, SupervisedFitMixin):
             if labels is None:
                 raise ValueError(
-                    f"{type(self.module).__name__} requires labeled data: pass "
+                    f"{matcher_name} requires labeled data: pass "
                     "labels=<Sequence[bool] aligned with the blocked candidates> "
-                    "to fit()."
+                    "(or pairs=<id-keyed labels>) to fit()."
                 )
             self.module.fit(self._candidates(data), labels)
+            self.fit_report_ = FitReport.build(
+                trainable=f"{matcher_name} (SupervisedFitMixin)",
+                trained=True,
+                n_train=len(labels),
+                threshold=self.clusterer.threshold,
+                run_ref=current_run.get(),
+            )
             return self
         if isinstance(self.module, UnsupervisedFitMixin):
             if labels is not None:
                 raise ValueError(
-                    f"{type(self.module).__name__} does not support fit(labels=...): "
+                    f"{matcher_name} does not support fit(labels=...): "
                     "it implements UnsupervisedFitMixin, which trains without labels "
                     "(fit_unlabeled) -- drop the labels= argument."
                 )
-            self.module.fit_unlabeled(self._candidates(data))
+            candidates = self.candidates(data)
+            self.module.fit_unlabeled(iter(candidates))
+            self.fit_report_ = FitReport.build(
+                trainable=f"{matcher_name} (UnsupervisedFitMixin)",
+                trained=True,
+                n_train=len(candidates),
+                run_ref=current_run.get(),
+            )
             return self
         if labels is not None:
             raise ValueError(
-                f"{type(self.module).__name__} does not support fit(labels=...): "
+                f"{matcher_name} does not support fit(labels=...): "
                 "it implements neither SupervisedFitMixin nor UnsupervisedFitMixin."
             )
+        self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
+
+    def _fit_from_pairs(
+        self,
+        data: list[Any],
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction],
+        *,
+        split: float | None,
+        seed: int,
+    ) -> FitReport:
+        """Fit a ``SupervisedFitMixin`` matcher from id-keyed labels via ``align_pairs``.
+
+        Runs the id-join + entity-disjoint split + coverage in one place, trains
+        on the train split, and evaluates held-out pair P/R/F1 on the valid split
+        (when a split was given, via :func:`~langres.core.metrics.classify_pairs`
+        at the clusterer's threshold). Returns the assembled :class:`FitReport`.
+        """
+        matcher_name = type(self.module).__name__
+        if not isinstance(self.module, SupervisedFitMixin):
+            raise ValueError(
+                f"{matcher_name} does not support fit(pairs=...): pairs= supplies "
+                "labeled pairs for a SupervisedFitMixin matcher, and this matcher "
+                "implements no supervised fit hook. Use fit() with no labels for an "
+                "unsupervised/non-learnable matcher."
+            )
+        aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+        self.module.fit(iter(aligned.train.candidates), aligned.train.labels)
+
+        metrics: PairMetrics | None = None
+        if aligned.valid.candidates:
+            judgements = list(self.module.forward(iter(aligned.valid.candidates)))
+            gold_pairs = {
+                frozenset({str(c.left.id), str(c.right.id)})
+                for c, label in zip(
+                    aligned.valid.candidates, aligned.valid.labels, strict=True
+                )
+                if label
+            }
+            metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
+
+        return FitReport.build(
+            trainable=f"{matcher_name} (SupervisedFitMixin)",
+            trained=True,
+            n_train=len(aligned.train.labels),
+            n_valid=len(aligned.valid.labels),
+            split=split,
+            seed=seed,
+            coverage=aligned.coverage,
+            threshold=self.clusterer.threshold,
+            metrics=metrics,
+            run_ref=current_run.get(),
+        )
 
     def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
         """Block records into candidates, attaching comparisons if configured.
