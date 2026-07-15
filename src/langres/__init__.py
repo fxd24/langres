@@ -19,12 +19,17 @@ This package provides:
   exceptions a front-door user must catch (fail-fast ``matcher="auto"``; a judge
   that abstained on the pair; the spend cap).
 
-Import weight: most root exports are cheap and eager. ``EvalReport``,
-``gold_pairs_from_clusters`` and ``derive_threshold`` resolve lazily via PEP
-562 ``__getattr__`` (same pattern as ``langres.core``) so a bare ``import
-langres`` never pulls the eval-report/benchmark modules -- or scikit-learn,
-which ``derive_threshold`` needs (the ``[trained]`` extra) -- into
-``sys.modules``. See ``tests/test_import_budget.py``.
+Import weight: most root exports are cheap and eager -- including the
+training-surface pieces that make ``Resolver.fit`` legible: the method objects
+``Method`` / ``Bootstrap`` / ``MIPRO`` / ``GEPA`` (prompt) and ``Platt`` /
+``Isotonic`` (calibrate), the ``align_pairs`` pairs->candidates bridge, and the
+``FitReport`` digest (all import-light config/primitives; dspy/sklearn stay lazy
+inside their fit paths). ``EvalReport``, ``gold_pairs_from_clusters``,
+``derive_threshold`` and ``LLMMatcher`` resolve lazily via PEP 562
+``__getattr__`` (same pattern as ``langres.core``) so a bare ``import langres``
+never pulls the eval-report/benchmark modules -- or scikit-learn
+(``derive_threshold``, the ``[trained]`` extra) or litellm (``LLMMatcher``, the
+``[llm]`` extra) -- into ``sys.modules``. See ``tests/test_import_budget.py``.
 """
 
 import importlib
@@ -34,14 +39,22 @@ from typing import TYPE_CHECKING, Any
 
 from langres.clients.openrouter import BudgetExceeded
 from langres.core import (
+    Bootstrap,
     CompanySchema,
     Correction,
     CorrectionLog,
     ERCandidate,
+    FitReport,
+    GEPA,
+    Isotonic,
     JudgementLog,
+    MIPRO,
+    Method,
     PairwiseJudgement,
+    Platt,
     Resolver,
     ReviewQueue,
+    align_pairs,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
     select_for_review,
@@ -56,8 +69,10 @@ if TYPE_CHECKING:
     from langres.core.benchmark import gold_pairs_from_clusters
     from langres.core.calibration import derive_threshold
     from langres.core.eval_report import EvalReport
+    from langres.core.matchers.llm_judge import LLMMatcher
 
 __all__ = [
+    "Bootstrap",
     "BudgetExceeded",
     "CompanySchema",
     "DEFAULT_AUTO_MODEL",
@@ -65,14 +80,22 @@ __all__ = [
     "CorrectionLog",
     "ERCandidate",
     "EvalReport",
+    "FitReport",
+    "GEPA",
+    "Isotonic",
     "MatcherAbstainedError",
+    "Method",
+    "MIPRO",
     "JudgementLog",
     "LinkVerdict",
+    "LLMMatcher",
     "NoMatcherAvailableError",
     "PairwiseJudgement",
+    "Platt",
     "QLoRA",
     "Resolver",
     "ReviewQueue",
+    "align_pairs",
     "dedupe",
     "derive_threshold",
     "derive_threshold_from_pairs",
@@ -102,6 +125,10 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "EvalReport": "langres.core.eval_report",
     "derive_threshold": "langres.core.calibration",
     "gold_pairs_from_clusters": "langres.core.benchmark",
+    # The LLM matcher (serve a fine-tuned model_ref, a vLLM api_base, or a paid
+    # judge). Importing the class pulls litellm -> the [llm] extra, so it stays
+    # lazy: a bare `import langres` never touches litellm.
+    "LLMMatcher": "langres.core.matchers.llm_judge",
     # The finetune surface: the module is import-light (peft/trl/torch import
     # lazily inside QLoRATrainer.train), so these symbols carry no [finetune] extra
     # here -- an ImportError from importing the symbols is a genuine bug. The
@@ -116,6 +143,7 @@ _LAZY_SYMBOLS: dict[str, str] = {
 #: an ImportError from them is a genuine bug and propagates unchanged.
 _EXTRA_BY_SYMBOL: dict[str, str] = {
     "derive_threshold": "trained",
+    "LLMMatcher": "llm",
 }
 
 

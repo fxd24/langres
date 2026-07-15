@@ -44,10 +44,12 @@ from langres.core.debugging import (
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
+from langres.core.fit_report import FitReport
 from langres.core.harvest import (
     Correction,
     CorrectionLog,
     LabeledPair,
+    align_pairs,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
@@ -63,6 +65,9 @@ from langres.core.method_registry import (
     list_methods,
     register_method,
 )
+from langres.core.methods_api import Method
+from langres.core.methods_calibrate import Isotonic, Platt
+from langres.core.methods_prompt import Bootstrap, GEPA, MIPRO
 from langres.core.models import (
     CompanySchema,
     EntityProtocol,
@@ -227,6 +232,17 @@ __all__ = [
     "RunRecord",
     "RunStore",
     "WandbTracker",
+    # Training surface: the pairs->candidates bridge, the fit digest, and the
+    # method objects passed to Resolver.fit(method=...) (import-light config;
+    # dspy/sklearn stay lazy in dspy_judge/calibration).
+    "align_pairs",
+    "Bootstrap",
+    "FitReport",
+    "GEPA",
+    "Isotonic",
+    "Method",
+    "MIPRO",
+    "Platt",
 ]
 
 #: Names resolved to a *submodule of this package* on first access -- unlike
