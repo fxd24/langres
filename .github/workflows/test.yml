@@ -45,10 +45,14 @@ jobs:
         # LLMJudge/RandomForestJudge/etc. (the [semantic]/[llm]/[trained] extras), which
         # W0.4 made optional at runtime but which CI still needs installed to
         # run those tests.
-        run: uv sync --all-extras
+        # --no-extra finetune: the QLoRA training stack (peft/trl/bitsandbytes) is
+        # heavy + Linux/CUDA-fragile and is covered by the dedicated `test-finetune`
+        # job below -- core.finetune imports it lazily, so the fast suite exercises
+        # the finetune orchestration with a fake trainer, no training stack needed.
+        run: uv sync --all-extras --no-extra finetune
 
       - name: Run fast unit tests (excludes slow ML tests)
-        run: uv run pytest -m "not integration and not slow" --cov-fail-under=0
+        run: uv run pytest -m "not integration and not slow and not finetune" --cov-fail-under=0
 
   test-core-only:
     if: github.event_name == 'pull_request'
@@ -123,7 +127,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        # --no-extra finetune: same rationale as the `test` job -- the QLoRA
+        # training stack is covered by `test-finetune`; core.finetune's lazy
+        # imports keep the full suite green without peft/trl/bitsandbytes here.
+        run: uv sync --all-extras --no-extra finetune
 
       - name: Run full suite incl. slow tests (95% coverage gate)
         # --cov-report=xml (on top of the pyproject default term/html reports)
@@ -131,7 +138,7 @@ jobs:
         # that runs the full suite, so it's the only place coverage is honest --
         # the per-PR `test` job deliberately excludes the slow ML tests, so
         # uploading its partial numbers would understate real coverage.
-        run: uv run pytest -m "not integration" --cov-report=xml
+        run: uv run pytest -m "not integration and not finetune" --cov-report=xml
 
       - name: Upload coverage to Codecov
         # Advisory, never a merge gate: fail_ci_if_error stays false so a Codecov
@@ -141,3 +148,34 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
+  # bitsandbytes) that every other job deliberately excludes (`--no-extra
+  # finetune`) and run the `finetune`-marked tests -- the CPU dry-run that actually
+  # imports peft/trl and trains a tiny LoRA (no GPU). Kept NON-BLOCKING
+  # (`continue-on-error: true`) so a fragile/heavy/Linux-only training dep can
+  # never red-CI the whole training-surface epic; once the QLoRA path is proven
+  # stable this can be promoted to a required check. The real GPU QLoRA train is
+  # `@pytest.mark.slow` + local-only (needs CUDA + bitsandbytes 4-bit), excluded here.
+  test-finetune:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.24"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install dependencies (incl. the [finetune] training stack)
+        run: uv sync --all-extras
+
+      - name: Run finetune tests (CPU dry-run; real GPU train is slow + local-only)
+        run: uv run pytest -m "finetune and not slow" --cov-fail-under=0

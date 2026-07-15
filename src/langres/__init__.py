@@ -70,14 +70,17 @@ __all__ = [
     "LinkVerdict",
     "NoMatcherAvailableError",
     "PairwiseJudgement",
+    "QLoRA",
     "Resolver",
     "ReviewQueue",
     "dedupe",
     "derive_threshold",
     "derive_threshold_from_pairs",
+    "finetune",
     "gold_pairs_from_clusters",
     "harvest_labeled_pairs",
     "link",
+    "run_finetune",
     "select_for_review",
 ]
 
@@ -99,6 +102,13 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "EvalReport": "langres.core.eval_report",
     "derive_threshold": "langres.core.calibration",
     "gold_pairs_from_clusters": "langres.core.benchmark",
+    # The finetune surface: the module is import-light (peft/trl/torch import
+    # lazily inside QLoRATrainer.train), so these symbols carry no [finetune] extra
+    # here -- an ImportError from importing the symbols is a genuine bug. The
+    # actionable "pip install langres[finetune]" hint is raised at train time.
+    "QLoRA": "langres.core.finetune",
+    "finetune": "langres.core.finetune",
+    "run_finetune": "langres.core.finetune",
 }
 
 #: ``name -> extra`` for the lazy symbols where a missing dependency has a

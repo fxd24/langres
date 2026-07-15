@@ -54,6 +54,11 @@ _HEAVY_MODULES = [
     # wandb lazily, never on a bare `import langres`.
     "mlflow",
     "wandb",
+    # Fine-tune stack ([finetune], PR-F): peft/trl/bitsandbytes import lazily
+    # inside core.finetune's QLoRATrainer.train, never on a bare `import langres`.
+    "peft",
+    "trl",
+    "bitsandbytes",
 ]
 
 _CHECK_SCRIPT = (
@@ -300,6 +305,37 @@ def test_import_langres_does_not_eagerly_import_lazy_root_export_modules() -> No
     )
     assert result.returncode == 0, (
         f"root-export laziness check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
+# The finetune surface ([finetune], PR-F) must be import-light: resolving the
+# ``langres.finetune``/``QLoRA`` symbols and importing ``langres.core.finetune``
+# must NOT pull the training stack (peft/trl/bitsandbytes) or torch/transformers --
+# they load lazily only inside ``QLoRATrainer.train``. So a core+[llm] user can
+# reference the symbols, build a ``QLoRA(...)`` spec, and inject a custom trainer
+# without the (Linux-only, heavy) QLoRA deps installed. Fresh-process subprocess
+# for an unpolluted ``sys.modules``.
+_FINETUNE_MODULES = ["peft", "trl", "bitsandbytes", "torch", "transformers"]
+
+_FINETUNE_IMPORT_LIGHT_SCRIPT = (
+    "import sys; import langres; "
+    "langres.finetune; langres.QLoRA; langres.run_finetune; "
+    "import langres.core.finetune; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'finetune surface leaked the training stack: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_FINETUNE_MODULES)
+
+
+def test_finetune_surface_stays_import_light() -> None:
+    """``langres.finetune``/``QLoRA`` + ``core.finetune`` must not pull peft/trl/torch."""
+    result = subprocess.run(
+        [sys.executable, "-c", _FINETUNE_IMPORT_LIGHT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"finetune import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
 

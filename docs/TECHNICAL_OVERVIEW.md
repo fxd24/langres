@@ -309,9 +309,11 @@ a **blocker's** hyperparameters (e.g. embedding model, `k_neighbors`) to maximiz
 a metric you compute in an objective function.
 
 > There is **no** general `Optimizer` that "compiles"/"finetunes" a whole
-> pipeline — no `compile()`, no `finetune()`, no PyTorch training loop. A general
-> `Optimizer` over full pipelines is roadmap (`docs/ROADMAP.md`), not
-> implemented. DSPy prompt optimization exists separately, inside `DSPyMatcher`
+> *pipeline* — no `compile()`, no pipeline-level training loop; a general
+> `Optimizer` over full pipelines is roadmap (`docs/ROADMAP.md`), not implemented.
+> *Component*-level training does exist, though: `langres.finetune()` QLoRA-fine-tunes
+> a single small-LM matcher (a real peft/trl training loop, `[finetune]` extra) into
+> a servable `model_ref`, and DSPy prompt optimization lives inside `DSPyMatcher`
 > (`[llm]` extra).
 
 **Constructor:**
