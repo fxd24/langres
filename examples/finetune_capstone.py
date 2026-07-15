@@ -20,6 +20,14 @@ On a CUDA GPU it is a couple of minutes; on CPU / Apple-Silicon MPS it is SLOW
 LoRA fine-tune when there is no CUDA. Local training has **no dollar cost**; the
 honest cost fact is GPU-seconds (printed below).
 
+What to expect (the flow is the lesson, not the score): SmolLM2-135M is a
+deliberately tiny base, so the held-out F1 *at the default 0.5 cut* is LOW. The
+fine-tune reliably finds the true matches (high recall) but over-includes
+non-matches (low precision), because the small model's Yes-confidence clusters
+near the 0.5 fence. That is not a broken flow -- it is a small, uncalibrated base.
+The two levers to raise it, both elsewhere on this same training surface: a
+larger base, or a calibrated decision threshold instead of the naive 0.5.
+
 Needs the training + serving + blocking extras:
 
     uv sync --extra finetune --extra semantic --extra llm
@@ -106,6 +114,11 @@ def main() -> None:
         f"P={result.pair.precision:.3f} R={result.pair.recall:.3f} F1={result.pair.f1:.3f}\n"
         f"honest cost: {outcome.gpu_seconds:.1f} GPU-seconds on {outcome.device} "
         f"(${outcome.dollars:.4f})"
+    )
+    print(
+        "\nRecall-heavy, low precision at the 0.5 cut is expected for a 135M base "
+        "(see the module docstring): it finds the matches but over-includes. Raise "
+        "it with a larger base or a calibrated threshold -- same training surface."
     )
 
 
