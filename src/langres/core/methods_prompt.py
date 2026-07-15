@@ -9,7 +9,12 @@ maps to one DSPy optimizer:
 - :class:`Bootstrap` -> ``BootstrapFewShot`` (deterministic under ``DummyLM`` --
   the zero-spend path the CI suite exercises);
 - :class:`MIPRO` -> ``MIPROv2`` (proposes+evaluates instructions via real LM
-  calls -- the paid path, exercised only by the example / a ``slow`` test).
+  calls -- the paid path, exercised only by the example / a ``slow`` test);
+- :class:`GEPA` -> ``dspy.GEPA`` (reflective Genetic-Pareto instruction
+  evolution: reflects on execution traces to rewrite the *instruction*, using a
+  separate reflection LM and Pareto selection). Like ``Bootstrap`` it runs
+  zero-spend under ``DummyLM`` -- for both the student and the reflection LM --
+  so the CI suite exercises it too.
 
 Import-light by construction (Pydantic only -- no ``dspy``/``litellm``): a
 ``Method`` is a *value* the caller constructs at the fit call site, so
@@ -21,15 +26,16 @@ import stays lazy inside
 
 .. note::
    The ``metric`` DSPy compiles against is fixed to the built-in match-decision
-   metric (``dspy_judge._pair_metric``); a user-selectable metric would be dead
-   config today, so these methods deliberately omit a ``metric`` knob.
+   metric (``dspy_judge._pair_metric``, adapted to GEPA's 5-argument metric
+   signature by ``dspy_judge._gepa_metric``); a user-selectable metric would be
+   dead config today, so these methods deliberately omit a ``metric`` knob.
 """
 
 from typing import Any, ClassVar, Literal
 
 from langres.core.methods_api import Method
 
-__all__ = ["Bootstrap", "MIPRO", "PromptMethod"]
+__all__ = ["GEPA", "Bootstrap", "MIPRO", "PromptMethod"]
 
 
 class PromptMethod(Method):
@@ -113,3 +119,67 @@ class MIPRO(PromptMethod):
     def describe(self) -> str:
         """One-liner: ``"prompt-optimize (MIPROv2, auto=<level>[, budget $N])"``."""
         return _with_budget(f"prompt-optimize (MIPROv2, auto={self.auto})", self.budget_usd)
+
+
+class GEPA(PromptMethod):
+    """Prompt-optimize by reflective Genetic-Pareto evolution (``dspy.GEPA``).
+
+    The reflective optimizer: GEPA runs the program on the labeled pairs,
+    reflects -- in natural language, through a separate *reflection LM* -- on the
+    execution traces to propose an improved instruction, and selects candidates
+    on a Pareto frontier over the validation scores (arXiv:2507.19457). Where
+    ``MIPROv2`` bootstraps demos, GEPA rewrites the *instruction itself* from
+    reflected feedback, which is why it needs a reflection LM (a strong one
+    helps) in addition to the scalar match metric.
+
+    A real run is paid -- both the student and the reflection LM make live calls
+    -- so pair it with a :attr:`budget_usd` cap. Unlike ``MIPRO`` it also runs
+    fully offline: drive both roles with a ``DummyLM`` and the compile is
+    zero-spend, so the unit suite exercises it (see the ``gepa`` branch of
+    :meth:`~langres.core.matchers.dspy_judge.DSPyMatcher.compile`).
+
+    Attributes:
+        auto: GEPA's search-budget preset (``"light"`` / ``"medium"`` /
+            ``"heavy"``) -- more reflection rounds for a better prompt. Ignored
+            when :attr:`max_metric_calls` is set (``dspy.GEPA`` accepts exactly
+            one budget knob). Threaded onto ``compile`` via :meth:`compile_kwargs`.
+        max_metric_calls: Optional precise budget -- the exact number of metric
+            evaluations GEPA may spend, its native cost lever. When set it takes
+            precedence over :attr:`auto` (the two are mutually exclusive).
+            ``None`` (the default) uses the :attr:`auto` preset.
+        reflection_model: LM id GEPA uses for the reflection step. ``None`` (the
+            default) reuses the matcher's own configured LM. GEPA benefits from a
+            strong reflection model, so naming a capable one here is the honest
+            knob for the reflection cost/quality trade-off.
+        reflection_minibatch_size: How many examples GEPA reflects over per step
+            (``dspy.GEPA``'s default is 3).
+    """
+
+    optimizer: ClassVar[str] = "gepa"
+
+    auto: Literal["light", "medium", "heavy"] = "light"
+    max_metric_calls: int | None = None
+    reflection_model: str | None = None
+    reflection_minibatch_size: int = 3
+
+    def compile_kwargs(self) -> dict[str, Any]:
+        """Thread GEPA's budget + reflection config onto ``DSPyMatcher.compile``."""
+        return {
+            "auto": self.auto,
+            "max_metric_calls": self.max_metric_calls,
+            "reflection_model": self.reflection_model,
+            "reflection_minibatch_size": self.reflection_minibatch_size,
+        }
+
+    def describe(self) -> str:
+        """One-liner: ``"prompt-optimize (GEPA reflective, <budget>[, budget $N])"``.
+
+        ``<budget>`` is ``max_metric_calls=<n>`` when that precise cap is set,
+        else the ``auto=<level>`` preset -- the knob GEPA will actually run under.
+        """
+        budget = (
+            f"max_metric_calls={self.max_metric_calls}"
+            if self.max_metric_calls is not None
+            else f"auto={self.auto}"
+        )
+        return _with_budget(f"prompt-optimize (GEPA reflective, {budget})", self.budget_usd)

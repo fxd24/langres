@@ -746,15 +746,24 @@ isinstance-on-the-module chain (`method=None` leaves that default byte-for-byte
 unchanged):
 
 - **prompt-optimize** (`kind="prompt"`, implemented) — `Bootstrap()` /
-  `MIPRO(auto=..., budget_usd=...)` from `langres.core.methods_prompt` compile a
-  `DSPyMatcher`'s prompt from labeled pairs (the optimizer's `BootstrapFewShot` /
-  `MIPROv2`). Supervision comes from `pairs=` (reusing `align_pairs` + the
-  entity-disjoint split, whose `valid` fold feeds `MIPROv2`'s valset) or
-  pre-aligned `labels=`. The `FitReport` names the demos learned, teacher model,
-  and declared budget. Requires a `DSPyMatcher` (else a clear error); DSPy stays
-  lazy-imported, so `Bootstrap()`/`MIPRO()` construct without pulling `dspy`.
-  `budget_usd` threads through the existing `SpendMonitor` seam (DSPy-compile
-  spend capture is deferred to #100, so it observes `$0` today).
+  `MIPRO(auto=..., budget_usd=...)` / `GEPA(auto=..., reflection_model=...,
+  max_metric_calls=..., budget_usd=...)` from `langres.core.methods_prompt`
+  compile a `DSPyMatcher`'s prompt from labeled pairs (the optimizer's
+  `BootstrapFewShot` / `MIPROv2` / `dspy.GEPA`). `GEPA` is the *reflective*
+  strategy: it reflects on execution traces — via a separate reflection LM
+  (`reflection_model`, defaulting to the matcher's own LM) — to rewrite the
+  *instruction*, and selects candidates on a Pareto frontier; carry either the
+  `auto` preset or a precise `max_metric_calls` budget (its native cost lever, and
+  mutually exclusive with `auto`). Supervision comes from `pairs=` (reusing
+  `align_pairs` + the entity-disjoint split, whose `valid` fold feeds the
+  `MIPROv2`/GEPA valset) or pre-aligned `labels=`. The `FitReport` names the demos
+  learned, teacher model, and declared budget. Requires a `DSPyMatcher` (else a
+  clear error); DSPy stays lazy-imported, so `Bootstrap()`/`MIPRO()`/`GEPA()`
+  construct without pulling `dspy`. Both `Bootstrap` and `GEPA` run zero-spend
+  under a `DummyLM` (GEPA reflects with the same dummy LM), so the unit suite
+  exercises them; `MIPRO` is paid-only. `budget_usd` threads through the existing
+  `SpendMonitor` seam (DSPy-compile spend capture is deferred to #100, so it
+  observes `$0` today).
 - **fine-tune** (`kind="finetune"`) / **calibrate** (`kind="calibrate"`) — wired
   stubs raising a clear NotImplementedError naming their PR.
 
