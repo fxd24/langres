@@ -9,7 +9,7 @@ usable, swappable, and tunable by everyone through one seam. This guide walks th
 > **No public plugin API yet.** There is deliberately **no** external/plugin
 > registration entry point today. A new *name-selectable* method must be wired
 > into the in-repo dispatch sites below. A single public method-registration API
-> that collapses them is **deferred to [issue #55](https://github.com/raisesquad/langres/issues/55)**
+> that collapses them is **deferred to [issue #55](https://github.com/fxd24/langres/issues/55)**
 > (see `TODOS.md`). This document is the contract *as it stands* — what a
 > contributor editing the repo does now.
 >

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-07
 **Author:** langres research (orchestrated multi-agent survey; primary-source verified)
-**Issues:** Task 0 of [#86](https://github.com/raisesquad/langres/issues/86) (reusable hard-case / informative-pair mining seam) · feeds [#83](https://github.com/raisesquad/langres/issues/83) (AnyMatch) · epic [#85](https://github.com/raisesquad/langres/issues/85)
+**Issues:** Task 0 of [#86](https://github.com/fxd24/langres/issues/86) (reusable hard-case / informative-pair mining seam) · feeds [#83](https://github.com/fxd24/langres/issues/83) (AnyMatch) · epic [#85](https://github.com/fxd24/langres/issues/85)
 **Scope of this doc:** state-of-the-art synthesis **+ langres seam mapping**. It deliberately stops short of a seam interface / API / function design — that is a separate, later step (per the research-only decision on 2026-07-07).
 
 ---
@@ -402,7 +402,7 @@ Encoder models (BERT / sentence-transformers) are no longer the only game; the O
 
 ## 13. Future work
 
-*What the three research threads point to as concrete things to try — direction, not commitment. Kept here as a living note; the data-prep mining directions are tracked in [#86](https://github.com/raisesquad/langres/issues/86), the collective/relational architecture gap in §11.4.*
+*What the three research threads point to as concrete things to try — direction, not commitment. Kept here as a living note; the data-prep mining directions are tracked in [#86](https://github.com/fxd24/langres/issues/86), the collective/relational architecture gap in §11.4.*
 
 **The empirical question threading all of these — does capability *transfer* between the two roles of one model?** The whole bet is that a single decoder can be a *generator* (matching) and a *recall* engine (blocking embeddings) at once. What we don't know — and should measure directly — is the **transfer** between those roles and its *direction*: does fine-tuning / prompt-optimizing the model for matching help, not affect, or *hurt* its embedding/blocking recall — and does contrastive embedding tuning help or hurt matching? GritLM's ablation says *joint* training degrades neither at 7B (§12.2), but transfer under *sequential* or *small-scale QLoRA* tuning is untested. **Practical rule: evaluate every experiment below on *both* stages — recall (Pair Completeness) and matching (F1) — not just the one it targets**, so we can see whether the capability transfers, is neutral, or interferes. These are starting probes; the list is open and expected to grow as results come in.
 

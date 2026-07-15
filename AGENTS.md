@@ -1,9 +1,8 @@
-# Codex Guidelines for langres
+# Agent Guidelines for langres
 
-> **Lean router.** Detail lives in modular rules under `.Codex/rules/` and in
-> `docs/`. Some rules are **always-on**; others are **path-scoped** (they load
-> only when you touch a file in their scope). Read the relevant rule before
-> writing code in its domain.
+> **Lean router.** Detail lives in modular rules under `.claude/rules/` and in
+> `docs/`. Claude Code may auto-load those rules by scope; Hermes and other
+> agents must read the relevant rule before writing code in its domain.
 >
 > **Keep docs in sync with code.** When a change touches behavior, paths,
 > commands, conventions, or data contracts that this file, a rule, or anything
@@ -12,21 +11,23 @@
 
 ## Project Overview
 
-**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: user-facing **verbs** (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over low-level **`langres.core`** primitives. (Note: there is no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.Codex/rules/component-design.md`.)
+**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: user-facing **verbs** (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over low-level **`langres.core`** primitives. (Note: there is no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
 
-**Current Stage**: We are at the **initial POC (Proof of Concept) stage**. Before building the full framework, we are validating the core architecture through three progressively sophisticated approaches:
-1. Classical string matching (rapidfuzz baseline)
-2. Semantic vector search (embedding-based)
-3. Hybrid blocking + LLM judge (target architecture)
+**Current Stage**: The initial POC — validating classical rapidfuzz, semantic
+vectors, and hybrid blocking + LLM matching — is **complete**;
+`docs/POC.md` is an archived historical record. langres is now a shipped 0.x
+beta on PyPI under Apache-2.0.
 
-**📋 See `docs/POC.md` for the complete POC plan** (hypothesis, success criteria — BCubed F1 ≥ 0.85 for Approach 3 — core components, TDD approach, Go/No-Go criteria).
+**📋 See `docs/ROADMAP.md` for current direction and milestones** and the root
+`CHANGELOG.md` for what shipped.
 
-**Current focus**: Building production-quality `langres.core` primitives under a **tiered coverage policy** (95–100% on the `core` contract, behavior/smoke on harness code — see `.Codex/rules/testing.md`). This is NOT throwaway prototype code—these components will become the foundation of the full library.
+**Current focus**: Building production-quality `langres.core` primitives under a **tiered coverage policy** (95–100% on the `core` contract, behavior/smoke on harness code — see `.claude/rules/testing.md`). This is NOT throwaway prototype code—these components will become the foundation of the full library.
 
-## How I Work — Rules (`.Codex/rules/`)
+## How I Work — Rules (`.claude/rules/`)
 
-These auto-load. **Always-on** rules apply every session; **path-scoped** rules
-load only when you read/edit a file matching their `paths:`.
+Treat the following as the rule router. Claude Code may auto-load these files;
+Hermes and other agents must load the always-on rules and read each relevant
+path-scoped rule before editing files in its scope.
 
 **Always-on:**
 - `expert-knowledge.md` — verify-before-asserting, hypotheses ≠ facts, own the failure, stay in scope, **commit before the worktree disappears**, timeouts. The baseline for how to reason and act.
@@ -37,7 +38,7 @@ load only when you read/edit a file matching their `paths:`.
 - `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
 - `component-design.md` *(`src/**`)* — the layered API (verbs → Resolver → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the three judge-dispatch sites).
 - `testing.md` *(`tests/**`)* — tiered coverage (high on `core`, behavior-focused on harness), markers, human-like dev-iteration loop.
-- `token-efficiency.md` *(`.Codex/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
+- `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
 ## Skills
 
@@ -90,7 +91,7 @@ These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/c
 
 ## Important Notes
 
-- **Always verify claims before you assert them.** Never present an unverified hypothesis — about code, tooling, model/library capabilities, or data — as fact. Check the source, run the code, read the data first; if you can't, label it explicitly as unverified. (Detail in `.Codex/rules/expert-knowledge.md`.)
+- **Always verify claims before you assert them.** Never present an unverified hypothesis — about code, tooling, model/library capabilities, or data — as fact. Check the source, run the code, read the data first; if you can't, label it explicitly as unverified. (Detail in `.claude/rules/expert-knowledge.md`.)
 - This is an **early-stage project** - expect significant changes
 - Prioritize clean, testable code over premature optimization
 - Document design decisions in code comments
@@ -105,12 +106,12 @@ The `.agent/` folder contains external expert analyses of the langres project:
 
 **When to consult**: before planning new features (check if already identified as a gap); when considering production requirements; when prioritizing work (these docs separate critical from nice-to-have).
 
-**Note on documentation structure**: Keep `AGENTS.md` concise and actionable. Substantial new guidance (>50 lines) belongs in a focused `.Codex/rules/*.md` or `.agent/` doc linked from here, not inline — this keeps the always-on instructions scannable.
+**Note on documentation structure**: Keep `AGENTS.md` concise and actionable. Substantial new guidance (>50 lines) belongs in a focused `.claude/rules/*.md` or `.agent/` doc linked from here, not inline — this keeps the always-on instructions scannable.
 
 ## Reference Documentation (`docs/`)
 
-- **`docs/ROADMAP.md`** ⭐ **DIRECTION** — the post-POC vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones M0–M6. Read alongside `POC.md` before planning new work.
-- **`docs/POC.md`** ⭐ **START HERE** — current development stage and priorities; the three approaches; success criteria; what's in scope NOW vs. later. Read before any implementation work.
+- **`docs/ROADMAP.md`** ⭐ **START HERE / DIRECTION** — the post-POC vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones M0–M6. Read before planning new work.
+- **`docs/POC.md`** — archived original POC validation plan; historical record only.
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
