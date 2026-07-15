@@ -140,17 +140,16 @@ def test_conversations_render_user_prompt_plus_yes_no_target() -> None:
 
     run_finetune(pairs, QLoRA(base="tiny/model"), trainer=trainer)
 
+    prompt_header = FINETUNE_YES_NO_PROMPT.split("{left}")[0]  # the default template's lead-in
     conversations = trainer.calls[0]["conversations"]
     assert len(conversations) == len(pairs)
     for (cand, label), convo in zip(pairs, conversations, strict=True):
         assert [turn["role"] for turn in convo] == ["user", "assistant"]
         assert convo[1]["content"] == ("Yes" if label else "No")
-        assert "same real-world entity" in convo[0]["content"]
+        assert prompt_header in convo[0]["content"]  # rendered from the default prompt
     # The matched pair's records are actually rendered into the user turn.
     match_convo = next(
-        convo
-        for (cand, label), convo in zip(pairs, conversations, strict=True)
-        if label
+        convo for (cand, label), convo in zip(pairs, conversations, strict=True) if label
     )
     assert "Acme Corp" in match_convo[0]["content"]
     assert match_convo[1]["content"] == "Yes"
@@ -170,7 +169,7 @@ def test_prompt_template_override_flows_into_rendering() -> None:
 
     user_turn = trainer.calls[0]["conversations"][0][0]["content"]
     assert user_turn.startswith("CUSTOM ")
-    assert "same real-world entity" not in user_turn
+    assert FINETUNE_YES_NO_PROMPT.split("{left}")[0] not in user_turn  # not the default
 
 
 # --- run_finetune: model_ref shape + cost digest -----------------------------

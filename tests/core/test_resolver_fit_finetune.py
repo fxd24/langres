@@ -85,6 +85,8 @@ def _predict_all_match(self: Any, candidates: Any) -> Any:
             right_id=str(cand.right.id),
             score=1.0,
             score_type="prob_llm",
+            decision_step="fake",
+            provenance={},
         )
 
 
@@ -184,7 +186,9 @@ def test_both_labels_and_pairs_raises() -> None:
         _resolver().fit(
             [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}],
             labels=[True],
-            pairs=[LabeledPair(left_id="a", right_id="b", score=None, label=True, source="correction")],
+            pairs=[
+                LabeledPair(left_id="a", right_id="b", score=None, label=True, source="correction")
+            ],
             method=QLoRA(base="tiny/model"),
         )
 
