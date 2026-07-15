@@ -17,35 +17,35 @@ lazily inside its body). ``tests/test_import_budget.py`` locks the budget: a bar
 sentence-transformers / litellm.
 """
 
-from langres.core.data_profile.base import DataProfileReport, ProfileSection
-from langres.core.data_profile.builders import (
+from langres.data.data_profile.base import DataProfileReport, ProfileSection
+from langres.data.data_profile.builders import (
     from_benchmark,
     from_embedder,
     from_records,
 )
-from langres.core.data_profile.corpus_field import (
+from langres.data.data_profile.corpus_field import (
     CorpusFieldSection,
     FieldStat,
     profile_corpus_fields,
 )
-from langres.core.data_profile.embedding_section import (
+from langres.data.data_profile.embedding_section import (
     EmbeddingComparisonSection,
     EmbeddingSection,
     profile_embedding,
     profile_embedding_comparison,
 )
-from langres.core.data_profile.embedding_source import (
+from langres.data.data_profile.embedding_source import (
     ArraySource,
     EmbeddingSource,
     NpySource,
     cosine_signal,
 )
-from langres.core.data_profile.hero import HeroSection, build_hero
-from langres.core.data_profile.label_structure import (
+from langres.data.data_profile.hero import HeroSection, build_hero
+from langres.data.data_profile.label_structure import (
     LabelStructureSection,
     profile_label_structure,
 )
-from langres.core.data_profile.separability import (
+from langres.data.data_profile.separability import (
     SeparabilitySection,
     SimilaritySignal,
     profile_separability,

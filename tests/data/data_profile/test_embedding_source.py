@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from langres.core.data_profile.embedding_source import (
+from langres.data.data_profile.embedding_source import (
     ArraySource,
     EmbeddingSource,
     NpySource,

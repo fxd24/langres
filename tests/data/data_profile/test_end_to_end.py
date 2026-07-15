@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from langres.core.data_profile import ArraySource, DataProfileReport
-from langres.core.data_profile.builders import from_records
+from langres.data.data_profile import ArraySource, DataProfileReport
+from langres.data.data_profile.builders import from_records
 from langres.core.models import CompanySchema
 
 _RECORDS = [

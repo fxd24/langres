@@ -8,8 +8,8 @@ is (positive-pair prevalence + the ``1:N`` class-imbalance ratio), and how clean
 numbers frame every downstream ER decision, so they belong at the top.
 
 Built with :func:`build_hero`, which reads the headline numbers off a
-:class:`~langres.core.data_profile.label_structure.LabelStructureSection` and a
-:class:`~langres.core.data_profile.separability.SeparabilitySection` when present.
+:class:`~langres.data.data_profile.label_structure.LabelStructureSection` and a
+:class:`~langres.data.data_profile.separability.SeparabilitySection` when present.
 Every KPI is optional: a missing source section leaves that card as an honest
 ``"n/a"`` (via :func:`~langres.core._report_html._num`), never a raise -- the same
 graceful-degradation contract the rest of the report keeps.
@@ -23,9 +23,9 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from langres.core import _report_html
-from langres.core.data_profile.base import ProfileSection
-from langres.core.data_profile.label_structure import LabelStructureSection
-from langres.core.data_profile.separability import SeparabilitySection
+from langres.data.data_profile.base import ProfileSection
+from langres.data.data_profile.label_structure import LabelStructureSection
+from langres.data.data_profile.separability import SeparabilitySection
 
 
 def _fmt_count(value: int | None) -> str:
@@ -163,9 +163,9 @@ def build_hero(
     """Distil a hero KPI section from already-built profile sections.
 
     Reads the headline numbers off the first
-    :class:`~langres.core.data_profile.label_structure.LabelStructureSection`
+    :class:`~langres.data.data_profile.label_structure.LabelStructureSection`
     (records / clusters / prevalence / imbalance) and the first
-    :class:`~langres.core.data_profile.separability.SeparabilitySection` (AUC) in
+    :class:`~langres.data.data_profile.separability.SeparabilitySection` (AUC) in
     ``sections``. A KPI whose source section is absent stays ``None`` and renders
     as ``"n/a"``.
 

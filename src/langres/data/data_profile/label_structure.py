@@ -25,7 +25,7 @@ from collections.abc import Collection, Hashable, Sequence
 from typing import Any, Literal
 
 from langres.core import _report_html, _svg
-from langres.core.data_profile.base import ProfileSection
+from langres.data.data_profile.base import ProfileSection
 
 #: Cap on the number of bars in the cluster-size histogram. Sizes at or above the
 #: cap fold into a single overflow bin so a pathological dedup dataset (one

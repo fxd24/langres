@@ -16,7 +16,7 @@ from typing import Any, Literal
 import pytest
 
 from langres.core import _report_html, _svg
-from langres.core.data_profile import DataProfileReport, ProfileSection
+from langres.data.data_profile import DataProfileReport, ProfileSection
 
 
 class _FakeSection(ProfileSection):
@@ -200,7 +200,7 @@ class TestConvenienceConstructorsDelegate:
         self, monkeypatch: pytest.MonkeyPatch, sentinel: DataProfileReport
     ) -> dict[str, Any]:
         calls: dict[str, Any] = {}
-        fake = types.ModuleType("langres.core.data_profile.builders")
+        fake = types.ModuleType("langres.data.data_profile.builders")
 
         def _from_benchmark(*args: Any, **kwargs: Any) -> DataProfileReport:
             calls["benchmark"] = (args, kwargs)
@@ -214,7 +214,7 @@ class TestConvenienceConstructorsDelegate:
         fake.from_records = _from_records  # type: ignore[attr-defined]
         # The delegators resolve builders dynamically (importlib.import_module),
         # which consults sys.modules first -- so injecting the fake here is enough.
-        monkeypatch.setitem(sys.modules, "langres.core.data_profile.builders", fake)
+        monkeypatch.setitem(sys.modules, "langres.data.data_profile.builders", fake)
         return calls
 
     def test_from_benchmark_delegates(self, monkeypatch: pytest.MonkeyPatch) -> None:

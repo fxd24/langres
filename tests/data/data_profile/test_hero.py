@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Hashable
 
-from langres.core.data_profile.hero import HeroSection, build_hero
-from langres.core.data_profile.label_structure import profile_label_structure
-from langres.core.data_profile.separability import profile_separability
+from langres.data.data_profile.hero import HeroSection, build_hero
+from langres.data.data_profile.label_structure import profile_label_structure
+from langres.data.data_profile.separability import profile_separability
 
 
 def _perfect_signal(left: Hashable, right: Hashable) -> float | None:

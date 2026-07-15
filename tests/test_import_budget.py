@@ -242,7 +242,7 @@ def test_eval_report_stays_import_light() -> None:
     )
 
 
-# The data-profile report (``langres.core.data_profile``) and its shared render
+# The data-profile report (``langres.data.data_profile``) and its shared render
 # scaffold (``langres.core._report_html``) render entirely from stdlib + numpy (a
 # core dep) + the import-light ``core.metrics``. Like the EvalReport tearsheet
 # they must NEVER pull the heavy/optional stack -- the plan's load-bearing
@@ -251,7 +251,7 @@ def test_eval_report_stays_import_light() -> None:
 # precomputed embeddings; it never generates them, so it carries no [semantic]
 # dep. Same fresh-process subprocess pattern as the eval_report check above.
 _DATA_PROFILE_IMPORT_LIGHT_SCRIPT = (
-    "import sys; import langres.core.data_profile; import langres.core._report_html; "
+    "import sys; import langres.data.data_profile; import langres.core._report_html; "
     "leaked = [m for m in {modules!r} if m in sys.modules]; "
     "assert not leaked, f'data_profile/_report_html leaked heavy modules: {{leaked}}'; "
     "print('OK')"
@@ -259,7 +259,7 @@ _DATA_PROFILE_IMPORT_LIGHT_SCRIPT = (
 
 
 def test_data_profile_stays_import_light() -> None:
-    """``import langres.core.data_profile`` (+ ``_report_html``) must not pull a heavy dep.
+    """``import langres.data.data_profile`` (+ ``_report_html``) must not pull a heavy dep.
 
     The data profile is dependency-free by construction: inline SVG, no
     matplotlib, no ML stack, no embedding generation (embeddings are consumed
@@ -348,7 +348,7 @@ _ROOT_LAZY_MODULES = [
     "langres.core.eval_report",
     "langres.core.benchmark",
     "langres.core.calibration",
-    "langres.core.data_profile",
+    "langres.data.data_profile",
 ]
 
 _ROOT_LAZY_SCRIPT = (

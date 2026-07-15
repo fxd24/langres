@@ -198,11 +198,11 @@ class DataProfileReport(BaseModel):
         the default section set, honouring optional ``embeddings=`` inputs, applying
         an ``include=`` subset -- lives there so this base stays a stable, minimal
         surface. The import is deferred into the method body (not module scope) so a
-        bare ``import langres.core.data_profile`` never pulls ``builders`` (and its
+        bare ``import langres.data.data_profile`` never pulls ``builders`` (and its
         leaf profilers) at import time -- the package's import-light budget -- while
         still handing mypy the real ``builders.from_benchmark`` return type.
         """
-        from langres.core.data_profile.builders import from_benchmark as _impl
+        from langres.data.data_profile.builders import from_benchmark as _impl
 
         return _impl(*args, **kwargs)
 
@@ -214,6 +214,6 @@ class DataProfileReport(BaseModel):
         the same ``builders`` module via the same deferred body import, for the same
         import-light reason documented there.
         """
-        from langres.core.data_profile.builders import from_records as _impl
+        from langres.data.data_profile.builders import from_records as _impl
 
         return _impl(*args, **kwargs)

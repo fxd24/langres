@@ -13,8 +13,8 @@ import math
 
 import pytest
 
-from langres.core.data_profile import ProfileSection
-from langres.core.data_profile.label_structure import (
+from langres.data.data_profile import ProfileSection
+from langres.data.data_profile.label_structure import (
     LabelStructureSection,
     profile_label_structure,
 )
