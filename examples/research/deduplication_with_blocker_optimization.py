@@ -7,7 +7,7 @@ This example demonstrates the CORRECT usage patterns for langres.core components
    - Uses `text_field_extractor` to combine multiple fields for embedding
    - Injects `SentenceTransformerEmbedder` and `FAISSIndex` for composability
 
-2. **LLMJudgeModule with Azure OpenAI**:
+2. **LLMMatcher with Azure OpenAI**:
    - Accepts iterator of candidates (use `iter()` to convert list)
    - Uses LiteLLM for enhanced observability (Langfuse tracing)
 
@@ -21,7 +21,7 @@ This example demonstrates the CORRECT usage patterns for langres.core components
    - Integrates with wandb for experiment tracking
 
 **KEY PATTERNS DEMONSTRATED**:
-- Separation of concerns: Blocker normalizes schema, Module compares
+- Separation of concerns: Blocker normalizes schema, Matcher compares
 - Dependency injection: Embedding and vector index are injectable
 - Type safety: All components use Pydantic for validation
 - Observability: Full provenance tracking via PairwiseJudgement
@@ -55,7 +55,7 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.metrics import calculate_bcubed_metrics, calculate_pairwise_metrics
-from langres.core.modules.llm_judge import LLMJudgeModule
+from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
 from langres.core.indexes.vector_index import FAISSIndex
 
@@ -220,21 +220,21 @@ def run_deduplication_pipeline(
     logger.info("Generated %d candidate pairs", len(candidates))
 
     # ==================================================================================
-    # STEP 2: Score Pairs using LLMJudgeModule
+    # STEP 2: Score Pairs using LLMMatcher
     # ==================================================================================
-    # KEY PATTERN: Module.forward() accepts Iterator
-    # All Module implementations accept Iterator[ERCandidate[SchemaT]], not lists.
+    # KEY PATTERN: Matcher.forward() accepts Iterator
+    # All Matcher implementations accept Iterator[ERCandidate[SchemaT]], not lists.
     # This enables streaming/lazy evaluation for large datasets.
-    logger.info("Scoring pairs with LLMJudgeModule...")
+    logger.info("Scoring pairs with LLMMatcher...")
 
     # Type annotation helps mypy verify schema consistency
-    llm_judge: LLMJudgeModule[CompanySchema] = LLMJudgeModule(
+    llm_judge: LLMMatcher[CompanySchema] = LLMMatcher(
         client=llm_client,  # Pre-configured LiteLLM client with Langfuse tracing
         model=azure_model,
         temperature=1.0,  # GPT-5 models only support temperature=1.0
     )
 
-    # IMPORTANT: Module.forward() expects Iterator, not list
+    # IMPORTANT: Matcher.forward() expects Iterator, not list
     # Convert list to iterator using iter()
     # forward() yields PairwiseJudgement with full provenance
     judgements = list(llm_judge.forward(iter(candidates)))

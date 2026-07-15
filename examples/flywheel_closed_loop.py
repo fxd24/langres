@@ -21,16 +21,16 @@ network, no spend).
 The eight stages (all $0, all deterministic)::
 
     1. bootstrap   SimulatedFrontierJudge scores every candidate under a
-                   LoggingModule -> judgements.jsonl (the flywheel inlet).
+                   LoggingMatcher -> judgements.jsonl (the flywheel inlet).
     2. select      select_for_review(uncertainty) -> a review queue; prints the
                    equivalent `uv run langres review queue.jsonl` command.
     3. answer      a simulated human answers the queue from gold -> corrections.
     4. harvest     BEFORE: harvest verdicts alone -> derive_threshold fires the
                    silver-only circularity warning. AFTER: overlay corrections.
-    5. train       fit a RandomForestJudge student on the harvested labels; calibrate its
+    5. train       fit a RandomForestMatcher student on the harvested labels; calibrate its
                    threshold on the STUDENT's OWN scores (never the teacher's --
                    different scale).
-    6. cascade     CascadeJudge(student, teacher, band=...) where the band is
+    6. cascade     CascadeMatcher(student, teacher, band=...) where the band is
                    DERIVED from calibration-split student scores (widen around
                    the student threshold until ~20% of pairs fall inside) -- not
                    a magic +/-0.15 constant.
@@ -42,7 +42,7 @@ The eight stages (all $0, all deterministic)::
                    that catches confident false merges), the escalation rate,
                    the frontier-call reduction, and the (simulated) dollars saved.
 
-Run it (needs the ``trained`` extra for scikit-learn behind ``RandomForestJudge``; no
+Run it (needs the ``trained`` extra for scikit-learn behind ``RandomForestMatcher``; no
 network, no spend)::
 
     uv run python examples/flywheel_closed_loop.py
@@ -73,11 +73,11 @@ from langres.core.harvest import (
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog, LoggingModule
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
-from langres.core.modules.cascade_judge import CASCADE_ESCALATED_STEP, CascadeJudge
-from langres.core.modules.random_forest_judge import RandomForestJudge
+from langres.core.matcher import Matcher
+from langres.core.matchers.cascade_judge import CASCADE_ESCALATED_STEP, CascadeMatcher
+from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.review import ReviewQueue, select_for_review
 
@@ -117,14 +117,14 @@ class FZRecord(BaseModel):
     phone: str = ""
 
 
-class SimulatedFrontierJudge(Module[FZRecord]):
+class SimulatedFrontierJudge(Matcher[FZRecord]):
     """A deterministic, $0 stand-in for an expensive frontier LLM judge.
 
     Maps a name-led rapidfuzz signal (read off the pair's ``ComparisonVector``)
     through a steep logistic into a confident probability, plus a small, stable
     per-pair perturbation so the scores spread realistically instead of snapping
     to two values. Emits ``score_type="prob_llm"`` on a shared ``[0, 1]``
-    probability scale (so it cascades with a ``RandomForestJudge`` student without
+    probability scale (so it cascades with a ``RandomForestMatcher`` student without
     tripping the scale-mismatch warning), and stamps a **fictional** ``cost_usd``
     -- no network call is ever made.
 
@@ -195,11 +195,11 @@ class SimulatedFrontierJudge(Module[FZRecord]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
 
-class _OuterSpendCap(Module[FZRecord]):
+class _OuterSpendCap(Matcher[FZRecord]):
     """Wrap the teacher judge in ONE cumulative spend cap for the whole run.
 
     This is the correct place for a cascade's spend cap: on the OUTSIDE of the
@@ -208,20 +208,20 @@ class _OuterSpendCap(Module[FZRecord]):
     so cost accumulates across EVERY ``forward`` call -- the stage-1 bootstrap
     batch AND the cascade's per-pair escalations (the same teacher instance is
     reused as the cascade's escalation tier). Core's
-    :class:`~langres.core.presets._SpendCappedModule` deliberately opens a FRESH
+    :class:`~langres.core.presets._SpendCappedMatcher` deliberately opens a FRESH
     monitor per ``forward`` call (right for a single verb call), which -- passed
     as a cascade tier -- would reset the budget on every one-pair escalation and
     so bound nothing (see
-    :class:`~langres.core.modules.cascade_judge.CascadeJudge`'s docstring). One
+    :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`'s docstring). One
     shared monitor is what makes the outer cap real.
 
     On a breach it raises :class:`~langres.clients.openrouter.BudgetExceeded`
     carrying the judgements already produced (and paid for) on
-    ``.partial_judgements`` -- the same recovery contract ``_SpendCappedModule``,
-    ``LoggingModule``, and the cascade's escalation-side re-raise all rely on.
+    ``.partial_judgements`` -- the same recovery contract ``_SpendCappedMatcher``,
+    ``LoggingMatcher``, and the cascade's escalation-side re-raise all rely on.
     """
 
-    def __init__(self, judge: Module[FZRecord], *, budget_usd: float) -> None:
+    def __init__(self, judge: Matcher[FZRecord], *, budget_usd: float) -> None:
         self._judge = judge
         self._monitor = SpendMonitor(budget_usd=budget_usd)
 
@@ -408,7 +408,7 @@ def derive_escalation_band(
     ``+/-0.15`` constant: the band is read straight off the calibration-split
     student score distribution, so it adapts to how confident the student
     actually is. ``low``/``high`` are clipped into ``[0, 1]`` with ``low < high``
-    (the :class:`CascadeJudge` contract).
+    (the :class:`CascadeMatcher` contract).
     """
     if not scores:
         raise ValueError("derive_escalation_band needs at least one calibration score.")
@@ -455,7 +455,7 @@ def run_closed_loop(
     seed: int = _SEED,
     work_dir: Path | None = None,
     verbose: bool = False,
-    teacher: Module[FZRecord] | None = None,
+    teacher: Matcher[FZRecord] | None = None,
     spend_cap_usd: float | None = None,
 ) -> ClosedLoopReport:
     """Run the full bootstrap -> review -> harvest -> train -> cascade loop.
@@ -515,7 +515,7 @@ def run_closed_loop(
     # OUTSIDE of the whole teacher (ONE shared monitor across the bootstrap batch
     # AND the cascade's per-pair escalations, since the same instance is reused as
     # the escalation tier) -- never a cascade tier, which would reset the budget
-    # per pair (see _OuterSpendCap / CascadeJudge's docstring).
+    # per pair (see _OuterSpendCap / CascadeMatcher's docstring).
     teacher = teacher if teacher is not None else SimulatedFrontierJudge(seed=seed)
     spend_cap = (
         _OuterSpendCap(teacher, budget_usd=spend_cap_usd) if spend_cap_usd is not None else None
@@ -525,7 +525,7 @@ def run_closed_loop(
     teacher_threshold = 0.5  # the teacher's natural cut (its logistic is centered near here)
     boot_log = JudgementLog(work_dir / "judgements.jsonl")
     boot_log.path.unlink(missing_ok=True)
-    logged_teacher = LoggingModule(teacher, log=boot_log, threshold=teacher_threshold)
+    logged_teacher = LoggingMatcher(teacher, log=boot_log, threshold=teacher_threshold)
     teacher_judgements = list(logged_teacher.forward(iter(candidates)))
     teacher_by_pair = {_pair_key(j.left_id, j.right_id): j for j in teacher_judgements}
     judgement_rows = boot_log.read()
@@ -577,7 +577,7 @@ def run_closed_loop(
     train_idx, heldout_idx = _seeded_split(len(candidates), seed)
     train_candidates = [candidates[i] for i in train_idx]
     train_labels = [label_by_pair[_pair_key(c.left.id, c.right.id)] for c in train_candidates]
-    student: RandomForestJudge[FZRecord] = RandomForestJudge(
+    student: RandomForestMatcher[FZRecord] = RandomForestMatcher(
         feature_specs=comparator.feature_specs, random_state=seed
     )
     student.fit(iter(train_candidates), train_labels)
@@ -597,7 +597,7 @@ def run_closed_loop(
             f"[{band_low:.3f}, {band_high:.3f}] captures {band_fraction:.0%} of "
             "calibration pairs (target ~20%) -- not a magic constant."
         )
-    cascade: CascadeJudge[FZRecord] = CascadeJudge(
+    cascade: CascadeMatcher[FZRecord] = CascadeMatcher(
         student=student, escalation=teacher, band=(band_low, band_high)
     )
     cascade_judgements = list(cascade.forward(iter(heldout_candidates)))

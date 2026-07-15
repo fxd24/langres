@@ -1,12 +1,12 @@
-"""Public test/example doubles for :class:`~langres.core.module.Module`.
+"""Public test/example doubles for :class:`~langres.core.matcher.Matcher`.
 
 ``langres.testing`` is a small, dependency-light home for scripted stand-ins
 for the library's abstract components -- currently :class:`ScriptedJudge`, a
-``Module`` that returns pre-scripted scores instead of computing them. It is
-the safe way to exercise judge-shaped code (``CascadeJudge``,
+``Matcher`` that returns pre-scripted scores instead of computing them. It is
+the safe way to exercise judge-shaped code (``CascadeMatcher``,
 :func:`~langres.core.benchmark.evaluate`, the review/harvest flywheel, ...) in
 tests and examples with no network, no API key, and no spend. A real
-``LLMJudge`` picks up ``OPENROUTER_API_KEY`` from the repo's ``.env`` via
+``LLMMatcher`` picks up ``OPENROUTER_API_KEY`` from the repo's ``.env`` via
 litellm's import-time ``load_dotenv()`` and would make a real, billed call;
 ``ScriptedJudge`` never imports litellm (or any other heavy/optional
 dependency) at all.
@@ -16,15 +16,15 @@ It also replaces one genuine hand-rolled duplicate: a near-identical
 ``tests/core/modules/test_cascade_judge.py`` (same name, same purpose, same
 ``seen`` escalation-laziness spy, same ``inspect_scores`` delegation to
 ``_inspect_scores_impl``) now imports this class instead. Two other
-``Module``-shaped test doubles were deliberately left in place, not migrated:
+``Matcher``-shaped test doubles were deliberately left in place, not migrated:
 
 - ``DummyBlocker`` in ``tests/core/test_blocker.py`` subclasses
-  :class:`~langres.core.blocker.Blocker`, not ``Module`` -- a ``Module``
+  :class:`~langres.core.blocker.Blocker`, not ``Matcher`` -- a ``Matcher``
   double cannot structurally replace it.
 - The four ``DummyModule`` classes in ``tests/core/test_module.py`` test the
-  ``Module`` abstract base class's own contract (it can't be instantiated
+  ``Matcher`` abstract base class's own contract (it can't be instantiated
   directly, a concrete subclass's ``forward()`` is a lazy iterator, etc.);
-  using a library-provided ``Module`` subclass to test the ABC itself would
+  using a library-provided ``Matcher`` subclass to test the ABC itself would
   be circular, so they stay as minimal, from-scratch stubs.
 
 Not part of the core import graph: a bare ``import langres`` does not import
@@ -37,20 +37,20 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 __all__ = ["ScriptedJudge"]
 
 
-class ScriptedJudge(Module[SchemaT]):
-    """A :class:`~langres.core.module.Module` that returns pre-scripted scores.
+class ScriptedJudge(Matcher[SchemaT]):
+    """A :class:`~langres.core.matcher.Matcher` that returns pre-scripted scores.
 
     For tests and examples that need a judge-shaped stand-in with no network,
     no API key, and no spend -- e.g. driving a
-    :class:`~langres.core.modules.cascade_judge.CascadeJudge`, exercising
+    :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`, exercising
     :func:`~langres.core.benchmark.evaluate`, or demonstrating the
-    review/harvest flywheel without a real ``LLMJudge``.
+    review/harvest flywheel without a real ``LLMMatcher``.
 
     Scores come from either a ``dict`` keyed by the unordered pair
     (``frozenset({left_id, right_id})`` -- order-independent, matching how the
@@ -124,7 +124,7 @@ class ScriptedJudge(Module[SchemaT]):
                 candidate the judge yields an abstention (``decision=None,
                 score=None``) instead of a scored judgement, so the abstain
                 paths of downstream code (``predicted_match``, ``link``'s
-                ``JudgeAbstainedError``, the review flywheel) are exercisable
+                ``MatcherAbstainedError``, the review flywheel) are exercisable
                 with no network. Evaluated before ``scores``.
             confidence: Optional per-pair confidence (credence in [0, 1]),
                 mirroring ``scores`` -- a ``dict`` keyed by the unordered pair or
@@ -199,5 +199,5 @@ class ScriptedJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Delegate to the shared :func:`_inspect_scores_impl` (same as every real Module)."""
+        """Delegate to the shared :func:`_inspect_scores_impl` (same as every real Matcher)."""
         return _inspect_scores_impl(judgements, sample_size)

@@ -17,7 +17,7 @@ run pays for is exactly what the `$0` replay validated:
   a cost estimate — **zero API calls**. Use it to preview cost and confirm the
   rendered prompt matches the archived one before spending anything.
 
-* ``--mode live`` (**PAID**, off by default): runs a real ``LLMJudge`` (the
+* ``--mode live`` (**PAID**, off by default): runs a real ``LLMMatcher`` (the
   paper's ``domain-complex-force`` template, the Peeters per-dataset
   ``record_serializer``, ``response_parser=parse_binary_yes_no``,
   ``temperature=0.0``) over the 1206 regenerated Abt-Buy pairs, under a hard
@@ -98,7 +98,7 @@ Crash-safe & resumable (paid runs never lose a billed call):
 Credence probe (``--logprobs``):
 
 * ``--logprobs`` (``--mode live``) runs the SAME live judge with
-  ``LLMJudge(confidence="logprob")`` — it requests first-token logprobs and records
+  ``LLMMatcher(confidence="logprob")`` — it requests first-token logprobs and records
   a P(Yes) credence (``p_yes`` / ``leaked_mass`` / ``p_yes_is_bound``, plus
   ``correct = verdict == gold``) in each **v2** row, so "does the model's own
   first-token credence predict its errors?" is answerable from the rows alone. It
@@ -164,7 +164,7 @@ from langres.clients.openrouter import (
 )
 from langres.core.metrics import classify_pairs
 from langres.core.models import PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudge, parse_binary_yes_no
+from langres.core.matchers.llm_judge import LLMMatcher, parse_binary_yes_no
 from langres.core.usage import LLMUsage
 from langres.data.peeters import (
     PeetersReplicationSpec,
@@ -325,7 +325,7 @@ PAID_MODELS: dict[str, float] = {
 #: rather than calling OpenAI directly; pinning ``order: ["OpenAI"]`` +
 #: ``allow_fallbacks: False`` forces OpenRouter to serve the request from OpenAI's
 #: own backend, so a different provider/quantization can't silently be substituted
-#: and change the F1/cost we report. Sent as ``LLMJudge(provider=...)`` ->
+#: and change the F1/cost we report. Sent as ``LLMMatcher(provider=...)`` ->
 #: ``extra_body["provider"]``.
 LIVE_PROVIDER: dict[str, Any] = {"order": ["OpenAI"], "allow_fallbacks": False}
 
@@ -568,7 +568,7 @@ def dry_run(
     """Render every pair through the LIVE path and count tokens — ZERO API calls.
 
     Renders each candidate with the exact ``build_llm_prompt_template`` +
-    ``make_record_serializer`` the live ``LLMJudge`` uses, so the input-token
+    ``make_record_serializer`` the live ``LLMMatcher`` uses, so the input-token
     total is the true billed input. Output tokens are estimated (the single-word
     binary answer). ``count_tokens`` is injectable for a dependency-free test;
     ``None`` uses the real litellm/tiktoken counter. ``indices`` (from
@@ -640,8 +640,8 @@ def _build_live_judge(
     client: Any = None,
     *,
     confidence: str = "none",
-) -> LLMJudge[Any]:
-    """The live ``LLMJudge`` for a Peeters slice — the single build site.
+) -> LLMMatcher[Any]:
+    """The live ``LLMMatcher`` for a Peeters slice — the single build site.
 
     Wires the paper's ``domain-complex-force`` template, the Peeters per-dataset
     ``record_serializer``, ``response_parser=parse_binary_yes_no`` and
@@ -657,7 +657,7 @@ def _build_live_judge(
     to the replication run apart from the logprob request (which, on the single
     "Yes"/"No" output token, adds zero output tokens and so ~zero cost).
     """
-    return LLMJudge(
+    return LLMMatcher(
         client=client,
         model=model,
         temperature=0.0,
@@ -907,7 +907,7 @@ def run_live(
     progress_every: int = DEFAULT_PROGRESS_EVERY,
     confidence: str = "none",
 ) -> dict[str, Any]:
-    """Judge every sampled pair with a live ``LLMJudge`` under a hard spend cap.
+    """Judge every sampled pair with a live ``LLMMatcher`` under a hard spend cap.
 
     Builds the judge via :func:`_build_live_judge` (paper template, Peeters
     serializer, ``parse_binary_yes_no``, ``temperature=0.0``, provider pinned) and
@@ -925,7 +925,7 @@ def run_live(
     in-memory path (writes nothing to disk).
 
     ``client`` is injectable (a fake returning "Yes"/"No") so the whole flow is
-    verified at **$0** in tests; ``None`` lets ``LLMJudge`` build a real litellm
+    verified at **$0** in tests; ``None`` lets ``LLMMatcher`` build a real litellm
     client from the environment (the paid path).
     """
     candidates = build_candidates(spec)
@@ -1729,7 +1729,7 @@ def main() -> int:
         "--logprobs",
         action="store_true",
         help=(
-            "Credence probe: run the live judge with LLMJudge(confidence='logprob'), which "
+            "Credence probe: run the live judge with LLMMatcher(confidence='logprob'), which "
             "requests first-token logprobs and records a P(Yes) credence per pair "
             "(p_yes/leaked_mass/p_yes_is_bound, plus correct=verdict==gold) in the v2 rows. "
             "Writes to a distinct …__logprobs.jsonl (never overwrites the replication rows) and "

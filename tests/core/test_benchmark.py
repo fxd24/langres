@@ -42,7 +42,7 @@ from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import GroupwiseModule, Module
+from langres.core.matcher import GroupwiseMatcher, Matcher
 from langres.core.presets import DEFAULT_BUDGET_USD
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
@@ -55,7 +55,7 @@ from langres.methods import ZERO_SPEND_METHODS
 # ---------------------------------------------------------------------------
 
 
-class _FakeModule(Module[CompanySchema]):
+class _FakeModule(Matcher[CompanySchema]):
     """Yields one judgement per candidate with a controllable cost / failure.
 
     ``cost_key`` selects which provenance key carries the spend (``cost_usd`` or
@@ -155,7 +155,7 @@ def test_runner_budget_stop_returns_paid_work_before_crossing() -> None:
     assert runner.labeled_count == 2
 
 
-class _CountingCostModule(Module[CompanySchema]):
+class _CountingCostModule(Matcher[CompanySchema]):
     """Fixed real-cost judge that counts ``forward()`` calls.
 
     Under ``BudgetedModuleRunner`` each call scores exactly one candidate (see
@@ -208,7 +208,7 @@ def test_runner_stops_immediately_after_post_call_budget_breach() -> None:
 
 
 def test_runner_tallies_llm_cost_usd_key() -> None:
-    # CascadeModule writes ``llm_cost_usd``; the tally must read it as a fallback.
+    # CascadeChainMatcher writes ``llm_cost_usd``; the tally must read it as a fallback.
     runner = BudgetedModuleRunner(
         _FakeModule(cost=0.2, cost_key="llm_cost_usd"),
         budget_usd=100.0,
@@ -269,25 +269,25 @@ def test_runner_propagates_blind_cost_error_with_partial() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BudgetedModuleRunner + GroupwiseModule: documented group-atomicity (E5).
+# BudgetedModuleRunner + GroupwiseMatcher: documented group-atomicity (E5).
 #
 # BudgetedModuleRunner._score_one() calls ``module.forward(iter([candidate]))``
 # ONE candidate at a time (by design -- see its docstring's "per-call
-# resilience" point). A GroupwiseModule's forward() derives groups from
+# resilience" point). A GroupwiseMatcher's forward() derives groups from
 # whatever pairwise stream it's given, so under the runner each call sees
 # exactly one candidate -> one trivial, size-1 group. This means the
 # atomicity guarantee ("never split a group mid-call") holds TRIVIALLY today
 # -- there is never more than one pair per call, so there is nothing to
 # split -- but it also means the runner does NOT yet amortize a real multi-
 # pair group into a single priced call. That cost-saving integration is
-# deferred to W1.1 (the first concrete GroupwiseModule, SelectJudge), which
+# deferred to W1.1 (the first concrete GroupwiseMatcher, SelectMatcher), which
 # will extend the runner (or add a group-aware runner) to pre-flight whole
 # groups. This test pins down and documents the current, correct-but-not-
 # yet-optimized behavior so a future change is a deliberate, measured one.
 # ---------------------------------------------------------------------------
 
 
-class _CountingGroupwiseModule(GroupwiseModule[CompanySchema]):
+class _CountingGroupwiseModule(GroupwiseMatcher[CompanySchema]):
     """Records every forward_groups() call's groups, for atomicity inspection."""
 
     def __init__(self) -> None:
@@ -435,7 +435,7 @@ def _cost_resolver_factory(threshold: float) -> Resolver:
     return Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=_FakeModule(cost=0.01),
+        matcher=_FakeModule(cost=0.01),
         clusterer=Clusterer(threshold=threshold),
     )
 
@@ -542,7 +542,7 @@ def test_cost_track_backward_compatible_construction_still_works() -> None:
 def _llm_judgement(
     *, lid: str = "a", rid: str = "b", cost_usd: float, cost_is_real: bool, tokens: int = 10
 ) -> PairwiseJudgement:
-    """A judgement shaped like LLMJudge's / DSPyJudge's real provenance."""
+    """A judgement shaped like LLMMatcher's / DSPyMatcher's real provenance."""
     usage = LLMUsage(input_tokens=tokens, output_tokens=tokens, model="m")
     return PairwiseJudgement(
         left_id=lid,
@@ -569,7 +569,7 @@ def test_cost_track_usage_sums_token_vectors_across_judgements() -> None:
 
 
 def test_cost_track_basis_estimated_when_cost_is_real_false() -> None:
-    # LLMJudge's litellm-estimate fallback, or DSPyJudge's normal (non-error)
+    # LLMMatcher's litellm-estimate fallback, or DSPyMatcher's normal (non-error)
     # self-reported cost -- neither claims to be the real billed amount.
     j = _llm_judgement(cost_usd=0.01, cost_is_real=False)
     track = _cost_track([j])
@@ -578,7 +578,7 @@ def test_cost_track_basis_estimated_when_cost_is_real_false() -> None:
 
 
 def test_cost_track_basis_untracked_for_dspy_parse_error_path() -> None:
-    # DSPyJudge's billed-but-unparseable call: cost_untracked=True regardless of
+    # DSPyMatcher's billed-but-unparseable call: cost_untracked=True regardless of
     # whether cost_usd/cost_is_real are also present.
     j = PairwiseJudgement(
         left_id="a",
@@ -625,7 +625,7 @@ def test_cost_track_basis_mixed_when_judgements_disagree() -> None:
 
 
 def test_cost_track_llm_cost_usd_basis_real_when_cost_is_real() -> None:
-    # BUG 2: llm_cost_usd is CascadeModule's cost key. usd_total already sums it
+    # BUG 2: llm_cost_usd is CascadeChainMatcher's cost key. usd_total already sums it
     # (see _judgement_cost), but _judgement_cost_basis only recognized cost_usd
     # -- so real spend written under llm_cost_usd was mislabeled cost_basis="none".
     j = PairwiseJudgement(
@@ -704,7 +704,7 @@ def test_cost_track_usage_malformed_falls_back_to_zero_vector() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _ScoreModule(Module[CompanySchema]):
+class _ScoreModule(Matcher[CompanySchema]):
     """Yields one judgement per candidate whose score is read from a per-id map.
 
     Lets a test drive the pair-level threshold sweep deterministically: the score
@@ -824,10 +824,10 @@ def test_evaluate_judge_on_candidates_handles_empty_candidates() -> None:
     assert result.truncation_reason == "none"
 
 
-class _AbstainingModule(Module[CompanySchema]):
+class _AbstainingModule(Matcher[CompanySchema]):
     """Like ``_ScoreModule`` but flags ids in ``abstain`` with ``parse_error``.
 
-    Models an LLMJudge under ``on_parse_error='abstain'``: the judgement is still
+    Models an LLMMatcher under ``on_parse_error='abstain'``: the judgement is still
     emitted (score 0.0) but carries ``provenance['parse_error']`` so the evaluator
     can count it instead of silently folding it into the metric.
     """
@@ -1094,7 +1094,7 @@ def test_evaluate_raises_on_empty_candidates() -> None:
 
 def test_classify_pairs_grades_an_abstention_as_a_match_at_threshold_zero() -> None:
     # The reason evaluate() rejects a cut of 0.0: `classify_pairs` predicts a
-    # match iff `score >= cut`, so a score=0.0 abstention (e.g. LLMJudge under
+    # match iff `score >= cut`, so a score=0.0 abstention (e.g. LLMMatcher under
     # on_parse_error='abstain') is scored a confident YES at cut 0.0. (A Wave-1
     # abstain nulls the score instead -- score=None -> excluded -- so this
     # pins the score=0.0 shape specifically.) This test pins the underlying

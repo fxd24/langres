@@ -42,7 +42,7 @@ blocker.vector_index.create_index(texts)          # easy to forget -> RuntimeErr
 candidates = list(blocker.stream(records))
 
 # Scorer: per-field extractor lambdas, missing handled ad hoc (`x.address or ""`).
-module = RapidfuzzModule(
+module = RapidfuzzMatcher(
     field_extractors={
         "name": (lambda x: x.name, 0.7),
         "address": (lambda x: x.address or "", 0.2),
@@ -91,7 +91,7 @@ What changed:
 - **One declarative line** replaces the schema factory, text extractor, scorer
   lambdas, and manual index build. `from_schema` derives a missing-aware
   `StringComparator` from the schema's string fields, excludes `id`, and wires
-  a `WeightedAverageJudge` + `Clusterer`.
+  a `WeightedAverageMatcher` + `Clusterer`.
 - **Missing-aware by construction.** A `None`/empty field is dropped, never
   compared as a blank string; the evidence floor stops a single weak feature
   from over-merging. No `x.address or ""`.
@@ -115,7 +115,7 @@ What changed:
 ### Power path still open
 
 The four-slot constructor is unchanged for advanced use — swap in a
-`VectorBlocker`, a custom `Module`, or `comparator=None` for a self-contained
+`VectorBlocker`, a custom `Matcher`, or `comparator=None` for a self-contained
 scorer:
 
 ```python
@@ -123,7 +123,7 @@ comparator = Comparator.from_schema(CompanySchema, weights={...})
 Resolver(
     blocker=AllPairsBlocker(schema=CompanySchema),
     comparator=comparator,
-    module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+    matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
     clusterer=Clusterer(threshold=0.7),
 )
 ```

@@ -1,6 +1,6 @@
-"""W1.1 SelectJudge benchmark: call-count + honest-cost reduction on Amazon-Google.
+"""W1.1 SelectMatcher benchmark: call-count + honest-cost reduction on Amazon-Google.
 
-SelectJudge (``langres.core.modules.select_judge.SelectJudge``) makes ONE LLM
+SelectMatcher (``langres.core.matchers.select_judge.SelectMatcher``) makes ONE LLM
 call per anchor GROUP ("which single candidate, if any, matches the anchor?")
 instead of one call per PAIR. This script produces the two artifacts the W1.1
 exit criterion calls for, both at $0 with DSPy's ``DummyLM`` (no key, no
@@ -16,10 +16,10 @@ network):
 2. **Honest call-count + cost-reduction table + group-size distribution**
    -- driven directly against the blocker's NATIVE
    ``VectorBlocker.stream_groups()`` (not the buffered pairwise->group
-   default ``GroupwiseModule.forward()`` uses, and NOT through
+   default ``GroupwiseMatcher.forward()`` uses, and NOT through
    ``run_method``/``BudgetedModuleRunner``, which today only ever sees
    size-1 groups -- see ``docs/TECHNICAL_OVERVIEW.md`` section 8 and
-   ``SelectJudge``'s own module docstring). This is the only way to measure
+   ``SelectMatcher``'s own module docstring). This is the only way to measure
    a real, non-size-1 group structure, so it is the only honest source for
    the call-count claim. The group-size distribution is reported alongside
    the ratio (E3): a skewed distribution (e.g. one giant group and many
@@ -43,7 +43,7 @@ from typing import Any
 from dspy.utils.dummies import DummyLM
 
 from langres.core.benchmark import run_method
-from langres.core.modules.select_judge import SelectJudge
+from langres.core.matchers.select_judge import SelectMatcher
 from langres.data.amazon_google import AmazonGoogleBenchmark
 from langres.methods import make_resolver_factory
 
@@ -115,9 +115,9 @@ def measure_call_count_reduction() -> dict[str, Any]:
     texts = [blocker.text_field_extractor(e) for e in entities]
     blocker.vector_index.create_index(texts)
 
-    # Property check (CEO #14), with SelectJudge's own consumer of
+    # Property check (CEO #14), with SelectMatcher's own consumer of
     # stream_groups() in the loop: the group contract stays lossless over
-    # pairs -- no dupes, no losses -- with a real GroupwiseModule attached.
+    # pairs -- no dupes, no losses -- with a real GroupwiseMatcher attached.
     stream_pairs = {frozenset({c.left.id, c.right.id}) for c in blocker.stream(records)}
     groups = list(blocker.stream_groups(records))
     group_pairs = {frozenset({g.anchor.id, member.id}) for g in groups for member in g.members}
@@ -128,11 +128,11 @@ def measure_call_count_reduction() -> dict[str, Any]:
     n_pairs = sum(group_sizes)
     n_groups = len(non_empty_groups)
 
-    judge: SelectJudge[Any] = SelectJudge(lm=_no_match_dummy_lm(), entity_noun="product")
+    judge: SelectMatcher[Any] = SelectMatcher(lm=_no_match_dummy_lm(), entity_noun="product")
     judgements = list(judge.forward_groups(iter(non_empty_groups)))
     n_select_calls = len(judge._get_lm().history)
-    assert n_select_calls == n_groups, "one SelectJudge LLM call per non-empty group"
-    assert len(judgements) == n_pairs, "SelectJudge must yield one judgement per pair in scope"
+    assert n_select_calls == n_groups, "one SelectMatcher LLM call per non-empty group"
+    assert len(judgements) == n_pairs, "SelectMatcher must yield one judgement per pair in scope"
 
     size_distribution = Counter(group_sizes)
     reduction_ratio = n_pairs / n_select_calls if n_select_calls else float("nan")
@@ -171,7 +171,7 @@ def measure_call_count_reduction() -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="W1.1 SelectJudge call-count benchmark ($0, DummyLM)."
+        description="W1.1 SelectMatcher call-count benchmark ($0, DummyLM)."
     )
     parser.parse_args()
 

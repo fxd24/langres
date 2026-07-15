@@ -1,4 +1,4 @@
-"""Phase 2: Full Pipeline Evaluation (Blocker → LLMJudge → Clusterer).
+"""Phase 2: Full Pipeline Evaluation (Blocker → LLMMatcher → Clusterer).
 
 This script evaluates the complete entity resolution pipeline and assesses POC success criteria.
 
@@ -9,7 +9,7 @@ POC Success Criteria:
 
 Pipeline Stages:
 1. Blocking: VectorBlocker with k=50 (winner from Phase 1)
-2. LLM Judgment: LLMJudgeModule with gpt-5-mini (async batch processing)
+2. LLM Judgment: LLMMatcher with gpt-5-mini (async batch processing)
 3. Clustering: Test thresholds [0.5, 0.6, 0.7, 0.8, 0.9]
 
 Environment variables required:
@@ -44,7 +44,7 @@ from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbed
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.metrics import pairs_from_clusters
 from langres.core.models import PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudgeModule
+from langres.core.matchers.llm_judge import LLMMatcher
 from langres.data import load_labeled_dedup_data
 
 # Configure logging
@@ -285,9 +285,9 @@ def main() -> None:
         settings = Settings()
         llm_client = create_llm_client(settings, enable_langfuse=True)
 
-        # Create LLMJudgeModule
-        logger.info(f"Creating LLMJudgeModule (model={LLM_MODEL})...")
-        llm_judge: LLMJudgeModule[FunderSchema] = LLMJudgeModule(
+        # Create LLMMatcher
+        logger.info(f"Creating LLMMatcher (model={LLM_MODEL})...")
+        llm_judge: LLMMatcher[FunderSchema] = LLMMatcher(
             client=llm_client,
             model=LLM_MODEL,
             temperature=LLM_TEMPERATURE,
@@ -313,7 +313,7 @@ def main() -> None:
             # Run async forward_async with rate limiting and progress bar
             async def score_with_progress() -> list[PairwiseJudgement]:
                 """Score candidates with real-time progress tracking."""
-                from langres.core.modules.llm_judge import _RateLimiter
+                from langres.core.matchers.llm_judge import _RateLimiter
 
                 # Initialize rate limiter and semaphore (same as forward_async)
                 rate_limiter = _RateLimiter(rpm_limit=250, tpm_limit=250000)

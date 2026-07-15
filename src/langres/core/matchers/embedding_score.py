@@ -1,7 +1,7 @@
-"""EmbeddingScoreJudge: the zero-spend embedding-cosine scorer Module.
+"""EmbeddingScoreMatcher: the zero-spend embedding-cosine scorer Matcher.
 
 This judge is the scorer slot for the ``embedding_cosine`` method. Unlike
-:class:`~langres.core.judges.weighted_average.WeightedAverageJudge` (which needs
+:class:`~langres.core.matchers.weighted_average.WeightedAverageMatcher` (which needs
 a Comparator upstream) it consumes nothing but each candidate's
 ``similarity_score`` — the cosine similarity a :class:`~langres.core.blockers.vector.VectorBlocker`
 already attached during blocking. It emits a
@@ -14,7 +14,7 @@ upstream: any blocker that leaves ``similarity_score`` as ``None`` (e.g.
 ``AllPairsBlocker``) makes the score undefined, and the judge raises a clear
 ``ValueError`` pointing the caller at the VectorBlocker.
 
-It is registry-serializable exactly like ``WeightedAverageJudge``
+It is registry-serializable exactly like ``WeightedAverageMatcher``
 (``@register("embedding_score_judge")`` + ``type_name`` + ``config`` /
 ``from_config``), so a Resolver with it in the ``module`` slot round-trips
 through ``save`` / ``load``.
@@ -24,13 +24,13 @@ from collections.abc import Iterator
 from typing import ClassVar
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 
 @register("embedding_score_judge")
-class EmbeddingScoreJudge(Module[SchemaT]):
+class EmbeddingScoreMatcher(Matcher[SchemaT]):
     """Scorer that passes a VectorBlocker's cosine ``similarity_score`` through.
 
     Owns a single ``threshold`` used only to label each judgement's
@@ -78,7 +78,7 @@ class EmbeddingScoreJudge(Module[SchemaT]):
             similarity = candidate.similarity_score
             if similarity is None:
                 raise ValueError(
-                    "EmbeddingScoreJudge requires candidates carrying a "
+                    "EmbeddingScoreMatcher requires candidates carrying a "
                     "similarity_score — use a VectorBlocker upstream (an AllPairs "
                     "or other non-vector blocker leaves similarity_score unset)."
                 )
@@ -97,7 +97,7 @@ class EmbeddingScoreJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
     @property
@@ -106,6 +106,6 @@ class EmbeddingScoreJudge(Module[SchemaT]):
         return {"threshold": self.threshold}
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "EmbeddingScoreJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "EmbeddingScoreMatcher[SchemaT]":
         """Reconstruct from :attr:`config`."""
         return cls(threshold=float(config["threshold"]))  # type: ignore[arg-type]

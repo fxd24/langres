@@ -6,9 +6,9 @@ Welcome to the langres documentation. This document provides a deep dive into th
 
 langres exposes a **three-layer API** — each layer a thin shell over the one below — so common tasks are one-liners while bespoke pipelines stay fully composable:
 
-- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `judge="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `model` / `score_type` / `threshold` — every result names the judge *and* the underlying model that ran).
-- **`langres.Resolver`** (Mid-Level): the declarative pipeline. `Resolver.from_schema(schema, judge=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
-- **`langres.core`** (Low-Level): the "power-user" API — the base classes (`Module`, `Blocker`, `Comparator`, `Clusterer`, judges) you compose into entirely new logic from scratch.
+- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `matcher="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `model` / `score_type` / `threshold` — every result names the judge *and* the underlying model that ran).
+- **`langres.Resolver`** (Mid-Level): the declarative pipeline. `Resolver.from_schema(schema, matcher=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
+- **`langres.core`** (Low-Level): the "power-user" API — the base classes (`Matcher`, `Blocker`, `Comparator`, `Clusterer`, judges) you compose into entirely new logic from scratch.
 
 > There is **no** `langres.tasks` / `langres.flows` module — those names were never built. The real layering is verbs → `Resolver` → `langres.core`.
 
@@ -27,7 +27,7 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
 - **pydantic** — every schema, `ERCandidate`, and `PairwiseJudgement` is a
   Pydantic model; all validation and (de)serialization runs through it.
 - **rapidfuzz** — string similarity behind `StringComparator` and the default
-  `WeightedAverageJudge` scorer (the `judge="string"` path).
+  `WeightedAverageMatcher` scorer (the `matcher="string"` path).
 - **networkx** — `Clusterer` builds an undirected graph from the judgements that
   clear the threshold and takes connected components (transitive closure). This
   is the *only* clustering backend — there is no scipy / hierarchical path.
@@ -37,12 +37,12 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
 
 - **`[semantic]`** — sentence-transformers / torch / faiss-cpu / qdrant-client
   (plus onnxruntime/optimum, fastembed): the embedding + ANN stack behind
-  `VectorBlocker`, `EmbeddingScoreJudge`, and `judge="embedding"`.
-- **`[llm]`** — litellm / dspy-ai / openai: `LLMJudge`, the DSPy-compiled
-  `DSPyJudge`, and `judge="zero_shot_llm"` / `judge="auto"`. DSPy prompt
-  optimization is real, but it lives *inside* `DSPyJudge` — it is not an
+  `VectorBlocker`, `EmbeddingScoreMatcher`, and `matcher="embedding"`.
+- **`[llm]`** — litellm / dspy-ai / openai: `LLMMatcher`, the DSPy-compiled
+  `DSPyMatcher`, and `matcher="zero_shot_llm"` / `matcher="auto"`. DSPy prompt
+  optimization is real, but it lives *inside* `DSPyMatcher` — it is not an
   automatic compile pass over a whole pipeline.
-- **`[trained]`** — scikit-learn: `RandomForestJudge` and
+- **`[trained]`** — scikit-learn: `RandomForestMatcher` and
   `core.calibration.derive_threshold`. Note the BCubed / pairwise metrics in
   `core.metrics` are a **vetted internal implementation** (Amigó et al. 2009),
   *not* sklearn — sklearn is pulled in only by these trained-judge / calibration
@@ -75,7 +75,7 @@ Three shipped layers, all built on `PairwiseJudgement.provenance`:
 - **Per-call provenance:** every LLM judge writes `model`, `cost_usd`,
   `provider`, and a typed `LLMUsage` token vector following the OpenTelemetry
   GenAI vocabulary into provenance (see §7, "LLM-judge provenance keys").
-- **The judgement log:** `core.judgement_log.JudgementLog` / `LoggingModule`
+- **The judgement log:** `core.judgement_log.JudgementLog` / `LoggingMatcher`
   persist every judge call (ids, score, verdict, model, cost) to JSONL — the
   flywheel's signal inlet.
 - **Experiment tracking:** `core.runs` (`RunContext`/`RunRecord`, content-
@@ -91,9 +91,9 @@ The two verbs are the one-liner front door. They infer an ephemeral schema from 
 
 **Definition:** Group a batch of records into entity clusters (single-source deduplication).
 
-`dedupe(records, *, judge="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used`, `model`, `score_type`, and the effective `threshold`. `model` is the underlying model that actually scored the batch: the resolved LLM id (e.g. `"openrouter/openai/gpt-4o-mini"`) for the LLM judges, the sentence-transformers embedder name for `judge="embedding"`, an injected `Module`'s own `model` attribute for `judge_used="custom"`, and `None` for pure-string similarity. The same value backfills the `model` column of `JudgementLog` rows (`log=`) whenever the judge doesn't stamp its own, so result and log always agree.
+`dedupe(records, *, matcher="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used`, `model`, `score_type`, and the effective `threshold`. `model` is the underlying model that actually scored the batch: the resolved LLM id (e.g. `"openrouter/openai/gpt-4o-mini"`) for the LLM judges, the sentence-transformers embedder name for `matcher="embedding"`, an injected `Matcher`'s own `model` attribute for `judge_used="custom"`, and `None` for pure-string similarity. The same value backfills the `model` column of `JudgementLog` rows (`log=`) whenever the judge doesn't stamp its own, so result and log always agree.
 
-**Example** (offline — `judge="string"` pins the zero-spend judge, no API key or network needed):
+**Example** (offline — `matcher="string"` pins the zero-spend judge, no API key or network needed):
 
 ```python
 from langres import dedupe
@@ -104,30 +104,30 @@ records = [
     {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
 ]
 
-result = dedupe(records, judge="string", threshold=0.6)
+result = dedupe(records, matcher="string", threshold=0.6)
 # result -> [{'1', '2'}]   (singleton "3" is dropped)
 print(result.judge_used, result.score_type)   # "string" "heuristic"
 ```
 
-`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. The default model it resolves to is the **pinned, documented constant `langres.DEFAULT_AUTO_MODEL`** (`"openrouter/openai/gpt-4o-mini"` on the OpenRouter route; a direct-OpenAI fallback applies when only `OPENAI_API_KEY` is set) — changing it is a behavior change that requires a CHANGELOG entry, and the resolved id is always reported back on `result.model`. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+`matcher="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoMatcherAvailableError` if no key is set — langres never silently falls back to fuzzy matching. The default model it resolves to is the **pinned, documented constant `langres.DEFAULT_AUTO_MODEL`** (`"openrouter/openai/gpt-4o-mini"` on the OpenRouter route; a direct-OpenAI fallback applies when only `OPENAI_API_KEY` is set) — changing it is a behavior change that requires a CHANGELOG entry, and the resolved id is always reported back on `result.model`. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
 
-`judge="prompt_llm"` is the bring-your-own-prompt LLM judge (`LLMJudge`) — run a published paper's prompt, or your own, straight from the verbs:
+`matcher="prompt_llm"` is the bring-your-own-prompt LLM judge (`LLMMatcher`) — run a published paper's prompt, or your own, straight from the verbs:
 
 ```python
-verdict = link(a, b, judge="prompt_llm",
+verdict = link(a, b, matcher="prompt_llm",
                prompt_template="Do these match? Answer Yes or No.\nA: {left}\nB: {right}",
                response_parser="binary_yes_no")   # a registered, serializable parser name
 verdict.judge_used   # "prompt_llm"
 verdict.model        # "openrouter/openai/gpt-4o-mini" (override with model=)
 ```
 
-`prompt_template` / `system_prompt` / `response_parser` apply only to `judge="prompt_llm"` (passing them with another judge raises — never silently ignored). `response_parser` takes a *registered name* (`"score"`, the default `Score:`-line parser, or `"binary_yes_no"` for the published yes/no ER-prompt family — see `langres.core.modules.llm_judge.RESPONSE_PARSERS`); named parsers serialize with the judge's config, so a `Resolver` built with one round-trips through `save`/`load`. For a custom parser callable, construct an `LLMJudge` yourself and pass it as `judge=<Module>`.
+`prompt_template` / `system_prompt` / `response_parser` apply only to `matcher="prompt_llm"` (passing them with another judge raises — never silently ignored). `response_parser` takes a *registered name* (`"score"`, the default `Score:`-line parser, or `"binary_yes_no"` for the published yes/no ER-prompt family — see `langres.core.matchers.llm_judge.RESPONSE_PARSERS`); named parsers serialize with the judge's config, so a `Resolver` built with one round-trips through `save`/`load`. For a custom parser callable, construct an `LLMMatcher` yourself and pass it as `matcher=<Matcher>`.
 
 ### link
 
 **Definition:** Decide whether **two records** are the same entity — a single pairwise verdict.
 
-`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMJudge`, has no score), `.judge_used`, `.model` (the resolved underlying model id — same contract as `DedupeResult.model` above), `.score_type`, the effective `.threshold`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMJudge` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `JudgeAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
+`link(left, right, *, matcher="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMMatcher`, has no score), `.judge_used`, `.model` (the resolved underlying model id — same contract as `DedupeResult.model` above), `.score_type`, the effective `.threshold`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMMatcher` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `MatcherAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
 
 ```python
 from langres import link
@@ -135,7 +135,7 @@ from langres import link
 verdict = link(
     {"id": "a", "name": "Acme Corp", "city": "New York"},
     {"id": "b", "name": "Acme Corporation", "city": "New York"},
-    judge="string",
+    matcher="string",
 )
 if verdict:                       # LinkVerdict is truthy iff it's a match
     print(verdict.score, verdict.judge_used)
@@ -156,14 +156,14 @@ class Company(BaseModel):
     name: str
     city: str
 
-resolver = Resolver.from_schema(Company, judge="string", threshold=0.6)
+resolver = Resolver.from_schema(Company, matcher="string", threshold=0.6)
 clusters = resolver.resolve(records)      # -> list[set[str]]
 resolver.save("company_resolver.json")    # config-registry serialization (no pickle)
 # later, in a fresh process:
 resolver = Resolver.load("company_resolver.json")
 ```
 
-`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageJudge` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `judge="embedding"`), and a `Clusterer`. `judge=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (with the same `prompt_template` / `system_prompt` / `response_parser` kwargs as the verbs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), or a `Module` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution and **no** spend cap (that magic lives in the verbs), so a paid judge built here runs uncapped.
+`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageMatcher` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `matcher="embedding"`), and a `Clusterer`. `matcher=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (with the same `prompt_template` / `system_prompt` / `response_parser` kwargs as the verbs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), or a `Matcher` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution and **no** spend cap (that magic lives in the verbs), so a paid judge built here runs uncapped.
 
 All three name-dispatch paths — the verbs, `from_schema`, and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg).
 
@@ -226,9 +226,9 @@ class MyCustomBlocker(Blocker):
             yield ERCandidate(left=norm_a, right=norm_b)
 ```
 
-### core.Module (Base Class - The "Flow")
+### core.Matcher (Base Class - The "Flow")
 
-**Definition:** The Module (or "Flow") is the "Brain" of the pipeline. It is the central Estimator that performs the pairwise comparison.
+**Definition:** The Matcher (or "Flow") is the "Brain" of the pipeline. It is the central Estimator that performs the pairwise comparison.
 
 **What it's not:** It is not a data loader. It must operate on the clean, normalized schema provided by the Blocker. This separation of concerns is what makes it reusable.
 
@@ -239,10 +239,10 @@ class MyCustomBlocker(Blocker):
 
 **Example (Custom Judge):**
 
-`MyProductJudge` is a *user-defined* `Module` subclass — `Module` is the base
+`MyProductJudge` is a *user-defined* `Matcher` subclass — `Matcher` is the base
 class; there is no `Flow` type in langres. This one combines two rapidfuzz
 similarities with a tunable weight (no torch, no learnable model — see
-`WeightedAverageJudge` / `EmbeddingScoreJudge` in `langres.core.judges` for the
+`WeightedAverageMatcher` / `EmbeddingScoreMatcher` in `langres.core.matchers` for the
 shipped judges):
 
 ```python
@@ -250,10 +250,10 @@ from collections.abc import Iterator
 
 import rapidfuzz.fuzz
 
-from langres.core import ERCandidate, Module, PairwiseJudgement
+from langres.core import ERCandidate, Matcher, PairwiseJudgement
 from langres.core.reports import ScoreInspectionReport
 
-class MyProductJudge(Module[MyInternalSchema]):
+class MyProductJudge(Matcher[MyInternalSchema]):
     def __init__(self, name_weight: float = 0.5) -> None:
         self.name_weight = name_weight  # a tunable hyperparameter
 
@@ -311,7 +311,7 @@ a metric you compute in an objective function.
 > There is **no** general `Optimizer` that "compiles"/"finetunes" a whole
 > pipeline — no `compile()`, no `finetune()`, no PyTorch training loop. A general
 > `Optimizer` over full pipelines is roadmap (`docs/ROADMAP.md`), not
-> implemented. DSPy prompt optimization exists separately, inside `DSPyJudge`
+> implemented. DSPy prompt optimization exists separately, inside `DSPyMatcher`
 > (`[llm]` extra).
 
 **Constructor:**
@@ -433,7 +433,7 @@ seam, and the bring-your-own-data `evaluate()` walkthrough.
 
 **What it does:**
 
-- `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`. `"uncertainty"` ranks by the logged **`confidence`** when present (`|confidence − 0.5|`, most-uncertain first), else falls back to `|score − threshold|`; a decision-only/binary log with neither a usable `confidence` nor a non-degenerate `score` now **raises** `ValueError` (naming `strategy="disagreement"` or `LLMJudge(confidence="logprob")` as the fix) rather than silently returning `[]`. `ReviewItem` also carries `reasoning` / `confidence` / `confidence_source`.
+- `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`. `"uncertainty"` ranks by the logged **`confidence`** when present (`|confidence − 0.5|`, most-uncertain first), else falls back to `|score − threshold|`; a decision-only/binary log with neither a usable `confidence` nor a non-degenerate `score` now **raises** `ValueError` (naming `strategy="disagreement"` or `LLMMatcher(confidence="logprob")` as the fix) rather than silently returning `[]`. `ReviewItem` also carries `reasoning` / `confidence` / `confidence_source`.
 - `ReviewQueue(path).write(items)` snapshots that selection to `review_queue.jsonl`; items are ids-only unless you pass `records=` to `select_for_review`.
 - The `langres` CLI labels the queue (`export-csv` → spreadsheet → `import-csv` → `corrections.jsonl`, or the `langres review` terminal loop). `core.harvest` folds those corrections back into `core.calibration.derive_threshold` / `fit()` — the active-learning loop.
 
@@ -445,7 +445,7 @@ from langres.core.judgement_log import JudgementLog
 from langres.core.review import ReviewQueue, select_for_review
 
 # 1. Log every judge call while resolving (the flywheel inlet).
-dedupe(records, judge="string", threshold=0.6, log="judgements.jsonl")
+dedupe(records, matcher="string", threshold=0.6, log="judgements.jsonl")
 
 # 2. Select the pairs worth a human's attention, near the decision margin.
 rows = JudgementLog("judgements.jsonl").read()
@@ -477,8 +477,8 @@ A judge is one of two shapes (and a logprob judge may be both): a **decider** em
 - `right_id: str`
 - `decision: bool | None` (default `None`): The judge's explicit match verdict, set by a *decider*. `None` when the judge only ranks (emits a `score`) or abstains. **Takes precedence over `score`** in `predicted_match`.
 - `score: float | None` (default `None`, 0.0 to 1.0): The confidence-ordered match score for a *ranker*, else `None`. **Widened from a required `float`:** a decider has no score, so `None` means "this judge does not rank", *not* "score of zero" — a fabricated `0.0`/`1.0` would lie.
-- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Stays **required** even when `score` is `None`: it doubles as the judge-*family* tag, so it names the family (e.g. `"prob_llm"` for a binary LLM judge) rather than a score. Critical for calibration and clustering. `prob_fs`, `prob_rf`, and `prob_group_llm` are emitted by `FellegiSunterJudge`, `RandomForestJudge`, and the set-wise `SelectJudge` respectively.
-- `confidence: float | None` (default `None`, 0.0 to 1.0): Optional "how sure am I", orthogonal to the decision. Set today only by `LLMJudge(confidence="logprob")` (the OpenAI-family first-token credence probe); `None` for every other judge.
+- `score_type: Literal["sim_cos", "prob_llm", "heuristic", "calibrated_prob", "prob_fs", "prob_rf", "prob_group_llm"]`: What kind of score is this? Stays **required** even when `score` is `None`: it doubles as the judge-*family* tag, so it names the family (e.g. `"prob_llm"` for a binary LLM judge) rather than a score. Critical for calibration and clustering. `prob_fs`, `prob_rf`, and `prob_group_llm` are emitted by `FellegiSunterMatcher`, `RandomForestMatcher`, and the set-wise `SelectMatcher` respectively.
+- `confidence: float | None` (default `None`, 0.0 to 1.0): Optional "how sure am I", orthogonal to the decision. Set today only by `LLMMatcher(confidence="logprob")` (the OpenAI-family first-token credence probe); `None` for every other judge.
 - `confidence_source: Literal["none", "unrequested", "logprob", "calibrated", "heuristic"]` (default `"none"`): Provenance of `confidence`. `"none"` = this judge structurally has no confidence to give; `"unrequested"` = it *could* (a decision judge that can expose logprobs) but was not asked; `"logprob"` = an earned first-token credence. The literal set is provisional, not a frozen API.
 - `decision_step: str`: Which logic branch made this decision (e.g., "string_sim" or "llm_judge").
 - `reasoning: Optional[str]`: The LLM's natural language explanation.
@@ -486,7 +486,7 @@ A judge is one of two shapes (and a logprob judge may be both): a **decider** em
 
 **Is this pair a match?** Ask `predicted_match(judgement, threshold) -> bool | None` (a module function in `langres.core.models`, exported from `langres.core`) — never a raw `score >= threshold`. It gives `decision` precedence over `score` (a decider already decided; the threshold never overrides it), applies `score >= threshold` to a ranker, and returns `None` for an abstention (neither set). The `is_abstain` property is `True` in exactly that neither-set case. An abstention is **not** a "no": `classify_pairs` and the clusterers *exclude* it from the predicted set rather than grading it a confident non-match.
 
-**LLM-judge provenance keys.** `LLMJudge` / `DSPyJudge` / `SelectJudge` write
+**LLM-judge provenance keys.** `LLMMatcher` / `DSPyMatcher` / `SelectMatcher` write
 `model`, `cost_usd`, `provider`, the legacy `prompt_tokens` / `completion_tokens`
 (kept for `JudgementLog`, `bootstrap.labelers`, `openrouter.make_token_cost_track`),
 and — added here — a typed **`usage`** vector: `LLMUsage.model_dump()`
@@ -497,8 +497,8 @@ SUBSET semantics): `input_tokens` / `output_tokens` are the *inclusive* totals
 serving `provider` and `model` id. LiteLLM already normalizes Anthropic's raw
 `input_tokens` up to the inclusive total, so the subsets are never re-added.
 
-**Abstention (parse error).** An `LLMJudge` under `on_parse_error="abstain"` (the
-default) whose `response_parser` could not parse a verdict — and a `DSPyJudge` on
+**Abstention (parse error).** An `LLMMatcher` under `on_parse_error="abstain"` (the
+default) whose `response_parser` could not parse a verdict — and a `DSPyMatcher` on
 a parse/validation error — now emits `decision=None, score=None` (so `is_abstain
 == True`, **not** the old `score=0.0`) with `provenance["parse_error"] = True`.
 Both judges abstain identically. `predicted_match` returns `None` for it, so
@@ -508,7 +508,7 @@ it is no longer graded a confident "no". `evaluate()` /
 `JudgePairEval.n_parse_errors` / `.n_abstained` and warn when non-zero;
 `on_parse_error="raise"` turns the same case into an immediate `LLMParseError`.
 
-**`LLMJudge` paper-replication seams (constructor).** To run a published paper's
+**`LLMMatcher` paper-replication seams (constructor).** To run a published paper's
 prompt without subclassing: `response_parser` (default `parse_score_response`; the
 shipped `parse_binary_yes_no` covers the Yes/No prompt family), `record_serializer`
 (default `default_record_serializer` = `model_dump_json(indent=2)`), `system_prompt`
@@ -530,14 +530,14 @@ The result of one incremental `Resolver.assign(record)` / `AnchorStore.assign(re
 - `score: Optional[float]`: Best matching score across judged candidates (observability); `None` when there were no candidates or on the idempotent path.
 - `reasoning: Optional[str]`: Human-readable note about the decision.
 
-## 8. Group + Fit Contracts (W1.0) + SelectJudge (W1.1)
+## 8. Group + Fit Contracts (W1.0) + SelectMatcher (W1.1)
 
 W1.0 froze two interfaces that later branches build against: this section
-documents the contracts. W1.1 shipped the first concrete `GroupwiseModule` —
-`SelectJudge` (`langres.core.modules.select_judge`) — proving the contract
+documents the contracts. W1.1 shipped the first concrete `GroupwiseMatcher` —
+`SelectMatcher` (`langres.core.matchers.select_judge`) — proving the contract
 against a real set-wise judge. The trained judges over `ComparisonVector` have
-since shipped too: `FellegiSunterJudge` (`langres.core.judges.fellegi_sunter`)
-and `RandomForestJudge` (`langres.core.modules.random_forest_judge`, `[trained]`).
+since shipped too: `FellegiSunterMatcher` (`langres.core.matchers.fellegi_sunter`)
+and `RandomForestMatcher` (`langres.core.matchers.random_forest_judge`, `[trained]`).
 
 ### ERCandidateGroup[SchemaT] (`langres.core.groups`)
 
@@ -586,9 +586,9 @@ regression/property tests in `tests/core/blockers/test_vector.py`
 (`test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs`,
 `test_vector_blocker_stream_groups_pairs_equivalence_property`).
 
-### GroupwiseModule (`langres.core.module`)
+### GroupwiseMatcher (`langres.core.matcher`)
 
-`GroupwiseModule` **is a `Module`** — it does not introduce a parallel
+`GroupwiseMatcher` **is a `Matcher`** — it does not introduce a parallel
 execution path. Its concrete `forward()` derives groups internally from
 whatever pairwise `ERCandidate` stream it receives (via
 `derive_groups_from_pairs`, the same buffered default as above — `forward()`
@@ -604,8 +604,8 @@ the Resolver execution spine (`Resolver._judgements` → `module.forward`),
 ```python
 # Illustrative pseudocode predating the shipped implementation below --
 # `self._call_llm` / `self._last_call_cost` are placeholders, not real
-# SelectJudge attributes (see the real cost/call plumbing in select_judge.py).
-class SelectJudge(GroupwiseModule[MySchema]):
+# SelectMatcher attributes (see the real cost/call plumbing in select_judge.py).
+class SelectMatcher(GroupwiseMatcher[MySchema]):
     def forward_groups(self, groups: Iterator[ERCandidateGroup[MySchema]]) -> Iterator[PairwiseJudgement]:
         for group in groups:
             # One LLM call per group: "which of these K candidates match the anchor?"
@@ -627,7 +627,7 @@ class SelectJudge(GroupwiseModule[MySchema]):
         ...
 ```
 
-**Shipped (W1.1):** `langres.core.modules.select_judge.SelectJudge` is the
+**Shipped (W1.1):** `langres.core.matchers.select_judge.SelectMatcher` is the
 real implementation of the skeleton above — a DSPy `ChainOfThought` over a
 `SelectSignature` asking the LLM to select **at most one** matching candidate
 id per group (mirroring ComEM's own "selecting" strategy: Wang et al., COLING
@@ -637,7 +637,7 @@ selection of more than one candidate (`select_error`, CEO #12) all map to
 whole-group "no match" judgements carrying `provenance["select_error"]` —
 never a raised exception. Selectable by name as `"select_judge"` in
 `langres.methods` (the benchmark/method-registry dispatch site only — not
-wired into `Resolver.from_schema(judge=...)` or the verbs' `judge="auto"`
+wired into `Resolver.from_schema(matcher=...)` or the verbs' `matcher="auto"`
 dispatch, since it is not yet part of the zero-label default path). See
 `data/benchmarks/w1/W1_RESULTS.md` for the measured call-count/cost reduction
 (35.56x on Amazon-Google) and group-size distribution.
@@ -647,7 +647,7 @@ dispatch, since it is not yet part of the zero-label default path). See
 One LLM call scores a whole group (K pairs). Pricing each of the K resulting
 judgements at the call's full cost would silently overcount total spend by a
 factor of K. `stamp_group_cost(judgements, call_cost_usd, group_id)`
-(`langres.core.module`) applies the fix: the full `call_cost_usd` goes on the
+(`langres.core.matcher`) applies the fix: the full `call_cost_usd` goes on the
 **first** judgement's `provenance["cost_usd"]`, every sibling gets `$0`, and
 `provenance["group_id"]` is set on all of them. Existing cost aggregation
 (`_judgement_cost`/`_cost_track` in `langres.core.benchmark`, which already
@@ -656,26 +656,26 @@ with no changes on their end.
 
 `stamp_group_cost` also sets `provenance["group_end"] = True` on (only) the
 **last** judgement of the group — a boundary marker that lets a consumer
-draining a whole group from a lazy stream (`_SpendCappedModule.forward` in
+draining a whole group from a lazy stream (`_SpendCappedMatcher.forward` in
 `langres.core.presets`, the hard spend cap the verb layer wraps every judge
 in) know exactly when to stop pulling, without peeking at the next
-judgement's `group_id` — which for a real `GroupwiseModule` would resume the
+judgement's `group_id` — which for a real `GroupwiseMatcher` would resume the
 generator into (and pay for) the next group before there's anything to
 compare against.
 
 **Atomicity caveat:** `BudgetedModuleRunner` scores exactly one `ERCandidate`
-per `module.forward()` call. A `GroupwiseModule` run through it today derives
+per `module.forward()` call. A `GroupwiseMatcher` run through it today derives
 a single, trivial, size-1 group per call — so a group is never *split*
 mid-call (there is never more than one pair per call to split), but a real
 multi-pair group is also not yet *batched* into one priced call: no cost
 amortization happens through the runner yet. Extending the runner (or adding
 a group-aware variant) to pre-flight and price whole groups atomically is
-deferred to the branch that lands the first concrete `GroupwiseModule`.
+deferred to the branch that lands the first concrete `GroupwiseMatcher`.
 
 ### Fit hooks (`langres.core.fit`)
 
 Two runtime-checkable, structural `Protocol`s — **not** abstract methods on
-`Module` (that would break every existing, non-learnable module):
+`Matcher` (that would break every existing, non-learnable module):
 
 - `SupervisedFitMixin.fit(candidates: Iterator[ERCandidate[SchemaT]], labels: Sequence[bool]) -> None`
 - `UnsupervisedFitMixin.fit_unlabeled(candidates: Iterator[ERCandidate[SchemaT]]) -> None`
@@ -684,19 +684,19 @@ A module opts in by implementing the method with the matching name — no
 subclassing required. `Resolver.fit(data, labels=None)` detects this with
 `isinstance(module, SupervisedFitMixin)` / `isinstance(module, UnsupervisedFitMixin)`:
 
-- Module implements `SupervisedFitMixin`: `labels` is required; omitting it
+- Matcher implements `SupervisedFitMixin`: `labels` is required; omitting it
   **raises** (a genuinely trainable module silently not being trained is the
   exact footgun this hook exists to prevent).
-- Module implements `UnsupervisedFitMixin`: `fit_unlabeled` is called
+- Matcher implements `UnsupervisedFitMixin`: `fit_unlabeled` is called
   unconditionally; passing `labels` to it raises (they would otherwise be
   silently ignored).
-- Module implements **neither** hook (e.g. `WeightedAverageJudge`): `fit()`
+- Matcher implements **neither** hook (e.g. `WeightedAverageMatcher`): `fit()`
   is a no-op returning `self` — the original sklearn-style symmetry is
   preserved for non-learnable pipelines — unless `labels` was passed, which
   raises rather than silently discarding them.
 
-`FellegiSunterJudge` (unsupervised EM over `ComparisonVector`) and
-`RandomForestJudge` (supervised, `[trained]`) are the concrete implementers.
+`FellegiSunterMatcher` (unsupervised EM over `ComparisonVector`) and
+`RandomForestMatcher` (supervised, `[trained]`) are the concrete implementers.
 
 ## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
 

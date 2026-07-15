@@ -20,8 +20,8 @@ Two evaluation tracks, computed for every method, are the core methodology fix:
   BCubed flow, plus the all-singletons sanity floor and the Δ above it.
 
 The harness consumes a *full* :class:`~langres.core.resolver.Resolver` factory
-rather than a raw ``Module`` factory on purpose: comparison-aware judges (e.g.
-``WeightedAverageJudge``) require a ``Comparator`` upstream, so the only uniform
+rather than a raw ``Matcher`` factory on purpose: comparison-aware judges (e.g.
+``WeightedAverageMatcher``) require a ``Comparator`` upstream, so the only uniform
 contract across methods is a complete resolver.
 """
 
@@ -44,7 +44,7 @@ from langres.core.metrics import (
     pairs_from_clusters,
 )
 from langres.core.models import PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 
 # ``_effective_budget`` resolves budget_usd=None -> presets.DEFAULT_BUDGET_USD, the
 # same default the verbs' spend cap uses (DRY). No import-cycle risk despite
@@ -548,13 +548,13 @@ def tune_threshold_on_train(
 #: sharing one constant means the two can never disagree about what counts as
 #: "this judgement has a cost" (previously `_judgement_cost_basis` only checked
 #: ``"cost_usd"``, so real spend written under ``"llm_cost_usd"`` -- the key
-#: ``CascadeModule`` writes -- was misclassified ``cost_basis="none"``).
+#: ``CascadeChainMatcher`` writes -- was misclassified ``cost_basis="none"``).
 def _validate_cut(label: str, value: float) -> None:
     """Reject a fixed grading cut outside ``(0.0, 1.0]``.
 
     ``classify_pairs`` predicts a match iff ``score >= cut``. A cut of ``0.0``
     (or below) therefore predicts EVERY pair a match -- including an abstention,
-    which both ``LLMJudge`` and ``DSPyJudge`` emit as ``score=0.0``. The judge's
+    which both ``LLMMatcher`` and ``DSPyMatcher`` emit as ``score=0.0``. The judge's
     "I could not decide" would silently become "yes, a match". A cut above
     ``1.0`` is unreachable for the ``ge=0.0, le=1.0`` score field: nothing ever
     matches, and F1 is a structural ``0.0`` rather than a measurement.
@@ -622,7 +622,7 @@ def _judgement_cost(judgement: PairwiseJudgement) -> float:
     """Measured USD cost of one judgement from its provenance.
 
     Reads :data:`_COST_KEYS` in order (``"cost_usd"`` first, falling back to
-    ``"llm_cost_usd"``, the key ``CascadeModule`` writes). Zero-spend judges set
+    ``"llm_cost_usd"``, the key ``CascadeChainMatcher`` writes). Zero-spend judges set
     neither, so this returns ``0.0`` for them.
     """
     prov = judgement.provenance
@@ -669,12 +669,12 @@ def _sum_usage(usages: list[LLMUsage]) -> LLMUsage:
 def _judgement_cost_basis(judgement: PairwiseJudgement) -> CostBasis:
     """Classify how ONE judgement's cost was determined (never returns ``"mixed"``).
 
-    Checked in order: ``cost_untracked`` (DSPyJudge's billed-but-unparseable
+    Checked in order: ``cost_untracked`` (DSPyMatcher's billed-but-unparseable
     call) wins regardless of what else is set; then none of :data:`_COST_KEYS`
     present means the judge has no cost concept at all (string/embedding); then
-    ``cost_is_real`` (LLMJudge's real-OpenRouter-billing vs litellm-estimate
+    ``cost_is_real`` (LLMMatcher's real-OpenRouter-billing vs litellm-estimate
     flag) distinguishes real from estimated -- a judge that sets a cost key
-    without ``cost_is_real`` (DSPyJudge's normal, non-error path: tokens times a
+    without ``cost_is_real`` (DSPyMatcher's normal, non-error path: tokens times a
     pinned price) is also an estimate, never a real billed amount.
     """
     prov = judgement.provenance
@@ -955,8 +955,8 @@ class JudgePairEval(BaseModel):
             belt-and-suspenders — either the Wave-1 abstain shape
             (:attr:`~langres.core.models.PairwiseJudgement.is_abstain`, i.e.
             ``decision is None and score is None``) OR a judge that flagged
-            ``provenance['parse_error']`` (truthy) — e.g. an ``LLMJudge`` under
-            ``on_parse_error='abstain'`` or a ``DSPyJudge`` parse failure. Kept
+            ``provenance['parse_error']`` (truthy) — e.g. an ``LLMMatcher`` under
+            ``on_parse_error='abstain'`` or a ``DSPyMatcher`` parse failure. Kept
             for backward compatibility; identical to :attr:`n_abstained`. ``0``
             for judges that never abstain.
         n_abstained: Same count as :attr:`n_parse_errors`, under the more
@@ -1077,7 +1077,7 @@ def _truncation_reason(
 
 
 def evaluate_judge_on_candidates(
-    module: Module[Any],
+    module: Matcher[Any],
     candidates: Sequence[Any],
     gold_pairs: set[frozenset[str]],
     grid: Sequence[float],
@@ -1097,7 +1097,7 @@ def evaluate_judge_on_candidates(
     band) and the order-independent gold match pairs.
 
     Args:
-        module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
+        module: The scorer to evaluate (any :class:`~langres.core.matcher.Matcher`).
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
         grid: Score thresholds to sweep for the pair-level PR curve. Every point
@@ -1167,7 +1167,7 @@ def evaluate_judge_on_candidates(
     # belt-and-suspenders: the Wave-1 abstain shape (``is_abstain`` -> decision
     # is None and score is None) OR a judge that flagged
     # ``provenance['parse_error']`` -- a judge may null the verdict, set the
-    # flag, or (like a fixed DSPyJudge parse failure) do both.
+    # flag, or (like a fixed DSPyMatcher parse failure) do both.
     n_abstained = sum(1 for j in judgements if j.is_abstain or j.provenance.get("parse_error"))
     abstention_rate = n_abstained / n_judged if n_judged > 0 else 0.0
     if n_abstained > 0:
@@ -1231,7 +1231,7 @@ class EvaluationTruncatedError(RuntimeError):
 
 
 #: Deliberately negligible "worst-case per pair" price for evaluate()'s internal
-#: BudgetedModuleRunner. evaluate() accepts ANY Module and has no way to know its
+#: BudgetedModuleRunner. evaluate() accepts ANY Matcher and has no way to know its
 #: real per-pair price (only evaluate_judge_on_candidates's explicit
 #: price_per_token_or_pair= knob does), so the runner's pre-flight worst-case cap
 #: is effectively disabled by this near-zero price -- it exists only to avoid
@@ -1244,7 +1244,7 @@ _NEGLIGIBLE_WORST_CASE_PRICE = 1e-9
 
 
 def _budget_truncation_message(result: JudgePairEval, budget_usd: float) -> str:
-    """Actionable message for a spend-caused truncation (modelled on NoJudgeAvailableError)."""
+    """Actionable message for a spend-caused truncation (modelled on NoMatcherAvailableError)."""
     return (
         f"evaluate() stopped early ({result.truncation_reason}): judged "
         f"{result.n_judged}/{result.n_candidates} pairs before the ${budget_usd:.2f} "
@@ -1339,7 +1339,7 @@ def _apply_truncation_policy(
 
 
 def evaluate(
-    module: Module[Any],
+    module: Matcher[Any],
     candidates: Sequence[Any],
     gold_pairs: set[frozenset[str]],
     *,
@@ -1403,7 +1403,7 @@ def evaluate(
     ``price_per_token_or_pair`` / ``cost_track_fn`` knobs stay there, not here.
 
     Args:
-        module: The scorer to evaluate (any :class:`~langres.core.module.Module`).
+        module: The scorer to evaluate (any :class:`~langres.core.matcher.Matcher`).
         candidates: The fixed candidate pairs to judge (each an ``ERCandidate``).
             Must be non-empty.
         gold_pairs: True match pairs as order-independent ``frozenset`` pairs.
@@ -1538,15 +1538,15 @@ def evaluate(
 
 
 class BudgetedModuleRunner:
-    """Run any :class:`~langres.core.module.Module` under a spend cap.
+    """Run any :class:`~langres.core.matcher.Matcher` under a spend cap.
 
     Wraps a module and scores candidate pairs one at a time, keeping the
     worst-case *projected* spend under ``budget_usd`` between calls, and
     stopping immediately once a call's *real*, measured cost pushes the running
     total past it. The same three-layer guarantee proven by
     :class:`~langres.bootstrap.labelers.TeacherLabeler`, but as a clean,
-    ``Module``-typed component returning :class:`PairwiseJudgement` (the teacher
-    is welded to ``LLMJudge`` and returns ``GoldPair``, so it cannot be reused
+    ``Matcher``-typed component returning :class:`PairwiseJudgement` (the teacher
+    is welded to ``LLMMatcher`` and returns ``GoldPair``, so it cannot be reused
     directly):
 
     1. **Pre-flight cap.** Truncate the input to
@@ -1586,7 +1586,7 @@ class BudgetedModuleRunner:
 
     Group-call atomicity (W1.0, E5): :meth:`run` scores exactly ONE candidate
     per ``module.forward()`` call (see point 3 above). A
-    :class:`~langres.core.module.GroupwiseModule` given a single candidate
+    :class:`~langres.core.matcher.GroupwiseMatcher` given a single candidate
     derives a single, trivial, size-1 group from it -- so under this runner
     a group is NEVER split mid-call (there is never more than one pair per
     call to split), but a real multi-pair group is also never batched into
@@ -1595,13 +1595,13 @@ class BudgetedModuleRunner:
     for the pinned-down behavior. Extending this runner (or adding a
     group-aware variant) to pre-flight and price whole groups atomically is
     deferred to W1.1, the branch that lands the first concrete
-    ``GroupwiseModule`` (``SelectJudge``) and can measure the real call-count
+    ``GroupwiseMatcher`` (``SelectMatcher``) and can measure the real call-count
     reduction this is for.
     """
 
     def __init__(
         self,
-        module: Module[Any],
+        module: Matcher[Any],
         *,
         budget_usd: float = 20.0,
         budget_soft_usd: float = 15.0,
@@ -1759,12 +1759,12 @@ class BudgetedModuleRunner:
             raise
         except Exception as exc:  # noqa: BLE001 — one bad call must not abort the run
             self.skipped_count += 1
-            logger.warning("Module call failed for a candidate: %s; skipping", exc)
+            logger.warning("Matcher call failed for a candidate: %s; skipping", exc)
             return None
 
         if not produced:
             self.skipped_count += 1
-            logger.warning("Module yielded no judgement for a candidate; skipping")
+            logger.warning("Matcher yielded no judgement for a candidate; skipping")
             return None
 
         judgement = produced[0]

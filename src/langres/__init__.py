@@ -2,10 +2,10 @@
 langres: A composable entity resolution framework.
 
 This package provides:
-- ``link`` / ``dedupe``: the two-verb DX layer (schema-optional, judge="auto"
+- ``link`` / ``dedupe``: the two-verb DX layer (schema-optional, matcher="auto"
   by default, spend-capped) -- see ``langres.verbs``.
 - ``langres.core``: Low-level primitives for custom pipelines (``Resolver``,
-  ``Blocker``, ``Module``, ``Clusterer``, ...).
+  ``Blocker``, ``Matcher``, ``Clusterer``, ...).
 - The flywheel loop, end to end at the root: ``JudgementLog`` (the inlet --
   wire via ``log=`` on ``link``/``dedupe``), ``select_for_review`` /
   ``ReviewQueue`` (pick the uncertain margin), ``Correction`` /
@@ -15,8 +15,8 @@ This package provides:
   it), and ``gold_pairs_from_clusters`` + ``EvalReport`` (grade a run against
   gold at $0). See ``examples/flywheel_min.py`` for the whole loop in one
   script.
-- ``NoJudgeAvailableError`` / ``JudgeAbstainedError`` / ``BudgetExceeded``: the
-  exceptions a front-door user must catch (fail-fast ``judge="auto"``; a judge
+- ``NoMatcherAvailableError`` / ``MatcherAbstainedError`` / ``BudgetExceeded``: the
+  exceptions a front-door user must catch (fail-fast ``matcher="auto"``; a judge
   that abstained on the pair; the spend cap).
 
 Import weight: most root exports are cheap and eager. ``EvalReport``,
@@ -46,8 +46,8 @@ from langres.core import (
     harvest_labeled_pairs,
     select_for_review,
 )
-from langres.core.models import JudgeAbstainedError
-from langres.core.presets import DEFAULT_AUTO_MODEL, NoJudgeAvailableError
+from langres.core.models import MatcherAbstainedError
+from langres.core.presets import DEFAULT_AUTO_MODEL, NoMatcherAvailableError
 from langres.verbs import LinkVerdict, dedupe, link
 
 if TYPE_CHECKING:
@@ -65,10 +65,10 @@ __all__ = [
     "CorrectionLog",
     "ERCandidate",
     "EvalReport",
-    "JudgeAbstainedError",
+    "MatcherAbstainedError",
     "JudgementLog",
     "LinkVerdict",
-    "NoJudgeAvailableError",
+    "NoMatcherAvailableError",
     "PairwiseJudgement",
     "Resolver",
     "ReviewQueue",

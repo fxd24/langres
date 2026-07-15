@@ -1,5 +1,5 @@
 """
-Module base class for entity comparison logic.
+Matcher base class for entity comparison logic.
 
 This module provides the abstract base class for all pairwise comparison
 implementations in the langres framework.
@@ -19,10 +19,10 @@ from langres.core.reports import ScoreInspectionReport
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-class Module(ABC, Generic[SchemaT]):
+class Matcher(ABC, Generic[SchemaT]):
     """Abstract base class for entity comparison logic.
 
-    The Module (also called "Flow") is the "brain" of the pipeline.
+    The Matcher (also called "Flow") is the "brain" of the pipeline.
     It receives normalized entity pairs and yields match judgements.
 
     Design principles:
@@ -31,12 +31,12 @@ class Module(ABC, Generic[SchemaT]):
     - Reusable across tasks (dedup, linking, etc.)
     - Composable (can contain sub-modules, embeddings, models, etc.)
 
-    The Module is the central Estimator in the langres architecture. It is
+    The Matcher is the central Estimator in the langres architecture. It is
     responsible for comparing pairs of entities and producing match decisions
     with full provenance.
 
     Key architectural points:
-    - **Separation of Concerns**: Module only compares; it doesn't load or
+    - **Separation of Concerns**: Matcher only compares; it doesn't load or
       normalize data. The Blocker handles candidate generation and schema
       normalization.
     - **Streaming First**: forward() is a generator to support lazy evaluation
@@ -47,7 +47,7 @@ class Module(ABC, Generic[SchemaT]):
       functions, embedding models, or LLM-based components.
 
     Example:
-        class RapidfuzzModule(Module[CompanySchema]):
+        class RapidfuzzMatcher(Matcher[CompanySchema]):
             '''Simple string-matching module using rapidfuzz.'''
 
             def forward(self, candidates):
@@ -63,12 +63,12 @@ class Module(ABC, Generic[SchemaT]):
                     )
 
     Example:
-        class CascadeModule(Module[CompanySchema]):
+        class CascadeChainMatcher(Matcher[CompanySchema]):
             '''Multi-stage module with early exit optimization.'''
 
             def __init__(self):
                 self.embed_sim = EmbeddingSimilarity()
-                self.llm_judge = LLMJudge()
+                self.llm_judge = LLMMatcher()
 
             def forward(self, candidates):
                 for pair in candidates:
@@ -117,7 +117,7 @@ class Module(ABC, Generic[SchemaT]):
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Compare entity pairs and yield match judgements.
 
-        This is the core method that all Module implementations must define.
+        This is the core method that all Matcher implementations must define.
         It processes a stream of normalized entity pairs and yields match
         decisions with full provenance.
 
@@ -146,9 +146,9 @@ class Module(ABC, Generic[SchemaT]):
             into memory.
 
         Note:
-            Module implementations should NOT modify the input candidates.
+            Matcher implementations should NOT modify the input candidates.
             They are read-only consumers. All data normalization should
-            happen in the Blocker before candidates reach the Module.
+            happen in the Blocker before candidates reach the Matcher.
 
         Note:
             The SchemaT type variable ensures type safety when working with
@@ -181,24 +181,24 @@ class Module(ABC, Generic[SchemaT]):
         pass  # pragma: no cover
 
 
-class GroupwiseModule(Module[SchemaT], ABC):
-    """A Module whose scoring logic naturally operates on GROUPS, not pairs (W1.0, E2).
+class GroupwiseMatcher(Matcher[SchemaT], ABC):
+    """A Matcher whose scoring logic naturally operates on GROUPS, not pairs (W1.0, E2).
 
-    GroupwiseModule **IS-A** Module: its concrete :meth:`forward` derives
+    GroupwiseMatcher **IS-A** Matcher: its concrete :meth:`forward` derives
     ``ERCandidateGroup`` groups internally from the pairwise ``ERCandidate``
     stream it receives (via :func:`~langres.core.groups.derive_groups_from_pairs`)
     and dispatches to the abstract :meth:`forward_groups`, decomposing its
     output back to a flat ``Iterator[PairwiseJudgement]``. This is a
     deliberate design choice, not an accident: it means the existing Resolver
     execution spine (``Resolver._judgements`` -> ``module.forward``),
-    :meth:`Module.inspect_scores`, the JudgementLog boundary, and benchmark
+    :meth:`Matcher.inspect_scores`, the JudgementLog boundary, and benchmark
     dispatch (``BudgetedModuleRunner``, ``run_method``) all keep working with
     **zero changes** -- there is no parallel, group-aware execution path.
 
-    Concrete set-wise judges (e.g. a future ComEM-style ``SelectJudge`` that
+    Concrete set-wise judges (e.g. a future ComEM-style ``SelectMatcher`` that
     asks one LLM call "which of these K candidates match the anchor?" instead
     of K separate pairwise calls) implement only :meth:`forward_groups` and
-    :meth:`Module.inspect_scores`. Set-wise IN, pairwise OUT: the group
+    :meth:`Matcher.inspect_scores`. Set-wise IN, pairwise OUT: the group
     structure never leaks past this class's boundary, so the clusterer, the
     metrics harness, and every other pairwise-only downstream consumer needs
     no changes either.
@@ -224,7 +224,7 @@ class GroupwiseModule(Module[SchemaT], ABC):
                 Blocker's ``stream()``.
 
         Yields:
-            PairwiseJudgement objects, exactly as any other Module -- the
+            PairwiseJudgement objects, exactly as any other Matcher -- the
             set-wise grouping is an internal implementation detail invisible
             to callers of ``forward()``.
         """
@@ -237,7 +237,7 @@ class GroupwiseModule(Module[SchemaT], ABC):
     ) -> Iterator[PairwiseJudgement]:
         """Compare each group's anchor against its members and yield judgements.
 
-        This is the set-wise counterpart to :meth:`Module.forward`. Concrete
+        This is the set-wise counterpart to :meth:`Matcher.forward`. Concrete
         implementations should yield one ``PairwiseJudgement`` per
         (anchor, member) pair evaluated -- typically all members of a group,
         so the output covers the same pairs the input groups covered.
@@ -247,7 +247,7 @@ class GroupwiseModule(Module[SchemaT], ABC):
 
         Yields:
             PairwiseJudgement objects with scores and full provenance, same
-            contract as :meth:`Module.forward`. When a single call produces
+            contract as :meth:`Matcher.forward`. When a single call produces
             judgements for a whole group, use
             :func:`stamp_group_cost` to apply the group-call cost convention.
         """
@@ -274,7 +274,7 @@ def stamp_group_cost(
 
     ``provenance["group_end"]`` is set ``True`` on (only) the LAST judgement
     of the group -- a boundary marker so a consumer draining a whole group
-    from a lazy stream (:class:`~langres.core.presets._SpendCappedModule`,
+    from a lazy stream (:class:`~langres.core.presets._SpendCappedMatcher`,
     E9) knows exactly when to stop pulling without needing to peek at (and
     thereby trigger the computation of) the next group.
 

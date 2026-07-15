@@ -3,7 +3,7 @@
 These are the DX-hardening assertions from the Wave 3 review: a downstream
 integrator must know exactly what ``resolve`` does at the edges. They run FAST —
 the resolver here mirrors :func:`build_restaurant_resolver` (same
-``RestaurantSchema`` + ``Comparator.from_schema`` + ``WeightedAverageJudge`` +
+``RestaurantSchema`` + ``Comparator.from_schema`` + ``WeightedAverageMatcher`` +
 ``Clusterer`` wiring) but swaps the MiniLM embedder for a ``FakeEmbedder`` so no
 model loads. The two contracts under test are embedder-independent:
 
@@ -24,7 +24,7 @@ from langres.core import (
     FakeEmbedder,
     Resolver,
     VectorBlocker,
-    WeightedAverageJudge,
+    WeightedAverageMatcher,
 )
 from langres.data.er_benchmarks import RestaurantSchema
 
@@ -46,7 +46,7 @@ def _fast_restaurant_resolver(threshold: float = 0.8) -> Resolver:
     return Resolver(
         blocker=blocker,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=threshold),
     )
 

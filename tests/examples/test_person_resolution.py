@@ -121,9 +121,9 @@ def test_serialized_blocker_recovers_blocking(tmp_path) -> None:  # type: ignore
 def test_live_smoke_single_pair() -> None:
     """One real OpenRouter pair returns a usable judgement (gated on a key)."""
     from langres.core.models import ERCandidate
-    from langres.core.modules.llm_judge import LLMJudge
+    from langres.core.matchers.llm_judge import LLMMatcher
 
-    judge: LLMJudge[PersonSchema] = LLMJudge.from_env(
+    judge: LLMMatcher[PersonSchema] = LLMMatcher.from_env(
         model="openrouter/openai/gpt-4o-mini", temperature=0.0, entity_noun="person"
     )
     pair: ERCandidate[PersonSchema] = ERCandidate(

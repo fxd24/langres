@@ -57,7 +57,7 @@ def test_ground_truth_label_empty_returns_empty() -> None:
 
 
 class FakeJudge:
-    """Minimal stand-in for LLMJudge.forward used by TeacherLabeler tests."""
+    """Minimal stand-in for LLMMatcher.forward used by TeacherLabeler tests."""
 
     def __init__(
         self,

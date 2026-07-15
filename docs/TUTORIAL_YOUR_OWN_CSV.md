@@ -87,7 +87,7 @@ the name.)
 > **What gets matched, and where `embed_text` fits.** The string judge scores on
 > the schema's declared `str | None` fields (`name`, `city`, `email` here) via
 > rapidfuzz — one similarity per field, weighted and combined; `id` is excluded.
-> When the embedding blocker is active (> 100 rows, or `judge="embedding"`),
+> When the embedding blocker is active (> 100 rows, or `matcher="embedding"`),
 > `dedupe`/`Resolver.from_schema` derive the *blocking* text from those same
 > declared string fields automatically. A schema-level
 > `@computed_field embed_text` is a separate, **advanced** convention: it only
@@ -100,10 +100,10 @@ the name.)
 
 ## 3. Dedupe — no key, no spend
 
-`dedupe` groups the batch into clusters. Pass `judge="string"` to stay **$0**
+`dedupe` groups the batch into clusters. Pass `matcher="string"` to stay **$0**
 with no LLM and no API key — offline string matching is an **explicit opt-in**:
-the default `judge="auto"` picks an LLM judge from your API key and **raises
-`NoJudgeAvailableError`** (root-exported from `langres`) when it finds none,
+the default `matcher="auto"` picks an LLM judge from your API key and **raises
+`NoMatcherAvailableError`** (root-exported from `langres`) when it finds none,
 rather than silently degrading to fuzzy matching that over-merges on unlabeled
 data. (For this 5-row file the string judge is also fully offline; on a file over
 100 rows the blocker step downloads MiniLM once, per the note at the top — still
@@ -112,7 +112,7 @@ $0.)
 ```python
 from langres import dedupe
 
-result = dedupe(records, schema=Contact, judge="string", threshold=0.6)
+result = dedupe(records, schema=Contact, matcher="string", threshold=0.6)
 
 print([sorted(c) for c in result])
 # [['1', '2'], ['3', '4']]      # "Acme Corporation"/"Acme Corp", etc.
@@ -127,7 +127,7 @@ exactly what ran. **Singletons are dropped** — a record that matches nothing
 does not appear in the output.
 
 > **Entity linking instead of dedupe?** Use `link(left, right, schema=Contact,
-> judge="string")` to score one pair; it returns a `LinkVerdict` that is truthy
+> matcher="string")` to score one pair; it returns a `LinkVerdict` that is truthy
 > iff it's a match (`if link(a, b): ...`) and carries `.score`, `.reasoning`,
 > and the full `.judgement`.
 
@@ -160,12 +160,12 @@ labeled = [
 
 scores, labels = [], []
 for left, right, is_match in labeled:
-    verdict = link(left, right, schema=Contact, judge="string")
+    verdict = link(left, right, schema=Contact, matcher="string")
     scores.append(verdict.score)
     labels.append(is_match)
 
 threshold = derive_threshold(scores, labels)   # -> ~0.907, from the data
-clusters = dedupe(records, schema=Contact, judge="string", threshold=threshold)
+clusters = dedupe(records, schema=Contact, matcher="string", threshold=threshold)
 ```
 
 `derive_threshold` needs the `[trained]` extra (scikit-learn):
@@ -196,7 +196,7 @@ the `Resolver` (the declarative mid-layer the verbs sit on) and use
 ```python
 from langres import Resolver
 
-resolver = Resolver.from_schema(Contact, judge="string", threshold=threshold)
+resolver = Resolver.from_schema(Contact, matcher="string", threshold=threshold)
 clusters = resolver.resolve(records)          # same clusters as dedupe()
 
 resolver.save("artifacts/contacts_v1")        # writes resolver.json (+ sidecars)
@@ -216,7 +216,7 @@ module that defines `Contact` first so the registration runs).
 ## Where to go next
 
 - **Spend a little on an LLM judge.** Set `OPENROUTER_API_KEY`, install the
-  `[llm]` extra (`uv sync --extra llm`), and drop the `judge=` kwarg:
+  `[llm]` extra (`uv sync --extra llm`), and drop the `matcher=` kwarg:
   `dedupe(records, schema=Contact)` picks an LLM judge under a default
   **$1 spend cap** (`budget_usd=`). See [`docs/EXPERIMENTS.md`](EXPERIMENTS.md).
 - **Test your pipeline in CI without spending.** See

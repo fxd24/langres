@@ -1,4 +1,4 @@
-"""WeightedAverageJudge: the M0 heuristic scorer Module.
+"""WeightedAverageMatcher: the M0 heuristic scorer Matcher.
 
 The judge is the scorer slot of the Resolver. It **owns its FeatureSpecs** (the
 weights) and reads each candidate's attached
@@ -7,7 +7,7 @@ pipeline: a Comparator attaches a ``comparison`` to each candidate, then the
 judge scores it::
 
     comparator = Comparator.from_schema(CompanySchema)
-    judge = WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    judge = WeightedAverageMatcher(feature_specs=comparator.feature_specs)
     candidates = (
         c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
         for c in raw_candidates
@@ -32,7 +32,7 @@ from typing import ClassVar, cast
 
 from langres.core.feature import ComparisonVector, FeatureSpec, combine_present
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
@@ -51,7 +51,7 @@ def _normalized_weights(specs: list[FeatureSpec]) -> dict[str, float]:
 
 
 @register("weighted_average_judge")
-class WeightedAverageJudge(Module[SchemaT]):
+class WeightedAverageMatcher(Matcher[SchemaT]):
     """Heuristic scorer: weighted average of present similarities + evidence floor.
 
     Owns its FeatureSpecs (the weights). Consumes each candidate's attached
@@ -104,7 +104,7 @@ class WeightedAverageJudge(Module[SchemaT]):
             vector = candidate.comparison
             if vector is None:
                 raise ValueError(
-                    "WeightedAverageJudge requires candidates carrying a comparison "
+                    "WeightedAverageMatcher requires candidates carrying a comparison "
                     "vector — add a Comparator to the pipeline."
                 )
             score = combine_present(vector.similarities, weights)
@@ -133,7 +133,7 @@ class WeightedAverageJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
     @property
@@ -142,7 +142,7 @@ class WeightedAverageJudge(Module[SchemaT]):
         return {"feature_specs": [spec.model_dump() for spec in self.feature_specs]}
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "WeightedAverageJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "WeightedAverageMatcher[SchemaT]":
         """Reconstruct from :attr:`config`, rebuilding the FeatureSpecs."""
         specs = [
             FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])

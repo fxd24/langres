@@ -7,7 +7,7 @@ consumption call — ``.link()`` / ``.stream_against()`` are M5 stubs and are ne
 touched here.
 
 The proof, deterministically and with ZERO spend (real MiniLM embeddings for
-blocking; the WeightedAverageJudge is a zero-cost feature-bag scorer):
+blocking; the WeightedAverageMatcher is a zero-cost feature-bag scorer):
 
 1. load -> split (seed=0) -> tune threshold on TRAIN -> build the resolver ->
    ``resolve`` the held-out TEST dicts IN-PROCESS -> clusters_A.

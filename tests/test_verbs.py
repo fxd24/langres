@@ -2,8 +2,8 @@
 
 Zero-spend throughout. The only judge that could ever cost money
 ("zero_shot_llm") is exercised exclusively via an injected
-``DSPyJudge(lm=DummyLM(...))`` -- the documented $0 test seam (never
-judge="auto" against a real key, and never past construction for a bare
+``DSPyMatcher(lm=DummyLM(...))`` -- the documented $0 test seam (never
+matcher="auto" against a real key, and never past construction for a bare
 "zero_shot_llm" string).
 """
 
@@ -20,13 +20,13 @@ import pytest
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
-from langres import NoJudgeAvailableError
+from langres import NoMatcherAvailableError
 from langres.clients.openrouter import BudgetExceeded
 from langres.core.judgement_log import JudgementLog
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
-from langres.core.modules.dspy_judge import DSPyJudge
-from langres.core.presets import ResolvedModule, _SpendCappedModule
+from langres.core.matcher import Matcher
+from langres.core.matchers.dspy_judge import DSPyMatcher
+from langres.core.presets import ResolvedModule, _SpendCappedMatcher
 from langres.verbs import (
     DedupeResult,
     LinkVerdict,
@@ -48,7 +48,7 @@ class VerbCompany(BaseModel):
     address: str | None = None
 
 
-class _EmptyModule(Module[object]):
+class _EmptyModule(Matcher[object]):
     """Yields nothing for any candidate -- exercises link()'s no-judgement guard."""
 
     def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
@@ -60,7 +60,7 @@ class _EmptyModule(Module[object]):
         raise NotImplementedError
 
 
-class _AbstainingModule(Module[object]):
+class _AbstainingModule(Matcher[object]):
     """Yields one abstention (no decision, no score) -- exercises link()'s abstain guard."""
 
     def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
@@ -78,7 +78,7 @@ class _AbstainingModule(Module[object]):
         raise NotImplementedError
 
 
-class _CostlyModule(Module[object]):
+class _CostlyModule(Matcher[object]):
     """Yields N judgements at a fixed cost each -- for cap-breach tests."""
 
     def __init__(self, n: int, cost_each: float) -> None:
@@ -102,13 +102,13 @@ class _CostlyModule(Module[object]):
         raise NotImplementedError
 
 
-def _dummy_judge(match: bool = True, prob: float = 0.9) -> DSPyJudge[VerbCompany]:
+def _dummy_judge(match: bool = True, prob: float = 0.9) -> DSPyMatcher[VerbCompany]:
     answer = {
         "reasoning": "same company" if match else "different company",
         "match": "True" if match else "False",
         "match_probability": str(prob),
     }
-    return DSPyJudge(lm=DummyLM([answer] * 20), entity_noun="company")
+    return DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company")
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ class TestCheckNoDuplicateIds:
 class TestDedupe:
     def test_empty_input_returns_empty_result(self) -> None:
         """dedupe([]) short-circuits BEFORE judge resolution: keyless empty
-        input must never raise NoJudgeAvailableError."""
+        input must never raise NoMatcherAvailableError."""
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
@@ -310,14 +310,14 @@ class TestDedupe:
         assert result.judge_used == "none"
 
     def test_single_record_returns_empty(self) -> None:
-        result = dedupe([{"id": "a", "name": "Solo"}], judge="string")
+        result = dedupe([{"id": "a", "name": "Solo"}], matcher="string")
         assert result == []
         assert result.judge_used == "none"
 
     def test_single_record_keyless_short_circuits_before_judge_resolution(self) -> None:
         """The docstring promises a single record -> [] (no pair possible):
-        one keyless record must return [] under the default judge="auto",
-        never raise NoJudgeAvailableError -- zero spend is possible."""
+        one keyless record must return [] under the default matcher="auto",
+        never raise NoMatcherAvailableError -- zero spend is possible."""
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
@@ -329,7 +329,7 @@ class TestDedupe:
     def test_duplicate_id_raises(self) -> None:
         records = [{"id": "a", "name": "X"}, {"id": "a", "name": "Y"}]
         with pytest.raises(ValueError, match="duplicate ids"):
-            dedupe(records, judge="string")
+            dedupe(records, matcher="string")
 
     def test_string_judge_inferred_schema_clusters_similar_names(self) -> None:
         records = [
@@ -337,14 +337,14 @@ class TestDedupe:
             {"id": "2", "name": "Acme Corporation"},
             {"id": "3", "name": "Totally Unrelated Restaurant"},
         ]
-        result = dedupe(records, judge="string", threshold=0.5)
+        result = dedupe(records, matcher="string", threshold=0.5)
         assert {"1", "2"} in result
         assert result.judge_used == "string"
         assert result.score_type == "heuristic"
 
     def test_result_threshold_reports_the_explicit_cut(self) -> None:
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme"}]
-        result = dedupe(records, judge="string", threshold=0.8)
+        result = dedupe(records, matcher="string", threshold=0.8)
         assert result.threshold == 0.8
 
     def test_result_threshold_reports_the_resolved_default(self) -> None:
@@ -352,12 +352,12 @@ class TestDedupe:
         result must report the RESOLVED value, ready for select_for_review,
         not echo the None back."""
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme"}]
-        result = dedupe(records, judge="string")
+        result = dedupe(records, matcher="string")
         assert result.threshold == 0.5
 
     def test_short_circuit_result_threshold_is_none(self) -> None:
         """The <2-records short-circuit resolves no judge, hence no cut."""
-        result = dedupe([{"id": "a", "name": "Solo"}], judge="string")
+        result = dedupe([{"id": "a", "name": "Solo"}], matcher="string")
         assert result.threshold is None
 
     def test_explicit_schema_used_verbatim(self) -> None:
@@ -365,7 +365,7 @@ class TestDedupe:
             {"id": "1", "name": "Acme Corporation", "address": "1 Main St"},
             {"id": "2", "name": "Acme Corporation", "address": "1 Main St"},
         ]
-        result = dedupe(records, judge="string", schema=VerbCompany, threshold=0.5)
+        result = dedupe(records, matcher="string", schema=VerbCompany, threshold=0.5)
         assert {"1", "2"} in result
 
     def test_explicit_schema_no_id_key_uses_positional_ids(self) -> None:
@@ -380,23 +380,23 @@ class TestDedupe:
             {"name": "Acme Corporation", "address": "1 Main St"},
             {"name": "Acme Corporation", "address": "1 Main St"},
         ]
-        result = dedupe(records, judge="string", schema=VerbCompany, threshold=0.5)
+        result = dedupe(records, matcher="string", schema=VerbCompany, threshold=0.5)
         assert {"0", "1"} in result
 
     def test_dummy_lm_e2e_at_zero_cost(self) -> None:
-        """Hostile-test requirement: judge=DSPyJudge(lm=DummyLM(...)) through dedupe()."""
+        """Hostile-test requirement: matcher=DSPyMatcher(lm=DummyLM(...)) through dedupe()."""
         records = [
             {"id": "1", "name": "Acme Corporation"},
             {"id": "2", "name": "Acme Corp"},
         ]
-        result = dedupe(records, judge=_dummy_judge(match=True, prob=0.95), threshold=0.5)
+        result = dedupe(records, matcher=_dummy_judge(match=True, prob=0.95), threshold=0.5)
         assert result.judge_used == "custom"
         assert {"1", "2"} in result
 
     def test_abstaining_judge_leaves_pair_unmerged_and_does_not_raise(self) -> None:
         """dedupe()'s abstain contract, the deliberate asymmetry with link().
 
-        link() raises JudgeAbstainedError on an abstain (one caller needs a
+        link() raises MatcherAbstainedError on an abstain (one caller needs a
         verdict). dedupe() judges many pairs to build clusters, so an abstained
         pair is conservatively left UNMERGED rather than aborting the whole
         batch -- one unparseable judgement must not sink a dedupe run. Here the
@@ -407,7 +407,7 @@ class TestDedupe:
             {"id": "a", "name": "Acme Corporation"},
             {"id": "b", "name": "Acme Corp"},
         ]
-        result = dedupe(records, judge=_AbstainingModule(), threshold=0.5)
+        result = dedupe(records, matcher=_AbstainingModule(), threshold=0.5)
         # No merge, no crash: the abstained pair simply did not connect a, b.
         assert {"a", "b"} not in result
         assert all(len(cluster) == 1 for cluster in result)
@@ -415,7 +415,7 @@ class TestDedupe:
     def test_cap_breach_mid_stream_raises_with_partial_judgements(self) -> None:
         records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
         with pytest.raises(BudgetExceeded) as excinfo:
-            dedupe(records, judge=_CostlyModule(6, 0.5), budget_usd=0.9)
+            dedupe(records, matcher=_CostlyModule(6, 0.5), budget_usd=0.9)
         partial = excinfo.value.partial_judgements
         assert len(partial) == 2
 
@@ -427,7 +427,7 @@ class TestDedupe:
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
-            pytest.raises(NoJudgeAvailableError, match="no API key"),
+            pytest.raises(NoMatcherAvailableError, match="no API key"),
         ):
             dedupe(records)
 
@@ -435,7 +435,7 @@ class TestDedupe:
         """Regression (2026-07-13 incident): popping the key env vars did NOT
         make dedupe() keyless -- Settings read the repo .env and a default
         dedupe(records) executed a real paid call. LANGRES_OFFLINE=1 is the
-        deterministic fix: it must force NoJudgeAvailableError with NO dotenv
+        deterministic fix: it must force NoMatcherAvailableError with NO dotenv
         patching, even when a key is present in the environment or .env."""
         records = [
             {"id": "1", "name": "Acme"},
@@ -447,7 +447,7 @@ class TestDedupe:
                 {"LANGRES_OFFLINE": "1", "OPENROUTER_API_KEY": "fake-not-a-real-key"},
                 clear=True,
             ),
-            pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE"),
+            pytest.raises(NoMatcherAvailableError, match="LANGRES_OFFLINE"),
         ):
             dedupe(records)
 
@@ -462,7 +462,7 @@ class TestLink:
         verdict = link(
             {"id": "a", "name": "Acme Corporation"},
             {"id": "b", "name": "Acme Corporation"},
-            judge="string",
+            matcher="string",
             threshold=0.5,
         )
         assert verdict.match is True
@@ -473,14 +473,14 @@ class TestLink:
         verdict = link(
             {"id": "a", "name": "Acme Corporation"},
             {"id": "b", "name": "Totally Unrelated Restaurant"},
-            judge="string",
+            matcher="string",
             threshold=0.9,
         )
         assert verdict.match is False
 
     def test_link_a_a_is_well_defined(self) -> None:
         a = {"id": "same", "name": "Acme Corporation"}
-        verdict = link(a, a, judge="string", threshold=0.5)
+        verdict = link(a, a, matcher="string", threshold=0.5)
         assert verdict.match is True
         assert verdict.score == pytest.approx(1.0)
 
@@ -488,7 +488,7 @@ class TestLink:
         verdict = link(
             {"id": "a", "name": "Acme"},
             {"id": "b", "name": "Acme Inc"},
-            judge=_dummy_judge(match=True, prob=0.87),
+            matcher=_dummy_judge(match=True, prob=0.87),
             threshold=0.5,
         )
         assert verdict.judge_used == "custom"
@@ -499,14 +499,14 @@ class TestLink:
         verdict = link(
             {"id": "a", "name": "Acme", "address": "1 Main St"},
             {"id": "b", "name": "Acme", "address": "1 Main St"},
-            judge="string",
+            matcher="string",
             schema=VerbCompany,
             threshold=0.5,
         )
         assert verdict.match is True
 
     def test_default_threshold_used_when_none(self) -> None:
-        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string")
+        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, matcher="string")
         assert verdict.score >= 0.0  # threshold resolved without raising
         # The verdict reports the RESOLVED cut (the string judge's 0.5
         # default), not the None the caller passed.
@@ -516,14 +516,14 @@ class TestLink:
         verdict = link(
             {"id": "a", "name": "Acme"},
             {"id": "b", "name": "Acme"},
-            judge="string",
+            matcher="string",
             threshold=0.9,
         )
         assert verdict.threshold == 0.9
 
     def test_no_judgement_produced_raises_runtime_error(self) -> None:
         with pytest.raises(RuntimeError, match="produced no judgement"):
-            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_EmptyModule())
+            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, matcher=_EmptyModule())
 
     def test_abstaining_judge_raises_judge_abstained_error(self) -> None:
         """A judge that neither decided nor scored gives link() no verdict to return.
@@ -532,24 +532,24 @@ class TestLink:
         would be read as "no match" by the obvious ``if verdict.match:`` and
         silently recreate the confident-no bug the contract exists to remove.
         """
-        from langres import JudgeAbstainedError
+        from langres import MatcherAbstainedError
 
-        with pytest.raises(JudgeAbstainedError, match="abstained"):
-            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_AbstainingModule())
+        with pytest.raises(MatcherAbstainedError, match="abstained"):
+            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, matcher=_AbstainingModule())
 
     def test_judge_abstained_error_is_a_runtime_error(self) -> None:
         """It subclasses RuntimeError so ``except RuntimeError`` still catches it."""
-        from langres import JudgeAbstainedError
+        from langres import MatcherAbstainedError
 
         with pytest.raises(RuntimeError):
-            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge=_AbstainingModule())
+            link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, matcher=_AbstainingModule())
 
     def test_no_key_raises_no_judge_available_error(self) -> None:
         """link() fails fast on the keyless auto path exactly like dedupe()."""
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
-            pytest.raises(NoJudgeAvailableError, match="no API key"),
+            pytest.raises(NoMatcherAvailableError, match="no API key"),
         ):
             link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"})
 
@@ -558,7 +558,7 @@ class TestLink:
             link(
                 {"id": "a", "name": "X"},
                 {"id": "b", "name": "Y"},
-                judge=_CostlyModule(1, 5.0),
+                matcher=_CostlyModule(1, 5.0),
                 budget_usd=1.0,
             )
         partial = excinfo.value.partial_judgements
@@ -572,7 +572,7 @@ class TestLink:
         DummyLM-backed module -- the notice fires, but nothing paid runs.
         """
         fake_resolved = ResolvedModule(
-            _SpendCappedModule(_dummy_judge(match=True, prob=0.8), budget_usd=1.0),
+            _SpendCappedMatcher(_dummy_judge(match=True, prob=0.8), budget_usd=1.0),
             "zero_shot_llm",
             "openrouter/openai/gpt-4o-mini",
         )
@@ -580,7 +580,7 @@ class TestLink:
             patch("langres.verbs.resolve_judge", return_value=fake_resolved),
             pytest.warns(UserWarning, match="scoring ~1 pairs"),
         ):
-            verdict = link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge="auto")
+            verdict = link({"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, matcher="auto")
         assert verdict.judge_used == "zero_shot_llm"
         assert verdict.score == pytest.approx(0.8)
 
@@ -591,7 +591,7 @@ class TestLink:
         (same DummyLM-backed / patched resolve_judge zero-spend seam as
         test_zero_shot_llm_emits_pre_scoring_notice above)."""
         fake_resolved = ResolvedModule(
-            _SpendCappedModule(_dummy_judge(match=True, prob=0.8), budget_usd=2.0),
+            _SpendCappedMatcher(_dummy_judge(match=True, prob=0.8), budget_usd=2.0),
             "zero_shot_llm",
             "unknown/model-not-in-table",
         )
@@ -600,7 +600,7 @@ class TestLink:
             pytest.warns(UserWarning, match="CANNOT enforce a limit") as record,
         ):
             verdict = link(
-                {"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, judge="auto", budget_usd=2.0
+                {"id": "a", "name": "X"}, {"id": "b", "name": "Y"}, matcher="auto", budget_usd=2.0
             )
         assert "est. cost $0.0000" not in str(record[0].message)
         assert "$2.00" in str(record[0].message)
@@ -611,7 +611,7 @@ class TestLink:
 class TestLinkEmbeddingJudge:
     def test_embedding_judge_scores_identical_text_near_one(self) -> None:
         a = {"id": "a", "name": "Acme Corporation"}
-        verdict = link(a, dict(a, id="b"), judge="embedding", threshold=0.5)
+        verdict = link(a, dict(a, id="b"), matcher="embedding", threshold=0.5)
         assert verdict.score > 0.99
         assert verdict.score_type == "sim_cos"
         assert verdict.judge_used == "embedding"
@@ -619,12 +619,12 @@ class TestLinkEmbeddingJudge:
 
 
 # ---------------------------------------------------------------------------
-# judge="auto" selection notice: which model, that money is involved, the cap.
+# matcher="auto" selection notice: which model, that money is involved, the cap.
 # Must fire BEFORE any paid call, on both verbs, and ONLY on the auto path.
 # ---------------------------------------------------------------------------
 
 
-class _EventRecordingJudge(Module[object]):
+class _EventRecordingJudge(Matcher[object]):
     """$0 stand-in for the auto-picked LLM judge that records when scoring
     actually happens -- lets a test assert the selection notice fired first."""
 
@@ -672,7 +672,7 @@ class TestAutoSelectionNotice:
         events: list[str] = []
         self._patch_auto_path(monkeypatch, events)
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
-        result = dedupe(records, judge="auto")
+        result = dedupe(records, matcher="auto")
         assert result.judge_used == "zero_shot_llm"
         selection = [i for i, e in enumerate(events) if "selected the LLM judge" in e]
         assert len(selection) == 1
@@ -684,7 +684,9 @@ class TestAutoSelectionNotice:
     ) -> None:
         events: list[str] = []
         self._patch_auto_path(monkeypatch, events)
-        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Corp"}, judge="auto")
+        verdict = link(
+            {"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Corp"}, matcher="auto"
+        )
         assert verdict.judge_used == "zero_shot_llm"
         selection = [i for i, e in enumerate(events) if "selected the LLM judge" in e]
         assert len(selection) == 1
@@ -705,7 +707,7 @@ class TestAutoSelectionNotice:
             model: str | None = None,
             entity_noun: str = "entity",
             judge_params: dict[str, object] | None = None,
-        ) -> Module[object]:
+        ) -> Matcher[object]:
             seen_models.append(model)
             return judge_module
 
@@ -713,7 +715,7 @@ class TestAutoSelectionNotice:
         monkeypatch.setattr("langres.core.presets.build_judge", fake_build_judge)
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
         with pytest.warns(UserWarning, match=r"selected the LLM judge 'openai/gpt-5-mini'"):
-            result = dedupe(records, judge="auto", model="openai/gpt-5-mini")
+            result = dedupe(records, matcher="auto", model="openai/gpt-5-mini")
         assert result.judge_used == "zero_shot_llm"
         assert seen_models == ["openai/gpt-5-mini"]
 
@@ -722,23 +724,23 @@ class TestAutoSelectionNotice:
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = dedupe(records, judge="string", threshold=0.5)
+            result = dedupe(records, matcher="string", threshold=0.5)
         assert result.judge_used == "string"
         assert not caught, f"unexpected warnings: {[str(w.message) for w in caught]}"
 
 
 def test_front_door_exceptions_are_root_exported() -> None:
-    """After fail-fast, NoJudgeAvailableError and BudgetExceeded are exactly
+    """After fail-fast, NoMatcherAvailableError and BudgetExceeded are exactly
     the two exceptions a front-door user must catch -- both live on `langres`
     (hiding one in langres.clients.openrouter would read as inconsistency)."""
     import langres
     from langres import BudgetExceeded as root_budget_exceeded
-    from langres import NoJudgeAvailableError as root_no_judge
-    from langres.core.presets import NoJudgeAvailableError as presets_no_judge
+    from langres import NoMatcherAvailableError as root_no_judge
+    from langres.core.presets import NoMatcherAvailableError as presets_no_judge
 
     assert root_no_judge is presets_no_judge
     assert root_budget_exceeded is BudgetExceeded  # langres.clients.openrouter's class
-    assert "NoJudgeAvailableError" in langres.__all__
+    assert "NoMatcherAvailableError" in langres.__all__
     assert "BudgetExceeded" in langres.__all__
     assert issubclass(root_no_judge, RuntimeError)
 
@@ -771,7 +773,7 @@ class TestDedupeWithLog:
             {"id": "3", "name": "Totally Unrelated Restaurant"},
         ]
         log_path = tmp_path / "run.jsonl"
-        result = dedupe(records, judge="string", threshold=0.5, log=log_path)
+        result = dedupe(records, matcher="string", threshold=0.5, log=log_path)
 
         rows = JudgementLog(log_path).read()
         assert len(rows) == 3  # C(3,2) all-pairs candidates
@@ -786,7 +788,7 @@ class TestDedupeWithLog:
             {"id": "2", "name": "Acme Corporation"},
         ]
         log = JudgementLog(tmp_path / "run.jsonl")
-        dedupe(records, judge="string", threshold=0.5, log=log)
+        dedupe(records, matcher="string", threshold=0.5, log=log)
         assert len(log.read()) == 1
 
     def test_verdict_agrees_with_the_resolved_threshold(self, tmp_path: Path) -> None:
@@ -796,7 +798,7 @@ class TestDedupeWithLog:
             {"id": "3", "name": "Totally Unrelated Restaurant"},
         ]
         log = JudgementLog(tmp_path / "run.jsonl")
-        dedupe(records, judge="string", threshold=0.5, log=log)
+        dedupe(records, matcher="string", threshold=0.5, log=log)
         rows = {(row["left_id"], row["right_id"]): row for row in log.read()}
         assert rows[("1", "2")]["verdict"] is True
         assert rows[("1", "3")]["verdict"] is False
@@ -807,7 +809,7 @@ class TestDedupeWithLog:
             {"id": "2", "name": "Acme Corporation"},
         ]
         log = JudgementLog(tmp_path / "run.jsonl", features=True)
-        dedupe(records, judge="string", threshold=0.5, log=log)
+        dedupe(records, matcher="string", threshold=0.5, log=log)
         row = log.read()[0]
         assert "similarities" in row["provenance"]
 
@@ -822,21 +824,21 @@ class TestDedupeWithLog:
             {"id": "2", "name": "Acme Corporation"},
             {"id": "3", "name": "Totally Unrelated Restaurant"},
         ]
-        without_kwarg = dedupe(records, judge="string", threshold=0.5)
-        with_none = dedupe(records, judge="string", threshold=0.5, log=None)
+        without_kwarg = dedupe(records, matcher="string", threshold=0.5)
+        with_none = dedupe(records, matcher="string", threshold=0.5, log=None)
         assert list(without_kwarg) == list(with_none)
         assert without_kwarg.judge_used == with_none.judge_used
         assert without_kwarg.score_type == with_none.score_type
 
     def test_budget_breach_still_logs_the_tripping_judgement(self, tmp_path: Path) -> None:
-        """Regression (codex review, PR #62): LoggingModule wraps the
+        """Regression (codex review, PR #62): LoggingMatcher wraps the
         already spend-capped module, so without this fix the paid judgement
         that trips the cap -- recorded on BudgetExceeded.partial_judgements
         but never yielded -- would be silently missing from the JSONL."""
         records = [{"id": str(i), "name": f"n{i}"} for i in range(4)]  # C(4,2) = 6 pairs
         log = JudgementLog(tmp_path / "run.jsonl")
         with pytest.raises(BudgetExceeded) as excinfo:
-            dedupe(records, judge=_CostlyModule(6, 0.5), budget_usd=0.9, log=log)
+            dedupe(records, matcher=_CostlyModule(6, 0.5), budget_usd=0.9, log=log)
         partial = excinfo.value.partial_judgements
         rows = log.read()
         assert len(rows) == len(partial) == 2
@@ -851,7 +853,7 @@ class TestLinkWithLog:
         verdict = link(
             {"id": "a", "name": "Acme Corporation"},
             {"id": "b", "name": "Acme Corporation"},
-            judge="string",
+            matcher="string",
             threshold=0.5,
             log=log_path,
         )
@@ -864,8 +866,8 @@ class TestLinkWithLog:
     def test_log_omitted_is_identical_to_log_none(self) -> None:
         a = {"id": "a", "name": "Acme Corporation"}
         b = {"id": "b", "name": "Acme Corporation"}
-        without_kwarg = link(a, b, judge="string", threshold=0.5)
-        with_none = link(a, b, judge="string", threshold=0.5, log=None)
+        without_kwarg = link(a, b, matcher="string", threshold=0.5)
+        with_none = link(a, b, matcher="string", threshold=0.5, log=None)
         assert without_kwarg.match == with_none.match
         assert without_kwarg.score == pytest.approx(with_none.score)
 
@@ -876,7 +878,7 @@ class TestLinkWithLog:
             link(
                 {"id": "a", "name": "X"},
                 {"id": "b", "name": "Y"},
-                judge=_CostlyModule(1, 5.0),
+                matcher=_CostlyModule(1, 5.0),
                 budget_usd=1.0,
                 log=log,
             )
@@ -976,7 +978,7 @@ def test_import_langres_top_level_does_not_import_dspy() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Model identity on results (v0.3 slice) + judge="prompt_llm" (#103)
+# Model identity on results (v0.3 slice) + matcher="prompt_llm" (#103)
 # ---------------------------------------------------------------------------
 
 
@@ -985,28 +987,28 @@ class TestModelIdentityOnResults:
 
     def test_string_judge_reports_no_model(self) -> None:
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
-        result = dedupe(records, judge="string")
+        result = dedupe(records, matcher="string")
         assert result.model is None
 
     def test_link_string_judge_reports_no_model(self) -> None:
-        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string")
+        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, matcher="string")
         assert verdict.model is None
 
     def test_short_circuit_result_model_is_none(self) -> None:
         assert dedupe([]).model is None
 
     def test_injected_module_reports_its_own_model(self) -> None:
-        """A custom Module's self-reported ``model`` attribute surfaces --
-        identity is no longer erased at the judge=<Module> escape hatch."""
+        """A custom Matcher's self-reported ``model`` attribute surfaces --
+        identity is no longer erased at the matcher=<Matcher> escape hatch."""
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
-        result = dedupe(records, judge=_dummy_judge(match=True))
+        result = dedupe(records, matcher=_dummy_judge(match=True))
         assert result.judge_used == "custom"
-        # DSPyJudge's constructor default -- the injected judge's own attribute.
+        # DSPyMatcher's constructor default -- the injected judge's own attribute.
         assert result.model == "openrouter/openai/gpt-4o-mini"
 
     def test_injected_module_without_model_attribute_reports_none(self) -> None:
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
-        result = dedupe(records, judge=_EventRecordingJudge([]))
+        result = dedupe(records, matcher=_EventRecordingJudge([]))
         assert result.judge_used == "custom"
         assert result.model is None
 
@@ -1015,7 +1017,7 @@ class TestModelIdentityOnResults:
         resolved model -- here the injected judge stamps its own, so both agree."""
         log_path = tmp_path / "log.jsonl"
         records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
-        result = dedupe(records, judge=_dummy_judge(match=True), log=log_path)
+        result = dedupe(records, matcher=_dummy_judge(match=True), log=log_path)
         rows = JudgementLog(log_path).read()
         assert rows
         assert all(row["model"] == result.model for row in rows)
@@ -1035,7 +1037,7 @@ def _mock_llm_client(content: str) -> Mock:
 
 
 class TestPromptLLMJudge:
-    """judge="prompt_llm" -- the bring-your-own-prompt LLMJudge, by name (#103).
+    """matcher="prompt_llm" -- the bring-your-own-prompt LLMMatcher, by name (#103).
 
     Zero-spend: ``langres.clients.create_llm_client`` is monkeypatched to a
     mock, so the lazily-built client never touches the network.
@@ -1054,7 +1056,7 @@ class TestPromptLLMJudge:
             verdict = link(
                 {"id": "a", "name": "Acme"},
                 {"id": "b", "name": "Acme Corp"},
-                judge="prompt_llm",
+                matcher="prompt_llm",
                 prompt_template=self.PROMPT,
                 response_parser="binary_yes_no",
             )
@@ -1073,7 +1075,7 @@ class TestPromptLLMJudge:
         with pytest.warns(UserWarning, match="scoring ~1 pairs"):
             result = dedupe(
                 records,
-                judge="prompt_llm",
+                matcher="prompt_llm",
                 prompt_template=self.PROMPT,
                 response_parser="binary_yes_no",
             )
@@ -1088,7 +1090,7 @@ class TestPromptLLMJudge:
             verdict = link(
                 {"id": "a", "name": "X"},
                 {"id": "b", "name": "Y"},
-                judge="prompt_llm",
+                matcher="prompt_llm",
                 model="openrouter/z-ai/glm-5.2",
                 response_parser="binary_yes_no",
             )
@@ -1098,11 +1100,11 @@ class TestPromptLLMJudge:
     def test_prompt_seam_kwargs_with_other_judges_raise(self) -> None:
         records = [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}]
         with pytest.raises(ValueError, match="prompt_llm"):
-            dedupe(records, judge="string", prompt_template="x {left} {right}")
+            dedupe(records, matcher="string", prompt_template="x {left} {right}")
         with pytest.raises(ValueError, match="prompt_llm"):
-            link(records[0], records[1], judge="string", response_parser="binary_yes_no")
+            link(records[0], records[1], matcher="string", response_parser="binary_yes_no")
         with pytest.raises(ValueError, match="prompt_llm"):
-            link(records[0], records[1], judge=_dummy_judge(), system_prompt="be brief")
+            link(records[0], records[1], matcher=_dummy_judge(), system_prompt="be brief")
 
     def test_unknown_parser_name_raises_with_registered_names(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1112,6 +1114,6 @@ class TestPromptLLMJudge:
             link(
                 {"id": "a", "name": "X"},
                 {"id": "b", "name": "Y"},
-                judge="prompt_llm",
+                matcher="prompt_llm",
                 response_parser="not_a_parser",
             )

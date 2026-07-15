@@ -8,7 +8,7 @@ Three concrete labelers, all emitting :class:`~langres.bootstrap.models.GoldPair
   for the teacher, with an over-confident confidence so the calibration report
   is non-trivial (the CI stand-in for :class:`TeacherLabeler`).
 - :class:`TeacherLabeler`: the real LLM teacher. Wraps an injected
-  :class:`~langres.core.modules.llm_judge.LLMJudge` and enforces a hard spend
+  :class:`~langres.core.matchers.llm_judge.LLMMatcher` and enforces a hard spend
   cap so a runaway loop can never burn the budget (design-review B1 + B4).
 """
 
@@ -22,7 +22,7 @@ from langres.bootstrap.base import Labeler
 from langres.bootstrap.models import GoldPair
 from langres.core.benchmark import BlindCostError
 from langres.core.models import ERCandidate, predicted_match
-from langres.core.modules.llm_judge import LLMJudge
+from langres.core.matchers.llm_judge import LLMMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ class FakeLabeler(Labeler):
 class TeacherLabeler(Labeler):
     """Budget-capped LLM-teacher labeler (design-review B1 + B4).
 
-    Wraps an injected :class:`LLMJudge` and turns its judgements into
+    Wraps an injected :class:`LLMMatcher` and turns its judgements into
     :class:`GoldPair` labels, while guaranteeing the labeling run can never
     exceed ``budget_usd``. Three layers enforce this:
 
@@ -228,7 +228,7 @@ class TeacherLabeler(Labeler):
        wrapped in ``try/except``; one failed call skips that pair and the loop
        continues, so a single error never discards an already-paid batch.
 
-    The teacher uses the **synchronous** :meth:`LLMJudge.forward` deliberately:
+    The teacher uses the **synchronous** :meth:`LLMMatcher.forward` deliberately:
     an async ``gather`` over a whole batch cannot be stopped mid-flight once
     dispatched, so it cannot honor the budget cap (design-review B1).
 
@@ -245,7 +245,7 @@ class TeacherLabeler(Labeler):
 
     def __init__(
         self,
-        judge: LLMJudge[Any],
+        judge: LLMMatcher[Any],
         *,
         price_per_1m_prompt_tokens: float,
         price_per_1m_completion_tokens: float,
@@ -347,7 +347,7 @@ class TeacherLabeler(Labeler):
         from langres.clients import Settings, create_llm_client
 
         client = create_llm_client(Settings(), enable_langfuse=False)
-        judge: LLMJudge[Any] = LLMJudge(client=client, model=model, entity_noun=entity_noun)
+        judge: LLMMatcher[Any] = LLMMatcher(client=client, model=model, entity_noun=entity_noun)
         return cls(
             judge,
             price_per_1m_prompt_tokens=price_per_1m_prompt_tokens,
@@ -507,7 +507,7 @@ class TeacherLabeler(Labeler):
         token_cost = self._pair_cost(prompt_tokens, completion_tokens)
         reported_cost = float(prov.get("cost_usd", 0.0) or 0.0)
 
-        # "Both zero" is the blind signal, not key-presence: LLMJudge always sets
+        # "Both zero" is the blind signal, not key-presence: LLMMatcher always sets
         # prompt_tokens/completion_tokens/cost_usd, defaulting them to 0 exactly
         # when response.usage is missing. A real call always spends prompt tokens,
         # so all-zero reliably means "usage was absent" — we cannot track spend.

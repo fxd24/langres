@@ -59,13 +59,13 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     # corrected from an earlier wrong 89.33; arXiv v4 Table 2 + results.xlsx).
     "openrouter/openai/gpt-4o-mini-2024-07-18": (0.15, 0.60),
     "openrouter/openai/gpt-4o-2024-08-06": (2.50, 10.00),
-    # OpenRouter path for judge="auto" (OPENROUTER_API_KEY set) — see
+    # OpenRouter path for matcher="auto" (OPENROUTER_API_KEY set) — see
     # langres.core.presets.choose_auto_judge. OpenRouter's own listing for this
     # route isn't in LiteLLM's pricing table; conservative-high over OpenAI's
     # published $0.15/$0.60 per-1M list price (litellm model_prices_and_context_
     # window.json, "gpt-4o-mini", checked 2026-07) to absorb any provider markup.
     "openrouter/openai/gpt-4o-mini": (0.20, 0.80),
-    # Direct-OpenAI path for judge="auto" (OPENAI_API_KEY set, no OPENROUTER_API_KEY)
+    # Direct-OpenAI path for matcher="auto" (OPENAI_API_KEY set, no OPENROUTER_API_KEY)
     # — see choose_auto_judge. Matches OpenAI's published gpt-5-mini list price
     # exactly (litellm model_prices_and_context_window.json, "gpt-5-mini" and
     # "openrouter/openai/gpt-5-mini" agree: $0.25/$2.00 per 1M, checked 2026-07).
@@ -80,7 +80,7 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: sequential run; a bounded timeout makes a stalled call fail fast and recover.
 DEFAULT_TIMEOUT_S = 60.0
 
-#: The OpenRouter route ``judge="auto"``/``judge="zero_shot_llm"`` default to
+#: The OpenRouter route ``matcher="auto"``/``matcher="zero_shot_llm"`` default to
 #: when no model id is given -- ``core.presets.choose_auto_judge`` and
 #: ``Resolver.from_schema`` both need this literal. Defined once here (the
 #: dspy-free, cycle-safe layer both of those sit above) so the two call sites
@@ -211,7 +211,7 @@ def dspy_price_per_1k(
 ) -> float:
     """Per-1k-token price for ``model`` from ``prices`` (0.0 if unknown).
 
-    ``DSPyJudge`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` -- a
+    ``DSPyMatcher`` prices each pair as ``tokens/1000 * price_per_1k_tokens`` -- a
     single blended per-1k rate over ``prompt + completion`` tokens -- so this
     takes the worst-case (dearer of input/output) per-token price and scales it
     to per-1k. Worst-case is the same price basis
@@ -434,7 +434,7 @@ class BudgetExceeded(RuntimeError):
 
     ``partial_judgements`` carries every judgement already produced (and paid
     for) before the cap tripped (E9) -- populated by the catcher, not here
-    (see :class:`~langres.core.presets._SpendCappedModule`). Declared with a
+    (see :class:`~langres.core.presets._SpendCappedMatcher`). Declared with a
     default empty list so any future raiser is safe even if it never sets it,
     and callers/mypy see the attribute without an ad hoc
     ``# type: ignore[attr-defined]`` at the one call site that populates it.

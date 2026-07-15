@@ -1,6 +1,6 @@
 """``LLMUsage``: the typed token-usage vector for one LLM call (the fact layer).
 
-Judges (``LLMJudge``, ``DSPyJudge``, ``SelectJudge``) previously recorded only
+Judges (``LLMMatcher``, ``DSPyMatcher``, ``SelectMatcher``) previously recorded only
 ``prompt_tokens`` / ``completion_tokens`` into ``PairwiseJudgement.provenance``
 and discarded everything else LiteLLM hands us. This module captures the full
 vector, in the **OpenTelemetry GenAI** vocabulary flattened to snake_case, with

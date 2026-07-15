@@ -42,8 +42,8 @@ flywheel harvest → closed-loop flywheel → person:
 - **`flywheel_threshold_harvest.py`** — the flywheel outlet: logged verdicts +
   human corrections feed `derive_threshold` to re-calibrate a decision threshold.
 - **`flywheel_closed_loop.py`** — the whole loop closed end to end at **$0**:
-  bootstrap → select_for_review → harvest → train a cheap RandomForestJudge student →
-  `CascadeJudge` (cheap everywhere, escalate only the margin) → report. The
+  bootstrap → select_for_review → harvest → train a cheap RandomForestMatcher student →
+  `CascadeMatcher` (cheap everywhere, escalate only the margin) → report. The
   runnable twin of [`docs/GETTING_STARTED.md`](../docs/GETTING_STARTED.md)
   (needs the `[trained]` extra).
 - **`person_resolution.py`** — the embeddings + LLM "strong path" on a second
@@ -77,22 +77,22 @@ each script's docstring before running it. Companion `*_results*.json` /
   against in-scope gold with no new LLM calls.
 - **`m3_report.py`** — renders the M3 race comparison table from committed
   per-cell JSON results.
-- **`m4_dspy_judge.py`** — M4 `DSPyJudge` smoke: Signature → ChainOfThought →
+- **`m4_dspy_judge.py`** — M4 `DSPyMatcher` smoke: Signature → ChainOfThought →
   compile → forward → eval → save/load, at $0 with `DummyLM`.
 - **`m4_calibration.py`** — a data-driven threshold beats a hand-set one on AG, at $0.
 - **`m4_experiment_loop.py`** — the DSPy-judge experimentation DX loop, end-to-end at $0.
 - **`m4_race.py`** — M4's paid, resumable DSPy-scorer benchmark on Amazon-Google.
 - **`w1_blocking_algebra.py`** — W1.3 blocking-algebra + clusterer benchmark
   (Fodors-Zagat + Amazon-Google), $0.
-- **`w1_select_judge_benchmark.py`** — W1.1 `SelectJudge` call-count + honest-cost
+- **`w1_select_judge_benchmark.py`** — W1.1 `SelectMatcher` call-count + honest-cost
   reduction benchmark on Amazon-Google.
 - **`w1_trained_family_race.py`** — W1.2 trained-family replication
-  (`FellegiSunterJudge` + `RandomForestJudge`), $0.
+  (`FellegiSunterMatcher` + `RandomForestMatcher`), $0.
 - **`w2_person_benchmark.py`** — M5 W2.1: a second entity type (person)
   resolved config-only, at $0.
 - **`phase1_blocker_optimization.py`** — POC Phase 1: blocker optimization evaluation.
 - **`phase2_full_pipeline.py`** — POC Phase 2: full pipeline evaluation
-  (VectorBlocker → LLMJudge → Clusterer) against the POC success criteria.
+  (VectorBlocker → LLMMatcher → Clusterer) against the POC success criteria.
 - **`deduplication_with_blocker_optimization.py`** — `BlockerOptimizer` +
   Optuna + wandb hyperparameter tuning example (requires Azure/wandb/Langfuse env vars).
 - **`deduplication_cached_faiss_simple.py`** — `DiskCachedEmbedder` speedup

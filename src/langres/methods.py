@@ -13,22 +13,22 @@ dataset.
 The five methods differ **only in the scorer** (the ``module`` slot) — blocking
 is held constant per dataset so the race compares judges, not blockers:
 
-- ``rapidfuzz`` — VectorBlocker -> ``RapidfuzzModule`` (string similarity over the
+- ``rapidfuzz`` — VectorBlocker -> ``RapidfuzzMatcher`` (string similarity over the
   schema's comparable string fields) -> Clusterer.
 - ``weighted_average`` — VectorBlocker -> ``Comparator.from_schema`` ->
-  ``WeightedAverageJudge`` -> Clusterer (generalizes ``build_restaurant_resolver``
+  ``WeightedAverageMatcher`` -> Clusterer (generalizes ``build_restaurant_resolver``
   to an arbitrary schema).
-- ``embedding_cosine`` — VectorBlocker -> ``EmbeddingScoreJudge`` (passes the
+- ``embedding_cosine`` — VectorBlocker -> ``EmbeddingScoreMatcher`` (passes the
   blocker's cosine similarity through) -> Clusterer. No Comparator.
-- ``llm_judge`` — VectorBlocker -> ``LLMJudge`` -> Clusterer. The LLM client is
+- ``llm_judge`` — VectorBlocker -> ``LLMMatcher`` -> Clusterer. The LLM client is
   *injected* (a mock in tests, the real frontier/GLM client in W4); it is never a
   hard import-time requirement.
-- ``cascade`` — VectorBlocker -> ``CascadeModule`` (embedding early-exit, LLM only
+- ``cascade`` — VectorBlocker -> ``CascadeChainMatcher`` (embedding early-exit, LLM only
   on the uncertain band) -> Clusterer. Its OpenAI client is injected the same way.
-- ``dspy_judge`` — VectorBlocker -> ``DSPyJudge`` (a compilable DSPy
+- ``dspy_judge`` — VectorBlocker -> ``DSPyMatcher`` (a compilable DSPy
   ``ChainOfThought``) -> Clusterer (M4). Its injected client is a **DSPy LM**
   (``dspy.LM`` / ``DummyLM``), distinct from the LiteLLM/OpenAI clients above.
-- ``select_judge`` — VectorBlocker -> ``SelectJudge`` (a ComEM-style set-wise
+- ``select_judge`` — VectorBlocker -> ``SelectMatcher`` (a ComEM-style set-wise
   judge: ONE LLM call per anchor group instead of one call per pair) ->
   Clusterer (W1.1). Its injected client is a **DSPy LM**, same shape as
   ``dspy_judge``.
@@ -42,11 +42,11 @@ provide (they rebuild the module fresh, unfit, per grid threshold). Build
 ``evaluate_judge_on_candidates`` instead — see ``docs/EXPERIMENTS.md``.
 
 - ``fellegi_sunter`` — VectorBlocker -> ``Comparator.from_schema`` ->
-  ``FellegiSunterJudge`` -> Clusterer. Learns m/u/prior via EM with **no
+  ``FellegiSunterMatcher`` -> Clusterer. Learns m/u/prior via EM with **no
   labels** (``UnsupervisedFitMixin.fit_unlabeled``, i.e.
   ``resolver.fit(records)``).
 - ``random_forest`` — VectorBlocker -> ``Comparator.from_schema`` ->
-  ``RandomForestJudge`` -> Clusterer. sklearn RandomForest over comparator similarities,
+  ``RandomForestMatcher`` -> Clusterer. sklearn RandomForest over comparator similarities,
   supervised (``SupervisedFitMixin.fit``, i.e.
   ``resolver.fit(records, labels=...)``).
 
@@ -67,8 +67,8 @@ from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.method_registry import get_method
 from langres.core.models import PairwiseJudgement
-from langres.core.module import Module
-from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP
+from langres.core.matcher import Matcher
+from langres.core.matchers.cascade import CASCADE_LLM_DECISION_STEP
 from langres.core.resolver import Resolver
 
 # The canonical method-name tuples live in the import-light ``_method_names``
@@ -115,7 +115,7 @@ def _make_module_builder(
     llm_model: str,
     cascade_low: float,
     cascade_high: float,
-) -> tuple[Callable[[], Module[Any]], Comparator[Any] | None]:
+) -> tuple[Callable[[], Matcher[Any]], Comparator[Any] | None]:
     """Resolve a method name to its (module-builder, comparator) pair.
 
     A thin adapter over the one :mod:`langres.core.method_registry` (the #55
@@ -139,7 +139,7 @@ def _make_module_builder(
         {"cascade_low": cascade_low, "cascade_high": cascade_high} if method == "cascade" else {}
     )
 
-    def build() -> Module[Any]:
+    def build() -> Matcher[Any]:
         return spec.build(
             schema,
             model=llm_model,
@@ -179,7 +179,7 @@ def make_resolver_factory(
             calls ``client.completion(...)`` (LiteLLM-shaped, e.g.
             ``langres.clients.create_llm_client``) while ``cascade`` calls
             ``client.chat.completions.create(...)`` (OpenAI-shaped) — a
-            pre-existing ``CascadeModule`` constraint. W4 must pass a separate
+            pre-existing ``CascadeChainMatcher`` constraint. W4 must pass a separate
             OpenAI-shaped client for ``cascade`` (do not reuse one client for
             both).
         llm_model: Model id for the LLM methods (overridden in W4).
@@ -206,7 +206,7 @@ def make_resolver_factory(
         return Resolver(
             blocker=benchmark.build_blocker(k_neighbors),
             comparator=comparator,
-            module=make_module(),
+            matcher=make_module(),
             clusterer=Clusterer(threshold=threshold),
         )
 

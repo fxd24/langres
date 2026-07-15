@@ -1,10 +1,10 @@
 # Adding a matching method behind the seam
 
 langres' thesis is that a matching method — string similarity, embeddings, an
-LLM judge — is implemented **once** as a judge (a `Module`) and stays
+LLM judge — is implemented **once** as a judge (a `Matcher`) and stays
 usable, swappable, and tunable by everyone through one seam. This guide walks the
 **current in-repo path** for contributing a new method, using the real
-**`SelectJudge`** (the ComEM-style set-wise judge, W1.1) as the worked example.
+**`SelectMatcher`** (the ComEM-style set-wise judge, W1.1) as the worked example.
 
 > **No public plugin API yet.** There is deliberately **no** external/plugin
 > registration entry point today. A new *name-selectable* method must be wired
@@ -13,23 +13,23 @@ usable, swappable, and tunable by everyone through one seam. This guide walks th
 > (see `TODOS.md`). This document is the contract *as it stands* — what a
 > contributor editing the repo does now.
 >
-> **You may not need any of this.** A judge you only ever pass as a `Module`
-> instance — `dedupe(records, judge=MySelectJudge(...))` — needs **zero**
+> **You may not need any of this.** A judge you only ever pass as a `Matcher`
+> instance — `dedupe(records, matcher=MySelectJudge(...))` — needs **zero**
 > registry wiring. The steps below are only for making a method selectable *by
 > name* (`"select_judge"`) across the benchmark harness and the two build paths.
 
 ---
 
-## 1. Write the judge (a `Module`)
+## 1. Write the judge (a `Matcher`)
 
-A judge is a `Module[SchemaT]` whose `forward` yields one `PairwiseJudgement` per
+A judge is a `Matcher[SchemaT]` whose `forward` yields one `PairwiseJudgement` per
 candidate pair. Everything downstream — the `Clusterer`, the metrics harness, the
 `JudgementLog` — consumes that flat pairwise stream, so **whatever shape your
 scoring logic has, the output contract is pairwise**.
 
-`SelectJudge` scores a whole *group* at once, so it subclasses
-`GroupwiseModule` (`src/langres/core/module.py`) rather than `Module` directly.
-`GroupwiseModule` **IS-A** `Module`: its concrete `forward` derives
+`SelectMatcher` scores a whole *group* at once, so it subclasses
+`GroupwiseMatcher` (`src/langres/core/module.py`) rather than `Matcher` directly.
+`GroupwiseMatcher` **IS-A** `Matcher`: its concrete `forward` derives
 `ERCandidateGroup`s from the pairwise stream and dispatches to your
 `forward_groups`, then flattens the result back to pairwise. **Set-wise in,
 pairwise out** — the group structure never leaks past the class boundary, so the
@@ -41,15 +41,15 @@ Resolver spine needs no changes. You implement only `forward_groups` and
 An `ERCandidate` carries an optional `comparison: ComparisonVector`
 (`src/langres/core/models.py`). This is the two-phase pipeline seam:
 
-- **Comparison-aware judges** (e.g. `WeightedAverageJudge`, `RandomForestJudge`,
-  `FellegiSunterJudge`) consume a per-feature `ComparisonVector` that a
+- **Comparison-aware judges** (e.g. `WeightedAverageMatcher`, `RandomForestMatcher`,
+  `FellegiSunterMatcher`) consume a per-feature `ComparisonVector` that a
   `Comparator` stage attaches upstream, and raise if it's `None`. Wire these with
   a `Comparator` (step 3 returns one alongside the module builder).
-- **Self-contained judges** (e.g. `LLMJudge`, `DSPyJudge`, `SelectJudge`) read
+- **Self-contained judges** (e.g. `LLMMatcher`, `DSPyMatcher`, `SelectMatcher`) read
   the raw `left`/`right` entities directly and **ignore** `comparison` — so it
   stays `None` for them, and they need no `Comparator`.
 
-`SelectJudge` is self-contained: it renders each entity to JSON and asks the LLM
+`SelectMatcher` is self-contained: it renders each entity to JSON and asks the LLM
 to select the matching id. So its method-registry entry (step 3) returns
 `(builder, None)` — no comparator.
 
@@ -63,14 +63,14 @@ allowed values live on `PairwiseJudgement` in `src/langres/core/models.py`:
 
 | `score_type` | Meaning | Emitting judge |
 |---|---|---|
-| `heuristic` | string-similarity score | `WeightedAverageJudge`, `RapidfuzzModule` |
-| `sim_cos` | cosine similarity | `EmbeddingScoreJudge` |
-| `prob_llm` | per-pair LLM probability | `DSPyJudge`, `LLMJudge` |
-| `prob_group_llm` | **set-wise** LLM decision decomposed to a pair | `SelectJudge` |
+| `heuristic` | string-similarity score | `WeightedAverageMatcher`, `RapidfuzzMatcher` |
+| `sim_cos` | cosine similarity | `EmbeddingScoreMatcher` |
+| `prob_llm` | per-pair LLM probability | `DSPyMatcher`, `LLMMatcher` |
+| `prob_group_llm` | **set-wise** LLM decision decomposed to a pair | `SelectMatcher` |
 | `calibrated_prob` | calibrated probability | cascade / calibrated modules |
-| `prob_fs` / `prob_rf` | Fellegi-Sunter / random-forest probability | `FellegiSunterJudge`, `RandomForestJudge` |
+| `prob_fs` / `prob_rf` | Fellegi-Sunter / random-forest probability | `FellegiSunterMatcher`, `RandomForestMatcher` |
 
-`SelectJudge` emits `score_type="prob_group_llm"` — a distinct literal precisely
+`SelectMatcher` emits `score_type="prob_group_llm"` — a distinct literal precisely
 because its score comes from a *group* decision (1.0 for the single selected id,
 0.0 for the rest), not an independent per-pair judgement. **If your method scores
 on a genuinely new scale, add a literal here** (and keep the table above in sync).
@@ -87,14 +87,14 @@ convention (`stamp_group_cost` in `src/langres/core/module.py`) avoids that:
   one call);
 - **`provenance["group_end"] = True`** marks the **last** judgement — a boundary
   marker so a consumer draining a lazy group stream (the verbs' spend cap,
-  `_SpendCappedModule`) knows where to stop without peeking past it and
+  `_SpendCappedMatcher`) knows where to stop without peeking past it and
   triggering the next paid call.
 
-`SelectJudge.forward_groups` prices the call from token usage
+`SelectMatcher.forward_groups` prices the call from token usage
 (`tokens / 1000 * price_per_1k_tokens`) and calls `stamp_group_cost(...)`. The
 existing cost aggregators (`benchmark._cost_track`) already read
 `provenance["cost_usd"]`, so a group sums to exactly one call's cost with no
-changes on their end. (`SelectJudge` also degrades gracefully: a malformed,
+changes on their end. (`SelectMatcher` also degrades gracefully: a malformed,
 out-of-group, or over-selecting LLM answer maps the *whole group* to `$0`-scored
 "no match" judgements carrying `provenance["select_error"]` rather than raising
 mid-stream — CEO #12. The call is still billed, so the same cost convention
@@ -116,13 +116,13 @@ builder function + one spec**:
 ```python
 # src/langres/core/method_registry.py
 def _build_select_judge(schema, *, model=None, entity_noun="entity",
-                        client=None, comparator=None) -> Module[Any]:
+                        client=None, comparator=None) -> Matcher[Any]:
     # Lazy import: dspy must stay out of sys.modules unless this method is
     # actually chosen (the registry is eager-imported by langres.core).
-    from langres.core.modules.select_judge import SelectJudge
+    from langres.core.matchers.select_judge import SelectMatcher
 
     resolved_model = model or DEFAULT_OPENROUTER_MODEL
-    judge: SelectJudge[Any] = SelectJudge(lm=client, model=resolved_model)
+    judge: SelectMatcher[Any] = SelectMatcher(lm=client, model=resolved_model)
     judge.price_per_1k_tokens = dspy_price_per_1k(resolved_model)  # honest-cost seam
     return judge
 
@@ -142,7 +142,7 @@ namespacing (model ids keep their slashes in the orthogonal `model=` kwarg).
 Two per-layer *policies* remain separate from registration: the verbs'
 allowlist (`presets._VERB_JUDGE_NAMES` — join it only if the judge is safe
 with no injected client and no fit step) and `from_schema`'s name tuple.
-`SelectJudge` joins neither (it's a benchmark/experiment method that needs an
+`SelectMatcher` joins neither (it's a benchmark/experiment method that needs an
 injected DSPy LM).
 
 Then declare its **membership** in the method tuples at the top of `methods.py`
@@ -167,7 +167,7 @@ Membership placement encodes a real contract:
   `Resolver.fit(...)` instead. Register the spec but leave it out of the race
   tuples.
 
-The `price_per_1k_tokens` assignment is the **honest-cost seam**: `SelectJudge`
+The `price_per_1k_tokens` assignment is the **honest-cost seam**: `SelectMatcher`
 prices each call as `tokens/1000 * price_per_1k_tokens`, defaulting to `$0`. A
 real paid run must pin the price from the OpenRouter table
 (`dspy_price_per_1k(model)` — the registry's DSPy builders do this), or cost
@@ -181,13 +181,13 @@ A judge that goes into a `Resolver` slot must be **serializable without pickle**
 The Resolver's `save`/`load` writes a human-readable `resolver.json` manifest and
 rebuilds every slot from the component registry **by `type_name`** — no code
 execution, no pickle. To participate, a judge provides four things (all visible on
-`SelectJudge` in `src/langres/core/modules/select_judge.py`):
+`SelectMatcher` in `src/langres/core/modules/select_judge.py`):
 
 ```python
 from langres.core.registry import register
 
 @register("select_judge")                       # (1) registry key
-class SelectJudge(GroupwiseModule[SchemaT]):
+class SelectMatcher(GroupwiseMatcher[SchemaT]):
     type_name: ClassVar[str] = "select_judge"    # (2) mirrored as a class attr
 
     @property
@@ -199,7 +199,7 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "SelectJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "SelectMatcher[SchemaT]":
         return cls(                               # (4) rebuild from config alone
             lm=None,                              #     (LM rebuilt lazily)
             model=str(config["model"]),
@@ -214,13 +214,13 @@ Rules the contract enforces:
   **never** the injected LM, an API key, or any live object. `from_config` alone
   must rebuild an equivalent (uncompiled) judge, and it builds its LM lazily on
   first use.
-- **`@register` may be lazy.** `SelectJudge` is registered via
+- **`@register` may be lazy.** `SelectMatcher` is registered via
   `registry._LAZY_COMPONENT_MODULES` so `import langres.core` doesn't import dspy
   (importing dspy opens a disk cache). `get_component("select_judge")` imports and
   registers it on demand.
 - **Out-of-band state, if any, is a separate concern.** A judge with tuned state
-  (e.g. `DSPyJudge`'s compiled program) implements `save_state`/`load_state` and
-  the Resolver writes a per-slot sidecar. `SelectJudge` has **none** —
+  (e.g. `DSPyMatcher`'s compiled program) implements `save_state`/`load_state` and
+  the Resolver writes a per-slot sidecar. `SelectMatcher` has **none** —
   `from_config` fully rebuilds it, like any stateless judge.
 
 ### A fresh-process round-trip is REQUIRED
@@ -250,13 +250,13 @@ companion tests — mirror both for your judge:
 ## 5. Test expectations
 
 - **100% coverage** (a POC requirement). Cover the happy path, every
-  `score_type` branch, and every error branch (for `SelectJudge`: parse failure,
+  `score_type` branch, and every error branch (for `SelectMatcher`: parse failure,
   unknown-id, over-selection — each maps a whole group to `select_error` without
   raising).
 - **LLM paths run on `DummyLM` — $0, offline, deterministic.** Never make a real
   call in a test. Build the judge with `lm=DummyLM([...canned answers...])`; the
   answer dict is keyed by the DSPy signature's output field names (for
-  `SelectJudge`: `{"reasoning": ..., "selected_ids": '["b"]'}`). See
+  `SelectMatcher`: `{"reasoning": ..., "selected_ids": '["b"]'}`). See
   [`docs/TESTING_AT_ZERO_COST.md`](TESTING_AT_ZERO_COST.md) and
   `tests/core/modules/test_select_judge.py` (DummyLM-driven throughout).
 - **Verify the cost convention.** Assert the full cost lands on the first
@@ -269,7 +269,7 @@ companion tests — mirror both for your judge:
 
 ## Checklist
 
-- [ ] Judge is a `Module` (or `GroupwiseModule`) yielding `PairwiseJudgement`s.
+- [ ] Judge is a `Matcher` (or `GroupwiseMatcher`) yielding `PairwiseJudgement`s.
 - [ ] Correct `score_type` (add a literal to `models.py` if genuinely new).
 - [ ] Set-wise judges apply the group-call cost convention (`stamp_group_cost`).
 - [ ] Honest-cost seam wired (`price_per_1k_tokens` pinned for paid runs).

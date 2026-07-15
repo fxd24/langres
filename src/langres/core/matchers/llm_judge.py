@@ -1,4 +1,4 @@
-"""LLMJudge: serializable LLM-based entity-matching Module.
+"""LLMMatcher: serializable LLM-based entity-matching Matcher.
 
 This module uses OpenAI API (or compatible) for match judgments with natural
 language reasoning and calibrated probability scores.
@@ -26,7 +26,7 @@ except ImportError:
 
 from langres.clients.openrouter import parse_openrouter_billing
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import current_run
@@ -71,12 +71,12 @@ def render_default_prompt(entity_noun: str = "entity") -> str:
 
 
 class LLMParseError(ValueError):
-    """Raised by :class:`LLMJudge` when ``on_parse_error='raise'`` and the
+    """Raised by :class:`LLMMatcher` when ``on_parse_error='raise'`` and the
     configured ``response_parser`` could not parse a score from a response."""
 
 
 class ParsedVerdict(BaseModel):
-    """The output of an :class:`LLMJudge` ``response_parser``.
+    """The output of an :class:`LLMMatcher` ``response_parser``.
 
     A parser returns EITHER a ``decision`` (the binary yes/no family) XOR a
     ``score`` (the rating family) — never both:
@@ -134,7 +134,7 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
     ``"yes" in text`` maps to ``True`` (MATCH) else ``False``. ``langres.data.
     peeters.parse_binary_answer`` is a thin ``int`` adapter over this function;
     there is only one code path so the ``$0`` offline replay validates the exact
-    parser the paid ``LLMJudge(response_parser=...)`` run will use.
+    parser the paid ``LLMMatcher(response_parser=...)`` run will use.
 
     Fidelity to the reference beats cleverness, so the crudeness is preserved on
     purpose:
@@ -160,7 +160,7 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
 
 #: Below this combined yes+no probability mass, a first-token credence is refused
 #: (``p_yes=None``) rather than manufactured from noise — see
-#: :meth:`LLMJudge._confidence_from_response`.
+#: :meth:`LLMMatcher._confidence_from_response`.
 _CONFIDENCE_MASS_FLOOR = 1e-9
 
 
@@ -186,9 +186,9 @@ def default_record_serializer(entity: Any) -> str:
 
 
 #: Named ``response_parser`` registry: these names are accepted anywhere a
-#: parser is (``LLMJudge(response_parser=...)``, the verbs' / ``from_schema``'s
-#: ``judge="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
-#: in :attr:`LLMJudge.config`, so a saved paper-replication judge reloads with
+#: parser is (``LLMMatcher(response_parser=...)``, the verbs' / ``from_schema``'s
+#: ``matcher="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
+#: in :attr:`LLMMatcher.config`, so a saved paper-replication judge reloads with
 #: its parser intact (the model-identity design note's round-trip fix).
 #: Adding an entry makes that name resolvable and serializable in-process.
 RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
@@ -197,7 +197,7 @@ RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
 }
 
 #: Named ``record_serializer`` registry -- same contract as
-#: :data:`RESPONSE_PARSERS` (names serialize in :attr:`LLMJudge.config`;
+#: :data:`RESPONSE_PARSERS` (names serialize in :attr:`LLMMatcher.config`;
 #: custom callables do not).
 RECORD_SERIALIZERS: dict[str, Callable[[Any], str]] = {
     "json": default_record_serializer,
@@ -214,7 +214,7 @@ def _resolve_named(
     """Resolve a parser/serializer given by name, callable, or ``None``.
 
     Returns ``(callable, name)`` where ``name`` is the registered name to
-    serialize in :attr:`LLMJudge.config` -- ``None`` for a custom callable that
+    serialize in :attr:`LLMMatcher.config` -- ``None`` for a custom callable that
     is not in ``registry`` (documented as non-serializable: it reverts to the
     default on load).
 
@@ -331,7 +331,7 @@ class _RateLimiter:
 
 
 @register("llm_judge")
-class LLMJudge(Module[SchemaT]):
+class LLMMatcher(Matcher[SchemaT]):
     """Schema-agnostic LLM-based matching module using LiteLLM.
 
     This module uses an LLM to make match judgments with natural language
@@ -355,7 +355,7 @@ class LLMJudge(Module[SchemaT]):
 
     Example:
         # Happy path: build the client from environment.
-        module = LLMJudge.from_env(model="gpt-5-mini")
+        module = LLMMatcher.from_env(model="gpt-5-mini")
 
         for judgement in module.forward(candidates):
             print(f"{judgement.left_id} vs {judgement.right_id}: {judgement.score}")
@@ -366,7 +366,7 @@ class LLMJudge(Module[SchemaT]):
         # Escape hatch: inject a pre-configured client (e.g. in tests).
         from langres.clients import create_llm_client, Settings
 
-        module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
+        module = LLMMatcher(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
         Defaults to ``gpt-5-mini`` at ``temperature=0.0`` (deterministic, the ER
@@ -404,7 +404,7 @@ class LLMJudge(Module[SchemaT]):
         on_parse_error: Literal["abstain", "raise"] = "abstain",
         confidence: Literal["none", "logprob"] = "none",
     ):
-        """Initialize LLMJudge.
+        """Initialize LLMMatcher.
 
         Args:
             client: Optional pre-configured LLM client (LiteLLM or OpenAI
@@ -415,7 +415,7 @@ class LLMJudge(Module[SchemaT]):
             model: Model name (e.g., "gpt-5-mini", "azure/gpt-5-mini")
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random).
                 Defaults to ``0.0`` — ER papers score at temperature 0 for
-                reproducibility, and the sibling ``DSPyJudge`` already defaults
+                reproducibility, and the sibling ``DSPyMatcher`` already defaults
                 to 0.0 (this makes 0.0 the house default for the judge family).
             prompt_template: Custom prompt template. Must contain both ``{left}``
                 and ``{right}`` placeholders (the two records are substituted in
@@ -514,8 +514,8 @@ class LLMJudge(Module[SchemaT]):
         cls,
         model: str = "gpt-5-mini",
         **kwargs: Any,
-    ) -> "LLMJudge[SchemaT]":
-        """Build an LLMJudge with a client constructed from the environment.
+    ) -> "LLMMatcher[SchemaT]":
+        """Build an LLMMatcher with a client constructed from the environment.
 
         The documented happy path: reads provider/tracing config from env via
         ``create_llm_client(Settings())``. ``kwargs`` are forwarded to
@@ -564,7 +564,7 @@ class LLMJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "LLMMatcher[SchemaT]":
         """Rebuild from :attr:`config` via the lazy-client path (client from env).
 
         Older artifacts without ``system_prompt`` / ``on_parse_error`` /
@@ -828,7 +828,7 @@ class LLMJudge(Module[SchemaT]):
             from langres.clients import create_llm_client
 
             client = create_llm_client()
-            module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+            module = LLMMatcher(client=client, model="gpt-4o-mini")
 
             # Process 100 candidates with async batching
             candidates = list(blocker.forward(data))
@@ -1200,8 +1200,3 @@ class LLMJudge(Module[SchemaT]):
             ScoreInspectionReport with statistics, examples, and recommendations
         """
         return _inspect_scores_impl(judgements, sample_size)
-
-
-# Backward-compatible public alias. ``LLMJudge`` is the public name; existing
-# imports of ``LLMJudgeModule`` keep working.
-LLMJudgeModule = LLMJudge

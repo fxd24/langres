@@ -2,7 +2,7 @@
 
 Covers:
 - Import sanity
-- isinstance checks against Blocker and Module ABCs
+- isinstance checks against Blocker and Matcher ABCs
 - NotImplementedError for all four abstract methods
 - Config round-trip (GLinkerConfig -> dict -> GLinkerAdapter)
 - Default config instantiation
@@ -13,7 +13,7 @@ import pytest
 
 from langres.core.adapters.glinker import GLinkerAdapter, GLinkerConfig
 from langres.core.blocker import Blocker
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.registry import get_component
 
 
@@ -31,14 +31,14 @@ class TestGLinkerIsInstanceChecks:
         assert isinstance(adapter, Blocker)
 
     def test_is_instance_of_module(self) -> None:
-        """GLinkerAdapter satisfies isinstance(adapter, Module)."""
+        """GLinkerAdapter satisfies isinstance(adapter, Matcher)."""
         adapter = GLinkerAdapter()
-        assert isinstance(adapter, Module)
+        assert isinstance(adapter, Matcher)
 
     def test_is_both_blocker_and_module(self) -> None:
         """GLinkerAdapter satisfies both ABC checks simultaneously."""
         adapter = GLinkerAdapter()
-        assert isinstance(adapter, Blocker) and isinstance(adapter, Module)
+        assert isinstance(adapter, Blocker) and isinstance(adapter, Matcher)
 
 
 class TestGLinkerNotImplementedMethods:

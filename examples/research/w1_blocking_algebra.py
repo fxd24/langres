@@ -1,7 +1,7 @@
 """W1.3 blocking-algebra + clusterer benchmark (Fodors-Zagat + Amazon-Google).
 
 Zero-spend ($0, no LLM calls anywhere): blocking is KeyBlocker/VectorBlocker,
-scoring is WeightedAverageJudge. Two independent measurements:
+scoring is WeightedAverageMatcher. Two independent measurements:
 
 1. **Composite blocking.** Does UNIONing a cheap, exact-key ``KeyBlocker``
    with each dataset's existing pinned ``VectorBlocker`` improve
@@ -17,7 +17,7 @@ scoring is WeightedAverageJudge. Two independent measurements:
 2. **C6 (CorrelationClusterer) vs the base Clusterer.** Head-to-head BCubed
    P/R/F1 on the SAME blocking + judge pipeline for both -- only the
    clusterer differs -- to isolate the over-merge fix's effect. The threshold
-   (0.80) reuses the value already tuned for WeightedAverageJudge in
+   (0.80) reuses the value already tuned for WeightedAverageMatcher in
    ``examples/research/m3_zero_spend_race_output.md``, so the base-Clusterer row here
    should reproduce those numbers.
 
@@ -37,7 +37,7 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.comparator import Comparator
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import calculate_bcubed_metrics, evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.data import _benchmark_utils as _bu
@@ -57,7 +57,7 @@ from langres.data.er_benchmarks import (
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-# Reused, not re-tuned: the WeightedAverageJudge threshold already established
+# Reused, not re-tuned: the WeightedAverageMatcher threshold already established
 # in examples/research/m3_zero_spend_race_output.md (both FZ and AG).
 THRESHOLD = 0.80
 
@@ -143,12 +143,14 @@ def run_blocking_comparison() -> list[dict[str, Any]]:
 def _judged_candidates(
     blocker: VectorBlocker[Any], corpus: list[Any], schema: type[BaseModel]
 ) -> list[Any]:
-    """Block + attach comparison + score with WeightedAverageJudge (no clustering)."""
+    """Block + attach comparison + score with WeightedAverageMatcher (no clustering)."""
     records = [r.model_dump() for r in corpus]
     candidates = _build_vector_candidates(blocker, corpus, records)
 
     comparator: Comparator[Any] = Comparator.from_schema(schema)
-    judge: WeightedAverageJudge[Any] = WeightedAverageJudge(feature_specs=comparator.feature_specs)
+    judge: WeightedAverageMatcher[Any] = WeightedAverageMatcher(
+        feature_specs=comparator.feature_specs
+    )
 
     compared = [
         c.model_copy(update={"comparison": comparator.compare(c.left, c.right)}) for c in candidates

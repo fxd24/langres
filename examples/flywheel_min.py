@@ -45,7 +45,7 @@ gold = gold_pairs_from_clusters([{"a1", "a2"}, {"g1", "g2"}, {"i1", "i2"}])
 
 # [1] First pass: offline string judge, every call logged (the flywheel inlet).
 log = JudgementLog(WORK / "judgements.jsonl")
-first = dedupe(records, judge="string", log=log)  # threshold=None -> 0.5 default
+first = dedupe(records, matcher="string", log=log)  # threshold=None -> 0.5 default
 rows = log.read()
 print(f"[1] clusters @ {first.threshold}: {sorted(sorted(c) for c in first)}")
 
@@ -83,7 +83,7 @@ tuned = derive_threshold_from_pairs(pairs)
 print(f"[4] harvested {len(pairs)} labeled pairs -> tuned threshold {tuned:.3f}")
 
 # [5] Re-run at the tuned cut: the over-merged clusters split.
-second = dedupe(records, judge="string", threshold=tuned, log=JudgementLog(WORK / "v2.jsonl"))
+second = dedupe(records, matcher="string", threshold=tuned, log=JudgementLog(WORK / "v2.jsonl"))
 print(f"[5] clusters @ {second.threshold:.3f}: {sorted(sorted(c) for c in second)}")
 
 # [6] Grade both passes against gold at $0 and write the HTML tearsheet.

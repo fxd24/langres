@@ -12,7 +12,7 @@ you can swap, tune, and evaluate independently.
 ```python
 import langres
 
-clusters = langres.dedupe(records)  # judge="auto" picks the best available judge
+clusters = langres.dedupe(records)  # matcher="auto" picks the best available judge
 ```
 
 Install from PyPI:

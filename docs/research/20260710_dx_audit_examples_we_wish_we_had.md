@@ -29,7 +29,7 @@ reading the named file — none is inferred from a name.*
 The other 1,646 are paper-fidelity plumbing: regenerating the pair set, fetching
 and diffing the authors' archived answers, the cost ledger, the resume store, the
 CLI, the dry-run estimator. And the twelve that *are* langres reach for
-`LLMJudge` and `classify_pairs` **directly** — never `link()`, `dedupe()`,
+`LLMMatcher` and `classify_pairs` **directly** — never `link()`, `dedupe()`,
 `Resolver`, or `evaluate()`.
 
 > When we did real ER research with our own framework, we bypassed our own
@@ -57,7 +57,7 @@ tutorial.
 | genuinely tutorial-shaped | **2** | **96** | `quickstart_verbs.py` (58), `judgement_log_demo.py` (38) |
 
 `examples/quickstart_verbs.py` is **good** — 58 lines, runs offline, and is
-honest about `judge="auto"` failing loudly instead of silently falling back to
+honest about `matcher="auto"` failing loudly instead of silently falling back to
 fuzzy matching. It is one file in fifty. Nobody tells the reader which fifty.
 
 `docs/GETTING_STARTED.md` is also good, and points at a "runnable twin" —
@@ -135,7 +135,7 @@ computed its metrics through `classify_pairs` by hand.
 
 ### G4 — langres ships no test double
 
-`docs/TESTING_AT_ZERO_COST.md` documents the `judge=<Module instance>` escape
+`docs/TESTING_AT_ZERO_COST.md` documents the `matcher=<Matcher instance>` escape
 hatch, but the fake it recommends is **DSPy's `DummyLM`** — so trying langres for
 free requires the `[llm]` extra and an eager `import dspy` (disk cache, sqlite).
 
@@ -147,7 +147,7 @@ calls, no embeddings, no infra" is currently something the user must build.
 
 ### G5 (already filed) — the verbs cannot express "use this prompt"
 
-`judge="auto"` and `judge="zero_shot_llm"` both build a `DSPyJudge`. `LLMJudge` —
+`matcher="auto"` and `matcher="zero_shot_llm"` both build a `DSPyMatcher`. `LLMMatcher` —
 the only class with a prompt seam — is unreachable by name from `link()`,
 `dedupe()`, or `Resolver.from_schema()`. Tracked as **#103**.
 
@@ -210,7 +210,7 @@ records = [
     {"id": "3", "name": "Unrelated Bakery", "city": "Miami"},
 ]
 
-for cluster in dedupe(records, judge="string", threshold=0.6):
+for cluster in dedupe(records, matcher="string", threshold=0.6):
     print(sorted(cluster))
 ```
 
@@ -221,7 +221,7 @@ explainer. It needs to become the front door, not file 7 of 50.
 
 ```python
 """Score any prompt on a benchmark: how good, and at what price?"""
-from langres.core import LLMJudge
+from langres.core import LLMMatcher
 from langres.eval import evaluate, get_benchmark
 
 PAPER_PROMPT = (
@@ -234,7 +234,7 @@ bench = get_benchmark("abt_buy")
 candidates, gold = bench.candidates(split="test")   # BLOCKED (G2): no public seam.
                                                     # portfolio_race.py:208 uses resolver._candidates()
 
-judge = LLMJudge(
+judge = LLMMatcher(
     model="openrouter/openai/gpt-4o-mini-2024-07-18",
     prompt_template=PAPER_PROMPT,        # ✓ landed in #102
     response_parser="binary_yes_no",     # ✓ landed in #102
@@ -270,7 +270,7 @@ report = evaluate(judge, candidates, gold, threshold=0.5)
 
 ```python
 """Cut cost without losing F1: review the margin, train a student, cascade."""
-from langres.core import CascadeJudge
+from langres.core import CascadeMatcher
 from langres.core.review import select_for_review
 from langres.core.harvest import harvest_labeled_pairs, derive_threshold_from_pairs
 
@@ -278,7 +278,7 @@ margin = select_for_review(judgements, n=50)        # the uncertain band
 pairs  = harvest_labeled_pairs("corrections.jsonl") # what the human fixed
 tau    = derive_threshold_from_pairs(pairs)         # kills the magic constant
 
-cheap = CascadeJudge(student=student, teacher=judge, band=(0.2, 0.8))
+cheap = CascadeMatcher(student=student, teacher=judge, band=(0.2, 0.8))
 report = evaluate(cheap, candidates, gold, threshold=tau)
 print(f"F1 {report.f1:.2f} at ${report.cost_usd:.4f} — was ${baseline.cost_usd:.4f}")
 ```
@@ -293,7 +293,7 @@ differentiator and there is no short example of it — only the 791-line
 
 Curated examples run on **every PR**, and they run **fully mocked**:
 
-- **no real LLM calls** — a `langres.testing` double in the `judge=` slot (G4),
+- **no real LLM calls** — a `langres.testing` double in the `matcher=` slot (G4),
   never a live client, never a key. `env -u OPENROUTER_API_KEY` does **not**
   make a process keyless (litellm's import-time `load_dotenv()` walks up the
   tree); injection is the only real guarantee.
@@ -321,7 +321,7 @@ deletes.
 | **B** | `CostTrack` carries the `LLMUsage` token vector + `cost_is_real`; `evaluate()` accepts a `runner`/`budget_usd` so the one-liner cannot spend unbounded | G1 → example 02 & 03 |
 | **B** | `evaluate()` accepts a fixed `threshold=`; when it sweeps, say so and warn that `best_threshold` is fitted to the labels being reported | G3 |
 | **B** | public `bench.candidates(split=…)` seam; re-export `gold_pairs_from_clusters` | G2 → kills `resolver._candidates()` |
-| **C** | `judge="prompt_llm"` preset reaching `LLMJudge` | G5 (#103) |
+| **C** | `matcher="prompt_llm"` preset reaching `LLMMatcher` | G5 (#103) |
 
 The sharpest single line item is **`evaluate()` has no spend cap**. Everything else
 degrades an experiment; that one bills for it.

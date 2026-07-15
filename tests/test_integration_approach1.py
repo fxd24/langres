@@ -2,7 +2,7 @@ r"""End-to-end integration test for Approach 1: Classical String Matching.
 
 This test validates the complete pipeline:
 1. AllPairsBlocker generates candidates
-2. RapidfuzzModule scores pairs
+2. RapidfuzzMatcher scores pairs
 3. Clusterer forms clusters
 4. BCubed F1 >= 0.70 (POC success criterion)
 """
@@ -13,7 +13,7 @@ from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.metrics import calculate_bcubed_metrics
 from langres.core.models import CompanySchema
-from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ def test_approach1_end_to_end_pipeline():
     blocker = AllPairsBlocker(schema_factory=company_factory)
     candidates = blocker.stream(COMPANY_RECORDS)
 
-    # 3. RapidfuzzModule: Score pairs with weighted field similarity
-    module = RapidfuzzModule(
+    # 3. RapidfuzzMatcher: Score pairs with weighted field similarity
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.6),
             "address": (lambda x: x.address or "", 0.2),
@@ -94,8 +94,8 @@ def test_approach1_pipeline_components():
     candidates = list(blocker.stream(data))
     assert len(candidates) == 3  # C(3,2) = 3 pairs
 
-    # 2. Module scores pairs
-    module = RapidfuzzModule(
+    # 2. Matcher scores pairs
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.7),
             "address": (lambda x: x.address or "", 0.3),
@@ -128,7 +128,7 @@ def test_approach1_perfect_matches():
     ]
 
     blocker = AllPairsBlocker(schema_factory=company_factory)
-    module = RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
+    module = RapidfuzzMatcher(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
     clusterer = Clusterer(threshold=0.9)
 
     candidates = blocker.stream(data)
@@ -154,7 +154,7 @@ def test_approach1_no_matches():
     ]
 
     blocker = AllPairsBlocker(schema_factory=company_factory)
-    module = RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
+    module = RapidfuzzMatcher(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=0.5)
     clusterer = Clusterer(threshold=0.7)
 
     candidates = blocker.stream(data)

@@ -1,4 +1,4 @@
-"""RandomForestJudge: sklearn RandomForest over ComparisonVector.similarities (W1.2, S2).
+"""RandomForestMatcher: sklearn RandomForest over ComparisonVector.similarities (W1.2, S2).
 
 Magellan-style supervised judge (``SupervisedFitMixin.fit(candidates,
 labels)``): a feature vector per candidate (one entry per declared
@@ -17,7 +17,7 @@ and average class probabilities (exactly what
 ``RandomForestClassifier.predict_proba`` does internally) without ever
 reconstructing a real sklearn estimator object. Persisted behind
 :class:`~langres.core.serialization.SerializableState` (a ``forest.json``
-sidecar, like ``DSPyJudge``'s ``program.json``) with an sklearn-version guard
+sidecar, like ``DSPyMatcher``'s ``program.json``) with an sklearn-version guard
 on load.
 """
 
@@ -32,7 +32,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from langres.core.feature import ComparisonVector, FeatureSpec
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
@@ -55,8 +55,8 @@ class _ForestState:
     """Inference-only representation of a fitted forest: plain per-tree arrays.
 
     Deliberately NOT an sklearn estimator -- this is the one canonical
-    representation used both right after :meth:`RandomForestJudge.fit` and after a
-    :meth:`RandomForestJudge.load_state`, so a freshly-fit judge and a reloaded judge
+    representation used both right after :meth:`RandomForestMatcher.fit` and after a
+    :meth:`RandomForestMatcher.load_state`, so a freshly-fit judge and a reloaded judge
     score identically.
     """
 
@@ -121,7 +121,7 @@ def _check_sklearn_version_guard(saved_version: str) -> None:
     current_major_minor = ".".join(current_version.split(".")[:2])
     if saved_major_minor != current_major_minor:
         raise ValueError(
-            f"RandomForestJudge artifact was fit with scikit-learn {saved_version}, but the "
+            f"RandomForestMatcher artifact was fit with scikit-learn {saved_version}, but the "
             f"current environment has scikit-learn {current_version}. Refusing to "
             "load a forest artifact across a scikit-learn minor-version boundary "
             "— re-fit the judge in this environment, or install "
@@ -130,7 +130,7 @@ def _check_sklearn_version_guard(saved_version: str) -> None:
 
 
 @register("random_forest")
-class RandomForestJudge(Module[SchemaT]):
+class RandomForestMatcher(Matcher[SchemaT]):
     """Supervised sklearn RandomForest judge over declared comparator features."""
 
     type_name: ClassVar[str] = "random_forest"
@@ -143,12 +143,12 @@ class RandomForestJudge(Module[SchemaT]):
         max_depth: int | None = None,
         random_state: int = 0,
     ) -> None:
-        """Initialize an (unfit) RandomForestJudge.
+        """Initialize an (unfit) RandomForestMatcher.
 
         Args:
             feature_specs: The features to build the sklearn feature vector
                 from, in order. Should match the pipeline's Comparator
-                features (mirrors ``WeightedAverageJudge``).
+                features (mirrors ``WeightedAverageMatcher``).
             n_estimators: Number of trees in the forest.
             max_depth: Maximum tree depth (``None`` = unbounded, sklearn's
                 default).
@@ -164,7 +164,7 @@ class RandomForestJudge(Module[SchemaT]):
         vector: ComparisonVector | None = candidate.comparison
         if vector is None:
             raise ValueError(
-                "RandomForestJudge requires candidates carrying a comparison vector — add "
+                "RandomForestMatcher requires candidates carrying a comparison vector — add "
                 "a Comparator to the pipeline."
             )
         return [
@@ -191,7 +191,7 @@ class RandomForestJudge(Module[SchemaT]):
         materialized = list(candidates)
         if len(materialized) != len(labels):
             raise ValueError(
-                f"RandomForestJudge.fit received {len(materialized)} candidates but "
+                f"RandomForestMatcher.fit received {len(materialized)} candidates but "
                 f"{len(labels)} labels — they must be positionally aligned "
                 "and equal length."
             )
@@ -207,7 +207,7 @@ class RandomForestJudge(Module[SchemaT]):
         self._forest_state = _extract_forest_state(clf)
 
     # ------------------------------------------------------------------
-    # Scoring (Module)
+    # Scoring (Matcher)
     # ------------------------------------------------------------------
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
@@ -222,7 +222,7 @@ class RandomForestJudge(Module[SchemaT]):
         """
         if self._forest_state is None:
             raise ValueError(
-                "RandomForestJudge must be fit before forward(): call fit(candidates, "
+                "RandomForestMatcher must be fit before forward(): call fit(candidates, "
                 "labels) directly, or resolver.fit(records, labels=...) on a "
                 "Resolver whose module is this judge."
             )
@@ -241,7 +241,7 @@ class RandomForestJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
     # ------------------------------------------------------------------
@@ -259,7 +259,7 @@ class RandomForestJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "RandomForestJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "RandomForestMatcher[SchemaT]":
         """Reconstruct a fresh, UNFIT judge from :attr:`config`."""
         specs = [
             FeatureSpec.model_validate(s) for s in cast("list[object]", config["feature_specs"])
@@ -275,7 +275,7 @@ class RandomForestJudge(Module[SchemaT]):
         """Persist the fitted forest as plain per-tree JSON arrays.
 
         Writes nothing when the judge has never been fit (mirrors
-        ``DSPyJudge``'s "nothing to save" behavior for an uncompiled judge) —
+        ``DSPyMatcher``'s "nothing to save" behavior for an uncompiled judge) —
         the Resolver drops an empty sidecar directory.
         """
         if self._forest_state is None:

@@ -23,7 +23,7 @@ Two surfaces, mirroring ``docs/EXPERIMENTS.md``:
   budget=0.0)`` on every loadable benchmark, printed as one
   :meth:`~langres.core.benchmark.BenchmarkTable.to_markdown` table. Non-loadable
   entries (``opensanctions``: CC-BY-NC, never vendored) are skipped with a note.
-- **Paid LLM row (``--paid``, OFF by default).** A zero-shot ``LLMJudge`` graded
+- **Paid LLM row (``--paid``, OFF by default).** A zero-shot ``LLMMatcher`` graded
   **judged-once** via :func:`~langres.core.benchmark.evaluate_judge_on_candidates`
   under a :class:`~langres.core.benchmark.BudgetedModuleRunner` pre-flight cap, all
   metered by one :class:`~langres.clients.openrouter.SpendMonitor`. Judged once —
@@ -157,7 +157,7 @@ def race_paid_llm(
     """Grade a zero-shot LLM judge, judged once, on each benchmark under one budget.
 
     For each benchmark the test split is blocked once into a fixed candidate set,
-    then an ``LLMJudge`` is graded pairwise via
+    then an ``LLMMatcher`` is graded pairwise via
     :func:`~langres.core.benchmark.evaluate_judge_on_candidates` under a
     :class:`~langres.core.benchmark.BudgetedModuleRunner` whose hard cap is the
     budget *still remaining* (never a fresh floored allowance), so cumulative spend
@@ -280,7 +280,7 @@ def main() -> int:
     parser.add_argument(
         "--paid",
         action="store_true",
-        help="Also grade a zero-shot LLMJudge (needs OPENROUTER_API_KEY; costs money).",
+        help="Also grade a zero-shot LLMMatcher (needs OPENROUTER_API_KEY; costs money).",
     )
     parser.add_argument(
         "--model", default=DEFAULT_LLM_MODEL, help="Priced OpenRouter model for the --paid row."

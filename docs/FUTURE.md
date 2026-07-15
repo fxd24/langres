@@ -274,13 +274,13 @@ Wait for user feedback - many users prefer exporting to pandas and using their o
 
 ### Motivation
 
-Users may want unified diagnostics across Blocker + Module + Clusterer.
+Users may want unified diagnostics across Blocker + Matcher + Clusterer.
 
 **Example**:
 ```python
 # Current (POC): Component-level diagnostics
 blocker_diag = blocker_report.diagnose(...)
-module_diag = module_report.diagnose(...)  # When Module.evaluate() exists
+module_diag = module_report.diagnose(...)  # When Matcher.evaluate() exists
 cluster_diag = clusterer_report.diagnose(...)
 
 # Future: Pipeline-level diagnostics
@@ -295,14 +295,14 @@ pipeline_diag = pipeline.diagnose(
 pipeline_diag.trace_failure(entity_id="E123")
 # Shows:
 # 1. Blocker: Found 20 candidates (ranked #5, score 0.85)
-# 2. Module: Scored 0.65 (below 0.7 threshold)
+# 2. Matcher: Scored 0.65 (below 0.7 threshold)
 # 3. Clusterer: Not merged (threshold 0.7)
 ```
 
 ### Recommendation
 
 **Defer until post-POC**. Current `PipelineDebugger` serves this purpose. Re-evaluate once:
-- Module.evaluate() exists
+- Matcher.evaluate() exists
 - Clusterer returns Pydantic reports
 - Users report needing pipeline-level tracing
 

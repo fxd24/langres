@@ -1,7 +1,7 @@
-"""Zero-spend tests for DSPyJudge (the M4 learnable scorer seam).
+"""Zero-spend tests for DSPyMatcher (the M4 learnable scorer seam).
 
 Every test runs at $0 with DSPy's ``DummyLM`` — no network, no key. They cover
-the serializable-Module contract (forward shape, honest cost, parse-failure
+the serializable-Matcher contract (forward shape, honest cost, parse-failure
 guard, lazy LM, global-state isolation), compilation (``BootstrapFewShot``
 populates demos), state round-trips (``save_state``/``load_state`` and a full
 fresh-process ``Resolver`` round-trip for both compiled and uncompiled judges),
@@ -19,8 +19,8 @@ from dspy.utils.dummies import DummyLM
 
 from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.dspy_judge import (
-    DSPyJudge,
+from langres.core.matchers.dspy_judge import (
+    DSPyMatcher,
     _clamp01,
     _pair_metric,
     _salvage_usage,
@@ -42,8 +42,8 @@ def _candidate(left_id: str = "l1", right_id: str = "r1") -> ERCandidate[Company
     )
 
 
-def _dummy_judge(answers: list[dict[str, str]] | None = None) -> DSPyJudge[CompanySchema]:
-    return DSPyJudge(lm=DummyLM(answers or _answers(10)), entity_noun="company")
+def _dummy_judge(answers: list[dict[str, str]] | None = None) -> DSPyMatcher[CompanySchema]:
+    return DSPyMatcher(lm=DummyLM(answers or _answers(10)), entity_noun="company")
 
 
 # ---------------------------------------------------------------------------
@@ -53,13 +53,13 @@ def _dummy_judge(answers: list[dict[str, str]] | None = None) -> DSPyJudge[Compa
 
 def test_registered_under_dspy_judge_via_lazy_lookup() -> None:
     """``get_component('dspy_judge')`` lazily imports+registers the class."""
-    assert get_component("dspy_judge") is DSPyJudge
-    assert DSPyJudge.type_name == "dspy_judge"
+    assert get_component("dspy_judge") is DSPyMatcher
+    assert DSPyMatcher.type_name == "dspy_judge"
 
 
 def test_config_is_pure_and_excludes_lm_and_program() -> None:
     """``config`` carries only model/temperature/entity_noun — never the LM/program."""
-    judge = DSPyJudge(lm=DummyLM([]), model="openrouter/z-ai/glm-5.2", entity_noun="product")
+    judge = DSPyMatcher(lm=DummyLM([]), model="openrouter/z-ai/glm-5.2", entity_noun="product")
     config = judge.config
     assert set(config) == {"model", "temperature", "entity_noun"}
     assert config == {
@@ -75,14 +75,14 @@ def test_config_is_pure_and_excludes_lm_and_program() -> None:
 def test_explicit_program_is_used_as_is() -> None:
     """An injected ``program`` is adopted verbatim (no fresh ChainOfThought built)."""
     program = dspy.ChainOfThought("left, right -> match")
-    judge = DSPyJudge(lm=DummyLM([]), program=program)
+    judge = DSPyMatcher(lm=DummyLM([]), program=program)
     assert judge._program is program
 
 
 def test_from_config_builds_fresh_uncompiled_judge() -> None:
     """``from_config`` rebuilds an equivalent judge with a fresh, uncompiled program."""
     original = _dummy_judge()
-    rebuilt = DSPyJudge.from_config(original.config)
+    rebuilt = DSPyMatcher.from_config(original.config)
     assert rebuilt.config == original.config
     assert rebuilt._lm is None  # LM is not persisted — built lazily
     assert rebuilt._compiled is False
@@ -90,7 +90,7 @@ def test_from_config_builds_fresh_uncompiled_judge() -> None:
 
 def test_entity_noun_woven_into_signature_instructions() -> None:
     """The domain noun is substituted into the program's signature instructions."""
-    judge = DSPyJudge(lm=DummyLM([]), entity_noun="restaurant")
+    judge = DSPyMatcher(lm=DummyLM([]), entity_noun="restaurant")
     instructions = judge._program.predict.signature.instructions
     assert "restaurant" in instructions
     assert "{entity_noun}" not in instructions
@@ -172,7 +172,7 @@ def test_forward_parse_failure_emits_abstention_judgement(
 ) -> None:
     """A DSPy parse error emits a Wave-1 abstention — is_abstain, excluded from predicted.
 
-    Regression chain: DSPyJudge first abstained at score=0.5 with NO
+    Regression chain: DSPyMatcher first abstained at score=0.5 with NO
     ``provenance["parse_error"]`` flag (``classify_pairs`` called it a MATCH at
     any threshold <= 0.5), then at score=0.0 with the flag — better, but still
     not the Wave-1 contract: score=0.0 is a *confident non-match*, so
@@ -184,7 +184,7 @@ def test_forward_parse_failure_emits_abstention_judgement(
     flattered), a true negative otherwise, never a match. The oracle below
     asserts those confusion-matrix counts move, not merely that the flag exists.
     """
-    judge = DSPyJudge(lm=DummyLM([{"unexpected": "shape"}]), entity_noun="company")
+    judge = DSPyMatcher(lm=DummyLM([{"unexpected": "shape"}]), entity_noun="company")
     with caplog.at_level(logging.WARNING):
         [judgement] = list(judge.forward(iter([_candidate("x", "y")])))
     # Wave-1 abstain shape: no decision, no score -> is_abstain (score=0.0 would
@@ -220,7 +220,7 @@ def test_get_lm_builds_dspy_lm_lazily(mocker) -> None:  # type: ignore[no-untype
     """With no injected LM, ``_get_lm`` builds a ``dspy.LM(model, cache=False)`` once."""
     sentinel = object()
     build = mocker.patch("dspy.LM", return_value=sentinel)
-    judge: DSPyJudge[CompanySchema] = DSPyJudge(model="openrouter/z-ai/glm-5.2")
+    judge: DSPyMatcher[CompanySchema] = DSPyMatcher(model="openrouter/z-ai/glm-5.2")
     assert judge._lm is None  # not built at construction
     assert judge._get_lm() is sentinel
     assert judge._get_lm() is sentinel  # cached
@@ -230,7 +230,9 @@ def test_get_lm_builds_dspy_lm_lazily(mocker) -> None:  # type: ignore[no-untype
 def test_get_lm_forwards_temperature(mocker) -> None:  # type: ignore[no-untyped-def]
     """A non-default temperature reaches the lazily-constructed ``dspy.LM``."""
     build = mocker.patch("dspy.LM", return_value=object())
-    judge: DSPyJudge[CompanySchema] = DSPyJudge(model="openrouter/z-ai/glm-5.2", temperature=0.7)
+    judge: DSPyMatcher[CompanySchema] = DSPyMatcher(
+        model="openrouter/z-ai/glm-5.2", temperature=0.7
+    )
     judge._get_lm()
     build.assert_called_once_with("openrouter/z-ai/glm-5.2", cache=False, temperature=0.7)
 
@@ -239,7 +241,7 @@ def test_injected_lm_is_used_and_never_rebuilt(mocker) -> None:  # type: ignore[
     """An injected LM wins — ``dspy.LM`` is never constructed."""
     build = mocker.patch("dspy.LM")
     lm = DummyLM([])
-    judge = DSPyJudge(lm=lm)
+    judge = DSPyMatcher(lm=lm)
     assert judge._get_lm() is lm
     build.assert_not_called()
 
@@ -338,7 +340,7 @@ def test_compiled_property_reflects_state_across_build_compile_and_reload(tmp_pa
     assert judge.compiled is True  # compile tunes it
 
     judge.save_state(tmp_path)
-    fresh = DSPyJudge.from_config(judge.config)
+    fresh = DSPyMatcher.from_config(judge.config)
     assert fresh.compiled is False  # a fresh rebuild is uncompiled
     fresh.load_state(tmp_path)
     assert fresh.compiled is True  # the reloaded (compiled) program restores the flag
@@ -478,7 +480,7 @@ def test_save_state_load_state_restores_compiled_program(tmp_path: Path) -> None
     judge.save_state(tmp_path)
     assert (tmp_path / "program.json").exists()
 
-    fresh = DSPyJudge.from_config(judge.config)
+    fresh = DSPyMatcher.from_config(judge.config)
     assert fresh._compiled is False
     fresh.load_state(tmp_path)
     assert fresh._compiled is True  # a loaded program is a tuned program
@@ -498,7 +500,7 @@ def test_save_before_compile_reloads_as_uncompiled(tmp_path: Path) -> None:
     judge.save_state(tmp_path)
     assert (tmp_path / "compiled").read_text() == "false"
 
-    fresh = DSPyJudge.from_config(judge.config)
+    fresh = DSPyMatcher.from_config(judge.config)
     fresh.load_state(tmp_path)
     assert fresh._compiled is False  # stays uncompiled — the marker said so
 
@@ -510,7 +512,7 @@ def test_save_after_compile_reloads_as_compiled(tmp_path: Path) -> None:
     judge.save_state(tmp_path)
     assert (tmp_path / "compiled").read_text() == "true"
 
-    fresh = DSPyJudge.from_config(judge.config)
+    fresh = DSPyMatcher.from_config(judge.config)
     fresh.load_state(tmp_path)
     assert fresh._compiled is True
 
@@ -522,13 +524,13 @@ def test_load_state_without_marker_infers_from_demos(tmp_path: Path) -> None:
     judge.save_state(tmp_path)
     (tmp_path / "compiled").unlink()  # simulate a pre-marker artifact
 
-    fresh = DSPyJudge.from_config(judge.config)
+    fresh = DSPyMatcher.from_config(judge.config)
     fresh.load_state(tmp_path)
     assert fresh._compiled is True  # inferred from the restored demos
 
 
 def test_resolver_with_dspy_judge_saves_and_loads(tmp_path: Path) -> None:
-    """A Resolver with a DSPyJudge in the module slot round-trips in-process."""
+    """A Resolver with a DSPyMatcher in the module slot round-trips in-process."""
     from langres.core import AllPairsBlocker, Clusterer, Resolver
 
     judge = _dummy_judge(_answers(50))
@@ -536,7 +538,7 @@ def test_resolver_with_dspy_judge_saves_and_loads(tmp_path: Path) -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -550,7 +552,7 @@ def test_resolver_with_dspy_judge_saves_and_loads(tmp_path: Path) -> None:
     assert (tmp_path / "module" / "program.json").exists()
 
     reloaded = Resolver.load(tmp_path)
-    assert isinstance(reloaded.module, DSPyJudge)
+    assert isinstance(reloaded.module, DSPyMatcher)
     assert reloaded.module.config == judge.config
     assert reloaded.module._compiled is True
 
@@ -561,7 +563,7 @@ def test_resolver_load_dspy_judge_in_fresh_process(tmp_path: Path, compiled: boo
     """A clean process can ``Resolver.load`` a dspy_judge artifact via ``langres.core`` alone.
 
     Regression for the lazy-registration path: ``@register('dspy_judge')`` only
-    fires when ``langres.core.modules.dspy_judge`` is imported, and ``langres.core``
+    fires when ``langres.core.matchers.dspy_judge`` is imported, and ``langres.core``
     deliberately does NOT import it (that would import ``dspy``). ``get_component``
     imports it on demand, so a fresh process that only does ``from langres.core
     import Resolver`` still resolves the type. Covers both a compiled and an
@@ -575,7 +577,7 @@ def test_resolver_load_dspy_judge_in_fresh_process(tmp_path: Path, compiled: boo
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -587,7 +589,7 @@ def test_resolver_load_dspy_judge_in_fresh_process(tmp_path: Path, compiled: boo
             (
                 "import sys; from langres.core import Resolver; "
                 f"r = Resolver.load(r'{tmp_path}'); "
-                "assert type(r.module).__name__ == 'DSPyJudge'; "
+                "assert type(r.module).__name__ == 'DSPyMatcher'; "
                 "print('OK')"
             ),
         ],

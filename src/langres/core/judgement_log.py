@@ -1,14 +1,14 @@
 """Opt-in JSONL judgement log: the flywheel inlet (harvested by W2.4).
 
-``JudgementLog`` is a small file-backed sink -- it is NOT a ``Module``.
+``JudgementLog`` is a small file-backed sink -- it is NOT a ``Matcher``.
 Wire it via ``log=`` on :func:`langres.link`/:func:`langres.dedupe`; those
-verbs wrap the resolved judge in :class:`LoggingModule` below, which appends
+verbs wrap the resolved judge in :class:`LoggingMatcher` below, which appends
 one JSON line per :class:`~langres.core.models.PairwiseJudgement` **as it
 streams past**. It never buffers or materializes the full judgement stream,
 so laziness and memory behavior are unaffected (Eng finding E10: an explicit
-boundary component wrapping a ``Module``, composed the same way
-:class:`~langres.core.presets._SpendCappedModule` wraps one -- never a
-monkey-patch of ``Module.forward``).
+boundary component wrapping a ``Matcher``, composed the same way
+:class:`~langres.core.presets._SpendCappedMatcher` wraps one -- never a
+monkey-patch of ``Matcher.forward``).
 
 Zero overhead when omitted: ``log=None`` (the default on both verbs) skips
 the wrap entirely -- no file, no extra generator layer, byte-identical to
@@ -30,7 +30,7 @@ to additionally log ``reasoning`` and the judge's raw ``provenance`` dict
 content a judge reasoned over, verbatim -- and JSONL is plaintext on disk.
 
 Serialization: excluded from Resolver artifacts (decided for W0.2, per E10).
-``LoggingModule`` has no registry ``type_name`` and is applied by the verbs
+``LoggingMatcher`` has no registry ``type_name`` and is applied by the verbs
 layer to an already-built ``Resolver.module`` *after* construction -- it is
 never part of a ``resolver.save()``'d pipeline (``link``/``dedupe`` never
 persist their internal resolver). A future milestone can register it if a
@@ -47,11 +47,11 @@ from typing import Any
 
 from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 from langres.core.runs import current_run
 
-__all__ = ["JudgementLog", "LoggingModule"]
+__all__ = ["JudgementLog", "LoggingMatcher"]
 
 #: Schema-version tag written into every line (CEO #15) -- lets a future
 #: harvester (W2.4) or format-migration branch on it instead of guessing.
@@ -72,7 +72,7 @@ _DECISION_CONTRACT_VERSION = 3
 #: Provenance keys carrying a judgement's USD cost, in priority order (first
 #: present wins). Twin of ``benchmark._COST_KEYS`` -- a deliberate local copy, not
 #: an import, to avoid a ``judgement_log`` <- ``benchmark`` cycle (``benchmark``
-#: imports log-adjacent things). ``CascadeModule`` writes cost under
+#: imports log-adjacent things). ``CascadeChainMatcher`` writes cost under
 #: ``llm_cost_usd``, so a plain ``.get("cost_usd")`` would persist 0.0 for every
 #: cascade row.
 _COST_KEYS: tuple[str, ...] = ("cost_usd", "llm_cost_usd")
@@ -82,7 +82,7 @@ def _judgement_cost(judgement: PairwiseJudgement) -> float:
     """Measured USD cost of one judgement from its provenance.
 
     Reads :data:`_COST_KEYS` in order (``"cost_usd"`` first, then
-    ``"llm_cost_usd"`` -- the key ``CascadeModule`` writes). Zero-spend judges
+    ``"llm_cost_usd"`` -- the key ``CascadeChainMatcher`` writes). Zero-spend judges
     set neither, so this returns ``0.0`` for them. Twin of
     ``benchmark._judgement_cost``.
     """
@@ -134,7 +134,7 @@ class JudgementLog:
     def append(
         self, judgement: PairwiseJudgement, *, verdict: bool | None, model: str | None = None
     ) -> None:
-        """Append one JSON line for ``judgement`` (called by :class:`LoggingModule`).
+        """Append one JSON line for ``judgement`` (called by :class:`LoggingMatcher`).
 
         ``verdict`` is the caller's predicted-match decision (see
         :func:`~langres.core.models.predicted_match`); ``None`` records an
@@ -163,7 +163,7 @@ class JudgementLog:
             "confidence": judgement.confidence,
             "confidence_source": judgement.confidence_source,
             "model": judgement.provenance.get("model") or model,
-            # First of _COST_KEYS present wins: CascadeModule logs ``llm_cost_usd``,
+            # First of _COST_KEYS present wins: CascadeChainMatcher logs ``llm_cost_usd``,
             # so a bare ``.get("cost_usd")`` would persist 0.0 for every cascade row.
             "cost_usd": _judgement_cost(judgement),
             # The typed token-usage vector (LLMUsage.model_dump()) when the judge
@@ -202,14 +202,14 @@ class JudgementLog:
         return rows
 
 
-class LoggingModule(Module[Any]):
-    """Boundary component: wraps a scorer ``Module``, logging each judgement as it streams past.
+class LoggingMatcher(Matcher[Any]):
+    """Boundary component: wraps a scorer ``Matcher``, logging each judgement as it streams past.
 
     Deliberately NOT a monkey-patch of ``module.forward`` (E10) -- a small
-    wrapper ``Module`` in the same family as
-    :class:`~langres.core.presets._SpendCappedModule`, composing
-    transparently with any ``Module`` -- including a future
-    ``GroupwiseModule`` (W1.0): both yield ``PairwiseJudgement`` one at a
+    wrapper ``Matcher`` in the same family as
+    :class:`~langres.core.presets._SpendCappedMatcher`, composing
+    transparently with any ``Matcher`` -- including a future
+    ``GroupwiseMatcher`` (W1.0): both yield ``PairwiseJudgement`` one at a
     time, so wrapping and logging is identical either way.
 
     ``verdict`` is computed per judgement from ``threshold`` -- the same
@@ -218,11 +218,11 @@ class LoggingModule(Module[Any]):
     agrees with what the caller acted on.
 
     Wrapping a spend-capped module (e.g.
-    :class:`~langres.core.presets._SpendCappedModule`, as ``link``/``dedupe``
+    :class:`~langres.core.presets._SpendCappedMatcher`, as ``link``/``dedupe``
     do): the judgement that trips the cap is recorded on the raised
     ``BudgetExceeded.partial_judgements`` but never yielded (the cap raises
     *before* yielding it -- E9's "set by the catcher, not at raise time"
-    pattern). A ``LoggingModule`` sitting outside that cap would otherwise
+    pattern). A ``LoggingMatcher`` sitting outside that cap would otherwise
     silently drop exactly the paid call the flywheel most needs. ``forward``
     catches ``BudgetExceeded`` and logs any trailing ``partial_judgements``
     entries not already logged (tracked by count, so nothing is logged
@@ -231,7 +231,7 @@ class LoggingModule(Module[Any]):
 
     def __init__(
         self,
-        module: Module[Any],
+        module: Matcher[Any],
         *,
         log: JudgementLog,
         threshold: float,

@@ -1,4 +1,4 @@
-"""Tests for CascadeModule (hybrid embeddings + LLM with early exit).
+"""Tests for CascadeChainMatcher (hybrid embeddings + LLM with early exit).
 
 This module tests the cascade pattern that optimizes cost while maintaining quality:
 1. Stage 1: Cheap embedding similarity check
@@ -14,21 +14,23 @@ import pytest
 from sentence_transformers import SentenceTransformer
 
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.cascade import CascadeModule
+from langres.core.matchers.cascade import CascadeChainMatcher
 
 logger = logging.getLogger(__name__)
 
-# The direct CascadeModule constructions throughout this file predate its T3
-# deprecation (CascadeJudge is the successor) — silence the intentional
+# The direct CascadeChainMatcher constructions throughout this file predate its T3
+# deprecation (CascadeMatcher is the successor) — silence the intentional
 # DeprecationWarning module-wide so the suite output stays readable.
 # test_cascade_module_init_emits_deprecation_warning still asserts the warning
 # fires: pytest.warns installs its own "always" filter inside the block.
-pytestmark = pytest.mark.filterwarnings("ignore:CascadeModule is deprecated:DeprecationWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:CascadeChainMatcher is deprecated:DeprecationWarning"
+)
 
 
 def test_cascade_module_initialization():
-    """Test CascadeModule initialization with valid parameters."""
-    module = CascadeModule(
+    """Test CascadeChainMatcher initialization with valid parameters."""
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -43,10 +45,10 @@ def test_cascade_module_initialization():
 
 
 def test_cascade_module_requires_valid_thresholds():
-    """Test that CascadeModule validates thresholds."""
+    """Test that CascadeChainMatcher validates thresholds."""
     # low_threshold must be < high_threshold
     with pytest.raises(ValueError, match="low_threshold must be < high_threshold"):
-        CascadeModule(
+        CascadeChainMatcher(
             embedding_model_name="all-MiniLM-L6-v2",
             llm_model="gpt-4o-mini",
             llm_api_key="test_key",
@@ -56,7 +58,7 @@ def test_cascade_module_requires_valid_thresholds():
 
     # Thresholds must be in [0, 1] range
     with pytest.raises(ValueError, match="must be between 0.0 and 1.0"):
-        CascadeModule(
+        CascadeChainMatcher(
             embedding_model_name="all-MiniLM-L6-v2",
             llm_model="gpt-4o-mini",
             llm_api_key="test_key",
@@ -68,7 +70,7 @@ def test_cascade_module_requires_valid_thresholds():
 def test_cascade_module_equal_thresholds_validation():
     """Test that equal thresholds are rejected."""
     with pytest.raises(ValueError, match="low_threshold must be < high_threshold"):
-        CascadeModule(
+        CascadeChainMatcher(
             embedding_model_name="all-MiniLM-L6-v2",
             llm_model="gpt-4o-mini",
             llm_api_key="test_key",
@@ -79,7 +81,7 @@ def test_cascade_module_equal_thresholds_validation():
 
 def test_cascade_module_cosine_similarity_zero_norm_vectors():
     """Test that cosine similarity handles zero-norm vectors without error."""
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -105,7 +107,7 @@ def test_cascade_module_threshold_boundary_conditions(mocker):
     import numpy as np
 
     # Test the _cosine_similarity method directly to understand boundaries
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -129,7 +131,7 @@ def test_cascade_module_threshold_boundary_conditions(mocker):
     ]
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -165,11 +167,11 @@ def test_cascade_module_early_exit_low_similarity(mocker):
     mock_model.encode.return_value = [[0.0, 0.0], [1.0, 1.0]]  # Very different vectors
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -208,11 +210,11 @@ def test_cascade_module_early_exit_high_similarity(mocker):
     mock_model.encode.return_value = [[1.0, 0.0], [1.0, 0.0]]
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -251,7 +253,7 @@ def test_cascade_module_llm_judgment_for_uncertain_cases(mocker):
     mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]  # ~60 degree angle
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -266,9 +268,9 @@ def test_cascade_module_llm_judgment_for_uncertain_cases(mocker):
     mock_client = Mock()
     mock_client.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -302,7 +304,7 @@ def test_cascade_module_llm_judgment_for_uncertain_cases(mocker):
 
 
 def test_cascade_module_processes_multiple_candidates(mocker):
-    """Test CascadeModule handles multiple candidates with different paths."""
+    """Test CascadeChainMatcher handles multiple candidates with different paths."""
     # Mock the embedding model
     mock_model = Mock(spec=SentenceTransformer)
     # Return different similarities for different calls
@@ -317,7 +319,7 @@ def test_cascade_module_processes_multiple_candidates(mocker):
     mock_model.encode.side_effect = embeddings
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -332,9 +334,9 @@ def test_cascade_module_processes_multiple_candidates(mocker):
     mock_client = Mock()
     mock_client.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -392,13 +394,13 @@ def test_cascade_module_tracks_cost_savings():
 
 
 def test_cascade_module_handles_malformed_llm_response(mocker):
-    """Test CascadeModule handles malformed LLM responses gracefully."""
+    """Test CascadeChainMatcher handles malformed LLM responses gracefully."""
     # Mock embedding model for medium similarity
     mock_model = Mock(spec=SentenceTransformer)
     mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -413,9 +415,9 @@ def test_cascade_module_handles_malformed_llm_response(mocker):
     mock_client = Mock()
     mock_client.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -438,13 +440,13 @@ def test_cascade_module_handles_malformed_llm_response(mocker):
 
 
 def test_cascade_module_handles_missing_usage_info(mocker):
-    """Test CascadeModule handles responses without usage info."""
+    """Test CascadeChainMatcher handles responses without usage info."""
     # Mock embedding model for medium similarity
     mock_model = Mock(spec=SentenceTransformer)
     mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -457,9 +459,9 @@ def test_cascade_module_handles_missing_usage_info(mocker):
     mock_client = Mock()
     mock_client.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -479,13 +481,13 @@ def test_cascade_module_handles_missing_usage_info(mocker):
 
 
 def test_cascade_module_uses_custom_prompt_template(mocker):
-    """Test CascadeModule can use custom LLM prompt template."""
+    """Test CascadeChainMatcher can use custom LLM prompt template."""
     # Mock embedding model for medium similarity
     mock_model = Mock(spec=SentenceTransformer)
     mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -500,11 +502,11 @@ def test_cascade_module_uses_custom_prompt_template(mocker):
     mock_client = Mock()
     mock_client.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
     custom_prompt = "Compare:\nA: {left}\nB: {right}\nScore: <0-1>\nReasoning: <text>"
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -525,9 +527,9 @@ def test_cascade_module_uses_custom_prompt_template(mocker):
 
 
 def test_cascade_module_requires_api_key():
-    """Test that CascadeModule raises ValueError if API key is missing."""
+    """Test that CascadeChainMatcher raises ValueError if API key is missing."""
     with pytest.raises(ValueError, match="LLM API key is required"):
-        CascadeModule(
+        CascadeChainMatcher(
             embedding_model_name="all-MiniLM-L6-v2",
             llm_model="gpt-4o-mini",
             llm_api_key="",  # Empty API key
@@ -537,23 +539,23 @@ def test_cascade_module_requires_api_key():
 
 
 def test_cascade_module_init_emits_deprecation_warning():
-    """Direct CascadeModule construction warns, pointing at CascadeJudge (T3).
+    """Direct CascadeChainMatcher construction warns, pointing at CascadeMatcher (T3).
 
     methods.py's own benchmark construction site suppresses this warning
     deliberately — see test_methods.py's
     ``test_cascade_factory_suppresses_cascade_module_deprecation``.
     """
-    with pytest.warns(DeprecationWarning, match="CascadeJudge"):
-        CascadeModule(llm_api_key="test-key")
+    with pytest.warns(DeprecationWarning, match="CascadeMatcher"):
+        CascadeChainMatcher(llm_api_key="test-key")
 
 
 @pytest.mark.slow
 def test_cascade_module_lazy_loads_embedding_model(mocker):
     """Test that embedding model is lazy-loaded on first use."""
     mock_client = Mock()
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -598,7 +600,7 @@ def test_cascade_module_llm_client_reused_across_calls(mocker):
     mock_model.encode.return_value = [[1.0, 0.0], [0.5, 0.866]]  # ~0.5 similarity
 
     mocker.patch(
-        "langres.core.modules.cascade.SentenceTransformer",
+        "langres.core.matchers.cascade.SentenceTransformer",
         return_value=mock_model,
     )
 
@@ -616,9 +618,9 @@ def test_cascade_module_llm_client_reused_across_calls(mocker):
     mock_response.usage.completion_tokens = 20
     mock_client_instance.chat.completions.create.return_value = mock_response
 
-    mocker.patch("langres.core.modules.cascade.OpenAI", mock_openai_class)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", mock_openai_class)
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",
@@ -659,12 +661,12 @@ def test_cascade_module_llm_client_reused_across_calls(mocker):
 def test_cascade_module_cost_uses_litellm_completion_cost(mocker):
     """Cascade reports whatever litellm.completion_cost returns for the LLM call."""
     mock_client = Mock()
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
     completion_cost = mocker.patch(
-        "langres.core.modules.cascade.litellm.completion_cost", return_value=0.036
+        "langres.core.matchers.cascade.litellm.completion_cost", return_value=0.036
     )
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4",
         llm_api_key="test_key",
@@ -702,13 +704,13 @@ def test_cascade_module_cost_uses_litellm_completion_cost(mocker):
 def test_cascade_module_cost_falls_back_to_zero_on_exception(mocker):
     """If litellm.completion_cost raises, Cascade reports 0.0 (never flakes)."""
     mock_client = Mock()
-    mocker.patch("langres.core.modules.cascade.OpenAI", return_value=mock_client)
+    mocker.patch("langres.core.matchers.cascade.OpenAI", return_value=mock_client)
     mocker.patch(
-        "langres.core.modules.cascade.litellm.completion_cost",
+        "langres.core.matchers.cascade.litellm.completion_cost",
         side_effect=Exception("unknown model"),
     )
 
-    module = CascadeModule(
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-5-future",  # Unknown model
         llm_api_key="test_key",
@@ -736,8 +738,8 @@ def test_cascade_module_cost_falls_back_to_zero_on_exception(mocker):
 
 
 def test_cascade_module_inspect_scores():
-    """Test CascadeModule.inspect_scores() delegates to shared implementation."""
-    module = CascadeModule(
+    """Test CascadeChainMatcher.inspect_scores() delegates to shared implementation."""
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",

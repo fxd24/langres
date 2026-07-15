@@ -1,8 +1,8 @@
-"""Tests for RandomForestJudge — a Magellan-style sklearn RandomForest judge (W1.2, S2).
+"""Tests for RandomForestMatcher — a Magellan-style sklearn RandomForest judge (W1.2, S2).
 
-RandomForestJudge is supervised (``SupervisedFitMixin.fit(candidates, labels)``) over the
-same ``ComparisonVector.similarities`` seam as ``WeightedAverageJudge`` and
-``FellegiSunterJudge``. It never pickles/joblib-dumps the fitted sklearn
+RandomForestMatcher is supervised (``SupervisedFitMixin.fit(candidates, labels)``) over the
+same ``ComparisonVector.similarities`` seam as ``WeightedAverageMatcher`` and
+``FellegiSunterMatcher``. It never pickles/joblib-dumps the fitted sklearn
 estimator (a hard requirement — see the branch spec and E7): fit state is
 extracted into a strict, plain-JSON per-tree array representation
 (``children_left``/``children_right``/``feature``/``threshold``/``value``,
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.random_forest_judge import RandomForestJudge
+from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.registry import get_component
 from langres.core.serialization import SerializableState
 
@@ -87,7 +87,7 @@ class TestFit:
     def test_fit_then_forward_separates_matches(self) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=20, n_nonmatches=20)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=20, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -102,14 +102,14 @@ class TestFit:
     def test_fit_raises_on_length_mismatch(self) -> None:
         comparator = _company_comparator()
         candidates, _ = _labeled_dataset(comparator, n_matches=2, n_nonmatches=2)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs
         )
         with pytest.raises(ValueError, match="labels"):
             judge.fit(iter(candidates), [True, False])  # 4 candidates, 2 labels
 
     def test_fit_raises_without_comparison_vector(self) -> None:
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=[FeatureSpec(name="name")]
         )
         bare = _candidate(_company("a", "Acme"), _company("b", "Acme Inc"), comparison=None)
@@ -132,7 +132,7 @@ class TestFit:
                 )
             )
             labels.append(i % 2 == 0)
-        judge: RandomForestJudge[ProductSchema] = RandomForestJudge(
+        judge: RandomForestMatcher[ProductSchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -143,7 +143,7 @@ class TestFit:
         specs = [FeatureSpec(name="name")]
         comparator: StringComparator[CompanySchema] = StringComparator(specs, schema=CompanySchema)
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -154,7 +154,7 @@ class TestFit:
         """A degenerate single-class training set (RF never saw a non-match)."""
         comparator = _company_comparator()
         candidates, _ = _labeled_dataset(comparator, n_matches=6, n_nonmatches=0)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), [True] * 6)
@@ -166,7 +166,7 @@ class TestFit:
         """A degenerate single-class training set (RF never saw a match)."""
         comparator = _company_comparator()
         candidates, _ = _labeled_dataset(comparator, n_matches=0, n_nonmatches=6)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), [False] * 6)
@@ -183,7 +183,7 @@ class TestFit:
             _company("y", "Y"),
             comparison=ComparisonVector(levels={}, similarities={}),
         )
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -198,7 +198,7 @@ class TestFit:
 
 class TestForward:
     def test_forward_raises_before_fit(self) -> None:
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=[FeatureSpec(name="name")]
         )
         candidate = _candidate(
@@ -214,7 +214,7 @@ class TestForward:
     def test_forward_raises_without_comparison_vector(self) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=3, n_nonmatches=3)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -225,7 +225,7 @@ class TestForward:
     def test_forward_left_id_right_id(self) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -237,7 +237,7 @@ class TestForward:
     def test_inspect_scores_delegates_to_shared_util(self) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -253,11 +253,11 @@ class TestForward:
 
 class TestSerialization:
     def test_is_registered_with_type_name(self) -> None:
-        assert get_component("random_forest") is RandomForestJudge
-        assert RandomForestJudge.type_name == "random_forest"
+        assert get_component("random_forest") is RandomForestMatcher
+        assert RandomForestMatcher.type_name == "random_forest"
 
     def test_implements_serializable_state(self) -> None:
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=[FeatureSpec(name="name")]
         )
         assert isinstance(judge, SerializableState)
@@ -265,7 +265,7 @@ class TestSerialization:
     def test_config_excludes_fitted_forest(self) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=7, max_depth=3, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -279,10 +279,10 @@ class TestSerialization:
 
     def test_from_config_builds_fresh_unfit_judge(self) -> None:
         comparator = _company_comparator()
-        original: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        original: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=9, random_state=2
         )
-        rebuilt = RandomForestJudge.from_config(original.config)
+        rebuilt = RandomForestMatcher.from_config(original.config)
         assert rebuilt.n_estimators == 9
         assert rebuilt.random_state == 2
         with pytest.raises(ValueError, match="fit"):
@@ -293,7 +293,7 @@ class TestSerialization:
             )
 
     def test_save_state_before_fit_writes_nothing(self, tmp_path: Path) -> None:
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=[FeatureSpec(name="name")]
         )
         judge.save_state(tmp_path)
@@ -302,7 +302,7 @@ class TestSerialization:
     def test_save_state_load_state_round_trips_predictions(self, tmp_path: Path) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=10, n_nonmatches=10)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=10, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -312,14 +312,14 @@ class TestSerialization:
         assert (tmp_path / "forest.json").exists()
         json.loads((tmp_path / "forest.json").read_text())  # valid JSON
 
-        fresh = RandomForestJudge.from_config(judge.config)
+        fresh = RandomForestMatcher.from_config(judge.config)
         fresh.load_state(tmp_path)
         reloaded_scores = [j.score for j in fresh.forward(iter(candidates))]
 
         assert reloaded_scores == pytest.approx(original_scores)
 
     def test_load_state_without_saved_file_stays_unfit(self, tmp_path: Path) -> None:
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=[FeatureSpec(name="name")]
         )
         judge.load_state(tmp_path)  # empty dir, no forest.json
@@ -336,7 +336,7 @@ class TestSerialization:
     def test_load_state_rejects_sklearn_version_mismatch(self, tmp_path: Path) -> None:
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=5, n_nonmatches=5)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=0
         )
         judge.fit(iter(candidates), labels)
@@ -346,7 +346,7 @@ class TestSerialization:
         payload["sklearn_version"] = "0.1.0"  # a version that cannot match the installed one
         (tmp_path / "forest.json").write_text(json.dumps(payload))
 
-        fresh = RandomForestJudge.from_config(judge.config)
+        fresh = RandomForestMatcher.from_config(judge.config)
         with pytest.raises(ValueError, match="scikit-learn"):
             fresh.load_state(tmp_path)
 
@@ -355,14 +355,14 @@ class TestSerialization:
 
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=10, n_nonmatches=10)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=10, random_state=0
         )
         judge.fit(iter(candidates), labels)
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=judge,
+            matcher=judge,
             clusterer=Clusterer(threshold=0.5),
         )
         resolver.save(tmp_path)
@@ -373,7 +373,7 @@ class TestSerialization:
         assert (tmp_path / "module" / "forest.json").exists()
 
         reloaded = Resolver.load(tmp_path)
-        assert isinstance(reloaded.module, RandomForestJudge)
+        assert isinstance(reloaded.module, RandomForestMatcher)
 
     @pytest.mark.slow
     def test_resolver_load_random_forest_in_fresh_process(self, tmp_path: Path) -> None:
@@ -382,14 +382,14 @@ class TestSerialization:
 
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=10, n_nonmatches=10)
-        judge: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        judge: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=10, random_state=0
         )
         judge.fit(iter(candidates), labels)
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=judge,
+            matcher=judge,
             clusterer=Clusterer(threshold=0.5),
         )
         resolver.save(tmp_path)
@@ -401,7 +401,7 @@ class TestSerialization:
                 (
                     "from langres.core import Resolver; "
                     f"r = Resolver.load(r'{tmp_path}'); "
-                    "assert type(r.module).__name__ == 'RandomForestJudge'; "
+                    "assert type(r.module).__name__ == 'RandomForestMatcher'; "
                     "j = r.predict([{'id': 'a', 'name': 'Acme'}, {'id': 'b', 'name': 'Acme Inc'}]); "
                     "assert len(j) == 1 and j[0].score_type == 'prob_rf'; "
                     "print('OK')"
@@ -425,7 +425,7 @@ class TestSerialization:
         """
         import ast
 
-        import langres.core.modules.random_forest_judge as module
+        import langres.core.matchers.random_forest_judge as module
 
         source = Path(str(module.__file__)).read_text()
         tree = ast.parse(source)

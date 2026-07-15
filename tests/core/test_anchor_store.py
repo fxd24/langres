@@ -2,14 +2,14 @@
 
 Two pipelines are exercised:
 
-- The **string** pipeline (``AllPairsBlocker`` + ``WeightedAverageJudge``) — pure
+- The **string** pipeline (``AllPairsBlocker`` + ``WeightedAverageMatcher``) — pure
   core, no embeddings — drives the store logic, singleton coverage, stable ids,
   and the all-pairs candidate path, plus a fresh-in-process save/load round-trip.
 - The **vector** pipeline (``VectorBlocker`` + ``FAISSIndex`` + ``FakeEmbedder``)
   is fast and deterministic (no model download) and exercises the single-record
   kNN candidate path over ``index.search`` and the FAISS-sidecar round-trip.
 
-Records carry name + address + phone so the WeightedAverageJudge's evidence floor
+Records carry name + address + phone so the WeightedAverageMatcher's evidence floor
 is cleared (a single present feature scores 0 as ``below_evidence_floor``).
 """
 
@@ -28,13 +28,13 @@ from langres.core import (
     CompanySchema,
     Comparator,
     CompositeBlocker,
-    EmbeddingScoreJudge,
+    EmbeddingScoreMatcher,
     ERCandidate,
     KeyBlocker,
-    Module,
+    Matcher,
     PairwiseJudgement,
     Resolver,
-    WeightedAverageJudge,
+    WeightedAverageMatcher,
 )
 from langres.core.anchor_store import _schema_factory
 from langres.core.blockers.vector import VectorBlocker
@@ -87,8 +87,8 @@ NOVEL = {
 
 
 def _string_resolver(threshold: float = 0.6) -> Resolver:
-    """AllPairs + WeightedAverageJudge string pipeline (pure core, no embeddings)."""
-    return Resolver.from_schema(CompanySchema, judge="string", threshold=threshold)
+    """AllPairs + WeightedAverageMatcher string pipeline (pure core, no embeddings)."""
+    return Resolver.from_schema(CompanySchema, matcher="string", threshold=threshold)
 
 
 def _vector_resolver(threshold: float = 0.6, k_neighbors: int = 10) -> Resolver:
@@ -101,12 +101,12 @@ def _vector_resolver(threshold: float = 0.6, k_neighbors: int = 10) -> Resolver:
     return Resolver(
         blocker=blocker,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=threshold),
     )
 
 
-class _NameJudge(Module[CompanySchema]):
+class _NameJudge(Matcher[CompanySchema]):
     """Self-contained judge (no comparator): score 1.0 on exact name match, else 0.0.
 
     Reads the raw ``left``/``right`` entities directly, so a Resolver using it
@@ -146,7 +146,7 @@ def _name_resolver(threshold: float = 0.6) -> Resolver:
     return Resolver(
         blocker=Resolver.from_schema(CompanySchema).blocker,
         comparator=None,
-        module=_NameJudge(),
+        matcher=_NameJudge(),
         clusterer=Clusterer(threshold=threshold),
     )
 
@@ -285,7 +285,7 @@ def test_assign_identifies_anchor_regardless_of_pair_orientation() -> None:
     resolver = Resolver(
         blocker=Resolver.from_schema(CompanySchema).blocker,
         comparator=None,
-        module=_NameJudge(flip=True),
+        matcher=_NameJudge(flip=True),
         clusterer=Clusterer(threshold=0.6),
     )
     store = AnchorStore.build(resolver, RECORDS)
@@ -415,7 +415,7 @@ def test_composite_blocker_reaches_child_schema_factory() -> None:
     resolver = Resolver(
         blocker=composite,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.6),
     )
     store = resolver.build_anchor_store(RECORDS)
@@ -448,7 +448,7 @@ def test_nested_composite_blocker_supports_build_and_vector_assign() -> None:
     resolver = Resolver(
         blocker=outer,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.6),
     )
 
@@ -502,7 +502,7 @@ def test_assign_does_not_store_non_anchor_records(tmp_path: Path) -> None:
 
 
 def test_embedding_judge_assign_gets_similarity_score() -> None:
-    """assign() must attach similarity_score so EmbeddingScoreJudge can score."""
+    """assign() must attach similarity_score so EmbeddingScoreMatcher can score."""
     anchors = [
         {"id": "1", "name": "Apple", "address": "a", "phone": "1"},
         {"id": "2", "name": "Microsoft", "address": "b", "phone": "2"},
@@ -512,11 +512,11 @@ def test_embedding_judge_assign_gets_similarity_score() -> None:
     blocker: VectorBlocker[CompanySchema] = VectorBlocker(
         vector_index=index, schema=CompanySchema, text_field="name", k_neighbors=10
     )
-    # EmbeddingScoreJudge scores purely off similarity_score (no comparator).
+    # EmbeddingScoreMatcher scores purely off similarity_score (no comparator).
     resolver = Resolver(
         blocker=blocker,
         comparator=None,
-        module=EmbeddingScoreJudge(threshold=0.9),
+        matcher=EmbeddingScoreMatcher(threshold=0.9),
         clusterer=Clusterer(threshold=0.9),
     )
     store = resolver.build_anchor_store(anchors)
@@ -561,7 +561,7 @@ def test_vector_search_skips_minus_one_padding() -> None:
         k_neighbors=2,
     )
     resolver = Resolver(
-        blocker=blocker, comparator=None, module=_NameJudge(), clusterer=Clusterer(threshold=0.6)
+        blocker=blocker, comparator=None, matcher=_NameJudge(), clusterer=Clusterer(threshold=0.6)
     )
     store = AnchorStore(
         resolver=resolver,

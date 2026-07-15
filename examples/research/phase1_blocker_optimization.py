@@ -555,8 +555,8 @@ Recommendation Strategy:
     logger.info("Next Steps:")
     logger.info("  1. Review diagnostic examples to understand failure modes")
     logger.info("  2. Copy recommended threshold to Phase 2 SIMILARITY_THRESHOLD config")
-    logger.info("  3. Proceed to Phase 2: Build RapidfuzzModule baseline")
-    logger.info("  4. Proceed to Phase 3: Build LLMJudgeModule for hybrid approach")
+    logger.info("  3. Proceed to Phase 2: Build RapidfuzzMatcher baseline")
+    logger.info("  4. Proceed to Phase 3: Build LLMMatcher for hybrid approach")
     logger.info("")
 
 

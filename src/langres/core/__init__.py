@@ -9,7 +9,7 @@ the core dependencies) and stay eager. A handful pull an optional, heavy
 dependency -- the embedding/vector stack (torch/sentence-transformers/faiss/
 qdrant-client, the ``[semantic]`` extra), the LLM stack (litellm, the ``[llm]``
 extra), the trained-judge stack (scikit-learn, the ``[trained]`` extra --
-:class:`~langres.core.modules.random_forest_judge.RandomForestJudge`), or dev/eval tooling
+:class:`~langres.core.matchers.random_forest_judge.RandomForestMatcher`), or dev/eval tooling
 (ranx/optuna/wandb) -- and are resolved lazily via PEP 562 ``__getattr__``
 (see :data:`_LAZY_SUBMODULES` / :data:`_LAZY_SYMBOLS` below): ``from
 langres.core import VectorBlocker`` still works, but the actual ``import`` of
@@ -51,10 +51,10 @@ from langres.core.harvest import (
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog, LoggingModule
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
-from langres.core.judges.fellegi_sunter import FellegiSunterJudge
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
+from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,
     MethodSpec,
@@ -67,12 +67,12 @@ from langres.core.models import (
     CompanySchema,
     EntityProtocol,
     ERCandidate,
-    JudgeAbstainedError,
+    MatcherAbstainedError,
     PairwiseJudgement,
     predicted_match,
 )
-from langres.core.module import GroupwiseModule, Module, stamp_group_cost
-from langres.core.modules.cascade_judge import CascadeJudge
+from langres.core.matcher import GroupwiseMatcher, Matcher, stamp_group_cost
+from langres.core.matchers.cascade_judge import CascadeMatcher
 from langres.core.registry import (
     SchemaNotRegistered,
     UnknownComponentType,
@@ -124,9 +124,9 @@ if TYPE_CHECKING:
         QdrantHybridIndex,
         VectorIndex,
     )
-    from langres.core.modules.llm_judge import LLMJudge
-    from langres.core.modules.random_forest_judge import RandomForestJudge
-    from langres.core.modules.select_judge import SelectJudge
+    from langres.core.matchers.llm_judge import LLMMatcher
+    from langres.core.matchers.random_forest_judge import RandomForestMatcher
+    from langres.core.matchers.select_judge import SelectMatcher
     from langres.core.trackers import MlflowTracker, WandbTracker
 
 __all__ = [
@@ -138,7 +138,7 @@ __all__ = [
     "Blocker",
     "CandidateStats",
     "Canonicalizer",
-    "CascadeJudge",
+    "CascadeMatcher",
     "ClusterDelta",
     "ClusterStats",
     "Clusterer",
@@ -155,7 +155,7 @@ __all__ = [
     "derive_groups_from_pairs",
     "derive_threshold_from_pairs",
     "EmbeddingProvider",
-    "EmbeddingScoreJudge",
+    "EmbeddingScoreMatcher",
     "EntityProtocol",
     "ERCandidate",
     "ERCandidateGroup",
@@ -167,23 +167,23 @@ __all__ = [
     "FakeVectorIndex",
     "FastEmbedSparseEmbedder",
     "FeatureSpec",
-    "FellegiSunterJudge",
+    "FellegiSunterMatcher",
     "get_component",
     "get_method",
     "get_schema",
     "GLinkerAdapter",
-    "GroupwiseModule",
+    "GroupwiseMatcher",
     "harvest_labeled_pairs",
-    "JudgeAbstainedError",
+    "MatcherAbstainedError",
     "JudgementLog",
     "KeyBlocker",
     "LabeledPair",
-    "LLMJudge",
+    "LLMMatcher",
     "list_methods",
-    "LoggingModule",
+    "LoggingMatcher",
     "MethodSpec",
     "metrics",
-    "Module",
+    "Matcher",
     "optimizers",
     "PairwiseJudgement",
     "PipelineDebugger",
@@ -195,11 +195,11 @@ __all__ = [
     "Resolver",
     "ReviewItem",
     "ReviewQueue",
-    "RandomForestJudge",
+    "RandomForestMatcher",
     "ScoreStats",
     "SchemaNotRegistered",
     "select_for_review",
-    "SelectJudge",
+    "SelectMatcher",
     "SentenceTransformerEmbedder",
     "SerializableState",
     "SparseEmbeddingProvider",
@@ -211,7 +211,7 @@ __all__ = [
     "UnsupervisedFitMixin",
     "VectorBlocker",
     "VectorIndex",
-    "WeightedAverageJudge",
+    "WeightedAverageMatcher",
     # Experiment tracking (S1): run identity + persistence + pluggable trackers.
     "capture_run",
     "compute_recipe_id",
@@ -251,9 +251,9 @@ _LAZY_SYMBOLS: dict[str, str] = {
     "FakeVectorIndex": "langres.core.indexes",
     "QdrantHybridIndex": "langres.core.indexes",
     "VectorIndex": "langres.core.indexes",
-    "LLMJudge": "langres.core.modules.llm_judge",
-    "RandomForestJudge": "langres.core.modules.random_forest_judge",
-    "SelectJudge": "langres.core.modules.select_judge",
+    "LLMMatcher": "langres.core.matchers.llm_judge",
+    "RandomForestMatcher": "langres.core.matchers.random_forest_judge",
+    "SelectMatcher": "langres.core.matchers.select_judge",
     # Backend tracker adapters (S3/S4): the package's own __getattr__ pulls the
     # concrete adapter -- and its mlflow/wandb dependency -- only on access.
     "MlflowTracker": "langres.core.trackers",
@@ -263,15 +263,15 @@ _LAZY_SYMBOLS: dict[str, str] = {
 #: ``name -> extra`` for the lazy symbols a ``pip install langres[<extra>]``
 #: actually fixes -- everything in :data:`_LAZY_SYMBOLS` except the three
 #: submodules (dev/eval tooling, not distributed as a pip extra; see
-#: :data:`_LAZY_SUBMODULES`'s docstring). ``RandomForestJudge`` needs scikit-learn (the
-#: ``[trained]`` extra, W1.2's trained-family judge); ``LLMJudge``/
-#: ``SelectJudge`` need ``[llm]`` (litellm/dspy-ai); everything else needs
+#: :data:`_LAZY_SUBMODULES`'s docstring). ``RandomForestMatcher`` needs scikit-learn (the
+#: ``[trained]`` extra, W1.2's trained-family judge); ``LLMMatcher``/
+#: ``SelectMatcher`` need ``[llm]`` (litellm/dspy-ai); everything else needs
 #: ``[semantic]`` (embeddings/vector index/VectorBlocker).
 _EXTRA_BY_SYMBOL: dict[str, str] = {
     name: {
-        "LLMJudge": "llm",
-        "SelectJudge": "llm",
-        "RandomForestJudge": "trained",
+        "LLMMatcher": "llm",
+        "SelectMatcher": "llm",
+        "RandomForestMatcher": "trained",
         "MlflowTracker": "mlflow",
         "WandbTracker": "wandb",
     }.get(name, "semantic")

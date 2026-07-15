@@ -79,7 +79,7 @@ def smoke(model: str) -> int:
     for the full run. Returns a process exit code.
     """
     from langres.clients import Settings, create_llm_client
-    from langres.core.modules.llm_judge import LLMJudge
+    from langres.core.matchers.llm_judge import LLMMatcher
 
     corpus_records, _ = load_fodors_zagat()
     fodors = next(r for r in corpus_records if r.source == "fodors")
@@ -89,7 +89,7 @@ def smoke(model: str) -> int:
     )
 
     client = create_llm_client(Settings(), enable_langfuse=False)
-    judge: LLMJudge[Any] = LLMJudge(client=client, model=model, entity_noun="restaurant")
+    judge: LLMMatcher[Any] = LLMMatcher(client=client, model=model, entity_noun="restaurant")
 
     print(f"[smoke] model={model}")
     print(f"[smoke] pair: {fodors.name!r} (fodors)  vs  {zagat.name!r} (zagat)")

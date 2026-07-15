@@ -56,7 +56,7 @@ def test_complete_partition_is_deterministic_in_all_ids_order() -> None:
 def _tiny_corpus() -> tuple[list[RestaurantSchema], list[set[str]]]:
     """Two cross-source identical-field match pairs + two singletons.
 
-    Identical fields make the equal-weight ``WeightedAverageJudge`` score the
+    Identical fields make the equal-weight ``WeightedAverageMatcher`` score the
     matched pairs at ~1.0 (plenty of evidence: all five fields present), so they
     merge at a low threshold; the distinct singletons never merge.
     """

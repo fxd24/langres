@@ -3,7 +3,7 @@
 The DeepMatcher/Magellan pair splits (``train.csv`` / ``valid.csv`` /
 ``test.csv``) that ship with Amazon-Google and Abt-Buy are rows of
 ``(id_a, id_b, label)``. To *fit* a supervised judge
-(:class:`~langres.core.modules.random_forest_judge.RandomForestJudge`) or grade
+(:class:`~langres.core.matchers.random_forest_judge.RandomForestMatcher`) or grade
 any judge at the pair level against literature bands (Ditto, DeepMatcher,
 Magellan), those rows must become :class:`~langres.core.models.ERCandidate`
 objects **carrying a comparison vector** — the raw ``(id_a, id_b)`` rows do not,
@@ -47,7 +47,7 @@ from langres.core.comparator import Comparator, StringComparator
 from langres.core.feature import FeatureSpec
 from langres.core.metrics import PairMetrics, classify_pairs, pair_pr_curve
 from langres.core.models import ERCandidate
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
@@ -77,7 +77,7 @@ class SplitPairData(Generic[SchemaT]):
             ``comparison`` vector from the benchmark's Comparator (so a
             supervised judge can fit/score on it).
         labels: ``label == 1`` per row, positionally aligned with
-            ``candidates`` (the contract ``RandomForestJudge.fit`` requires).
+            ``candidates`` (the contract ``RandomForestMatcher.fit`` requires).
         gold: The positive pairs as order-independent ``frozenset({id_a, id_b})``
             — exactly the ``label == 1`` rows.
     """
@@ -257,7 +257,7 @@ class FixedSplitPairBenchmark(Generic[SchemaT]):
 
 
 def evaluate_fixed_split_honest(
-    judge: Module[SchemaT],
+    judge: Matcher[SchemaT],
     benchmark: FixedSplitPairBenchmark[SchemaT],
     *,
     derive_on: str = "train",

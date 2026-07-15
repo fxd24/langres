@@ -1,6 +1,6 @@
-"""Tests for LLMJudge's paper-replication seams + the token-usage vector.
+"""Tests for LLMMatcher's paper-replication seams + the token-usage vector.
 
-Task 2 makes ``LLMJudge`` able to run a published paper's prompt without a
+Task 2 makes ``LLMMatcher`` able to run a published paper's prompt without a
 subclass fork: an injectable ``response_parser`` (default Score-regex; a shipped
 binary yes/no parser), an injectable ``record_serializer``, a ``system_prompt``
 seam, explicit parse-failure semantics (``on_parse_error`` + a ``parse_error``
@@ -17,8 +17,8 @@ from unittest.mock import Mock
 import pytest
 
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.llm_judge import (
-    LLMJudge,
+from langres.core.matchers.llm_judge import (
+    LLMMatcher,
     LLMParseError,
     ParsedVerdict,
     default_record_serializer,
@@ -47,8 +47,8 @@ def _response(content: str, *, prompt_tokens: int = 100, completion_tokens: int 
     return resp
 
 
-def _judge(client: Mock, **kwargs: object) -> LLMJudge[CompanySchema]:
-    return LLMJudge(client=client, model="gpt-4o-mini", **kwargs)  # type: ignore[arg-type]
+def _judge(client: Mock, **kwargs: object) -> LLMMatcher[CompanySchema]:
+    return LLMMatcher(client=client, model="gpt-4o-mini", **kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ class TestSafeTemplateSubstitution:
 
 
 def test_temperature_defaults_to_zero() -> None:
-    judge = LLMJudge(client=Mock(), model="gpt-4o-mini")
+    judge = LLMMatcher(client=Mock(), model="gpt-4o-mini")
     assert judge.temperature == 0.0
 
 
@@ -380,7 +380,7 @@ class TestUsageVectorInProvenance:
         }
         resp.provider = "DeepInfra"
         client.completion.return_value = resp
-        judge = LLMJudge(client=client, model="openrouter/z-ai/glm-5.2")
+        judge = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2")
         j = list(judge.forward([_pair()]))[0]
         assert j.provenance["usage"]["provider"] == "DeepInfra"
 

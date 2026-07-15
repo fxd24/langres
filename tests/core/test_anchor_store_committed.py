@@ -35,7 +35,7 @@ def _anchor_slice() -> tuple[list[dict[str, object]], dict[str, object]]:
 
 def test_assign_links_held_out_partner_on_committed_data() -> None:
     anchors, held_out = _anchor_slice()
-    resolver = Resolver.from_schema(RestaurantSchema, judge="string", threshold=0.5)
+    resolver = Resolver.from_schema(RestaurantSchema, matcher="string", threshold=0.5)
     store = resolver.build_anchor_store(anchors)
 
     delta = resolver.assign(held_out)
@@ -46,7 +46,7 @@ def test_assign_links_held_out_partner_on_committed_data() -> None:
 
 def test_assign_novel_record_is_new_on_committed_data() -> None:
     anchors, _held_out = _anchor_slice()
-    resolver = Resolver.from_schema(RestaurantSchema, judge="string", threshold=0.5)
+    resolver = Resolver.from_schema(RestaurantSchema, matcher="string", threshold=0.5)
     resolver.build_anchor_store(anchors)
     novel = {
         "id": "novel-1",
@@ -66,13 +66,13 @@ def test_fresh_process_round_trip(tmp_path: Path) -> None:
 
     # In-process reference result.
     reference = Resolver.from_schema(
-        RestaurantSchema, judge="string", threshold=0.5
+        RestaurantSchema, matcher="string", threshold=0.5
     ).build_anchor_store(anchors)
     before = reference.assign(held_out)
 
     # Persist a fresh store (assign above mutates; save an untouched one).
     path = tmp_path / "anchors"
-    Resolver.from_schema(RestaurantSchema, judge="string", threshold=0.5).build_anchor_store(
+    Resolver.from_schema(RestaurantSchema, matcher="string", threshold=0.5).build_anchor_store(
         anchors
     ).save(path)
 

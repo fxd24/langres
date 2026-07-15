@@ -1,6 +1,6 @@
-"""Tests for FellegiSunterJudge — the first "learn with no labels" judge (W1.2, S2).
+"""Tests for FellegiSunterMatcher — the first "learn with no labels" judge (W1.2, S2).
 
-FellegiSunterJudge fits per-feature m/u agreement probabilities via EM
+FellegiSunterMatcher fits per-feature m/u agreement probabilities via EM
 (``UnsupervisedFitMixin.fit_unlabeled``) and scores candidates with the
 classical Fellegi-Sunter posterior. Critical design constraint (E4, both Eng
 voices in the M4.5/M5 plan): it must NOT rely on ``ComparisonLevel.MISMATCH``
@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
-from langres.core.judges.fellegi_sunter import _GUARD_EPS, _PROB_EPS, FellegiSunterJudge
+from langres.core.matchers.fellegi_sunter import _GUARD_EPS, _PROB_EPS, FellegiSunterMatcher
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.registry import get_component
 
@@ -95,7 +95,7 @@ def _clustered_pairs(
 class TestFitUnlabeledBasics:
     def test_fit_unlabeled_sets_prior_m_and_u(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -111,7 +111,7 @@ class TestFitUnlabeledBasics:
     def test_fit_unlabeled_separates_matches_from_nonmatches(self) -> None:
         """With real separating signal, EM should learn m > u for discriminative features."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, n_random_pairs=200
         )
         candidates = _clustered_pairs(comparator, n_matches=20, n_nonmatches=20)
@@ -125,7 +125,7 @@ class TestFitUnlabeledBasics:
     def test_m_prob_never_below_u_prob(self) -> None:
         """The m>=u guard (label-switch protection) always holds after fit."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=1
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -144,7 +144,7 @@ class TestFitUnlabeledBasics:
         correlation and u should land meaningfully below 1.0.
         """
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, n_random_pairs=200
         )
         # Distinct, UNRELATED name pools per company (no shared template/prefix) so
@@ -186,7 +186,7 @@ class TestFitUnlabeledBasics:
 
     def test_fit_unlabeled_raises_without_comparison_vector(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         bare = _candidate(_company("a", "Acme"), _company("b", "Acme Inc"), comparison=None)
         with pytest.raises(ValueError, match="comparison vector"):
             judge.fit_unlabeled(iter([bare]))
@@ -194,7 +194,7 @@ class TestFitUnlabeledBasics:
     def test_fit_unlabeled_is_schema_agnostic_with_product_schema(self) -> None:
         """The exact same judge class works against a second, unrelated schema."""
         comparator: StringComparator[ProductSchema] = StringComparator.from_schema(ProductSchema)
-        judge: FellegiSunterJudge[ProductSchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[ProductSchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         candidates = [
@@ -223,7 +223,7 @@ class TestFitUnlabeledBasics:
 class TestEMConvergence:
     def test_converged_flag_true_on_normal_fit(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, max_em_iter=50
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -232,7 +232,7 @@ class TestEMConvergence:
     def test_max_iter_zero_falls_back_to_priors_and_marks_unconverged(self) -> None:
         """max_em_iter=0 runs no EM steps at all -> fallback to the safe initial priors."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, max_em_iter=0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -245,7 +245,7 @@ class TestEMConvergence:
 
     def test_max_iter_zero_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, max_em_iter=0
         )
         with caplog.at_level("WARNING"):
@@ -255,7 +255,7 @@ class TestEMConvergence:
     def test_tol_controls_convergence_speed(self) -> None:
         """A very loose tolerance converges immediately (delta always < tol)."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, max_em_iter=50, tol=1.0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -282,7 +282,7 @@ class TestEMFallbackGuard:
     def test_fallback_m_respects_m_geq_u_guard_directly(self) -> None:
         """Unit-level: ``_run_em``'s fallback clamps m against a high u_prob."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, max_em_iter=0
         )
         # "name"'s u_prob (0.95) exceeds the raw fallback init_m (0.9) --
@@ -312,7 +312,7 @@ class TestEMFallbackGuard:
             )
             for i in range(10)
         ]
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, max_em_iter=0, random_state=0
         )
         judge.fit_unlabeled(iter(candidates))
@@ -350,7 +350,7 @@ class TestUProbClampLeavesGuardMargin:
 
     def test_estimate_u_probs_leaves_headroom_for_guard_margin(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
 
         # Every pair "agrees" on every feature (identical name/address) --
         # with enough pairs, Laplace smoothing pushes the raw estimate
@@ -378,7 +378,7 @@ class TestUProbClampLeavesGuardMargin:
             )
             for i in range(70)
         ]
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, max_em_iter=0, random_state=0, n_random_pairs=2000
         )
         judge.fit_unlabeled(iter(candidates))
@@ -397,7 +397,7 @@ class TestDegenerateInputs:
     def test_all_missing_features_no_crash(self) -> None:
         """Every candidate has an empty comparison vector (all features MISSING)."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         empty_vector = ComparisonVector(levels={}, similarities={})
@@ -419,7 +419,7 @@ class TestDegenerateInputs:
     def test_all_agree_pattern_no_crash(self) -> None:
         """Every candidate agrees on every present feature — an extreme, one-sided fixture."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, n_random_pairs=50
         )
         candidates = [
@@ -441,7 +441,7 @@ class TestDegenerateInputs:
         """A comparator with only a single declared feature (F=1) works fine."""
         specs = [FeatureSpec(name="name")]
         comparator: StringComparator[CompanySchema] = StringComparator(specs, schema=CompanySchema)
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         candidates = _clustered_pairs(comparator, n_matches=10, n_nonmatches=10)
@@ -456,7 +456,7 @@ class TestDegenerateInputs:
     def test_no_positive_signal_all_disagree_no_crash(self) -> None:
         """Every candidate disagrees on every present feature — no positive evidence anywhere."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, n_random_pairs=50
         )
         candidates = [
@@ -483,7 +483,7 @@ class TestDegenerateInputs:
         specific converged flag.
         """
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter([]))
@@ -496,7 +496,7 @@ class TestDegenerateInputs:
     def test_entity_pool_of_one_record_no_crash(self) -> None:
         """A pool with < 2 distinct entities can't form any random pair for u-estimation."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0, n_random_pairs=50
         )
         solo = _company("x", "Acme")
@@ -515,14 +515,14 @@ class TestDegenerateInputs:
 class TestForward:
     def test_forward_raises_before_fit(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         candidate = _compared(comparator, _company("a", "Acme"), _company("b", "Acme Inc"))
         with pytest.raises(ValueError, match="fit_unlabeled"):
             list(judge.forward(iter([candidate])))
 
     def test_forward_raises_without_comparison_vector(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         bare = _candidate(_company("a", "Acme"), _company("b", "Acme Inc"), comparison=None)
         with pytest.raises(ValueError, match="comparison vector"):
@@ -531,7 +531,7 @@ class TestForward:
     def test_forward_score_matches_hand_computed_posterior(self) -> None:
         """Pin the exact FS posterior formula against a hand-computed value."""
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         # Bypass fit_unlabeled: set fitted state directly to known, simple values.
         judge.prior = 0.5
         judge.m_prob = {"name": 0.9, "address": 0.9, "phone": 0.9, "website": 0.9}
@@ -554,7 +554,7 @@ class TestForward:
 
     def test_forward_disagree_lowers_score_below_prior(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         judge.prior = 0.5
         judge.m_prob = {"name": 0.9, "address": 0.9, "phone": 0.9, "website": 0.9}
         judge.u_prob = {"name": 0.1, "address": 0.1, "phone": 0.1, "website": 0.1}
@@ -570,7 +570,7 @@ class TestForward:
 
     def test_forward_provenance_includes_pattern(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         candidate = _compared(
             comparator,
@@ -583,7 +583,7 @@ class TestForward:
 
     def test_inspect_scores_delegates_to_shared_util(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         judgements = list(judge.forward(iter(_clustered_pairs(comparator))))
         report = judge.inspect_scores(judgements, sample_size=5)
@@ -591,7 +591,7 @@ class TestForward:
 
     def test_forward_left_id_right_id(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(comparator=comparator)
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(comparator=comparator)
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         candidate = _compared(comparator, _company("left-1", "Acme"), _company("right-1", "Acme"))
         [judgement] = list(judge.forward(iter([candidate])))
@@ -608,10 +608,10 @@ class TestAgreementThreshold:
     def test_custom_agreement_threshold_changes_binarization(self) -> None:
         """A stricter threshold reclassifies a mid-similarity feature as disagree."""
         comparator = _company_comparator()
-        lenient: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        lenient: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, agreement_threshold=0.3
         )
-        strict: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        strict: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, agreement_threshold=0.9
         )
         for judge in (lenient, strict):
@@ -638,12 +638,12 @@ class TestAgreementThreshold:
 
 class TestSerialization:
     def test_is_registered_with_type_name(self) -> None:
-        assert get_component("fellegi_sunter_judge") is FellegiSunterJudge
-        assert FellegiSunterJudge.type_name == "fellegi_sunter_judge"
+        assert get_component("fellegi_sunter_judge") is FellegiSunterMatcher
+        assert FellegiSunterMatcher.type_name == "fellegi_sunter_judge"
 
     def test_config_is_json_serializable_before_fit(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, agreement_threshold=0.4, n_random_pairs=123, random_state=7
         )
         config = judge.config
@@ -658,7 +658,7 @@ class TestSerialization:
 
     def test_config_includes_fitted_state_after_fit(self) -> None:
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
@@ -671,10 +671,10 @@ class TestSerialization:
 
     def test_from_config_round_trips_unfit_judge(self) -> None:
         comparator = _company_comparator()
-        original: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        original: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, agreement_threshold=0.42
         )
-        rebuilt = FellegiSunterJudge.from_config(original.config)
+        rebuilt = FellegiSunterMatcher.from_config(original.config)
         assert rebuilt.agreement_threshold == pytest.approx(0.42)
         assert rebuilt.m_prob is None
         with pytest.raises(ValueError, match="fit_unlabeled"):
@@ -686,14 +686,14 @@ class TestSerialization:
 
     def test_from_config_round_trips_fitted_judge_and_scores_identically(self) -> None:
         comparator = _company_comparator()
-        original: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        original: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         candidates = _clustered_pairs(comparator)
         original.fit_unlabeled(iter(candidates))
         original_scores = [j.score for j in original.forward(iter(candidates))]
 
-        rebuilt = FellegiSunterJudge.from_config(original.config)
+        rebuilt = FellegiSunterMatcher.from_config(original.config)
         rebuilt_scores = [j.score for j in rebuilt.forward(iter(candidates))]
 
         assert rebuilt_scores == pytest.approx(original_scores)
@@ -702,14 +702,14 @@ class TestSerialization:
         from langres.core import AllPairsBlocker, Clusterer, Resolver
 
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=judge,
+            matcher=judge,
             clusterer=Clusterer(threshold=0.5),
         )
         resolver.save(tmp_path)
@@ -719,14 +719,14 @@ class TestSerialization:
         assert module_spec["type_name"] == "fellegi_sunter_judge"
 
         reloaded = Resolver.load(tmp_path)
-        assert isinstance(reloaded.module, FellegiSunterJudge)
+        assert isinstance(reloaded.module, FellegiSunterMatcher)
         assert reloaded.module.converged is True
 
     @pytest.mark.slow
     def test_resolver_load_fs_judge_in_fresh_process(self, tmp_path: Path) -> None:
         """Fresh-process save/load round trip (the M2 lesson — E12).
 
-        Saves a fitted FellegiSunterJudge inside a Resolver, then reloads it in a
+        Saves a fitted FellegiSunterMatcher inside a Resolver, then reloads it in a
         brand-new Python subprocess that imports ONLY ``langres.core`` (never this
         test module or the judge module directly) — proving eager registration
         actually fires on plain ``import langres.core``, not just because this
@@ -735,14 +735,14 @@ class TestSerialization:
         from langres.core import AllPairsBlocker, Clusterer, Resolver
 
         comparator = _company_comparator()
-        judge: FellegiSunterJudge[CompanySchema] = FellegiSunterJudge(
+        judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
             comparator=comparator, random_state=0
         )
         judge.fit_unlabeled(iter(_clustered_pairs(comparator)))
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=judge,
+            matcher=judge,
             clusterer=Clusterer(threshold=0.5),
         )
         resolver.save(tmp_path)
@@ -754,7 +754,7 @@ class TestSerialization:
                 (
                     "from langres.core import Resolver; "
                     f"r = Resolver.load(r'{tmp_path}'); "
-                    "assert type(r.module).__name__ == 'FellegiSunterJudge'; "
+                    "assert type(r.module).__name__ == 'FellegiSunterMatcher'; "
                     "assert r.module.converged is True; "
                     "print('OK')"
                 ),
@@ -770,7 +770,7 @@ class TestSerialization:
 
 
 # ---------------------------------------------------------------------------
-# Regression: existing comparator / WeightedAverageJudge semantics untouched (E4)
+# Regression: existing comparator / WeightedAverageMatcher semantics untouched (E4)
 # ---------------------------------------------------------------------------
 
 
@@ -786,17 +786,17 @@ class TestComparatorSemanticsUnchanged:
         assert ComparisonLevel.MISMATCH not in vector.levels.values()
 
     def test_weighted_average_judge_score_matches_pre_fs_baseline(self) -> None:
-        """Pin WeightedAverageJudge's score on a fixed fixture (unaffected by this branch).
+        """Pin WeightedAverageMatcher's score on a fixed fixture (unaffected by this branch).
 
         Asserted via ``pytest.approx`` against the same expected value as the
         pre-existing pinned fixture below -- not a literal byte-for-byte
         comparison of two runs (nit from review: earlier PR-description
         wording said "byte-identical", which overstated what this checks).
         """
-        from langres.core.judges.weighted_average import WeightedAverageJudge
+        from langres.core.matchers.weighted_average import WeightedAverageMatcher
 
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vector = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.PRESENT},
             similarities={"name": 1.0, "address": 0.5},

@@ -2,15 +2,15 @@
 
 This is the machinery behind the two-verb DX layer (:mod:`langres.verbs`):
 picking a judge from available API keys (failing fast with
-:class:`NoJudgeAvailableError` when ``judge="auto"`` finds none -- never a
-silent fallback to fuzzy matching), building its scorer Module, wiring a
+:class:`NoMatcherAvailableError` when ``judge="auto"`` finds none -- never a
+silent fallback to fuzzy matching), building its scorer Matcher, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import
 back from here -- ``Resolver.from_schema`` keeps its own thin policy switch
 over the shared :mod:`~langres.core.method_registry`) and BELOW
 :mod:`langres.verbs`:
 
-    verbs.py -> core/presets.py -> Resolver -> {Blocker, Comparator, Module, Clusterer}
+    verbs.py -> core/presets.py -> Resolver -> {Blocker, Comparator, Matcher, Clusterer}
 
 Nothing here is domain-specific: every function takes a Pydantic ``schema``
 type and works for any schema (the registry's ``"string"``/``"embedding"``
@@ -28,12 +28,12 @@ Judge construction is NOT hand-rolled here anymore: every name resolves
 through the one :mod:`langres.core.method_registry` (the #55 unification), so
 a judge name means the same thing on this path, on
 ``Resolver.from_schema``'s, and on the benchmark harness's. This layer keeps
-only its *policy*: which names the verbs expose (:data:`JudgeName`), the
+only its *policy*: which names the verbs expose (:data:`MatcherName`), the
 ``"auto"`` key-based resolution, and the spend cap.
 
 Spend cap (adopted CEO decision #8 + Eng E1/E9): every judge -- including the
-free ones -- is wrapped in :class:`_SpendCappedModule`, a small
-:class:`~langres.core.module.Module` that tallies each judgement's
+free ones -- is wrapped in :class:`_SpendCappedMatcher`, a small
+:class:`~langres.core.matcher.Matcher` that tallies each judgement's
 ``provenance["cost_usd"]`` through a :class:`~langres.clients.openrouter.SpendMonitor`
 and raises :class:`~langres.clients.openrouter.BudgetExceeded` the moment
 cumulative spend would cross ``budget_usd`` (default
@@ -75,7 +75,7 @@ from langres.core.method_registry import (
     get_method,
 )
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.resolver import Resolver
 
 if TYPE_CHECKING:
@@ -91,9 +91,9 @@ if TYPE_CHECKING:
 
 #: The judge names the verb layer understands, plus the "auto" meta-value that
 #: :func:`choose_auto_judge` resolves down to one of the others.
-JudgeName = Literal["auto", "zero_shot_llm", "prompt_llm", "embedding", "string"]
+MatcherName = Literal["auto", "zero_shot_llm", "prompt_llm", "embedding", "string"]
 
-#: The concrete judge names the verbs expose (:data:`JudgeName` minus
+#: The concrete judge names the verbs expose (:data:`MatcherName` minus
 #: ``"auto"``) -- the verb-layer *policy* allowlist over the shared
 #: :mod:`~langres.core.method_registry`. Benchmark-only method names
 #: (``rapidfuzz``, ``cascade``, the fit-requiring trained family, ...) resolve
@@ -145,7 +145,7 @@ def default_threshold_for(judge_used: str) -> float:
     Reads the judge's :class:`~langres.core.method_registry.MethodSpec`
     (``default_threshold`` -- D3/E12: score scales differ per family, so each
     method carries its own default). A name outside the registry (``"custom"``
-    for an injected ``Module``) falls back to ``0.5``.
+    for an injected ``Matcher``) falls back to ``0.5``.
     """
     try:
         return get_method(judge_used).default_threshold
@@ -158,7 +158,7 @@ def _score_type_for(judge_used: str) -> str:
 
     Used as a fallback when no judgement was actually produced (e.g. a blocker
     that yields no candidate pairs). ``"unknown"`` for names outside the
-    registry (an injected ``Module``).
+    registry (an injected ``Matcher``).
     """
     try:
         return get_method(judge_used).score_type
@@ -188,7 +188,7 @@ def _effective_budget(budget_usd: float | None) -> float:
     return DEFAULT_BUDGET_USD if budget_usd is None else budget_usd
 
 
-class NoJudgeAvailableError(RuntimeError):
+class NoMatcherAvailableError(RuntimeError):
     """``judge="auto"`` refused to pick a judge it cannot run safely.
 
     Raised (never a silent fallback) when no LLM API key is set, when
@@ -196,7 +196,7 @@ class NoJudgeAvailableError(RuntimeError):
     key is treated as absent), or when the selected model's price is unpinned
     so the spend cap would be blind. The message carries the exact fixes; the
     offline escape hatch is an explicit ``judge="string"``. Root-exported as
-    ``langres.NoJudgeAvailableError``.
+    ``langres.NoMatcherAvailableError``.
     """
 
 
@@ -209,13 +209,13 @@ _GETTING_STARTED_URL = "https://github.com/fxd24/langres/blob/main/docs/GETTING_
 
 def choose_auto_judge(
     settings: Settings, *, model: str | None = None, budget_usd: float | None = None
-) -> tuple[JudgeName, str]:
+) -> tuple[MatcherName, str]:
     """Resolve ``judge="auto"`` from available API keys -- or refuse, loudly.
 
-    ``LANGRES_OFFLINE`` truthy -> :class:`NoJudgeAvailableError` (every key is
+    ``LANGRES_OFFLINE`` truthy -> :class:`NoMatcherAvailableError` (every key is
     treated as absent); else ``OPENROUTER_API_KEY`` set -> the OpenRouter
     gpt-4o-mini route; else ``OPENAI_API_KEY`` set -> the direct-OpenAI
-    gpt-5-mini route; else -> :class:`NoJudgeAvailableError`. There is
+    gpt-5-mini route; else -> :class:`NoMatcherAvailableError`. There is
     deliberately no silent fallback to ``"string"``: unsupervised fuzzy
     matching over-merges on unlabeled data, so the offline judge is an
     explicit opt-in, never a default. A caller-supplied ``model=`` overrides
@@ -240,7 +240,7 @@ def choose_auto_judge(
       the directory tree) can never influence it.
 
     ``LANGRES_OFFLINE`` is scoped to this auto path: an explicit
-    ``judge="zero_shot_llm"``/``"string"``/``"embedding"`` or a ``Module``
+    ``judge="zero_shot_llm"``/``"string"``/``"embedding"`` or a ``Matcher``
     instance in code bypasses it (explicit code beats ambient environment).
 
     The happy path emits one selection notice via :func:`_notice` -- which
@@ -260,12 +260,12 @@ def choose_auto_judge(
         ``("zero_shot_llm", model)`` -- the resolved judge and model id.
 
     Raises:
-        NoJudgeAvailableError: ``LANGRES_OFFLINE`` is truthy, no API key is
+        NoMatcherAvailableError: ``LANGRES_OFFLINE`` is truthy, no API key is
             set, or the selected model has no pinned price in
             ``PRICES_PER_1M``.
     """
     if settings.langres_offline:
-        raise NoJudgeAvailableError(
+        raise NoMatcherAvailableError(
             'judge="auto" is disabled: LANGRES_OFFLINE is set, so every API key is '
             "treated as absent (deterministic keyless mode -- the process env beats "
             "any .env file).\n"
@@ -276,7 +276,7 @@ def choose_auto_judge(
             f"Guide: {_GETTING_STARTED_URL}"
         )
     if not settings.openrouter_api_key and not settings.openai_api_key:
-        raise NoJudgeAvailableError(
+        raise NoMatcherAvailableError(
             'judge="auto" found no API key (OPENROUTER_API_KEY / OPENAI_API_KEY are unset).\n'
             "langres refuses to fall back silently: unsupervised fuzzy string matching "
             "over-merges on unlabeled data.\n"
@@ -289,7 +289,7 @@ def choose_auto_judge(
         )
     resolved_model = model or (DEFAULT_AUTO_MODEL if settings.openrouter_api_key else _OPENAI_MODEL)
     if dspy_price_per_1k(resolved_model) <= 0.0:
-        raise NoJudgeAvailableError(
+        raise NoMatcherAvailableError(
             f'judge="auto" selected {resolved_model!r}, but it has no pinned price in '
             "langres.clients.openrouter.PRICES_PER_1M -- its spend cap would be blind "
             "($0-metered), and a blind cap is no cap at all.\n"
@@ -307,14 +307,14 @@ def choose_auto_judge(
 
 
 def build_judge(
-    judge: JudgeName | Module[Any],
+    judge: MatcherName | Matcher[Any],
     schema: type[BaseModel],
     *,
     model: str | None = None,
     entity_noun: str = "entity",
     judge_params: dict[str, Any] | None = None,
-) -> Module[Any]:
-    """Build the scorer Module for a resolved ``judge``.
+) -> Matcher[Any]:
+    """Build the scorer Matcher for a resolved ``judge``.
 
     Construction is delegated to the judge's
     :class:`~langres.core.method_registry.MethodSpec` (the one registry all
@@ -323,8 +323,8 @@ def build_judge(
 
     Args:
         judge: ``"zero_shot_llm"`` / ``"prompt_llm"`` / ``"embedding"`` /
-            ``"string"``, or a ``Module`` instance passed through verbatim --
-            the escape hatch (and the ``DummyLM``-injected-``DSPyJudge``
+            ``"string"``, or a ``Matcher`` instance passed through verbatim --
+            the escape hatch (and the ``DummyLM``-injected-``DSPyMatcher``
             zero-spend test seam). ``"auto"`` is NOT resolved here; call
             :func:`choose_auto_judge` first (:func:`resolve_judge` does this).
         schema: The entity schema (drives ``"string"``'s comparator and the
@@ -336,11 +336,11 @@ def build_judge(
             spec's builder -- for ``"prompt_llm"``: ``prompt_template``,
             ``system_prompt``, ``response_parser`` / ``record_serializer``
             (registered names serialize; see
-            ``langres.core.modules.llm_judge.RESPONSE_PARSERS``). An unknown
+            ``langres.core.matchers.llm_judge.RESPONSE_PARSERS``). An unknown
             param fails loudly (``TypeError``).
 
     Returns:
-        A ready (uncapped) scorer Module.
+        A ready (uncapped) scorer Matcher.
 
     Raises:
         ValueError: If ``judge`` is an unrecognized string (including
@@ -349,12 +349,12 @@ def build_judge(
         ImportError: For an LLM judge when the ``[llm]`` extra is not
             installed -- raised by the builder with the install line.
     """
-    if isinstance(judge, Module):
+    if isinstance(judge, Matcher):
         return judge
     if judge not in _VERB_JUDGE_NAMES:
         raise ValueError(
             f"unknown judge {judge!r}; choose one of 'zero_shot_llm', 'prompt_llm', "
-            "'embedding', 'string', 'auto', or pass a Module instance directly"
+            "'embedding', 'string', 'auto', or pass a Matcher instance directly"
         )
     spec = get_method(judge)
     return spec.build(
@@ -367,8 +367,8 @@ def build_judge(
     )
 
 
-class _SpendCappedModule(Module[Any]):
-    """Wrap a Module, hard-stopping the moment cumulative cost crosses a budget.
+class _SpendCappedMatcher(Matcher[Any]):
+    """Wrap a Matcher, hard-stopping the moment cumulative cost crosses a budget.
 
     Reuses :class:`~langres.clients.openrouter.SpendMonitor` for the tally +
     threshold check, per pair, and re-raises its
@@ -376,7 +376,7 @@ class _SpendCappedModule(Module[Any]):
     already produced (and paid for) attached as ``.partial_judgements`` (E9;
     mirrors :class:`~langres.core.benchmark.BlindCostError`'s "set by the
     catcher, not at raise time" pattern). For a group-wise module
-    (``SelectJudge``), a group is never split across the cap boundary: the
+    (``SelectMatcher``), a group is never split across the cap boundary: the
     already-paid-for siblings of a tripping judgement are drained in too (see
     ``forward``'s ``provenance["group_end"]`` handling).
 
@@ -386,7 +386,7 @@ class _SpendCappedModule(Module[Any]):
     hand back a partially-scored, partially-clustered result).
     """
 
-    def __init__(self, module: Module[Any], *, budget_usd: float) -> None:
+    def __init__(self, module: Matcher[Any], *, budget_usd: float) -> None:
         self._module = module
         self._budget_usd = budget_usd
 
@@ -401,7 +401,7 @@ class _SpendCappedModule(Module[Any]):
             try:
                 monitor.check()
             except BudgetExceeded as exc:
-                # A group-wise module (SelectJudge) stamps the full call cost
+                # A group-wise module (SelectMatcher) stamps the full call cost
                 # on the group's first judgement and $0 on its K-1 siblings,
                 # all sharing provenance["group_id"] and with
                 # provenance["group_end"] = True on the LAST one (E5,
@@ -412,7 +412,7 @@ class _SpendCappedModule(Module[Any]):
                 # iterator up to (and including) the group_end marker.
                 #
                 # This must NOT peek at the next judgement's group_id to
-                # detect the boundary: for a real GroupwiseModule the
+                # detect the boundary: for a real GroupwiseMatcher the
                 # generator is lazy, so pulling one item past the group's
                 # last already-materialized judgement resumes forward_groups
                 # and fires the NEXT group's paid LLM call before there is
@@ -447,19 +447,19 @@ class ResolvedModule(NamedTuple):
     the resolved LLM id for the LLM judges, the pinned embedder
     (:data:`~langres.core.method_registry.DEFAULT_EMBEDDING_MODEL`) for
     ``"embedding"``, ``None`` for pure-string similarity, and an injected
-    ``Module``'s own ``model`` attribute (when it has a string one) for
+    ``Matcher``'s own ``model`` attribute (when it has a string one) for
     ``"custom"``. The verbs stamp it on every result.
     """
 
-    module: Module[Any]
+    module: Matcher[Any]
     judge_used: str
     model: str | None
 
 
-def _module_model(module: Module[Any]) -> str | None:
-    """An injected ``Module``'s self-reported model id (its ``model`` attribute).
+def _module_model(module: Matcher[Any]) -> str | None:
+    """An injected ``Matcher``'s self-reported model id (its ``model`` attribute).
 
-    Both LLM judge families expose ``model: str`` (``LLMJudge`` / ``DSPyJudge``
+    Both LLM judge families expose ``model: str`` (``LLMMatcher`` / ``DSPyMatcher``
     and friends); anything else -- absent or non-string -- honestly reports
     ``None`` rather than fabricating an identity.
     """
@@ -468,7 +468,7 @@ def _module_model(module: Module[Any]) -> str | None:
 
 
 def resolve_judge(
-    judge: JudgeName | Module[Any],
+    judge: MatcherName | Matcher[Any],
     schema: type[BaseModel],
     *,
     model: str | None = None,
@@ -476,11 +476,11 @@ def resolve_judge(
     budget_usd: float | None = None,
     judge_params: dict[str, Any] | None = None,
 ) -> ResolvedModule:
-    """Resolve ``judge`` (including ``"auto"``) to a spend-capped scorer Module.
+    """Resolve ``judge`` (including ``"auto"``) to a spend-capped scorer Matcher.
 
     Args:
-        judge: ``"auto"``, one of the other :data:`JudgeName` values, or a
-            ``Module`` instance (the escape hatch -- reported as
+        judge: ``"auto"``, one of the other :data:`MatcherName` values, or a
+            ``Matcher`` instance (the escape hatch -- reported as
             ``judge_used="custom"``).
         schema: The entity schema.
         model: Model id override for the LLM judges and ``"auto"`` (ignored
@@ -497,12 +497,12 @@ def resolve_judge(
         for what ``model`` means per judge).
 
     Raises:
-        NoJudgeAvailableError: On the ``"auto"`` path when no API key is set
+        NoMatcherAvailableError: On the ``"auto"`` path when no API key is set
             or the selected model's price is unpinned (see
             :func:`choose_auto_judge`).
     """
-    if isinstance(judge, Module):
-        capped_instance = _SpendCappedModule(judge, budget_usd=_effective_budget(budget_usd))
+    if isinstance(judge, Matcher):
+        capped_instance = _SpendCappedMatcher(judge, budget_usd=_effective_budget(budget_usd))
         return ResolvedModule(capped_instance, "custom", _module_model(judge))
 
     resolved_model = model
@@ -525,7 +525,7 @@ def resolve_judge(
         resolved_model = resolved_model or spec.default_model
     else:
         resolved_model = spec.default_model
-    capped = _SpendCappedModule(built, budget_usd=_effective_budget(budget_usd))
+    capped = _SpendCappedMatcher(built, budget_usd=_effective_budget(budget_usd))
     return ResolvedModule(capped, judge_used, resolved_model)
 
 
@@ -610,10 +610,10 @@ def notice_pre_scoring_cost(
 
     ``est_cost`` is a rough, worst-case-biased estimate
     (:data:`_ESTIMATED_TOKENS_PER_PAIR`) -- the spend cap
-    (:class:`_SpendCappedModule`) meters and enforces the REAL cost live, per
+    (:class:`_SpendCappedMatcher`) meters and enforces the REAL cost live, per
     pair, as scoring happens.
 
-    If ``model`` has no pinned price in :data:`PRICES_PER_1M`, DSPyJudge
+    If ``model`` has no pinned price in :data:`PRICES_PER_1M`, DSPyMatcher
     self-reports ``$0`` per pair -- printing "est. cost $0.0000" here would be
     actively misleading: the spend cap tallies that same ``$0`` and can NEVER
     trip, so an unpinned model that OpenRouter really bills for would run
@@ -651,7 +651,7 @@ class ResolvedJudge(NamedTuple):
 def build_resolver(
     schema: type[BaseModel],
     *,
-    judge: JudgeName | Module[Any],
+    judge: MatcherName | Matcher[Any],
     model: str | None,
     entity_noun: str,
     threshold: float | None,
@@ -668,7 +668,7 @@ def build_resolver(
 
     Args:
         schema: The entity schema (any Pydantic model with an ``id`` field).
-        judge: ``"auto"``, another :data:`JudgeName`, or a ``Module`` instance.
+        judge: ``"auto"``, another :data:`MatcherName`, or a ``Matcher`` instance.
         model: Model id override for the LLM judges.
         entity_noun: Domain noun for the LLM judge's prompt.
         threshold: Clusterer threshold; ``None`` resolves to the judge's
@@ -711,7 +711,7 @@ def build_resolver(
     resolver = Resolver(
         blocker=blocker,
         comparator=comparator,
-        module=resolved.module,
+        matcher=resolved.module,
         clusterer=Clusterer(threshold=resolved_threshold),
     )
     return ResolvedJudge(

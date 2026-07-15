@@ -22,7 +22,7 @@ import langres.data.registry as registry
 import langres.eval as ev
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 
 
@@ -93,7 +93,7 @@ def test_unknown_attribute_raises_attribute_error() -> None:
         ev.not_a_real_symbol  # noqa: B018
 
 
-class _ExactNameJudge(Module[CompanySchema]):
+class _ExactNameJudge(Matcher[CompanySchema]):
     """Trivial judge: score 1.0 when the two names match exactly, else 0.0."""
 
     def forward(
@@ -153,10 +153,10 @@ _RANX_FREE_SCRIPT = """
 import sys
 from langres.eval import evaluate, get_benchmark, list_benchmarks, reduction_ratio
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 
 
-class J(Module):
+class J(Matcher):
     def forward(self, candidates):
         for c in candidates:
             yield PairwiseJudgement(

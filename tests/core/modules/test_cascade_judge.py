@@ -1,6 +1,6 @@
-"""Tests for CascadeJudge — the two-tier student/escalation judge (T3).
+"""Tests for CascadeMatcher — the two-tier student/escalation judge (T3).
 
-Covers: ctor validation (band + GroupwiseModule rejection), inclusive band
+Covers: ctor validation (band + GroupwiseMatcher rejection), inclusive band
 edges, per-pair escalation laziness, escalation-wins fields, provenance merge
 (cost_usd + model MUST survive on escalated pairs), the exactly-one-judgement
 contract guard, the one-time score_type contract warning, mixed
@@ -8,7 +8,7 @@ prob_rf/prob_llm streams through one Clusterer threshold, the spend-cap +
 logging composition (an escalation-side BudgetExceeded must not drop paid
 judgements from the log), registry config round-trip, and SerializableState
 sidecar layout — including a full Resolver save/load round trip with a fitted
-RandomForestJudge student.
+RandomForestMatcher student.
 """
 
 import json
@@ -23,16 +23,16 @@ from langres.clients.openrouter import BudgetExceeded
 from langres.core.clusterer import Clusterer
 from langres.core.feature import FeatureSpec
 from langres.core.groups import ERCandidateGroup
-from langres.core.judgement_log import JudgementLog, LoggingModule
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import GroupwiseModule, Module
-from langres.core.modules.cascade_judge import (
+from langres.core.matcher import GroupwiseMatcher, Matcher
+from langres.core.matchers.cascade_judge import (
     CASCADE_ESCALATED_STEP,
     CASCADE_STUDENT_STEP,
-    CascadeJudge,
+    CascadeMatcher,
 )
-from langres.core.presets import _SpendCappedModule
+from langres.core.presets import _SpendCappedMatcher
 from langres.core.registry import get_component
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.testing import ScriptedJudge
@@ -111,8 +111,8 @@ class BinaryDeciderJudge(ScriptedJudge[CompanySchema]):
             )
 
 
-class GroupwiseStub(GroupwiseModule[CompanySchema]):
-    """Minimal GroupwiseModule — must be rejected by the CascadeJudge ctor."""
+class GroupwiseStub(GroupwiseMatcher[CompanySchema]):
+    """Minimal GroupwiseMatcher — must be rejected by the CascadeMatcher ctor."""
 
     def forward_groups(
         self, groups: Iterator[ERCandidateGroup[CompanySchema]]
@@ -128,7 +128,7 @@ class GroupwiseStub(GroupwiseModule[CompanySchema]):
 class StatefulStubJudge(ScriptedJudge[CompanySchema]):
     """ScriptedJudge that also implements SerializableState (a ``state.txt`` file).
 
-    An empty ``value`` writes nothing — mirrors an unfit RandomForestJudge's
+    An empty ``value`` writes nothing — mirrors an unfit RandomForestMatcher's
     "nothing to save" behavior, exercising the empty-sidecar branches.
     """
 
@@ -157,23 +157,23 @@ class TestCtorValidation:
     )
     def test_invalid_band_raises(self, band: tuple[float, float]) -> None:
         with pytest.raises(ValueError, match="band"):
-            CascadeJudge(student=ScriptedJudge({}), escalation=ScriptedJudge({}), band=band)
+            CascadeMatcher(student=ScriptedJudge({}), escalation=ScriptedJudge({}), band=band)
 
     def test_valid_band_is_stored_as_tuple(self) -> None:
-        judge = CascadeJudge(
+        judge = CascadeMatcher(
             student=ScriptedJudge({}), escalation=ScriptedJudge({}), band=(0.0, 1.0)
         )
         assert judge.band == (0.0, 1.0)
 
     @pytest.mark.parametrize("slot", ["student", "escalation"])
     def test_groupwise_child_rejected_with_actionable_error(self, slot: str) -> None:
-        children: dict[str, Module[CompanySchema]] = {
+        children: dict[str, Matcher[CompanySchema]] = {
             "student": ScriptedJudge({}),
             "escalation": ScriptedJudge({}),
         }
         children[slot] = GroupwiseStub()
-        with pytest.raises(ValueError, match=f"GroupwiseModule as its {slot}"):
-            CascadeJudge(
+        with pytest.raises(ValueError, match=f"GroupwiseMatcher as its {slot}"):
+            CascadeMatcher(
                 student=children["student"], escalation=children["escalation"], band=(0.3, 0.7)
             )
 
@@ -198,7 +198,7 @@ class TestBandRouting:
             score_type="prob_llm",
             decision_step="frontier",
         )
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         pairs = [_pair(*ids) for ids in id_pairs]
         steps = [j.decision_step for j in cascade.forward(iter(pairs))]
@@ -219,7 +219,7 @@ class TestBandRouting:
         """
         student = BinaryDeciderJudge({})  # scores dict unused; it emits a decision
         escalation = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
 
@@ -231,7 +231,7 @@ class TestBandRouting:
         """The contrast: a real abstention (is_abstain) IS maximally uncertain -> escalate."""
         student = ScriptedJudge({}, abstain=lambda _c: True)  # yields decision=None, score=None
         escalation = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
 
@@ -244,7 +244,7 @@ class TestBandRouting:
             score_type="prob_rf",
         )
         escalation = ScriptedJudge({frozenset({"c", "d"}): 0.8}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         list(cascade.forward(iter([_pair("a", "b"), _pair("c", "d"), _pair("e", "f")])))
 
@@ -265,7 +265,7 @@ class TestBandRouting:
             decision_step="frontier",
             reasoning="same company, different branding",
         )
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         (judgement,) = list(cascade.forward(iter([_pair("a", "b")])))
 
@@ -280,7 +280,7 @@ class TestBandRouting:
             {frozenset({"a", "b"}): 0.95}, score_type="prob_rf", decision_step="stub_student"
         )
         escalation = ScriptedJudge({}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         (judgement,) = list(cascade.forward(iter([_pair("a", "b")])))
 
@@ -306,11 +306,11 @@ class TestProvenanceMerge:
             decision_step="frontier",
             provenance={"cost_usd": 0.002, "model": "frontier-x", "tokens": 42},
         )
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         (judgement,) = list(cascade.forward(iter([_pair("a", "b")])))
 
-        # The child's provenance survives (cost_usd feeds _SpendCappedModule,
+        # The child's provenance survives (cost_usd feeds _SpendCappedMatcher,
         # model feeds the JudgementLog model column) ...
         assert judgement.provenance["cost_usd"] == 0.002
         assert judgement.provenance["model"] == "frontier-x"
@@ -328,7 +328,7 @@ class TestProvenanceMerge:
             decision_step="stub_student",
             provenance={"n_estimators": 10},
         )
-        cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
 
         (judgement,) = list(cascade.forward(iter([_pair("a", "b")])))
 
@@ -345,12 +345,14 @@ class TestProvenanceMerge:
 
 class TestOneGuard:
     def test_student_yielding_zero_judgements_raises(self) -> None:
-        cascade = CascadeJudge(student=ZeroJudge({}), escalation=ScriptedJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(
+            student=ZeroJudge({}), escalation=ScriptedJudge({}), band=(0.3, 0.7)
+        )
         with pytest.raises(RuntimeError, match="student judge produced 0 judgements"):
             list(cascade.forward(iter([_pair("a", "b")])))
 
     def test_escalation_yielding_two_judgements_raises(self) -> None:
-        cascade = CascadeJudge(
+        cascade = CascadeMatcher(
             student=ScriptedJudge({frozenset({"a", "b"}): 0.5}, score_type="prob_rf"),
             escalation=DoubleJudge({}),
             band=(0.3, 0.7),
@@ -369,7 +371,7 @@ class TestScoreTypeWarning:
         student = ScriptedJudge(
             {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.95}, score_type="heuristic"
         )
-        cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -388,7 +390,7 @@ class TestScoreTypeWarning:
         assert not [w for w in caught_again if "score_type" in str(w.message)]
 
     def test_non_probability_escalation_warns(self) -> None:
-        # student must stay a probability score_type here -- CascadeJudge's
+        # student must stay a probability score_type here -- CascadeMatcher's
         # one-time warning fires on the FIRST non-probability score_type it
         # sees, and the student is always checked before the escalation
         # child. A non-probability student would consume the one-time
@@ -396,7 +398,7 @@ class TestScoreTypeWarning:
         # the escalation child's warning at all.
         student = ScriptedJudge({frozenset({"a", "b"}): 0.5}, score_type="prob_rf")
         escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="sim_cos")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         with pytest.warns(UserWarning, match="sim_cos"):
             list(cascade.forward(iter([_pair("a", "b")])))
@@ -406,7 +408,7 @@ class TestScoreTypeWarning:
             {frozenset({"a", "b"}): 0.5, frozenset({"c", "d"}): 0.9}, score_type="prob_rf"
         )
         escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -426,7 +428,7 @@ class TestMixedStreamClustering:
             score_type="prob_rf",
         )
         escalation = ScriptedJudge({frozenset({"c", "d"}): 0.9}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         judgements = list(
             cascade.forward(iter([_pair("a", "b"), _pair("c", "d"), _pair("e", "f")]))
@@ -449,8 +451,8 @@ class TestBudgetExceededComposition:
     def test_capped_escalation_under_logging_module_keeps_paid_judgements(
         self, tmp_path: Path
     ) -> None:
-        """The exact composition from the plan: a _SpendCappedModule-wrapped
-        escalation child under LoggingModule must NOT drop the paid judgement
+        """The exact composition from the plan: a _SpendCappedMatcher-wrapped
+        escalation child under LoggingMatcher must NOT drop the paid judgement
         from the log (judgement_log.py's ``[logged:]`` slice)."""
         student = ScriptedJudge(
             {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.1, frozenset({"e", "f"}): 0.5},
@@ -463,12 +465,12 @@ class TestBudgetExceededComposition:
             decision_step="frontier",
             provenance={"cost_usd": 1.0, "model": "frontier-x"},
         )
-        capped: _SpendCappedModule = _SpendCappedModule(expensive, budget_usd=0.5)
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        capped: _SpendCappedMatcher = _SpendCappedMatcher(expensive, budget_usd=0.5)
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=student, escalation=capped, band=(0.3, 0.7)
         )
         log = JudgementLog(tmp_path / "log.jsonl")
-        logging_module = LoggingModule(cascade, log=log, threshold=0.5)
+        logging_module = LoggingMatcher(cascade, log=log, threshold=0.5)
 
         with pytest.raises(BudgetExceeded) as excinfo:
             list(logging_module.forward(iter([_pair("a", "b"), _pair("c", "d"), _pair("e", "f")])))
@@ -493,7 +495,7 @@ class TestBudgetExceededComposition:
         assert rows[2]["model"] == "frontier-x"
 
     def test_outer_spend_cap_sees_escalated_cost(self) -> None:
-        """cost_usd passes through the merge, so an OUTER _SpendCappedModule
+        """cost_usd passes through the merge, so an OUTER _SpendCappedMatcher
         wrapping the whole cascade trips on escalation spend unchanged."""
         student = ScriptedJudge(
             {frozenset({"a", "b"}): 0.9, frozenset({"c", "d"}): 0.5}, score_type="prob_rf"
@@ -503,10 +505,10 @@ class TestBudgetExceededComposition:
             score_type="prob_llm",
             provenance={"cost_usd": 1.0, "model": "frontier-x"},
         )
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=student, escalation=escalation, band=(0.3, 0.7)
         )
-        capped: _SpendCappedModule = _SpendCappedModule(cascade, budget_usd=0.5)
+        capped: _SpendCappedMatcher = _SpendCappedMatcher(cascade, budget_usd=0.5)
 
         with pytest.raises(BudgetExceeded) as excinfo:
             list(capped.forward(iter([_pair("a", "b"), _pair("c", "d")])))
@@ -529,7 +531,7 @@ class TestNonBudgetExceededPropagation:
         student = ScriptedJudge(
             {frozenset({"a", "b"}): 0.5}, score_type="prob_rf"
         )  # in-band -> escalates
-        cascade = CascadeJudge(student=student, escalation=RaisingJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=RaisingJudge({}), band=(0.3, 0.7))
 
         with pytest.raises(RuntimeError, match="escalation backend unavailable"):
             list(cascade.forward(iter([_pair("a", "b")])))
@@ -543,9 +545,9 @@ class TestNonBudgetExceededPropagation:
 class TestSerialization:
     def test_config_roundtrip_via_registry(self) -> None:
         specs = [FeatureSpec(name="name")]
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
-            student=WeightedAverageJudge(feature_specs=specs),
-            escalation=WeightedAverageJudge(feature_specs=specs),
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
+            student=WeightedAverageMatcher(feature_specs=specs),
+            escalation=WeightedAverageMatcher(feature_specs=specs),
             band=(0.3, 0.7),
         )
 
@@ -554,16 +556,16 @@ class TestSerialization:
         assert config["band"] == [0.3, 0.7]
 
         cls = get_component("cascade_judge")
-        assert cls is CascadeJudge
+        assert cls is CascadeMatcher
         rebuilt = cls.from_config(config)
-        assert isinstance(rebuilt, CascadeJudge)
+        assert isinstance(rebuilt, CascadeMatcher)
         assert rebuilt.band == (0.3, 0.7)
-        assert isinstance(rebuilt.student, WeightedAverageJudge)
-        assert isinstance(rebuilt.escalation, WeightedAverageJudge)
+        assert isinstance(rebuilt.student, WeightedAverageMatcher)
+        assert isinstance(rebuilt.escalation, WeightedAverageMatcher)
         assert rebuilt.config == config
 
     def test_config_rejects_unregistered_child(self) -> None:
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=ScriptedJudge({}), escalation=ScriptedJudge({}), band=(0.3, 0.7)
         )
         with pytest.raises(ValueError, match="type_name"):
@@ -575,10 +577,10 @@ class TestSerialization:
         of the module is ever trimmed (mirrors the w1_2/w1_3 wiring tests)."""
         from langres.core.registry import _LAZY_COMPONENT_MODULES
 
-        assert _LAZY_COMPONENT_MODULES["cascade_judge"] == "langres.core.modules.cascade_judge"
+        assert _LAZY_COMPONENT_MODULES["cascade_judge"] == "langres.core.matchers.cascade_judge"
 
     def test_save_state_writes_per_child_subdirs(self, tmp_path: Path) -> None:
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=StatefulStubJudge({}, value="fitted-student"),
             escalation=ScriptedJudge({}),  # no SerializableState: skipped
             band=(0.3, 0.7),
@@ -590,7 +592,7 @@ class TestSerialization:
 
     def test_save_state_drops_empty_child_dir(self, tmp_path: Path) -> None:
         """A stateful child with nothing to persist (e.g. unfit) leaves no dir."""
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=StatefulStubJudge({}, value=""),  # writes nothing
             escalation=ScriptedJudge({}),
             band=(0.3, 0.7),
@@ -603,7 +605,7 @@ class TestSerialization:
         (tmp_path / "student" / "state.txt").write_text("fitted-student")
 
         student = StatefulStubJudge({}, value="")
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7)
         )
         cascade.load_state(tmp_path)
@@ -612,19 +614,19 @@ class TestSerialization:
     def test_load_state_tolerates_missing_and_stateless(self, tmp_path: Path) -> None:
         """Absent subdirs and stateless children are both no-ops (never raise)."""
         student = StatefulStubJudge({}, value="untouched")
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7)
         )
         cascade.load_state(tmp_path)  # empty dir: nothing to restore
         assert student.value == "untouched"
 
     def test_resolver_save_load_roundtrip_with_fitted_rf_student(self, tmp_path: Path) -> None:
-        """Full Resolver round trip: fitted RandomForestJudge student survives save/load
+        """Full Resolver round trip: fitted RandomForestMatcher student survives save/load
         via the cascade's SerializableState sidecar (zero Resolver changes)."""
         pytest.importorskip("sklearn")
         from langres.core import AllPairsBlocker, Resolver
         from langres.core.comparator import StringComparator
-        from langres.core.modules.random_forest_judge import RandomForestJudge
+        from langres.core.matchers.random_forest_judge import RandomForestMatcher
 
         comparator = StringComparator.from_schema(CompanySchema)
         candidates: list[ERCandidate[CompanySchema]] = []
@@ -653,22 +655,22 @@ class TestSerialization:
             )
             labels.append(False)
 
-        student: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        student: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=10, random_state=0
         )
         student.fit(iter(candidates), labels)
         # Unfit escalation: persists nothing, so its sidecar subdir is dropped
         # (the tolerate-empty-dirs contract in a real Resolver round trip).
-        escalation: RandomForestJudge[CompanySchema] = RandomForestJudge(
+        escalation: RandomForestMatcher[CompanySchema] = RandomForestMatcher(
             feature_specs=comparator.feature_specs, n_estimators=5, random_state=1
         )
-        cascade: CascadeJudge[CompanySchema] = CascadeJudge(
+        cascade: CascadeMatcher[CompanySchema] = CascadeMatcher(
             student=student, escalation=escalation, band=(0.45, 0.55)
         )
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=cascade,
+            matcher=cascade,
             clusterer=Clusterer(threshold=0.5),
         )
         resolver.save(tmp_path)
@@ -684,7 +686,7 @@ class TestSerialization:
         assert not (tmp_path / "module" / "escalation").exists()
 
         reloaded = Resolver.load(tmp_path)
-        assert isinstance(reloaded.module, CascadeJudge)
+        assert isinstance(reloaded.module, CascadeMatcher)
         assert reloaded.module.band == (0.45, 0.55)
 
         records = [
@@ -705,7 +707,7 @@ class TestSerialization:
 class TestInspectScores:
     def test_inspect_scores_returns_report(self) -> None:
         student = ScriptedJudge({frozenset({"a", "b"}): 0.9}, score_type="prob_rf")
-        cascade = CascadeJudge(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=ScriptedJudge({}), band=(0.3, 0.7))
         judgements = list(cascade.forward(iter([_pair("a", "b")])))
         report = cascade.inspect_scores(judgements)
         assert isinstance(report, ScoreInspectionReport)
@@ -734,7 +736,7 @@ class TestAbstainingStudentEscalates:
     def test_abstaining_student_escalates_to_teacher(self) -> None:
         student = AbstainingStudent({})
         escalation = ScriptedJudge({frozenset({"a", "b"}): 0.8}, score_type="prob_llm")
-        cascade = CascadeJudge(student=student, escalation=escalation, band=(0.3, 0.7))
+        cascade = CascadeMatcher(student=student, escalation=escalation, band=(0.3, 0.7))
 
         [judgement] = list(cascade.forward(iter([_pair("a", "b")])))
 

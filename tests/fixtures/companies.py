@@ -2,7 +2,7 @@
 Test dataset for company deduplication (Approach 1: Classical String Matching).
 
 This dataset contains synthetic company records with known duplicates for testing
-the AllPairsBlocker, RapidfuzzModule, and end-to-end pipeline.
+the AllPairsBlocker, RapidfuzzMatcher, and end-to-end pipeline.
 
 Duplicate groups:
 - Group 1 (exact duplicates): companies[0] and companies[1] (IDs: "c1", "c1_dup1")

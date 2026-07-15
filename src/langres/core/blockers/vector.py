@@ -541,7 +541,7 @@ class VectorBlocker(Blocker[SchemaT]):
             neighbors (A's nearest neighbor is B AND B's nearest neighbor is
             A -- common with real ANN indexes on near-duplicate records) would
             otherwise appear as a member edge in BOTH groups, and a consumer
-            issuing one call per group (e.g. a future SelectJudge) would
+            issuing one call per group (e.g. a future SelectMatcher) would
             emit and charge for the same undirected pair twice.
 
             The pairs recoverable by flattening these groups back to

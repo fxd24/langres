@@ -1,4 +1,4 @@
-# W1.2 trained-family replication: FellegiSunterJudge + RandomForestJudge
+# W1.2 trained-family replication: FellegiSunterMatcher + RandomForestMatcher
 
 **Date:** 2026-07-02
 **Branch:** `feat/w1-trained-family`
@@ -12,10 +12,10 @@ examples/research/w1_trained_family_race.py`)
 W1.2 shipped the first two members of the "trained family" — judges that need
 a `fit()` step before they can score (`docs/EXPERIMENTS.md` § "The fit seam"):
 
-- **`FellegiSunterJudge`** (`fellegi_sunter`) — classical Fellegi-Sunter,
+- **`FellegiSunterMatcher`** (`fellegi_sunter`) — classical Fellegi-Sunter,
   fit via **EM with no labels** (`UnsupervisedFitMixin.fit_unlabeled`). The
   first "learn with no labels" proof in langres.
-- **`RandomForestJudge`** (`random_forest`) — a Magellan-style `sklearn.RandomForestClassifier`
+- **`RandomForestMatcher`** (`random_forest`) — a Magellan-style `sklearn.RandomForestClassifier`
   over `ComparisonVector.similarities`, fit **with labels**
   (`SupervisedFitMixin.fit`).
 
@@ -62,10 +62,10 @@ misses on the harder AG; FS misses its literature band on every dataset.**
 This is reported as-is, not tuned to close the gap — see the diagnostic below
 for *why*, which is itself the most useful finding of this replication.
 
-## Diagnostic: FellegiSunterJudge's EM does not converge at real-benchmark scale
+## Diagnostic: FellegiSunterMatcher's EM does not converge at real-benchmark scale
 
-Every one of the three fits above hit `FellegiSunterJudge`'s **non-convergence
-fallback** (`FellegiSunterJudge EM did not converge within max_em_iter=20`), so
+Every one of the three fits above hit `FellegiSunterMatcher`'s **non-convergence
+fallback** (`FellegiSunterMatcher EM did not converge within max_em_iter=20`), so
 the reported FS scores use the *safe initial priors* (`prior=0.5`, `m=0.9` for
 every feature) rather than data-learned m-probabilities. `max_em_iter=20` is
 the class default — validated in

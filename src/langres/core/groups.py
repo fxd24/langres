@@ -1,10 +1,10 @@
 """Set-wise candidate grouping: ERCandidateGroup and the pairwise->group default.
 
-ERCandidateGroup is the set-wise input contract for :class:`~langres.core.module.
-GroupwiseModule` (W1.0 contracts; see docs/TECHNICAL_OVERVIEW.md "Group
+ERCandidateGroup is the set-wise input contract for :class:`~langres.core.matcher.
+GroupwiseMatcher` (W1.0 contracts; see docs/TECHNICAL_OVERVIEW.md "Group
 contract"). It represents "anchor + K candidate members" -- e.g. one LLM call
 asking "which of these K candidates match the anchor?" instead of K separate
-pairwise calls (the ComEM-style SelectJudge this contract is designed for,
+pairwise calls (the ComEM-style SelectMatcher this contract is designed for,
 which lands in a later branch).
 
 This module also provides :func:`derive_groups_from_pairs`, the default,
@@ -29,14 +29,14 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
 class ERCandidateGroup(BaseModel, Generic[SchemaT]):
-    """Anchor + K candidate members: the set-wise input to a GroupwiseModule.
+    """Anchor + K candidate members: the set-wise input to a GroupwiseMatcher.
 
     Attributes:
         anchor: The reference entity all members are compared against.
         members: The K candidate entities being evaluated against the anchor.
         group_id: Identifier for this group, e.g. the anchor's id. Carried
             through to ``PairwiseJudgement.provenance["group_id"]`` by
-            :func:`~langres.core.module.stamp_group_cost` so every judgement
+            :func:`~langres.core.matcher.stamp_group_cost` so every judgement
             produced from one group call is traceable back to it.
     """
 

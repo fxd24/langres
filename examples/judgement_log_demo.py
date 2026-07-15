@@ -27,7 +27,7 @@ records = [
 ]
 
 log = JudgementLog("tmp/judgement_log_demo.jsonl")
-result = dedupe(records, judge="string", threshold=0.6, log=log)
+result = dedupe(records, matcher="string", threshold=0.6, log=log)
 
 print(f"{len(result)} cluster(s): {list(result)}")
 
