@@ -10,9 +10,11 @@ import pytest
 
 from langres.core.metrics import (
     _bin_indices,
+    _LOG_LOSS_EPS,
     brier_score,
     cohens_kappa,
     expected_calibration_error,
+    log_loss,
     matthews_corrcoef,
     reliability_bins,
 )
@@ -144,6 +146,73 @@ def test_brier_confidence_out_of_range_raises() -> None:
 def test_brier_confidence_negative_raises() -> None:
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         brier_score([-0.1], [True])
+
+
+# ---------------------------------------------------------------------------
+# Log loss (binary cross-entropy)
+# ---------------------------------------------------------------------------
+
+
+def test_log_loss_hand_computed() -> None:
+    # -(log(0.9) + log(1-0.1)) / 2 = -log(0.9).
+    assert log_loss([0.9, 0.1], [True, False]) == pytest.approx(-math.log(0.9))
+
+
+def test_log_loss_perfect_is_near_zero() -> None:
+    # Clamped to [eps, 1-eps]; the residual is ~eps, i.e. effectively 0.
+    assert log_loss([1.0, 0.0], [True, False]) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_log_loss_confident_and_wrong_is_large_but_finite() -> None:
+    # p=0 for a True and p=1 for a False both clamp to the eps bound.
+    worst = log_loss([0.0, 1.0], [True, False])
+    assert worst == pytest.approx(-math.log(_LOG_LOSS_EPS))
+    assert math.isfinite(worst)
+
+
+def test_log_loss_constant_half_is_log_two() -> None:
+    assert log_loss([0.5, 0.5], [True, False]) == pytest.approx(math.log(2.0))
+
+
+def test_log_loss_is_symmetric_under_label_flip() -> None:
+    # Flipping every (p, y) to (1-p, not y) leaves the loss unchanged.
+    assert log_loss([0.9, 0.1], [True, False]) == pytest.approx(
+        log_loss([0.1, 0.9], [False, True])
+    )
+
+
+def test_log_loss_small_vector() -> None:
+    conf = [0.8, 0.6, 0.3]
+    out = [True, True, False]
+    expected = -(math.log(0.8) + math.log(0.6) + math.log(1 - 0.3)) / 3
+    assert log_loss(conf, out) == pytest.approx(expected)
+
+
+def test_log_loss_epsilon_clamp_at_zero() -> None:
+    # p=0: correct-False stays ~0, wrong-True clamps to the eps penalty (finite).
+    assert log_loss([0.0], [False]) == pytest.approx(0.0, abs=1e-12)
+    assert log_loss([0.0], [True]) == pytest.approx(-math.log(_LOG_LOSS_EPS))
+
+
+def test_log_loss_epsilon_clamp_at_one() -> None:
+    # p=1: correct-True stays ~0, wrong-False clamps to the eps penalty (finite).
+    assert log_loss([1.0], [True]) == pytest.approx(0.0, abs=1e-12)
+    assert log_loss([1.0], [False]) == pytest.approx(-math.log(_LOG_LOSS_EPS))
+
+
+def test_log_loss_length_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="equal length"):
+        log_loss([0.5], [True, False])
+
+
+def test_log_loss_empty_raises() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        log_loss([], [])
+
+
+def test_log_loss_confidence_out_of_range_raises() -> None:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        log_loss([1.5], [True])
 
 
 # ---------------------------------------------------------------------------

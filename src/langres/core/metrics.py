@@ -5,8 +5,8 @@ This module provides metrics for evaluating different pipeline stages:
 - Clustering stage: evaluate_clustering(), calculate_bcubed_metrics(), calculate_pairwise_metrics()
 - Agreement (rater-vs-rater): cohens_kappa(), matthews_corrcoef()
 - Ranking (score-vs-label): roc_auc_score(), average_precision_score()
-- Calibration (confidence-vs-outcome): brier_score(), expected_calibration_error(),
-  reliability_bins()
+- Calibration (confidence-vs-outcome): brier_score(), log_loss(),
+  expected_calibration_error(), reliability_bins()
 
 References:
     Amigó, E., Gonzalo, J., Artiles, J., & Verdejo, F. (2009).
@@ -1282,6 +1282,53 @@ def brier_score(confidences: list[float], outcomes: list[bool]) -> float:
     return sum(
         (p - (1.0 if y else 0.0)) ** 2 for p, y in zip(confidences, outcomes, strict=True)
     ) / len(confidences)
+
+
+# Epsilon that clamps predicted probabilities away from 0 and 1 before taking
+# their log, so a confident-and-wrong prediction yields a large *finite* loss
+# instead of ``log(0) = -inf``. 1e-15 matches the scikit-learn default and caps
+# the per-item penalty near ``-log(1e-15) ~= 34.5``.
+_LOG_LOSS_EPS = 1e-15
+
+
+def log_loss(confidences: list[float], outcomes: list[bool]) -> float:
+    """Binary cross-entropy (log loss): the loss-like proper scoring rule.
+
+    ``log_loss = -mean( y*log(p) + (1 - y)*log(1 - p) )`` over aligned predicted
+    probabilities ``p`` and boolean outcomes ``y``. Like :func:`brier_score` it
+    is a strictly proper scoring rule (minimized only by honest probabilities)
+    and needs no binning, but it penalizes confident mistakes far more harshly.
+    That heavy tail makes it the natural loss-like steering signal for the
+    autoresearch loop, which optimizes a loss rather than a saturated F1.
+
+    Each probability is clamped to ``[eps, 1 - eps]`` (``eps = _LOG_LOSS_EPS =
+    1e-15``) before the log, so a confident-and-wrong ``p = 0`` / ``p = 1`` gives
+    a large finite loss instead of ``+inf``; the per-item penalty is therefore
+    capped near ``-log(eps) ~= 34.5``.
+
+    Args:
+        confidences: Predicted probabilities in ``[0, 1]``.
+        outcomes: Realized boolean outcomes, aligned with ``confidences``.
+
+    Returns:
+        Mean binary cross-entropy in nats; ``>= 0.0``, lower is better.
+        Approaches ``0.0`` only for confident, correct predictions (up to the
+        ``eps`` clamp). A constant ``0.5`` forecaster scores ``log(2) ~= 0.693``.
+
+    Raises:
+        ValueError: If inputs differ in length, are empty, or any confidence is
+            outside ``[0, 1]``.
+
+    Example:
+        >>> log_loss([0.9, 0.1], [True, False])
+        0.10536051565782628
+    """
+    _validate_calibration(confidences, outcomes)
+    total = 0.0
+    for p, y in zip(confidences, outcomes, strict=True):
+        clamped = min(max(p, _LOG_LOSS_EPS), 1.0 - _LOG_LOSS_EPS)
+        total += math.log(clamped) if y else math.log(1.0 - clamped)
+    return -total / len(confidences)
 
 
 def _bin_indices(confidences: list[float], n_bins: int, strategy: BinStrategy) -> list[list[int]]:
