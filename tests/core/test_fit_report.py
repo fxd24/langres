@@ -55,9 +55,7 @@ class _FakeSupervised(Matcher[CompanySchema]):
     ) -> ScoreInspectionReport:
         raise NotImplementedError
 
-    def fit(
-        self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]
-    ) -> None:
+    def fit(self, candidates: Iterator[ERCandidate[CompanySchema]], labels: Sequence[bool]) -> None:
         self.fit_calls.append((len(list(candidates)), list(labels)))
 
 

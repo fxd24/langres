@@ -25,8 +25,9 @@ from langres.core.harvest import (
 from langres.core.models import CompanySchema, ERCandidate
 
 
-def _cand(left_id: str, right_id: str, *, left_name: str | None = None,
-          right_name: str | None = None) -> ERCandidate[CompanySchema]:
+def _cand(
+    left_id: str, right_id: str, *, left_name: str | None = None, right_name: str | None = None
+) -> ERCandidate[CompanySchema]:
     """A minimal candidate keyed by (left_id, right_id)."""
     return ERCandidate(
         left=CompanySchema(id=left_id, name=left_name or left_id),
@@ -36,7 +37,9 @@ def _cand(left_id: str, right_id: str, *, left_name: str | None = None,
 
 
 def _labeled(left_id: str, right_id: str, label: bool) -> LabeledPair:
-    return LabeledPair(left_id=left_id, right_id=right_id, score=None, label=label, source="correction")
+    return LabeledPair(
+        left_id=left_id, right_id=right_id, score=None, label=label, source="correction"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -607,9 +607,7 @@ class Resolver:
             judgements = list(self.module.forward(iter(aligned.valid.candidates)))
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)})
-                for c, label in zip(
-                    aligned.valid.candidates, aligned.valid.labels, strict=True
-                )
+                for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
                 if label
             }
             metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
