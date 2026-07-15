@@ -145,7 +145,7 @@ jobs:
       - name: Upload coverage to Codecov
         # Advisory, never a merge gate: fail_ci_if_error stays false so a Codecov
         # hiccup can't turn this merge-to-main run red. Token is required for uploads.
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
