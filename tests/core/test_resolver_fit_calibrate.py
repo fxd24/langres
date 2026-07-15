@@ -16,14 +16,16 @@ wiring: dispatch, ``describe()``, the calibrated predict path, the ``FitReport``
 delta, and the save/load round-trip of a fitted calibrator.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from langres.core.harvest import LabeledPair
 from langres.core.methods_api import Method
 from langres.core.methods_calibrate import CalibrateMethod, Isotonic, Platt
-from langres.core.models import CompanySchema
+from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.resolver import Resolver
 
 # Six disconnected groups; each is one entity-disjoint component carrying two
@@ -217,3 +219,28 @@ def test_calibrate_with_non_calibrate_method_raises() -> None:
 
     with pytest.raises(ValueError, match="needs a CalibrateMethod exposing .strategy"):
         _resolver().fit(records, pairs=pairs, method=_Bare())
+
+
+class _DeciderOnlyMatcher:
+    """A matcher that decides but never ranks (``score=None``) -- nothing to calibrate."""
+
+    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            yield PairwiseJudgement(
+                left_id=str(candidate.left.id),
+                right_id=str(candidate.right.id),
+                decision=True,
+                score=None,
+                score_type="prob_llm",
+                decision_step="decider",
+                provenance={},
+            )
+
+
+def test_calibrate_on_scoreless_matcher_raises() -> None:
+    """A pure decider emits no scores, so calibration has nothing to fit -- clear error."""
+    records, pairs = _dataset()
+    resolver = _resolver()
+    resolver.module = _DeciderOnlyMatcher()  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="no scores to calibrate"):
+        resolver.fit(records, pairs=pairs, method=Platt())

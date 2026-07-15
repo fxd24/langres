@@ -691,8 +691,10 @@ signature:
   (learn a high-recall blocking key/index from known match pairs). Contract-only
   for now — the concrete `TrainableVectorBlocker` is a later PR.
 - **Calibrator** — `CalibratorFitMixin.fit_calibrator(scores: Sequence[float], labels: Sequence[bool]) -> None`
-  (learn a score→probability map). Contract-only for now — the concrete
-  Platt/isotonic impl is a later PR.
+  (learn a score→probability map) + `transform(scores) -> list[float]` (apply
+  it). The concrete `Calibrator` (Platt logistic / isotonic, `[trained]`) in
+  `langres.core.calibration` implements it, consumed by
+  `Resolver.fit(method=Platt()/Isotonic())` — see the `method=` seam below.
 
 `Resolver.fit(data, labels=None, *, pairs=None, split=None, seed=0)` consumes the
 **matcher** mixins, detected with `isinstance(module, SupervisedFitMixin)` /
@@ -764,8 +766,24 @@ unchanged):
   exercises them; `MIPRO` is paid-only. `budget_usd` threads through the existing
   `SpendMonitor` seam (DSPy-compile spend capture is deferred to #100, so it
   observes `$0` today).
-- **fine-tune** (`kind="finetune"`) / **calibrate** (`kind="calibrate"`) — wired
-  stubs raising a clear NotImplementedError naming their PR.
+- **fine-tune** (`kind="finetune"`, implemented) — `QLoRA(base=..., ...)` from
+  `langres.core.finetune` fine-tunes a small LM on the labeled pairs, repoints
+  the Resolver's matcher at an in-process logprob-scoring `LLMMatcher` over the
+  produced `model_ref`, and records GPU-seconds / derived-$ + held-out P/R/F1 in
+  the `FitReport`. The training stack (peft/trl) stays lazy-imported.
+- **calibrate** (`kind="calibrate"`, implemented) — `Platt()` / `Isotonic()`
+  from `langres.core.methods_calibrate` fit a score→probability `Calibrator`
+  (`langres.core.calibration`, `[trained]`) from labeled pairs, attach it to the
+  Resolver, and map every raw judgement score to a calibrated probability in
+  `predict()`/`resolve()` (the clusterer then thresholds a real probability; the
+  matcher and clusterer are untouched). Supervision comes from `pairs=` (reusing
+  `align_pairs` + the entity-disjoint split) or pre-aligned `labels=`. When a
+  `valid` split exists the `FitReport` carries the **Brier/ECE before-vs-after**
+  on it — the honest proof the map calibrates. The learned params are a handful
+  of plain floats carried inline in the artifact, so `save`/`load` round-trips a
+  *fitted* calibrator with no pickle and no weight files (`transform` applies the
+  map with pure NumPy). `Platt()`/`Isotonic()` are import-light (no scikit-learn
+  until the fit runs).
 
 `Resolver.describe()` is the pre-fit honesty device: a per-component string
 tagging each pipeline role **TRAINABLE** (implements a `langres.core.fit`
