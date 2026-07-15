@@ -53,6 +53,11 @@ flywheel harvest → closed-loop flywheel → person:
   slice, serve the weightless `model_ref` in-process, and evaluate held-out F1,
   reporting the honest cost in GPU-seconds. A REAL (small) fine-tune, slow on
   CPU/MPS; needs the `[finetune,semantic,llm]` extras (see its docstring).
+- **`quickstart_mining.py`** — the data-prep substrate that *feeds* training:
+  mine AnyMatch hard positives, balance negatives 2:1, attribute-augment, and
+  confident-learning denoise a labeled pair set, then print a
+  `MiningReadinessSection`. Offline and $0; uses the `[trained]` extra (sklearn)
+  for the out-of-fold RandomForest behind the featurizing miners.
 
 ## Example Data
 

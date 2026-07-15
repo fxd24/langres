@@ -153,6 +153,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "cleanlab>=2.9.0",
     # Experimentation/eval tooling (hyperparameter tuning via optuna) plus
     # experiment-tracking integrations (wandb, langfuse) -- not needed by the
     # production link()/dedupe() path, so they live in the dev group (not a

@@ -2,7 +2,8 @@
 
 The public surface of the data-layer profiler (plan §2). The report is a *bag of
 sections* -- one self-contained :class:`ProfileSection` per metric family (label
-structure, corpus fields, separability, embeddings, the KPI hero), composed into a
+structure, mining readiness, corpus fields, separability, embeddings, the KPI
+hero), composed into a
 :class:`DataProfileReport` that renders exactly the sections it is given. Build one
 explicitly from the profiler functions, or via the convenience constructors
 :func:`from_benchmark` / :func:`from_records` (and the ``[semantic]``-gated
@@ -45,6 +46,10 @@ from langres.data.data_profile.label_structure import (
     LabelStructureSection,
     profile_label_structure,
 )
+from langres.data.data_profile.mining_readiness import (
+    MiningReadinessSection,
+    profile_mining_readiness,
+)
 from langres.data.data_profile.separability import (
     SeparabilitySection,
     SimilaritySignal,
@@ -59,6 +64,7 @@ __all__ = [
     # Sections
     "HeroSection",
     "LabelStructureSection",
+    "MiningReadinessSection",
     "CorpusFieldSection",
     "FieldStat",
     "SeparabilitySection",
@@ -67,6 +73,7 @@ __all__ = [
     # Profiler functions
     "build_hero",
     "profile_label_structure",
+    "profile_mining_readiness",
     "profile_corpus_fields",
     "profile_separability",
     "profile_embedding",

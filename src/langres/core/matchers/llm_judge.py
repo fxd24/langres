@@ -192,6 +192,25 @@ def default_record_serializer(entity: Any) -> str:
     return str(entity.model_dump_json(indent=2))
 
 
+def colval_serializer(entity: Any) -> str:
+    """COL/VAL ``record_serializer`` (the AnyMatch / Ditto flat serialization).
+
+    Renders each ``model_dump()`` field as ``COL <field> VAL <value>``, space
+    joined -- e.g. ``COL name VAL Acme Corp COL city VAL Berlin``. A ``None``
+    value renders as an empty ``VAL`` (the field is present but blank), so a
+    record with a missing attribute is distinguishable from one where the field
+    was never declared. A serialization *strategy* (a sibling of ``json``), not a
+    miner: it is the flat text small-LM matchers/finetunes are trained on, so it
+    lives beside :func:`default_record_serializer` and is name-selectable via
+    :data:`RECORD_SERIALIZERS` (``record_serializer="colval"``).
+    """
+    parts = [
+        f"COL {field} VAL {'' if value is None else value}"
+        for field, value in entity.model_dump().items()
+    ]
+    return " ".join(parts)
+
+
 #: Named ``response_parser`` registry: these names are accepted anywhere a
 #: parser is (``LLMMatcher(response_parser=...)``, the verbs' / ``from_schema``'s
 #: ``matcher="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
@@ -208,6 +227,7 @@ RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
 #: custom callables do not).
 RECORD_SERIALIZERS: dict[str, Callable[[Any], str]] = {
     "json": default_record_serializer,
+    "colval": colval_serializer,
 }
 
 
