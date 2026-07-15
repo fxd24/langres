@@ -66,6 +66,11 @@ DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 #: an LLM-family builder raises when its lazy import fails.
 _INSTALL_LLM_EXTRA = "`uv sync --extra llm` or `pip install 'langres[llm]'`"
 
+#: Install line for the ``[trained]`` extra, woven into the actionable
+#: ImportError the supervised ``random_forest`` builder raises when scikit-learn
+#: is absent (the same shape as ``_INSTALL_LLM_EXTRA``).
+_INSTALL_TRAINED_EXTRA = "`uv sync --extra trained` or `pip install 'langres[trained]'`"
+
 
 class UnknownMethodError(ValueError):
     """Raised when a judge/method name is not registered (or uses reserved grammar).
@@ -200,6 +205,14 @@ def _llm_extra_error(name: str, missing: str) -> ImportError:
     return ImportError(
         f'judge "{name}" needs the [llm] extra ({missing} is not installed). '
         f"Install it with {_INSTALL_LLM_EXTRA}."
+    )
+
+
+def _trained_extra_error(name: str, missing: str) -> ImportError:
+    """The actionable [trained]-extra ImportError the random-forest builder raises."""
+    return ImportError(
+        f'judge "{name}" needs the [trained] extra ({missing} is not installed). '
+        f"Install it with {_INSTALL_TRAINED_EXTRA}."
     )
 
 
@@ -418,7 +431,10 @@ def _build_random_forest(
     comparator: Comparator[Any] | None = None,
 ) -> Matcher[Any]:
     """``random_forest``: supervised sklearn forest over comparator similarities."""
-    from langres.core.matchers.random_forest_judge import RandomForestMatcher
+    try:
+        from langres.core.matchers.random_forest_judge import RandomForestMatcher
+    except ImportError as exc:
+        raise _trained_extra_error("random_forest", "scikit-learn") from exc
 
     return RandomForestMatcher(feature_specs=_feature_specs(schema, comparator))
 

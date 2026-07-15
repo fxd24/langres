@@ -86,7 +86,7 @@ _MANIFEST_FILENAME = "resolver.json"
 #: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
 #: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
 #: constructor argument.
-_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm"]
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"]
 
 
 def _build_module_for_judge(
@@ -110,11 +110,11 @@ def _build_module_for_judge(
     """
     if isinstance(judge, Matcher):
         return judge
-    if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm"):
+    if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"):
         raise ValueError(
             f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
-            "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', or pass a "
-            "Matcher instance. 'auto' key-based resolution is a verbs-layer "
+            "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', 'random_forest', "
+            "or pass a Matcher instance. 'auto' key-based resolution is a verbs-layer "
             "feature -- use langres.link/langres.dedupe for that."
         )
     from langres.core.method_registry import get_method
@@ -408,7 +408,11 @@ class Resolver:
                 above), ``"zero_shot_llm"``, ``"prompt_llm"`` (the
                 bring-your-own-prompt ``LLMMatcher`` -- with a *registered*
                 ``response_parser`` name the whole judge, prompt included,
-                ``save``/``load`` round-trips), or a ``Matcher`` instance. This
+                ``save``/``load`` round-trips), ``"random_forest"`` (a
+                supervised sklearn ``RandomForestMatcher`` over the comparator's
+                per-feature similarities -- needs the ``[trained]`` extra and is
+                TRAINABLE, so ``fit(records, pairs=...)``/``labels=...`` it with
+                labeled data before it can score), or a ``Matcher`` instance. This
                 is the low-level, explicit switch (no ``"auto"`` key-based
                 resolution and no spend cap -- that magic lives in
                 ``langres.link``/``langres.dedupe``). **Caution**:
