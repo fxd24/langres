@@ -43,8 +43,7 @@ Optuna/LLAMBO proposer swap.
   clamped near `-log(1e-15)` so a confident-and-wrong `p=0/1` is large but finite).
 - **`examples/research/blocking_recall_autoresearch.py`** — the E1 proof: the loop
   hill-climbs blocking recall@budget on amazon_google at **$0, offline** (measured
-  climb + budget-rejection numbers in
-  [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)).
+  climb + budget-rejection numbers in `docs/EXPERIMENTS.md`).
 
 ### Model identity + one method registry (v0.3 slice, closes #103)
 
