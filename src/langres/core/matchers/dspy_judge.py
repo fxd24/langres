@@ -204,6 +204,17 @@ class DSPyMatcher(Matcher[SchemaT]):
         return self._compiled
 
     @property
+    def n_demos(self) -> int:
+        """Total bootstrapped few-shot demos across the program's predictors.
+
+        ``0`` before :meth:`compile` (a bare ``ChainOfThought`` carries none);
+        the count the ``FitReport`` surfaces after a prompt-optimize fit as "what
+        the compile learned". Mirrors the demo-count probe :meth:`load_state`
+        uses to infer compilation on markerless artifacts.
+        """
+        return sum(len(predictor.demos) for _, predictor in self._program.named_predictors())
+
+    @property
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the LM, program, or secrets)."""
         return {
@@ -233,6 +244,36 @@ class DSPyMatcher(Matcher[SchemaT]):
     def _render_entity(self, entity: SchemaT) -> str:
         """Render an entity for the prompt (LLMMatcher's JSON convention)."""
         return entity.model_dump_json(indent=2)
+
+    def examples_from_candidates(
+        self, candidates: Sequence[ERCandidate[SchemaT]], labels: Sequence[bool]
+    ) -> list[dspy.Example]:
+        """Build a :meth:`compile` trainset from labeled candidates.
+
+        Each pair becomes a ``dspy.Example`` whose ``left`` / ``right`` inputs are
+        rendered *exactly* as :meth:`forward` renders them (via
+        :meth:`_render_entity`), so the demos the optimizer learns reflect what the
+        program sees at inference; ``match`` carries the gold label. This is the
+        candidate->``dspy.Example`` bridge ``Resolver.fit(method=<prompt>)`` uses
+        to feed :meth:`compile`, keeping the rendering convention owned by the
+        matcher rather than duplicated at the call site.
+
+        Args:
+            candidates: Blocked candidate pairs to train on, positionally aligned
+                with ``labels`` (e.g. ``align_pairs(...).train.candidates``).
+            labels: Gold match/non-match labels for each candidate.
+
+        Returns:
+            One ``dspy.Example`` per candidate, inputs marked ``left`` / ``right``.
+        """
+        return [
+            dspy.Example(
+                left=self._render_entity(candidate.left),
+                right=self._render_entity(candidate.right),
+                match=bool(label),
+            ).with_inputs("left", "right")
+            for candidate, label in zip(candidates, labels, strict=True)
+        ]
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Score each candidate pair with the DSPy program, yielding PairwiseJudgements.
@@ -324,6 +365,7 @@ class DSPyMatcher(Matcher[SchemaT]):
         valset: Sequence[dspy.Example] | None = None,
         *,
         optimizer: str = "bootstrap",
+        auto: str = "light",
         tracker: ExperimentTracker | None = None,
         store: str | Path | RunStore | None = None,
         parent_run_id: str | None = None,
@@ -345,8 +387,11 @@ class DSPyMatcher(Matcher[SchemaT]):
                 gold ``match``) the optimizer tunes against.
             valset: Optional validation set (used by ``mipro``).
             optimizer: ``"bootstrap"`` (``BootstrapFewShot`` — deterministic under
-                ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2
-                auto="light"`` — the paid path, exercised only by the example).
+                ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2`` —
+                the paid path, exercised only by the example).
+            auto: ``MIPROv2``'s search-budget preset (``"light"`` / ``"medium"`` /
+                ``"heavy"``); ignored by ``"bootstrap"``. Threaded from the
+                ``MIPRO`` method's ``auto`` field by ``Resolver.fit``.
             tracker: Experiment tracker for the compile run (``None`` — the
                 default — resolves to a no-op via ``resolve_tracker``).
             store: Where to persist the compile :class:`RunRecord` (default: none).
@@ -393,7 +438,7 @@ class DSPyMatcher(Matcher[SchemaT]):
                     # Exercised only by the paid example (MIPROv2 proposes+evaluates
                     # instructions via real LM calls; it is not deterministic under
                     # DummyLM, so it is kept out of the zero-spend unit suite).
-                    self._program = dspy.MIPROv2(metric=_pair_metric, auto="light").compile(
+                    self._program = dspy.MIPROv2(metric=_pair_metric, auto=auto).compile(
                         self._program,
                         trainset=list(trainset),
                         valset=list(valset) if valset is not None else None,
