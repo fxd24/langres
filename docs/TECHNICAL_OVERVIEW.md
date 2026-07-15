@@ -672,31 +672,68 @@ amortization happens through the runner yet. Extending the runner (or adding
 a group-aware variant) to pre-flight and price whole groups atomically is
 deferred to the branch that lands the first concrete `GroupwiseMatcher`.
 
-### Fit hooks (`langres.core.fit`)
+### Fit-hook contract (`langres.core.fit`)
 
-Two runtime-checkable, structural `Protocol`s — **not** abstract methods on
-`Matcher` (that would break every existing, non-learnable module):
+Runtime-checkable, structural `Protocol`s — **not** abstract methods on any base
+class (that would break every existing, non-learnable component). A component
+opts in by implementing the method with the matching name — no subclassing. The
+taxonomy spans the **three trainable pipeline roles**, each with its own
+signature:
 
-- `SupervisedFitMixin.fit(candidates: Iterator[ERCandidate[SchemaT]], labels: Sequence[bool]) -> None`
-- `UnsupervisedFitMixin.fit_unlabeled(candidates: Iterator[ERCandidate[SchemaT]]) -> None`
+- **Matcher** —
+  `SupervisedFitMixin.fit(candidates: Iterator[ERCandidate[SchemaT]], labels: Sequence[bool]) -> None`
+  and `UnsupervisedFitMixin.fit_unlabeled(candidates: Iterator[ERCandidate[SchemaT]]) -> None`.
+  `FellegiSunterMatcher` (unsupervised EM over `ComparisonVector`) and
+  `RandomForestMatcher` (supervised, `[trained]`) are the concrete implementers.
+- **Blocker** — `BlockerFitMixin.fit_blocker(records: Sequence[Any], pairs: Sequence[tuple[str, str]]) -> None`
+  (learn a high-recall blocking key/index from known match pairs). Contract-only
+  for now — the concrete `TrainableVectorBlocker` is a later PR.
+- **Calibrator** — `CalibratorFitMixin.fit_calibrator(scores: Sequence[float], labels: Sequence[bool]) -> None`
+  (learn a score→probability map). Contract-only for now — the concrete
+  Platt/isotonic impl is a later PR.
 
-A module opts in by implementing the method with the matching name — no
-subclassing required. `Resolver.fit(data, labels=None)` detects this with
-`isinstance(module, SupervisedFitMixin)` / `isinstance(module, UnsupervisedFitMixin)`:
+`Resolver.fit(data, labels=None, *, pairs=None, split=None, seed=0)` consumes the
+**matcher** mixins, detected with `isinstance(module, SupervisedFitMixin)` /
+`isinstance(module, UnsupervisedFitMixin)`:
 
-- Matcher implements `SupervisedFitMixin`: `labels` is required; omitting it
+- Matcher implements `SupervisedFitMixin`: supervision comes from either
+  pre-aligned `labels` **or** id-keyed `pairs` (see below); passing neither
   **raises** (a genuinely trainable module silently not being trained is the
-  exact footgun this hook exists to prevent).
+  exact footgun this hook exists to prevent), and passing both raises.
 - Matcher implements `UnsupervisedFitMixin`: `fit_unlabeled` is called
-  unconditionally; passing `labels` to it raises (they would otherwise be
-  silently ignored).
+  unconditionally; passing `labels`/`pairs` to it raises.
 - Matcher implements **neither** hook (e.g. `WeightedAverageMatcher`): `fit()`
   is a no-op returning `self` — the original sklearn-style symmetry is
-  preserved for non-learnable pipelines — unless `labels` was passed, which
-  raises rather than silently discarding them.
+  preserved for non-learnable pipelines — unless `labels`/`pairs` was passed,
+  which raises rather than silently discarding them.
 
-`FellegiSunterMatcher` (unsupervised EM over `ComparisonVector`) and
-`RandomForestMatcher` (supervised, `[trained]`) are the concrete implementers.
+Every non-raising path sets `resolver.fit_report_` (an sklearn
+trailing-underscore digest, `langres.core.fit_report.FitReport`) and returns
+`self`, so `resolver.fit(...).resolve(...)` still chains.
+
+### `align_pairs` + coverage + `FitReport`
+
+`langres.core.harvest.align_pairs(candidates, labels, *, split=None, seed=0) ->
+AlignedPairs` is the id-join bridge for supervised fit: it joins id-keyed labels
+(a `corrections.jsonl` path, or a `Sequence` of `LabeledPair`/`Correction` —
+`PairLabel` is a thin alias of `LabeledPair`, not a forked schema) to the blocked
+candidates order-independently, and returns a named result with:
+
+- `.train` / `.valid` — positionally-aligned `(candidates, labels)` splits for
+  `SupervisedFitMixin.fit`. The split is **entity-disjoint** (union-find over the
+  labeled pairs, whole components assigned to one side) — a row-random split
+  would leak an entity across train/valid and inflate held-out metrics. A single
+  all-connected component keeps `valid` empty rather than emptying `train`.
+- `.coverage` — a `GoldCoverage` guardrail (reusing `metrics.evaluate_blocking`)
+  surfacing `gold_coverage` (fraction of labeled positives that survived
+  blocking) and the `dropped_positives` id-pairs blocking never proposed.
+
+`Resolver.fit(..., pairs=...)` runs `align_pairs` internally, trains on `.train`,
+and — when a `split` was given — scores held-out pair P/R/F1 on `.valid` via
+`metrics.classify_pairs`, all captured in the `FitReport` (`.to_markdown()` for a
+digest). `FitReport` is import-light (Pydantic + `harvest`/`metrics` only, no
+sklearn/torch) and references the enclosing `RunRecord`'s `attempt_id` via
+`run_ref` for lineage rather than duplicating it.
 
 ## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
 
