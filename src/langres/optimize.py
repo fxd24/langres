@@ -65,11 +65,11 @@ def _source_sizes(corpus: list[Any]) -> tuple[int, int] | None:
     """
     from collections import Counter
 
-    counts = Counter(getattr(record, "source", None) for record in corpus)
+    counts: Counter[Any] = Counter(getattr(record, "source", None) for record in corpus)
     counts.pop(None, None)
     if len(counts) != 2:
         return None
-    left, right = (counts[key] for key in sorted(counts))
+    left, right = (counts[key] for key in sorted(counts, key=str))
     return (left, right)
 
 
