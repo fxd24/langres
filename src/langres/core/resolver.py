@@ -849,7 +849,7 @@ class Resolver:
             ValueError: If neither ``pairs`` nor ``labels`` is given (fine-tuning
                 needs supervision), or both are.
         """
-        from langres.core.finetune import QLoRA, run_finetune
+        from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
         from langres.core.matchers.llm_judge import LLMMatcher
         from langres.core.matchers.model_ref import to_config
 
@@ -884,7 +884,14 @@ class Resolver:
         # Preserve the outgoing matcher's record rendering (so what the model is
         # trained on matches what it is served) when it is an LLMMatcher.
         render = self._llm_render_config()
-        outcome = run_finetune(train_pairs, method, **render)
+        # Train AND serve on the SAME yes/no prompt: the model learns the
+        # FINETUNE_YES_NO_PROMPT completion, so the served matcher must send that
+        # prompt (not LLMMatcher's default "Score:" template) and read it with the
+        # binary yes/no parser -- otherwise serving asks a differently-worded
+        # question than training taught.
+        outcome = run_finetune(
+            train_pairs, method, prompt_template=FINETUNE_YES_NO_PROMPT, **render
+        )
 
         # Repoint this Resolver at the fine-tuned model: an in-process,
         # logprob-scoring yes/no LLMMatcher over the produced model_ref.
@@ -892,6 +899,7 @@ class Resolver:
             model=to_config(outcome.model_ref),
             confidence="logprob",
             response_parser="binary_yes_no",
+            prompt_template=FINETUNE_YES_NO_PROMPT,
             **render,
         )
 
@@ -921,15 +929,15 @@ class Resolver:
         return self
 
     def _llm_render_config(self) -> dict[str, Any]:
-        """The current matcher's prompt/serializer config to keep train == serve.
+        """The current matcher's record serializer, to keep train == serve.
 
         When ``self.module`` is an :class:`~langres.core.matchers.llm_judge.LLMMatcher`
         this carries its ``record_serializer`` (by registered name) so a fine-tune
-        renders records the way they will be served; the yes/no prompt is the
-        finetune default (see :data:`~langres.core.finetune.FINETUNE_YES_NO_PROMPT`),
-        so ``prompt_template`` is intentionally left to that default rather than the
-        outgoing matcher's (which may be the ``Score:`` scoring prompt). Empty for a
-        non-LLM matcher (the finetune defaults apply).
+        renders records the way they will be served. Only the serializer -- NOT the
+        ``prompt_template``: ``_fit_finetune`` pins both training and serving to
+        :data:`~langres.core.finetune.FINETUNE_YES_NO_PROMPT` (the outgoing matcher's
+        prompt may be the ``Score:`` scoring template, which the yes/no fine-tune
+        does not use). Empty for a non-LLM matcher (the finetune defaults apply).
         """
         from langres.core.matchers.llm_judge import LLMMatcher
 

@@ -26,7 +26,7 @@ from langres.core.finetune import (
     run_finetune,
 )
 from langres.core.matchers.model_ref import ModelRef
-from langres.core.models import CompanySchema
+from langres.core.models import CompanySchema, ERCandidate
 
 RECORDS = [
     {"id": "a", "name": "Acme Corp"},
@@ -306,3 +306,107 @@ def test_qlora_trainer_cpu_dry_run(tmp_path: Path) -> None:
     assert outcome.model_ref.base == "HuggingFaceTB/SmolLM2-135M-Instruct"
     assert outcome.model_ref.adapter is not None
     assert Path(outcome.model_ref.adapter).is_dir()
+
+
+# --- The full go/no-go: train -> save -> reload -> serve in-process -> evaluate ---
+
+_MATCH_NAMES = [
+    ("Acme Corp", "Acme Corporation"),
+    ("Globex Inc", "Globex Incorporated"),
+    ("Initech LLC", "Initech Limited"),
+    ("Umbrella Co", "Umbrella Company"),
+    ("Soylent Corp", "Soylent Corporation"),
+    ("Stark Industries", "Stark Ind."),
+    ("Wayne Enterprises", "Wayne Enterprise"),
+    ("Wonka Ltd", "Wonka Limited"),
+    ("Cyberdyne Systems", "Cyberdyne Sys"),
+    ("Tyrell Corp", "Tyrell Corporation"),
+]
+_NON_NAMES = [
+    ("Acme Corp", "Globex Inc"),
+    ("Initech LLC", "Umbrella Co"),
+    ("Soylent Corp", "Stark Industries"),
+    ("Wayne Enterprises", "Wonka Ltd"),
+    ("Cyberdyne Systems", "Tyrell Corp"),
+    ("Acme Corp", "Umbrella Co"),
+    ("Globex Inc", "Stark Industries"),
+    ("Initech LLC", "Wonka Ltd"),
+    ("Soylent Corp", "Tyrell Corp"),
+    ("Wayne Enterprises", "Cyberdyne Systems"),
+]
+
+
+def _balanced_pairs() -> list[tuple[ERCandidate[CompanySchema], bool]]:
+    """10 matching name-variant pairs + 10 non-matching pairs (balanced overfit set)."""
+    pairs: list[tuple[ERCandidate[CompanySchema], bool]] = []
+    for i, (left, right) in enumerate(_MATCH_NAMES):
+        c = ERCandidate(
+            left=CompanySchema(id=f"m{i}L", name=left),
+            right=CompanySchema(id=f"m{i}R", name=right),
+            blocker_name="test",
+        )
+        pairs.append((c, True))
+    for i, (left, right) in enumerate(_NON_NAMES):
+        c = ERCandidate(
+            left=CompanySchema(id=f"n{i}L", name=left),
+            right=CompanySchema(id=f"n{i}R", name=right),
+            blocker_name="test",
+        )
+        pairs.append((c, False))
+    return pairs
+
+
+def _serve_scores(model_cfg: Any, pairs: list[tuple[ERCandidate[CompanySchema], bool]]) -> Any:
+    """Serve ``model_cfg`` in-process on the yes/no prompt; return (F1, p_yes separation)."""
+    from langres.core.matchers.llm_judge import LLMMatcher
+    from langres.core.metrics import classify_pairs
+
+    matcher: LLMMatcher[Any] = LLMMatcher(
+        model=model_cfg,
+        confidence="logprob",
+        response_parser="binary_yes_no",
+        prompt_template=FINETUNE_YES_NO_PROMPT,
+    )
+    judgements = list(matcher.forward(iter([c for c, _ in pairs])))
+    gold = {frozenset({str(c.left.id), str(c.right.id)}) for c, y in pairs if y}
+    metrics = classify_pairs(judgements, gold, 0.5)
+    pos = [j.provenance["p_yes"] for (_, y), j in zip(pairs, judgements, strict=True) if y]
+    neg = [j.provenance["p_yes"] for (_, y), j in zip(pairs, judgements, strict=True) if not y]
+    separation = sum(pos) / len(pos) - sum(neg) / len(neg)
+    return metrics.f1, separation
+
+
+@pytest.mark.slow
+@pytest.mark.finetune
+def test_finetune_overfit_train_serve_evaluate() -> None:
+    """The whole loop learns: real QLoRA train -> reload -> in-process serve beats the base.
+
+    The go/no-go for the fine-tune surface. Fine-tunes SmolLM2-135M (real peft LoRA +
+    trl completion-only SFT) on 20 balanced yes/no pairs, reloads the produced
+    base+adapter ``model_ref``, serves it IN-PROCESS with the same finetune prompt +
+    logprob probe, and asserts the fine-tuned model scores the overfit set *and*
+    separates match/non-match ``p_yes`` **better than the untrained base** -- i.e.
+    training actually moved the served decisions (not just that the plumbing runs).
+    Marked ``slow`` + ``finetune`` so it runs only locally / on demand (real training
+    + model download), never in the fast suite or the CPU-dry-run CI job.
+    """
+    pytest.importorskip("peft")
+    pytest.importorskip("trl")
+    pytest.importorskip("torch")
+    from langres.core.matchers.model_ref import to_config
+
+    pairs = _balanced_pairs()
+    base_f1, base_sep = _serve_scores("HuggingFaceTB/SmolLM2-135M-Instruct", pairs)
+
+    method = QLoRA(base="HuggingFaceTB/SmolLM2-135M-Instruct", epochs=8, batch_size=4)
+    outcome = run_finetune(pairs, method)
+    assert outcome.gpu_seconds > 0.0
+    assert outcome.model_ref.adapter is not None
+
+    tuned_f1, tuned_sep = _serve_scores(to_config(outcome.model_ref), pairs)
+
+    # Training must both raise overfit F1 and widen match/non-match p_yes separation
+    # over the untrained base (the base collapses to all-positive at threshold 0.5).
+    assert tuned_f1 > base_f1
+    assert tuned_sep > base_sep
+    assert tuned_f1 >= 0.8  # overfits the 20-pair set (observed ~0.93)

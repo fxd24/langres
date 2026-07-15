@@ -319,15 +319,22 @@ class QLoRATrainer:
     runs locally (the ``[finetune]`` extra scopes bitsandbytes to Linux for this
     reason).
 
-    Trains full-sequence SFT on the yes/no chat conversation rendered with the base
-    model's own chat template (matching serving). Full-sequence — *not*
-    ``assistant_only_loss`` — deliberately: trl's assistant-only masking needs a
-    chat template carrying ``{% generation %}`` markers (or one on trl's short
-    hardcoded patch-list, effectively Qwen-only), which most small base LMs
-    (SmolLM2, Llama-family, ...) lack, so it raises at trainer construction. Since
-    langres must fine-tune *arbitrary* small bases, we train on the whole
-    (fixed-prefix) conversation; the discriminative signal is the final ``"Yes"`` /
-    ``"No"`` token and the constant prompt prefix is trivially learned.
+    Trains COMPLETION-ONLY on the yes/no target using trl's prompt-completion
+    dataset format: the ``prompt`` is the user turn rendered with the base model's
+    own chat template + a generation prompt (byte-identical to what the served chat
+    model sees), and the ``completion`` is the bare ``"Yes"``/``"No"``. trl masks
+    the prompt tokens (``completion_only_loss`` defaults on for prompt-completion
+    data), so the gradient lands on the answer token.
+
+    This is *not* ``assistant_only_loss``: that needs a chat template carrying
+    ``{% generation %}`` markers (or one on trl's short hardcoded patch-list,
+    effectively Qwen-only), which most small bases (SmolLM2, Llama-family, ...)
+    lack, so it raises at trainer construction. And it is *not* full-sequence loss
+    either: with the one-token answer buried in a ~30-token prompt, full-sequence
+    loss spends nearly all its gradient reproducing the constant prompt and learns
+    no yes/no discrimination (measured: p_yes separation ~0.016 before AND after).
+    Completion-only masking is the portable middle path -- it works on any base and
+    still puts the signal on the decision token.
     """
 
     def train(  # pragma: no cover - real training runs in the test-finetune job / on GPU
@@ -381,7 +388,24 @@ class QLoRATrainer:
             target_modules=list(method.target_modules) if method.target_modules else None,
             task_type="CAUSAL_LM",
         )
-        dataset = Dataset.from_dict({"messages": conversations})
+        # Prompt-completion format (NOT a "messages" dataset): pre-apply the chat
+        # template to the user turn with a generation prompt, and hand the Yes/No as
+        # a bare completion. trl then trains COMPLETION-ONLY (``completion_only_loss``
+        # defaults on for prompt-completion data) -- the gradient lands on the answer
+        # token, not the constant prompt -- WITHOUT needing the ``{% generation %}``
+        # chat-template markers ``assistant_only_loss`` requires (which most small
+        # bases lack). The prompt is byte-identical to what the served chat model
+        # sees, so the first-token logprob probe reads the trained Yes/No mass.
+        prompt_completions = [
+            {
+                "prompt": tokenizer.apply_chat_template(
+                    [convo[0]], tokenize=False, add_generation_prompt=True
+                ),
+                "completion": convo[1]["content"],
+            }
+            for convo in conversations
+        ]
+        dataset = Dataset.from_list(prompt_completions)
         sft_config = SFTConfig(
             output_dir=output_dir,
             num_train_epochs=method.epochs,
