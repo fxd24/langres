@@ -50,8 +50,12 @@ from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
 from langres.core.matchers.model_ref import to_config
 from langres.eval import candidates_for, evaluate, get_benchmark
 
-# SmolLM2-135M is tiny + fast + has a chat template -- a good "see it run" base.
-# Swap in "Qwen/Qwen3-0.6B" (bigger, slower, stronger) once you have a GPU.
+# SmolLM2-135M is tiny + fast + has a plain chat template -- a good "see it run"
+# base. Swap in a larger *same-family* instruct model for more headroom (e.g.
+# "HuggingFaceTB/SmolLM2-360M-Instruct"). Avoid "thinking" models (e.g. Qwen3):
+# they emit a reasoning turn before the answer, so the first-token Yes/No logprob
+# probe this serves with reads the think-tag, not the decision -- a different
+# serving contract than this example's.
 BASE = "HuggingFaceTB/SmolLM2-135M-Instruct"
 BENCH = "fodors_zagat"  # a small, real restaurant-matching benchmark
 
