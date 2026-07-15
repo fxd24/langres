@@ -1,12 +1,13 @@
 """Tests for the ``method=`` object seam on ``Resolver.fit`` (PR-M).
 
 ``fit(..., method=<Method>)`` dispatches on ``method.kind`` to the matching fit
-path *before* the module-hook isinstance chain. The ``prompt``/``calibrate``
-bodies still land in later PRs (MIPRO/PR-C, Platt/PR-D), so those wired kinds
-raise a clear ``NotImplementedError`` naming that PR; ``finetune`` (PR-F) now
-routes to its real ``_fit_finetune`` handler, which rejects a non-``QLoRA``
-finetune method with a ``TypeError`` that still surfaces ``describe()``. Either
-way the dispatch + param plumbing is real, which is what these tests lock:
+path *before* the module-hook isinstance chain. All three concrete kinds now
+route to real handlers (``prompt``/PR-C, ``finetune``/PR-F, ``calibrate``/PR-D):
+each rejects a malformed method for its kind with a distinct, handler-specific
+error (a non-``DSPyMatcher`` module, a non-``QLoRA`` method, a calibrate method
+missing ``.strategy``) that still surfaces ``describe()``. That distinct error
+text is what proves the routing; the dispatch + param plumbing is real, which is
+what these tests lock:
 
 - distinct ``kind`` values route to distinct branches (distinct error text);
 - an unrecognized ``kind`` falls through to a "no Method implements it" error;
@@ -59,7 +60,7 @@ class _FinetuneMethod(Method):
 
 
 class _CalibrateMethod(Method):
-    """Fake calibrate strategy (kind wired to PR-D)."""
+    """A malformed calibrate strategy: right kind, but no ``.strategy`` set."""
 
     kind: ClassVar[str] = "calibrate"
 
@@ -111,9 +112,14 @@ def test_prompt_kind_routes_to_pr_c_prompt_fit() -> None:
         _resolver().fit(RECORDS, method=_PromptMethod())
 
 
-def test_calibrate_kind_routes_to_pr_d_stub() -> None:
-    """A ``kind="calibrate"`` method routes to the PR-D branch."""
-    with pytest.raises(NotImplementedError, match=r"method kind 'calibrate'.*lands in PR-D"):
+def test_calibrate_kind_routes_to_calibrate_handler() -> None:
+    """A ``kind="calibrate"`` method routes to the real PR-D ``_fit_calibrate`` branch.
+
+    ``_fit_calibrate`` needs a ``CalibrateMethod`` exposing ``.strategy``; the fake
+    here has none, so it raises that clear error -- which *proves routing* (a
+    different branch than prompt/finetune) without needing gold pairs.
+    """
+    with pytest.raises(ValueError, match=r"needs a CalibrateMethod exposing .strategy"):
         _resolver().fit(RECORDS, method=_CalibrateMethod())
 
 
