@@ -152,24 +152,35 @@ def test_supervised_labels_path_sets_report_without_coverage() -> None:
 def test_pairs_path_sets_coverage_and_heldout_metrics() -> None:
     module = _FakeSupervised()
     resolver = _resolver(module)
-    # Label the two true-match pairs positive and one cross pair negative.
+    # Two DISJOINT entity-components (no cross pair to bridge them), so an
+    # entity-disjoint split can hold one whole component out as valid.
+    records = [
+        {"id": "a1", "name": "Acme"},
+        {"id": "a2", "name": "Acme"},
+        {"id": "a3", "name": "Aardvark"},
+        {"id": "b1", "name": "Beta"},
+        {"id": "b2", "name": "Beta"},
+        {"id": "b3", "name": "Bumble"},
+    ]
     pairs = [
         LabeledPair(left_id="a1", right_id="a2", score=None, label=True, source="correction"),
+        LabeledPair(left_id="a1", right_id="a3", score=None, label=False, source="correction"),
         LabeledPair(left_id="b1", right_id="b2", score=None, label=True, source="correction"),
-        LabeledPair(left_id="a1", right_id="b1", score=None, label=False, source="correction"),
+        LabeledPair(left_id="b1", right_id="b3", score=None, label=False, source="correction"),
     ]
 
-    resolver.fit(RECORDS, pairs=pairs, split=0.5, seed=0)
+    resolver.fit(records, pairs=pairs, split=0.5, seed=0)
 
     report = resolver.fit_report_
     assert report is not None
     assert report.trained is True
     assert report.trainable == "_FakeSupervised (SupervisedFitMixin)"
     assert report.entity_disjoint is True
-    assert report.n_train + report.n_valid == 3  # all three labeled pairs aligned
+    assert report.n_train + report.n_valid == 4  # all four labeled pairs aligned
+    assert report.n_train > 0 and report.n_valid > 0  # split held one component out
     assert isinstance(report.coverage, GoldCoverage)
     assert report.coverage.gold_coverage == pytest.approx(1.0)  # AllPairs keeps every pair
-    # A split was given, so held-out pair metrics exist.
+    # A split was given and a valid component exists, so held-out pair metrics exist.
     assert report.metrics is not None
     assert "Held-out pair metrics" in report.to_markdown()
     # The matcher was actually trained on the train split (label count == n_train).
