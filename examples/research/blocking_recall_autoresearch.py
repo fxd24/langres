@@ -163,7 +163,7 @@ def print_progress(result: LoopResult, rr_budget: float) -> list[float]:
     return incumbents
 
 
-def report_best(result: LoopResult) -> None:
+def report_best(result: LoopResult, rr_budget: float) -> None:
     """Print the winning config and its metrics."""
     print("\nBest feasible config found:")
     if result.best_config is None or result.best_metrics is None:
@@ -175,7 +175,7 @@ def report_best(result: LoopResult) -> None:
     print(f"  text_field    : {cfg['text_field']}")
     print(f"  k_neighbors   : {cfg['k_neighbors']}")
     print(f"  candidate_recall : {m['candidate_recall']:.4f}")
-    print(f"  reduction_ratio  : {m['reduction_ratio']:.5f}  (budget >= {RR_BUDGET})")
+    print(f"  reduction_ratio  : {m['reduction_ratio']:.5f}  (budget >= {rr_budget})")
     print(f"  candidate_precision : {m['candidate_precision']:.4f}")
     print(f"  total_candidates    : {int(m['total_candidates'])}")
 
@@ -243,7 +243,7 @@ def main() -> None:
     result = run_search(space, RR_BUDGET, STORE_PATH, seed=0)
 
     incumbents = print_progress(result, RR_BUDGET)
-    report_best(result)
+    report_best(result, RR_BUDGET)
     report_store(STORE_PATH)
     maybe_plot(incumbents, os.path.dirname(STORE_PATH))
 
