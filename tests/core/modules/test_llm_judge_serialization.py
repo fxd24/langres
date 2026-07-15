@@ -354,3 +354,24 @@ def test_named_record_serializer_resolves_and_serializes() -> None:
     judge = LLMMatcher(client=object(), record_serializer="json")
     assert judge._serialize is default_record_serializer
     assert judge.config["record_serializer"] == "json"
+
+
+def test_colval_serializer_is_registered_and_round_trips() -> None:
+    """The AnyMatch/Ditto COL/VAL serializer is a name-selectable sibling of json."""
+    from langres.core.matchers.llm_judge import colval_serializer
+
+    judge = LLMMatcher(client=object(), record_serializer="colval")
+    assert judge._serialize is colval_serializer
+    assert judge.config["record_serializer"] == "colval"
+    assert LLMMatcher.from_config(judge.config)._serialize is colval_serializer
+
+
+def test_colval_serializer_renders_col_val_and_blanks_none() -> None:
+    """`COL <field> VAL <value>` over model_dump; a None field renders a blank VAL."""
+    from langres.core.matchers.llm_judge import colval_serializer
+    from langres.core.models import CompanySchema
+
+    text = colval_serializer(CompanySchema(id="1", name="Acme Corp", address=None))
+    assert text.startswith("COL id VAL 1 COL name VAL Acme Corp")
+    # A None attribute is present-but-blank, not omitted.
+    assert "COL address VAL " in text
