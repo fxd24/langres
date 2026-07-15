@@ -106,3 +106,4 @@ nav:
       - Clusterers: reference/clusterers.md
       - Flywheel (log / review / harvest / calibration): reference/flywheel.md
       - EvalReport: reference/eval-report.md
+      - DataProfileReport: reference/data-profile.md

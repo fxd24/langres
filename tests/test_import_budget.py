@@ -280,6 +280,40 @@ def test_eval_report_stays_import_light() -> None:
     )
 
 
+# The data-profile report (``langres.data.data_profile``) and its shared render
+# scaffold (``langres.core._report_html``) render entirely from stdlib + numpy (a
+# core dep) + the import-light ``core.metrics``. Like the EvalReport tearsheet
+# they must NEVER pull the heavy/optional stack -- the plan's load-bearing
+# guarantee that a ``$0`` data profile is buildable on a bare core-only install
+# (no torch, no sentence-transformers, no matplotlib). The report *consumes*
+# precomputed embeddings; it never generates them, so it carries no [semantic]
+# dep. Same fresh-process subprocess pattern as the eval_report check above.
+_DATA_PROFILE_IMPORT_LIGHT_SCRIPT = (
+    "import sys; import langres.data.data_profile; import langres.core._report_html; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'data_profile/_report_html leaked heavy modules: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_EVAL_REPORT_HEAVY_DEPS)
+
+
+def test_data_profile_stays_import_light() -> None:
+    """``import langres.data.data_profile`` (+ ``_report_html``) must not pull a heavy dep.
+
+    The data profile is dependency-free by construction: inline SVG, no
+    matplotlib, no ML stack, no embedding generation (embeddings are consumed
+    precomputed). This locks it so a future edit can never regress the $0,
+    core-only path.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _DATA_PROFILE_IMPORT_LIGHT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"data_profile import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # ``langres.data.registry.list_methods`` is a public, import-light discovery API
 # (exported from ``langres.data``): it must return the method NAMES without
 # pulling ``langres.methods`` — which imports VectorBlocker / RandomForestMatcher /
@@ -352,6 +386,7 @@ _ROOT_LAZY_MODULES = [
     "langres.core.eval_report",
     "langres.core.benchmark",
     "langres.core.calibration",
+    "langres.data.data_profile",
 ]
 
 _ROOT_LAZY_SCRIPT = (

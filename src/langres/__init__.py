@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     # to `mypy --strict` without executing the imports below on a bare import.
     from langres.core.benchmark import gold_pairs_from_clusters
     from langres.core.calibration import derive_threshold
+    from langres.data.data_profile import DataProfileReport
     from langres.core.eval_report import EvalReport
     from langres.core.matchers.llm_judge import LLMMatcher
 
@@ -79,6 +80,7 @@ __all__ = [
     "DEFAULT_AUTO_MODEL",
     "Correction",
     "CorrectionLog",
+    "DataProfileReport",
     "ERCandidate",
     "EvalReport",
     "FitReport",
@@ -126,6 +128,7 @@ except PackageNotFoundError:  # pragma: no cover - only hit on uninstalled sourc
 #: scikit-learn at module scope (the ``[trained]`` extra).
 _LAZY_SYMBOLS: dict[str, str] = {
     "EvalReport": "langres.core.eval_report",
+    "DataProfileReport": "langres.data.data_profile",
     "derive_threshold": "langres.core.calibration",
     "gold_pairs_from_clusters": "langres.core.benchmark",
     # The LLM matcher (serve a fine-tuned model_ref, a vLLM api_base, or a paid

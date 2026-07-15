@@ -215,9 +215,11 @@ branch = true
 [tool.coverage.report]
 # Relaxed, repo-wide floor for the tiered coverage policy (see
 # .claude/rules/testing.md): high (95-100%) on the src/langres/core/**
-# library contract, behavior/smoke on benchmark/experiment/harness code, so
-# the blended whole-repo floor sits below the core tier. Kept simple (one
-# floor, no per-module omit lists). Gated weekly by test-full, not per-PR.
+# library contract AND the data-prep paths (src/langres/data/data_profile/**,
+# and src/langres/data/mining.py coming next), behavior/smoke on
+# benchmark/experiment/harness code, so the blended whole-repo floor sits
+# below the core tier. Kept simple (one floor, no per-module omit lists).
+# Gated weekly by test-full, not per-PR.
 fail_under = 90
 exclude_lines = [
     "pragma: no cover",
