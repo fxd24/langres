@@ -4,9 +4,12 @@
 [![Tests](https://github.com/fxd24/langres/actions/workflows/test.yml/badge.svg)](https://github.com/fxd24/langres/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/fxd24/langres/branch/main/graph/badge.svg)](https://codecov.io/gh/fxd24/langres)
 [![PyPI](https://img.shields.io/pypi/v/langres.svg)](https://pypi.org/project/langres/)
-[![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/pypi/pyversions/langres)](https://pypi.org/project/langres/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![Pydantic v2](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pydantic/pydantic/main/docs/badge/v2.json)](https://pydantic.dev)
+[![prek](https://img.shields.io/badge/prek-enabled-brightgreen)](https://prek.j178.dev/)
 
 **langres** is a composable entity resolution (ER) framework for Python: it
 finds records that refer to the same real-world entity. The matching "brain" —
