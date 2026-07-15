@@ -173,7 +173,7 @@ docs = [
 # 7-day supply-chain quarantine: resolution only picks packages published at
 # least 7 days ago, giving time for malicious uploads to be caught and
 # yanked. Roll this forward with `make upgrade-deps`.
-exclude-newer = "2026-06-18"
+exclude-newer = "2026-07-08"
 # To block a known-bad version, uncomment and set:
 # constraint-dependencies = ["somepkg!=1.2.3"]
 
