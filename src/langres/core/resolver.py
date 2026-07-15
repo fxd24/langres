@@ -46,7 +46,12 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
-from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
+from langres.core.fit import (
+    BlockerFitMixin,
+    CalibratorFitMixin,
+    SupervisedFitMixin,
+    UnsupervisedFitMixin,
+)
 from langres.core.fit_report import FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
 from langres.core.methods_api import Method
@@ -304,6 +309,19 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
     return component
 
 
+def _is_prompt_compilable(module: object) -> bool:
+    """Whether ``module`` is a prompt-optimizable (DSPy-style) matcher.
+
+    Structural, import-light check (no ``dspy`` import): a compilable scorer
+    exposes a ``compile(trainset, ...)`` method and a ``compiled`` flag -- the
+    :class:`~langres.core.matchers.dspy_judge.DSPyMatcher` shape. Used by
+    :meth:`Resolver.describe` to tag the matcher TRAINABLE and mirrors the
+    matcher the ``method.kind == "prompt"`` fit path requires, without pulling
+    ``dspy`` into a bare ``import langres``.
+    """
+    return callable(getattr(module, "compile", None)) and hasattr(module, "compiled")
+
+
 class Resolver:
     """Composable entity-resolution pipeline: blocker -> compare -> score -> cluster.
 
@@ -459,6 +477,53 @@ class Resolver:
     # ------------------------------------------------------------------
     # Running the pipeline
     # ------------------------------------------------------------------
+
+    def describe(self) -> str:
+        """Return a per-component "what would train vs what is frozen" digest.
+
+        The honesty device the caller reads *before* ``fit``: one line per
+        pipeline role naming the component and tagging it ``TRAINABLE`` (a fit
+        hook or a prompt-compile would tune it) or ``frozen`` (nothing to train).
+        A role is TRAINABLE when it implements the matching fit Protocol from
+        :mod:`langres.core.fit` -- a :class:`~langres.core.fit.BlockerFitMixin`
+        blocker, a :class:`~langres.core.fit.SupervisedFitMixin`/
+        :class:`~langres.core.fit.UnsupervisedFitMixin` matcher (or a
+        prompt-compilable :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`,
+        tuned by ``fit(method="prompt")``), or a
+        :class:`~langres.core.fit.CalibratorFitMixin` calibrator. The clusterer is
+        always frozen (a decision threshold, not a learned parameter).
+
+        Pure string builder: it reads slots and reports, never trains, imports a
+        backend, or mutates anything -- safe to call on a fresh Resolver. Example::
+
+            blocker:    AllPairsBlocker         — frozen
+            matcher:    DSPyMatcher             — TRAINABLE
+            calibrator: <none>                  — frozen
+            clusterer:  threshold=0.5           — frozen
+
+        Returns:
+            A newline-joined, column-aligned digest (no trailing newline).
+        """
+        calibrator = getattr(self, "calibrator", None)
+        matcher_trainable = isinstance(
+            self.module, (SupervisedFitMixin, UnsupervisedFitMixin)
+        ) or _is_prompt_compilable(self.module)
+        rows: list[tuple[str, str, bool]] = [
+            ("blocker", type(self.blocker).__name__, isinstance(self.blocker, BlockerFitMixin)),
+            ("matcher", type(self.module).__name__, matcher_trainable),
+            (
+                "calibrator",
+                "<none>" if calibrator is None else type(calibrator).__name__,
+                calibrator is not None and isinstance(calibrator, CalibratorFitMixin),
+            ),
+            ("clusterer", f"threshold={self.clusterer.threshold:g}", False),
+        ]
+        label_w = max(len(label) for label, _, _ in rows) + 1  # +1 for the trailing ":"
+        desc_w = max(len(desc) for _, desc, _ in rows)
+        return "\n".join(
+            f"{label + ':':<{label_w}} {desc:<{desc_w}} — {'TRAINABLE' if trainable else 'frozen'}"
+            for label, desc, trainable in rows
+        )
 
     def fit(
         self,
