@@ -1,14 +1,15 @@
 name: Test
 
 # Per-PR: run the FAST suite only (slow ML tests excluded -- see the `test`
-# job). The full suite incl. slow tests + the coverage gate runs weekly and on
-# demand via the `test-full` job, so slow embedding/ML tests don't cost ~10min
-# on every PR. Jobs are gated by event with `if:` below.
+# job). The full suite incl. slow tests + the 95% coverage gate runs on every
+# merge to main (push) + on demand (workflow_dispatch) via the `test-full` job,
+# so slow embedding/ML tests don't cost ~10min on every PR. This repo is public,
+# so Actions minutes are free/unlimited -- per-merge coverage is worth it, while
+# the fast suite still runs per-PR. Jobs are gated by event with `if:` below.
 on:
   pull_request:
-  schedule:
-    # Weekly on Monday at 06:00 UTC (full suite incl. slow tests)
-    - cron: "0 6 * * 1"
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -29,12 +30,12 @@ jobs:
         python-version: ["3.13"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.11.24"
           python-version: ${{ matrix.python-version }}
@@ -67,10 +68,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.11.24"
           python-version: "3.13"
@@ -95,11 +96,12 @@ jobs:
         run: uv run python examples/flywheel_min.py
 
   # Full suite INCLUDING the slow embedding/ML tests, plus the 95% coverage gate
-  # (inherited from pyproject addopts). Runs weekly + on demand only -- NOT per
-  # PR -- so ML regressions and the coverage floor are still enforced on a
-  # cadence without paying ~10min on every push. Trigger a run before a release
-  # or a risky ML change with the "Run workflow" button (workflow_dispatch).
-  # Do NOT mark this a required status check (it is skipped on PR events).
+  # (inherited from pyproject addopts). Runs on every merge to main (push) + on
+  # demand (workflow_dispatch) -- NOT per PR -- so ML regressions and the
+  # coverage floor are enforced on every merge without paying ~10min on every
+  # PR. Trigger an ad-hoc run before a release or a risky ML change with the
+  # "Run workflow" button (workflow_dispatch). Do NOT mark this a required
+  # status check (it is skipped on PR events).
   test-full:
     if: github.event_name != 'pull_request'
     # 4-vCPU: the slow ML tests' torch inference uses all 4 cores via torch's
@@ -111,12 +113,12 @@ jobs:
         python-version: ["3.13"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.11.24"
           python-version: ${{ matrix.python-version }}
@@ -135,8 +137,8 @@ jobs:
 
       - name: Upload coverage to Codecov
         # Advisory, never a merge gate: fail_ci_if_error stays false so a Codecov
-        # hiccup can't turn this weekly run red. Token is required for uploads.
-        uses: codecov/codecov-action@v5
+        # hiccup can't turn this merge-to-main run red. Token is required for uploads.
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml

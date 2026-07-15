@@ -31,11 +31,12 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - Mark slow tests with `@pytest.mark.slow`, integration tests with `@pytest.mark.integration`
   - **Mark any heavy test `@pytest.mark.slow`** (loads embedding/ML models, runs
     torch inference, etc.). CI runs the **fast** subset (`not slow`) on every
-    PR; the **slow** tests + the coverage gate run on the **weekly** `test-full`
-    job (and on demand via *Run workflow*). So per-PR CI does not gate coverage
-    or exercise slow ML paths — mislabeling a heavy test as fast slows every PR,
-    and the coverage floor is verified weekly, not per-PR. Run the full suite
-    locally (`uv run pytest`) before merging a change to ML/embedding code.
+    PR; the **slow** tests + the coverage gate run on **every merge to main
+    (push)** + **on demand** (`workflow_dispatch`) via the `test-full` job. So
+    per-PR CI does not gate coverage or exercise slow ML paths — mislabeling a
+    heavy test as fast slows every PR, and the coverage floor is verified on
+    each merge to main, not per-PR. Run the full suite locally
+    (`uv run pytest`) before merging a change to ML/embedding code.
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
