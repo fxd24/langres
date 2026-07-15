@@ -59,6 +59,11 @@ def test_build_index_passes_metric_through() -> None:
     assert _fake_index(metric="L2").metric == "L2"
 
 
+def test_build_index_rejects_unknown_metric() -> None:
+    with pytest.raises(ValueError, match="metric must be 'L2' or 'cosine'"):
+        build_index("m", "euclidean", _TEXTS, embedder=FakeEmbedder(embedding_dim=8))
+
+
 # ---------------------------------------------------------------------------
 # build_blocker_from_config -- vector
 # ---------------------------------------------------------------------------

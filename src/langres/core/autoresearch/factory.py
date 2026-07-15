@@ -46,8 +46,9 @@ def build_index(
     Args:
         embedding_model: sentence-transformers model name. Used to construct a
             :class:`SentenceTransformerEmbedder` unless ``embedder`` is injected.
-        metric: FAISS metric, ``"L2"`` or ``"cosine"``. Passed to ``FAISSIndex``;
-            an unknown value raises ``ValueError`` inside ``create_index``.
+        metric: FAISS metric, ``"L2"`` or ``"cosine"``. Validated here, so an
+            unknown value fails fast with a clear ``ValueError`` before any
+            embedding work — rather than deferring to the FAISS internals.
         texts: Corpus texts to embed and index, in the same order as the records
             the resulting blocker will stream.
         embedder: Optional pre-built embedder that overrides constructing one
@@ -57,8 +58,11 @@ def build_index(
     Returns:
         A ready-to-search :class:`FAISSIndex` (``create_index`` already called).
     """
+    if metric not in ("L2", "cosine"):
+        raise ValueError(f"metric must be 'L2' or 'cosine', got {metric!r}")
     if embedder is None:
         embedder = SentenceTransformerEmbedder(embedding_model)
+    # metric is validated just above, so narrowing str -> Literal is sound.
     index = FAISSIndex(embedder=embedder, metric=cast(Literal["L2", "cosine"], metric))
     index.create_index(list(texts))
     return index
