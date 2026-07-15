@@ -107,7 +107,7 @@ def test_calibrate_kind_routes_to_pr_d_stub() -> None:
 
 def test_unknown_kind_falls_through_to_no_impl_error() -> None:
     """A kind no concrete Method implements raises the distinct fall-through error."""
-    with pytest.raises(NotImplementedError, match=r"method kind 'bogus' has no fit path"):
+    with pytest.raises(NotImplementedError, match=r"method kind 'bogus' is not recognized"):
         _resolver().fit(RECORDS, method=_UnknownMethod())
 
 
