@@ -49,6 +49,7 @@ from langres.core.comparator import Comparator
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.fit_report import FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
+from langres.core.methods_api import Method
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import PairMetrics, classify_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -81,6 +82,19 @@ _MANIFEST_FILENAME = "resolver.json"
 #: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
 #: constructor argument.
 _FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm"]
+
+#: ``method=`` dispatch table: maps a :class:`~langres.core.methods_api.Method`'s
+#: ``kind`` to the PR that implements its fit path. The dispatch in
+#: :meth:`Resolver.fit` is REAL today (``method.kind`` selects the branch here);
+#: only the per-kind training body is stubbed until each concrete ``Method``
+#: lands -- prompt-optimize (MIPRO) in PR-C, fine-tune (QLoRA) in PR-F, calibrate
+#: (Platt/isotonic) in PR-D. An unrecognized kind falls through to a distinct
+#: "no Method implements it yet" error.
+_METHOD_KIND_PENDING_PR: dict[str, str] = {
+    "prompt": "PR-C",
+    "finetune": "PR-F",
+    "calibrate": "PR-D",
+}
 
 
 def _build_module_for_judge(
@@ -467,6 +481,7 @@ class Resolver:
         pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None = None,
         split: float | None = None,
         seed: int = 0,
+        method: Method | None = None,
     ) -> Self:
         """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
@@ -516,6 +531,13 @@ class Resolver:
             split: Held-out fraction for the entity-disjoint ``pairs`` split
                 (``None`` = train on everything; only meaningful with ``pairs``).
             seed: Seed for the entity-disjoint split.
+            method: An optional :class:`~langres.core.methods_api.Method` naming
+                *how* to train (prompt-optimize / fine-tune / calibrate). When
+                given, ``fit`` dispatches on ``method.kind`` to the matching fit
+                path instead of the isinstance-on-the-module default above; when
+                ``None`` (the default), behavior is exactly the module-hook path
+                described here. The concrete per-kind fit paths land in later PRs
+                (see :data:`_METHOD_KIND_PENDING_PR`).
 
         Returns:
             ``self``, so ``resolver.fit(data).resolve(data)`` chains.
@@ -524,7 +546,27 @@ class Resolver:
             ValueError: If both ``labels`` and ``pairs`` are given; if the module
                 implements ``SupervisedFitMixin`` and neither is given; or if
                 ``labels``/``pairs`` is given to a module that cannot use them.
+            NotImplementedError: If ``method`` is given but its ``kind``'s fit
+                path is not implemented yet (the seam is wired ahead of the
+                concrete methods; the error names the PR that will land it).
         """
+        if method is not None:
+            # The ``method=`` object seam: a Method names *how* to train and
+            # dispatches on its ``kind`` to the matching fit path. The dispatch
+            # is real today; the per-kind training bodies are stubbed until each
+            # concrete Method lands (see _METHOD_KIND_PENDING_PR). Guarded by
+            # ``is not None`` so the ``method=None`` default leaves every existing
+            # fit path below byte-for-byte unchanged.
+            pending_pr = _METHOD_KIND_PENDING_PR.get(method.kind)
+            if pending_pr is not None:
+                raise NotImplementedError(
+                    f"method kind {method.kind!r} dispatch is wired but its fit path "
+                    f"lands in {pending_pr} ({method.describe()})."
+                )
+            raise NotImplementedError(
+                f"method kind {method.kind!r} has no fit path: no langres Method "
+                f"implements it yet ({method.describe()})."
+            )
         if labels is not None and pairs is not None:
             raise ValueError(
                 "pass either labels= (a Sequence[bool] pre-aligned with the blocked "
