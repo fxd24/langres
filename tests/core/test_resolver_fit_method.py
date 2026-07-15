@@ -1,10 +1,12 @@
 """Tests for the ``method=`` object seam on ``Resolver.fit`` (PR-M).
 
 ``fit(..., method=<Method>)`` dispatches on ``method.kind`` to the matching fit
-path *before* the module-hook isinstance chain. The concrete per-kind training
-bodies land in later PRs (MIPRO/PR-C, QLoRA/PR-F, Platt/PR-D), so every wired
-kind currently raises a clear ``NotImplementedError`` naming that PR -- but the
-dispatch + param plumbing is real, which is what these tests lock:
+path *before* the module-hook isinstance chain. The ``prompt``/``calibrate``
+bodies still land in later PRs (MIPRO/PR-C, Platt/PR-D), so those wired kinds
+raise a clear ``NotImplementedError`` naming that PR; ``finetune`` (PR-F) now
+routes to its real ``_fit_finetune`` handler, which rejects a non-``QLoRA``
+finetune method with a ``TypeError`` that still surfaces ``describe()``. Either
+way the dispatch + param plumbing is real, which is what these tests lock:
 
 - distinct ``kind`` values route to distinct branches (distinct error text);
 - an unrecognized ``kind`` falls through to a "no Method implements it" error;
@@ -87,9 +89,14 @@ def _resolver() -> Resolver:
 # --- dispatch: kind routes to its branch, all stubbed for now ---------------
 
 
-def test_finetune_kind_routes_to_pr_f_stub() -> None:
-    """A ``kind="finetune"`` method routes to the wired-but-stubbed PR-F branch."""
-    with pytest.raises(NotImplementedError, match=r"method kind 'finetune'.*lands in PR-F"):
+def test_finetune_kind_routes_to_finetune_handler() -> None:
+    """A ``kind="finetune"`` method routes to the real ``_fit_finetune`` handler (PR-F).
+
+    A non-``QLoRA`` finetune method reaches the handler and gets its QLoRA
+    type-guard TypeError -- distinct from the ``prompt``/``calibrate``
+    NotImplementedError branches, which is what proves the routing.
+    """
+    with pytest.raises(TypeError, match=r"method kind 'finetune' requires a QLoRA method"):
         _resolver().fit(RECORDS, method=_FinetuneMethod())
 
 
@@ -117,8 +124,12 @@ def test_unknown_kind_falls_through_to_no_impl_error() -> None:
 
 
 def test_error_carries_the_describe_string() -> None:
-    """The dispatch surfaces ``method.describe()`` at the call site (kind + cost)."""
-    with pytest.raises(NotImplementedError, match=r"fine-tune \(QLoRA, ~GPU-seconds\)"):
+    """The dispatch surfaces ``method.describe()`` at the call site (kind + cost).
+
+    The finetune handler's QLoRA type-guard error still embeds ``describe()``, so
+    the "what + cost" string reaches the caller exactly like the stub branches do.
+    """
+    with pytest.raises(TypeError, match=r"fine-tune \(QLoRA, ~GPU-seconds\)"):
         _resolver().fit(RECORDS, method=_FinetuneMethod())
 
 

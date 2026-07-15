@@ -87,6 +87,25 @@ trained = [
 eval = [
     "ranx>=0.3.21",
 ]
+# The fine-tune stack -- QLoRA training in core.finetune (peft LoRA adapters +
+# trl SFT). Kept OUT of every normal CI job (they run
+# `uv sync --all-extras --no-extra finetune`); one dedicated `test-finetune` job
+# installs it. peft/trl/bitsandbytes import lazily inside core.finetune (never at
+# module load -- locked by tests/test_import_budget.py). This extra adds only the
+# training-specific deps; it complements `[semantic]` (torch/transformers, used to
+# load + serve the model) and `[llm]` (LLMMatcher serving) -- the full train+serve
+# install is `pip install 'langres[semantic,llm,finetune]'`.
+finetune = [
+    "peft>=0.13",
+    "trl>=0.12",
+    # QLoRA 4-bit quantization is CUDA-only, so scope bitsandbytes to Linux (CI's
+    # runner + the GPU box). On macOS/other platforms core.finetune falls back to
+    # a non-quantized LoRA fine-tune (no 4-bit) so the path still runs locally.
+    "bitsandbytes>=0.44; platform_system == 'Linux'",
+    # NOTE: unsloth is deliberately NOT required here -- it is fragile to install
+    # across platforms/CUDA versions. peft+trl+bitsandbytes is the portable QLoRA
+    # path; install unsloth yourself (`pip install unsloth`) for its speedups.
+]
 # Experiment-tracking backends for the ExperimentTracker seam (core/trackers/).
 # Each is loaded lazily by its adapter (mlflow_tracker.py / wandb_tracker.py) so
 # `import langres` never pulls them -- installing the extra names the fix that
@@ -179,12 +198,13 @@ exclude-newer = "2026-06-18"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=90 -m 'not integration'"
+addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=90 -m 'not integration and not finetune'"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow running (e.g., embedding models, ML inference)",
     "integration: marks tests that require external API credentials or resources. DO NOT use for testcontainer database tests (fast enough for continuous testing).",
+    "finetune: marks tests that require the [finetune] extra (peft/trl/bitsandbytes). Run only in the dedicated `test-finetune` CI job (uv sync --all-extras); excluded elsewhere via `--no-extra finetune`.",
 ]
 
 [tool.coverage.run]
@@ -287,6 +307,6 @@ ignore_missing_imports = true
 # without [finetune]. Treat both as untyped uniformly and skip following their
 # imports, mirroring the litellm/dspy blocks; the backend annotates its own public
 # surface (it holds the model/tokenizer as `Any`).
-module = ["transformers.*", "peft.*"]
+module = ["transformers.*", "peft.*", "trl.*", "bitsandbytes.*"]
 ignore_missing_imports = true
 follow_imports = "skip"

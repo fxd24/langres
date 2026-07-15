@@ -830,16 +830,112 @@ class Resolver:
         seed: int,
         method: Method,
     ) -> Self:
-        """Fit via fine-tuning (``method.kind == "finetune"``) -- STUB.
+        """Fit via fine-tuning (``method.kind == "finetune"``): QLoRA train → serve.
 
-        Wired into ``fit``'s ``method=`` dispatch; the concrete QLoRA fine-tune
-        body (with GPU-seconds cost) lands in PR-F. Until then this raises with
-        that pointer.
+        Aligns the labeled ``pairs`` to candidates, fine-tunes ``method.base`` on
+        them (:func:`~langres.core.finetune.run_finetune`), repoints this
+        Resolver's matcher at the resulting ``model_ref`` as an in-process,
+        logprob-scoring :class:`~langres.core.matchers.llm_judge.LLMMatcher`, and
+        evaluates held-out pair P/R/F1 on the entity-disjoint ``valid`` split.
+        Records the GPU-seconds / derived-$ cost and the served ``model_ref`` in
+        :attr:`fit_report_`.
+
+        Heavy imports (``core.finetune`` → peft/trl on the training call;
+        ``LLMMatcher`` → litellm) are deferred to here so the ``method=None`` and
+        non-finetune fit paths never pay for them.
+
+        Raises:
+            TypeError: If ``method`` is not a :class:`~langres.core.finetune.QLoRA`.
+            ValueError: If neither ``pairs`` nor ``labels`` is given (fine-tuning
+                needs supervision), or both are.
         """
-        raise NotImplementedError(
-            f"method kind 'finetune' dispatch is wired but its fit path lands in "
-            f"PR-F ({method.describe()})."
+        from langres.core.finetune import QLoRA, run_finetune
+        from langres.core.matchers.llm_judge import LLMMatcher
+        from langres.core.matchers.model_ref import to_config
+
+        if not isinstance(method, QLoRA):
+            raise TypeError(
+                f"method kind 'finetune' requires a QLoRA method; got "
+                f"{type(method).__name__} ({method.describe()})."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError("pass either labels= or pairs= to a finetune fit, not both.")
+        if labels is None and pairs is None:
+            raise ValueError(
+                "fine-tuning needs labeled supervision: pass pairs=<id-keyed labels> "
+                "(align_pairs joins them + gives a held-out split) or "
+                "labels=<Sequence[bool] aligned with the blocked candidates>."
+            )
+
+        candidates = self.candidates(data)
+        coverage = None
+        if pairs is not None:
+            aligned = align_pairs(candidates, pairs, split=split, seed=seed)
+            train_pairs = list(zip(aligned.train.candidates, aligned.train.labels, strict=True))
+            valid_pairs = list(zip(aligned.valid.candidates, aligned.valid.labels, strict=True))
+            coverage = aligned.coverage
+            n_valid = len(aligned.valid.labels)
+        else:
+            train_pairs = list(zip(candidates, cast("Sequence[bool]", labels), strict=True))
+            valid_pairs = []
+            n_valid = 0
+            split = None
+
+        # Preserve the outgoing matcher's record rendering (so what the model is
+        # trained on matches what it is served) when it is an LLMMatcher.
+        render = self._llm_render_config()
+        outcome = run_finetune(train_pairs, method, **render)
+
+        # Repoint this Resolver at the fine-tuned model: an in-process,
+        # logprob-scoring yes/no LLMMatcher over the produced model_ref.
+        self.module = LLMMatcher(
+            model=to_config(outcome.model_ref),
+            confidence="logprob",
+            response_parser="binary_yes_no",
+            **render,
         )
+
+        metrics: PairMetrics | None = None
+        if valid_pairs:
+            judgements = list(self.module.forward(iter([c for c, _ in valid_pairs])))
+            gold_pairs = {
+                frozenset({str(c.left.id), str(c.right.id)}) for c, label in valid_pairs if label
+            }
+            metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
+
+        self.fit_report_ = FitReport.build(
+            trainable=f"LLMMatcher (finetune: {outcome.method})",
+            trained=True,
+            n_train=outcome.n_train,
+            n_valid=n_valid,
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            metrics=metrics,
+            cost=outcome.dollars,
+            gpu_seconds=outcome.gpu_seconds,
+            model_ref=to_config(outcome.model_ref),
+            run_ref=current_run.get(),
+        )
+        return self
+
+    def _llm_render_config(self) -> dict[str, Any]:
+        """The current matcher's prompt/serializer config to keep train == serve.
+
+        When ``self.module`` is an :class:`~langres.core.matchers.llm_judge.LLMMatcher`
+        this carries its ``record_serializer`` (by registered name) so a fine-tune
+        renders records the way they will be served; the yes/no prompt is the
+        finetune default (see :data:`~langres.core.finetune.FINETUNE_YES_NO_PROMPT`),
+        so ``prompt_template`` is intentionally left to that default rather than the
+        outgoing matcher's (which may be the ``Score:`` scoring prompt). Empty for a
+        non-LLM matcher (the finetune defaults apply).
+        """
+        from langres.core.matchers.llm_judge import LLMMatcher
+
+        if isinstance(self.module, LLMMatcher):
+            return {"record_serializer": self.module.config["record_serializer"]}
+        return {}
 
     def _fit_calibrate(
         self,

@@ -52,8 +52,16 @@ class FitReport(BaseModel):
             nothing trained.
         threshold: The clusterer decision threshold in force, or ``None``.
         metrics: Held-out pair P/R/F1 on ``valid``, or ``None`` when no split.
-        cost: Tokens/$ or GPU-seconds when a paid/GPU fit ran (filled by later
-            PRs), else ``None``.
+        cost: The derived dollar cost of a paid/GPU fit (tokens→$ or
+            GPU-seconds→$), else ``None``. For a local fine-tune with no
+            ``$/GPU-hour`` rate configured this is ``0.0`` (honest, like the
+            in-process serve path).
+        gpu_seconds: Wall-clock training seconds for a fine-tune fit (the
+            GPU-seconds cost *fact* ``cost`` is derived from), else ``None``.
+        model_ref: The weightless model reference a fine-tune produced (a base id
+            / local dir string, or a ``{base, adapter}`` dict whose shape also
+            encodes merge status), else ``None``. Serialize with
+            :func:`~langres.core.matchers.model_ref.to_config`.
         run_ref: The enclosing run's ``attempt_id`` (lineage reference to the
             machine :class:`~langres.core.runs.RunRecord`), or ``None``.
     """
@@ -69,6 +77,8 @@ class FitReport(BaseModel):
     threshold: float | None = None
     metrics: PairMetrics | None = None
     cost: float | None = None
+    gpu_seconds: float | None = None
+    model_ref: str | dict[str, str] | None = None
     run_ref: str | None = None
 
     @classmethod
@@ -85,6 +95,8 @@ class FitReport(BaseModel):
         threshold: float | None = None,
         metrics: PairMetrics | None = None,
         cost: float | None = None,
+        gpu_seconds: float | None = None,
+        model_ref: str | dict[str, str] | None = None,
         run_ref: str | None = None,
     ) -> FitReport:
         """Assemble a FitReport from the artefacts of one ``fit()`` call.
@@ -105,6 +117,8 @@ class FitReport(BaseModel):
             threshold=threshold,
             metrics=metrics,
             cost=cost,
+            gpu_seconds=gpu_seconds,
+            model_ref=model_ref,
             run_ref=run_ref,
         )
 
@@ -138,8 +152,12 @@ class FitReport(BaseModel):
         ]
         if self.threshold is not None:
             lines.append(f"- Threshold: {self.threshold:.4f}")
+        if self.model_ref is not None:
+            lines.append(f"- Model ref: {self.model_ref}")
+        if self.gpu_seconds is not None:
+            lines.append(f"- GPU-seconds: {self.gpu_seconds:.1f}")
         if self.cost is not None:
-            lines.append(f"- Cost: {self.cost}")
+            lines.append(f"- Cost: ${self.cost}")
         if self.run_ref is not None:
             lines.append(f"- Run: {self.run_ref}")
         lines.append("")
