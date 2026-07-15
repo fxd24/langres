@@ -24,6 +24,7 @@ from langres.core.data_profile.embedding_source import (
     EmbeddingSource,
     NpySource,
     _fingerprint,
+    _locate,
     cosine_signal,
 )
 
@@ -259,6 +260,35 @@ class TestFromAnchorStore:
         src = NpySource.from_anchor_store(tmp_path, "idx")
         assert src.id_order == ["a", "b"]
         assert src.pre_normalized is True
+
+
+# ------------------------------------------------------------------------ _locate
+class TestLocate:
+    def test_single_match_resolves_without_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        nested = tmp_path / "resolver" / "index"
+        nested.mkdir(parents=True)
+        (nested / "corpus_embeddings.npy").write_bytes(b"x")
+        with caplog.at_level(logging.WARNING):
+            found = _locate(tmp_path, "corpus_embeddings.npy")
+        assert found == nested / "corpus_embeddings.npy"
+        assert caplog.text == ""  # unambiguous -> silent
+
+    def test_ambiguous_match_warns_and_still_resolves(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        (tmp_path / "a" / "corpus_embeddings.npy").write_bytes(b"x")
+        (tmp_path / "b" / "corpus_embeddings.npy").write_bytes(b"x")
+        with caplog.at_level(logging.WARNING):
+            found = _locate(tmp_path, "corpus_embeddings.npy")
+        # Still resolves (non-breaking: first of the sorted matches) ...
+        assert found == tmp_path / "a" / "corpus_embeddings.npy"
+        # ... but names the ambiguity instead of silently picking one.
+        assert "matched 2 files" in caplog.text
+        assert str(found) in caplog.text
 
 
 # ------------------------------------------------------------------ cosine_signal

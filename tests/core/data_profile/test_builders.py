@@ -9,6 +9,7 @@ sampling / helper functions.
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
 from collections.abc import Hashable
@@ -22,6 +23,8 @@ from langres.core.data_profile import ArraySource, NpySource
 from langres.core.data_profile.builders import (
     _build_separability,
     _embed_text,
+    _index_by_id,
+    _member_cluster_index,
     _positive_pairs,
     _sample_negative_pairs,
     _validate_include,
@@ -183,26 +186,59 @@ class TestInternalHelpers:
         pairs = {frozenset(pair) for pair in _positive_pairs([{"1", "2", "3"}, {"4"}])}
         assert pairs == {frozenset({"1", "2"}), frozenset({"1", "3"}), frozenset({"2", "3"})}
 
-    def test_sample_negatives_excludes_positives_and_repeats(self) -> None:
-        positives = {frozenset({"1", "2"})}
-        negatives = _sample_negative_pairs(["1", "2", "3", "4"], positives, cap=100, seed=0)
+    def test_positive_pairs_bounded_and_logs_on_huge_cluster(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A 500-member gold cluster already yields 124,750 within-cluster pairs; a
+        # 5000-member bad-merge "default entity" would materialise ~12.5M. The
+        # generator must reservoir-sample that down to `cap` (O(cap) memory), not
+        # enumerate the whole O(size**2) set into a list.
+        big = {str(i) for i in range(500)}
+        with caplog.at_level(logging.WARNING):
+            pairs = _positive_pairs([big], cap=200, seed=0)
+        assert len(pairs) == 200  # bounded to cap, not 124,750
+        assert all(a != b and a in big and b in big for a, b in pairs)
+        assert "positive pairs" in caplog.text  # truncation logged (never silent)
+
+    def test_positive_pairs_small_cluster_is_full_set_no_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            pairs = _positive_pairs([{"1", "2", "3"}, {"4"}], cap=1000, seed=0)
+        # Under the cap: the exact same full within-cluster pair set as an un-capped
+        # enumeration -- the cap only bites on pathologically large clusters.
+        assert {frozenset(p) for p in pairs} == {
+            frozenset({"1", "2"}),
+            frozenset({"1", "3"}),
+            frozenset({"2", "3"}),
+        }
+        assert "positive pairs" not in caplog.text  # no truncation, no log
+
+    def test_member_cluster_index_maps_ids_to_their_cluster(self) -> None:
+        index = _member_cluster_index([{"a", "b"}, {"c"}])
+        assert index["a"] == index["b"]  # same cluster
+        assert index["c"] != index["a"]  # different cluster
+
+    def test_sample_negatives_excludes_same_cluster_and_repeats(self) -> None:
+        member_cluster = {"1": 0, "2": 0}  # 1 and 2 share a gold cluster (a positive)
+        negatives = _sample_negative_pairs(["1", "2", "3", "4"], member_cluster, cap=100, seed=0)
         keys = [frozenset(pair) for pair in negatives]
-        assert frozenset({"1", "2"}) not in keys  # positive excluded
+        assert frozenset({"1", "2"}) not in keys  # same-cluster positive excluded
         assert len(keys) == len(set(keys))  # no repeats
         assert all(len(k) == 2 for k in keys)  # no self-pairs
 
     def test_sample_negatives_respects_cap(self) -> None:
-        negatives = _sample_negative_pairs(list("abcdefgh"), set(), cap=3, seed=0)
+        negatives = _sample_negative_pairs(list("abcdefgh"), {}, cap=3, seed=0)
         assert len(negatives) <= 3
 
     def test_sample_negatives_degenerate_inputs(self) -> None:
-        assert _sample_negative_pairs(["only"], set(), cap=10, seed=0) == []
-        assert _sample_negative_pairs(["a", "b"], set(), cap=0, seed=0) == []
+        assert _sample_negative_pairs(["only"], {}, cap=10, seed=0) == []
+        assert _sample_negative_pairs(["a", "b"], {}, cap=0, seed=0) == []
 
     def test_sample_negatives_is_deterministic(self) -> None:
         ids: list[Hashable] = list("abcdef")
-        first = _sample_negative_pairs(ids, set(), cap=4, seed=7)
-        second = _sample_negative_pairs(ids, set(), cap=4, seed=7)
+        first = _sample_negative_pairs(ids, {}, cap=4, seed=7)
+        second = _sample_negative_pairs(ids, {}, cap=4, seed=7)
         assert first == second
 
     def test_embed_text_joins_string_fields_except_id(self) -> None:
@@ -220,6 +256,30 @@ class TestInternalHelpers:
         _validate_include({"hero", "embedding"})  # no raise
         with pytest.raises(ValueError, match=r"unknown section kind\(s\) \['nope'\]"):
             _validate_include({"nope"})
+
+
+class TestIndexById:
+    def test_first_wins_and_logs_duplicate_count(self, caplog: pytest.LogCaptureFixture) -> None:
+        records = [
+            {"id": "1", "name": "first"},
+            {"id": "1", "name": "second"},  # duplicate id -> dropped (first-wins)
+            {"id": "2", "name": "other"},
+        ]
+        with caplog.at_level(logging.WARNING):
+            id_map = _index_by_id(records, "id")
+        assert id_map["1"]["name"] == "first"  # first-wins, not last ("second")
+        assert list(id_map) == ["1", "2"]
+        assert "dropped 1 duplicate" in caplog.text  # the count is surfaced
+
+    def test_no_duplicates_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            id_map = _index_by_id([{"id": "1"}, {"id": "2"}], "id")
+        assert list(id_map) == ["1", "2"]
+        assert caplog.text == ""  # no duplicates -> no warning
+
+    def test_skips_records_missing_id_key(self) -> None:
+        id_map = _index_by_id([{"id": "1"}, {"name": "no-id"}], "id")
+        assert list(id_map) == ["1"]  # the id-less record is skipped, not raised
 
 
 class TestBuildSeparabilityBranches:

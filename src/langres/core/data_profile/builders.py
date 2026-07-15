@@ -321,9 +321,7 @@ def _assemble(
     prepends the derived hero and applies the ``include=`` kind filter.
     """
     sources = list(embeddings or [])
-    id_map: dict[Hashable, Mapping[str, Any]] = {
-        record[id_key]: record for record in records if id_key in record
-    }
+    id_map = _index_by_id(records, id_key)
     corpus_ids = list(id_map)
 
     body: list[ProfileSection] = []
@@ -362,6 +360,40 @@ def _assemble(
     return DataProfileReport(sections)
 
 
+def _index_by_id(
+    records: Sequence[Mapping[str, Any]],
+    id_key: str,
+) -> dict[Hashable, Mapping[str, Any]]:
+    """Index ``records`` by their ``id_key``, **first-wins** on a duplicate id.
+
+    A duplicate id cannot be addressed twice, so -- matching the embedding side's
+    :class:`~langres.core.data_profile.embedding_source._RowGatherSource`
+    convention -- the first occurrence wins and later duplicates are dropped
+    (a naive ``{r[id_key]: r ...}`` comprehension would silently keep the *last*).
+    Records missing ``id_key`` are skipped. Any dropped duplicate is logged with
+    its count -- never silent, since a wrong id map corrupts every id-keyed lookup
+    (e.g. the separability signal) downstream.
+    """
+    id_map: dict[Hashable, Mapping[str, Any]] = {}
+    n_duplicate_ids = 0
+    for record in records:
+        if id_key not in record:
+            continue
+        identifier = record[id_key]
+        if identifier in id_map:
+            n_duplicate_ids += 1  # first-wins: keep the existing, drop this one
+            continue
+        id_map[identifier] = record
+    if n_duplicate_ids:
+        logger.warning(
+            "data-profile: dropped %d duplicate %r id(s) (kept the first occurrence "
+            "of each); a last-wins map would silently corrupt id-keyed lookups",
+            n_duplicate_ids,
+            id_key,
+        )
+    return id_map
+
+
 def _build_separability(
     *,
     id_map: Mapping[Hashable, Mapping[str, Any]],
@@ -374,17 +406,20 @@ def _build_separability(
     """Build the separability section(s): string by default, cosine per source.
 
     Needs a gold clustering (for the positive pairs) -- returns ``[]`` without one.
-    Positives are every within-cluster pair; negatives are a deterministic numpy
-    sample of non-matching pairs (capped, logged). A string-similarity section is
-    added when a ``schema`` is available, and one cosine-similarity section per
-    embedding source, each named distinctly so their titles never collide.
+    Positives are within-cluster pairs (reservoir-sampled to ``negatives_cap`` so a
+    pathological gold cluster cannot blow up memory); negatives are a deterministic
+    numpy sample of non-matching pairs (capped, logged), excluded via an
+    ``id -> cluster`` map rather than a materialised positive-pair set. A
+    string-similarity section is added when a ``schema`` is available, and one
+    cosine-similarity section per embedding source, each named distinctly so their
+    titles never collide.
     """
     if clusters is None:
         return []
 
-    positives = _positive_pairs(clusters)
-    positive_set = {frozenset(pair) for pair in positives}
-    negatives = _sample_negative_pairs(list(id_map), positive_set, negatives_cap, seed)
+    positives = _positive_pairs(clusters, cap=negatives_cap, seed=seed)
+    member_cluster = _member_cluster_index(clusters)
+    negatives = _sample_negative_pairs(list(id_map), member_cluster, negatives_cap, seed)
     if not positives and not negatives:
         return []
 
@@ -410,26 +445,81 @@ def _build_separability(
 
 def _positive_pairs(
     clusters: Sequence[Collection[Hashable]],
+    *,
+    cap: int = _DEFAULT_NEGATIVES_CAP,
+    seed: int = _NEGATIVES_SEED,
 ) -> list[tuple[Hashable, Hashable]]:
-    """Every within-cluster id pair (the ER positives); singletons contribute none."""
-    pairs: list[tuple[Hashable, Hashable]] = []
+    """Up to ``cap`` within-cluster id pairs (the ER positives); singletons contribute none.
+
+    Every within-cluster pair is a positive, but one pathological gold cluster (a
+    bad-merge "default entity" of thousands of members) yields ``O(size**2)`` pairs
+    -- millions of tuples -- which would defeat the package's memory-efficiency
+    contract. So the pairs are **reservoir-sampled to** ``cap`` *during* generation
+    (``O(cap)`` memory, seeded for reproducibility), and any truncation is logged --
+    never silent, mirroring the negatives. A corpus small enough to stay under
+    ``cap`` yields the exact same full pair set an un-capped enumeration would;
+    ``cap`` bites only on the pathological case. ``cap`` matches the per-class
+    scoring cap
+    :func:`~langres.core.data_profile.separability.profile_separability` applies, so
+    no positive information is lost (it subsamples to ``cap`` for scoring anyway).
+    """
+    reservoir: list[tuple[Hashable, Hashable]] = []
+    n_seen = 0
+    rng = np.random.default_rng(seed)
     for cluster in clusters:
         members = list(cluster)
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
-                pairs.append((members[i], members[j]))
-    return pairs
+                n_seen += 1
+                if n_seen <= cap:
+                    reservoir.append((members[i], members[j]))
+                else:
+                    # Reservoir sampling (Algorithm R): the n-th pair replaces a
+                    # uniformly-random slot with probability cap/n, so the kept set
+                    # stays a uniform sample of every pair seen -- without ever
+                    # holding more than `cap` of them in memory.
+                    replace = int(rng.integers(0, n_seen))
+                    if replace < cap:
+                        reservoir[replace] = (members[i], members[j])
+    if n_seen > cap:
+        logger.warning(
+            "data-profile separability: sampled %d of %d positive pairs (cap=%d)",
+            cap,
+            n_seen,
+            cap,
+        )
+    return reservoir
+
+
+def _member_cluster_index(
+    clusters: Sequence[Collection[Hashable]],
+) -> dict[Hashable, int]:
+    """Map each record id to its gold-cluster index (for same-cluster exclusion).
+
+    A pair is a positive iff both ids fall in the same gold cluster. Sampling
+    negatives against this ``O(n_records)`` map -- rather than a materialised set of
+    every positive *pair* -- keeps the exclusion memory-linear even when one cluster
+    contributes ``O(size**2)`` positives (see :func:`_positive_pairs`). First-wins
+    on the (malformed) case of an id in two clusters.
+    """
+    index_of: dict[Hashable, int] = {}
+    for index, cluster in enumerate(clusters):
+        for member in cluster:
+            index_of.setdefault(member, index)
+    return index_of
 
 
 def _sample_negative_pairs(
     ids: Sequence[Hashable],
-    positive_pairs: set[frozenset[Hashable]],
+    member_cluster: Mapping[Hashable, int],
     cap: int,
     seed: int,
 ) -> list[tuple[Hashable, Hashable]]:
     """A deterministic numpy sample of up to ``cap`` non-matching id pairs.
 
-    Draws random id pairs (seeded), rejecting self-pairs, positives, and repeats.
+    Draws random id pairs (seeded), rejecting self-pairs, same-cluster pairs (the
+    positives -- tested against ``member_cluster``, an ``id -> cluster index`` map,
+    so the full positive-pair set never has to be materialised), and repeats.
     Bounded by an attempt ceiling so a corpus with few possible negatives cannot
     spin. Logs the cap it targets (never silent).
     """
@@ -451,8 +541,10 @@ def _sample_negative_pairs(
         if i == j:
             continue
         left, right = ids[i], ids[j]
+        left_cluster = member_cluster.get(left)
+        same_cluster = left_cluster is not None and left_cluster == member_cluster.get(right)
         key = frozenset((left, right))
-        if len(key) != 2 or key in positive_pairs or key in seen:
+        if len(key) != 2 or same_cluster or key in seen:
             continue
         seen.add(key)
         negatives.append((left, right))

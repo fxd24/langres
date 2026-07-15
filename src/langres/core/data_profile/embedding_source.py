@@ -433,6 +433,18 @@ def _locate(root: Path, filename: str) -> Path:
             f"{filename!r} not found in {root} (searched recursively) -- is this a "
             "persisted anchor-store / vector-index artifact with a built index?"
         )
+    if len(matches) > 1:
+        # More than one artifact under the same root: the first (sorted) still
+        # resolves so this stays non-breaking, but we name the choice instead of
+        # picking silently -- matching this module's "never silent" convention.
+        logger.warning(
+            "%r matched %d files under %s; using the first (%s). Point state_dir at a "
+            "single artifact to disambiguate.",
+            filename,
+            len(matches),
+            root,
+            matches[0],
+        )
     return matches[0]
 
 

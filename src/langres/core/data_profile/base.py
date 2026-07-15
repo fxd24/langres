@@ -24,8 +24,7 @@ are the default surfaces; ``to_html`` is the optional ``$0`` tearsheet.
 from __future__ import annotations
 
 import abc
-import importlib
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, SerializeAsAny
 
@@ -195,26 +194,26 @@ class DataProfileReport(BaseModel):
     def from_benchmark(cls, *args: Any, **kwargs: Any) -> DataProfileReport:
         """Profile a benchmark (labels + fields + ... ) with sensible defaults.
 
-        A thin delegator to the ``builders`` module (Wave 2): the heavy lifting
-        -- composing the default section set, honouring optional
-        ``embeddings=``/``blocker=`` inputs, applying an ``include=`` subset --
-        lives there so this frozen base never changes as that logic firms up.
-        Resolved *dynamically* (``importlib``) rather than a static ``from ...
-        import``: ``builders`` does not exist until Wave 2, and resolving it
-        dynamically keeps this frozen module type-clean both before and after it
-        lands (a static import would need a ``# type: ignore`` that Wave 2 would
-        then have to remove -- editing a module that must stay frozen).
+        A thin delegator to the ``builders`` module: the heavy lifting -- composing
+        the default section set, honouring optional ``embeddings=`` inputs, applying
+        an ``include=`` subset -- lives there so this base stays a stable, minimal
+        surface. The import is deferred into the method body (not module scope) so a
+        bare ``import langres.core.data_profile`` never pulls ``builders`` (and its
+        leaf profilers) at import time -- the package's import-light budget -- while
+        still handing mypy the real ``builders.from_benchmark`` return type.
         """
-        builders = importlib.import_module("langres.core.data_profile.builders")
-        return cast("DataProfileReport", builders.from_benchmark(*args, **kwargs))
+        from langres.core.data_profile.builders import from_benchmark as _impl
+
+        return _impl(*args, **kwargs)
 
     @classmethod
     def from_records(cls, *args: Any, **kwargs: Any) -> DataProfileReport:
         """Profile raw records (+ optional gold / embeddings) with sensible defaults.
 
-        The bring-your-own-data counterpart of :meth:`from_benchmark`; delegates
-        to the same Wave 2 ``builders`` module, resolved dynamically for the same
-        frozen-module reason documented there.
+        The bring-your-own-data counterpart of :meth:`from_benchmark`; delegates to
+        the same ``builders`` module via the same deferred body import, for the same
+        import-light reason documented there.
         """
-        builders = importlib.import_module("langres.core.data_profile.builders")
-        return cast("DataProfileReport", builders.from_records(*args, **kwargs))
+        from langres.core.data_profile.builders import from_records as _impl
+
+        return _impl(*args, **kwargs)
