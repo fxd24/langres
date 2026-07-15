@@ -19,9 +19,11 @@ Three pipeline roles can be trained, each with its own fit signature:
   high-recall blocking key/index from known match pairs). Contract-only here;
   the concrete ``TrainableVectorBlocker`` is a later PR -- this makes learned
   blocking *expressible* in the role taxonomy.
-- **Calibrator** -- ``CalibratorFitMixin`` (``fit_calibrator(scores, labels)``:
-  learn a score->probability map). Contract-only here; the concrete
-  Platt/isotonic impl is a later PR.
+- **Calibrator** -- ``CalibratorFitMixin`` (``fit_calibrator(scores, labels)``
+  learns a score->probability map; ``transform(scores)`` applies it). The
+  concrete Platt/isotonic
+  :class:`~langres.core.calibration.Calibrator` implements it, consumed by
+  ``Resolver.fit(method=Platt()/Isotonic())``.
 
 See ``Resolver.fit()`` for how the matcher mixins are consumed, and
 docs/TECHNICAL_OVERVIEW.md ("Fit-hook contract") for the full picture.
@@ -104,13 +106,16 @@ class BlockerFitMixin(Protocol):
 
 @runtime_checkable
 class CalibratorFitMixin(Protocol):
-    """A calibrator that learns a score->probability map from scores + labels.
+    """A calibrator that learns a score->probability map and applies it.
 
-    Implement ``fit_calibrator(scores, labels)`` to opt in; no subclassing
-    required (structural typing via ``isinstance()``). Contract-only for now --
-    the concrete Platt/isotonic impl is a later PR; this makes score calibration
-    *expressible* as its own fit role, distinct from a matcher's
-    ``fit(candidates, labels)``.
+    Implement ``fit_calibrator(scores, labels)`` (learn) and ``transform(scores)``
+    (apply) to opt in; no subclassing required (structural typing via
+    ``isinstance()``). The role is two-sided: a fitted calibrator is only useful
+    if the predict path can push scores through it, so the apply half is part of
+    the contract. The concrete Platt/isotonic
+    :class:`~langres.core.calibration.Calibrator` implements both;
+    :meth:`~langres.core.resolver.Resolver._fit_calibrate` fits it and
+    :meth:`~langres.core.resolver.Resolver.predict` applies it.
     """
 
     def fit_calibrator(self, scores: Sequence[float], labels: Sequence[bool]) -> None:
@@ -120,5 +125,16 @@ class CalibratorFitMixin(Protocol):
             scores: The matcher scores to calibrate, positionally aligned with
                 ``labels``.
             labels: Gold match/non-match labels for each score.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+    def transform(self, scores: Sequence[float]) -> list[float]:
+        """Map raw scores to calibrated probabilities in ``[0, 1]``.
+
+        Args:
+            scores: Raw matcher scores to calibrate.
+
+        Returns:
+            One calibrated probability per input score.
         """
         ...  # pragma: no cover — Protocol method body, never executed
