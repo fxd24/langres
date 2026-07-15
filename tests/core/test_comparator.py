@@ -49,7 +49,7 @@ class TestComparatorABC:
 
         The ABC exposes a concrete read-only ``feature_specs`` default of ``[]``
         so spec-less comparators don't raise AttributeError when the
-        WeightedAverageJudge reads ``comparator.feature_specs``.
+        WeightedAverageMatcher reads ``comparator.feature_specs``.
         """
 
         class _SpecLess(Comparator[CompanySchema]):

@@ -5,7 +5,7 @@ experiment. It exercises **both experiment surfaces** on Amazon-Google, entirely
 offline and free with DSPy's ``DummyLM`` (no API key, no network):
 
 1. Load the fixed Amazon-Google **pair splits** (train/test candidate sets + gold).
-2. Build a ``DSPyJudge(lm=DummyLM(...), model="dummy")`` and ``.compile(...)`` it
+2. Build a ``DSPyMatcher(lm=DummyLM(...), model="dummy")`` and ``.compile(...)`` it
    on the train band with ``BootstrapFewShot`` (zero-spend).
 3. Evaluate the **compiled** judge on the test band with
    ``evaluate_judge_on_candidates`` — pairwise P/R/F1 at the best-F1 grid
@@ -45,7 +45,7 @@ from langres.core.benchmark import (  # noqa: E402
 )
 from langres.core.calibration import derive_threshold  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
-from langres.core.modules.dspy_judge import DSPyJudge  # noqa: E402
+from langres.core.matchers.dspy_judge import DSPyMatcher  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402
     AmazonGoogleBenchmark,
     ProductSchema,
@@ -76,7 +76,7 @@ def build_candidates(
     """Build a balanced band of ER candidates from a fixed AG pair split.
 
     Reuses the corpus-by-id + fixed-pair-rows pattern (no embedding step —
-    ``DSPyJudge`` reads the raw records): takes ``per_class`` positive and
+    ``DSPyMatcher`` reads the raw records): takes ``per_class`` positive and
     ``per_class`` negative rows so both the trainset and the eval carry both
     labels. Returns the candidates plus the positive gold pairs.
     """
@@ -133,11 +133,11 @@ def main() -> None:
     print(f"- test  band: {len(test_candidates)} candidates, {len(test_gold)} gold pairs")
 
     # --- 2) Build + compile the DSPy judge (BootstrapFewShot, zero-spend). ------
-    judge: DSPyJudge[ProductSchema] = DSPyJudge(
+    judge: DSPyMatcher[ProductSchema] = DSPyMatcher(
         lm=_dummy_lm(), model="dummy", entity_noun="product"
     )
     judge.compile(to_trainset(train_candidates, train_gold), optimizer="bootstrap")
-    print("\n## 2. DSPyJudge compiled")
+    print("\n## 2. DSPyMatcher compiled")
     print(f"- optimizer=bootstrap  compiled={judge.compiled}  (DummyLM => $0)")
 
     # --- 3) Evaluate the COMPILED judge on the test band — judged ONCE. ---------

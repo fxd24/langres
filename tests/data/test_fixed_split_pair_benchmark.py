@@ -3,7 +3,7 @@
 The fast tests use a tiny toy schema + a deterministic fake judge, so they never
 import the torch-backed dataset loaders. Two ``@pytest.mark.slow`` tests exercise
 the real Amazon-Google and Abt-Buy full standard splits end-to-end with the
-``RandomForestJudge`` floor.
+``RandomForestMatcher`` floor.
 """
 
 from collections.abc import Iterator
@@ -16,7 +16,7 @@ from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel
 from langres.core.metrics import classify_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.data.fixed_split_pair_benchmark import (
     FixedSplitPairBenchmark,
@@ -179,7 +179,7 @@ def test_from_loaders_accepts_an_explicit_comparator() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _MapJudge(Module[_ToySchema]):
+class _MapJudge(Matcher[_ToySchema]):
     """A deterministic judge: score is a pure lookup on the pair's id-frozenset.
 
     Keying on ``frozenset({left.id, right.id})`` makes the judge a pure function
@@ -310,7 +310,7 @@ def test_derive_on_valid_uses_the_valid_split() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Slow end-to-end: real datasets with the RandomForestJudge floor
+# Slow end-to-end: real datasets with the RandomForestMatcher floor
 # ---------------------------------------------------------------------------
 
 
@@ -359,8 +359,8 @@ def test_real_dataset_full_test_split_shapes(name: str, n_test: int, n_test_pos:
 
 @pytest.mark.slow
 def test_random_forest_floor_runs_honestly_on_amazon_google() -> None:
-    """RandomForestJudge fits on train and grades honestly on the full AG test."""
-    from langres.core.modules.random_forest_judge import RandomForestJudge
+    """RandomForestMatcher fits on train and grades honestly on the full AG test."""
+    from langres.core.matchers.random_forest_judge import RandomForestMatcher
     from langres.data.amazon_google import (
         ProductSchema,
         load_amazon_google,
@@ -374,7 +374,7 @@ def test_random_forest_floor_runs_honestly_on_amazon_google() -> None:
         pair_split_loader=load_amazon_google_pair_splits,
     )
     train = bench.build("train")
-    judge: RandomForestJudge[ProductSchema] = RandomForestJudge(feature_specs=bench.feature_specs)
+    judge: RandomForestMatcher[ProductSchema] = RandomForestMatcher(feature_specs=bench.feature_specs)
     judge.fit(iter(train.candidates), train.labels)
 
     result = evaluate_fixed_split_honest(judge, bench, derive_on="train")
@@ -391,7 +391,7 @@ def test_random_forest_floor_runs_honestly_on_amazon_google() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _DecisionOnlyJudge(Module[_ToySchema]):
+class _DecisionOnlyJudge(Matcher[_ToySchema]):
     """A binary judge: it decides directly and emits NO score."""
 
     def __init__(self, decisions: dict[frozenset[str], bool]) -> None:

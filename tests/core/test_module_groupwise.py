@@ -1,12 +1,12 @@
-"""Tests for GroupwiseModule and the group-call cost-stamping helper.
+"""Tests for GroupwiseMatcher and the group-call cost-stamping helper.
 
-GroupwiseModule IS-A Module (E2): its concrete forward() derives groups
+GroupwiseMatcher IS-A Matcher (E2): its concrete forward() derives groups
 internally from the pairwise ERCandidate stream it receives and dispatches to
 the abstract forward_groups(), so the existing Resolver execution spine
 (Resolver._judgements -> module.forward), inspect_scores, the JudgementLog
 boundary, and benchmark dispatch all keep working with ZERO changes -- no
 parallel execution path. These tests pin that contract down, including an
-end-to-end Resolver.resolve() run through a concrete GroupwiseModule.
+end-to-end Resolver.resolve() run through a concrete GroupwiseMatcher.
 
 stamp_group_cost is the E5 group-call cost convention helper: a groupwise
 judge stamps the full call cost on the first judgement of a group, $0 on
@@ -23,7 +23,7 @@ from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.groups import ERCandidateGroup
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import GroupwiseModule, Module, stamp_group_cost
+from langres.core.matcher import GroupwiseMatcher, Matcher, stamp_group_cost
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
 
@@ -35,8 +35,8 @@ class ProductSchema(BaseModel):
     title: str
 
 
-class _RecordingGroupwiseModule(GroupwiseModule[CompanySchema]):
-    """Concrete GroupwiseModule: matches every member to its anchor, score=1.0."""
+class _RecordingGroupwiseModule(GroupwiseMatcher[CompanySchema]):
+    """Concrete GroupwiseMatcher: matches every member to its anchor, score=1.0."""
 
     def __init__(self) -> None:
         self.forward_groups_calls: list[list[ERCandidateGroup[CompanySchema]]] = []
@@ -97,15 +97,15 @@ def _candidates(pairs: list[tuple[str, str]]) -> list[ERCandidate[CompanySchema]
 
 
 def test_groupwise_module_is_a_module() -> None:
-    """GroupwiseModule IS-A Module (E2): the Resolver spine dispatches unchanged."""
-    assert issubclass(GroupwiseModule, Module)
-    assert isinstance(_RecordingGroupwiseModule(), Module)
+    """GroupwiseMatcher IS-A Matcher (E2): the Resolver spine dispatches unchanged."""
+    assert issubclass(GroupwiseMatcher, Matcher)
+    assert isinstance(_RecordingGroupwiseModule(), Matcher)
 
 
 def test_cannot_instantiate_groupwise_module_without_forward_groups() -> None:
     """forward_groups() is abstract; a subclass missing it cannot be instantiated."""
 
-    class IncompleteGroupwiseModule(GroupwiseModule[CompanySchema]):
+    class IncompleteGroupwiseModule(GroupwiseMatcher[CompanySchema]):
         def inspect_scores(
             self, judgements: list[PairwiseJudgement], sample_size: int = 10
         ) -> ScoreInspectionReport:
@@ -116,9 +116,9 @@ def test_cannot_instantiate_groupwise_module_without_forward_groups() -> None:
 
 
 def test_cannot_instantiate_groupwise_module_directly() -> None:
-    """GroupwiseModule itself stays abstract."""
+    """GroupwiseMatcher itself stays abstract."""
     with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-        GroupwiseModule()  # type: ignore[abstract]
+        GroupwiseMatcher()  # type: ignore[abstract]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ def test_forward_groups_pairwise_candidates_and_dispatches() -> None:
 
 
 def test_forward_returns_iterator_of_pairwise_judgements() -> None:
-    """forward()'s output type is Iterator[PairwiseJudgement] -- unchanged Module contract."""
+    """forward()'s output type is Iterator[PairwiseJudgement] -- unchanged Matcher contract."""
     module = _RecordingGroupwiseModule()
     result = module.forward(iter(_candidates([("a", "b")])))
 
@@ -164,9 +164,9 @@ def test_forward_handles_empty_candidate_stream() -> None:
 
 
 def test_forward_is_schema_agnostic_with_product_schema() -> None:
-    """GroupwiseModule works with a second, unrelated schema (ProductSchema)."""
+    """GroupwiseMatcher works with a second, unrelated schema (ProductSchema)."""
 
-    class _ProductGroupwiseModule(GroupwiseModule[ProductSchema]):
+    class _ProductGroupwiseModule(GroupwiseMatcher[ProductSchema]):
         def forward_groups(
             self, groups: Iterator[ERCandidateGroup[ProductSchema]]
         ) -> Iterator[PairwiseJudgement]:
@@ -205,18 +205,18 @@ def test_forward_is_schema_agnostic_with_product_schema() -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: the Resolver spine dispatches to a GroupwiseModule unchanged.
+# End-to-end: the Resolver spine dispatches to a GroupwiseMatcher unchanged.
 # ---------------------------------------------------------------------------
 
 
 def test_resolver_resolve_dispatches_through_groupwise_module() -> None:
-    """A full Resolver (blocker -> module -> clusterer) runs a GroupwiseModule
+    """A full Resolver (blocker -> module -> clusterer) runs a GroupwiseMatcher
     with zero Resolver changes -- proving the spine is preserved end-to-end."""
     module = _RecordingGroupwiseModule()
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=module,
+        matcher=module,
         clusterer=Clusterer(threshold=0.5),
     )
     records = [
@@ -303,7 +303,7 @@ def test_stamp_group_cost_does_not_mutate_input_judgements() -> None:
 
 def test_stamp_group_cost_sets_group_end_only_on_last_judgement() -> None:
     """group_end marks exactly the LAST judgement, so a consumer draining a
-    whole group from a lazy stream (E9's _SpendCappedModule) can stop at the
+    whole group from a lazy stream (E9's _SpendCappedMatcher) can stop at the
     boundary without peeking at (and thereby computing) the next group."""
     judgements = [
         _judgement("anchor", "m1"),

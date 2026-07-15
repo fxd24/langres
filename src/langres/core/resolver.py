@@ -5,7 +5,7 @@ slots into one runnable, serializable pipeline:
 
     blocker      -> candidate generation + schema normalization
     comparator   -> (optional) missing-aware per-feature comparison
-    module       -> the scorer (a Module yielding PairwiseJudgements)
+    module       -> the scorer (a Matcher yielding PairwiseJudgements)
     clusterer    -> connected-components grouping of matched pairs
 
 ``resolve(records)`` orchestrates blocking -> (compare) -> score -> cluster.
@@ -47,9 +47,9 @@ from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.registry import get_component
 from langres.core.serialization import (
     ARTIFACT_VERSION,
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
     # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
     # core-only `import langres` never pulls faiss/torch in for a Resolver
-    # that never uses judge="embedding".
+    # that never uses matcher="embedding".
     from langres.core.anchor_store import AnchorStore, ClusterDelta
     from langres.core.blockers.vector import VectorBlocker
 
@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 _MANIFEST_FILENAME = "resolver.json"
 
 #: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
-#: than ``langres.core.presets.JudgeName`` -- no ``"auto"``, since resolving
+#: than ``langres.core.presets.MatcherName`` -- no ``"auto"``, since resolving
 #: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
 #: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
 #: constructor argument.
@@ -80,15 +80,15 @@ _FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm"]
 
 
 def _build_module_for_judge(
-    judge: "_FromSchemaJudge | Module[Any]",
+    judge: "_FromSchemaJudge | Matcher[Any]",
     schema: type[BaseModel],
     comparator: Comparator[Any],
     *,
     model: str | None,
     entity_noun: str,
     judge_params: dict[str, Any] | None = None,
-) -> Module[Any]:
-    """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
+) -> Matcher[Any]:
+    """Build the scorer for ``Resolver.from_schema``'s ``matcher=`` slot.
 
     Construction is delegated to the one
     :mod:`~langres.core.method_registry` (a core leaf, so no
@@ -98,13 +98,13 @@ def _build_module_for_judge(
     ``comparator`` is passed to the spec builder so custom
     ``weights=``/``exclude=`` flow into feature-spec-driven judges.
     """
-    if isinstance(judge, Module):
+    if isinstance(judge, Matcher):
         return judge
     if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm"):
         raise ValueError(
             f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
             "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', or pass a "
-            "Module instance. 'auto' key-based resolution is a verbs-layer "
+            "Matcher instance. 'auto' key-based resolution is a verbs-layer "
             "feature -- use langres.link/langres.dedupe for that."
         )
     from langres.core.method_registry import get_method
@@ -116,7 +116,7 @@ def _build_module_for_judge(
         if dspy_price_per_1k(resolved_model) == 0.0:
             # An unpinned model self-reports $0/pair -- honest, not reassuring
             # (mirrors core.presets.notice_pre_scoring_cost's identical check).
-            # Resolver.from_schema has no spend cap at all (see its judge=
+            # Resolver.from_schema has no spend cap at all (see its matcher=
             # docstring), so this is strictly worse than the verbs' blind-cap
             # case: nothing would ever stop a runaway bill.
             warnings.warn(
@@ -138,10 +138,10 @@ def _build_module_for_judge(
 
 
 def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
-    """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
+    """Build the ``VectorBlocker`` a ``matcher="embedding"`` pipeline needs.
 
     ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
-    ``EmbeddingScoreJudge`` requires to score -- ``judge="embedding"`` must
+    ``EmbeddingScoreMatcher`` requires to score -- ``matcher="embedding"`` must
     always be paired with a ``VectorBlocker``, mirroring the identical rule
     ``core.presets.build_resolver`` applies for the verb layer (same model,
     same k, same cosine metric). Duplicated here rather than imported from
@@ -225,7 +225,7 @@ def _component_spec(obj: object, slot: str) -> ComponentSpec:
     if not isinstance(type_name, str):
         raise TypeError(
             f"{type(obj).__name__} is not serializable (no `type_name`/@register). "
-            f"Use a registered component (e.g. LLMJudge, WeightedAverageJudge) in "
+            f"Use a registered component (e.g. LLMMatcher, WeightedAverageMatcher) in "
             f"the {slot!r} slot."
         )
     return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
@@ -306,8 +306,8 @@ class Resolver:
         blocker: Candidate generator + schema normalizer.
         comparator: Optional pre-stage turning each pair into a
             ComparisonVector. When ``None``, the module is called directly
-            (e.g. a self-contained ``RapidfuzzModule``).
-        module: The scorer Module that yields PairwiseJudgements.
+            (e.g. a self-contained ``RapidfuzzMatcher``).
+        module: The scorer Matcher that yields PairwiseJudgements.
         clusterer: Groups matched pairs into entity clusters.
 
     Example:
@@ -315,7 +315,7 @@ class Resolver:
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+            module=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
         clusters = resolver.resolve(COMPANY_RECORDS)
@@ -327,7 +327,7 @@ class Resolver:
         self,
         blocker: Blocker[Any],
         comparator: Comparator[Any] | None,
-        module: Module[Any],
+        module: Matcher[Any],
         clusterer: Clusterer,
     ) -> None:
         self.blocker = blocker
@@ -350,7 +350,7 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
-        judge: "_FromSchemaJudge | Module[Any]" = "string",
+        judge: "_FromSchemaJudge | Matcher[Any]" = "string",
         model: str | None = None,
         entity_noun: str = "entity",
         prompt_template: str | None = None,
@@ -361,10 +361,10 @@ class Resolver:
 
         Defaults to an ``AllPairsBlocker`` over the schema, a missing-aware
         ``StringComparator`` auto-derived from the schema's string fields (with
-        ``id`` excluded), a ``WeightedAverageJudge`` scorer, and a ``Clusterer``
-        at ``threshold``. ``judge="embedding"`` is the one exception to the
+        ``id`` excluded), a ``WeightedAverageMatcher`` scorer, and a ``Clusterer``
+        at ``threshold``. ``matcher="embedding"`` is the one exception to the
         ``AllPairsBlocker`` default: it wires a ``VectorBlocker`` instead,
-        since ``EmbeddingScoreJudge`` scores off the blocker's
+        since ``EmbeddingScoreMatcher`` scores off the blocker's
         ``similarity_score``, which only a ``VectorBlocker`` attaches.
 
         Args:
@@ -380,24 +380,24 @@ class Resolver:
             judge: ``"string"`` (default -- identical to pre-existing
                 behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
                 above), ``"zero_shot_llm"``, ``"prompt_llm"`` (the
-                bring-your-own-prompt ``LLMJudge`` -- with a *registered*
+                bring-your-own-prompt ``LLMMatcher`` -- with a *registered*
                 ``response_parser`` name the whole judge, prompt included,
-                ``save``/``load`` round-trips), or a ``Module`` instance. This
+                ``save``/``load`` round-trips), or a ``Matcher`` instance. This
                 is the low-level, explicit switch (no ``"auto"`` key-based
                 resolution and no spend cap -- that magic lives in
                 ``langres.link``/``langres.dedupe``). **Caution**:
-                ``judge="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
-                ``Module``) built here runs UNCAPPED -- there is no
+                ``matcher="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
+                ``Matcher``) built here runs UNCAPPED -- there is no
                 ``budget_usd`` on this method and nothing stops a runaway
                 bill. Use ``langres.link``/``langres.dedupe`` for the
                 built-in ``SpendMonitor`` cap.
-            model: Model id override for ``judge="zero_shot_llm"``/``"prompt_llm"``.
+            model: Model id override for ``matcher="zero_shot_llm"``/``"prompt_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
-            prompt_template: ``judge="prompt_llm"`` only: custom prompt with
+            prompt_template: ``matcher="prompt_llm"`` only: custom prompt with
                 ``{left}``/``{right}`` placeholders (see
-                :class:`~langres.core.modules.llm_judge.LLMJudge`).
-            system_prompt: ``judge="prompt_llm"`` only: optional system message.
-            response_parser: ``judge="prompt_llm"`` only: a *registered*
+                :class:`~langres.core.matchers.llm_judge.LLMMatcher`).
+            system_prompt: ``matcher="prompt_llm"`` only: optional system message.
+            response_parser: ``matcher="prompt_llm"`` only: a *registered*
                 parser name (``"score"`` / ``"binary_yes_no"`` -- see
                 ``llm_judge.RESPONSE_PARSERS``), serialized in the artifact.
 
@@ -422,8 +422,8 @@ class Resolver:
         }
         if judge_params and judge != "prompt_llm":
             raise ValueError(
-                f"{', '.join(sorted(judge_params))}: only valid with judge='prompt_llm' "
-                f"(got judge={judge!r})."
+                f"{', '.join(sorted(judge_params))}: only valid with matcher='prompt_llm' "
+                f"(got matcher={judge!r})."
             )
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
@@ -472,7 +472,7 @@ class Resolver:
         When the module implements **neither** hook, this is a no-op that
         returns ``self`` -- unchanged sklearn-style symmetry so callers can
         write ``resolver.fit(data).resolve(data)`` for non-learnable
-        pipelines (e.g. ``WeightedAverageJudge``) without branching -- UNLESS
+        pipelines (e.g. ``WeightedAverageMatcher``) without branching -- UNLESS
         ``labels`` was passed, in which case it raises rather than silently
         discarding them.
 
@@ -544,7 +544,7 @@ class Resolver:
         comparator configured (the default for ``Resolver.from_schema``) --
         a caller that instead reaches into e.g. ``bench.build_blocker().stream(records)``
         directly gets candidates WITHOUT comparison vectors, which silently
-        changes what a comparison-reading judge (e.g. ``WeightedAverageJudge``)
+        changes what a comparison-reading judge (e.g. ``WeightedAverageMatcher``)
         sees.
 
         Prefer this over a raw ``blocker.stream(...)`` generator whenever the

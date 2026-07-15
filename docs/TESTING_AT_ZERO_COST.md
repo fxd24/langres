@@ -2,7 +2,7 @@
 
 An LLM judge costs money and needs a network. Neither belongs in a unit test or
 CI run. langres' verbs (`link` / `dedupe`) and its `Resolver` all accept a
-**`Module` instance** in the `judge=` slot — the escape hatch that lets you swap
+**`Matcher` instance** in the `matcher=` slot — the escape hatch that lets you swap
 the real LLM for a **`DummyLM`**-backed judge that replays canned answers
 offline, deterministically, and for **$0**.
 
@@ -24,15 +24,15 @@ This is the same seam the project's own test suite runs on (see
 
 `DummyLM` (from `dspy.utils.dummies`) is a DSPy language model that returns
 **canned answers** instead of calling a provider. You build a real judge
-(`DSPyJudge` for pairwise, `SelectJudge` for set-wise) around it and pass the
-judge as `judge=`:
+(`DSPyMatcher` for pairwise, `SelectMatcher` for set-wise) around it and pass the
+judge as `matcher=`:
 
 ```python
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
 from langres import dedupe
-from langres.core.modules.dspy_judge import DSPyJudge
+from langres.core.matchers.dspy_judge import DSPyMatcher
 
 
 class Company(BaseModel):
@@ -41,24 +41,24 @@ class Company(BaseModel):
 
 
 def test_dedupe_merges_matching_records() -> None:
-    # DSPyJudge's signature has three output fields; a DummyLM answer is a dict
+    # DSPyMatcher's signature has three output fields; a DummyLM answer is a dict
     # keyed by those field names. DummyLM replays this same answer for every
     # call -> fully deterministic.
     answer = {"reasoning": "same company", "match": "True", "match_probability": "0.95"}
-    judge = DSPyJudge(lm=DummyLM([answer] * 20), entity_noun="company")
+    judge = DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company")
 
     records = [
         {"id": "a", "name": "Acme Corp"},
         {"id": "b", "name": "Acme Corporation"},
     ]
-    result = dedupe(records, schema=Company, judge=judge, threshold=0.5)
+    result = dedupe(records, schema=Company, matcher=judge, threshold=0.5)
 
     assert result == [{"a", "b"}]        # the pair merged into one cluster
-    assert result.judge_used == "custom"  # an injected Module reports as "custom"
+    assert result.judge_used == "custom"  # an injected Matcher reports as "custom"
 ```
 
 No key, no network, no spend — and the assertion is exact because DummyLM's
-answer is fixed. The judge still runs the *real* `DSPyJudge.forward` code
+answer is fixed. The judge still runs the *real* `DSPyMatcher.forward` code
 (rendering, parsing, scoring, provenance); only the model call is faked, so you
 are testing your pipeline wiring, not a mock of it.
 
@@ -72,7 +72,7 @@ verdict = link(
     {"id": "a", "name": "Acme"},
     {"id": "b", "name": "Acme Inc"},
     schema=Company,
-    judge=DSPyJudge(lm=DummyLM([answer] * 20), entity_noun="company"),
+    matcher=DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company"),
     threshold=0.5,
 )
 assert verdict.match is True
@@ -86,7 +86,7 @@ from langres.core import AllPairsBlocker, Clusterer, Resolver
 resolver = Resolver(
     blocker=AllPairsBlocker(schema=Company),
     comparator=None,
-    module=DSPyJudge(lm=DummyLM([answer] * 20), entity_noun="company"),
+    matcher=DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company"),
     clusterer=Clusterer(threshold=0.5),
 )
 assert resolver.resolve(records) == [{"a", "b"}]
@@ -94,18 +94,18 @@ assert resolver.resolve(records) == [{"a", "b"}]
 
 ---
 
-## Set-wise judges (SelectJudge) at $0
+## Set-wise judges (SelectMatcher) at $0
 
-A `GroupwiseModule` like `SelectJudge` makes **one** LLM call per candidate
+A `GroupwiseMatcher` like `SelectMatcher` makes **one** LLM call per candidate
 *group* ("which of these K candidates matches the anchor?"). DummyLM tests it the
 same way — the canned answer carries the signature's `selected_ids` field:
 
 ```python
 from dspy.utils.dummies import DummyLM
 from langres.core.groups import ERCandidateGroup
-from langres.core.modules.select_judge import SelectJudge
+from langres.core.matchers.select_judge import SelectMatcher
 
-judge = SelectJudge(
+judge = SelectMatcher(
     lm=DummyLM([{"reasoning": "b matches", "selected_ids": '["b"]'}]),
     entity_noun="company",
 )
@@ -126,7 +126,7 @@ assert judgements[0].provenance["cost_usd"] == 0.0    # DummyLM = $0
 
 ## Key facts
 
-- **`judge=<Module>` is the seam.** Any `Module` instance passed to `link` /
+- **`matcher=<Matcher>` is the seam.** Any `Matcher` instance passed to `link` /
   `dedupe` is used verbatim and reported as `judge_used="custom"`; passed to a
   `Resolver`, it just fills the `module` slot.
 - **DummyLM is deterministic.** It replays its canned answers, so assertions are
@@ -134,9 +134,9 @@ assert judgements[0].provenance["cost_usd"] == 0.0    # DummyLM = $0
 - **Cost is honest and zero.** Under DummyLM, token counts are 0, so the
   `provenance["cost_usd"]` a judge stamps is `$0`; the built-in spend cap on the
   verbs never trips.
-- **DSPy is an extra.** `DSPyJudge` / `SelectJudge` / `DummyLM` live behind the
+- **DSPy is an extra.** `DSPyMatcher` / `SelectMatcher` / `DummyLM` live behind the
   `[llm]` extra: `uv sync --extra llm` (or `--all-extras`). The string /
-  embedding judges need no LLM at all — for those, `judge="string"` is already a
+  embedding judges need no LLM at all — for those, `matcher="string"` is already a
   $0 offline path with nothing to inject.
 - **Guard the suite.** Run `uv run pytest -m "not integration"` to keep live,
   paid integration tests out. A bare `pytest` can spend.

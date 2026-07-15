@@ -494,7 +494,7 @@ class TestCollectSeeds:
         config = {
             "type_name": "root",
             "blocker": {"type_name": "VectorBlocker", "random_state": 5},
-            "module": {"type_name": "RandomForestJudge", "seed": 9},
+            "module": {"type_name": "RandomForestMatcher", "seed": 9},
         }
         seeds = runs._collect_seeds(1, config)
         assert seeds["split"] == 1

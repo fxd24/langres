@@ -1,11 +1,11 @@
-"""CascadeJudge: a two-tier student -> escalation judge over the Module contract.
+"""CascadeMatcher: a two-tier student -> escalation judge over the Matcher contract.
 
 The flywheel's cost lever (T3): a cheap trained ``student`` scores every pair;
 only pairs whose student score falls inside an uncertainty ``band`` are
 escalated to an expensive ``escalation`` judge (typically a frontier LLM).
-Unlike the deprecated :class:`~langres.core.modules.cascade.CascadeModule`
-(which hard-wires embeddings + an OpenAI client), CascadeJudge composes ANY two
-pairwise :class:`~langres.core.module.Module` instances and round-trips through
+Unlike the deprecated :class:`~langres.core.matchers.cascade.CascadeChainMatcher`
+(which hard-wires embeddings + an OpenAI client), CascadeMatcher composes ANY two
+pairwise :class:`~langres.core.matcher.Matcher` instances and round-trips through
 ``Resolver.save``/``load`` via the component registry.
 
 **Shared probability-scale contract:** both tiers must emit
@@ -14,7 +14,7 @@ probability-calibrated scores on a shared ``[0, 1]`` scale (e.g. ``prob_rf``,
 single downstream :class:`~langres.core.clusterer.Clusterer`/verdict threshold
 cuts the *mixed* student/escalation stream, so a raw similarity mixed with a
 probability makes both cuts meaningless. The API cannot prevent misuse, so
-:meth:`CascadeJudge.forward` emits a one-time ``UserWarning`` when a child
+:meth:`CascadeMatcher.forward` emits a one-time ``UserWarning`` when a child
 judgement's ``score_type`` falls outside the known probability set.
 
 Deliberately imports nothing from ``modules/cascade.py`` (that module pulls
@@ -29,7 +29,7 @@ from typing import Any, ClassVar
 
 from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import GroupwiseModule, Module, SchemaT
+from langres.core.matcher import GroupwiseMatcher, Matcher, SchemaT
 from langres.core.registry import get_component, register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.serialization import SerializableState
@@ -53,11 +53,11 @@ _PROBABILITY_SCORE_TYPES = frozenset(
     {"prob_llm", "prob_rf", "prob_fs", "prob_group_llm", "calibrated_prob"}
 )
 
-__all__ = ["CASCADE_ESCALATED_STEP", "CASCADE_STUDENT_STEP", "CascadeJudge"]
+__all__ = ["CASCADE_ESCALATED_STEP", "CASCADE_STUDENT_STEP", "CascadeMatcher"]
 
 
 @register("cascade_judge")
-class CascadeJudge(Module[SchemaT]):
+class CascadeMatcher(Matcher[SchemaT]):
     """Two-tier judge: a cheap student everywhere, escalation only in the band.
 
     The student scores each pair; a score in ``[low, high]`` (both edges
@@ -79,7 +79,7 @@ class CascadeJudge(Module[SchemaT]):
     scale (e.g. ``prob_rf`` / ``prob_llm``): one ``band`` cuts student scores
     and one downstream threshold cuts the mixed output stream. A child
     judgement with a non-probability ``score_type`` triggers a one-time
-    ``UserWarning`` per CascadeJudge instance.
+    ``UserWarning`` per CascadeMatcher instance.
 
     Spend caps belong on the OUTSIDE of a cascade, not on a tier. ``forward``
     runs the escalation judge once per band pair, so a per-call spend cap
@@ -92,7 +92,7 @@ class CascadeJudge(Module[SchemaT]):
     Serialization mirrors :class:`~langres.core.blockers.composite.CompositeBlocker`:
     children serialize as ``{"type_name", "config"}`` registry specs, and
     out-of-band child state (e.g. a fitted
-    :class:`~langres.core.modules.random_forest_judge.RandomForestJudge` forest) persists via
+    :class:`~langres.core.matchers.random_forest_judge.RandomForestMatcher` forest) persists via
     :class:`~langres.core.serialization.SerializableState` into per-child
     subdirectories (``<state_dir>/student``, ``<state_dir>/escalation``) --
     so a fitted student survives ``Resolver.save``/``load`` with zero Resolver
@@ -106,16 +106,16 @@ class CascadeJudge(Module[SchemaT]):
 
     Raises:
         ValueError: If ``band`` is not ``0 <= low < high <= 1``, or a child is
-            a :class:`~langres.core.module.GroupwiseModule` (its group-call
+            a :class:`~langres.core.matcher.GroupwiseMatcher` (its group-call
             cost contract is incompatible with per-pair escalation -- pass a
-            pairwise ``Module``, or keep the group-wise judge as a standalone
+            pairwise ``Matcher``, or keep the group-wise judge as a standalone
             tier outside the cascade).
 
     Example:
-        >>> student = RandomForestJudge(feature_specs=comparator.feature_specs)
+        >>> student = RandomForestMatcher(feature_specs=comparator.feature_specs)
         >>> student.fit(iter(train_candidates), train_labels)   # prob_rf scores
-        >>> frontier = LLMJudge(client=client, model="gpt-4o")  # prob_llm scores
-        >>> judge = CascadeJudge(student=student, escalation=frontier, band=(0.35, 0.65))
+        >>> frontier = LLMMatcher(client=client, model="gpt-4o")  # prob_llm scores
+        >>> judge = CascadeMatcher(student=student, escalation=frontier, band=(0.35, 0.65))
         >>> judgements = list(judge.forward(iter(candidates)))
         >>> # cheap student everywhere; the frontier only inside the band:
         >>> clusters = Clusterer(threshold=0.5).cluster(judgements)
@@ -125,8 +125,8 @@ class CascadeJudge(Module[SchemaT]):
 
     def __init__(
         self,
-        student: Module[SchemaT],
-        escalation: Module[SchemaT],
+        student: Matcher[SchemaT],
+        escalation: Matcher[SchemaT],
         *,
         band: tuple[float, float],
     ) -> None:
@@ -138,13 +138,13 @@ class CascadeJudge(Module[SchemaT]):
                 "probability scores; both edges are inclusive."
             )
         for slot, child in (("student", student), ("escalation", escalation)):
-            if isinstance(child, GroupwiseModule):
+            if isinstance(child, GroupwiseMatcher):
                 raise ValueError(
-                    f"CascadeJudge does not accept a GroupwiseModule as its {slot} "
+                    f"CascadeMatcher does not accept a GroupwiseMatcher as its {slot} "
                     f"(got {type(child).__name__}): escalation is per-pair, which "
                     "conflicts with the group-call cost contract (one call priced "
                     "across a whole group, stamp_group_cost). Pass a pairwise "
-                    "Module instead, or run the group-wise judge standalone."
+                    "Matcher instead, or run the group-wise judge standalone."
                 )
         self.student = student
         self.escalation = escalation
@@ -152,7 +152,7 @@ class CascadeJudge(Module[SchemaT]):
         self._score_type_warned = False
 
     # ------------------------------------------------------------------
-    # Scoring (Module)
+    # Scoring (Matcher)
     # ------------------------------------------------------------------
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
@@ -178,13 +178,13 @@ class CascadeJudge(Module[SchemaT]):
                 re-raised with ``partial_judgements`` reset to the cascade's
                 own full produced list (everything already yielded plus the
                 paid, in-flight escalation judgements in cascade form) --
-                otherwise an outer ``LoggingModule``'s ``[logged:]`` slice
+                otherwise an outer ``LoggingMatcher``'s ``[logged:]`` slice
                 would drop exactly the paid judgements.
             Exception: Any OTHER exception raised by the escalation child
                 (e.g. a network error, rate limit, or API failure) propagates
                 unchanged, WITHOUT partial-judgement preservation -- only
                 ``BudgetExceeded`` is langres's own exception and carries the
-                ``partial_judgements`` field the ``LoggingModule`` slice needs.
+                ``partial_judgements`` field the ``LoggingMatcher`` slice needs.
         """
         low, high = self.band
         produced: list[PairwiseJudgement] = []
@@ -212,7 +212,7 @@ class CascadeJudge(Module[SchemaT]):
                     raw = list(self.escalation.forward(iter([candidate])))
                 except BudgetExceeded as exc:
                     # The child's partial_judgements only cover ITS OWN forward
-                    # call, while an outer LoggingModule counts everything the
+                    # call, while an outer LoggingMatcher counts everything the
                     # cascade yielded -- its `partial_judgements[logged:]` slice
                     # (judgement_log.py) would come up empty and silently drop
                     # the paid judgements. Reset to the cascade's full produced
@@ -249,7 +249,7 @@ class CascadeJudge(Module[SchemaT]):
                 f"the cascade's {tier} judge produced {len(judgements)} judgements "
                 "for a single candidate pair; every candidate must yield exactly "
                 f"one PairwiseJudgement. This indicates a bug in the injected "
-                f"{tier} Module."
+                f"{tier} Matcher."
             )
         return judgements[0]
 
@@ -260,7 +260,7 @@ class CascadeJudge(Module[SchemaT]):
         """The escalation judgement wins, with cascade keys MERGED INTO its provenance.
 
         Merging (never replacing) keeps the child's ``cost_usd`` (feeds
-        ``_SpendCappedModule``) and ``model`` (feeds the JudgementLog ``model``
+        ``_SpendCappedMatcher``) and ``model`` (feeds the JudgementLog ``model``
         column) intact on escalated pairs.
         """
         return escalation_judgement.model_copy(
@@ -282,14 +282,14 @@ class CascadeJudge(Module[SchemaT]):
             return
         self._score_type_warned = True
         warnings.warn(
-            f"CascadeJudge received a child judgement with score_type="
+            f"CascadeMatcher received a child judgement with score_type="
             f"{judgement.score_type!r}, outside the known probability set "
             f"{sorted(_PROBABILITY_SCORE_TYPES)}. Both tiers must emit "
             "probability-calibrated scores on a shared [0, 1] scale: the band "
             "cuts student scores and one downstream threshold cuts the mixed "
             "student/escalation stream, so a raw similarity (e.g. 'sim_cos', "
             "'heuristic') mixed in makes those cuts meaningless. Calibrate the "
-            "child's scores (e.g. train a RandomForestJudge, or map similarities through "
+            "child's scores (e.g. train a RandomForestMatcher, or map similarities through "
             "derive_threshold-calibrated probabilities) before cascading.",
             stacklevel=2,
         )
@@ -297,7 +297,7 @@ class CascadeJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
     # ------------------------------------------------------------------
@@ -323,19 +323,19 @@ class CascadeJudge(Module[SchemaT]):
         }
 
     @staticmethod
-    def _child_spec(slot: str, child: Module[Any]) -> dict[str, object]:
+    def _child_spec(slot: str, child: Matcher[Any]) -> dict[str, object]:
         child_type_name = getattr(child, "type_name", None)
         if child_type_name is None:
             raise ValueError(
-                f"CascadeJudge {slot} {child!r} has no registry 'type_name'; "
-                "construct with a registered Module subclass to persist."
+                f"CascadeMatcher {slot} {child!r} has no registry 'type_name'; "
+                "construct with a registered Matcher subclass to persist."
             )
         child_config: Any = child.config  # type: ignore[attr-defined]
         return {"type_name": child_type_name, "config": child_config}
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "CascadeJudge[SchemaT]":
-        """Rebuild a CascadeJudge from its serialized config.
+    def from_config(cls, config: dict[str, object]) -> "CascadeMatcher[SchemaT]":
+        """Rebuild a CascadeMatcher from its serialized config.
 
         Children are rebuilt through the component registry by ``type_name``
         (a fitted child's out-of-band state is restored separately via
@@ -349,9 +349,9 @@ class CascadeJudge(Module[SchemaT]):
         )
 
     @staticmethod
-    def _child_from_spec(spec: Any) -> Module[Any]:
+    def _child_from_spec(spec: Any) -> Matcher[Any]:
         child_cls: Any = get_component(str(spec["type_name"]))
-        child: Module[Any] = child_cls.from_config(spec["config"])
+        child: Matcher[Any] = child_cls.from_config(spec["config"])
         return child
 
     def save_state(self, state_dir: Path) -> None:
@@ -360,7 +360,7 @@ class CascadeJudge(Module[SchemaT]):
         Delegates to any child implementing
         :class:`~langres.core.serialization.SerializableState`
         (``<state_dir>/student``, ``<state_dir>/escalation``). A stateful
-        child with nothing to persist yet (e.g. an unfit ``RandomForestJudge``) writes
+        child with nothing to persist yet (e.g. an unfit ``RandomForestMatcher``) writes
         no files; its empty subdir is dropped so :meth:`load_state` never
         tries to read a missing state file (mirrors ``Resolver.save``'s
         empty-sidecar handling).

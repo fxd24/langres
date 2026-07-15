@@ -26,7 +26,7 @@ Re-run only to change the scenario::
 
 Both label classes are guaranteed in the harvested training set
 ------------------------------------------------------------------
-``RandomForestJudge.fit`` (the demo's student) raises an opaque scikit-learn error if it
+``RandomForestMatcher.fit`` (the demo's student) raises an opaque scikit-learn error if it
 sees a single label class. The demo trains the student on the harvested labels
 of a *seeded half* of ``gold_pairs``; this generator therefore asserts that that
 same seeded half carries both a ``true`` and a ``false`` gold pair (and the
@@ -177,7 +177,7 @@ def main() -> None:
 
 
 def _assert_both_classes_in_seeded_split(candidate_pairs: list[dict[str, Any]]) -> None:
-    """Guard the RandomForestJudge single-class trap: the demo's train half must span both classes.
+    """Guard the RandomForestMatcher single-class trap: the demo's train half must span both classes.
 
     Replays the demo's deterministic 50/50 train/held-out split (same ``_SEED``)
     and asserts the train half carries at least one ``true`` and one ``false``
@@ -192,7 +192,7 @@ def _assert_both_classes_in_seeded_split(candidate_pairs: list[dict[str, Any]]) 
     if train_labels != {True, False}:
         raise AssertionError(
             f"train split does not span both gold classes (labels={train_labels}); "
-            "RandomForestJudge.fit would fail on single-class labels -- adjust the scenario "
+            "RandomForestMatcher.fit would fail on single-class labels -- adjust the scenario "
             "parameters in generate_fixtures.py."
         )
 

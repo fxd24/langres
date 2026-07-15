@@ -10,7 +10,7 @@ errors -- at **zero** extra cost.
 Fully offline on purpose: no API key, no network, no torch, no embeddings. The
 judge here is a :class:`~langres.testing.ScriptedJudge` standing in for a real
 one -- it scores each pair by string similarity and reports a confidence, exactly
-the shape an ``LLMJudge(confidence="logprob")`` produces, but with no spend. For a
+the shape an ``LLMMatcher(confidence="logprob")`` produces, but with no spend. For a
 real (paid) judge you would wrap the scoring call in
 :func:`~langres.core.benchmark.evaluate` for its default $1 spend cap; the report
 below is identical either way.
@@ -48,12 +48,12 @@ records = [
 gold_clusters = [{"1", "2"}, {"3", "4"}, {"5", "6"}, {"7"}, {"8", "9"}]
 
 # 1. BLOCK: generate candidate pairs to judge (no judge, no spend yet).
-resolver = Resolver.from_schema(CompanySchema, judge="string")
+resolver = Resolver.from_schema(CompanySchema, matcher="string")
 candidates = resolver.candidates(records)
 
 
 # 2. JUDGE: a mocked judge that scores each pair AND reports a confidence,
-#    standing in for LLMJudge(confidence="logprob") -- deterministic, offline.
+#    standing in for LLMMatcher(confidence="logprob") -- deterministic, offline.
 def _similarity(candidate: object) -> float:
     left, right = candidate.left.name.lower(), candidate.right.name.lower()  # type: ignore[attr-defined]
     return difflib.SequenceMatcher(None, left, right).ratio()

@@ -1,6 +1,6 @@
 """Tests for langres.testing.ScriptedJudge.
 
-``ScriptedJudge`` is a public :class:`~langres.core.module.Module` double for
+``ScriptedJudge`` is a public :class:`~langres.core.matcher.Matcher` double for
 tests and examples: no network, no API key, no spend. These tests cover the
 scripted-score contract (dict + callable forms, order-independent pair keys,
 ``default_score`` for unmapped pairs), the ``seen`` escalation-laziness spy,
@@ -85,7 +85,7 @@ class TestScriptedJudgeForward:
 
 
 class TestScriptedJudgeSeenSpy:
-    """``seen`` is the escalation-laziness spy CascadeJudge-style tests rely on."""
+    """``seen`` is the escalation-laziness spy CascadeMatcher-style tests rely on."""
 
     def test_records_every_pair_in_order_pulled(self) -> None:
         judge = ScriptedJudge({})

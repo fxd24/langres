@@ -14,8 +14,8 @@ The public surface of langres, generated from docstrings. It is layered:
     - [Blockers](blockers.md) — candidate generation (`AllPairsBlocker`,
       `VectorBlocker`, ...).
     - [Comparators](comparators.md) — field-wise similarity features.
-    - [Judges](judges.md) — pairwise match/no-match scoring (`Module` ABC,
-      `LLMJudge`, `CascadeJudge`, ...).
+    - [Judges](judges.md) — pairwise match/no-match scoring (`Matcher` ABC,
+      `LLMMatcher`, `CascadeMatcher`, ...).
     - [Clusterers](clusterers.md) — judgements to entity clusters.
     - [Flywheel](flywheel.md) — `JudgementLog`, review selection, correction
       harvesting, threshold calibration.
@@ -25,5 +25,5 @@ The public surface of langres, generated from docstrings. It is layered:
 !!! note "Lazy imports and optional extras"
     Heavy optional dependencies (torch, litellm, faiss, scikit-learn, ranx)
     resolve lazily: `import langres` never pulls them in. Components that
-    need them (e.g. `VectorBlocker`, `LLMJudge`, `RandomForestJudge`) require
+    need them (e.g. `VectorBlocker`, `LLMMatcher`, `RandomForestMatcher`) require
     the matching extra — `langres[semantic]`, `[llm]`, `[trained]`, `[eval]`.

@@ -674,7 +674,7 @@ def test_vector_blocker_stream_groups_dedupes_mutual_neighbor_pairs():
     also appear in the other anchor's group (c1's group ends up empty).
 
     Without the fix, a consumer issuing one LLM call per group (e.g. a future
-    SelectJudge) would emit and charge for the same undirected pair twice --
+    SelectMatcher) would emit and charge for the same undirected pair twice --
     this test fails against that pre-fix behavior (which asserted the pair
     appeared in BOTH groups) and passes against the fix.
     """

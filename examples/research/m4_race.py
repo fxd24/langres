@@ -1,7 +1,7 @@
 """M4 Wave 2 — the paid, resumable DSPy-scorer benchmark on Amazon-Google.
 
 This is the M4 script that spends real money (OpenRouter, ``$5`` global cap). It
-drives the merged M4 seam — ``DSPyJudge`` (the compilable DSPy scorer) graded by
+drives the merged M4 seam — ``DSPyMatcher`` (the compilable DSPy scorer) graded by
 ``evaluate_judge_on_candidates`` (pairwise-F1, judged-once) — on the Amazon-Google
 fixed literature pair split, and answers M4's one falsifiable question:
 
@@ -11,10 +11,10 @@ fixed literature pair split, and answers M4's one falsifiable question:
 Cells (each writes one committed JSON under ``data/benchmarks/m4/results/`` so a
 crash or interruption re-does only the missing cells — paid work is never lost):
 
-* ``smoke`` (cents, NOT committed): a handful of GLM-5.2 DSPyJudge calls that
+* ``smoke`` (cents, NOT committed): a handful of GLM-5.2 DSPyMatcher calls that
   confirm the paid DSPy path works AND registers honest cost > $0.
 * ``ag600_dspy_glm_zeroshot`` — **the precision probe / DSPy baseline.** An
-  *uncompiled* ``DSPyJudge`` (whose signature is already the hand-written,
+  *uncompiled* ``DSPyMatcher`` (whose signature is already the hand-written,
   precision-tuned, hard-negative prompt: "a different model / size / edition /
   variant ⇒ a different product") on the deterministic 600-pair AG band. Its
   pair precision, versus GLM-5.2 zero-shot's 0.264 (M3) and frontier's 0.541
@@ -81,7 +81,7 @@ from langres.core.benchmark import (  # noqa: E402
     evaluate_judge_on_candidates,
 )
 from langres.core.models import ERCandidate  # noqa: E402
-from langres.core.modules.dspy_judge import DSPyJudge  # noqa: E402
+from langres.core.matchers.dspy_judge import DSPyMatcher  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402
     ProductSchema,
     load_amazon_google,
@@ -180,7 +180,7 @@ M3_FRONTIER = {
 def _split_candidates(split: str) -> tuple[list[ERCandidate[ProductSchema]], set[frozenset[str]]]:
     """Build ER candidates from a fixed AG literature pair split (no embedding).
 
-    ``DSPyJudge`` reads the raw records (not a cosine similarity), so — unlike
+    ``DSPyMatcher`` reads the raw records (not a cosine similarity), so — unlike
     ``m3_race.build_ag_fixed_candidates`` — we skip the MiniLM embedding step.
     Candidates are built in fixed row order so a downstream stratified subsample
     reproduces the SAME band M3 evaluated.
@@ -260,15 +260,15 @@ def _trainset(
 # ---------------------------------------------------------------------------
 
 
-def build_glm_dspy_judge(program: Any = None) -> DSPyJudge[ProductSchema]:
-    """A GLM-5.2 ``DSPyJudge`` with an honest (conservative) per-token price wired in.
+def build_glm_dspy_judge(program: Any = None) -> DSPyMatcher[ProductSchema]:
+    """A GLM-5.2 ``DSPyMatcher`` with an honest (conservative) per-token price wired in.
 
     ``price_per_1k_tokens`` is set to GLM-5.2's *output* rate (the dearer side), so
     the per-pair provenance cost the ``BudgetedModuleRunner`` tallies is a safe
     upper bound; the FINAL reported ``usd_total`` uses ``make_token_cost_track``
     (accurate input/output split), so the cap is conservative and the report exact.
     """
-    judge: DSPyJudge[ProductSchema] = DSPyJudge(
+    judge: DSPyMatcher[ProductSchema] = DSPyMatcher(
         model=GLM_MODEL, temperature=0.0, entity_noun=ENTITY_NOUN, program=program
     )
     judge.price_per_1k_tokens = max(PRICES_PER_1M[GLM_MODEL]) / 1000.0
@@ -368,7 +368,7 @@ def _judge_eval_dict(
 
 
 def smoke() -> int:
-    """A few real GLM-5.2 DSPyJudge calls: confirm the paid path works + cost > $0."""
+    """A few real GLM-5.2 DSPyMatcher calls: confirm the paid path works + cost > $0."""
     dated = register_runtime_model_price(GLM_MODEL)
     if dated is None:
         print(f"[smoke] {GLM_MODEL} did not respond; trying fallback {GLM_MODEL_FALLBACK}")
@@ -396,7 +396,7 @@ def smoke() -> int:
 
 
 def run_probe_cell(monitor: SpendMonitor) -> dict[str, Any]:
-    """The precision probe / DSPy baseline: UNCOMPILED GLM-5.2 DSPyJudge on the 600-band."""
+    """The precision probe / DSPy baseline: UNCOMPILED GLM-5.2 DSPyMatcher on the 600-band."""
     cell_id = "ag600_dspy_glm_zeroshot"
     band, gold = build_ag_band()
     judge = build_glm_dspy_judge()  # uncompiled -> the precision-tuned signature is the baseline
@@ -441,7 +441,7 @@ def estimate_compile_cost(per_call_usd: float) -> float:
 
 
 def run_compile_cell(monitor: SpendMonitor) -> dict[str, Any]:
-    """MIPROv2 compile of the GLM-5.2 DSPyJudge + eval on the 600-band + save artifact."""
+    """MIPROv2 compile of the GLM-5.2 DSPyMatcher + eval on the 600-band + save artifact."""
     cell_id = "ag600_dspy_glm_compiled"
     train_cands, train_gold = _split_candidates("train")
     val_cands, val_gold = _split_candidates("valid")
@@ -467,7 +467,7 @@ def run_compile_cell(monitor: SpendMonitor) -> dict[str, Any]:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=ProductSchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=result.best_threshold),
     )
     resolver.save(ARTIFACT_DIR)
@@ -542,7 +542,7 @@ def write_report() -> None:
     if probe:
         m = _pair_of(probe)
         lines.append(
-            f"| ag600_dspy_glm_zeroshot | GLM-5.2 DSPyJudge UNCOMPILED (precision-tuned signature) | "
+            f"| ag600_dspy_glm_zeroshot | GLM-5.2 DSPyMatcher UNCOMPILED (precision-tuned signature) | "
             f"{m['p']:.3f} | {m['r']:.3f} | {m['f1']:.3f} | {m['thr']:.2f} | "
             f"{probe['usd_total']:.4f} | **this run** |"
         )
@@ -550,7 +550,7 @@ def write_report() -> None:
     if compiled:
         m = _pair_of(compiled)
         lines.append(
-            f"| ag600_dspy_glm_compiled | GLM-5.2 DSPyJudge MIPROv2-compiled | "
+            f"| ag600_dspy_glm_compiled | GLM-5.2 DSPyMatcher MIPROv2-compiled | "
             f"{m['p']:.3f} | {m['r']:.3f} | {m['f1']:.3f} | {m['thr']:.2f} | "
             f"{compiled['usd_total']:.4f} | **this run** |"
         )

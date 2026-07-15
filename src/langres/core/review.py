@@ -293,7 +293,7 @@ def select_for_review(
             ``score`` ``None`` or a ``0``/``1`` decision). That last case used to
             silently return ``[]`` -- indistinguishable from a finished loop --
             so it now fails loud, naming ``strategy="disagreement"`` or
-            ``LLMJudge(confidence="logprob")`` as the fix.
+            ``LLMMatcher(confidence="logprob")`` as the fix.
 
     Examples:
         >>> rows = [
@@ -480,7 +480,7 @@ def _select_uncertainty(
     rather than silently returning ``[]`` (see :func:`select_for_review`).
 
     A *mixed* log (some rows carry confidence, some only a score -- e.g. a
-    :class:`~langres.core.modules.cascade_judge.CascadeJudge` whose cheap-student
+    :class:`~langres.core.matchers.cascade_judge.CascadeMatcher` whose cheap-student
     rows are score-only and whose escalated rows carry a logprob confidence)
     yields both bands: credence-ranked rows first (a real self-reported
     uncertainty), then score-ranked rows for the rows that lacked confidence, so
@@ -523,7 +523,7 @@ def _select_uncertainty(
             "decision, so the uncertainty band is always empty (this used to "
             "silently return [], indistinguishable from a finished loop). For a "
             "binary/decision judge, either use strategy='disagreement' to compare "
-            'it against a second judge, or run LLMJudge(confidence="logprob") so '
+            'it against a second judge, or run LLMMatcher(confidence="logprob") so '
             "each judgement carries a real uncertainty signal."
         )
     return _uncertainty_by_score(rows, threshold=threshold, margin=margin)

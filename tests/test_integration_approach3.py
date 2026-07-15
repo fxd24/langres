@@ -2,7 +2,7 @@
 
 This test validates the complete pipeline:
 1. VectorBlocker generates candidates via embedding similarity (ANN search)
-2. CascadeModule scores pairs using cascade pattern (embeddings → LLM)
+2. CascadeChainMatcher scores pairs using cascade pattern (embeddings → LLM)
 3. Clusterer forms clusters from pairwise judgements
 4. BCubed F1 >= 0.85 (POC success criterion)
 """
@@ -19,7 +19,7 @@ from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes import FAISSIndex
 from langres.core.metrics import calculate_bcubed_metrics
 from langres.core.models import CompanySchema
-from langres.core.modules.cascade import CascadeModule
+from langres.core.matchers.cascade import CascadeChainMatcher
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ def test_approach3_end_to_end_pipeline(mocker):
         kwargs["messages"]
     )
     mocker.patch(
-        "langres.core.modules.cascade.OpenAI",
+        "langres.core.matchers.cascade.OpenAI",
         return_value=mock_client,
     )
 
@@ -96,8 +96,8 @@ def test_approach3_end_to_end_pipeline(mocker):
     assert len(candidates) > 0
     logger.info(f"Generated {len(candidates)} candidate pairs")
 
-    # Step 2: Score candidates using CascadeModule (with mocked LLM)
-    module = CascadeModule(
+    # Step 2: Score candidates using CascadeChainMatcher (with mocked LLM)
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key=api_key,
@@ -105,7 +105,7 @@ def test_approach3_end_to_end_pipeline(mocker):
         high_threshold=0.95,  # Very high = accept most matches without LLM
     )
 
-    logger.info("Step 2: Scoring candidates with CascadeModule (mocked LLM)...")
+    logger.info("Step 2: Scoring candidates with CascadeChainMatcher (mocked LLM)...")
     judgements = list(module.forward(iter(candidates)))
 
     # Should get judgements for all candidates
@@ -210,7 +210,7 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
     )
 
     mocker.patch(
-        "langres.core.modules.cascade.OpenAI",
+        "langres.core.matchers.cascade.OpenAI",
         return_value=mock_client,
     )
 
@@ -226,8 +226,8 @@ def test_approach3_pipeline_with_mocked_llm(mocker):
     candidates = list(blocker.stream(COMPANY_RECORDS))
     assert len(candidates) > 0
 
-    # Step 2: Score with CascadeModule (will use mocked LLM)
-    module = CascadeModule(
+    # Step 2: Score with CascadeChainMatcher (will use mocked LLM)
+    module = CascadeChainMatcher(
         embedding_model_name="all-MiniLM-L6-v2",
         llm_model="gpt-4o-mini",
         llm_api_key="test_key",

@@ -5,7 +5,7 @@ primitives into a reusable M2 baseline:
 
 - ``build_restaurant_blocker`` — the shared MiniLM + FAISS-cosine VectorBlocker.
 - ``build_restaurant_resolver`` — VectorBlocker + StringComparator + the
-  zero-spend WeightedAverageJudge + connected-components Clusterer, serializable.
+  zero-spend WeightedAverageMatcher + connected-components Clusterer, serializable.
 - ``split_restaurant_corpus`` — leakage-free stratified train/test split over
   FULL ``RestaurantSchema`` records (preserving ``source`` + ``f``/``z`` ids).
 
@@ -22,7 +22,7 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import StringComparator
 from langres.core.indexes.vector_index import FAISSIndex
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.resolver import Resolver
 from langres.data.er_benchmarks import (
     DEFAULT_BLOCKING_K,
@@ -61,7 +61,7 @@ def test_build_restaurant_resolver_wires_expected_components() -> None:
     assert isinstance(resolver, Resolver)
     assert isinstance(resolver.blocker, VectorBlocker)
     assert isinstance(resolver.comparator, StringComparator)
-    assert isinstance(resolver.module, WeightedAverageJudge)
+    assert isinstance(resolver.module, WeightedAverageMatcher)
     assert isinstance(resolver.clusterer, Clusterer)
     assert resolver.clusterer.threshold == 0.7
     assert resolver.blocker.k_neighbors == DEFAULT_BLOCKING_K
@@ -95,7 +95,7 @@ def test_build_restaurant_resolver_is_serializable(tmp_path: Path) -> None:
     # round-trips through the registry (no pickle, no code execution).
     reloaded = Resolver.load(tmp_path)
     assert isinstance(reloaded.blocker, VectorBlocker)
-    assert isinstance(reloaded.module, WeightedAverageJudge)
+    assert isinstance(reloaded.module, WeightedAverageMatcher)
     assert isinstance(reloaded.comparator, StringComparator)
     assert reloaded.clusterer.threshold == 0.7
 

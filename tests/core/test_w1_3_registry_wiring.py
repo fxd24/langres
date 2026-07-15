@@ -6,7 +6,7 @@ plain ``import langres.core`` (W1.3).
 component must therefore be eager-imported by either ``core/blockers/
 __init__.py`` + ``core/__init__.py`` (or ``core/clusterers/__init__.py`` +
 ``core/__init__.py`` for clusterer variants) -- mirroring the existing
-``AllPairsBlocker``/``VectorBlocker``/``LLMJudge`` pattern -- or listed in
+``AllPairsBlocker``/``VectorBlocker``/``LLMMatcher`` pattern -- or listed in
 ``registry._LAZY_COMPONENT_MODULES``. Without that wiring, a fresh process
 that does ``from langres.core import Resolver`` and then ``Resolver.load()``
 on an artifact referencing ``"key_blocker"``/``"composite_blocker"``/
@@ -98,7 +98,7 @@ def test_resolver_fresh_process_roundtrip_with_composite_key_vector_blocker(
         KeyBlocker,
         Resolver,
         VectorBlocker,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
@@ -115,7 +115,7 @@ def test_resolver_fresh_process_roundtrip_with_composite_key_vector_blocker(
     resolver = Resolver(
         blocker=composite,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.resolve(COMPANY_RECORDS)  # builds the nested index before saving
@@ -156,7 +156,7 @@ def test_resolver_fresh_process_roundtrip_with_key_blocker_alone(tmp_path: Path)
     (W0.4 exit check: every ``_LAZY_COMPONENT_MODULES`` entry must survive a
     fresh-process ``Resolver.load``, not just as an incidental nested case).
     """
-    from langres.core import Clusterer, Comparator, KeyBlocker, Resolver, WeightedAverageJudge
+    from langres.core import Clusterer, Comparator, KeyBlocker, Resolver, WeightedAverageMatcher
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
 
@@ -165,7 +165,7 @@ def test_resolver_fresh_process_roundtrip_with_key_blocker_alone(tmp_path: Path)
     resolver = Resolver(
         blocker=blocker,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.resolve(COMPANY_RECORDS)
@@ -205,7 +205,7 @@ def test_resolver_fresh_process_roundtrip_with_correlation_clusterer(tmp_path: P
     that gap for the W0.4 exit check.
     """
     from langres.core import AllPairsBlocker, Comparator, CorrelationClusterer, Resolver
-    from langres.core.judges.weighted_average import WeightedAverageJudge
+    from langres.core.matchers.weighted_average import WeightedAverageMatcher
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
 
@@ -213,7 +213,7 @@ def test_resolver_fresh_process_roundtrip_with_correlation_clusterer(tmp_path: P
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=CorrelationClusterer(threshold=0.7),
     )
     resolver.resolve(COMPANY_RECORDS)

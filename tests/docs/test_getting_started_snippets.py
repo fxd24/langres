@@ -4,9 +4,9 @@ Extracts the FIRST fenced ``python`` block from the getting-started guide and
 runs it verbatim, so the page's opening example can never silently drift from
 the code it documents.
 
-SPEND SAFETY: this test runs ONLY the keyless ``judge="string"`` snippet, which
+SPEND SAFETY: this test runs ONLY the keyless ``matcher="string"`` snippet, which
 makes no network call and costs $0. It hard-refuses to execute a block that is
-not pinned to ``judge="string"`` (a keyed/``"auto"`` snippet would make a paid
+not pinned to ``matcher="string"`` (a keyed/``"auto"`` snippet would make a paid
 call), so a future edit that puts a paid snippet first fails loudly instead of
 spending money.
 """
@@ -37,13 +37,13 @@ def test_getting_started_exists() -> None:
 def test_first_snippet_is_the_keyless_lane() -> None:
     """Spend-safety guard: the first snippet must be the $0 keyless lane."""
     snippet = _first_python_snippet()
-    assert 'judge="string"' in snippet, (
+    assert 'matcher="string"' in snippet, (
         "The first GETTING_STARTED.md python snippet must be the keyless "
-        'judge="string" lane -- this test runs it verbatim and must never make '
+        'matcher="string" lane -- this test runs it verbatim and must never make '
         "a paid call."
     )
     assert '"auto"' not in snippet, (
-        'The first snippet must not use judge="auto" (it would make a paid '
+        'The first snippet must not use matcher="auto" (it would make a paid '
         "call); keep the keyless lane first."
     )
 
@@ -51,7 +51,7 @@ def test_first_snippet_is_the_keyless_lane() -> None:
 def test_first_snippet_runs_verbatim() -> None:
     """The opening keyless snippet must execute and produce the documented result."""
     snippet = _first_python_snippet()
-    assert 'judge="string"' in snippet  # spend-safety, re-checked before exec
+    assert 'matcher="string"' in snippet  # spend-safety, re-checked before exec
     namespace: dict[str, object] = {}
     exec(snippet, namespace)  # noqa: S102 -- deliberate: run the doc snippet as written
 

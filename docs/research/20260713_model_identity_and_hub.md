@@ -4,7 +4,7 @@
 anybody can publish their model, and you can use it easily; today `link`/`dedupe`
 don't tell you which model is used, and the verbs should be tied to the type of
 model one uses" — and for [issue #103](https://github.com/fxd24/langres/issues/103)
-(LLMJudge unreachable by name from the verbs). Scope: what "model identity" and
+(LLMMatcher unreachable by name from the verbs). Scope: what "model identity" and
 "publishing" should mean in langres, mapped honestly onto the seams that exist,
 with staged options. Documentation only; no code changes. Written against `main`
 @ `53a08ed` (2026-07-13).*
@@ -32,7 +32,7 @@ with staged options. Documentation only; no code changes. Written against `main`
    (`all-MiniLM-L6-v2`, `presets.py:105`) is a hardcoded constant that appears
    in no result, notice, or docstring a verb user sees. (b) A *specific* model
    from a specific paper cannot be named at all: the only prompt-seam judge,
-   `LLMJudge`, has no preset name (issue #103), so a published method must be
+   `LLMMatcher`, has no preset name (issue #103), so a published method must be
    hand-wired from `langres.core` and then reports itself as
    `judge_used="custom"` (`presets.py:404-406`) — identity erased at exactly the
    moment it matters.
@@ -61,10 +61,10 @@ with staged options. Documentation only; no code changes. Written against `main`
 4. **Recommendation (§6): O3, staged — but sequenced so each stage is useful
    alone.** v0.3 ships O4's fixes *expressed in O1's vocabulary*: one method
    registry that collapses the three dispatch sites (closing #55's debt and
-   #103 in the same move), `LLMJudge` reachable by name with named parsers, and
+   #103 in the same move), `LLMMatcher` reachable by name with named parsers, and
    the resolved model id stamped on every result. v0.4 opens the namespace to
    third parties via a `langres.methods` entry-points group
-   (`pip install langres-ditto` → `dedupe(records, judge="ditto")`) plus the
+   (`pip install langres-ditto` → `dedupe(records, matcher="ditto")`) plus the
    `evaluate_method(name, benchmark)` one-liner that makes the leaderboard
    story real. `Resolver.from_pretrained` + Hub hosting (O2) is deferred until
    the training loop produces weight-bearing artifacts worth downloading — and
@@ -76,11 +76,11 @@ with staged options. Documentation only; no code changes. Written against `main`
 
 ### 1.1 The verb judge names and what the verbs report
 
-`JudgeName = Literal["auto", "zero_shot_llm", "embedding", "string"]`
-(`presets.py:83`). `judge="auto"` resolves to `("zero_shot_llm", <model>)` from
+`MatcherName = Literal["auto", "zero_shot_llm", "embedding", "string"]`
+(`presets.py:83`). `matcher="auto"` resolves to `("zero_shot_llm", <model>)` from
 whichever API key is set — `OPENROUTER_API_KEY` → `openrouter/openai/gpt-4o-mini`
 (`clients/openrouter.py:88`), else `OPENAI_API_KEY` → `openai/gpt-5-mini`
-(`presets.py:112`) — failing fast with `NoJudgeAvailableError` when neither is
+(`presets.py:112`) — failing fast with `NoMatcherAvailableError` when neither is
 (`presets.py:197-208`). The caller can override with `model=`, but that kwarg
 is documented as "Model id override for `zero_shot_llm`" and is **silently
 ignored for every other judge** (`presets.py:387-389`, `verbs.py:298`).
@@ -91,17 +91,17 @@ What comes back:
   (`verbs.py:81-101`). No `model` field. The model id *is* reachable via
   `verdict.judgement.provenance["model"]` — but that is a per-judge provenance
   convention (`dspy_judge.py:289,311`; `llm_judge.py:1077`), not a typed
-  contract; nothing guarantees a third-party `Module` stamps it.
+  contract; nothing guarantees a third-party `Matcher` stamps it.
 - `DedupeResult(list[set[str]], judge_used, score_type)` (`verbs.py:104-127`).
   No `model`, and no judgements at all — the model id of a paid run is
   reported once, in a `warnings.warn` notice before scoring
   (`presets.py:220-224`), and is then unrecoverable from the result object.
-- `judge="embedding"` never surfaces `all-MiniLM-L6-v2`
+- `matcher="embedding"` never surfaces `all-MiniLM-L6-v2`
   (`_VECTOR_MODEL_NAME`, `presets.py:105`) anywhere a verb user looks. The
   same constant silently governs the blocker that kicks in above 100 records
   for *every* judge (`_ALL_PAIRS_MAX_N`, `presets.py:103`) — so even a
-  `judge="string"` run's candidate set depends on an invisible embedding model.
-- Passing a `Module` instance reports `judge_used="custom"`
+  `matcher="string"` run's candidate set depends on an invisible embedding model.
+- Passing a `Matcher` instance reports `judge_used="custom"`
   (`presets.py:404-406`): the escape hatch works, but erases identity.
 
 ### 1.2 The method registry (`methods.py`) — names exist, but only for the race
@@ -114,7 +114,7 @@ hand-rolled `if/elif` chain mapping name → module builder;
 `make_resolver_factory` (`methods.py:268-326`) requires a `BlockingBenchmark`
 (schema + pinned blocker), so **these names are unusable from the verbs or from
 `Resolver.from_schema`** — they exist only for the benchmark harness. Note the
-registry's `llm_judge` method *does* build `LLMJudge` (`methods.py:209`), so
+registry's `llm_judge` method *does* build `LLMMatcher` (`methods.py:209`), so
 "the prompt-seam judge by name" already exists on exactly one of the three
 dispatch paths — the one end users never call.
 
@@ -149,16 +149,16 @@ Two hard facts that shape §3:
 ### 1.4 `Resolver.from_schema` — the third dispatch site
 
 `_build_module_for_judge` (`resolver.py:82-137`) accepts
-`Literal["string", "embedding", "zero_shot_llm"]` or a `Module` — deliberately
+`Literal["string", "embedding", "zero_shot_llm"]` or a `Matcher` — deliberately
 no `"auto"` (layering) and **no spend cap** (`resolver.py:380-385`). Its
-`zero_shot_llm` branch, like the verbs', builds a `DSPyJudge` — not `LLMJudge`.
+`zero_shot_llm` branch, like the verbs', builds a `DSPyMatcher` — not `LLMMatcher`.
 The three-site duplication is documented as deliberate layering-preserving debt
 (`resolver.py:93-97`, `.claude/rules/component-design.md`), with the single
 registration API deferred to #55.
 
 ### 1.5 Issue #103 — the prompt seam is unreachable by name
 
-Verified against the issue and the code: `LLMJudge` is the only judge exposing
+Verified against the issue and the code: `LLMMatcher` is the only judge exposing
 `system_prompt` / `prompt_template` / `response_parser` / `record_serializer`
 (`llm_judge.py:344-352`), it is registered and serializable
 (`type_name="llm_judge"`, config carries model/temperature/prompt/system-prompt/
@@ -188,10 +188,10 @@ in-process config, not to a shareable name.
 
 | HF transformers concept | langres today | Gap |
 |---|---|---|
-| **Model id `author/name`** (globally unique, namespaced) | Three flat namespaces: 4 verb judge names, 9 method names, 20 `type_name`s. No author dimension; uniqueness only within one install (`registry.py:104-105` raises on collision). | No identity primitive. The same string means different things per layer (`llm_judge` the *method* builds `LLMJudge`; `zero_shot_llm` the *judge name* builds `DSPyJudge`). |
+| **Model id `author/name`** (globally unique, namespaced) | Three flat namespaces: 4 verb judge names, 9 method names, 20 `type_name`s. No author dimension; uniqueness only within one install (`registry.py:104-105` raises on collision). | No identity primitive. The same string means different things per layer (`llm_judge` the *method* builds `LLMMatcher`; `zero_shot_llm` the *judge name* builds `DSPyMatcher`). |
 | **Revision pinning** (commit hash, `revision=`) | `artifact_version` (layout version) + `langres_version` (logged, non-fatal) in `resolver.json`; `recipe_id` hashes the config for replay (`runs.py:223`). | No content-addressed revision on a *named* thing; `recipe_id` is per-run infra, not a distribution handle. |
 | **Model card** (README + metadata: intended use, eval results, cost) | Nothing. Closest: `EvalReport` (per-run tearsheet) and the §8 open question in `docs/research/20260709_cost_accounting_design.md` — "an artifact that says what it *is* but not what it *achieves and costs* isn't choosable". | The card is the missing half of "evaluate it for themselves": a published method needs pinned claims (dataset, protocol, F1, $/1k pairs) next to its config. |
-| **`pipeline(task, model=...)`** | `link`/`dedupe(judge=..., model=...)`. | `judge` names a *family*, not a model; `model=` only affects the LLM family and is silently ignored otherwise (`presets.py:387-389`); result drops the resolved model (§1.1). |
+| **`pipeline(task, model=...)`** | `link`/`dedupe(matcher=..., model=...)`. | `judge` names a *family*, not a model; `model=` only affects the LLM family and is silently ignored otherwise (`presets.py:387-389`); result drops the resolved model (§1.1). |
 | **`AutoModel.from_pretrained("author/name")`** | `Resolver.load(local_dir)` — registry rebuild, no code execution. | No remote fetch, no namespace, hard-fail on layout drift (`resolver.py:861-866`). |
 | **The Hub** (hosting, discovery, versioning) | Nothing. Artifacts are plain directories — which is exactly what `huggingface_hub` hosts well (a repo *is* a directory of files). | Hosting is the easy part; §3-O2 argues the payload and compat policy are the hard parts. |
 | **`evaluate` / leaderboards** | `langres.eval.evaluate` + `candidates_for` + 10-dataset registry + `EvalReport`. | No name×benchmark one-liner; no cross-run aggregation (§4). |
@@ -241,13 +241,13 @@ packaging precedent exists in-repo).
 
 ```python
 # Hand-wire core, lose identity:
-from langres.core.modules.llm_judge import LLMJudge, parse_binary_yes_no
-judge = LLMJudge.from_env(
+from langres.core.matchers.llm_judge import LLMMatcher, parse_binary_yes_no
+judge = LLMMatcher.from_env(
     model="openrouter/openai/gpt-4o-mini",
     prompt_template=PEETERS_PROMPT,
     response_parser=parse_binary_yes_no,
 )
-verdict = langres.link(a, b, judge=judge)
+verdict = langres.link(a, b, matcher=judge)
 verdict.judge_used   # "custom"  <- identity erased (presets.py:404-406)
 ```
 
@@ -258,7 +258,7 @@ verdict.judge_used   # "custom"  <- identity erased (presets.py:404-406)
 #   [project.entry-points."langres.methods"]
 #   peeters2023 = "langres_peeters2023:METHOD"
 
-verdict = langres.link(a, b, judge="peeters2023",
+verdict = langres.link(a, b, matcher="peeters2023",
                        model="openrouter/openai/gpt-4o-mini")
 verdict.judge_used   # "peeters2023"
 verdict.model        # "openrouter/openai/gpt-4o-mini"
@@ -269,7 +269,7 @@ with a registry entry shaped roughly like:
 ```python
 class MethodSpec(BaseModel):
     name: str                        # "zero_shot_llm", "peeters2023"
-    build: Callable[..., Module[Any]]  # (schema, *, model, **params) -> Module
+    build: Callable[..., Matcher[Any]]  # (schema, *, model, **params) -> Matcher
     default_threshold: float         # absorbs _DEFAULT_THRESHOLDS (presets.py:89)
     score_type: str                  # absorbs _SCORE_TYPE_BY_JUDGE (presets.py:118)
     requires_extra: str | None       # "llm" -> actionable ImportError, like
@@ -277,19 +277,19 @@ class MethodSpec(BaseModel):
 ```
 
 **Id grammar — a decision to make deliberately, once.** The task sketch
-`judge="zero_shot_llm/gpt-4o-mini"` collides with reality: model ids
+`matcher="zero_shot_llm/gpt-4o-mini"` collides with reality: model ids
 themselves contain slashes (`openrouter/openai/gpt-4o-mini`). First-slash
 splitting would parse, but it burns `/` on the model axis. Recommendation
 inside O1: keep `model=` an orthogonal kwarg (it already exists on both
 verbs), and reserve `/` for HF-style **author namespacing** of third-party
-methods (`judge="jdoe/ditto"`), with bare names reserved for built-ins.
+methods (`matcher="jdoe/ditto"`), with bare names reserved for built-ins.
 Cheap to reserve now; expensive to retrofit after names ship.
 
 - **Benefits.** Collapses the three dispatch sites into one — this *is* the
   #55 debt, and #103 falls out of it (register a `prompt_llm` spec backed by
-  `LLMJudge`). Makes `methods.py`'s names (currently harness-only, §1.2)
+  `LLMMatcher`). Makes `methods.py`'s names (currently harness-only, §1.2)
   usable from the verbs. The announcement story is the strongest of the four:
-  "`pip install langres-ditto` → `dedupe(records, judge='ditto')`" is
+  "`pip install langres-ditto` → `dedupe(records, matcher='ditto')`" is
   concrete, demoable, and mirrors how the Python ecosystem already trusts
   code.
 - **Drawbacks.** Code distribution only: no pinned prompt/threshold/eval
@@ -331,7 +331,7 @@ resolver = Resolver.from_pretrained("jdoe/abtbuy-gpt4omini-calibrated")
 ```
 
 - **Benefits.** Carries the *exact* bundle §2.1 says a method is: config +
-  prompt (`LLMJudge.config` already serializes `prompt_template` and
+  prompt (`LLMMatcher.config` already serializes `prompt_template` and
   `system_prompt`, `llm_judge.py:478-501`) + calibrated threshold (the
   Clusterer slot) + sidecar weights (compiled DSPy program, fitted models).
   No code execution on load — the invariant holds. The card slot directly
@@ -378,23 +378,23 @@ pinned, reproducible payloads and a card.
 **After (O4):**
 
 ```python
-clusters = langres.dedupe(records)         # judge="auto"
+clusters = langres.dedupe(records)         # matcher="auto"
 clusters.judge_used   # "zero_shot_llm"
 clusters.model        # "openrouter/openai/gpt-4o-mini"   <- new; today: gone
 
-verdict = langres.link(a, b, judge="prompt_llm",           # new preset -> LLMJudge
+verdict = langres.link(a, b, matcher="prompt_llm",           # new preset -> LLMMatcher
                        prompt_template=PEETERS_PROMPT,
                        response_parser="binary_yes_no")    # named, serializable
 verdict.model         # "openrouter/openai/gpt-4o-mini"
 ```
 
-Three concrete edits: (1) a `prompt_llm` preset resolving to `LLMJudge`, wired
+Three concrete edits: (1) a `prompt_llm` preset resolving to `LLMMatcher`, wired
 into all three dispatch sites, with `response_parser` accepting a *registered
 name* so it serializes (fixing `llm_judge.py:485-488`'s round-trip gap for the
 built-in parsers); (2) `model` on `ResolvedJudge`/`DedupeResult`/`LinkVerdict`
 (and the embedder model surfaced when a `VectorBlocker` is in play); (3) a
 decision recorded on #103's open question — new name vs. re-backing
-`zero_shot_llm` (recommend **new name**: `zero_shot_llm`→`DSPyJudge` is load-
+`zero_shot_llm` (recommend **new name**: `zero_shot_llm`→`DSPyMatcher` is load-
 bearing for compiled-judge work, and a silent backing-class swap changes
 behavior for existing callers).
 
@@ -413,7 +413,7 @@ behavior for existing callers).
 
 | Option | The release-post sentence | Honest caveat |
 |---|---|---|
-| O1 | "`pip install langres-ditto` → `dedupe(records, judge='ditto')` — anyone can publish an ER method as a package." | Claims about quality live in the package README, unpinned. |
+| O1 | "`pip install langres-ditto` → `dedupe(records, matcher='ditto')` — anyone can publish an ER method as a package." | Claims about quality live in the package README, unpinned. |
 | O2 | "`Resolver.from_pretrained('user/ditto-abtbuy')` — download the exact matcher, prompt, threshold, and card." | Thin until trained artifacts exist; schema/component deps still need pip. |
 | O3 | Both of the above. | Ships last. |
 | O4 | "Every result now tells you exactly which model matched your records — and you can run any paper's prompt by name." | No third-party story yet. |
@@ -523,10 +523,10 @@ registry already enforces (`registry.py:61-75`).
    `methods.py:_make_module_builder`) — closing #55's debt; built-ins only;
    `"auto"`'s fail-fast, spend-cap, and per-judge-threshold semantics
    preserved under the existing test suite.
-2. Close #103 through it: `judge="prompt_llm"` → `LLMJudge`, with
+2. Close #103 through it: `matcher="prompt_llm"` → `LLMMatcher`, with
    `response_parser`/`record_serializer` accepting registered names so the
    config round-trips (`llm_judge.py:485-488`); `zero_shot_llm` keeps backing
-   `DSPyJudge` (no silent behavior change).
+   `DSPyMatcher` (no silent behavior change).
 3. Identity on every result: `model` on `LinkVerdict`/`DedupeResult` (and the
    embedding/blocker model surfaced), stamped from `ResolvedModule.model`
    which already exists (`presets.py:364-370`); same fields into
@@ -571,12 +571,12 @@ registry already enforces (`registry.py:61-75`).
 
 | Claim | Location |
 |---|---|
-| `JudgeName` literal (4 names) | `src/langres/core/presets.py:83` |
+| `MatcherName` literal (4 names) | `src/langres/core/presets.py:83` |
 | Per-judge default thresholds (E12) | `src/langres/core/presets.py:89-93` |
 | `_VECTOR_MODEL_NAME = "all-MiniLM-L6-v2"` (invisible embedder) | `src/langres/core/presets.py:105` |
 | Auto-judge model pick by API key; gpt-4o-mini / gpt-5-mini | `src/langres/core/presets.py:107-112,197-225`; `src/langres/clients/openrouter.py:88` |
 | `resolve_judge` returns the model; verbs drop it | `src/langres/core/presets.py:364-423,531-598` |
-| `judge=Module` → `judge_used="custom"` | `src/langres/core/presets.py:404-406` |
+| `matcher=Matcher` → `judge_used="custom"` | `src/langres/core/presets.py:404-406` |
 | `LinkVerdict` / `DedupeResult` fields (no `model`) | `src/langres/verbs.py:81-101,104-127` |
 | `model=` ignored for non-LLM judges | `src/langres/core/presets.py:387-389`; `src/langres/verbs.py:298` |
 | Provenance `"model"` is a convention, not a contract | `src/langres/core/modules/dspy_judge.py:289,311`; `llm_judge.py:1077`; `src/langres/core/models.py` (`PairwiseJudgement` has no model field) |
@@ -586,7 +586,7 @@ registry already enforces (`registry.py:61-75`).
 | Artifact manifest; "no code and no pickle" | `src/langres/core/resolver.py:15-16,656-755` |
 | Artifact layout hard-fail (both directions) | `src/langres/core/resolver.py:848-866` |
 | `from_schema` judge switch (3rd dispatch site, uncapped) | `src/langres/core/resolver.py:82-137,380-385` |
-| `LLMJudge` seams; parser/serializer not serialized | `src/langres/core/modules/llm_judge.py:339-352,478-501,485-488,122` |
+| `LLMMatcher` seams; parser/serializer not serialized | `src/langres/core/modules/llm_judge.py:339-352,478-501,485-488,122` |
 | Compiled DSPy program persists via sidecar | `src/langres/core/modules/dspy_judge.py:207-220` |
 | `evaluate` signature; best-F1-threshold default | `src/langres/core/benchmark.py:1341-1361` |
 | `candidates_for` pins blocker/split/seed | `src/langres/eval.py:102-170` |

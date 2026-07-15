@@ -3,16 +3,16 @@
 GLinker (gliner-linker) is an external entity resolution method that wraps
 GLiNER (Generalist and Lightweight Model for Named Entity Recognition) for
 zero-shot NER-driven entity matching. It can act as BOTH a Blocker (candidate
-generation by identifying named entity spans) AND a Module (pairwise scoring
+generation by identifying named entity spans) AND a Matcher (pairwise scoring
 via entity span similarity).
 
-ROADMAP M3 benchmarks GLinker behind langres's own Blocker and Module
+ROADMAP M3 benchmarks GLinker behind langres's own Blocker and Matcher
 interfaces to measure how an external NER-based approach compares to
 langres's built-in methods on standard ER benchmarks.
 
 This class is a CONTRACT-CONFORMANCE STUB:
 - All four abstract-method bodies raise NotImplementedError.
-- The class fully implements the Blocker[SchemaT] and Module[SchemaT] ABCs
+- The class fully implements the Blocker[SchemaT] and Matcher[SchemaT] ABCs
   (isinstance checks pass), registers in the component registry, and
   type-checks under mypy --strict.
 - The config + from_config round-trip is REAL (not stubbed).
@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from langres.core.blocker import Blocker
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.registry import register
 from langres.core.reports import CandidateInspectionReport, ScoreInspectionReport
 
@@ -48,10 +48,10 @@ class GLinkerConfig(BaseModel):
 
 
 @register("glinker_adapter")
-class GLinkerAdapter(Blocker[SchemaT], Module[SchemaT], Generic[SchemaT]):
+class GLinkerAdapter(Blocker[SchemaT], Matcher[SchemaT], Generic[SchemaT]):
     """Contract-conformance stub for GLiNER-based entity resolution (M3 benchmark).
 
-    Implements both Blocker[SchemaT] and Module[SchemaT] to prove the langres
+    Implements both Blocker[SchemaT] and Matcher[SchemaT] to prove the langres
     interfaces are implementable by an external NER-driven method.
 
     All method bodies raise NotImplementedError until M3.
@@ -113,7 +113,7 @@ class GLinkerAdapter(Blocker[SchemaT], Module[SchemaT], Generic[SchemaT]):
         )  # pragma: no cover
 
     # ------------------------------------------------------------------
-    # Module abstract methods
+    # Matcher abstract methods
     # ------------------------------------------------------------------
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:

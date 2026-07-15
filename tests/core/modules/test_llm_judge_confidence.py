@@ -1,7 +1,7 @@
-"""$0 tests for the LLMJudge first-token logprob credence probe.
+"""$0 tests for the LLMMatcher first-token logprob credence probe.
 
 Every test runs at **$0** with an injected fake client — no API key, no network,
-no real model call. Covers the P(Yes) math (:meth:`LLMJudge._confidence_from_response`),
+no real model call. Covers the P(Yes) math (:meth:`LLMMatcher._confidence_from_response`),
 the two-way-subspace renormalisation, the never-normalised leaked mass, the
 one-sided *bound* flag, the below-floor abstention, and — the bug the plan calls
 out — that ``logprobs``/``top_logprobs`` are requested at BOTH completion call
@@ -18,8 +18,8 @@ from typing import Any
 import pytest
 
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.llm_judge import (
-    LLMJudge,
+from langres.core.matchers.llm_judge import (
+    LLMMatcher,
     _normalize_answer_token,
     parse_binary_yes_no,
 )
@@ -86,9 +86,9 @@ class _FakeClient:
         return self._response
 
 
-def _judge(model: str = "gpt-4o-mini", confidence: str = "logprob") -> LLMJudge[CompanySchema]:
+def _judge(model: str = "gpt-4o-mini", confidence: str = "logprob") -> LLMMatcher[CompanySchema]:
     # A sentinel client so the lazy-from-env path is NEVER taken (no real client).
-    return LLMJudge[CompanySchema](
+    return LLMMatcher[CompanySchema](
         client=object(),
         model=model,
         confidence=confidence,  # type: ignore[arg-type]
@@ -112,9 +112,9 @@ def test_p_yes_does_not_clobber_a_rating_parsers_score() -> None:
     is gated on `parsed.decision is not None` (a binary decider), so a rating flows
     through untouched.
     """
-    from langres.core.modules.llm_judge import parse_score_response
+    from langres.core.matchers.llm_judge import parse_score_response
 
-    judge = LLMJudge[CompanySchema](
+    judge = LLMMatcher[CompanySchema](
         client=object(),  # sentinel; _map_verdict never touches the client
         model="gpt-4o-mini",
         confidence="logprob",
@@ -274,7 +274,7 @@ def test_logprobs_kwargs_present_for_non_openrouter_model() -> None:
 
 def test_confidence_invalid_value_raises() -> None:
     with pytest.raises(ValueError, match="confidence must be 'none' or 'logprob'"):
-        LLMJudge[CompanySchema](client=object(), model="gpt-4o-mini", confidence="always")  # type: ignore[arg-type]
+        LLMMatcher[CompanySchema](client=object(), model="gpt-4o-mini", confidence="always")  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -285,7 +285,7 @@ def test_confidence_invalid_value_raises() -> None:
 def test_sync_forward_requests_logprobs_on_non_openrouter_and_records_pyes() -> None:
     resp = _response([("Yes", [("Yes", 0.8), (" No", 0.15)])])
     client = _FakeClient(resp)
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=client,
         model="gpt-4o-mini",  # NON-openrouter
         confidence="logprob",
@@ -307,7 +307,7 @@ def test_logprob_forward_promotes_pyes_onto_the_judgement() -> None:
     """A usable p_yes becomes the judgement's score + a max(p_yes,1-p_yes) confidence."""
     p_yes = 0.8 / 0.95
     resp = _response([("Yes", [("Yes", 0.8), (" No", 0.15)])], message="Yes")
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=_FakeClient(resp),
         model="gpt-4o-mini",
         confidence="logprob",
@@ -329,7 +329,7 @@ def test_logprob_run_with_no_usable_mass_falls_back_to_decision_only() -> None:
     p_yes to promote), and confidence_source is "none" (no earned credence).
     """
     resp = _response([("Maybe", [("Maybe", 0.6), ("Unsure", 0.3)])], message="Yes")
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=_FakeClient(resp),
         model="gpt-4o-mini",
         confidence="logprob",
@@ -346,7 +346,7 @@ def test_logprob_run_with_no_usable_mass_falls_back_to_decision_only() -> None:
 def test_sync_forward_openrouter_sends_both_extra_body_and_logprobs() -> None:
     resp = _response([("Yes", [("Yes", 0.9), ("No", 0.05)])])
     client = _FakeClient(resp)
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=client,
         model="openrouter/openai/gpt-4o-mini",
         confidence="logprob",
@@ -362,7 +362,7 @@ def test_sync_forward_confidence_off_is_byte_identical() -> None:
     """confidence='none' adds no logprobs kwarg and no p_yes provenance key."""
     resp = _response([("Yes", [("Yes", 0.9), ("No", 0.05)])])
     client = _FakeClient(resp)
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=client,
         model="gpt-4o-mini",
         response_parser=parse_binary_yes_no,
@@ -385,7 +385,7 @@ def test_async_forward_requests_logprobs_and_records_pyes() -> None:
 
     resp = _response([("No", [("No", 0.7), (" Yes", 0.2)])])
     client = SimpleNamespace(acompletion=AsyncMock(return_value=resp))
-    j = LLMJudge[CompanySchema](
+    j = LLMMatcher[CompanySchema](
         client=client,
         model="gpt-4o-mini",  # NON-openrouter
         confidence="logprob",

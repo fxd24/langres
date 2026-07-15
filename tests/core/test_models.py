@@ -301,7 +301,7 @@ class TestPairwiseJudgement:
         """PairwiseJudgement accepts the W1.0-added score_type literals (E11).
 
         prob_fs (Fellegi-Sunter), prob_rf (RandomForest), and prob_group_llm
-        (set-wise judges, e.g. SelectJudge) are additive: existing literals are
+        (set-wise judges, e.g. SelectMatcher) are additive: existing literals are
         unaffected (see test_pairwise_judgement_all_score_types above).
         """
         from langres.core.models import PairwiseJudgement
@@ -672,14 +672,14 @@ class TestJudgeAbstainedError:
 
     def test_subclasses_runtime_error(self):
         """So existing ``except RuntimeError`` handlers still catch it."""
-        from langres.core.models import JudgeAbstainedError
+        from langres.core.models import MatcherAbstainedError
 
-        assert issubclass(JudgeAbstainedError, RuntimeError)
+        assert issubclass(MatcherAbstainedError, RuntimeError)
 
     def test_exported_from_top_level_and_core(self):
         import langres
-        from langres.core import JudgeAbstainedError as core_cls
-        from langres.core.models import JudgeAbstainedError as models_cls
+        from langres.core import MatcherAbstainedError as core_cls
+        from langres.core.models import MatcherAbstainedError as models_cls
 
-        assert langres.JudgeAbstainedError is models_cls
+        assert langres.MatcherAbstainedError is models_cls
         assert core_cls is models_cls

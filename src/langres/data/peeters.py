@@ -51,7 +51,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.modules.llm_judge import parse_binary_yes_no
+from langres.core.matchers.llm_judge import parse_binary_yes_no
 from langres.data import _benchmark_utils as _bu
 
 __all__ = [
@@ -253,10 +253,10 @@ def parse_binary_answer(answer: str) -> int:
     """Parse a raw model answer into a binary match decision (``int`` adapter).
 
     Thin ``int`` wrapper over the canonical
-    :func:`langres.core.modules.llm_judge.parse_binary_yes_no`, which owns the
+    :func:`langres.core.matchers.llm_judge.parse_binary_yes_no`, which owns the
     exact ``check_for_prediction`` semantics (strip → delete ``string.punctuation``
     → lowercase → ``"yes" in text``). There is a single code path so the offline
-    ``$0`` replay validates the same parser the paid ``LLMJudge`` run uses.
+    ``$0`` replay validates the same parser the paid ``LLMMatcher`` run uses.
 
     Args:
         answer: The raw model response.
@@ -416,7 +416,7 @@ def render_sample_prompts(spec: PeetersReplicationSpec) -> list[PeetersPairPromp
 # Live (paid) LLM-judge seam: template + record_serializer + candidates.
 #
 # The offline replay above validates the parser + metric wiring at $0. To run a
-# *live* judge over the same slice, an ``LLMJudge`` renders each pair itself from
+# *live* judge over the same slice, an ``LLMMatcher`` renders each pair itself from
 # ``prompt_template`` + ``record_serializer``; these three functions build those
 # from a spec so the live prompt is byte-identical to the archived one (proven in
 # tests). Reusable across any Peeters slice/prompt-design, not just abt-buy.
@@ -426,7 +426,7 @@ def render_sample_prompts(spec: PeetersReplicationSpec) -> list[PeetersPairPromp
 class PeetersRecord(BaseModel):
     """A single record for the live LLM-judge path: an id + its raw CSV row.
 
-    The minimal :class:`~langres.core.models.ERCandidate` entity an ``LLMJudge``
+    The minimal :class:`~langres.core.models.ERCandidate` entity an ``LLMMatcher``
     needs — it carries ``id`` (for the judgement) and the raw ``fields`` mapping
     the :func:`make_record_serializer` closure truncates into the prompt. Kept
     dataset-agnostic (a raw-row bag, not a typed product/publication schema) so
@@ -438,10 +438,10 @@ class PeetersRecord(BaseModel):
 
 
 def build_llm_prompt_template(spec: PeetersReplicationSpec) -> str:
-    """The ``LLMJudge.prompt_template`` (with ``{left}``/``{right}``) for ``spec``.
+    """The ``LLMMatcher.prompt_template`` (with ``{left}``/``{right}``) for ``spec``.
 
     Renders the spec's prompt design with the two records left as the literal
-    ``{left}`` / ``{right}`` placeholders ``LLMJudge`` substitutes at judgement
+    ``{left}`` / ``{right}`` placeholders ``LLMMatcher`` substitutes at judgement
     time (literal replacement, so the surrounding quotes/newlines are preserved).
     Substituting the serialized records back in reproduces :func:`render_prompt`
     exactly.
@@ -452,7 +452,7 @@ def build_llm_prompt_template(spec: PeetersReplicationSpec) -> str:
 
 
 def make_record_serializer(spec: PeetersReplicationSpec) -> Callable[[PeetersRecord], str]:
-    """An ``LLMJudge.record_serializer`` applying ``spec``'s per-field truncation.
+    """An ``LLMMatcher.record_serializer`` applying ``spec``'s per-field truncation.
 
     Binds ``spec.serialization_fields`` into a closure that runs
     :func:`serialize_record` over a :class:`PeetersRecord`'s raw ``fields`` — so
@@ -471,7 +471,7 @@ def build_candidates(spec: PeetersReplicationSpec) -> list[ERCandidate[PeetersRe
 
     The live-path sibling of :func:`render_sample_prompts`: instead of
     pre-rendering the prompt, it wraps each record as a :class:`PeetersRecord` so
-    an ``LLMJudge`` (with :func:`build_llm_prompt_template` +
+    an ``LLMMatcher`` (with :func:`build_llm_prompt_template` +
     :func:`make_record_serializer`) renders it. Order matches the committed sample
     (and hence :func:`gold_match_pairs` from the same slice).
     """

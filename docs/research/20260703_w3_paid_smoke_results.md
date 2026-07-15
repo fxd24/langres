@@ -1,4 +1,4 @@
-# W3 paid smoke — SelectJudge (set-wise) vs pairwise, measured
+# W3 paid smoke — SelectMatcher (set-wise) vs pairwise, measured
 
 **Date:** 2026-07-03
 **Branch:** `feat/w3-results-and-docs`
@@ -16,7 +16,7 @@ The ER field's headline set-wise result — **ComEM Select: ~+16 F1 at ~⅓ cost
 by scoring an anchor against a *set* of candidates in one LLM call instead of
 pair-by-pair — is the single biggest cost *and* quality lever we deferred to
 M4.5 (S1). W3 is the ≤$10 paid smoke that **measures whether it replicates on our
-data**, using langres' own `SelectJudge` set-wise contract vs. an ordinary
+data**, using langres' own `SelectMatcher` set-wise contract vs. an ordinary
 pairwise judge, **same real model on both arms**, graded side by side on
 Amazon-Google via `evaluate_judge_on_candidates` / `pair_pr_curve`.
 
@@ -29,9 +29,9 @@ does **not** replicate here.
 Both arms run the SAME real model over the SAME candidate population, graded once
 (no blocking-recall ceiling, no clustering amplification — directly pairwise-F1):
 
-- **Pairwise:** a `DSPyJudge` scoring **one LLM call per pair**, graded via
+- **Pairwise:** a `DSPyMatcher` scoring **one LLM call per pair**, graded via
   `evaluate_judge_on_candidates` (under a `BudgetedModuleRunner` pre-flight cap).
-- **Set-wise:** a `SelectJudge` scoring **one LLM call per anchor group** (the AG
+- **Set-wise:** a `SelectMatcher` scoring **one LLM call per anchor group** (the AG
   pairs re-shaped into per-Amazon-anchor groups via `derive_groups_from_pairs`),
   still yielding `PairwiseJudgement`s, graded with the same `pair_pr_curve`.
 
@@ -91,7 +91,7 @@ cap:
 
 - **`link()`** on one pair — match, score **0.95** (`judge_used="custom"`).
 - **`dedupe()`** on a small record set — **1 cluster** (`[d1, d2]`).
-- **A single `SelectJudge` group call** — **1 LLM call judging 22 members** →
+- **A single `SelectMatcher` group call** — **1 LLM call judging 22 members** →
   22 `PairwiseJudgement`s for **$0.011**. This is the raw set-wise cost lever on a
   real model: one call where pairwise would have made 22.
 - **Signal log** (`JudgementLog`, the flywheel inlet) — **4 rows** emitted by the
@@ -103,7 +103,7 @@ cap:
 Both runs are SpendMonitor-capped so they structurally cannot cross `--budget`
 (hard ceiling $10). Needs a real `OPENROUTER_API_KEY` (loaded from `.env`) and the
 `semantic` + `llm` extras (`langres.data.amazon_google` pulls the embedding stack;
-`DSPyJudge` pulls dspy/litellm).
+`DSPyMatcher` pulls dspy/litellm).
 
 ```bash
 # gpt-4o-mini (default: 300 AG anchor-groups) — the primary run

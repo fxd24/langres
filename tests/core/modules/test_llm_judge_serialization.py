@@ -1,9 +1,9 @@
-"""Serialization, lazy-client, and neutral-prompt tests for LLMJudge.
+"""Serialization, lazy-client, and neutral-prompt tests for LLMMatcher.
 
-These cover the M0.5 W-C contract: LLMJudge is a first-class, serializable
-Resolver Module — it registers under ``llm_judge``, exposes a pure ``config``
+These cover the M0.5 W-C contract: LLMMatcher is a first-class, serializable
+Resolver Matcher — it registers under ``llm_judge``, exposes a pure ``config``
 that never carries the client/secrets, rebuilds from env via the lazy-client
-path, and a Resolver with an LLMJudge in the ``module`` slot can ``save`` /
+path, and a Resolver with an LLMMatcher in the ``module`` slot can ``save`` /
 ``load`` with no network.
 """
 
@@ -14,26 +14,26 @@ from pathlib import Path
 
 import pytest
 
-from langres.core.modules.llm_judge import (
+from langres.core.matchers.llm_judge import (
     DEFAULT_PROMPT,
-    LLMJudge,
-    LLMJudgeModule,
+    LLMMatcher,
+    LLMMatcher,
     render_default_prompt,
 )
 from langres.core.registry import get_component
 
 
 def test_llm_judge_is_registered_with_type_name() -> None:
-    """LLMJudge is discoverable in the component registry under ``llm_judge``."""
-    assert get_component("llm_judge") is LLMJudge
-    assert LLMJudge.type_name == "llm_judge"
+    """LLMMatcher is discoverable in the component registry under ``llm_judge``."""
+    assert get_component("llm_judge") is LLMMatcher
+    assert LLMMatcher.type_name == "llm_judge"
     # Backward-compat alias keeps old imports working.
-    assert LLMJudgeModule is LLMJudge
+    assert LLMMatcher is LLMMatcher
 
 
 def test_config_excludes_client_and_secrets() -> None:
     """``config`` carries only pure, serializable data — never the client."""
-    judge = LLMJudge(
+    judge = LLMMatcher(
         model="openrouter/openai/gpt-4o-mini",
         client=object(),  # non-serializable stub client
         temperature=0.3,
@@ -67,14 +67,14 @@ def test_config_excludes_client_and_secrets() -> None:
 
 def test_from_config_round_trips_via_lazy_client_path() -> None:
     """``from_config`` rebuilds an equivalent judge with the client left lazy."""
-    original = LLMJudge(
+    original = LLMMatcher(
         model="gpt-5-mini",
         client=object(),
         temperature=0.7,
         entity_noun="product",
     )
 
-    rebuilt = LLMJudge.from_config(original.config)
+    rebuilt = LLMMatcher.from_config(original.config)
 
     assert rebuilt.config == original.config
     # Client is NOT persisted — it is reconstructed from env on first use.
@@ -91,27 +91,27 @@ def test_confidence_round_trips_through_config() -> None:
     Without ``confidence`` in ``config``, ``Resolver.save``/``load`` would silently
     revert a logprob judge to ``confidence="none"`` -- dropping the credence probe.
     """
-    original = LLMJudge(
+    original = LLMMatcher(
         model="openrouter/openai/gpt-4o-mini",
         client=object(),
         confidence="logprob",
     )
     assert original.config["confidence"] == "logprob"
 
-    rebuilt = LLMJudge.from_config(original.config)
+    rebuilt = LLMMatcher.from_config(original.config)
     assert rebuilt.confidence == "logprob"
     assert rebuilt.config == original.config
 
     # An older artifact with no ``confidence`` key falls back to "none".
     legacy = dict(original.config)
     del legacy["confidence"]
-    assert LLMJudge.from_config(legacy).confidence == "none"
+    assert LLMMatcher.from_config(legacy).confidence == "none"
 
 
 def test_provider_pin_round_trips_through_config() -> None:
     """A provider pin survives ``config`` -> ``from_config`` (reproducible runs)."""
     pin = {"order": ["DeepInfra"], "allow_fallbacks": False}
-    original = LLMJudge(
+    original = LLMMatcher(
         model="openrouter/z-ai/glm-5.2",
         client=object(),
         provider=pin,
@@ -121,7 +121,7 @@ def test_provider_pin_round_trips_through_config() -> None:
     assert config["provider"] == pin
     json.dumps(config)  # a provider pin stays JSON-serializable
 
-    rebuilt = LLMJudge.from_config(config)
+    rebuilt = LLMMatcher.from_config(config)
     assert rebuilt.provider == pin
     assert rebuilt.config == original.config
 
@@ -131,7 +131,7 @@ def test_from_env_builds_client_from_environment(mocker) -> None:
     sentinel = object()
     create = mocker.patch("langres.clients.create_llm_client", return_value=sentinel)
 
-    judge = LLMJudge.from_env(model="gpt-5-mini", temperature=0.0, entity_noun="person")
+    judge = LLMMatcher.from_env(model="gpt-5-mini", temperature=0.0, entity_noun="person")
 
     assert judge.client is sentinel
     assert judge.model == "gpt-5-mini"
@@ -145,7 +145,7 @@ def test_client_is_lazily_built_from_env_when_omitted(mocker) -> None:
     built = object()
     create = mocker.patch("langres.clients.create_llm_client", return_value=built)
 
-    judge: LLMJudge = LLMJudge(model="gpt-5-mini")  # no client
+    judge: LLMMatcher = LLMMatcher(model="gpt-5-mini")  # no client
     assert judge.client is None  # not built at construction
 
     first = judge._get_client()
@@ -163,14 +163,14 @@ def test_default_prompt_is_domain_neutral() -> None:
     assert "company" not in rendered.lower()
     assert "entity" in rendered.lower()
     # The default judge (no overrides) uses the neutral prompt.
-    assert "company" not in LLMJudge(client=object()).prompt_template.lower()
+    assert "company" not in LLMMatcher(client=object()).prompt_template.lower()
     # The centralized template placeholder is the single source of truth.
     assert "{entity_noun}" in DEFAULT_PROMPT
 
 
 def test_entity_noun_is_woven_into_the_prompt() -> None:
     """``entity_noun`` parametrizes the default prompt for a specific domain."""
-    judge = LLMJudge(client=object(), entity_noun="company")
+    judge = LLMMatcher(client=object(), entity_noun="company")
     assert "company" in judge.prompt_template.lower()
     # ``{left}`` / ``{right}`` survive for judgement-time formatting.
     assert "{left}" in judge.prompt_template
@@ -180,12 +180,12 @@ def test_entity_noun_is_woven_into_the_prompt() -> None:
 def test_custom_prompt_template_is_the_escape_hatch() -> None:
     """An explicit ``prompt_template`` wins and ignores ``entity_noun``."""
     custom = "Same? A={left} B={right}"
-    judge = LLMJudge(client=object(), prompt_template=custom, entity_noun="company")
+    judge = LLMMatcher(client=object(), prompt_template=custom, entity_noun="company")
     assert judge.prompt_template == custom
 
 
 def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) -> None:
-    """A Resolver with an LLMJudge in the module slot round-trips with no network.
+    """A Resolver with an LLMMatcher in the module slot round-trips with no network.
 
     Save serializes only the pure config; load rebuilds the judge with a lazy
     (env-reconstructed) client. We patch ``create_llm_client`` to raise so the
@@ -200,7 +200,7 @@ def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) 
         side_effect=AssertionError("client must not be built during save/load"),
     )
 
-    judge: LLMJudge[CompanySchema] = LLMJudge(
+    judge: LLMMatcher[CompanySchema] = LLMMatcher(
         model="openrouter/openai/gpt-4o-mini",
         client=object(),
         entity_noun="company",
@@ -208,7 +208,7 @@ def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -222,29 +222,29 @@ def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) 
     assert "client" not in module_spec["config"]
 
     reloaded = Resolver.load(tmp_path)
-    assert isinstance(reloaded.module, LLMJudge)
+    assert isinstance(reloaded.module, LLMMatcher)
     assert reloaded.module.client is None  # lazy — not built at load
     assert reloaded.module.config == judge.config
 
 
 @pytest.mark.slow
 def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) -> None:
-    """A clean process can ``Resolver.load`` an LLMJudge artifact via ``langres.core`` alone.
+    """A clean process can ``Resolver.load`` an LLMMatcher artifact via ``langres.core`` alone.
 
     Regression for the load-path registration bug: ``@register("llm_judge")`` only
-    fires when ``langres.core.modules.llm_judge`` is imported. ``langres.core`` must
+    fires when ``langres.core.matchers.llm_judge`` is imported. ``langres.core`` must
     import it so a fresh process that *only* does ``from langres.core import
     Resolver`` finds ``llm_judge`` in the registry. Without the ``__init__`` import,
     ``Resolver.load`` raises ``UnknownComponentType`` here (this test fails); with
     it, load succeeds and stays offline (the client is rebuilt lazily, not at load).
 
-    The subprocess deliberately does NOT import ``langres.core.modules.llm_judge``
+    The subprocess deliberately does NOT import ``langres.core.matchers.llm_judge``
     — that is the whole point of the check.
     """
     from langres.core import AllPairsBlocker, Clusterer, Resolver
     from langres.core.models import CompanySchema
 
-    judge: LLMJudge[CompanySchema] = LLMJudge(
+    judge: LLMMatcher[CompanySchema] = LLMMatcher(
         model="openrouter/openai/gpt-4o-mini",
         client=object(),
         entity_noun="company",
@@ -252,7 +252,7 @@ def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) ->
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -268,7 +268,7 @@ def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) ->
     )
 
     assert result.returncode == 0, (
-        "fresh-process Resolver.load failed (LLMJudge not registered on the "
+        "fresh-process Resolver.load failed (LLMMatcher not registered on the "
         f"import-langres.core path).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     assert "UnknownComponentType" not in result.stderr
@@ -283,9 +283,9 @@ def test_named_response_parser_round_trips_through_config() -> None:
     """A registered parser NAME serializes and reloads as the same callable --
     pre-v0.3, a paper-replication judge silently reverted to the default
     Score:-line parser on Resolver.load."""
-    from langres.core.modules.llm_judge import parse_binary_yes_no
+    from langres.core.matchers.llm_judge import parse_binary_yes_no
 
-    original = LLMJudge(
+    original = LLMMatcher(
         model="openrouter/openai/gpt-4o-mini",
         client=object(),
         response_parser="binary_yes_no",
@@ -293,62 +293,62 @@ def test_named_response_parser_round_trips_through_config() -> None:
     assert original._parse is parse_binary_yes_no
     assert original.config["response_parser"] == "binary_yes_no"
 
-    rebuilt = LLMJudge.from_config(original.config)
+    rebuilt = LLMMatcher.from_config(original.config)
     assert rebuilt._parse is parse_binary_yes_no
     assert rebuilt.config == original.config
 
 
 def test_registered_callable_serializes_as_its_name() -> None:
     """Passing the registered callable itself (not the name) still serializes."""
-    from langres.core.modules.llm_judge import parse_binary_yes_no
+    from langres.core.matchers.llm_judge import parse_binary_yes_no
 
-    judge = LLMJudge(client=object(), response_parser=parse_binary_yes_no)
+    judge = LLMMatcher(client=object(), response_parser=parse_binary_yes_no)
     assert judge.config["response_parser"] == "binary_yes_no"
 
 
 def test_custom_callable_parser_serializes_as_none_and_reverts_on_load() -> None:
     """An unregistered callable cannot travel (no-pickle invariant): config
     carries None and from_config falls back to the default parser."""
-    from langres.core.modules.llm_judge import ParsedVerdict, parse_score_response
+    from langres.core.matchers.llm_judge import ParsedVerdict, parse_score_response
 
     def my_parser(content: str) -> ParsedVerdict:
         return ParsedVerdict(score=1.0)
 
-    judge = LLMJudge(client=object(), response_parser=my_parser)
+    judge = LLMMatcher(client=object(), response_parser=my_parser)
     assert judge._parse is my_parser
     assert judge.config["response_parser"] is None
 
-    rebuilt = LLMJudge.from_config(judge.config)
+    rebuilt = LLMMatcher.from_config(judge.config)
     assert rebuilt._parse is parse_score_response
 
 
 def test_unknown_parser_name_raises_listing_registered_names() -> None:
     with pytest.raises(ValueError, match="binary_yes_no"):
-        LLMJudge(client=object(), response_parser="nope")
+        LLMMatcher(client=object(), response_parser="nope")
 
 
 def test_default_parser_and_serializer_names_in_config() -> None:
-    judge = LLMJudge(client=object())
+    judge = LLMMatcher(client=object())
     assert judge.config["response_parser"] == "score"
     assert judge.config["record_serializer"] == "json"
 
 
 def test_pre_v03_config_without_parser_keys_falls_back_to_defaults() -> None:
     """Artifacts saved before the named-parser keys existed keep loading."""
-    from langres.core.modules.llm_judge import default_record_serializer, parse_score_response
+    from langres.core.matchers.llm_judge import default_record_serializer, parse_score_response
 
-    judge = LLMJudge(client=object())
+    judge = LLMMatcher(client=object())
     legacy = {
         k: v for k, v in judge.config.items() if k not in ("response_parser", "record_serializer")
     }
-    rebuilt = LLMJudge.from_config(legacy)
+    rebuilt = LLMMatcher.from_config(legacy)
     assert rebuilt._parse is parse_score_response
     assert rebuilt._serialize is default_record_serializer
 
 
 def test_named_record_serializer_resolves_and_serializes() -> None:
-    from langres.core.modules.llm_judge import default_record_serializer
+    from langres.core.matchers.llm_judge import default_record_serializer
 
-    judge = LLMJudge(client=object(), record_serializer="json")
+    judge = LLMMatcher(client=object(), record_serializer="json")
     assert judge._serialize is default_record_serializer
     assert judge.config["record_serializer"] == "json"

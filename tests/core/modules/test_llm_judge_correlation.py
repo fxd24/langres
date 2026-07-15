@@ -1,4 +1,4 @@
-"""S5: LLMJudge run correlation -- litellm ``metadata`` passthrough.
+"""S5: LLMMatcher run correlation -- litellm ``metadata`` passthrough.
 
 The judge stamps the active ``capture_run`` attempt id (plus pair identity and
 decision step) into litellm's first-class ``metadata`` param, so a Langfuse/OTel
@@ -29,7 +29,7 @@ import pytest
 litellm = pytest.importorskip("litellm")
 
 from langres.core.models import CompanySchema, ERCandidate  # noqa: E402
-from langres.core.modules.llm_judge import LLMJudge  # noqa: E402
+from langres.core.matchers.llm_judge import LLMMatcher  # noqa: E402
 from langres.core.runs import RunContext, capture_run  # noqa: E402
 
 
@@ -60,7 +60,7 @@ def test_metadata_stamped_on_litellm_path_inside_capture_run(mocker: Any) -> Non
     """Inside a run on the litellm path, ``completion()`` receives ``metadata``
     with the attempt id, both pair ids, and the decision step."""
     mocker.patch.object(litellm, "completion", return_value=_response())
-    module = LLMJudge(client=litellm, model="gpt-4o-mini")
+    module = LLMMatcher(client=litellm, model="gpt-4o-mini")
 
     with capture_run(_context(), store=None) as handle:
         list(module.forward([_pair()]))
@@ -78,7 +78,7 @@ def test_no_metadata_kwarg_when_no_capture_run(mocker: Any) -> None:
     """Byte-identical invariant: with no open run, ``completion()`` is called
     exactly as before -- NO ``metadata`` kwarg (key regression guard)."""
     mocker.patch.object(litellm, "completion", return_value=_response())
-    module = LLMJudge(client=litellm, model="gpt-4o-mini")
+    module = LLMMatcher(client=litellm, model="gpt-4o-mini")
 
     list(module.forward([_pair()]))  # not inside any capture_run
 
@@ -90,7 +90,7 @@ def test_direct_client_never_receives_metadata_even_inside_capture_run() -> None
     unknown ``metadata`` kwarg -- never receives it, even inside a run."""
     client = Mock()  # NOT the litellm module
     client.completion.return_value = _response()
-    module = LLMJudge(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     with capture_run(_context(), store=None):
         list(module.forward([_pair()]))
@@ -106,7 +106,7 @@ async def test_async_metadata_stamped_on_litellm_path_inside_capture_run(mocker:
     """Async mirror: inside a run on the litellm path, ``acompletion()`` receives
     ``metadata`` with the attempt id, both pair ids, and the async decision step."""
     mocker.patch.object(litellm, "acompletion", AsyncMock(return_value=_response()))
-    module = LLMJudge(client=litellm, model="gpt-4o-mini")
+    module = LLMMatcher(client=litellm, model="gpt-4o-mini")
 
     with capture_run(_context(), store=None) as handle:
         await module.forward_async([_pair()])
@@ -125,7 +125,7 @@ async def test_async_no_metadata_kwarg_when_no_capture_run(mocker: Any) -> None:
     """Async byte-identical invariant: with no open run, ``acompletion()`` is
     called with NO ``metadata`` kwarg (the async regression guard)."""
     mocker.patch.object(litellm, "acompletion", AsyncMock(return_value=_response()))
-    module = LLMJudge(client=litellm, model="gpt-4o-mini")
+    module = LLMMatcher(client=litellm, model="gpt-4o-mini")
 
     await module.forward_async([_pair()])  # not inside any capture_run
 
@@ -138,7 +138,7 @@ async def test_async_direct_client_never_receives_metadata_even_inside_capture_r
     the async path either, even inside a run."""
     client = Mock()  # NOT the litellm module
     client.acompletion = AsyncMock(return_value=_response())
-    module = LLMJudge(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     with capture_run(_context(), store=None):
         await module.forward_async([_pair()])

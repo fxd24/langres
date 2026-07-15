@@ -20,7 +20,7 @@ Jellyfish/AnyMatch, epic #85) as *clients of langres*, increasingly via agents.
 Five-workstream research + first-hand code verification concluded: **don't build a
 tracker — add a thin pluggable adapter that wraps langres's existing seams and
 reuses its existing Pydantic result models.** langres already has the hard parts
-(auto per-judge capture via `LoggingModule`, honest cost via `SpendMonitor` +
+(auto per-judge capture via `LoggingMatcher`, honest cost via `SpendMonitor` +
 pinned prices, rich serializable reports, a `"v":1` JSONL idiom). Missing: run
 identity + config/dataset/split capture + backend persistence + lineage.
 

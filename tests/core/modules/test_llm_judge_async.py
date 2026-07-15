@@ -1,4 +1,4 @@
-"""Tests for LLMJudgeModule async batch processing.
+"""Tests for LLMMatcher async batch processing.
 
 This test module validates the async forward_async() method, which enables
 concurrent LLM API calls with token-aware rate limiting and retry logic.
@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.llm_judge import LLMJudgeModule, _RateLimiter
+from langres.core.matchers.llm_judge import LLMMatcher, _RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def test_forward_async_processes_single_candidate(mock_llm_client, mock_ll
     """Test forward_async() processes a single candidate correctly."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -97,7 +97,7 @@ async def test_forward_async_processes_multiple_candidates(
     """Test forward_async() processes multiple candidates concurrently."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     judgements = await module.forward_async(sample_candidates)
 
@@ -129,7 +129,7 @@ async def test_forward_async_maintains_order(mock_llm_client, sample_candidates)
 
     mock_llm_client.acompletion.side_effect = responses
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     judgements = await module.forward_async(sample_candidates)
 
@@ -143,7 +143,7 @@ async def test_forward_async_maintains_order(mock_llm_client, sample_candidates)
 @pytest.mark.asyncio
 async def test_forward_async_empty_candidates_list(mock_llm_client):
     """Test forward_async() handles empty candidate list."""
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     judgements = await module.forward_async([])
 
@@ -171,7 +171,7 @@ async def test_forward_async_respects_max_concurrent(mock_llm_client, mock_llm_r
 
     mock_llm_client.acompletion = mock_acompletion
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Create 10 candidates
     candidates = [
@@ -341,7 +341,7 @@ async def test_forward_async_retries_on_rate_limit_error(mock_llm_client, mock_l
         mock_llm_response,
     ]
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -367,7 +367,7 @@ async def test_forward_async_fails_after_max_retries(mock_llm_client):
         "Rate limit exceeded", None, None
     )
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -393,7 +393,7 @@ async def test_forward_async_respects_custom_max_retries(mock_llm_client):
         raise litellm.RateLimitError("Always fail", None, None)
 
     mock_llm_client.acompletion = failing_completion
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -423,7 +423,7 @@ async def test_forward_async_retries_with_exponential_backoff(mock_llm_client, m
         return mock_llm_response
 
     mock_llm_client.acompletion = tracked_completion
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -453,9 +453,9 @@ async def test_forward_async_tracks_cost(mock_llm_client, mock_llm_response, moc
     """Test forward_async() tracks API costs in provenance via litellm pricing."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    mocker.patch("langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.000123)
+    mocker.patch("langres.core.matchers.llm_judge.litellm.completion_cost", return_value=0.000123)
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -488,7 +488,7 @@ async def test_forward_async_records_real_cost_and_pins_provider(mock_llm_client
     mock_llm_client.acompletion.return_value = resp
 
     pin = {"only": ["DeepInfra"]}
-    module = LLMJudgeModule(client=mock_llm_client, model="openrouter/z-ai/glm-5.2", provider=pin)
+    module = LLMMatcher(client=mock_llm_client, model="openrouter/z-ai/glm-5.2", provider=pin)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -515,7 +515,7 @@ async def test_forward_async_handles_missing_usage(mock_llm_client):
 
     mock_llm_client.acompletion.return_value = response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -541,7 +541,7 @@ async def test_forward_async_integration_with_custom_limits(
     """Test forward_async() with custom rate limits."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Use custom rate limits
     judgements = await module.forward_async(
@@ -577,7 +577,7 @@ async def test_forward_async_score_extraction(mock_llm_client):
 
     mock_llm_client.acompletion.side_effect = mock_responses
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidates = [
         ERCandidate(
@@ -609,7 +609,7 @@ async def test_forward_async_handles_other_exceptions(mock_llm_client):
         raise ValueError("Invalid model configuration")
 
     mock_llm_client.acompletion = mock_acompletion
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -631,7 +631,7 @@ async def test_forward_async_with_custom_prompt_template(mock_llm_client, mock_l
     mock_llm_client.acompletion.return_value = mock_llm_response
 
     custom_prompt = "Compare: {left} vs {right}"
-    module = LLMJudgeModule(
+    module = LLMMatcher(
         client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
     )
 
@@ -685,7 +685,7 @@ async def test_forward_async_partial_failures_all_fail():
 
     client.acompletion = mock_acompletion
 
-    module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     candidates = [
         ERCandidate(
@@ -706,7 +706,7 @@ async def test_forward_async_memory_efficient_large_batch(mock_llm_client, mock_
     """Test that large batches don't cause memory issues."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Create 100 candidates (reduced from 1000 to keep test fast)
     candidates = [
@@ -736,7 +736,7 @@ async def test_forward_async_with_very_high_concurrency(mock_llm_client, mock_ll
     """Test with max_concurrent higher than number of candidates."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Only 3 candidates but max_concurrent=100
     candidates = [
@@ -758,7 +758,7 @@ async def test_forward_async_with_zero_temperature(mock_llm_client, mock_llm_res
     """Test async with temperature=0 for deterministic results."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini", temperature=0.0)
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini", temperature=0.0)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -791,7 +791,7 @@ async def test_forward_async_score_clamping():
 
     client.acompletion = mock_acompletion
 
-    module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -812,7 +812,7 @@ async def test_forward_async_with_entities_missing_optional_fields(
     """Test async with entities that have None for optional fields."""
     mock_llm_client.acompletion.return_value = mock_llm_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Entities with minimal fields
     candidate = ERCandidate(
@@ -857,7 +857,7 @@ async def test_forward_async_decision_step_marking():
 
     client.acompletion = mock_acompletion
 
-    module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -889,7 +889,7 @@ async def test_forward_async_preserves_blocker_name():
 
     client.acompletion = mock_acompletion
 
-    module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+    module = LLMMatcher(client=client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         1. Constructor kwargs -- ``Settings(openrouter_api_key="sk-...")``.
         2. Process environment (``os.environ``). A variable set to the EMPTY
            string counts as *set* and wins over the ``.env`` file -- and an
-           empty key is treated as absent by ``judge="auto"``, so
+           empty key is treated as absent by ``matcher="auto"``, so
            ``OPENROUTER_API_KEY="" OPENAI_API_KEY=""`` is the per-key way to
            force a keyless run. (Merely *unsetting* the variable does NOT: the
            ``.env`` file below refills it.)
@@ -25,18 +25,18 @@ class Settings(BaseSettings):
     Note: litellm separately runs ``load_dotenv()`` at import time, which DOES
     walk up the directory tree from its install location and loads the nearest
     ``.env`` into ``os.environ`` (without overriding already-set variables).
-    That side effect never influences ``judge="auto"``'s key discovery -- the
+    That side effect never influences ``matcher="auto"``'s key discovery -- the
     auto decision is made from this class BEFORE litellm is ever imported.
 
     Environment variables:
-        LANGRES_OFFLINE: When truthy ("1"/"true"), ``judge="auto"`` treats
-            every API key as absent and raises ``NoJudgeAvailableError``
+        LANGRES_OFFLINE: When truthy ("1"/"true"), ``matcher="auto"`` treats
+            every API key as absent and raises ``NoMatcherAvailableError``
             deterministically -- the process-wide switch to force keyless
             behavior (empty string / "0" / "false" / unset mean off).
-            Scoped to auto-discovery only: an explicit ``judge=`` choice in
+            Scoped to auto-discovery only: an explicit ``matcher=`` choice in
             code is unaffected. See langres.core.presets.choose_auto_judge.
         OPENAI_API_KEY: OpenAI API key
-        OPENROUTER_API_KEY: OpenRouter API key (drives judge="auto" model
+        OPENROUTER_API_KEY: OpenRouter API key (drives matcher="auto" model
             selection; see langres.core.presets.choose_auto_judge)
         WANDB_API_KEY: Weights & Biases API key
         WANDB_PROJECT: W&B project name (default: "langres")
@@ -87,11 +87,11 @@ class Settings(BaseSettings):
         settings = Settings()
     """
 
-    # Offline switch: judge="auto" treats every API key as absent when true.
+    # Offline switch: matcher="auto" treats every API key as absent when true.
     # Deterministic because the process env beats the .env file (see the
     # discovery order in the class docstring) -- setting LANGRES_OFFLINE=1
     # forces the keyless fail-fast path even when a .env in the CWD carries a
-    # real key. Scoped to auto-discovery; explicit judge= choices bypass it.
+    # real key. Scoped to auto-discovery; explicit matcher= choices bypass it.
     langres_offline: bool = False
 
     # OpenAI / LLM

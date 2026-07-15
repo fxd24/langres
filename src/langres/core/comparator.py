@@ -1,9 +1,9 @@
 """Comparator contract: turn a pair of entities into a ComparisonVector.
 
 The Comparator is the missing-aware bridge between raw entities and the scorer
-Module. The Blocker emits candidate pairs; the Comparator compares each pair
+Matcher. The Blocker emits candidate pairs; the Comparator compares each pair
 feature-by-feature into a :class:`~langres.core.feature.ComparisonVector`; the
-scorer Module combines that vector into a score.
+scorer Matcher combines that vector into a score.
 
 **M0 Wave 1 builds only the ABC and the typed errors.** The concrete
 implementation and ``from_schema`` factory land in Wave 2a — they are
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
-# Supported rapidfuzz algorithms (mirrors RapidfuzzModule.Algorithm).
+# Supported rapidfuzz algorithms (mirrors RapidfuzzMatcher.Algorithm).
 Algorithm = Literal["ratio", "token_sort_ratio", "token_set_ratio"]
 
 _FUZZ_FUNCS: dict[str, Callable[[str, str], float]] = {
@@ -78,7 +78,7 @@ class Comparator(ABC, Generic[SchemaT]):
     def feature_specs(self) -> list[FeatureSpec]:
         """FeatureSpecs this comparator scores on; empty for spec-less comparators.
 
-        Part of the Comparator contract: the WeightedAverageJudge reads
+        Part of the Comparator contract: the WeightedAverageMatcher reads
         ``comparator.feature_specs`` to weight the score. The ABC defaults to an
         empty list so a comparator that scores without declared features (e.g. a
         self-contained or learned scorer) satisfies the contract without

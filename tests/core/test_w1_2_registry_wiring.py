@@ -1,10 +1,10 @@
-"""Regression: FellegiSunterJudge/RandomForestJudge register on plain ``import langres.core``
+"""Regression: FellegiSunterMatcher/RandomForestMatcher register on plain ``import langres.core``
 (W1.2) AND resolve via the lazy registry path.
 
 ``@register(...)`` only fires when a component's OWNING MODULE is imported
 (see ``langres.core.registry``'s module docstring). Every registrable
 component must therefore be eager-imported by ``core/__init__.py`` (mirroring
-the existing ``AllPairsBlocker``/``VectorBlocker``/``LLMJudge`` pattern) *or*
+the existing ``AllPairsBlocker``/``VectorBlocker``/``LLMMatcher`` pattern) *or*
 listed in ``registry._LAZY_COMPONENT_MODULES``. Without either, a fresh
 process that does ``from langres.core import Resolver`` and then
 ``Resolver.load()`` on an artifact referencing ``"fellegi_sunter_judge"``/
@@ -65,5 +65,5 @@ def test_lazy_component_modules_includes_new_w1_2_components() -> None:
     """
     from langres.core.registry import _LAZY_COMPONENT_MODULES
 
-    assert _LAZY_COMPONENT_MODULES["fellegi_sunter_judge"] == "langres.core.judges.fellegi_sunter"
-    assert _LAZY_COMPONENT_MODULES["random_forest"] == "langres.core.modules.random_forest_judge"
+    assert _LAZY_COMPONENT_MODULES["fellegi_sunter_judge"] == "langres.core.matchers.fellegi_sunter"
+    assert _LAZY_COMPONENT_MODULES["random_forest"] == "langres.core.matchers.random_forest_judge"

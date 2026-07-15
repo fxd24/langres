@@ -5,7 +5,7 @@ and comprehensive evaluation (with ground truth):
 
 Inspection Reports (no ground truth required):
 - CandidateInspectionReport: Blocker output exploration
-- ScoreInspectionReport: Module score distribution analysis
+- ScoreInspectionReport: Matcher score distribution analysis
 - ClusterInspectionReport: Clusterer output exploration
 
 Evaluation Reports (require ground truth):
@@ -985,13 +985,13 @@ class BlockerEvaluationReport(BaseModel):
 def _inspect_scores_impl(
     judgements: list["PairwiseJudgement"], sample_size: int = 10
 ) -> ScoreInspectionReport:
-    """Shared implementation of inspect_scores for all Module types.
+    """Shared implementation of inspect_scores for all Matcher types.
 
     This function provides common score inspection logic that works for all
-    Module implementations since they all return PairwiseJudgement objects. It
-    lives here (not in any single Module) so every Module — including the
-    dependency-light WeightedAverageJudge — can reuse it without importing a
-    heavier Module (e.g. the LLM judge that pulls in litellm/openai).
+    Matcher implementations since they all return PairwiseJudgement objects. It
+    lives here (not in any single Matcher) so every Matcher — including the
+    dependency-light WeightedAverageMatcher — can reuse it without importing a
+    heavier Matcher (e.g. the LLM judge that pulls in litellm/openai).
 
     Args:
         judgements: List of PairwiseJudgement objects to analyze
@@ -1009,7 +1009,7 @@ def _inspect_scores_impl(
             low_scoring_examples=[],
             recommendations=[
                 "No judgements to analyze - generate some predictions first",
-                "Run Module.forward() on candidates to produce judgements",
+                "Run Matcher.forward() on candidates to produce judgements",
             ],
         )
 

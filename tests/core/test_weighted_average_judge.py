@@ -1,6 +1,6 @@
-"""Unit tests for WeightedAverageJudge (M0 Wave 2a scorer Module).
+"""Unit tests for WeightedAverageMatcher (M0 Wave 2a scorer Matcher).
 
-The judge owns its FeatureSpecs (``WeightedAverageJudge(feature_specs=...)``) and
+The judge owns its FeatureSpecs (``WeightedAverageMatcher(feature_specs=...)``) and
 the scoring rule (weight normalization + the evidence floor from
 ``combine_present``). It reads each candidate's attached ``comparison`` vector;
 the Resolver attaches it from the Comparator. These tests pin that behavior.
@@ -10,7 +10,7 @@ import pytest
 
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 
 
@@ -41,7 +41,7 @@ class TestScore:
     def test_weighted_average_correct(self) -> None:
         # Two present features, weights 0.6 / 0.4, similarities 1.0 / 0.5.
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.PRESENT},
             similarities={"name": 1.0, "address": 0.5},
@@ -52,7 +52,7 @@ class TestScore:
     def test_weights_normalized_to_one(self) -> None:
         # Raw weights 6 / 4 must normalize to 0.6 / 0.4 -> same 0.8 result.
         specs = [FeatureSpec(name="name", weight=6.0), FeatureSpec(name="address", weight=4.0)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.PRESENT},
             similarities={"name": 1.0, "address": 0.5},
@@ -62,7 +62,7 @@ class TestScore:
     def test_evidence_floor_single_low_weight_forces_zero(self) -> None:
         # Single present feature carrying < 0.5 of total weight -> floor -> 0.0.
         specs = [FeatureSpec(name="name", weight=0.3), FeatureSpec(name="address", weight=0.7)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.MISSING},
             similarities={"name": 0.95},
@@ -72,7 +72,7 @@ class TestScore:
     def test_single_high_weight_present_clears_floor(self) -> None:
         # Single present feature with >= 0.5 of total weight scores normally.
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.MISSING},
             similarities={"name": 0.9},
@@ -81,7 +81,7 @@ class TestScore:
 
     def test_all_missing_scores_zero(self) -> None:
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.MISSING, "address": ComparisonLevel.MISSING},
             similarities={},
@@ -91,7 +91,7 @@ class TestScore:
     def test_empty_specs_scores_zero(self) -> None:
         # Defensive: scoring with no specs yields an empty weight map, which
         # combine_present treats as no-evidence -> 0.0 (never divides by zero).
-        judge: WeightedAverageJudge[CompanySchema] = WeightedAverageJudge(feature_specs=[])
+        judge: WeightedAverageMatcher[CompanySchema] = WeightedAverageMatcher(feature_specs=[])
         vec = ComparisonVector(levels={}, similarities={})
         assert judge.score(vec) == 0.0
 
@@ -99,7 +99,7 @@ class TestScore:
         # When every spec has weight 0, normalization splits evenly (1/n each)
         # rather than dividing by zero. Two present features clear the floor.
         specs = [FeatureSpec(name="name", weight=0.0), FeatureSpec(name="address", weight=0.0)]
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         vec = ComparisonVector(
             levels={"name": ComparisonLevel.PRESENT, "address": ComparisonLevel.PRESENT},
             similarities={"name": 1.0, "address": 0.0},
@@ -114,7 +114,7 @@ class TestForward:
 
     def test_emits_valid_pairwise_judgement(self) -> None:
         comp = StringComparator(self._specs())
-        judge = WeightedAverageJudge(feature_specs=self._specs())
+        judge = WeightedAverageMatcher(feature_specs=self._specs())
         cand = _compared(
             comp,
             _company(id="a", name="Acme", address="123 Main"),
@@ -135,7 +135,7 @@ class TestForward:
 
     def test_decision_step_all_features_missing(self) -> None:
         comp = StringComparator(self._specs())
-        judge = WeightedAverageJudge(feature_specs=self._specs())
+        judge = WeightedAverageMatcher(feature_specs=self._specs())
         cand = _compared(
             comp,
             _company(id="a", name="", address=None),
@@ -148,7 +148,7 @@ class TestForward:
     def test_decision_step_below_evidence_floor(self) -> None:
         specs = [FeatureSpec(name="name", weight=0.3), FeatureSpec(name="address", weight=0.7)]
         comp = StringComparator(specs)
-        judge = WeightedAverageJudge(feature_specs=specs)
+        judge = WeightedAverageMatcher(feature_specs=specs)
         # name present (low weight), address missing -> below floor -> 0.0.
         cand = _compared(
             comp,
@@ -160,12 +160,12 @@ class TestForward:
         assert j.decision_step == "below_evidence_floor"
 
     def test_streams_lazily(self) -> None:
-        judge = WeightedAverageJudge(feature_specs=self._specs())
+        judge = WeightedAverageMatcher(feature_specs=self._specs())
         gen = judge.forward(iter([]))
         assert list(gen) == []
 
     def test_forward_without_comparison_raises(self) -> None:
-        judge = WeightedAverageJudge(feature_specs=self._specs())
+        judge = WeightedAverageMatcher(feature_specs=self._specs())
         # Candidate carries no comparison vector -> the judge cannot score it.
         cand = _candidate(_company(id="a"), _company(id="b"))
         with pytest.raises(ValueError, match="requires candidates carrying a comparison"):
@@ -174,7 +174,7 @@ class TestForward:
 
 class TestInspectScores:
     def test_inspect_scores_delegates(self) -> None:
-        judge = WeightedAverageJudge(feature_specs=[FeatureSpec(name="name")])
+        judge = WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name")])
         judgements = [
             PairwiseJudgement(
                 left_id="a",
@@ -193,20 +193,20 @@ class TestConfigRoundTrip:
     def test_config_is_serializable(self) -> None:
         import json
 
-        json.dumps(WeightedAverageJudge(feature_specs=[FeatureSpec(name="name")]).config)
+        json.dumps(WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name")]).config)
 
     def test_from_config_reconstructs_feature_specs(self) -> None:
         specs = [FeatureSpec(name="name", weight=0.6), FeatureSpec(name="address", weight=0.4)]
-        judge = WeightedAverageJudge(feature_specs=specs)
-        rebuilt = WeightedAverageJudge.from_config(judge.config)
-        assert isinstance(rebuilt, WeightedAverageJudge)
+        judge = WeightedAverageMatcher(feature_specs=specs)
+        rebuilt = WeightedAverageMatcher.from_config(judge.config)
+        assert isinstance(rebuilt, WeightedAverageMatcher)
         # The weights survive the round-trip so scoring is identical.
         assert rebuilt.feature_specs == specs
 
     def test_registered_under_weighted_average_judge(self) -> None:
         from langres.core.registry import get_component
 
-        assert get_component("weighted_average_judge") is WeightedAverageJudge
+        assert get_component("weighted_average_judge") is WeightedAverageMatcher
 
 
 class TestCompanyFixtureBehavior:
@@ -223,7 +223,7 @@ class TestCompanyFixtureBehavior:
         # name carries 0.6 of total weight (0.6 / (0.6+0.2+0.1+0.1)) -> clears
         # the 0.5 evidence floor on a name-only match.
         comp = self._name_dominant_comparator()
-        judge = WeightedAverageJudge(feature_specs=comp.feature_specs)
+        judge = WeightedAverageMatcher(feature_specs=comp.feature_specs)
         cand = _compared(
             comp,
             _company(id="c4", name="DataFlow Solutions", address="321 Tech Way"),
@@ -236,7 +236,7 @@ class TestCompanyFixtureBehavior:
         # Only a single low-weight feature (website) is present on both sides;
         # everything else differs/missing -> below evidence floor -> 0.0.
         comp = self._name_dominant_comparator()
-        judge = WeightedAverageJudge(feature_specs=comp.feature_specs)
+        judge = WeightedAverageMatcher(feature_specs=comp.feature_specs)
         cand = _compared(
             comp,
             _company(id="a", name="Quantum Dynamics", website="https://shared.com"),

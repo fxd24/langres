@@ -19,7 +19,7 @@ from langres.core.benchmark import complete_partition
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.metrics import calculate_bcubed_metrics, classify_pairs, evaluate_blocking
-from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 from langres.data._benchmark_utils import cross_source
 from langres.data.tiny_fixture import (
     TinyFixtureBenchmark,
@@ -116,7 +116,7 @@ def test_end_to_end_offline_block_judge_cluster_metrics() -> None:
         assert 0.0 <= stats_rr.reduction_ratio <= 1.0
 
     # --- Judge (rapidfuzz over name; offline) ---
-    judge: RapidfuzzModule[TinyFixtureSchema] = RapidfuzzModule(
+    judge: RapidfuzzMatcher[TinyFixtureSchema] = RapidfuzzMatcher(
         field_extractors={"name": (lambda entity: entity.name, 1.0)},
         algorithm="token_set_ratio",
     )

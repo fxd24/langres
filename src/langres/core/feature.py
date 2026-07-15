@@ -1,7 +1,7 @@
 """Feature-comparison contracts for the M0 Resolver.
 
 These are the frozen data contracts that sit between the Comparator (which
-turns a pair of entities into a per-feature comparison) and the scorer Module
+turns a pair of entities into a per-feature comparison) and the scorer Matcher
 (which combines that comparison into a single match score).
 
 Three pieces live here:
@@ -72,7 +72,7 @@ class ComparisonVector(BaseModel):
     """Per-pair comparison result — the contract between Comparator and scorer.
 
     The Comparator emits one ComparisonVector per candidate pair. The scorer
-    Module consumes it (via :func:`combine_present`) to produce a single score.
+    Matcher consumes it (via :func:`combine_present`) to produce a single score.
     It is fully serializable and observable so a pair's evidence can be logged
     and inspected.
 

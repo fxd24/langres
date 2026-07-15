@@ -80,7 +80,7 @@ def run_demo() -> dict[str, Any]:
     # 1. Anchor a string-judge Resolver on the rich batch (deterministic, free).
     resolver = Resolver.from_schema(
         CompanySchema,
-        judge="string",
+        matcher="string",
         threshold=0.5,
         weights={"name": 0.7, "address": 0.1, "phone": 0.1, "website": 0.1},
     )

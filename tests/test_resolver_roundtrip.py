@@ -1,6 +1,6 @@
 r"""M0 EXIT TEST — Resolver save/load round-trip (GREEN, Wave 3).
 
-The Resolver, the concrete Comparator, and WeightedAverageJudge exist, so the
+The Resolver, the concrete Comparator, and WeightedAverageMatcher exist, so the
 xfail markers are gone and these tests assert the real behavior.
 
 The 4-slot resolver is built with **name-dominant weights** matching Approach 1
@@ -15,7 +15,7 @@ separately and only asserts the >= 0.70 accuracy floor (it need not recover c4).
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),  # scorer slot
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),  # scorer slot
         clusterer=Clusterer(threshold=0.7),
     )
     clusters_before = resolver.resolve(COMPANY_RECORDS)
@@ -84,7 +84,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
         Clusterer,
         Comparator,
         Resolver,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -92,7 +92,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -141,7 +141,7 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
         Clusterer,
         Comparator,
         Resolver,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -149,7 +149,7 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
     clusters_before = resolver.resolve(COMPANY_RECORDS)
@@ -263,7 +263,7 @@ def test_resolver_load_rejects_older_artifact(tmp_path: Path) -> None:
 def test_resolver_save_rejects_unserializable_component(tmp_path: Path) -> None:
     """save() raises a clear TypeError naming an unregistered slot component.
 
-    A component without a registry ``type_name`` (e.g. CascadeModule in the
+    A component without a registry ``type_name`` (e.g. CascadeChainMatcher in the
     module slot) must fail with a readable message instead of an opaque
     AttributeError from the spec/save path.
     """
@@ -311,7 +311,7 @@ def _vector_resolver() -> "object":
         FakeEmbedder,
         Resolver,
         VectorBlocker,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -326,7 +326,7 @@ def _vector_resolver() -> "object":
     return Resolver(
         blocker=blocker,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -396,7 +396,7 @@ def _composite_vector_resolver(op: str = "union") -> "object":
         KeyBlocker,
         Resolver,
         VectorBlocker,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -419,7 +419,7 @@ def _composite_vector_resolver(op: str = "union") -> "object":
     return Resolver(
         blocker=composite,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -458,7 +458,7 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
         KeyBlocker,
         Resolver,
         VectorBlocker,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -478,7 +478,7 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
     resolver = Resolver(
         blocker=outer,
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -533,15 +533,15 @@ def test_resolver_save_unbuilt_vector_index_writes_no_sidecar(tmp_path: Path) ->
 
 
 def test_resolver_without_comparator_uses_plain_module() -> None:
-    """comparator=None drives a self-contained Module directly (no compare stage)."""
+    """comparator=None drives a self-contained Matcher directly (no compare stage)."""
     from collections.abc import Iterator
 
     from langres.core import AllPairsBlocker, Clusterer, Resolver
     from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-    from langres.core.module import Module
+    from langres.core.matcher import Matcher
     from langres.core.reports import ScoreInspectionReport
 
-    class ExactNameModule(Module[CompanySchema]):
+    class ExactNameModule(Matcher[CompanySchema]):
         """Tiny self-contained scorer: 1.0 iff names are identical."""
 
         def forward(
@@ -566,7 +566,7 @@ def test_resolver_without_comparator_uses_plain_module() -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=ExactNameModule(),
+        matcher=ExactNameModule(),
         clusterer=Clusterer(threshold=0.5),
     )
     clusters = resolver.resolve(COMPANY_RECORDS)
@@ -579,14 +579,14 @@ def test_resolver_without_comparator_uses_plain_module() -> None:
 
 def test_resolver_save_without_comparator_omits_slot(tmp_path: Path) -> None:
     """A comparator=None Resolver writes a 3-component manifest (no comparator)."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageJudge
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=WeightedAverageJudge(feature_specs=[FeatureSpec(name="name")]),
+        matcher=WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name")]),
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -623,14 +623,14 @@ def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
     positional/type_name identification, a comparator registered as
     "phonetic_comparator" was misread as the module and the real module was
     dropped. Here we assert the reloaded comparator IS the subclass AND the
-    module slot is the real WeightedAverageJudge.
+    module slot is the real WeightedAverageMatcher.
     """
     from langres.core import (
         AllPairsBlocker,
         Clusterer,
         Comparator,
         Resolver,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
         register,
     )
     from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
@@ -668,7 +668,7 @@ def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=PhoneticComparator(),
-        module=WeightedAverageJudge(feature_specs=[FeatureSpec(name="name", weight=1.0)]),
+        matcher=WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name", weight=1.0)]),
         clusterer=Clusterer(threshold=0.5),
     )
     resolver.save(tmp_path)
@@ -687,7 +687,7 @@ def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
     # The comparator slot is the custom subclass, NOT misread as the module.
     assert isinstance(reloaded.comparator, PhoneticComparator)
     # The module slot is the real module, NOT the comparator.
-    assert isinstance(reloaded.module, WeightedAverageJudge)
+    assert isinstance(reloaded.module, WeightedAverageMatcher)
 
 
 def test_resolver_load_rejects_manifest_missing_required_slot(tmp_path: Path) -> None:
@@ -747,7 +747,7 @@ def test_resolver_load_rejects_legacy_manifest_without_module(tmp_path: Path) ->
 
 
 def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> None:
-    """A scorer Module that is itself SerializableState round-trips its state.
+    """A scorer Matcher that is itself SerializableState round-trips its state.
 
     Validates the *direct* (non-nested) state path: a slot component that both
     declares a BaseModel ``config()`` and implements ``SerializableState`` is
@@ -761,14 +761,14 @@ def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> No
 
     from langres.core import AllPairsBlocker, Clusterer, Resolver, register
     from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-    from langres.core.module import Module
+    from langres.core.matcher import Matcher
     from langres.core.reports import ScoreInspectionReport
 
     class _StatefulConfig(_BaseModel):
         base: float = 0.0
 
     @register("stateful_test_module")
-    class StatefulModule(Module[CompanySchema]):
+    class StatefulModule(Matcher[CompanySchema]):
         """Scores every pair at ``base + bump``; ``bump`` is restored from state."""
 
         type_name = "stateful_test_module"
@@ -814,7 +814,7 @@ def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> No
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=module,
+        matcher=module,
         clusterer=Clusterer(threshold=0.5),
     )
     resolver.save(tmp_path)
@@ -837,7 +837,7 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
     The adapter sits in the blocker slot; save/load never calls its stubbed
     ``stream``/``forward``.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageJudge
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
     from langres.core.adapters.glinker import GLinkerAdapter, GLinkerConfig
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
@@ -848,7 +848,7 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
     resolver = Resolver(
         blocker=adapter,
         comparator=None,
-        module=WeightedAverageJudge(feature_specs=[FeatureSpec(name="name")]),
+        matcher=WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name")]),
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)

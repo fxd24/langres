@@ -31,7 +31,7 @@ from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
 from langres.core.resolver import Resolver
@@ -90,7 +90,7 @@ DEFAULT_BLOCKING_K = 5
 RECALL_GATE = 0.95
 
 #: Candidate Clusterer thresholds swept by :func:`tune_threshold_on_train`. The
-#: WeightedAverageJudge scores in ``[0, 1]``; this small grid brackets the
+#: WeightedAverageMatcher scores in ``[0, 1]``; this small grid brackets the
 #: useful range without an expensive fine sweep (tuned on TRAIN only).
 DEFAULT_THRESHOLD_GRID: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
@@ -277,7 +277,7 @@ def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCK
     Composes the shared :func:`build_restaurant_blocker` with the missing-aware
     :class:`~langres.core.comparator.StringComparator` (auto-derived from
     ``RestaurantSchema``) and the registered, zero-spend
-    :class:`~langres.core.judges.weighted_average.WeightedAverageJudge` scoring
+    :class:`~langres.core.matchers.weighted_average.WeightedAverageMatcher` scoring
     on the same FeatureSpecs, then a connected-components
     :class:`~langres.core.clusterer.Clusterer` at ``threshold``. Mirrors
     ``Resolver.from_schema``'s comparator+judge+clusterer wiring but swaps the
@@ -303,7 +303,7 @@ def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCK
         comparator=comparator,
         # The judge scores on the same FeatureSpecs the comparator compares on,
         # so the comparison vector and the weights line up.
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=threshold),
     )
 

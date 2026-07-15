@@ -1,6 +1,6 @@
-"""Tests for LLMJudgeModule.inspect_scores() method.
+"""Tests for LLMMatcher.inspect_scores() method.
 
-This module tests the inspection capabilities of LLMJudgeModule for exploratory
+This module tests the inspection capabilities of LLMMatcher for exploratory
 analysis of score distributions without ground truth labels.
 """
 
@@ -9,7 +9,7 @@ import logging
 import pytest
 
 from langres.core.models import PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudgeModule
+from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.reports import ScoreInspectionReport
 
 logger = logging.getLogger(__name__)
@@ -119,13 +119,13 @@ def mock_llm_client():
 
 
 class TestLLMJudgeModuleInspection:
-    """Tests for LLMJudgeModule.inspect_scores() method."""
+    """Tests for LLMMatcher.inspect_scores() method."""
 
     def test_inspect_scores_with_normal_distribution(
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test inspect_scores with normal score distribution."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         # Verify report structure
@@ -140,7 +140,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that score statistics are computed correctly."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         dist = report.score_distribution
@@ -166,7 +166,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that high-scoring examples are extracted correctly."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=3)
 
         # Should have 3 high-scoring examples
@@ -189,7 +189,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that low-scoring examples are extracted correctly."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=3)
 
         # Should have 3 low-scoring examples
@@ -208,7 +208,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that reasoning is extracted from judgement provenance."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=2)
 
         # Check that reasoning is present in examples
@@ -220,7 +220,7 @@ class TestLLMJudgeModuleInspection:
         self, high_scores_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that high scores trigger different recommendations."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(high_scores_judgements, sample_size=5)
 
         # With high median (> 0.7), should NOT recommend threshold=0.6
@@ -232,7 +232,7 @@ class TestLLMJudgeModuleInspection:
         self, low_scores_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that low scores trigger different recommendations."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(low_scores_judgements, sample_size=5)
 
         # With low median (< 0.3), should recommend threshold=0.2
@@ -244,7 +244,7 @@ class TestLLMJudgeModuleInspection:
         self, bimodal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that bimodal distribution is detected as having good separation."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(bimodal_distribution_judgements, sample_size=5)
 
         # Bimodal distribution should have good separation (high - low > 0.3)
@@ -256,7 +256,7 @@ class TestLLMJudgeModuleInspection:
         self, uniform_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that uniform distribution triggers low variance warning."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(uniform_distribution_judgements, sample_size=5)
 
         # Uniform distribution should have very low std
@@ -270,7 +270,7 @@ class TestLLMJudgeModuleInspection:
 
     def test_inspect_scores_with_empty_list(self, mock_llm_client) -> None:
         """Test inspect_scores with empty judgements list."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores([], sample_size=10)
 
         assert report.total_judgements == 0
@@ -301,7 +301,7 @@ class TestLLMJudgeModuleInspection:
             ),
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=10)
 
         # Should return all available judgements
@@ -312,7 +312,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that percentiles are calculated correctly."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         dist = report.score_distribution
@@ -326,7 +326,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that report generates readable markdown."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         markdown = report.to_markdown()
@@ -339,7 +339,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that to_dict returns proper structure."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         data = report.to_dict()
@@ -354,7 +354,7 @@ class TestLLMJudgeModuleInspection:
         self, normal_distribution_judgements: list[PairwiseJudgement], mock_llm_client
     ) -> None:
         """Test that stats property contains only numerical data."""
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(normal_distribution_judgements, sample_size=5)
 
         stats = report.stats
@@ -378,7 +378,7 @@ class TestLLMJudgeModuleInspection:
             )
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=5)
 
         # Should handle missing reasoning gracefully
@@ -401,7 +401,7 @@ class TestLLMJudgeModuleInspection:
             for i in range(20)
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=5)
 
         # Should warn about small sample
@@ -429,7 +429,7 @@ class TestLLMJudgeModuleInspection:
             for i in range(1500)
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=5)
 
         # Should suggest sampling for faster iteration
@@ -457,7 +457,7 @@ class TestLLMJudgeModuleInspection:
             for i in range(60)
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=5)
 
         assert report.total_judgements == 60
@@ -484,7 +484,7 @@ class TestLLMJudgeModuleInspection:
             for i, score in enumerate(scores)
         ]
 
-        module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+        module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
         report = module.inspect_scores(judgements, sample_size=5)
 
         # Should have std in medium range

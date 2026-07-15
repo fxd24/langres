@@ -17,7 +17,7 @@ import pytest
 from langres.core.benchmark import evaluate_judge_on_candidates
 from langres.core.metrics import classify_pairs
 from langres.core.models import ERCandidate
-from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 from langres.data import _benchmark_utils as _bu
 from langres.data.wdc_computers import (
     WDC_COMPUTERS_ACHIEVED_PC,
@@ -84,7 +84,7 @@ def test_wdc_sliced_judge_eval_grades_every_slice_at_one_fixed_threshold() -> No
     ]
     gold_pairs = {frozenset({left, right}) for (left, right, label) in test_pairs if label == 1}
 
-    judge: RapidfuzzModule[WdcComputersSchema] = RapidfuzzModule(
+    judge: RapidfuzzMatcher[WdcComputersSchema] = RapidfuzzMatcher(
         field_extractors={"title": (lambda r: r.title, 1.0)},
         algorithm="token_set_ratio",
     )

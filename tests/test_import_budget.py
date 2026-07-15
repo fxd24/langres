@@ -2,7 +2,7 @@
 
 Two concerns, both closed by making ``langres/__init__.py``'s import chain --
 ``langres.core``, ``langres.clients``, ``langres.core.blockers``,
-``langres.core.modules`` -- resolve heavy/optional-dependency symbols lazily
+``langres.core.matchers`` -- resolve heavy/optional-dependency symbols lazily
 (PEP 562 ``__getattr__``) instead of eager top-level imports:
 
 1. **Import weight**: a bare ``import langres`` must not pull torch, litellm,
@@ -210,8 +210,8 @@ def test_eval_report_stays_import_light() -> None:
 
 # ``langres.data.registry.list_methods`` is a public, import-light discovery API
 # (exported from ``langres.data``): it must return the method NAMES without
-# pulling ``langres.methods`` — which imports VectorBlocker / RandomForestJudge /
-# EmbeddingScoreJudge at module scope, dragging in faiss / scikit-learn /
+# pulling ``langres.methods`` — which imports VectorBlocker / RandomForestMatcher /
+# EmbeddingScoreMatcher at module scope, dragging in faiss / scikit-learn /
 # sentence-transformers. The names live in the ``langres._method_names`` leaf so
 # a core-only (or ``[semantic]``-only) user can list them. Subprocess-based for a
 # fresh import state (this pytest process is already polluted by other tests).
@@ -331,14 +331,14 @@ def test_import_langres_does_not_leak_env_from_dotenv(tmp_path: Path) -> None:
 
     Reproduces the actual footgun: litellm's import runs ``load_dotenv()``,
     which walks up the directory tree from cwd looking for a ``.env`` file
-    and populates ``os.environ`` from it -- independent of any judge= choice.
+    and populates ``os.environ`` from it -- independent of any matcher= choice.
     Runs the subprocess with cwd set to a directory containing exactly that
     kind of ``.env``; since litellm must stay out of sys.modules (previous
     test), the key must never appear.
 
     Explicitly strips ``OPENROUTER_API_KEY`` from the child's inherited
     environment first: an *earlier* test in this suite legitimately importing
-    litellm (e.g. to test ``LLMJudge`` directly) can itself trigger
+    litellm (e.g. to test ``LLMMatcher`` directly) can itself trigger
     ``load_dotenv()`` in THIS pytest process, populating the real key from the
     repo's own ``.env`` a few directories up -- that's a pre-existing fact of
     running this suite locally with a real key configured, not a regression
@@ -390,25 +390,25 @@ class TestCoreLazyGetattr:
         pytest.importorskip("litellm", reason="requires the [llm] extra")
         import langres.core as core
 
-        from langres.core.modules.llm_judge import LLMJudge
+        from langres.core.matchers.llm_judge import LLMMatcher
 
-        assert core.LLMJudge is LLMJudge
+        assert core.LLMMatcher is LLMMatcher
 
     def test_random_forest_judge_resolves(self) -> None:
         pytest.importorskip("sklearn", reason="requires the [trained] extra")
         import langres.core as core
 
-        from langres.core.modules.random_forest_judge import RandomForestJudge
+        from langres.core.matchers.random_forest_judge import RandomForestMatcher
 
-        assert core.RandomForestJudge is RandomForestJudge
+        assert core.RandomForestMatcher is RandomForestMatcher
 
     def test_select_judge_resolves(self) -> None:
         pytest.importorskip("dspy", reason="requires the [llm] extra")
         import langres.core as core
 
-        from langres.core.modules.select_judge import SelectJudge
+        from langres.core.matchers.select_judge import SelectMatcher
 
-        assert core.SelectJudge is SelectJudge
+        assert core.SelectMatcher is SelectMatcher
 
     def test_embeddings_and_indexes_symbols_resolve(self) -> None:
         pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
@@ -443,8 +443,8 @@ class TestCoreLazyGetattr:
             pytest.skip("litellm is installed ([llm] extra present) -- nothing to observe")
         import langres.core as core
 
-        with pytest.raises(ImportError, match=r"langres\.core\.LLMJudge.*langres\[llm\]"):
-            core.LLMJudge  # noqa: B018
+        with pytest.raises(ImportError, match=r"langres\.core\.LLMMatcher.*langres\[llm\]"):
+            core.LLMMatcher  # noqa: B018
 
     def test_random_forest_judge_raises_actionable_import_error_when_trained_absent(self) -> None:
         """Core-only install (no [trained]): a real, un-simulated ImportError (see above)."""
@@ -453,9 +453,9 @@ class TestCoreLazyGetattr:
         import langres.core as core
 
         with pytest.raises(
-            ImportError, match=r"langres\.core\.RandomForestJudge.*langres\[trained\]"
+            ImportError, match=r"langres\.core\.RandomForestMatcher.*langres\[trained\]"
         ):
-            core.RandomForestJudge  # noqa: B018
+            core.RandomForestMatcher  # noqa: B018
 
     def test_select_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
         """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""
@@ -463,8 +463,8 @@ class TestCoreLazyGetattr:
             pytest.skip("dspy is installed ([llm] extra present) -- nothing to observe")
         import langres.core as core
 
-        with pytest.raises(ImportError, match=r"langres\.core\.SelectJudge.*langres\[llm\]"):
-            core.SelectJudge  # noqa: B018
+        with pytest.raises(ImportError, match=r"langres\.core\.SelectMatcher.*langres\[llm\]"):
+            core.SelectMatcher  # noqa: B018
 
     def test_submodules_resolve_to_the_module_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Attribute access resolves each submodule via ``__getattr__``.
@@ -648,49 +648,49 @@ class TestBlockersPackageLazyGetattr:
 
 
 class TestModulesPackageLazyGetattr:
-    """``langres.core.modules.__getattr__`` for LLMJudge/LLMJudgeModule/CascadeModule."""
+    """``langres.core.matchers.__getattr__`` for LLMMatcher/LLMMatcher/CascadeChainMatcher."""
 
     def test_llm_judge_resolves_via_package_path(self) -> None:
         pytest.importorskip("litellm", reason="requires the [llm] extra")
-        import langres.core.modules as modules_pkg
+        import langres.core.matchers as modules_pkg
 
-        from langres.core.modules.llm_judge import LLMJudge
+        from langres.core.matchers.llm_judge import LLMMatcher
 
-        assert modules_pkg.LLMJudge is LLMJudge
+        assert modules_pkg.LLMMatcher is LLMMatcher
 
     def test_llm_judge_module_resolves_via_package_path(self) -> None:
         pytest.importorskip("litellm", reason="requires the [llm] extra")
-        import langres.core.modules as modules_pkg
+        import langres.core.matchers as modules_pkg
 
-        from langres.core.modules.llm_judge import LLMJudgeModule
+        from langres.core.matchers.llm_judge import LLMMatcher
 
-        assert modules_pkg.LLMJudgeModule is LLMJudgeModule
+        assert modules_pkg.LLMMatcher is LLMMatcher
 
     def test_cascade_module_resolves_via_package_path(self) -> None:
         pytest.importorskip("litellm", reason="requires the [llm] extra")
         pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
-        import langres.core.modules as modules_pkg
+        import langres.core.matchers as modules_pkg
 
-        from langres.core.modules.cascade import CascadeModule
+        from langres.core.matchers.cascade import CascadeChainMatcher
 
-        assert modules_pkg.CascadeModule is CascadeModule
+        assert modules_pkg.CascadeChainMatcher is CascadeChainMatcher
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
-        import langres.core.modules as modules_pkg
+        import langres.core.matchers as modules_pkg
 
         with pytest.raises(AttributeError, match="not_a_real_attribute"):
             modules_pkg.not_a_real_attribute  # noqa: B018
 
     def test_missing_dependency_raises_actionable_import_error(self, monkeypatch) -> None:
-        import langres.core.modules as modules_pkg
+        import langres.core.matchers as modules_pkg
 
         # See the analogous comment in TestCoreLazyGetattr: clear any cached
         # resolution from an earlier test so __getattr__ actually runs.
-        monkeypatch.delitem(vars(modules_pkg), "LLMJudge", raising=False)
+        monkeypatch.delitem(vars(modules_pkg), "LLMMatcher", raising=False)
 
         def _fail(name: str) -> object:
             raise ModuleNotFoundError("No module named 'litellm'")
 
         monkeypatch.setattr(modules_pkg.importlib, "import_module", _fail)
-        with pytest.raises(ImportError, match=r"langres\.core\.modules\.LLMJudge.*llm"):
-            modules_pkg.LLMJudge  # noqa: B018
+        with pytest.raises(ImportError, match=r"langres\.core\.modules\.LLMMatcher.*llm"):
+            modules_pkg.LLMMatcher  # noqa: B018

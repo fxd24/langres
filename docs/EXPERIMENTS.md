@@ -42,7 +42,7 @@ print(table.to_markdown())          # BCubed-F1 + pair-F1 + cost per method
 from langres.core.benchmark import evaluate_judge_on_candidates
 
 result, judgements = evaluate_judge_on_candidates(
-    compiled_judge,        # a Module instance (e.g. a compiled DSPyJudge)
+    compiled_judge,        # a Matcher instance (e.g. a compiled DSPyMatcher)
     candidates,            # a FIXED candidate set (a pair split, or a blocked band)
     gold_pairs,            # set[frozenset[str]] — order-independent true matches
     grid=(0.1, 0.3, 0.5, 0.7, 0.9),
@@ -105,7 +105,7 @@ seam for this, and it dispatches on which of two runtime-checkable protocols
 (`langres.core.fit`) the judge implements:
 
 - **`UnsupervisedFitMixin.fit_unlabeled(candidates)`** — learns with **no**
-  labels. `FellegiSunterJudge` (classical Fellegi-Sunter EM) is the first
+  labels. `FellegiSunterMatcher` (classical Fellegi-Sunter EM) is the first
   example: it binarizes each `ComparisonVector`'s similarities into
   agree/disagree itself (never asking the comparator to emit `MISMATCH` — that
   would change `combine_present` scoring for every other judge), estimates
@@ -114,7 +114,7 @@ seam for this, and it dispatches on which of two runtime-checkable protocols
   upward), and learns m-probabilities + the match prior via log-space EM.
   Called with `resolver.fit(records)` — no `labels=`.
 - **`SupervisedFitMixin.fit(candidates, labels)`** — learns **with** labels.
-  `RandomForestJudge` (a Magellan-style sklearn `RandomForestClassifier` over
+  `RandomForestMatcher` (a Magellan-style sklearn `RandomForestClassifier` over
   `ComparisonVector.similarities`) is the example: `resolver.fit(records,
   labels=[...])`, positionally aligned with the blocked candidates. Omitting
   `labels=` raises — a trainable module that silently never trains is exactly
@@ -152,11 +152,11 @@ fresh-process `Resolver.load` (see `tests/core/judges/test_fellegi_sunter_judge.
 
 ```python
 from dspy.utils.dummies import DummyLM        # zero-spend; swap for dspy.LM when paid
-from langres.core.modules.dspy_judge import DSPyJudge
+from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.benchmark import evaluate_judge_on_candidates
 
 # 1. build
-judge = DSPyJudge(lm=DummyLM([...]), model="dummy", entity_noun="product")
+judge = DSPyMatcher(lm=DummyLM([...]), model="dummy", entity_noun="product")
 
 # 2. compile  (BootstrapFewShot is the zero-spend path; "mipro" for MIPROv2)
 judge.compile(trainset, optimizer="bootstrap")   # trainset = list[dspy.Example]
@@ -230,7 +230,7 @@ context = RunContext(
 )
 
 with capture_run(context, store=RunStore("runs/langres_runs.jsonl")) as run:
-    result = dedupe(records, judge="string", threshold=0.6)
+    result = dedupe(records, matcher="string", threshold=0.6)
     run.log_metrics({"f1": 0.75}, metric_definition="pair_f1", headline_metric=0.75)
     run.record_cost(0.0)               # = SpendMonitor.spent for a paid judge
 
@@ -294,11 +294,11 @@ captures a two-threshold sweep, reads it back, and prints the two-run metric dif
 plus the agent two-liner. Run it:
 `uv run python examples/research/experiment_tracking_demo.py`.
 
-## W3 paid smoke — SelectJudge vs pairwise, measured
+## W3 paid smoke — SelectMatcher vs pairwise, measured
 
 `examples/research/w3_paid_smoke.py` is the ≤$10, SpendMonitor-capped operator run
 that puts both surfaces above on a real model at once: it grades a **set-wise
-`SelectJudge`** (one LLM call per anchor group) against an ordinary **pairwise
+`SelectMatcher`** (one LLM call per anchor group) against an ordinary **pairwise
 judge** (one call per pair), same model on both arms, side by side on
 Amazon-Google via `evaluate_judge_on_candidates` / `pair_pr_curve`. Verified at $0
 with `DummyLM` in `tests/examples/test_w3_paid_smoke.py`; the single paid run cost
@@ -323,7 +323,7 @@ and reproduction commands:
 from langres import JudgementLog, dedupe
 
 log = JudgementLog("runs/judgements.jsonl")
-result = dedupe(records, judge="string", threshold=0.6, log=log)
+result = dedupe(records, matcher="string", threshold=0.6, log=log)
 
 rows = log.read()  # round-trips every line written
 ```
@@ -339,9 +339,9 @@ default** — pass `JudgementLog(path, features=True)` to additionally log
 similarities, token counts, ...): this may contain PII (the record content a
 judge reasoned over), and JSONL is plaintext on disk.
 
-Implementation note: `JudgementLog` is a plain file sink, not a `Module`.
-`log=` wraps the resolved judge in a `LoggingModule` — a small boundary
-component (the same pattern `_SpendCappedModule` uses) that logs each
+Implementation note: `JudgementLog` is a plain file sink, not a `Matcher`.
+`log=` wraps the resolved judge in a `LoggingMatcher` — a small boundary
+component (the same pattern `_SpendCappedMatcher` uses) that logs each
 `PairwiseJudgement` as it streams past without materializing the whole
 judgement stream. It is intentionally excluded from `Resolver` artifacts —
 `link()`/`dedupe()` never persist their internal resolver, so this isn't a
@@ -400,7 +400,7 @@ with `examples/data/flywheel/generate_fixtures.py`.
 - `examples/research/portfolio_race.py` — registry-driven race over every loadable
   benchmark (offline by default; optional capped LLM row).
 - `examples/research/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
-- `examples/research/m4_dspy_judge.py` — DSPyJudge compile + save/load round-trip.
+- `examples/research/m4_dspy_judge.py` — DSPyMatcher compile + save/load round-trip.
 - `examples/research/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
 - `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
 - `examples/flywheel_threshold_harvest.py` — harvest verdicts + corrections → a

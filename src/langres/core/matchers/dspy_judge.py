@@ -1,14 +1,14 @@
-"""DSPyJudge: a serializable, compilable DSPy ChainOfThought entity-matching Module.
+"""DSPyMatcher: a serializable, compilable DSPy ChainOfThought entity-matching Matcher.
 
-This is the M4 "learnable scorer seam": a :class:`~langres.core.module.Module`
+This is the M4 "learnable scorer seam": a :class:`~langres.core.matcher.Matcher`
 whose match decision comes from a DSPy ``ChainOfThought`` program over a typed
 :class:`PairwiseMatchSignature`. Because the program is a DSPy artifact it can be
 **compiled** against a gold set (``BootstrapFewShot`` / ``MIPROv2``) to tune the
 prompt from data — the direct answer to M3's finding that a cheap judge's
 precision collapses under a generic, hand-written prompt.
 
-It mirrors :class:`~langres.core.modules.llm_judge.LLMJudge`'s serializable shape
-so a Resolver with a DSPyJudge in the ``module`` slot can ``save`` / ``load``:
+It mirrors :class:`~langres.core.matchers.llm_judge.LLMMatcher`'s serializable shape
+so a Resolver with a DSPyMatcher in the ``module`` slot can ``save`` / ``load``:
 
 - pure :attr:`config` (``model`` / ``temperature`` / ``entity_noun`` — never the
   ``dspy.LM`` client or the program bytes);
@@ -35,7 +35,7 @@ import dspy
 from dspy.utils.exceptions import AdapterParseError
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import RunContext, RunStore, capture_run
@@ -128,14 +128,14 @@ def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
 
 
 @register("dspy_judge")
-class DSPyJudge(Module[SchemaT]):
+class DSPyMatcher(Matcher[SchemaT]):
     """DSPy ``ChainOfThought`` entity-matching scorer — compilable and serializable.
 
     Example:
         # Zero-spend: inject a DummyLM, compile against a gold set, then score.
         from dspy.utils.dummies import DummyLM
 
-        judge = DSPyJudge(lm=DummyLM([...]), entity_noun="product")
+        judge = DSPyMatcher(lm=DummyLM([...]), entity_noun="product")
         judge.compile(trainset, optimizer="bootstrap")
         for j in judge.forward(candidates):
             print(j.score, j.reasoning, j.provenance["cost_usd"])
@@ -153,7 +153,7 @@ class DSPyJudge(Module[SchemaT]):
         entity_noun: str = "entity",
         program: Any = None,
     ) -> None:
-        """Initialize a DSPyJudge.
+        """Initialize a DSPyMatcher.
 
         Args:
             lm: Optional pre-built DSPy LM (``dspy.LM`` or ``DummyLM``). When
@@ -213,7 +213,7 @@ class DSPyJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "DSPyJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "DSPyMatcher[SchemaT]":
         """Rebuild a fresh (uncompiled) judge from :attr:`config`.
 
         The program is uncompiled; :meth:`load_state` overwrites it with the saved
@@ -231,7 +231,7 @@ class DSPyJudge(Module[SchemaT]):
         return (prompt_tokens + completion_tokens) / 1000.0 * self.price_per_1k_tokens
 
     def _render_entity(self, entity: SchemaT) -> str:
-        """Render an entity for the prompt (LLMJudge's JSON convention)."""
+        """Render an entity for the prompt (LLMMatcher's JSON convention)."""
         return entity.model_dump_json(indent=2)
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
@@ -250,7 +250,7 @@ class DSPyJudge(Module[SchemaT]):
         """
         if not self._compiled:
             logger.warning(
-                "DSPyJudge.forward is running on an UNCOMPILED program — the prompt "
+                "DSPyMatcher.forward is running on an UNCOMPILED program — the prompt "
                 "is untuned. Call compile(trainset) before benchmarking to avoid "
                 "silently scoring with an untuned judge."
             )
@@ -264,7 +264,7 @@ class DSPyJudge(Module[SchemaT]):
                 with dspy.context(lm=lm, track_usage=True):
                     prediction = self._program(left=left, right=right)
             except AdapterParseError as error:
-                logger.warning("DSPyJudge parse failure for %s vs %s: %s", left_id, right_id, error)
+                logger.warning("DSPyMatcher parse failure for %s vs %s: %s", left_id, right_id, error)
                 # The LM completion WAS billed even though parsing failed. Salvage
                 # whatever token counts DSPy recorded and flag the cost as
                 # untrackable (``cost_untracked``) so downstream accounting does not

@@ -21,7 +21,7 @@ This POC focuses exclusively on the `langres.core` layer—the foundational prim
 
 The langres architecture proposes three key innovations:
 
-1. **Separation of Concerns**: Blocker (candidate generation + schema normalization) and Module (comparison logic) as distinct, composable primitives
+1. **Separation of Concerns**: Blocker (candidate generation + schema normalization) and Matcher (comparison logic) as distinct, composable primitives
 2. **Universal Data Contracts**: `ERCandidate` and `PairwiseJudgement` as the type-safe interfaces between all components
 3. **Provenance-First Design**: Every decision carries full metadata for observability and future optimization
 
@@ -35,7 +35,7 @@ We will implement three progressively sophisticated entity resolution strategies
 **Pure rapidfuzz with tunable thresholds**
 
 This baseline validates:
-- The `Module.forward()` abstraction feels natural for rule-based logic
+- The `Matcher.forward()` abstraction feels natural for rule-based logic
 - `PairwiseJudgement` provenance captures decision metadata
 - The architecture doesn't add unnecessary complexity for simple cases
 
@@ -45,9 +45,9 @@ This baseline validates:
 **Embedding-based blocking with cosine similarity matching**
 
 This intermediate approach validates:
-- The Blocker/Module separation clarifies responsibilities
+- The Blocker/Matcher separation clarifies responsibilities
 - ANN-based candidate generation integrates cleanly
-- Schema normalization in Blocker keeps Module logic portable
+- Schema normalization in Blocker keeps Matcher logic portable
 
 **Why this matters**: This is the modern ER baseline—embeddings + approximate nearest neighbor search. Our framework must make this pattern trivial.
 
@@ -55,7 +55,7 @@ This intermediate approach validates:
 **Vector blocking for recall, LLM judgment for precision**
 
 This target architecture validates:
-- Cascade patterns (cheap checks → expensive LLM) fit the Module abstraction
+- Cascade patterns (cheap checks → expensive LLM) fit the Matcher abstraction
 - Cost and reasoning tracking work via provenance
 - The system can achieve competitive accuracy (≥0.85 BCubed F1)
 
@@ -65,7 +65,7 @@ This target architecture validates:
 
 ### Functional Requirements
 - All three approaches run end-to-end on the same test data
-- Swapping Module implementations requires minimal code changes
+- Swapping Matcher implementations requires minimal code changes
 - Every `PairwiseJudgement` contains actionable provenance
 
 ### Quality Requirements
@@ -86,14 +86,14 @@ This target architecture validates:
 - `CompanySchema`: Domain model for test data
 
 ### Core Primitives
-- `Module`: Abstract base for all comparison logic
+- `Matcher`: Abstract base for all comparison logic
 - `Blocker`: Abstract base for candidate generation + normalization
 - `Clusterer`: Graph-based entity formation (transitive closure)
 
 ### Concrete Implementations
-- **Approach 1**: `RapidfuzzModule`
+- **Approach 1**: `RapidfuzzMatcher`
 - **Approach 2**: `VectorBlocker`, `EmbeddingModule`
-- **Approach 3**: `LLMJudgeModule`, `CascadeModule`
+- **Approach 3**: `LLMMatcher`, `CascadeChainMatcher`
 
 ### Evaluation Infrastructure
 - BCubed F1 metric (cluster-level quality)

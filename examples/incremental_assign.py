@@ -49,7 +49,7 @@ BATCH = [
 
 
 def main() -> None:
-    resolver = Resolver.from_schema(CompanySchema, judge="string", threshold=0.6)
+    resolver = Resolver.from_schema(CompanySchema, matcher="string", threshold=0.6)
 
     # 1. Anchor the resolver on the batch — one stable entity id per record,
     #    including the singletons a batch resolve() would have dropped.

@@ -9,8 +9,8 @@ This document catalogs external resources that inform langres's design, architec
 ### PyTorch
 
 - **URL**: <https://pytorch.org/>
-- **What we learn**: Modular, composable primitives that can be combined flexibly. The `nn.Module` abstraction for stateful components with `forward()` methods. Clear separation between high-level (`torch.nn`) and low-level (`torch.Tensor`) APIs.
-- **Applied in langres**: Our `Module` abstraction mirrors PyTorch's design. The two-layer API (tasks vs. core) follows PyTorch's philosophy of simple primitives + convenient wrappers.
+- **What we learn**: Modular, composable primitives that can be combined flexibly. The `nn.Matcher` abstraction for stateful components with `forward()` methods. Clear separation between high-level (`torch.nn`) and low-level (`torch.Tensor`) APIs.
+- **Applied in langres**: Our `Matcher` abstraction mirrors PyTorch's design. The two-layer API (tasks vs. core) follows PyTorch's philosophy of simple primitives + convenient wrappers.
 
 ### PyTorch Lightning
 

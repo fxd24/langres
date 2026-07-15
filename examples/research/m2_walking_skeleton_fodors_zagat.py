@@ -1,7 +1,7 @@
 """M2 walking skeleton — held-out BCubed baseline on Fodors-Zagat.
 
 Runs the full M2 pipeline end-to-end, deterministically and with ZERO spend
-(real MiniLM embeddings for blocking; the WeightedAverageJudge is a zero-cost
+(real MiniLM embeddings for blocking; the WeightedAverageMatcher is a zero-cost
 feature-bag scorer — no LLM):
 
     load -> split (seed=0) -> tune threshold on TRAIN -> build resolver at the

@@ -1,4 +1,4 @@
-"""FellegiSunterJudge: the first "learn with no labels" judge (W1.2, S2).
+"""FellegiSunterMatcher: the first "learn with no labels" judge (W1.2, S2).
 
 Classical Fellegi-Sunter probabilistic record linkage, fit via EM with **no
 labels**. The judge rides the existing :class:`~langres.core.feature.ComparisonVector`
@@ -30,7 +30,7 @@ documented approximation, not full-corpus random sampling.
 
 m-probabilities (the per-feature agreement rate under a true match) and the
 match prior are learned via **EM in log-space**, holding u fixed. See
-:meth:`FellegiSunterJudge._run_em` for the exact numerics: Laplace smoothing,
+:meth:`FellegiSunterMatcher._run_em` for the exact numerics: Laplace smoothing,
 probability clamping, an m>=u guard against the classical two-cluster
 label-switch failure mode, and a convergence check with a max-iteration
 fallback to the safe initial priors (never returns numerically degenerate
@@ -46,7 +46,7 @@ from typing import ClassVar, cast
 from langres.core.comparator import StringComparator
 from langres.core.feature import ComparisonVector
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
@@ -126,12 +126,12 @@ def _sample_random_pairs(
 
 
 @register("fellegi_sunter_judge")
-class FellegiSunterJudge(Module[SchemaT]):
+class FellegiSunterMatcher(Matcher[SchemaT]):
     """Classical Fellegi-Sunter judge, fit via EM with no labels.
 
     Consumes each candidate's attached ``comparison`` (a
     :class:`~langres.core.feature.ComparisonVector`), same as
-    ``WeightedAverageJudge``, but requires its own :class:`Comparator`
+    ``WeightedAverageMatcher``, but requires its own :class:`Comparator`
     instance at construction time -- unlike a purely-scoring judge, FS needs
     the ability to *compute new comparisons* for synthetic random pairs during
     :meth:`fit_unlabeled` (the u-probability estimation step).
@@ -149,7 +149,7 @@ class FellegiSunterJudge(Module[SchemaT]):
         tol: float = 1e-4,
         random_state: int = 0,
     ) -> None:
-        """Initialize an (unfit) FellegiSunterJudge.
+        """Initialize an (unfit) FellegiSunterMatcher.
 
         Args:
             comparator: Computes ComparisonVectors for both the fitted
@@ -218,7 +218,7 @@ class FellegiSunterJudge(Module[SchemaT]):
             vector = candidate.comparison
             if vector is None:
                 raise ValueError(
-                    "FellegiSunterJudge requires candidates carrying a comparison "
+                    "FellegiSunterMatcher requires candidates carrying a comparison "
                     "vector — add a Comparator to the pipeline."
                 )
             patterns.append(_binarize(vector, self.agreement_threshold))
@@ -286,7 +286,7 @@ class FellegiSunterJudge(Module[SchemaT]):
 
         if not converged:
             logger.warning(
-                "FellegiSunterJudge EM did not converge within max_em_iter=%d "
+                "FellegiSunterMatcher EM did not converge within max_em_iter=%d "
                 "(tol=%g); falling back to the safe initial priors "
                 "(prior=%.2f, m=%.2f per feature) for a usable judge.",
                 self.max_em_iter,
@@ -361,7 +361,7 @@ class FellegiSunterJudge(Module[SchemaT]):
         return new_prior, new_m
 
     # ------------------------------------------------------------------
-    # Scoring (Module)
+    # Scoring (Matcher)
     # ------------------------------------------------------------------
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
@@ -376,7 +376,7 @@ class FellegiSunterJudge(Module[SchemaT]):
         """
         if self.prior is None or self.m_prob is None or self.u_prob is None:
             raise ValueError(
-                "FellegiSunterJudge must be fit before forward(): call "
+                "FellegiSunterMatcher must be fit before forward(): call "
                 "fit_unlabeled(candidates) directly, or resolver.fit(records) "
                 "on a Resolver whose module is this judge."
             )
@@ -387,7 +387,7 @@ class FellegiSunterJudge(Module[SchemaT]):
             vector = candidate.comparison
             if vector is None:
                 raise ValueError(
-                    "FellegiSunterJudge requires candidates carrying a comparison "
+                    "FellegiSunterMatcher requires candidates carrying a comparison "
                     "vector — add a Comparator to the pipeline."
                 )
             pattern = _binarize(vector, self.agreement_threshold)
@@ -410,7 +410,7 @@ class FellegiSunterJudge(Module[SchemaT]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        """Explore scores without ground truth (shared Module utility)."""
+        """Explore scores without ground truth (shared Matcher utility)."""
         return _inspect_scores_impl(judgements, sample_size)
 
     # ------------------------------------------------------------------
@@ -439,7 +439,7 @@ class FellegiSunterJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "FellegiSunterJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "FellegiSunterMatcher[SchemaT]":
         """Reconstruct from :attr:`config`, restoring any fitted state."""
         comparator: StringComparator[SchemaT] = StringComparator.from_config(
             cast("dict[str, object]", config["comparator_config"])

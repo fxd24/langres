@@ -1,19 +1,19 @@
-"""Fit-hook contracts: how a Module opts into being trainable (W1.0, E6).
+"""Fit-hook contracts: how a Matcher opts into being trainable (W1.0, E6).
 
 Two runtime-checkable, structural `Protocol`s -- **not** abstract methods on
-the base ``Module``. Adding an abstract ``fit``/``fit_unlabeled`` to ``Module``
-would break every existing, non-learnable module (``WeightedAverageJudge``,
-``LLMJudge``, ...), which is not the goal here: most judges stay heuristic or
+the base ``Matcher``. Adding an abstract ``fit``/``fit_unlabeled`` to ``Matcher``
+would break every existing, non-learnable module (``WeightedAverageMatcher``,
+``LLMMatcher``, ...), which is not the goal here: most judges stay heuristic or
 zero-shot and never need a fit hook. Instead, a module *opts in* structurally
 by implementing the method with the matching name and signature; callers (the
 Resolver) detect this with ``isinstance(module, SupervisedFitMixin)`` /
 ``isinstance(module, UnsupervisedFitMixin)``.
 
 - ``SupervisedFitMixin``: for judges that learn from labeled pairs (e.g. a
-  future ``RandomForestJudge`` fitting an sklearn RandomForest over
+  future ``RandomForestMatcher`` fitting an sklearn RandomForest over
   ``ComparisonVector.similarities``).
 - ``UnsupervisedFitMixin``: for judges that learn without labels (e.g. a
-  future ``FellegiSunterJudge`` fitting m/u probabilities via EM).
+  future ``FellegiSunterMatcher`` fitting m/u probabilities via EM).
 
 See ``Resolver.fit()`` for how these are consumed, and
 docs/TECHNICAL_OVERVIEW.md ("Fit-hook contract") for the full picture.
@@ -34,7 +34,7 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 @runtime_checkable
 class SupervisedFitMixin(Protocol[SchemaT]):
-    """A Module that learns from labeled candidate pairs.
+    """A Matcher that learns from labeled candidate pairs.
 
     Implement ``fit(candidates, labels)`` to opt in; no subclassing required
     (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
@@ -55,7 +55,7 @@ class SupervisedFitMixin(Protocol[SchemaT]):
 
 @runtime_checkable
 class UnsupervisedFitMixin(Protocol[SchemaT]):
-    """A Module that learns from candidate pairs without labels.
+    """A Matcher that learns from candidate pairs without labels.
 
     Implement ``fit_unlabeled(candidates)`` to opt in; no subclassing required
     (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
