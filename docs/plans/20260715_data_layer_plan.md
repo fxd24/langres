@@ -27,8 +27,10 @@ gaps (exploration 2026-07-15):
 
 **Decision (maintainer, 2026-07-15):** build these as **one coherent data-layer arc**
 (shared substrate + the first two miners + the tearsheet together), with the **full
-metric battery including embeddings**, and — the load-bearing constraint —
-**flexible / composable / graceful**, not a monolith.
+metric battery including embeddings**, and — the load-bearing constraints —
+**flexible / composable / graceful, not a monolith**; **embeddings precomputed &
+consumed-only** (never generated; multiple first-class, one default); and **text-first,
+HTML optional** (the object is the source of truth, rendering is a thin layer).
 
 ---
 
@@ -48,10 +50,21 @@ you compose**.
    judgement log, no gold) means *that section is simply absent* — never an exception,
    never a blocked report. A profiler validates its own inputs and no-ops when they're
    missing.
-4. **Multiple embeddings are first-class.** You pass N embedding models
-   (`{model_name: matrix}`) and get **one section per model** plus a **comparison
-   panel** (separability side-by-side). Adding an embedder is passing one more entry.
-5. **Reuse the `$0` tearsheet infra.** Inline-SVG (`core/_svg.py`), self-contained
+4. **Embeddings are consumed, never generated; multiple are first-class.** The report
+   takes **precomputed** embeddings — by in-memory matrix *or* by location (a `.npy`
+   path, parquet, a vector-store handle) — keyed by model name. It never loads an
+   embedder or generates vectors, so it carries **no `[semantic]` dependency** (profiling
+   a given matrix needs only numpy). **Good default = one embedding model (+ one blocker
+   view)**; a user who wants more passes N sources → **one section per model + a
+   comparison panel**. Adding an embedder is one more entry.
+5. **Text-first; HTML is a nice-to-have renderer.** The computed stats object is the
+   source of truth; rendering is a thin layer over it. `print`/markdown/dict are the
+   **primary** surfaces (many users live in a terminal or notebook and never open HTML);
+   the `$0` HTML tearsheet is **optional** (§2.5). This mirrors QuantStats
+   (`reports.metrics()` text vs `reports.html()`), statsmodels (`.summary()` vs
+   `.as_html()`), ydata-profiling (`description_set` vs `.to_file`) and sklearn
+   (`classification_report(output_dict=…)`).
+6. **Reuse the `$0` tearsheet infra.** Inline-SVG (`core/_svg.py`), self-contained
    HTML, no CDN/matplotlib, light/dark — the exact pattern `EvalReport` already proves.
 
 The miners obey the same ethos: **plain composable functions** producing `LabeledPair`s
@@ -70,11 +83,13 @@ report a *bag of sections* instead of a monolith.
 # core/data_profile.py  (leaf module — same layering rules as eval_report.py)
 class ProfileSection(BaseModel):                 # frozen
     title: str
-    def to_dict(self) -> dict: ...               # model_dump
+    def to_dict(self) -> dict: ...               # model_dump (machine / JSON)
     def to_markdown(self) -> str: ...            # this block's markdown
+    def __repr__(self) -> str: ...               # -> to_markdown; prints cleanly in a REPL/notebook
     @property
     def summary(self) -> dict: ...               # numeric headline
-    def panels(self) -> list[str]: ...           # inline-SVG/HTML <section>s (reuses _svg)
+    def rows(self) -> list[dict]: ...            # tabular rows -> pd.DataFrame(section.rows()), no pandas dep
+    def panels(self) -> list[str]: ...           # inline-SVG/HTML <section>s (reuses _svg) — HTML only
 ```
 
 Concrete sections (each `ProfileSection`):
@@ -84,7 +99,8 @@ Concrete sections (each `ProfileSection`):
 | `LabelStructureSection` | `gold_clusters`, `gold_pairs` (+ optional splits) | positive prevalence (pos:neg), cluster-size distribution, singleton rate, linkage-vs-dedup shape, train/valid/test balance + **leakage check** |
 | `CorpusFieldSection` | `corpus` (records `.model_dump()`), per source | per-field null/missing rate, cardinality/entropy, value- & token-length distribution, source lopsidedness |
 | `SeparabilitySection` | a pair-set + a **pluggable signal** (string sim default; or an embedding cosine) | score histogram **positives vs negatives**, overlap/AUC — "how hard is this dataset" |
-| `EmbeddingSection` (one **per model**) | an embedding matrix + `model_name` (+ `gold_pairs` for the labeled view) | model name/dim (provenance), vector-norm dist, **cosine positives-vs-negatives**, recall@k of true match in embedding space |
+| `BlockingSection` (one **per blocker**, default one) | a blocker's candidate pairs + `gold_pairs` | candidate count, **reduction ratio**, **pair-completeness** (recall ceiling), candidates-per-record skew — "how blockable is this data" |
+| `EmbeddingSection` (one **per model**, default one) | a **precomputed** `EmbeddingSource` (matrix *or* location) + `model_name` (+ `gold_pairs` for the labeled view) | model name/dim (provenance), vector-norm dist, **cosine positives-vs-negatives**, recall@k of true match in embedding space |
 | `EmbeddingComparisonSection` | ≥2 `EmbeddingSection`s | separability by model side-by-side — "which embedder suits this data" |
 | `MiningReadinessSection` | a mined `LabeledPair` set (+ optional judgement log) | hard-pos/neg counts, class balance after mining, difficulty histogram (EL2N \|1−p\|), **label-noise estimate** |
 
@@ -93,11 +109,15 @@ Concrete sections (each `ProfileSection`):
 ```python
 class DataProfileReport(BaseModel):              # frozen
     sections: list[ProfileSection]
-    def to_html(self, *, title=...) -> str: ...  # renders present sections' panels only
-    def to_markdown(self) -> str: ...
-    def to_dict(self) -> dict: ...
+    # primary surfaces (text-first):
+    def to_markdown(self) -> str: ...            # concatenate sections' markdown
+    def __repr__(self) -> str: ...               # -> to_markdown; `print(report)` just works
+    def to_dict(self) -> dict: ...               # {section.title: section.to_dict()}
     @property
-    def summary(self) -> dict: ...
+    def summary(self) -> dict: ...               # flattened headline numbers
+    def __getitem__(self, title: str) -> ProfileSection: ...   # pull one section out
+    # optional renderer (nice-to-have):
+    def to_html(self, *, title=...) -> str: ...  # renders present sections' panels only
 ```
 
 The report **holds whatever sections you gave it** and renders exactly those. It does
@@ -112,9 +132,15 @@ family = a new `ProfileSection` subclass + a profiler function; the report is un
 ```python
 label = profile_label_structure(gold_clusters, gold_pairs)
 fields = profile_fields(corpus)
-emb    = profile_embeddings({"all-MiniLM-L6-v2": m1, "bge-large-en": m2},
-                            gold_pairs=gold_pairs)   # -> [Section, Section, ComparisonSection]
-DataProfileReport([label, fields, *emb]).to_html()   # renders only these
+emb    = profile_embeddings(                            # precomputed sources, matrix OR location
+    [ArraySource("all-MiniLM-L6-v2", ids, m1),         #   in-memory matrix
+     NpySource("bge-large-en", "vecs/bge.npy", ids)],  #   or a path on disk
+    gold_pairs=gold_pairs)                              # -> [Section, Section, ComparisonSection]
+
+report = DataProfileReport([label, fields, *emb])
+print(report)                    # text-first: markdown table straight to the terminal
+report.summary                   # {"pos_prevalence": 0.0012, "n_clusters": 1076, ...}
+report.to_html("report.html")    # optional nice-to-have tearsheet
 ```
 
 **(b) Convenience with sensible defaults — everything optional, nothing blocks:**
@@ -122,13 +148,15 @@ DataProfileReport([label, fields, *emb]).to_html()   # renders only these
 ```python
 DataProfileReport.from_benchmark(
     get_benchmark("abt_buy"),
-    embeddings={"all-MiniLM-L6-v2": m1},   # OMIT -> no embedding section, no error
-    include={"labels", "fields", "separability", "embeddings"},  # optional subset selector
+    embeddings=[ArraySource("all-MiniLM-L6-v2", ids, m1)],  # OMIT -> no embedding section, no error
+    blocker=VectorBlocker(...),           # OMIT -> no blocking section, no error
+    include={"labels", "fields", "separability"},           # optional subset selector
 )
 ```
 
-Omitting `embeddings=` yields a report without the embedding sections — *no exception*.
-`include=` narrows the default set. Both paths return the same `DataProfileReport`.
+**Default set** = labels + fields + separability + (blocking if a blocker is passed) +
+(one embedding section per source passed). Omitting `embeddings=`/`blocker=` drops those
+sections — *no exception*. `include=` narrows further. Both paths return the same object.
 
 ### 2.4 Shared HTML scaffold (non-invasive)
 
@@ -137,6 +165,34 @@ churning it, lift the ~20-line CSS + a `section(title, body)` helper into a tiny
 `core/_report_html.py`; `DataProfileReport` uses it, `EvalReport` is **left untouched**
 (optional later migration, not in this arc — surgical-changes rule). `core/_svg.py`
 chart primitives are already fully shareable as-is.
+
+### 2.5 `EmbeddingSource` — precomputed, matrix or location
+
+The report never generates embeddings. It consumes them through a one-method value so
+matrices, files, and vector stores are interchangeable and new backends need no profiler
+change:
+
+```python
+class EmbeddingSource(Protocol):
+    name: str                                    # model id, for provenance + comparison
+    def vectors_for(self, ids: Sequence[str]) -> np.ndarray: ...   # aligned to record ids
+```
+
+Concrete now: `ArraySource(name, ids, matrix)` (in-memory) and `NpySource(name, path,
+ids)` (a `.npy` on disk). Later, trivially: a parquet source, a Qdrant/faiss handle —
+each just implements `vectors_for`. Profiling only touches numpy; no `[semantic]` dep.
+
+### 2.6 Render targets — text-first, HTML optional (matches the field)
+
+Every section and the report expose the same ladder, so **HTML is never required**:
+
+| Surface | Method | Use | Precedent |
+|---|---|---|---|
+| **Print / terminal / notebook** | `print(report)` / `__repr__` / `to_markdown()` | the default way to read it | statsmodels `.summary()`, QuantStats `reports.metrics()`, pandas `df.info()` |
+| **Headline numbers** | `.summary` (dict) | log it, assert on it, glance | sklearn `classification_report(output_dict=True)` |
+| **Machine / JSON** | `.to_dict()` | persist, diff across runs, feed a dashboard | ydata-profiling `.to_json()` |
+| **Tabular** | `section.rows()` → `pd.DataFrame(...)` | analysis, no pandas dep forced | pandas `describe()` returns a frame |
+| **Tearsheet (nice-to-have)** | `.to_html()` | shareable `$0` self-contained page | QuantStats `reports.html()`, statsmodels `.as_html()` |
 
 ---
 
@@ -154,9 +210,13 @@ Every metric maps to data already in the codebase — nothing needs new pipeline
 - **Separability** ← any pair-set + a pluggable per-pair signal: default a cheap
   `StringComparator` similarity (core-dep only), or an embedding cosine when a matrix is
   present. Reuses the pos/non-pos split logic already in `EvalReport._histogram`.
-- **Embeddings** ← a caller-supplied matrix + `model_name` (numpy only). We **consume**
-  vectors; we do not force generation (see §5). `embeddings.py` already knows
-  `model_name`/`embedding_dim`.
+- **Embeddings** ← a caller-supplied **precomputed** `EmbeddingSource` (matrix or a
+  location) + `model_name` (numpy only). We **consume** vectors; we never generate them
+  (§2.5). `embeddings.py` already knows `model_name`/`embedding_dim` for anyone producing
+  the matrix upstream.
+- **Blocking** ← a blocker's candidate pairs vs `gold_pairs`; reduction ratio +
+  pair-completeness reuse `core/metrics.reduction_ratio` and the blocker-recall path
+  already in `core/analysis.py`.
 - **Mining readiness** ← a mined `LabeledPair` set (§4) + optional `JudgementLog` rows
   for the EL2N difficulty view.
 
@@ -190,15 +250,16 @@ never rework.
 | Need | Dep | Status | Where |
 |---|---|---|---|
 | Numeric profiling (norms, histograms, cosine) | numpy | **core** (already) | all sections |
-| Profile a *given* embedding matrix | numpy only | **core** | `EmbeddingSection` consumes vectors |
-| *Generate* embeddings (optional convenience) | sentence-transformers | `[semantic]`, **lazy** | optional `from_embedder` helper only |
+| Profile a *given* embedding matrix/source | numpy only | **core** | `EmbeddingSection` consumes precomputed vectors |
 | Hard-positive classifier + confident-learning | scikit-learn | `[trained]` (already) | `mine_misclassified`, `denoise_pairs` |
 | Packaged label-noise (later) | cleanlab | **new, optional, deferred** | Wave 3+ if the built-in isn't enough |
+| ~~Generate embeddings~~ | ~~sentence-transformers~~ | **out of scope** | the report never generates — consumed only (§2.5) |
 
-Import-budget rule (`tests/test_import_budget.py`): `core/data_profile.py` is a **leaf**
-that imports only `core.{metrics,benchmark,models,_svg,_report_html}` + numpy. Profiling
-a matrix must **not** pull sentence-transformers; only the optional *generator* helper
-does, behind the lazy `[semantic]` gate.
+The report pulls **no embedding dependency at all** — a decisive simplification from the
+first draft. Import-budget rule (`tests/test_import_budget.py`): `core/data_profile.py`
+is a **leaf** that imports only `core.{metrics,benchmark,models,_svg,_report_html}` +
+numpy, and pulls **no** sentence-transformers / torch / pandas into a bare `import
+langres`.
 
 ## 6. Testing & layering
 
@@ -236,13 +297,21 @@ does, behind the lazy `[semantic]` gate.
 rule. The miners export via the training/`core` surface next to `harvest`/`align_pairs`.
 (Alternative: a dedicated `langres.profile` namespace — flagged as an open decision.)
 
-## 9. Open design decisions (for maintainer review)
+## 9. Decisions
 
+**Settled (maintainer, 2026-07-15):**
+- **Embeddings are consumed-only** — precomputed, by matrix *or* location, multiple
+  first-class, one default. The report generates nothing and carries no `[semantic]` dep.
+- **Text-first, HTML optional** — `print`/markdown/dict are the primary surfaces (field
+  standard: QuantStats/statsmodels/ydata/sklearn); the tearsheet is a nice-to-have.
+- **Good defaults, extensible** — default = labels + fields + separability + one blocker
+  + one embedding; power users add N blockers/embedders; `include=` narrows.
+
+**Still open (recommendation given, will proceed unless redirected):**
 1. **Public namespace:** `langres.eval.DataProfileReport` (report lives with `EvalReport`)
    vs. a dedicated `langres.profile` / `langres.data` facade. *Rec: reuse `langres.eval`*
    — fewer surfaces, and it's the reporting home already.
 2. **Label-noise rail dep:** built-in confident-learning (sklearn, no new dep) now, with
    Cleanlab as an optional extra later. *Rec: built-in first.*
-3. **Separability default signal:** cheap `StringComparator` sim (core-only, always
-   available) as the default "how hard" signal, embeddings when supplied. *Rec: yes —
-   keeps the section dependency-free by default.*
+3. **pandas interop:** expose `section.rows()` (list[dict]) so `pd.DataFrame(...)` works,
+   *without* adding a pandas dependency. *Rec: yes — DX win, zero dep cost.*
