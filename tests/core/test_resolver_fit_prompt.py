@@ -23,7 +23,7 @@ from langres.core.harvest import LabeledPair
 from langres.core.matcher import Matcher
 from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.methods_api import Method
-from langres.core.methods_prompt import MIPRO, Bootstrap, PromptMethod
+from langres.core.methods_prompt import GEPA, MIPRO, Bootstrap, PromptMethod
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
@@ -59,17 +59,21 @@ def _dspy_resolver() -> tuple[Resolver, DSPyMatcher]:
 
 
 def test_prompt_methods_share_kind_prompt() -> None:
-    """Both concrete prompt methods route through the ``kind == "prompt"`` branch."""
+    """All concrete prompt methods route through the ``kind == "prompt"`` branch."""
     assert Bootstrap.kind == "prompt"
     assert MIPRO.kind == "prompt"
+    assert GEPA.kind == "prompt"
     assert issubclass(Bootstrap, PromptMethod) and issubclass(MIPRO, Method)
+    assert issubclass(GEPA, PromptMethod)
 
 
 def test_optimizer_is_classvar_not_a_field() -> None:
     """``optimizer`` is strategy-type identity, not serialized per-instance config."""
     assert Bootstrap.optimizer == "bootstrap"
     assert MIPRO.optimizer == "mipro"
+    assert GEPA.optimizer == "gepa"
     assert "optimizer" not in MIPRO.model_fields
+    assert "optimizer" not in GEPA.model_fields
     assert "kind" not in MIPRO.model_fields
 
 
@@ -90,10 +94,44 @@ def test_describe_renders_optimizer_and_budget() -> None:
     )
 
 
+def test_gepa_describe_renders_budget_knob_and_dollar_cap() -> None:
+    """GEPA's describe() shows the auto preset, or the precise call cap when set."""
+    assert GEPA().describe() == "prompt-optimize (GEPA reflective, auto=light)"
+    assert GEPA(auto="heavy", budget_usd=2.5).describe() == (
+        "prompt-optimize (GEPA reflective, auto=heavy), budget $2.5"
+    )
+    # max_metric_calls (when set) is the budget GEPA actually runs under, so it
+    # supersedes the auto preset in the descriptor.
+    assert GEPA(max_metric_calls=40).describe() == (
+        "prompt-optimize (GEPA reflective, max_metric_calls=40)"
+    )
+
+
 def test_compile_kwargs_maps_auto_for_mipro_only() -> None:
     """MIPRO threads its ``auto`` preset onto compile; Bootstrap adds nothing."""
     assert Bootstrap().compile_kwargs() == {}
     assert MIPRO(auto="medium").compile_kwargs() == {"auto": "medium"}
+
+
+def test_gepa_compile_kwargs_carries_budget_and_reflection_config() -> None:
+    """GEPA threads its budget + reflection knobs onto ``DSPyMatcher.compile``."""
+    assert GEPA().compile_kwargs() == {
+        "auto": "light",
+        "max_metric_calls": None,
+        "reflection_model": None,
+        "reflection_minibatch_size": 3,
+    }
+    assert GEPA(
+        auto="medium",
+        max_metric_calls=25,
+        reflection_model="openrouter/openai/gpt-4o",
+        reflection_minibatch_size=5,
+    ).compile_kwargs() == {
+        "auto": "medium",
+        "max_metric_calls": 25,
+        "reflection_model": "openrouter/openai/gpt-4o",
+        "reflection_minibatch_size": 5,
+    }
 
 
 # --- fit(method=Bootstrap()): the zero-spend compile-under-fit happy path ------

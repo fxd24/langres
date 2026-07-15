@@ -81,6 +81,34 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
 
 
+# The prompt-optimize ``Method`` objects (``Bootstrap`` / ``MIPRO`` / ``GEPA``)
+# are pure config a caller constructs at the fit call site -- constructing one
+# (even ``GEPA(reflection_model=...)``, which names a DSPy optimizer) must never
+# pull ``dspy`` into ``sys.modules``. The heavy ``dspy`` import stays lazy inside
+# ``dspy_judge``, reached only when a fit actually compiles. Fresh-process so the
+# check is not masked by another test having already imported dspy.
+_METHODS_PROMPT_IMPORT_LIGHT_SCRIPT = (
+    "import sys; "
+    "from langres.core.methods_prompt import GEPA, MIPRO, Bootstrap; "
+    "Bootstrap(); MIPRO(auto='heavy'); GEPA(reflection_model='x', max_metric_calls=10); "
+    "assert 'dspy' not in sys.modules, 'methods_prompt pulled dspy on construct'; "
+    "print('OK')"
+)
+
+
+def test_methods_prompt_stays_import_light() -> None:
+    """Constructing a prompt-optimize ``Method`` must not import ``dspy`` (config only)."""
+    result = subprocess.run(
+        [sys.executable, "-c", _METHODS_PROMPT_IMPORT_LIGHT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"methods_prompt import-budget check failed.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # The eval harness (``core.metrics`` / ``core.benchmark``) must be importable
 # without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP) is now
 # imported lazily inside ``evaluate_blocking_with_ranking`` only, so importing
