@@ -364,6 +364,12 @@ class QLoRATrainer:
             else ("mps" if torch.backends.mps.is_available() else "cpu")
         )
         use_4bit = method.load_in_4bit and device == "cuda"
+        # Pin precision explicitly. trl/transformers otherwise auto-enable bf16 from
+        # a CUDA torch *build*, which then errors on a GPU-less runner ("Your setup
+        # doesn't support bf16/gpu") -- CI installs the CUDA wheel but has no GPU. Use
+        # bf16 only on a real bf16-capable CUDA GPU; CPU/MPS train in fp32. (device ==
+        # "cuda" is checked first so is_bf16_supported() runs only when CUDA exists.)
+        use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
 
         tokenizer = AutoTokenizer.from_pretrained(base)
         if tokenizer.pad_token_id is None:
@@ -412,6 +418,8 @@ class QLoRATrainer:
             per_device_train_batch_size=method.batch_size,
             learning_rate=method.learning_rate,
             max_length=method.max_seq_len,
+            bf16=use_bf16,
+            fp16=False,
             report_to=[],
             logging_steps=1,
         )
