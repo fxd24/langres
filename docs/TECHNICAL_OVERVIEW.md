@@ -354,6 +354,10 @@ best_params = optimizer.optimize()   # -> {"embedding_model": ..., "k_neighbors"
 (Optuna lives in the dev dependency group, not a runtime extra — `BlockerOptimizer`
 is an eval-time tool, not part of the `link()`/`dedupe()` path.)
 
+> For a higher-level, self-tuning blocking search — a declarative `SearchSpace`
+> driven by an `Objective` through the `propose → run → evaluate → keep` loop, with
+> every trial persisted — see `langres.optimize` in §10.
+
 ### core.Canonicalizer (`langres.core.canonicalizer`, M5/W2.3) — ✅ ships today
 
 **Definition:** The "last mile" of Master Data Creation (Use Case 4): merge one
@@ -861,3 +865,143 @@ see `examples/research/w1_blocking_algebra_output.md` for the full tables and th
 default-flip decision (kept opt-in; recommended for harder/messier
 entity-resolution problems, not flipped globally on a single hard-dataset
 win).
+
+## 10. Self-tuning: the autoresearch loop (`langres.optimize`)
+
+The autoresearch loop (epic #145, M1) is a small **propose → run → evaluate →
+keep-if-better** hill-climber: it enumerates blocker configs, scores each into
+blocking metrics, and keeps the one an `Objective` prefers. Because ER F1
+saturates near 99%, it steers on a **loss-like** signal (`candidate_recall@budget`,
+`log_loss`, quality×cost Pareto) rather than a thresholded F1.
+
+`optimize` / `score_blocking` are **root exports** (`from langres import optimize`)
+and **import-light**: every heavy import (faiss, the benchmark loader,
+`core.autoresearch.factory`) is lazy inside the call, so a bare `import langres`
+never pulls the `[semantic]` stack (`tests/test_import_budget.py` guards this). The
+proposal/objective types (`SearchSpace`, `Objective`) are pure-stdlib and safe to
+import anywhere; only the concrete blocking scorer touches faiss.
+
+> This is a **blocking-search** facade, distinct from `core.optimizers.BlockerOptimizer`
+> (§5): `BlockerOptimizer` runs an Optuna study returning best params, while
+> `optimize` runs the deterministic keep-if-better loop over a declarative
+> `SearchSpace`, gated by an `Objective`, persisting every trial. A general
+> `Optimizer` over full *pipelines* remains roadmap.
+
+### langres.optimize (the loop facade)
+
+`optimize(space, objective, benchmark, *, seed=None, store=None, dedup=True, split="full", embedder=None, tracker=None) -> LoopResult`
+
+Loads `benchmark` **once**, fingerprints it once, wraps an index-caching blocking
+scorer (one vector index per `(embedding_model, metric, text_field)` group, reused
+across every `k`), and drives the loop over `space.configs()`.
+
+- `space: SearchSpace` — the declarative config grid (below).
+- `objective: Objective` — the immutable keep-if-better decision (below).
+- `benchmark: str | Benchmark` — a registered benchmark **name** (loaded via
+  `langres.data`) or an already-built benchmark object (offline / test path).
+- `seed: int | None` — recorded on every run for provenance under
+  `seeds["optimize"]` (blocking is deterministic, so this only labels the run).
+- `store: str | Path | RunStore | None` — where to persist run records;
+  **`store=None` writes nothing.**
+- `dedup: bool = True` — skip a config whose `recipe_id` was already scored this
+  run (degenerate `all_pairs` repeats are collapsed first).
+- `split: str = "full"` — split label recorded on every run (M1 measures over the
+  whole loaded corpus).
+- `embedder: EmbeddingProvider | None` — optional pre-built embedder (a fake keeps
+  tests offline); production leaves it `None` to load the real SentenceTransformer.
+- `tracker: ExperimentTracker | None` — optional experiment tracker; defaults to a
+  no-op (the deferred Trackio/HF hook).
+
+### score_blocking (the one-config scorer)
+
+`score_blocking(config, benchmark, *, embedder=None, index=None) -> dict[str, float]`
+
+Blocking metrics for **one** config — builds the index + blocker the config
+describes, streams the full corpus to candidates, and evaluates blocking. This is
+the concrete scorer `optimize` wraps; call it directly to score a single config.
+`index=` reuses a prebuilt vector index instead of building one. Returns a plain
+metrics dict (all values `float`):
+
+| Key | Meaning |
+|---|---|
+| `candidate_recall` | Fraction of true match pairs the blocker surfaced (the recall signal the loop maximizes). |
+| `reduction_ratio` | Fraction of the `O(|A|·|B|)` (or `num_records`-choose-2) comparison space eliminated — the budget/cost axis. |
+| `candidate_precision` | Fraction of surfaced candidates that are true matches. |
+| `total_candidates` | Count of candidate pairs emitted (as a float). |
+
+For a two-source (linkage) corpus the candidates are filtered to cross-source
+pairs and `reduction_ratio` uses `|A|·|B|`; otherwise it uses `num_records`.
+
+### SearchSpace (`langres.core.autoresearch.search_space`)
+
+A frozen, declarative Cartesian grid of blocker configs. Each field is a
+non-empty tuple of candidate values for one axis (an empty axis raises).
+
+- `blocker: tuple[str, ...] = ("vector",)` — `"vector"` and/or `"all_pairs"`
+  (the vector axes below are ignored by `"all_pairs"`).
+- `embedding_model: tuple[str, ...] = ("all-MiniLM-L6-v2",)`
+- `metric: tuple[str, ...] = ("cosine",)` — FAISS metric `"L2"` / `"cosine"`.
+- `text_field: tuple[str, ...] = ("name",)` — record attribute holding the
+  blocking text (dataset-specific; override to your schema's field).
+- `k_neighbors: tuple[int, ...] = (5, 10, 20)`
+
+`configs() -> Iterator[dict[str, Any]]` yields the Cartesian product as config
+dicts (keys `blocker`, `embedding_model`, `metric`, `text_field`, `k_neighbors`).
+**Ordering contract (the loop relies on it):** `k_neighbors` is the **innermost**
+varying axis, so consecutive configs hold `(blocker, embedding_model, metric,
+text_field)` fixed while `k` sweeps its full range — letting `optimize` build one
+index per group and reuse it across every `k`. `len(space)` is the product of the
+axis sizes.
+
+### Objective (`langres.core.autoresearch.objective`)
+
+The immutable keep-if-better scorer, metric-source-agnostic (it operates on a
+plain `Mapping[str, float]` and never computes a metric itself). It bundles one or
+more `Goal`s (optimization targets) with zero or more `Constraint`s (feasibility
+gates). Prefer the three ergonomic constructors:
+
+- `Objective.maximize(metric, *, subject_to=())` — one maximize goal.
+- `Objective.minimize(metric, *, subject_to=())` — one minimize goal (e.g.
+  `log_loss`, cost).
+- `Objective.pareto(goals, *, subject_to=())` — a multi-objective Pareto front,
+  `goals` = `(metric, direction)` pairs; **never scalarized**.
+
+`subject_to` is an iterable of `(metric, op, threshold)` triples with `op` in
+`>= <= > <`; a missing metric raises (it never defaults to `0.0`).
+
+**`is_better(candidate, incumbent) -> bool`** — the loop's decision, in order:
+(1) **feasibility first** — an infeasible candidate is never better; a feasible
+candidate beats a `None` or infeasible incumbent; (2) **Pareto improvement** —
+with both feasible, the candidate wins iff it *dominates* the incumbent (`>=` on
+every goal, `>` on at least one; for a single goal, a strict scalar improvement).
+A tie or an incomparable trade-off keeps the incumbent, so the decision is
+deterministic and monotone.
+
+### LoopResult / Trial (`langres.core.autoresearch.loop`)
+
+`run_loop` (the driver `optimize` calls) returns a frozen `LoopResult`:
+
+- `best_config: dict[str, Any] | None` — the winning config, or `None` if no
+  config was ever accepted (empty input, or every trial infeasible/failed).
+- `best_metrics: dict[str, float] | None` — the winning config's metrics (or `None`).
+- `trials: tuple[Trial, ...]` — every trial in evaluation order (accepted,
+  rejected, and failed), for reconstructing why the incumbent won.
+
+Each `Trial` is frozen: `config` (the scored dict), `metrics` (`dict | None` —
+`None` if the scorer raised), `accepted` (whether it displaced the incumbent),
+`recipe_id` (the content-addressed dedup key), `attempt_id` (the run record PK),
+and `status` (`"completed"` or `"failed"` — one bad config is logged and skipped,
+never aborting the sweep).
+
+### Persistence — local JSONL only, today
+
+Every trial (including over-budget rejects and scorer failures) is appended to the
+`store` path's `RunStore` JSONL (the `core.runs` spine, §2). `store=None` writes
+nothing; read a trail back with `RunStore(path).read()` (each `RunRecord`'s
+`metrics["accepted"]` is `1.0`/`0.0`, so the incumbent timeline is reconstructable
+from the store alone). This is **local-only for now**: a durable off-laptop
+dashboard (Trackio + Hugging Face + models-on-Hub) is deferred behind the optional
+`tracker=` hook (a no-op by default), as are an Optuna/LLAMBO proposer and the
+matching vertical (`log_loss` / AUC-PR steering) + fine-tuning. See
+[EXPERIMENTS.md](EXPERIMENTS.md#self-tuning-the-autoresearch-loop-langresoptimize)
+for the worked amazon_google proof and `examples/research/blocking_recall_autoresearch.py`.

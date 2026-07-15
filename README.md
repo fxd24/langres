@@ -223,6 +223,7 @@ custom pipelines. See [docs/DX_RESOLVER.md](docs/DX_RESOLVER.md) and
 | **Incremental single-record assignment** (`Resolver.build_anchor_store` / `assign`, serializable `AnchorStore`) | ✅ shipped |
 | **Golden records / canonicalization** (`Canonicalizer` survivorship + `enrich`) | ✅ shipped |
 | Evaluation instrument: benchmark registry, `evaluate()`, `EvalReport` tearsheet | ✅ shipped |
+| **Self-tuning blocking search** (`langres.optimize` — `propose→run→eval→keep` over a `SearchSpace`, gated by a loss-like `Objective`) | ✅ shipped (blocking vertical; matching + fine-tuning roadmap) |
 | Cross-source linking (`Resolver.link`, `stream_against`) | 🚧 reserved stubs (raise `NotImplementedError`) — roadmap |
 | Fine-tuning a small LM on harvested labels (the next cost rung) | 🚧 roadmap |
 | Negative constraints (cannot-link clustering) | 🚧 roadmap |
