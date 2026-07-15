@@ -14,7 +14,7 @@ usable, swappable, and tunable by everyone through one seam. This guide walks th
 > contributor editing the repo does now.
 >
 > **You may not need any of this.** A judge you only ever pass as a `Matcher`
-> instance — `dedupe(records, matcher=MySelectJudge(...))` — needs **zero**
+> instance — `dedupe(records, matcher=MySelectMatcher(...))` — needs **zero**
 > registry wiring. The steps below are only for making a method selectable *by
 > name* (`"select_judge"`) across the benchmark harness and the two build paths.
 
@@ -28,7 +28,7 @@ candidate pair. Everything downstream — the `Clusterer`, the metrics harness, 
 scoring logic has, the output contract is pairwise**.
 
 `SelectMatcher` scores a whole *group* at once, so it subclasses
-`GroupwiseMatcher` (`src/langres/core/module.py`) rather than `Matcher` directly.
+`GroupwiseMatcher` (`src/langres/core/matcher.py`) rather than `Matcher` directly.
 `GroupwiseMatcher` **IS-A** `Matcher`: its concrete `forward` derives
 `ERCandidateGroup`s from the pairwise stream and dispatches to your
 `forward_groups`, then flattens the result back to pairwise. **Set-wise in,
@@ -79,7 +79,7 @@ on a genuinely new scale, add a literal here** (and keep the table above in sync
 
 A set-wise judge makes **one** LLM call for K pairs. Pricing each of the K
 resulting judgements at the full call cost would overcount spend K-fold. The
-convention (`stamp_group_cost` in `src/langres/core/module.py`) avoids that:
+convention (`stamp_group_cost` in `src/langres/core/matcher.py`) avoids that:
 
 - the **full `cost_usd`** is stamped on the **first** judgement of the group;
 - every **sibling** carries **`$0`**;
@@ -181,7 +181,7 @@ A judge that goes into a `Resolver` slot must be **serializable without pickle**
 The Resolver's `save`/`load` writes a human-readable `resolver.json` manifest and
 rebuilds every slot from the component registry **by `type_name`** — no code
 execution, no pickle. To participate, a judge provides four things (all visible on
-`SelectMatcher` in `src/langres/core/modules/select_judge.py`):
+`SelectMatcher` in `src/langres/core/matchers/select_judge.py`):
 
 ```python
 from langres.core.registry import register
