@@ -15,8 +15,8 @@ import logging
 import numpy as np
 import pytest
 
-from langres.core.data_profile.base import ProfileSection
-from langres.core.data_profile.embedding_section import (
+from langres.data.data_profile.base import ProfileSection
+from langres.data.data_profile.embedding_section import (
     EmbeddingComparisonSection,
     EmbeddingSection,
     _good_norms,
@@ -24,7 +24,7 @@ from langres.core.data_profile.embedding_section import (
     profile_embedding,
     profile_embedding_comparison,
 )
-from langres.core.data_profile.embedding_source import ArraySource
+from langres.data.data_profile.embedding_source import ArraySource
 
 
 def _spread_source(name: str = "m", n: int = 200, dim: int = 8) -> ArraySource:
@@ -164,7 +164,7 @@ class TestEmbeddingSectionRender:
         assert rows[0]["n_vectors"] == 200
 
     def test_html_render_via_container_has_no_nan(self) -> None:
-        from langres.core.data_profile.base import DataProfileReport
+        from langres.data.data_profile.base import DataProfileReport
 
         section = profile_embedding(_spread_source(), _ids(200))
         out = DataProfileReport([section]).to_html()
@@ -268,7 +268,7 @@ class TestProfileEmbeddingComparison:
         assert all(model.n_vectors == 40 for model in section.models)
 
     def test_render_via_container_has_no_nan(self) -> None:
-        from langres.core.data_profile.base import DataProfileReport
+        from langres.data.data_profile.base import DataProfileReport
 
         a = _spread_source("a", n=100, dim=8)
         b = _spread_source("b", n=100, dim=8)

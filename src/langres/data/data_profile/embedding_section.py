@@ -1,10 +1,10 @@
 """Embedding profile sections: the norm distribution of a model, and a compare.
 
-Two :class:`~langres.core.data_profile.base.ProfileSection` subclasses plus their
+Two :class:`~langres.data.data_profile.base.ProfileSection` subclasses plus their
 profiler functions:
 
 - :class:`EmbeddingSection` / :func:`profile_embedding` -- streams a corpus's
-  vectors through an :class:`~langres.core.data_profile.embedding_source.EmbeddingSource`
+  vectors through an :class:`~langres.data.data_profile.embedding_source.EmbeddingSource`
   and reports the **L2-norm distribution** (a histogram + mean/median/std). Norm
   is the cheapest, most revealing embedding health signal: a spike of zero norms
   means empty inputs, a fat tail means outliers, and an all-``1.0`` spike means
@@ -38,9 +38,9 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
 
 from langres.core import _report_html, _svg
-from langres.core.data_profile.accumulators import OnlineHistogram, RunningStats
-from langres.core.data_profile.base import ProfileSection
-from langres.core.data_profile.embedding_source import EmbeddingSource, _ensure_source
+from langres.data.data_profile.accumulators import OnlineHistogram, RunningStats
+from langres.data.data_profile.base import ProfileSection
+from langres.data.data_profile.embedding_source import EmbeddingSource, _ensure_source
 
 logger = logging.getLogger(__name__)
 

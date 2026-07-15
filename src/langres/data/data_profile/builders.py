@@ -1,6 +1,6 @@
 """Convenience builders: compose the default section set with sensible defaults.
 
-The Wave 2 seam :class:`~langres.core.data_profile.base.DataProfileReport`'s two
+The Wave 2 seam :class:`~langres.data.data_profile.base.DataProfileReport`'s two
 convenience constructors (:meth:`~DataProfileReport.from_benchmark` /
 :meth:`~DataProfileReport.from_records`) delegate to. Everything here is pure
 composition over the Wave-1 profiler functions -- it computes nothing new. Both
@@ -20,7 +20,7 @@ input.
 no ``[semantic]`` stack. :func:`from_benchmark` imports ``get_benchmark`` locally
 (only when handed a name), and :func:`from_embedder` -- the one place vectors are
 *produced* rather than consumed -- imports ``sentence-transformers`` inside its
-body, so a bare ``import langres.core.data_profile`` never pulls a heavy dep.
+body, so a bare ``import langres.data.data_profile`` never pulls a heavy dep.
 """
 
 from __future__ import annotations
@@ -33,20 +33,20 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from langres.core.data_profile.base import DataProfileReport, ProfileSection
-from langres.core.data_profile.corpus_field import profile_corpus_fields
-from langres.core.data_profile.embedding_section import (
+from langres.data.data_profile.base import DataProfileReport, ProfileSection
+from langres.data.data_profile.corpus_field import profile_corpus_fields
+from langres.data.data_profile.embedding_section import (
     profile_embedding,
     profile_embedding_comparison,
 )
-from langres.core.data_profile.embedding_source import (
+from langres.data.data_profile.embedding_source import (
     EmbeddingSource,
     NpySource,
     cosine_signal,
 )
-from langres.core.data_profile.hero import build_hero
-from langres.core.data_profile.label_structure import profile_label_structure
-from langres.core.data_profile.separability import (
+from langres.data.data_profile.hero import build_hero
+from langres.data.data_profile.label_structure import profile_label_structure
+from langres.data.data_profile.separability import (
     SeparabilitySection,
     profile_separability,
     string_signal,
@@ -113,7 +113,7 @@ def from_benchmark(
             :data:`_KNOWN_KINDS`). ``None`` keeps every section the inputs support.
             An unknown kind raises :class:`ValueError`.
         embeddings: Optional precomputed
-            :class:`~langres.core.data_profile.embedding_source.EmbeddingSource` s
+            :class:`~langres.data.data_profile.embedding_source.EmbeddingSource` s
             (aligned to the corpus ids). Omitting them drops the embedding sections
             -- never a raise.
         negatives_cap: Cap on sampled non-matching pairs for the separability
@@ -181,7 +181,7 @@ def from_records(
         schema: Optional Pydantic entity schema; enables the rapidfuzz
             ``string_signal`` separability.
         embeddings: Optional precomputed
-            :class:`~langres.core.data_profile.embedding_source.EmbeddingSource` s.
+            :class:`~langres.data.data_profile.embedding_source.EmbeddingSource` s.
         include: Optional selector of section *kinds* (see :func:`from_benchmark`).
         id_key: The record field holding the id used for pairs / embedding
             alignment (default ``"id"``).
@@ -224,7 +224,7 @@ def from_embedder(
     yet. It is a **separate** step from the report itself: the report still never
     generates embeddings -- this helper produces a ``.npy`` (+ an ids sidecar) once,
     then hands back a memory-efficient
-    :class:`~langres.core.data_profile.embedding_source.NpySource` you pass into
+    :class:`~langres.data.data_profile.embedding_source.NpySource` you pass into
     ``from_benchmark``/``from_records`` like any other source. Mirrors
     ``langres.eval.candidates_for``: a paid/heavy step kept off the report's
     import-light, ``$0`` path.
@@ -244,7 +244,7 @@ def from_embedder(
             ``pre_normalized`` with ``metric="cosine"``.
 
     Returns:
-        An :class:`~langres.core.data_profile.embedding_source.NpySource` over the
+        An :class:`~langres.data.data_profile.embedding_source.NpySource` over the
         written vectors, aligned to the records' ids.
 
     Raises:
@@ -255,7 +255,7 @@ def from_embedder(
     try:
         # Local import: producing vectors is the one heavy step here; keeping it
         # inside the body preserves the module's import-light budget so a bare
-        # ``import langres.core.data_profile`` never pulls sentence-transformers.
+        # ``import langres.data.data_profile`` never pulls sentence-transformers.
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:  # pragma: no cover - exercised only without [semantic]
         raise ImportError(
@@ -367,7 +367,7 @@ def _index_by_id(
     """Index ``records`` by their ``id_key``, **first-wins** on a duplicate id.
 
     A duplicate id cannot be addressed twice, so -- matching the embedding side's
-    :class:`~langres.core.data_profile.embedding_source._RowGatherSource`
+    :class:`~langres.data.data_profile.embedding_source._RowGatherSource`
     convention -- the first occurrence wins and later duplicates are dropped
     (a naive ``{r[id_key]: r ...}`` comprehension would silently keep the *last*).
     Records missing ``id_key`` are skipped. Any dropped duplicate is logged with
@@ -460,7 +460,7 @@ def _positive_pairs(
     ``cap`` yields the exact same full pair set an un-capped enumeration would;
     ``cap`` bites only on the pathological case. ``cap`` matches the per-class
     scoring cap
-    :func:`~langres.core.data_profile.separability.profile_separability` applies, so
+    :func:`~langres.data.data_profile.separability.profile_separability` applies, so
     no positive information is lost (it subsamples to ``cap`` for scoring anyway).
     """
     reservoir: list[tuple[Hashable, Hashable]] = []

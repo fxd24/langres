@@ -1,7 +1,7 @@
 """Shared, dependency-free HTML/render scaffold for the ``$0`` report family.
 
 This is the leaf both :mod:`langres.core.eval_report` and the data-profile
-report (:mod:`langres.core.data_profile`) render through. It carries the same
+report (:mod:`langres.data.data_profile`) render through. It carries the same
 guarantee ``eval_report`` already proves: inline styles, no CDN, no matplotlib,
 no ML stack -- a self-contained HTML page buildable on a bare core-only install.
 An import-budget test (``tests/test_import_budget.py``) locks that this module

@@ -92,7 +92,7 @@ A small Pydantic base every metric block subclasses. This is the seam that makes
 report a *bag of sections* instead of a monolith.
 
 ```python
-# core/data_profile.py  (leaf module — same layering rules as eval_report.py)
+# data/data_profile.py  (leaf module — same layering rules as eval_report.py)
 class ProfileSection(BaseModel):                 # frozen
     title: str
     def to_dict(self) -> dict: ...               # model_dump (machine / JSON)
@@ -268,7 +268,7 @@ never rework.
 | ~~Generate embeddings~~ | ~~sentence-transformers~~ | **out of scope** | the report never generates — consumed only (§2.5) |
 
 The report pulls **no embedding dependency at all** — a decisive simplification from the
-first draft. Import-budget rule (`tests/test_import_budget.py`): `core/data_profile.py`
+first draft. Import-budget rule (`tests/test_import_budget.py`): `data/data_profile.py`
 is a **leaf** that imports only `core.{metrics,benchmark,models,_svg,_report_html}` +
 numpy, and pulls **no** sentence-transformers / torch / pandas into a bare `import
 langres`.

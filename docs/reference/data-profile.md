@@ -62,7 +62,7 @@ itself dependency-free.
 ## Usage
 
 ```python
-from langres.core.data_profile import ArraySource, DataProfileReport
+from langres.data.data_profile import ArraySource, DataProfileReport
 
 # Precomputed vectors (from a VectorBlocker, an AnchorStore, or a .npy on disk).
 emb = ArraySource("all-MiniLM-L6-v2", ids, matrix)
@@ -82,4 +82,4 @@ report.to_html("out.html")   # optional $0 tearsheet
 
 `from_benchmark("abt_buy", embeddings=[...])` is the registered-benchmark twin.
 
-::: langres.core.data_profile
+::: langres.data.data_profile

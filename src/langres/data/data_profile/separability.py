@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from langres.core import _report_html, _svg
 from langres.core.comparator import StringComparator
-from langres.core.data_profile.base import ProfileSection
+from langres.data.data_profile.base import ProfileSection
 from langres.core.feature import combine_present
 
 logger = logging.getLogger(__name__)

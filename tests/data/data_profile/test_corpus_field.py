@@ -14,8 +14,8 @@ import logging
 
 import pytest
 
-from langres.core.data_profile import ProfileSection
-from langres.core.data_profile.corpus_field import (
+from langres.data.data_profile import ProfileSection
+from langres.data.data_profile.corpus_field import (
     CorpusFieldSection,
     FieldStat,
     profile_corpus_fields,

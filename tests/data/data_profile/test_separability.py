@@ -19,8 +19,8 @@ from collections.abc import Hashable
 import pytest
 from pydantic import BaseModel
 
-from langres.core.data_profile import ProfileSection
-from langres.core.data_profile.separability import (
+from langres.data.data_profile import ProfileSection
+from langres.data.data_profile.separability import (
     SeparabilitySection,
     SimilaritySignal,
     profile_separability,

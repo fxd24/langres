@@ -3,7 +3,7 @@
 Before you judge a single pair, the data itself has a story: how rare a true match
 is (class imbalance), how clean the fields are, whether *any* signal separates
 matches from non-matches, and how your embeddings are distributed. This example
-builds a :class:`~langres.core.data_profile.DataProfileReport` over a toy corpus +
+builds a :class:`~langres.data.data_profile.DataProfileReport` over a toy corpus +
 gold clustering + two (synthetic) embedding models, then shows the **text-first**
 surfaces (``print``/markdown/dict/rows) and writes a single self-contained
 ``data_profile.html`` tearsheet -- a KPI hero, label structure, string- and
@@ -11,7 +11,7 @@ cosine-separability charts, per-field stats, and side-by-side embedding norms.
 
 Fully offline on purpose: no API key, no network, no torch, no
 sentence-transformers. The two embedding sources are plain in-memory
-:class:`~langres.core.data_profile.ArraySource` matrices (what a
+:class:`~langres.data.data_profile.ArraySource` matrices (what a
 ``VectorBlocker``'s corpus, an ``AnchorStore``, or a ``.npy`` on disk would give
 you). The report *consumes* precomputed vectors -- it never generates them -- so
 this whole quickstart runs on a bare core-only install.
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from langres.core.data_profile import ArraySource, DataProfileReport
+from langres.data.data_profile import ArraySource, DataProfileReport
 from langres.core.models import CompanySchema
 
 # A toy cross-source corpus and its true clustering (what a small labeled sample

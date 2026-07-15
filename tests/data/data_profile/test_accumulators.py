@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pytest
 
-from langres.core.data_profile.accumulators import OnlineHistogram, RunningStats
+from langres.data.data_profile.accumulators import OnlineHistogram, RunningStats
 
 
 class TestOnlineHistogramConstruction:

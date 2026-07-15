@@ -26,7 +26,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from langres.core import _report_html
-from langres.core.data_profile.base import ProfileSection
+from langres.data.data_profile.base import ProfileSection
 
 logger = logging.getLogger(__name__)
 

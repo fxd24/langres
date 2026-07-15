@@ -15,10 +15,12 @@ code. Verify as you go.** Read before writing tests or running the suite.
 
 - **Tiered coverage** — not a blanket 100% (past-POC, a flat 100% floor just
   manufactures low-value tests):
-  - **`src/langres/core/**` → 95–100%.** This is the library contract users
+  - **`src/langres/core/**` and the data-prep contract
+    (`src/langres/data/data_profile/**`, and `src/langres/data/mining.py`
+    coming next) → 95–100%.** These are the library contracts users
     serialize against and depend on (`Resolver.save`/`load`, the judge/blocker
-    ABCs, the registry). Cover behavior *and* edge cases: empty inputs,
-    `None`/MISSING, boundaries, error paths.
+    ABCs, the registry, the data-profile/mining diagnostics). Cover behavior
+    *and* edge cases: empty inputs, `None`/MISSING, boundaries, error paths.
   - **Benchmark / experiment / harness code → behavior + smoke tests.** e.g.
     `methods.py`, the `core/benchmark.py` evaluation harness, research
     `examples/` — assert they *work* (happy path + the key edges), not that

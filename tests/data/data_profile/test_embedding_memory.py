@@ -23,7 +23,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from langres.core.data_profile.embedding_source import NpySource
+from langres.data.data_profile.embedding_source import NpySource
 
 _N_ROWS = 500_000
 _DIM = 256
@@ -35,7 +35,7 @@ _SUBSET = 100
 _SUBPROCESS = r"""
 import json, sys, tracemalloc
 import numpy as np
-from langres.core.data_profile.embedding_source import NpySource
+from langres.data.data_profile.embedding_source import NpySource
 
 path, n_rows, dim, subset_n = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 src = NpySource("big", path, list(range(n_rows)))
