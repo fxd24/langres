@@ -45,6 +45,7 @@ def _import_ok(module_name: str) -> bool:
 
 _HEAVY_MODULES = [
     "torch",
+    "transformers",
     "litellm",
     "faiss",
     "sentence_transformers",

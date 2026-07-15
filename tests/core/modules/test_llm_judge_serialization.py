@@ -44,6 +44,7 @@ def test_config_excludes_client_and_secrets() -> None:
 
     assert set(config) == {
         "model",
+        "api_base",
         "temperature",
         "prompt_template",
         "entity_noun",
@@ -55,6 +56,7 @@ def test_config_excludes_client_and_secrets() -> None:
         "record_serializer",
     }
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
+    assert config["api_base"] is None  # no served endpoint by default
     assert config["temperature"] == 0.3
     assert config["entity_noun"] == "company"
     assert config["provider"] is None  # no provider pin by default
