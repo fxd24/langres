@@ -19,9 +19,10 @@ uv sync
 # (needed to run the full test suite and mypy the way CI does):
 uv sync --all-extras
 
-# Install the git hooks (ruff + hygiene on commit, fast tests on push):
-uv run pre-commit install
-uv run pre-commit install --hook-type pre-push
+# Install the git hooks (ruff + hygiene on commit, fast tests on push).
+# prek is a Rust single-binary drop-in for pre-commit; it reads the same
+# .pre-commit-config.yaml:
+uvx prek install && uvx prek install --hook-type pre-push
 ```
 
 Notes:
