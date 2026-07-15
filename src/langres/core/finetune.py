@@ -317,8 +317,17 @@ class QLoRATrainer:
     this class costs nothing. 4-bit QLoRA is used only when CUDA + bitsandbytes are
     present; on CPU/MPS it falls back to a non-quantized LoRA fine-tune so the path
     runs locally (the ``[finetune]`` extra scopes bitsandbytes to Linux for this
-    reason). Trains completion-only (the ``"Yes"``/``"No"`` assistant span) on the
-    base model's chat template, matching serving.
+    reason).
+
+    Trains full-sequence SFT on the yes/no chat conversation rendered with the base
+    model's own chat template (matching serving). Full-sequence — *not*
+    ``assistant_only_loss`` — deliberately: trl's assistant-only masking needs a
+    chat template carrying ``{% generation %}`` markers (or one on trl's short
+    hardcoded patch-list, effectively Qwen-only), which most small base LMs
+    (SmolLM2, Llama-family, ...) lack, so it raises at trainer construction. Since
+    langres must fine-tune *arbitrary* small bases, we train on the whole
+    (fixed-prefix) conversation; the discriminative signal is the final ``"Yes"`` /
+    ``"No"`` token and the constant prompt prefix is trivially learned.
     """
 
     def train(  # pragma: no cover - real training runs in the test-finetune job / on GPU
@@ -379,7 +388,6 @@ class QLoRATrainer:
             per_device_train_batch_size=method.batch_size,
             learning_rate=method.learning_rate,
             max_length=method.max_seq_len,
-            assistant_only_loss=True,
             report_to=[],
             logging_steps=1,
         )
