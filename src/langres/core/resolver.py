@@ -49,6 +49,7 @@ from langres.core.comparator import Comparator
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.fit_report import FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
+from langres.core.methods_api import Method
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import PairMetrics, classify_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -467,6 +468,7 @@ class Resolver:
         pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None = None,
         split: float | None = None,
         seed: int = 0,
+        method: Method | None = None,
     ) -> Self:
         """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
@@ -516,6 +518,15 @@ class Resolver:
             split: Held-out fraction for the entity-disjoint ``pairs`` split
                 (``None`` = train on everything; only meaningful with ``pairs``).
             seed: Seed for the entity-disjoint split.
+            method: An optional :class:`~langres.core.methods_api.Method` naming
+                *how* to train (prompt-optimize / fine-tune / calibrate). When
+                given, ``fit`` dispatches on ``method.kind`` to a per-kind handler
+                (``_fit_prompt`` / ``_fit_finetune`` / ``_fit_calibrate``) instead
+                of the isinstance-on-the-module default above; when ``None`` (the
+                default), behavior is exactly the module-hook path described here.
+                Those handlers are thin stubs today -- the concrete per-kind fit
+                paths land in later PRs (prompt in PR-C, finetune in PR-F,
+                calibrate in PR-D).
 
         Returns:
             ``self``, so ``resolver.fit(data).resolve(data)`` chains.
@@ -524,7 +535,34 @@ class Resolver:
             ValueError: If both ``labels`` and ``pairs`` are given; if the module
                 implements ``SupervisedFitMixin`` and neither is given; or if
                 ``labels``/``pairs`` is given to a module that cannot use them.
+            NotImplementedError: If ``method`` is given but its ``kind``'s fit
+                path is not implemented yet (the seam is wired ahead of the
+                concrete methods; the error names the PR that will land it).
         """
+        if method is not None:
+            # The ``method=`` object seam: a Method names *how* to train and
+            # routes to its own per-kind handler below, so the concrete
+            # strategies that fill these in later touch DISJOINT methods instead
+            # of one shared branch. Each handler is a thin stub today, raising a
+            # clear NotImplementedError naming its PR. Guarded by ``is not None``
+            # so the ``method=None`` default leaves every existing fit path below
+            # byte-for-byte unchanged.
+            if method.kind == "prompt":
+                return self._fit_prompt(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            if method.kind == "finetune":
+                return self._fit_finetune(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            if method.kind == "calibrate":
+                return self._fit_calibrate(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            raise NotImplementedError(
+                f"method kind {method.kind!r} is not recognized: no langres Method "
+                f"implements it ({method.describe()})."
+            )
         if labels is not None and pairs is not None:
             raise ValueError(
                 "pass either labels= (a Sequence[bool] pre-aligned with the blocked "
@@ -575,6 +613,79 @@ class Resolver:
             )
         self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
+
+    # ------------------------------------------------------------------
+    # ``method=`` per-kind fit handlers (the object seam)
+    #
+    # Each ``Method.kind`` routes to its OWN handler so the concrete strategies
+    # land in disjoint methods -- prompt-optimize in PR-C, fine-tune in PR-F,
+    # calibrate in PR-D -- rather than colliding on one shared branch. Every
+    # handler takes the full fit context (data + supervision + split/seed + the
+    # Method itself) so its PR fills in only the body, not the call site. Until
+    # then each is a thin stub raising a clear, PR-naming NotImplementedError.
+    # ------------------------------------------------------------------
+
+    def _fit_prompt(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via prompt-optimization (``method.kind == "prompt"``) -- STUB.
+
+        Wired into ``fit``'s ``method=`` dispatch; the concrete
+        DSPy-compile-under-fit body lands in PR-C. Until then this raises with
+        that pointer.
+        """
+        raise NotImplementedError(
+            f"method kind 'prompt' dispatch is wired but its fit path lands in "
+            f"PR-C ({method.describe()})."
+        )
+
+    def _fit_finetune(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via fine-tuning (``method.kind == "finetune"``) -- STUB.
+
+        Wired into ``fit``'s ``method=`` dispatch; the concrete QLoRA fine-tune
+        body (with GPU-seconds cost) lands in PR-F. Until then this raises with
+        that pointer.
+        """
+        raise NotImplementedError(
+            f"method kind 'finetune' dispatch is wired but its fit path lands in "
+            f"PR-F ({method.describe()})."
+        )
+
+    def _fit_calibrate(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via score calibration (``method.kind == "calibrate"``) -- STUB.
+
+        Wired into ``fit``'s ``method=`` dispatch; the concrete Platt/isotonic
+        calibration body lands in PR-D. Until then this raises with that pointer.
+        """
+        raise NotImplementedError(
+            f"method kind 'calibrate' dispatch is wired but its fit path lands in "
+            f"PR-D ({method.describe()})."
+        )
 
     def _fit_from_pairs(
         self,
