@@ -3,9 +3,9 @@
 This is the M4 "learnable scorer seam": a :class:`~langres.core.matcher.Matcher`
 whose match decision comes from a DSPy ``ChainOfThought`` program over a typed
 :class:`PairwiseMatchSignature`. Because the program is a DSPy artifact it can be
-**compiled** against a gold set (``BootstrapFewShot`` / ``MIPROv2``) to tune the
-prompt from data — the direct answer to M3's finding that a cheap judge's
-precision collapses under a generic, hand-written prompt.
+**compiled** against a gold set (``BootstrapFewShot`` / ``MIPROv2`` / ``GEPA``)
+to tune the prompt from data — the direct answer to M3's finding that a cheap
+judge's precision collapses under a generic, hand-written prompt.
 
 It mirrors :class:`~langres.core.matchers.llm_judge.LLMMatcher`'s serializable shape
 so a Resolver with a DSPyMatcher in the ``module`` slot can ``save`` / ``load``:
@@ -104,6 +104,31 @@ def _pair_metric(example: dspy.Example, prediction: Any, trace: Any = None) -> b
     is kept only when it reproduces the labeled match decision.
     """
     return bool(prediction.match) == bool(example.match)
+
+
+def _gepa_metric(
+    example: dspy.Example,
+    prediction: Any,
+    trace: Any = None,
+    pred_name: str | None = None,
+    pred_trace: Any = None,
+) -> float:
+    """GEPA-shaped compilation metric: 1.0 when the predicted ``match`` is correct.
+
+    ``dspy.GEPA`` validates (in its constructor) that the metric accepts *five*
+    arguments — ``(gold, pred, trace, pred_name, pred_trace)`` — and rejects the
+    three-argument :func:`_pair_metric` that ``BootstrapFewShot`` / ``MIPROv2``
+    take. This is the same match-decision metric, adapted to that signature and
+    returning a scalar score (``1.0``/``0.0``) GEPA can rank on its Pareto
+    frontier.
+
+    A *feedback-returning* metric — ``dspy.Prediction(score=..., feedback=...)``,
+    letting GEPA reflect on *why* a pair was misjudged rather than only on the
+    score — would sharpen the reflection, but it is a deliberate future
+    enhancement, not built now (simplicity-first): the scalar path already
+    exercises the full reflective-evolution loop.
+    """
+    return 1.0 if _pair_metric(example, prediction) else 0.0
 
 
 def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
@@ -366,6 +391,9 @@ class DSPyMatcher(Matcher[SchemaT]):
         *,
         optimizer: str = "bootstrap",
         auto: str = "light",
+        reflection_model: str | None = None,
+        reflection_minibatch_size: int = 3,
+        max_metric_calls: int | None = None,
         tracker: ExperimentTracker | None = None,
         store: str | Path | RunStore | None = None,
         parent_run_id: str | None = None,
@@ -387,11 +415,24 @@ class DSPyMatcher(Matcher[SchemaT]):
                 gold ``match``) the optimizer tunes against.
             valset: Optional validation set (used by ``mipro``).
             optimizer: ``"bootstrap"`` (``BootstrapFewShot`` — deterministic under
-                ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2`` —
-                the paid path, exercised only by the example).
-            auto: ``MIPROv2``'s search-budget preset (``"light"`` / ``"medium"`` /
-                ``"heavy"``); ignored by ``"bootstrap"``. Threaded from the
-                ``MIPRO`` method's ``auto`` field by ``Resolver.fit``.
+                ``DummyLM``, the zero-spend path), ``"mipro"`` (``MIPROv2`` — the
+                paid path, exercised only by the example), or ``"gepa"``
+                (``dspy.GEPA`` — reflective Genetic-Pareto instruction evolution;
+                runs zero-spend under ``DummyLM`` for both the student and the
+                reflection LM).
+            auto: Search-budget preset (``"light"`` / ``"medium"`` / ``"heavy"``)
+                for ``"mipro"`` and ``"gepa"``; ignored by ``"bootstrap"``, and
+                by ``"gepa"`` when ``max_metric_calls`` is given. Threaded from
+                the method's ``auto`` field by ``Resolver.fit``.
+            reflection_model: ``"gepa"`` only — LM id for GEPA's reflection step.
+                ``None`` reuses this matcher's own LM (:meth:`_get_lm`), which is
+                what keeps the ``DummyLM`` path zero-spend while still satisfying
+                GEPA's required-reflection-LM contract.
+            reflection_minibatch_size: ``"gepa"`` only — examples reflected over
+                per step (``dspy.GEPA`` default 3).
+            max_metric_calls: ``"gepa"`` only — precise metric-call budget; when
+                set it supersedes ``auto`` (``dspy.GEPA`` takes exactly one budget
+                knob). ``None`` falls back to the ``auto`` preset.
             tracker: Experiment tracker for the compile run (``None`` — the
                 default — resolves to a no-op via ``resolve_tracker``).
             store: Where to persist the compile :class:`RunRecord` (default: none).
@@ -405,8 +446,10 @@ class DSPyMatcher(Matcher[SchemaT]):
             ``_compiled`` set, and ``_compile_run_id`` stamped — so callers can
             chain ``judge.compile(...).forward(...)``.
         """
-        if optimizer not in ("bootstrap", "mipro"):
-            raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
+        if optimizer not in ("bootstrap", "mipro", "gepa"):
+            raise ValueError(
+                f"unknown optimizer {optimizer!r}; choose 'bootstrap', 'mipro', or 'gepa'"
+            )
         tracker = resolve_tracker(tracker)
         context = RunContext(
             experiment="dspy_compile",
@@ -433,6 +476,34 @@ class DSPyMatcher(Matcher[SchemaT]):
                 if optimizer == "bootstrap":
                     self._program = dspy.BootstrapFewShot(metric=_pair_metric).compile(
                         self._program, trainset=list(trainset), **kwargs
+                    )
+                elif optimizer == "gepa":
+                    # Reflective Genetic-Pareto evolution: GEPA runs the program on
+                    # the trainset, reflects (in natural language, via reflection_lm)
+                    # on the traces, and evolves the *instruction* on a Pareto
+                    # frontier. Two hard requirements from dspy.GEPA's constructor:
+                    #  (1) the metric must be 5-arg (_gepa_metric, not _pair_metric);
+                    #  (2) reflection_lm must be non-None -- reuse this matcher's own
+                    #      LM when unset (so a DummyLM student also reflects at $0).
+                    # GEPA also takes EXACTLY ONE budget knob, so pass max_metric_calls
+                    # when given, else the auto preset.
+                    reflection_lm = (
+                        dspy.LM(reflection_model) if reflection_model else self._get_lm()
+                    )
+                    gepa_budget = (
+                        {"max_metric_calls": max_metric_calls}
+                        if max_metric_calls is not None
+                        else {"auto": auto}
+                    )
+                    self._program = dspy.GEPA(
+                        metric=_gepa_metric,
+                        reflection_lm=reflection_lm,
+                        reflection_minibatch_size=reflection_minibatch_size,
+                        **gepa_budget,
+                    ).compile(
+                        self._program,
+                        trainset=list(trainset),
+                        valset=list(valset) if valset is not None else None,
                     )
                 else:  # "mipro"  # pragma: no cover - paid, non-deterministic path
                     # Exercised only by the paid example (MIPROv2 proposes+evaluates

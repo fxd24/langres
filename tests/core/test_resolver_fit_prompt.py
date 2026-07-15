@@ -187,6 +187,31 @@ def test_fit_prompt_accepts_prealigned_labels() -> None:
     assert resolver.fit_report_.coverage is None
 
 
+def test_fit_prompt_compiles_with_gepa_zero_spend() -> None:
+    """``fit(pairs, method=GEPA())`` runs GEPA's reflective loop at $0 under DummyLM.
+
+    GEPA needs many more LM calls than BootstrapFewShot (student rollouts +
+    reflection), so this resolver is built with a generous ``DummyLM`` answer
+    pool and a tight ``max_metric_calls`` budget -- still fully offline (the
+    reflection LM defaults to the matcher's own DummyLM).
+    """
+    matcher: DSPyMatcher[CompanySchema] = DSPyMatcher(
+        lm=DummyLM([_ANSWER] * 500), entity_noun="company"
+    )
+    resolver = Resolver.from_schema(CompanySchema, matcher=matcher)
+
+    out = resolver.fit(
+        RECORDS, pairs=PAIRS, method=GEPA(max_metric_calls=8, reflection_minibatch_size=2)
+    )
+
+    assert out is resolver
+    assert matcher.compiled is True
+    report = resolver.fit_report_
+    assert report is not None and report.trained is True
+    assert report.n_train == len(PAIRS)
+    assert "prompt-optimize (GEPA reflective, max_metric_calls=8)" in report.trainable
+
+
 # --- fit(method=...) error contracts -----------------------------------------
 
 

@@ -22,6 +22,7 @@ from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.matchers.dspy_judge import (
     DSPyMatcher,
     _clamp01,
+    _gepa_metric,
     _pair_metric,
     _salvage_usage,
 )
@@ -350,6 +351,96 @@ def test_compile_unknown_optimizer_raises() -> None:
     judge = _dummy_judge(_answers(10))
     with pytest.raises(ValueError, match="unknown optimizer"):
         judge.compile(_trainset(), optimizer="nope")
+
+
+# ---------------------------------------------------------------------------
+# Compilation — GEPA reflective optimizer (zero-spend under DummyLM)
+# ---------------------------------------------------------------------------
+
+
+def _mixed_trainset() -> list[dspy.Example]:
+    """A trainset with both a positive and a negative (GEPA reflects over both)."""
+    return [
+        dspy.Example(left="Acme", right="Acme Inc", match=True).with_inputs("left", "right"),
+        dspy.Example(left="Beta", right="Gamma", match=False).with_inputs("left", "right"),
+        dspy.Example(left="Acme", right="Acme LLC", match=True).with_inputs("left", "right"),
+        dspy.Example(left="Delta", right="Omega", match=False).with_inputs("left", "right"),
+    ]
+
+
+def test_gepa_metric_is_five_arg_and_wraps_pair_metric() -> None:
+    """``dspy.GEPA`` requires a 5-arg metric; ``_gepa_metric`` adapts the decision.
+
+    It must (a) accept ``(gold, pred, trace, pred_name, pred_trace)`` -- exactly
+    what ``dspy.GEPA.__init__`` binds to validate the metric -- and (b) return the
+    scalar ``1.0``/``0.0`` mirror of :func:`_pair_metric`.
+    """
+    import inspect
+
+    inspect.signature(_gepa_metric).bind(None, None, None, None, None)  # 5-arg contract
+
+    gold = dspy.Example(match=True)
+    assert _gepa_metric(gold, dspy.Prediction(match=True)) == 1.0
+    assert _gepa_metric(gold, dspy.Prediction(match=False)) == 0.0
+    # pred_name / pred_trace are accepted and ignored (per-predictor feedback is
+    # a future enhancement).
+    assert _gepa_metric(gold, dspy.Prediction(match=True), None, "predict", None) == 1.0
+
+
+def test_compile_gepa_sets_flag_zero_spend() -> None:
+    """``compile(optimizer='gepa')`` runs the full reflective loop at $0 under DummyLM.
+
+    Both the student and the reflection LM are the injected ``DummyLM``
+    (``reflection_model=None`` reuses the matcher's own LM), so GEPA reflects and
+    evolves without any network/paid call. A tight ``max_metric_calls`` keeps it
+    fast and deterministic.
+    """
+    judge = _dummy_judge(_answers(500))
+    returned = judge.compile(
+        _mixed_trainset(),
+        optimizer="gepa",
+        max_metric_calls=8,
+        reflection_minibatch_size=2,
+    )
+    assert returned is judge  # chainable
+    assert judge.compiled is True
+    # The reflective optimizer leaves the program tuned (an instruction it can
+    # score/forward with) -- forward still works after a GEPA compile.
+    judgements = list(judge.forward(iter([_candidate()])))
+    assert len(judgements) == 1
+
+
+def test_compile_gepa_builds_named_reflection_lm(mocker) -> None:  # type: ignore[no-untyped-def]
+    """A ``reflection_model`` builds a dedicated ``dspy.LM`` passed as GEPA's reflection_lm.
+
+    Covers the named-model branch without a paid call: ``dspy.GEPA`` is stubbed so
+    only the wiring (reflection LM construction + kwargs) is asserted.
+    """
+    reflection_sentinel = object()
+
+    def _fake_lm(model_id: str, *args: object, **kw: object) -> object:
+        return reflection_sentinel if model_id == "openrouter/openai/gpt-4o" else object()
+
+    mocker.patch("dspy.LM", side_effect=_fake_lm)
+    fake_program = object()
+    gepa_ctor = mocker.patch("dspy.GEPA")
+    gepa_ctor.return_value.compile.return_value = fake_program
+
+    judge = _dummy_judge(_answers(10))
+    judge.compile(
+        _mixed_trainset(),
+        optimizer="gepa",
+        reflection_model="openrouter/openai/gpt-4o",
+        auto="medium",
+    )
+
+    _, ctor_kwargs = gepa_ctor.call_args
+    assert ctor_kwargs["reflection_lm"] is reflection_sentinel
+    assert ctor_kwargs["metric"] is _gepa_metric
+    assert ctor_kwargs["auto"] == "medium"  # no max_metric_calls => auto preset
+    assert "max_metric_calls" not in ctor_kwargs  # exactly one budget knob
+    assert judge._program is fake_program
+    assert judge.compiled is True
 
 
 # ---------------------------------------------------------------------------
