@@ -37,23 +37,35 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from langres.core.calibration import ThresholdMethod
+    from langres.core.models import ERCandidate
 
 __all__ = [
+    "AlignedPairs",
+    "AlignedSplit",
     "Correction",
     "CorrectionLog",
+    "GoldCoverage",
     "LabeledPair",
+    "PairLabel",
+    "align_pairs",
     "derive_threshold_from_pairs",
     "harvest_labeled_pairs",
 ]
+
+#: Schema type variable for the entity schema an ``ERCandidate`` carries. Defined
+#: locally to keep this module import-light (no ``models`` import at runtime).
+SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
@@ -340,3 +352,272 @@ def derive_threshold_from_pairs(
         method=method,
         percentile=percentile,
     )
+
+
+# ---------------------------------------------------------------------------
+# align_pairs: the id-join bridge from labeled pairs to fit-ready candidates
+# ---------------------------------------------------------------------------
+
+#: Public spelling of the pair-label record. :class:`LabeledPair` already IS the
+#: pair-label schema (a score + a label + provenance), so ``PairLabel`` is a
+#: thin alias rather than a forked, duplicated model -- callers/docs may prefer
+#: the ``PairLabel`` name without a second class to keep in sync.
+PairLabel = LabeledPair
+
+
+class GoldCoverage(BaseModel):
+    """How many labeled *positive* pairs survived blocking (the honest-numbers guardrail).
+
+    A positive label whose pair the blocker never proposed is silently
+    unrecoverable downstream -- no matcher can match a pair it never sees. This
+    model makes that leak visible instead of letting held-out metrics quietly
+    absorb it.
+
+    Attributes:
+        gold_coverage: Fraction of labeled positive pairs that appeared among the
+            candidates -- blocking pair-completeness restricted to the labeled
+            positives (from :func:`~langres.core.metrics.evaluate_blocking`, not
+            reimplemented). ``1.0`` when there are no positive labels (nothing to
+            miss).
+        dropped_positives: The lexicographically-ordered ``(left_id, right_id)``
+            id-pairs of positive labels with no matching candidate -- the pairs
+            blocking dropped. ``len(dropped_positives)`` is the dropped count.
+        n_labeled: Distinct labeled pairs after order-independent de-duplication.
+        n_aligned: Labeled pairs that matched a candidate (the fit-set size).
+        n_positive_labels: Positive labels among ``n_labeled`` (the coverage
+            denominator).
+    """
+
+    gold_coverage: float
+    dropped_positives: list[tuple[str, str]]
+    n_labeled: int
+    n_aligned: int
+    n_positive_labels: int
+
+
+@dataclass(frozen=True)
+class AlignedSplit(Generic[SchemaT]):
+    """One split's positionally-aligned candidates and their boolean labels.
+
+    ``candidates[i]`` and ``labels[i]`` describe the same pair, ready to hand to
+    :meth:`SupervisedFitMixin.fit(candidates, labels)
+    <langres.core.fit.SupervisedFitMixin>`.
+    """
+
+    candidates: list[ERCandidate[SchemaT]]
+    labels: list[bool]
+
+
+@dataclass(frozen=True)
+class AlignedPairs(Generic[SchemaT]):
+    """Result of :func:`align_pairs`: fit-ready train/valid splits + coverage.
+
+    A small named result (not a bare 4-tuple) so downstream code reads
+    ``aligned.train.candidates`` / ``aligned.coverage.gold_coverage`` instead of
+    positional unpacking.
+
+    Attributes:
+        train: The training split (all labeled candidates when ``split is None``).
+        valid: The held-out split (empty when ``split is None``); entity-disjoint
+            from ``train`` so no entity id appears in both.
+        coverage: The :class:`GoldCoverage` guardrail for the whole label set.
+    """
+
+    train: AlignedSplit[SchemaT]
+    valid: AlignedSplit[SchemaT]
+    coverage: GoldCoverage
+
+    @property
+    def labels(self) -> list[bool]:
+        """The training split's labels -- convenience for the common no-split case."""
+        return self.train.labels
+
+
+class _UnionFind:
+    """Minimal union-find over string ids for the entity-disjoint split."""
+
+    def __init__(self) -> None:
+        self._parent: dict[str, str] = {}
+
+    def find(self, x: str) -> str:
+        """Root of ``x``'s component, with path compression."""
+        self._parent.setdefault(x, x)
+        root = x
+        while self._parent[root] != root:
+            root = self._parent[root]
+        node = x
+        while self._parent[node] != root:
+            self._parent[node], node = root, self._parent[node]
+        return root
+
+    def union(self, a: str, b: str) -> None:
+        """Merge the components of ``a`` and ``b``."""
+        self._parent[self.find(a)] = self.find(b)
+
+
+def _labels_to_map(
+    labels: str | Path | Sequence[LabeledPair] | Sequence[Correction],
+) -> dict[frozenset[str], bool]:
+    """Normalize any labels input to ``{frozenset({left_id, right_id}): label}``.
+
+    A ``corrections.jsonl`` path is read via :class:`CorrectionLog`. Pairs are
+    keyed order-independently (mirroring :func:`harvest_labeled_pairs`), and a
+    later label for the same pair wins (last-write-wins) -- so duplicate and
+    conflicting labels collapse deterministically to the last one seen.
+    """
+    resolved: Sequence[LabeledPair] | Sequence[Correction]
+    if isinstance(labels, (str, Path)):
+        resolved = CorrectionLog(labels).read()
+    else:
+        resolved = labels
+    label_map: dict[frozenset[str], bool] = {}
+    for item in resolved:
+        label_map[frozenset({str(item.left_id), str(item.right_id)})] = bool(item.label)
+    return label_map
+
+
+def _candidate_key(candidate: ERCandidate[Any]) -> frozenset[str]:
+    """Order-independent id key for a candidate (mirrors the label key)."""
+    return frozenset({str(candidate.left.id), str(candidate.right.id)})
+
+
+def _gold_coverage(
+    candidates: list[ERCandidate[Any]],
+    label_map: dict[frozenset[str], bool],
+    candidate_keys: set[frozenset[str]],
+) -> GoldCoverage:
+    """Build the :class:`GoldCoverage` guardrail, reusing ``evaluate_blocking``."""
+    positive_keys = {key for key, label in label_map.items() if label and len(key) == 2}
+
+    dropped: list[tuple[str, str]] = []
+    for key in positive_keys - candidate_keys:
+        ordered = sorted(key)
+        dropped.append((ordered[0], ordered[1]))
+    dropped.sort()
+
+    if positive_keys:
+        # Reuse evaluate_blocking (do NOT reimplement pair-completeness): each
+        # positive pair is its own 2-id cluster, so candidate_recall is exactly
+        # the fraction of labeled positive pairs captured by blocking -- with no
+        # transitive closure fabricating pairs that were never labeled.
+        from langres.core.metrics import evaluate_blocking
+
+        gold_clusters = [set(key) for key in positive_keys]
+        gold_coverage = evaluate_blocking(candidates, gold_clusters).candidate_recall
+    else:
+        gold_coverage = 1.0  # No positives -> nothing to miss.
+
+    return GoldCoverage(
+        gold_coverage=gold_coverage,
+        dropped_positives=dropped,
+        n_labeled=len(label_map),
+        n_aligned=sum(1 for key in label_map if key in candidate_keys),
+        n_positive_labels=len(positive_keys),
+    )
+
+
+def _entity_disjoint_split(
+    aligned: list[tuple[ERCandidate[Any], bool]],
+    *,
+    split: float | None,
+    seed: int,
+) -> tuple[list[int], list[int]]:
+    """Partition aligned indices into ``(train, valid)`` with NO entity in both.
+
+    Groups aligned pairs into connected entity-components (union-find over the
+    two ids each pair touches), then assigns whole components to valid -- in a
+    seed-shuffled order -- until about ``split`` of the pairs are held out. A
+    row-random split would leak an entity across the boundary and inflate
+    held-out metrics; assigning whole components cannot. Indices within each
+    returned split keep their original candidate order.
+    """
+    n = len(aligned)
+    if split is None or n == 0:
+        return list(range(n)), []
+
+    uf = _UnionFind()
+    for candidate, _ in aligned:
+        uf.union(str(candidate.left.id), str(candidate.right.id))
+
+    components: dict[str, list[int]] = {}
+    for index, (candidate, _) in enumerate(aligned):
+        components.setdefault(uf.find(str(candidate.left.id)), []).append(index)
+
+    # Deterministic base order (by smallest member index), then a seeded shuffle
+    # so the split is reproducible but not coupled to component discovery order.
+    component_lists = sorted(components.values(), key=min)
+    random.Random(seed).shuffle(component_lists)
+
+    target_valid = round(split * n)
+    valid_set: set[int] = set()
+    for members in component_lists:
+        if len(valid_set) >= target_valid:
+            break
+        valid_set.update(members)
+
+    train_indices = [i for i in range(n) if i not in valid_set]
+    valid_indices = [i for i in range(n) if i in valid_set]
+    return train_indices, valid_indices
+
+
+def align_pairs(
+    candidates: Iterable[ERCandidate[SchemaT]],
+    labels: str | Path | Sequence[LabeledPair] | Sequence[Correction],
+    *,
+    split: float | None = None,
+    seed: int = 0,
+) -> AlignedPairs[SchemaT]:
+    """Join labeled pairs to blocked candidates, split entity-disjointly, report coverage.
+
+    The id-join bridge between the two halves of a supervised fit: raw labels
+    (by id, in any left/right order) on one side, the blocker's candidate stream
+    on the other. Each candidate whose ``{left_id, right_id}`` matches a label is
+    emitted with that label, positionally aligned for
+    :meth:`SupervisedFitMixin.fit <langres.core.fit.SupervisedFitMixin>`.
+
+    Args:
+        candidates: The blocked (and, if a comparator is configured,
+            comparison-attached) candidate stream to align labels onto. Consumed
+            once and materialized.
+        labels: A ``corrections.jsonl`` path (``str``/``Path``), or an in-memory
+            ``Sequence`` of :class:`LabeledPair`/:class:`Correction`. Pairs are
+            keyed order-independently; a later label for the same pair wins.
+        split: ``None`` (default) puts every labeled candidate in ``train`` and
+            leaves ``valid`` empty. Otherwise the held-out fraction
+            (``0 < split < 1``): whole entity-components are assigned to ``valid``
+            until about ``split`` of the labeled pairs are held out.
+        seed: Seed for the deterministic component shuffle.
+
+    Returns:
+        An :class:`AlignedPairs` with ``train``/``valid`` splits and a
+        :class:`GoldCoverage` guardrail.
+
+    Raises:
+        ValueError: If ``split`` is given but not in the open interval ``(0, 1)``.
+    """
+    if split is not None and not 0.0 < split < 1.0:
+        raise ValueError(f"split must be in the open interval (0, 1) or None; got {split!r}")
+
+    label_map = _labels_to_map(labels)
+    materialized = list(candidates)
+
+    aligned: list[tuple[ERCandidate[SchemaT], bool]] = []
+    candidate_keys: set[frozenset[str]] = set()
+    for candidate in materialized:
+        key = _candidate_key(candidate)
+        candidate_keys.add(key)
+        if key in label_map:
+            aligned.append((candidate, label_map[key]))
+
+    coverage = _gold_coverage(materialized, label_map, candidate_keys)
+
+    train_indices, valid_indices = _entity_disjoint_split(aligned, split=split, seed=seed)
+    train = AlignedSplit(
+        candidates=[aligned[i][0] for i in train_indices],
+        labels=[aligned[i][1] for i in train_indices],
+    )
+    valid = AlignedSplit(
+        candidates=[aligned[i][0] for i in valid_indices],
+        labels=[aligned[i][1] for i in valid_indices],
+    )
+    return AlignedPairs(train=train, valid=valid, coverage=coverage)
