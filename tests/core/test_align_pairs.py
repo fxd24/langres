@@ -196,6 +196,18 @@ def test_split_is_deterministic_for_a_fixed_seed() -> None:
     assert [c.left.id for c in a1.valid.candidates] == [c.left.id for c in a2.valid.candidates]
 
 
+def test_single_connected_component_cannot_split_keeps_train_nonempty() -> None:
+    """All labeled entities connected -> valid empty, train keeps everything (never empties train)."""
+    # (a,b),(b,c),(c,d) chain everything into one component.
+    candidates = [_cand("a", "b"), _cand("b", "c"), _cand("c", "d")]
+    labels = [_labeled("a", "b", True), _labeled("b", "c", False), _labeled("c", "d", True)]
+
+    aligned = align_pairs(candidates, labels, split=0.5, seed=0)
+
+    assert len(aligned.train.candidates) == 3  # everything stays in train
+    assert aligned.valid.candidates == []  # no entity-disjoint valid is possible
+
+
 def test_split_none_gives_empty_valid_and_all_train() -> None:
     candidates = [_cand("a", "b"), _cand("c", "d")]
     labels = [_labeled("a", "b", True), _labeled("c", "d", False)]

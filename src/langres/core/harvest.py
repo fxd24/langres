@@ -553,6 +553,12 @@ def _entity_disjoint_split(
     for members in component_lists:
         if len(valid_set) >= target_valid:
             break
+        # Never empty train: skip a component that would swallow EVERY pair. A
+        # single all-connected component cannot be split entity-disjointly, so
+        # the honest outcome is an empty valid (train keeps everything), not an
+        # empty train. With >1 component this still fills valid toward target.
+        if len(valid_set) + len(members) >= n:
+            continue
         valid_set.update(members)
 
     train_indices = [i for i in range(n) if i not in valid_set]

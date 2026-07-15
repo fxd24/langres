@@ -164,7 +164,13 @@ class FitReport(BaseModel):
 
         lines.append("## Held-out pair metrics (valid split)")
         if self.metrics is None:
-            lines.append("- No split was given (no held-out evaluation).")
+            if self.split is not None:
+                lines.append(
+                    "- The requested split produced no held-out pairs (all labeled "
+                    "entities are connected -- no entity-disjoint valid is possible)."
+                )
+            else:
+                lines.append("- No split was given (no held-out evaluation).")
         else:
             m = self.metrics
             lines += [
