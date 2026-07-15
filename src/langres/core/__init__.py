@@ -124,6 +124,7 @@ if TYPE_CHECKING:
         QdrantHybridIndex,
         VectorIndex,
     )
+    from langres.core.calibration import Calibrator
     from langres.core.matchers.llm_judge import LLMMatcher
     from langres.core.matchers.random_forest_judge import RandomForestMatcher
     from langres.core.matchers.select_judge import SelectMatcher
@@ -136,6 +137,7 @@ __all__ = [
     "ArtifactManifest",
     "benchmark",
     "Blocker",
+    "Calibrator",
     "CandidateStats",
     "Canonicalizer",
     "CascadeMatcher",
@@ -239,6 +241,7 @@ _LAZY_SUBMODULES: frozenset[str] = frozenset({"benchmark", "metrics", "optimizer
 #: needs an optional extra installed; see :data:`_EXTRA_BY_SYMBOL` for the
 #: ``pip install langres[<extra>]`` hint a missing dependency should surface.
 _LAZY_SYMBOLS: dict[str, str] = {
+    "Calibrator": "langres.core.calibration",
     "VectorBlocker": "langres.core.blockers.vector",
     "EmbeddingProvider": "langres.core.embeddings",
     "FakeEmbedder": "langres.core.embeddings",
@@ -272,6 +275,7 @@ _EXTRA_BY_SYMBOL: dict[str, str] = {
         "LLMMatcher": "llm",
         "SelectMatcher": "llm",
         "RandomForestMatcher": "trained",
+        "Calibrator": "trained",
         "MlflowTracker": "mlflow",
         "WandbTracker": "wandb",
     }.get(name, "semantic")
