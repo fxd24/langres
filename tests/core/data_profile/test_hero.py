@@ -41,9 +41,32 @@ class TestHeroSectionRender:
         labels = dict(hero._cards())
         assert labels["records"] == "1,000"
         assert labels["clusters"] == "400"
-        assert labels["positive-pair prevalence"] == "0.0003"
+        # Hero abridges prevalence to a scannable percentage (2 sig figs).
+        assert labels["positive-pair prevalence"] == "0.03%"
         assert labels["class imbalance (pos:neg)"] == "1:2,940"
         assert labels["separability AUC"] == "0.812"
+
+    def test_prevalence_rendered_as_percentage(self) -> None:
+        hero = HeroSection(
+            title="Overview",
+            n_records=None,
+            n_clusters=None,
+            prevalence=0.00638742,
+            imbalance_ratio=None,
+            separability_auc=None,
+        )
+        assert dict(hero._cards())["positive-pair prevalence"] == "0.64%"
+
+    def test_zero_prevalence_is_na_not_zero_percent(self) -> None:
+        hero = HeroSection(
+            title="Overview",
+            n_records=None,
+            n_clusters=None,
+            prevalence=0.0,
+            imbalance_ratio=None,
+            separability_auc=None,
+        )
+        assert dict(hero._cards())["positive-pair prevalence"] == "n/a"
 
     def test_markdown_has_all_kpis(self) -> None:
         hero = HeroSection(

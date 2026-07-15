@@ -36,14 +36,17 @@ def _fmt_count(value: int | None) -> str:
 
 
 def _fmt_prevalence(value: float | None) -> str:
-    """A small probability with ``%g`` sig-figs; ``None``/NaN/Inf -> ``"n/a"``.
+    """Positive-pair prevalence as a scannable percentage (2 sig figs).
 
-    Prevalence is often tiny (``3e-04`` under ER imbalance); ``%g`` keeps the
-    significant digits a fixed-decimal format would round to ``0.000``.
+    The hero card trades the raw float (``0.00638742``) for the percentage a
+    reader actually scans (``0.64%``). ``None``/NaN/Inf and an exactly-zero
+    prevalence (a degenerate gold with no positive pairs) render as ``"n/a"`` --
+    the report's honest-degradation contract -- never a crash. The Label-structure
+    table keeps full ``%g`` precision (its own ``_fmt_g``); only the hero abridges.
     """
-    if value is None or not math.isfinite(value):
+    if value is None or not math.isfinite(value) or value == 0:
         return "n/a"
-    return f"{value:g}"
+    return f"{value * 100:.2g}%"
 
 
 def _fmt_imbalance(value: float | None) -> str:
@@ -128,13 +131,17 @@ class HeroSection(ProfileSection):
     def panels(self) -> list[str]:
         """A single ``<section>``: a big-number KPI card grid (inline styles only).
 
-        The cards are a flex grid built with inline styles that ride on the shared
-        :mod:`langres.core._report_html` CSS variables (``--line``/``--muted``/
-        ``--fg``), so the hero inherits the report's light/dark palette without a
-        new stylesheet.
+        The cards sit in a CSS grid of ``auto-fill`` tracks
+        (``repeat(auto-fill, minmax(150px, 1fr))``): ``auto-fill`` keeps the empty
+        trailing tracks, so a lone last card stays one cell wide and left-aligned
+        instead of stretching across the row (as ``auto-fit`` or a flex row would).
+        It rides on the shared :mod:`langres.core._report_html` CSS variables
+        (``--line``/``--muted``/``--fg``), inheriting the report's light/dark
+        palette without a new stylesheet, and reflows to fewer columns on narrow
+        widths.
         """
         cards = "".join(
-            f'<div style="flex:1 1 130px;min-width:120px;border:1px solid var(--line);'
+            f'<div style="border:1px solid var(--line);'
             f'border-radius:8px;padding:12px 14px;">'
             f'<div style="font-size:0.78rem;color:var(--muted);">{html.escape(label)}</div>'
             f'<div style="font-size:1.6rem;font-weight:600;font-variant-numeric:tabular-nums;">'
@@ -142,7 +149,11 @@ class HeroSection(ProfileSection):
             f"</div>"
             for label, value in self._cards()
         )
-        grid = f'<div style="display:flex;flex-wrap:wrap;gap:12px;">{cards}</div>'
+        grid = (
+            '<div style="display:grid;'
+            'grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;">'
+            f"{cards}</div>"
+        )
         return [_report_html.section(self.title, grid)]
 
 
