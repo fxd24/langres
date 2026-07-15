@@ -55,6 +55,14 @@ from langres.core.judgement_log import JudgementLog, LoggingModule
 from langres.core.judges.embedding_score import EmbeddingScoreJudge
 from langres.core.judges.fellegi_sunter import FellegiSunterJudge
 from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.method_registry import (
+    DEFAULT_EMBEDDING_MODEL,
+    MethodSpec,
+    UnknownMethodError,
+    get_method,
+    list_methods,
+    register_method,
+)
 from langres.core.models import (
     CompanySchema,
     EntityProtocol,
@@ -143,6 +151,7 @@ __all__ = [
     "Correction",
     "CorrectionLog",
     "CorrelationClusterer",
+    "DEFAULT_EMBEDDING_MODEL",
     "derive_groups_from_pairs",
     "derive_threshold_from_pairs",
     "EmbeddingProvider",
@@ -160,6 +169,7 @@ __all__ = [
     "FeatureSpec",
     "FellegiSunterJudge",
     "get_component",
+    "get_method",
     "get_schema",
     "GLinkerAdapter",
     "GroupwiseModule",
@@ -169,7 +179,9 @@ __all__ = [
     "KeyBlocker",
     "LabeledPair",
     "LLMJudge",
+    "list_methods",
     "LoggingModule",
+    "MethodSpec",
     "metrics",
     "Module",
     "optimizers",
@@ -178,6 +190,7 @@ __all__ = [
     "predicted_match",
     "QdrantHybridIndex",
     "register",
+    "register_method",
     "register_schema",
     "Resolver",
     "ReviewItem",
@@ -194,6 +207,7 @@ __all__ = [
     "StringComparator",
     "SupervisedFitMixin",
     "UnknownComponentType",
+    "UnknownMethodError",
     "UnsupervisedFitMixin",
     "VectorBlocker",
     "VectorIndex",

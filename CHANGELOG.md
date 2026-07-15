@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+### Model identity + one method registry (v0.3 slice, closes #103)
+
+The maintainer complaint this fixes: *"`langres.dedupe` is too simple — you
+have no idea what's running behind. What is the default model? And it makes
+changing the default model hard."* Design note:
+`docs/research/20260713_model_identity_and_hub.md`.
+
+#### ⚠️ Behavior changes
+
+- **`LinkVerdict.model` and `DedupeResult.model` are new required fields**
+  carrying the resolved underlying model id: the LLM id (e.g.
+  `"openrouter/openai/gpt-4o-mini"`) for the LLM judges, the
+  sentence-transformers embedder name for `judge="embedding"`, an injected
+  `Module`'s own `model` attribute for `judge_used="custom"` (identity is no
+  longer erased at the escape hatch), and `None` for pure-string similarity.
+  External code constructing these models directly must now pass the field
+  (pre-1.0; same contract as the 0.3.0 `threshold` fields). `JudgementLog`
+  rows backfill their existing `model` column from the same resolved value
+  whenever a judge doesn't stamp `provenance["model"]` itself, so log and
+  result can't drift.
+- **The `judge="auto"` default model is now a pinned, documented constant:
+  `langres.DEFAULT_AUTO_MODEL`** (aliasing
+  `clients.openrouter.DEFAULT_OPENROUTER_MODEL`; the direct-OpenAI fallback
+  route when only `OPENAI_API_KEY` is set remains `openai/gpt-5-mini`). The
+  values are unchanged — what's new is the policy: **changing the default
+  model is a user-facing behavior change and requires a changelog entry.**
+
+#### Added
+
+- **`judge="prompt_llm"` — the bring-your-own-prompt LLM judge, by name**
+  (closes #103). `link`/`dedupe`/`Resolver.from_schema` accept
+  `prompt_template=`, `system_prompt=`, and `response_parser=` (a *registered*
+  parser name: `"score"` or `"binary_yes_no"` — see
+  `llm_judge.RESPONSE_PARSERS`/`RECORD_SERIALIZERS`). Named parsers serialize
+  in `LLMJudge.config`, closing the round-trip gap where a saved
+  paper-replication judge silently reverted to the default parser on
+  `Resolver.load`. Passing a prompt-seam kwarg with any other judge raises —
+  never silently ignored. `zero_shot_llm` keeps backing `DSPyJudge`
+  (no behavior change for existing callers).
+- **One method registry** (`langres.core.method_registry`): every
+  name-selectable judge/method is a `MethodSpec` (builder + `score_type` +
+  `default_threshold` + `default_model` + comparator/extra requirements)
+  registered once. The three hand-rolled dispatch switches
+  (`presets.build_judge`, `resolver._build_module_for_judge`,
+  `methods._make_module_builder`) now all resolve through it — closing the
+  #55 wiring debt; `"auto"`'s fail-fast, the spend cap, and per-judge
+  thresholds are unchanged. Public seam: `register_method` / `get_method` /
+  `list_methods` (exported from `langres.core`). **Id grammar reserved:**
+  bare method names are built-ins; `/` is reserved for future
+  `author/method` namespacing (model ids keep their slashes in the separate
+  `model=` kwarg).
+
 ### Fixed
 
 - **`langres.__version__` no longer drifts from the released version.** It was a

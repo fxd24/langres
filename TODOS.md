@@ -49,9 +49,13 @@ backlog in [#55](https://github.com/fxd24/langres/issues/55).
   seam instead of only the native FS-EM judge. ([#55](https://github.com/fxd24/langres/issues/55))
 - **Full C1 six-dataset replication portfolio** — only FZ/AG (+ Abt-Buy in M4.5) are
   in scope now; the rest of the benchmark portfolio is deferred. ([#55](https://github.com/fxd24/langres/issues/55))
-- **Public method-registration API** — a supported, documented way for third parties
-  to register a new judge/method (beyond editing `methods.py:_make_module_builder`
-  in-tree). ([#55](https://github.com/fxd24/langres/issues/55))
+- **Public method-registration API** — the in-tree half shipped in the v0.3
+  model-identity slice: one `MethodSpec` registry (`core/method_registry.py`,
+  `register_method`/`get_method`) that all three dispatch sites resolve
+  through, with `/` reserved for `author/method` namespacing. Remaining for
+  v0.4: the `langres.methods` entry-points group so a *pip-installed* package
+  can register a method without editing langres.
+  ([#55](https://github.com/fxd24/langres/issues/55))
 
 ## Hardening
 

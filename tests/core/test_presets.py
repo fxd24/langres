@@ -28,13 +28,13 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module, stamp_group_cost
 from langres.core.modules.dspy_judge import DSPyJudge
 from langres.core.presets import (
+    DEFAULT_AUTO_MODEL,
     DEFAULT_BUDGET_USD,
     _ALL_PAIRS_MAX_N,
     NoJudgeAvailableError,
     _build_vector_blocker,
     _estimate_n_pairs,
     _OPENAI_MODEL,
-    _OPENROUTER_MODEL,
     _SpendCappedModule,
     _text_field_extractor,
     build_embedding_candidate,
@@ -240,7 +240,7 @@ class TestChooseAutoJudge:
         with pytest.warns(UserWarning, match="PAID") as record:
             judge, model = choose_auto_judge(_settings(openrouter="or-key"))
         assert judge == "zero_shot_llm"
-        assert model == _OPENROUTER_MODEL
+        assert model == DEFAULT_AUTO_MODEL
         assert PRICES_PER_1M[model][0] > 0.0 and PRICES_PER_1M[model][1] > 0.0
         message = str(record[0].message)
         assert model in message  # which model was picked
@@ -256,19 +256,19 @@ class TestChooseAutoJudge:
     def test_openrouter_key_preferred_over_openai_key(self) -> None:
         with pytest.warns(UserWarning):
             judge, model = choose_auto_judge(_settings(openrouter="or-key", openai="oai-key"))
-        assert (judge, model) == ("zero_shot_llm", _OPENROUTER_MODEL)
+        assert (judge, model) == ("zero_shot_llm", DEFAULT_AUTO_MODEL)
 
     def test_refuses_paid_judge_with_unpinned_price(self) -> None:
         """E1/TD1: a model with no pinned price raises -- a blind $0 cap is no
         cap at all; explicit judge="zero_shot_llm" stays the escape hatch."""
-        unpriced = {k: v for k, v in PRICES_PER_1M.items() if k != _OPENROUTER_MODEL}
+        unpriced = {k: v for k, v in PRICES_PER_1M.items() if k != DEFAULT_AUTO_MODEL}
         with (
             patch.dict("langres.clients.openrouter.PRICES_PER_1M", unpriced, clear=True),
             pytest.raises(NoJudgeAvailableError, match="no pinned price") as excinfo,
         ):
             choose_auto_judge(_settings(openrouter="or-key"))
         message = str(excinfo.value)
-        assert _OPENROUTER_MODEL in message
+        assert DEFAULT_AUTO_MODEL in message
         assert 'judge="zero_shot_llm"' in message  # the blind-cap escape hatch
 
     def test_caller_model_override_is_honored_and_named_in_notice(self) -> None:
@@ -282,7 +282,7 @@ class TestChooseAutoJudge:
 
     def test_no_keys_raises_even_with_model_override(self) -> None:
         with pytest.raises(NoJudgeAvailableError, match="no API key"):
-            choose_auto_judge(_settings(), model=_OPENROUTER_MODEL)
+            choose_auto_judge(_settings(), model=DEFAULT_AUTO_MODEL)
 
     def test_budget_usd_is_named_in_the_selection_notice(self) -> None:
         with pytest.warns(UserWarning, match=r"\$2\.50"):
@@ -345,7 +345,7 @@ class TestBuildJudge:
     def test_zero_shot_llm_returns_dspy_judge_with_default_model_and_pinned_price(self) -> None:
         module = build_judge("zero_shot_llm", PresetCompany, entity_noun="company")
         assert isinstance(module, DSPyJudge)
-        assert module.model == _OPENROUTER_MODEL
+        assert module.model == DEFAULT_AUTO_MODEL
         assert module.entity_noun == "company"
         assert module.price_per_1k_tokens > 0.0
 
@@ -506,8 +506,8 @@ class TestResolveJudge:
     def test_zero_shot_llm_explicit_defaults_model_when_none(self) -> None:
         resolved = resolve_judge("zero_shot_llm", PresetCompany, model=None)
         assert resolved.judge_used == "zero_shot_llm"
-        assert resolved.model == _OPENROUTER_MODEL
-        assert resolved.module._module.model == _OPENROUTER_MODEL  # type: ignore[attr-defined]
+        assert resolved.model == DEFAULT_AUTO_MODEL
+        assert resolved.module._module.model == DEFAULT_AUTO_MODEL  # type: ignore[attr-defined]
 
     def test_injected_module_reports_judge_used_custom(self) -> None:
         injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
@@ -522,7 +522,7 @@ class TestResolveJudge:
         ):
             resolved = resolve_judge("auto", PresetCompany)
         assert resolved.judge_used == "zero_shot_llm"
-        assert resolved.model == _OPENROUTER_MODEL
+        assert resolved.model == DEFAULT_AUTO_MODEL
         assert isinstance(resolved.module._module, DSPyJudge)
 
     def test_auto_resolution_raises_without_keys(self) -> None:
@@ -587,7 +587,7 @@ class TestResolveJudge:
 class TestNoticeAndEstimate:
     def test_notice_message_format(self) -> None:
         with pytest.warns(UserWarning, match=r"scoring ~10 pairs with '.*', est\. cost \$"):
-            notice_pre_scoring_cost(_OPENROUTER_MODEL, 10)
+            notice_pre_scoring_cost(DEFAULT_AUTO_MODEL, 10)
 
     def test_unpinned_model_warns_blind_cap_not_reassuring_zero(self) -> None:
         """M1 regression: an unpinned paid model must never print the
@@ -678,7 +678,7 @@ class TestBuildResolver:
             build_resolver(
                 PresetCompany,
                 judge="zero_shot_llm",
-                model=_OPENROUTER_MODEL,
+                model=DEFAULT_AUTO_MODEL,
                 entity_noun="e",
                 threshold=None,
                 n_records=4,
@@ -784,3 +784,74 @@ class TestBuildEmbeddingCandidateNoCandidateGuard:
                 build_embedding_candidate(
                     PresetCompany, {"id": "a", "name": "X"}, {"id": "b", "name": "Y"}
                 )
+
+
+# ---------------------------------------------------------------------------
+# Model identity (v0.3 slice): the pinned auto default + per-judge resolution
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultAutoModelPolicy:
+    def test_default_auto_model_is_pinned(self) -> None:
+        """The judge="auto" default model is a documented, pinned policy.
+
+        Changing this value is a user-facing behavior change (quality, cost,
+        and privacy posture of every default link()/dedupe() call) and
+        REQUIRES a CHANGELOG entry -- see DEFAULT_AUTO_MODEL's docstring. If
+        this test fails because the constant changed, write that entry.
+        """
+        assert DEFAULT_AUTO_MODEL == "openrouter/openai/gpt-4o-mini"
+
+    def test_default_auto_model_is_the_shared_openrouter_constant(self) -> None:
+        from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
+
+        assert DEFAULT_AUTO_MODEL == DEFAULT_OPENROUTER_MODEL
+
+    def test_default_auto_model_is_root_exported(self) -> None:
+        import langres
+
+        assert langres.DEFAULT_AUTO_MODEL == DEFAULT_AUTO_MODEL
+
+
+class TestResolveJudgeModelIdentity:
+    """resolve_judge stamps the model that actually runs -- per judge family."""
+
+    def test_string_reports_none(self) -> None:
+        resolved = resolve_judge("string", PresetCompany)
+        assert resolved.model is None
+
+    def test_embedding_reports_the_pinned_embedder(self) -> None:
+        from langres.core.method_registry import DEFAULT_EMBEDDING_MODEL
+
+        resolved = resolve_judge("embedding", PresetCompany)
+        assert resolved.model == DEFAULT_EMBEDDING_MODEL
+
+    def test_embedding_ignored_model_override_is_not_reported(self) -> None:
+        """model= is ignored by the embedding judge, so reporting it back
+        would lie about what ran -- the pinned embedder is the truth."""
+        from langres.core.method_registry import DEFAULT_EMBEDDING_MODEL
+
+        resolved = resolve_judge("embedding", PresetCompany, model="some/other-model")
+        assert resolved.model == DEFAULT_EMBEDDING_MODEL
+
+    def test_zero_shot_llm_defaults_to_the_pinned_auto_model(self) -> None:
+        resolved = resolve_judge("zero_shot_llm", PresetCompany)
+        assert resolved.model == DEFAULT_AUTO_MODEL
+
+    def test_injected_module_reports_its_own_model_attribute(self) -> None:
+        injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
+        resolved = resolve_judge(injected, PresetCompany)
+        assert resolved.judge_used == "custom"
+        assert resolved.model == injected.model
+
+    def test_build_resolver_threads_the_model_through(self) -> None:
+        resolved = build_resolver(
+            PresetCompany,
+            judge="string",
+            model=None,
+            entity_noun="entity",
+            threshold=None,
+            n_records=2,
+        )
+        assert resolved.model is None
+        assert resolved.judge_used == "string"

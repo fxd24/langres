@@ -185,6 +185,57 @@ def default_record_serializer(entity: Any) -> str:
     return str(entity.model_dump_json(indent=2))
 
 
+#: Named ``response_parser`` registry: these names are accepted anywhere a
+#: parser is (``LLMJudge(response_parser=...)``, the verbs' / ``from_schema``'s
+#: ``judge="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
+#: in :attr:`LLMJudge.config`, so a saved paper-replication judge reloads with
+#: its parser intact (the model-identity design note's round-trip fix).
+#: Adding an entry makes that name resolvable and serializable in-process.
+RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
+    "score": parse_score_response,
+    "binary_yes_no": parse_binary_yes_no,
+}
+
+#: Named ``record_serializer`` registry -- same contract as
+#: :data:`RESPONSE_PARSERS` (names serialize in :attr:`LLMJudge.config`;
+#: custom callables do not).
+RECORD_SERIALIZERS: dict[str, Callable[[Any], str]] = {
+    "json": default_record_serializer,
+}
+
+
+def _resolve_named(
+    value: Callable[..., Any] | str | None,
+    registry: dict[str, Callable[..., Any]],
+    *,
+    kind: str,
+    default_name: str,
+) -> tuple[Callable[..., Any], str | None]:
+    """Resolve a parser/serializer given by name, callable, or ``None``.
+
+    Returns ``(callable, name)`` where ``name`` is the registered name to
+    serialize in :attr:`LLMJudge.config` -- ``None`` for a custom callable that
+    is not in ``registry`` (documented as non-serializable: it reverts to the
+    default on load).
+
+    Raises:
+        ValueError: For an unknown name, listing the registered ones.
+    """
+    if value is None:
+        return registry[default_name], default_name
+    if isinstance(value, str):
+        resolved = registry.get(value)
+        if resolved is None:
+            raise ValueError(
+                f"unknown {kind} name {value!r}; registered names: "
+                f"{', '.join(sorted(registry))}. Pass a callable for a custom "
+                f"{kind} (it will not serialize in config)."
+            )
+        return resolved, value
+    name = next((n for n, fn in registry.items() if fn is value), None)
+    return value, name
+
+
 class _RateLimiter:
     """Token-aware rate limiter for LLM API calls.
 
@@ -348,8 +399,8 @@ class LLMJudge(Module[SchemaT]):
         provider: dict[str, Any] | None = None,
         *,
         system_prompt: str | None = None,
-        response_parser: Callable[[str], ParsedVerdict] | None = None,
-        record_serializer: Callable[[Any], str] | None = None,
+        response_parser: Callable[[str], ParsedVerdict] | str | None = None,
+        record_serializer: Callable[[Any], str] | str | None = None,
         on_parse_error: Literal["abstain", "raise"] = "abstain",
         confidence: Literal["none", "logprob"] = "none",
     ):
@@ -383,17 +434,22 @@ class LLMJudge(Module[SchemaT]):
             system_prompt: Optional system message. When set, the request sends
                 two messages (``system`` then ``user``); when ``None`` (default)
                 a single ``user`` message is sent (byte-identical to before).
-            response_parser: Callable mapping the raw response text to a
-                :class:`ParsedVerdict` (score + optional reasoning). Defaults to
-                :func:`parse_score_response` (the ``Score:``-line parser). Ship a
-                published-prompt replication with :func:`parse_binary_yes_no`.
-                A verdict whose ``score`` is ``None`` is a parse failure and is
-                routed through ``on_parse_error``. NOT serialized (see
-                :attr:`config`).
-            record_serializer: Callable ``(entity) -> str`` rendering each record
-                into the prompt. Defaults to :func:`default_record_serializer`
-                (``model_dump_json(indent=2)``). Override to control exactly what
-                the LLM sees (e.g. drop ``id``/``source``). NOT serialized.
+            response_parser: A registered parser *name* (see
+                :data:`RESPONSE_PARSERS`: ``"score"`` -- the default
+                ``Score:``-line parser -- or ``"binary_yes_no"`` for the
+                published yes/no ER-prompt family) or a callable mapping the
+                raw response text to a :class:`ParsedVerdict`. A verdict whose
+                ``score`` is ``None`` is a parse failure and is routed through
+                ``on_parse_error``. A registered name (or one of the registered
+                callables) serializes in :attr:`config` and round-trips through
+                ``Resolver.save``/``load``; an unregistered custom callable does
+                NOT (it reverts to the default on load -- see :attr:`config`).
+            record_serializer: A registered serializer *name* (see
+                :data:`RECORD_SERIALIZERS`: ``"json"``, the default) or a
+                callable ``(entity) -> str`` rendering each record into the
+                prompt. Override to control exactly what the LLM sees (e.g.
+                drop ``id``/``source``). Same serialization contract as
+                ``response_parser``.
             on_parse_error: What to do on a parse failure. ``"abstain"`` (the
                 default) emits a judgement flagged ``provenance["parse_error"] =
                 True`` with ``score=0.0`` — the evaluator surfaces and warns on
@@ -419,8 +475,9 @@ class LLMJudge(Module[SchemaT]):
         Raises:
             ValueError: If temperature out of range, ``on_parse_error`` is not
                 ``"abstain"``/``"raise"``, ``confidence`` is not
-                ``"none"``/``"logprob"``, or ``prompt_template`` lacks
-                ``{left}``/``{right}``.
+                ``"none"``/``"logprob"``, ``prompt_template`` lacks
+                ``{left}``/``{right}``, or a ``response_parser``/
+                ``record_serializer`` name is not registered.
         """
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
@@ -437,9 +494,11 @@ class LLMJudge(Module[SchemaT]):
         self.system_prompt = system_prompt
         self.on_parse_error = on_parse_error
         self.confidence = confidence
-        self._parse = response_parser if response_parser is not None else parse_score_response
-        self._serialize = (
-            record_serializer if record_serializer is not None else default_record_serializer
+        self._parse, self._parser_name = _resolve_named(
+            response_parser, RESPONSE_PARSERS, kind="response_parser", default_name="score"
+        )
+        self._serialize, self._serializer_name = _resolve_named(
+            record_serializer, RECORD_SERIALIZERS, kind="record_serializer", default_name="json"
         )
         self.prompt_template = (
             prompt_template if prompt_template else render_default_prompt(entity_noun)
@@ -482,11 +541,14 @@ class LLMJudge(Module[SchemaT]):
         ``confidence`` credence mode so a saved paper-replication / logprob judge
         reloads with them — without ``confidence`` a ``save``/``load`` would
         silently revert a logprob judge to ``confidence="none"`` (PR #105 review).
-        The ``response_parser`` and ``record_serializer`` callables are **not**
-        serialized (there is no no-pickle way to persist an arbitrary callable) —
-        like the ``client``, they revert to the defaults on
-        :meth:`from_config`/``Resolver.load``. Re-inject a custom
-        parser/serializer after load if you need it.
+        ``response_parser`` / ``record_serializer`` are serialized **by
+        registered name** (see :data:`RESPONSE_PARSERS` /
+        :data:`RECORD_SERIALIZERS`), so a judge built with ``"binary_yes_no"``
+        round-trips. An *unregistered* custom callable serializes as ``None``
+        (there is no no-pickle way to persist an arbitrary callable) — like the
+        ``client``, it reverts to the default on
+        :meth:`from_config`/``Resolver.load``; re-inject it after load if you
+        need it.
         """
         return {
             "model": self.model,
@@ -497,6 +559,8 @@ class LLMJudge(Module[SchemaT]):
             "system_prompt": self.system_prompt,
             "on_parse_error": self.on_parse_error,
             "confidence": self.confidence,
+            "response_parser": self._parser_name,
+            "record_serializer": self._serializer_name,
         }
 
     @classmethod
@@ -504,8 +568,9 @@ class LLMJudge(Module[SchemaT]):
         """Rebuild from :attr:`config` via the lazy-client path (client from env).
 
         Older artifacts without ``system_prompt`` / ``on_parse_error`` /
-        ``confidence`` fall back to the constructor defaults (``None`` /
-        ``"abstain"`` / ``"none"``).
+        ``confidence`` / ``response_parser`` / ``record_serializer`` fall back
+        to the constructor defaults (``None`` / ``"abstain"`` / ``"none"`` /
+        the ``"score"`` parser / the ``"json"`` serializer).
         """
         provider = config.get("provider")
         return cls(
@@ -518,6 +583,10 @@ class LLMJudge(Module[SchemaT]):
             system_prompt=config.get("system_prompt"),  # type: ignore[arg-type]
             on_parse_error=config.get("on_parse_error", "abstain"),  # type: ignore[arg-type]
             confidence=config.get("confidence", "none"),  # type: ignore[arg-type]
+            # Serialized by registered name; None (a custom callable, or a
+            # pre-registry artifact) resolves to the default.
+            response_parser=config.get("response_parser"),  # type: ignore[arg-type]
+            record_serializer=config.get("record_serializer"),  # type: ignore[arg-type]
         )
 
     def _completion_kwargs(self) -> dict[str, Any]:

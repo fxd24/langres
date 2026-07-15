@@ -289,6 +289,9 @@ invented that loop. The delta:
   on your own harvested labels — no rewrite.
 - **Honest cost accounting.** Every LLM call is spend-capped and reports its
   real per-call cost; quality and dollars land side by side in the tearsheet.
+- **No hidden model.** Every result tells you which judge and which model
+  produced it (`result.judge_used`, `result.model`) — nothing runs behind
+  your back.
 - **Code-first & testable.** Matching logic is Python you can unit-test like
   any other class; no YAML DSL.
 - **vs. [Splink](https://github.com/moj-analytical-services/splink) —

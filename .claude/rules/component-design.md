@@ -125,17 +125,26 @@ Extract when you see:
 1. **Blockers**: Must implement candidate generation (`stream`) and schema
    normalization.
 2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
-   There is **no single registration seam yet** — a new *public, name-selectable*
-   judge must be wired into **all three** dispatch sites, or it will be rejected
-   by whichever path doesn't know it:
-   - `methods.py:_make_module_builder` — the benchmark / method-registry path.
-   - `core/resolver.py:_build_module_for_judge` — what `Resolver.from_schema(judge=...)`
-     dispatches on.
-   - `core/presets.py:build_judge` — what the verbs (`link` / `dedupe`, incl.
-     `"auto"`) dispatch on.
-   (A single public method-registration API that collapses these is deferred to
-   issue #55; see `TODOS.md`.) A judge you only ever pass as a `Module` instance
-   — `dedupe(records, judge=MyJudge(...))` — needs none of this wiring.
+   A *public, name-selectable* judge is registered **once**, in the single
+   method registry (`core/method_registry.py` — the v0.3 unification that
+   closed issue #55's three-site wiring debt): a `MethodSpec` carries the
+   builder plus identity metadata (`score_type`, `default_threshold`,
+   `default_model`, `accepts_model`, `needs_comparator`, `requires_extra`).
+   All three dispatch paths — `core/presets.py:build_judge` (the verbs),
+   `core/resolver.py:_build_module_for_judge` (`Resolver.from_schema`), and
+   `methods.py:_make_module_builder` (the benchmark harness) — resolve names
+   through it, so a name means exactly one construction everywhere. Two
+   things stay per-layer *policy*, not registration: the verbs' allowlist
+   (`presets._VERB_JUDGE_NAMES` — extend it only for judges that are safe
+   without an injected client or a fit step) and `from_schema`'s name tuple
+   (no `"auto"`). Method ids are bare names; `/` is reserved for future
+   `author/method` namespacing. Spec builders must lazy-import heavy deps
+   (dspy/litellm/sklearn) inside the build function — the registry is
+   eager-imported by `langres.core` (see `tests/test_import_budget.py`).
+   A judge you only ever pass as a `Module` instance —
+   `dedupe(records, judge=MyJudge(...))` — needs none of this wiring. For
+   `save`/`load`, the component config-registry (`core/registry.py:register`)
+   remains a separate, orthogonal namespace.
 3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
    blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
    the user-facing sugar over it.

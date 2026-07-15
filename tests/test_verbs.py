@@ -14,7 +14,7 @@ import sys
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from dspy.utils.dummies import DummyLM
@@ -131,6 +131,7 @@ class TestLinkVerdict:
             score=0.9,
             reasoning=None,
             judge_used="string",
+            model=None,
             score_type="heuristic",
             threshold=0.5,
             judgement=judgement,
@@ -155,6 +156,7 @@ class TestLinkVerdict:
             score=0.42,
             reasoning=None,
             judge_used="string",
+            model=None,
             score_type="heuristic",
             threshold=0.5,
             judgement=judgement,
@@ -168,22 +170,32 @@ class TestLinkVerdict:
 class TestDedupeResult:
     def test_behaves_like_a_plain_list(self) -> None:
         result = DedupeResult(
-            [{"a", "b"}], judge_used="string", score_type="heuristic", threshold=0.5
+            [{"a", "b"}], judge_used="string", score_type="heuristic", threshold=0.5, model=None
         )
         assert result == [{"a", "b"}]
         assert len(result) == 1
         assert list(result) == [{"a", "b"}]
 
     def test_carries_judge_metadata(self) -> None:
-        result = DedupeResult([], judge_used="embedding", score_type="sim_cos", threshold=0.7)
+        result = DedupeResult(
+            [],
+            judge_used="embedding",
+            score_type="sim_cos",
+            threshold=0.7,
+            model="all-MiniLM-L6-v2",
+        )
         assert result.judge_used == "embedding"
         assert result.score_type == "sim_cos"
         assert result.threshold == 0.7
+        assert result.model == "all-MiniLM-L6-v2"
 
     def test_repr_includes_judge_used_and_threshold(self) -> None:
-        result = DedupeResult([], judge_used="string", score_type="heuristic", threshold=0.5)
+        result = DedupeResult(
+            [], judge_used="string", score_type="heuristic", threshold=0.5, model=None
+        )
         assert "judge_used='string'" in repr(result)
         assert "threshold=0.5" in repr(result)
+        assert "model=None" in repr(result)
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +615,7 @@ class TestLinkEmbeddingJudge:
         assert verdict.score > 0.99
         assert verdict.score_type == "sim_cos"
         assert verdict.judge_used == "embedding"
+        assert verdict.model == "all-MiniLM-L6-v2"
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +661,9 @@ class TestAutoSelectionNotice:
         judge_module = _EventRecordingJudge(events)
         monkeypatch.setattr(
             "langres.core.presets.build_judge",
-            lambda judge, schema, *, model=None, entity_noun="entity": judge_module,
+            lambda judge, schema, *, model=None, entity_noun="entity", judge_params=None: (
+                judge_module
+            ),
         )
 
     def test_dedupe_auto_notice_fires_before_any_scoring(
@@ -689,6 +704,7 @@ class TestAutoSelectionNotice:
             *,
             model: str | None = None,
             entity_noun: str = "entity",
+            judge_params: dict[str, object] | None = None,
         ) -> Module[object]:
             seen_models.append(model)
             return judge_module
@@ -957,3 +973,145 @@ def test_import_langres_top_level_does_not_import_dspy() -> None:
     assert result.returncode == 0, (
         f"import-safety check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Model identity on results (v0.3 slice) + judge="prompt_llm" (#103)
+# ---------------------------------------------------------------------------
+
+
+class TestModelIdentityOnResults:
+    """Every result reports which underlying model ran (or None, honestly)."""
+
+    def test_string_judge_reports_no_model(self) -> None:
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        result = dedupe(records, judge="string")
+        assert result.model is None
+
+    def test_link_string_judge_reports_no_model(self) -> None:
+        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme"}, judge="string")
+        assert verdict.model is None
+
+    def test_short_circuit_result_model_is_none(self) -> None:
+        assert dedupe([]).model is None
+
+    def test_injected_module_reports_its_own_model(self) -> None:
+        """A custom Module's self-reported ``model`` attribute surfaces --
+        identity is no longer erased at the judge=<Module> escape hatch."""
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        result = dedupe(records, judge=_dummy_judge(match=True))
+        assert result.judge_used == "custom"
+        # DSPyJudge's constructor default -- the injected judge's own attribute.
+        assert result.model == "openrouter/openai/gpt-4o-mini"
+
+    def test_injected_module_without_model_attribute_reports_none(self) -> None:
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        result = dedupe(records, judge=_EventRecordingJudge([]))
+        assert result.judge_used == "custom"
+        assert result.model is None
+
+    def test_log_rows_carry_the_resolved_model(self, tmp_path: Path) -> None:
+        """Log/result consistency: rows the judge didn't stamp get the verb's
+        resolved model -- here the injected judge stamps its own, so both agree."""
+        log_path = tmp_path / "log.jsonl"
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        result = dedupe(records, judge=_dummy_judge(match=True), log=log_path)
+        rows = JudgementLog(log_path).read()
+        assert rows
+        assert all(row["model"] == result.model for row in rows)
+
+
+def _mock_llm_client(content: str) -> Mock:
+    """A LiteLLM-shaped mock client whose completion() returns ``content``."""
+    response = Mock()
+    response.choices = [Mock()]
+    response.choices[0].message.content = content
+    response.usage = Mock()
+    response.usage.prompt_tokens = 10
+    response.usage.completion_tokens = 5
+    client = Mock()
+    client.completion.return_value = response
+    return client
+
+
+class TestPromptLLMJudge:
+    """judge="prompt_llm" -- the bring-your-own-prompt LLMJudge, by name (#103).
+
+    Zero-spend: ``langres.clients.create_llm_client`` is monkeypatched to a
+    mock, so the lazily-built client never touches the network.
+    """
+
+    PROMPT = "Do these records match? Answer Yes or No.\nA: {left}\nB: {right}"
+
+    def _patch_client(self, monkeypatch: pytest.MonkeyPatch, content: str) -> Mock:
+        client = _mock_llm_client(content)
+        monkeypatch.setattr("langres.clients.create_llm_client", lambda *a, **kw: client)
+        return client
+
+    def test_link_prompt_llm_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = self._patch_client(monkeypatch, "Yes")
+        with pytest.warns(UserWarning, match="scoring ~1 pairs"):
+            verdict = link(
+                {"id": "a", "name": "Acme"},
+                {"id": "b", "name": "Acme Corp"},
+                judge="prompt_llm",
+                prompt_template=self.PROMPT,
+                response_parser="binary_yes_no",
+            )
+        assert verdict.match is True
+        assert verdict.score is None  # decision family: no fabricated score
+        assert verdict.judge_used == "prompt_llm"
+        assert verdict.model == "openrouter/openai/gpt-4o-mini"
+        assert verdict.score_type == "prob_llm"
+        # The custom prompt (not the neutral default) is what was sent.
+        sent = client.completion.call_args.kwargs["messages"][-1]["content"]
+        assert sent.startswith("Do these records match?")
+
+    def test_dedupe_prompt_llm_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_client(monkeypatch, "Yes")
+        records = [{"id": "1", "name": "Acme"}, {"id": "2", "name": "Acme Corp"}]
+        with pytest.warns(UserWarning, match="scoring ~1 pairs"):
+            result = dedupe(
+                records,
+                judge="prompt_llm",
+                prompt_template=self.PROMPT,
+                response_parser="binary_yes_no",
+            )
+        assert result == [{"1", "2"}]
+        assert result.judge_used == "prompt_llm"
+        assert result.model == "openrouter/openai/gpt-4o-mini"
+        assert result.threshold == 0.7  # prompt_llm's registered default
+
+    def test_prompt_llm_honors_model_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_client(monkeypatch, "No")
+        with pytest.warns(UserWarning):
+            verdict = link(
+                {"id": "a", "name": "X"},
+                {"id": "b", "name": "Y"},
+                judge="prompt_llm",
+                model="openrouter/z-ai/glm-5.2",
+                response_parser="binary_yes_no",
+            )
+        assert verdict.match is False
+        assert verdict.model == "openrouter/z-ai/glm-5.2"
+
+    def test_prompt_seam_kwargs_with_other_judges_raise(self) -> None:
+        records = [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}]
+        with pytest.raises(ValueError, match="prompt_llm"):
+            dedupe(records, judge="string", prompt_template="x {left} {right}")
+        with pytest.raises(ValueError, match="prompt_llm"):
+            link(records[0], records[1], judge="string", response_parser="binary_yes_no")
+        with pytest.raises(ValueError, match="prompt_llm"):
+            link(records[0], records[1], judge=_dummy_judge(), system_prompt="be brief")
+
+    def test_unknown_parser_name_raises_with_registered_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_client(monkeypatch, "Yes")
+        with pytest.raises(ValueError, match="binary_yes_no"):
+            link(
+                {"id": "a", "name": "X"},
+                {"id": "b", "name": "Y"},
+                judge="prompt_llm",
+                response_parser="not_a_parser",
+            )

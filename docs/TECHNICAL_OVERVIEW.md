@@ -6,7 +6,7 @@ Welcome to the langres documentation. This document provides a deep dive into th
 
 langres exposes a **three-layer API** — each layer a thin shell over the one below — so common tasks are one-liners while bespoke pipelines stay fully composable:
 
-- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `judge="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `score_type`).
+- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `judge="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `model` / `score_type` / `threshold` — every result names the judge *and* the underlying model that ran).
 - **`langres.Resolver`** (Mid-Level): the declarative pipeline. `Resolver.from_schema(schema, judge=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
 - **`langres.core`** (Low-Level): the "power-user" API — the base classes (`Module`, `Blocker`, `Comparator`, `Clusterer`, judges) you compose into entirely new logic from scratch.
 
@@ -91,7 +91,7 @@ The two verbs are the one-liner front door. They infer an ephemeral schema from 
 
 **Definition:** Group a batch of records into entity clusters (single-source deduplication).
 
-`dedupe(records, *, judge="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used` and `score_type`.
+`dedupe(records, *, judge="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used`, `model`, `score_type`, and the effective `threshold`. `model` is the underlying model that actually scored the batch: the resolved LLM id (e.g. `"openrouter/openai/gpt-4o-mini"`) for the LLM judges, the sentence-transformers embedder name for `judge="embedding"`, an injected `Module`'s own `model` attribute for `judge_used="custom"`, and `None` for pure-string similarity. The same value backfills the `model` column of `JudgementLog` rows (`log=`) whenever the judge doesn't stamp its own, so result and log always agree.
 
 **Example** (offline — `judge="string"` pins the zero-spend judge, no API key or network needed):
 
@@ -109,13 +109,25 @@ result = dedupe(records, judge="string", threshold=0.6)
 print(result.judge_used, result.score_type)   # "string" "heuristic"
 ```
 
-`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+`judge="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoJudgeAvailableError` if no key is set — langres never silently falls back to fuzzy matching. The default model it resolves to is the **pinned, documented constant `langres.DEFAULT_AUTO_MODEL`** (`"openrouter/openai/gpt-4o-mini"` on the OpenRouter route; a direct-OpenAI fallback applies when only `OPENAI_API_KEY` is set) — changing it is a behavior change that requires a CHANGELOG entry, and the resolved id is always reported back on `result.model`. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+
+`judge="prompt_llm"` is the bring-your-own-prompt LLM judge (`LLMJudge`) — run a published paper's prompt, or your own, straight from the verbs:
+
+```python
+verdict = link(a, b, judge="prompt_llm",
+               prompt_template="Do these match? Answer Yes or No.\nA: {left}\nB: {right}",
+               response_parser="binary_yes_no")   # a registered, serializable parser name
+verdict.judge_used   # "prompt_llm"
+verdict.model        # "openrouter/openai/gpt-4o-mini" (override with model=)
+```
+
+`prompt_template` / `system_prompt` / `response_parser` apply only to `judge="prompt_llm"` (passing them with another judge raises — never silently ignored). `response_parser` takes a *registered name* (`"score"`, the default `Score:`-line parser, or `"binary_yes_no"` for the published yes/no ER-prompt family — see `langres.core.modules.llm_judge.RESPONSE_PARSERS`); named parsers serialize with the judge's config, so a `Resolver` built with one round-trips through `save`/`load`. For a custom parser callable, construct an `LLMJudge` yourself and pass it as `judge=<Module>`.
 
 ### link
 
 **Definition:** Decide whether **two records** are the same entity — a single pairwise verdict.
 
-`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMJudge`, has no score), `.judge_used`, `.score_type`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMJudge` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `JudgeAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
+`link(left, right, *, judge="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMJudge`, has no score), `.judge_used`, `.model` (the resolved underlying model id — same contract as `DedupeResult.model` above), `.score_type`, the effective `.threshold`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMJudge` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `JudgeAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
 
 ```python
 from langres import link
@@ -151,7 +163,9 @@ resolver.save("company_resolver.json")    # config-registry serialization (no pi
 resolver = Resolver.load("company_resolver.json")
 ```
 
-`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageJudge` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `judge="embedding"`), and a `Clusterer`. `judge=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, or a `Module` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution and **no** spend cap (that magic lives in the verbs), so a paid judge built here runs uncapped.
+`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageJudge` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `judge="embedding"`), and a `Clusterer`. `judge=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (with the same `prompt_template` / `system_prompt` / `response_parser` kwargs as the verbs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), or a `Module` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution and **no** spend cap (that magic lives in the verbs), so a paid judge built here runs uncapped.
+
+All three name-dispatch paths — the verbs, `from_schema`, and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg).
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 

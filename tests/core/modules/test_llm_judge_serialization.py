@@ -51,6 +51,8 @@ def test_config_excludes_client_and_secrets() -> None:
         "system_prompt",
         "on_parse_error",
         "confidence",
+        "response_parser",
+        "record_serializer",
     }
     assert config["model"] == "openrouter/openai/gpt-4o-mini"
     assert config["temperature"] == 0.3
@@ -270,3 +272,83 @@ def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) ->
         f"import-langres.core path).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     assert "UnknownComponentType" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Named parsers/serializers (v0.3): the config round-trip gap, closed
+# ---------------------------------------------------------------------------
+
+
+def test_named_response_parser_round_trips_through_config() -> None:
+    """A registered parser NAME serializes and reloads as the same callable --
+    pre-v0.3, a paper-replication judge silently reverted to the default
+    Score:-line parser on Resolver.load."""
+    from langres.core.modules.llm_judge import parse_binary_yes_no
+
+    original = LLMJudge(
+        model="openrouter/openai/gpt-4o-mini",
+        client=object(),
+        response_parser="binary_yes_no",
+    )
+    assert original._parse is parse_binary_yes_no
+    assert original.config["response_parser"] == "binary_yes_no"
+
+    rebuilt = LLMJudge.from_config(original.config)
+    assert rebuilt._parse is parse_binary_yes_no
+    assert rebuilt.config == original.config
+
+
+def test_registered_callable_serializes_as_its_name() -> None:
+    """Passing the registered callable itself (not the name) still serializes."""
+    from langres.core.modules.llm_judge import parse_binary_yes_no
+
+    judge = LLMJudge(client=object(), response_parser=parse_binary_yes_no)
+    assert judge.config["response_parser"] == "binary_yes_no"
+
+
+def test_custom_callable_parser_serializes_as_none_and_reverts_on_load() -> None:
+    """An unregistered callable cannot travel (no-pickle invariant): config
+    carries None and from_config falls back to the default parser."""
+    from langres.core.modules.llm_judge import ParsedVerdict, parse_score_response
+
+    def my_parser(content: str) -> ParsedVerdict:
+        return ParsedVerdict(score=1.0)
+
+    judge = LLMJudge(client=object(), response_parser=my_parser)
+    assert judge._parse is my_parser
+    assert judge.config["response_parser"] is None
+
+    rebuilt = LLMJudge.from_config(judge.config)
+    assert rebuilt._parse is parse_score_response
+
+
+def test_unknown_parser_name_raises_listing_registered_names() -> None:
+    with pytest.raises(ValueError, match="binary_yes_no"):
+        LLMJudge(client=object(), response_parser="nope")
+
+
+def test_default_parser_and_serializer_names_in_config() -> None:
+    judge = LLMJudge(client=object())
+    assert judge.config["response_parser"] == "score"
+    assert judge.config["record_serializer"] == "json"
+
+
+def test_pre_v03_config_without_parser_keys_falls_back_to_defaults() -> None:
+    """Artifacts saved before the named-parser keys existed keep loading."""
+    from langres.core.modules.llm_judge import default_record_serializer, parse_score_response
+
+    judge = LLMJudge(client=object())
+    legacy = {
+        k: v for k, v in judge.config.items() if k not in ("response_parser", "record_serializer")
+    }
+    rebuilt = LLMJudge.from_config(legacy)
+    assert rebuilt._parse is parse_score_response
+    assert rebuilt._serialize is default_record_serializer
+
+
+def test_named_record_serializer_resolves_and_serializes() -> None:
+    from langres.core.modules.llm_judge import default_record_serializer
+
+    judge = LLMJudge(client=object(), record_serializer="json")
+    assert judge._serialize is default_record_serializer
+    assert judge.config["record_serializer"] == "json"

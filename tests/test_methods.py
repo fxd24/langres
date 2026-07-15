@@ -416,13 +416,19 @@ def test_select_judge_registered_in_llm_methods() -> None:
 
 
 def test_dspy_price_per_1k_known_and_unknown() -> None:
-    """``_dspy_price_per_1k`` maps a known model to its worst-case per-1k, unknown to 0.0."""
-    from langres.clients.openrouter import per_token_worst_price
-    from langres.methods import _dspy_price_per_1k
+    """``dspy_price_per_1k`` maps a known model to its worst-case per-1k, unknown to 0.0,
+    and the registry's dspy builder pins exactly that price onto the judge."""
+    from langres.clients.openrouter import dspy_price_per_1k, per_token_worst_price
+    from langres.core.method_registry import get_method
 
     model = "openrouter/z-ai/glm-5.2"
-    assert _dspy_price_per_1k(model) == pytest.approx(per_token_worst_price(model) * 1_000.0)
-    assert _dspy_price_per_1k("unknown/model-not-in-table") == 0.0
+    assert dspy_price_per_1k(model) == pytest.approx(per_token_worst_price(model) * 1_000.0)
+    assert dspy_price_per_1k("unknown/model-not-in-table") == 0.0
+
+    judge = get_method("dspy_judge").build(
+        CompanySchema, model=model, entity_noun="entity", client=None, comparator=None
+    )
+    assert judge.price_per_1k_tokens == pytest.approx(dspy_price_per_1k(model))
 
 
 def test_factory_yields_fresh_independent_blockers() -> None:
@@ -465,12 +471,14 @@ def test_deterministic_method_runs_end_to_end(method: str) -> None:
 def test_rapidfuzz_and_weighted_average_score_the_same_fields() -> None:
     """rapidfuzz extractors mirror Comparator.from_schema (same fields raced)."""
     from langres.core.comparator import Comparator
-    from langres.methods import _rapidfuzz_extractors
+    from langres.core.method_registry import get_method
 
-    extractors = _rapidfuzz_extractors(CompanySchema)
+    module = get_method("rapidfuzz").build(
+        CompanySchema, model=None, entity_noun="entity", client=None, comparator=None
+    )
     comparator_fields = {s.name for s in Comparator.from_schema(CompanySchema).feature_specs}
-    assert set(extractors) == comparator_fields
-    assert "id" not in extractors  # id is excluded from comparison
+    assert set(module.field_extractors) == comparator_fields
+    assert "id" not in module.field_extractors  # id is excluded from comparison
 
 
 # ---------------------------------------------------------------------------

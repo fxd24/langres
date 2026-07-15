@@ -216,6 +216,31 @@ class TestJudgementLogAppend:
         row = log.read()[0]
         assert row["model"] is None
 
+    def test_append_model_falls_back_to_resolved_pipeline_model(self, tmp_path: Path) -> None:
+        """A judgement without its own provenance model logs the caller's resolved id.
+
+        This is the log half of the model-identity contract: the verbs pass
+        their resolved ``model`` through ``LoggingModule``, so log rows and
+        the result's ``model`` field agree even for judges (string/embedding)
+        that never stamp ``provenance["model"]`` themselves.
+        """
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(_judgement(provenance={}), verdict=True, model="all-MiniLM-L6-v2")
+        row = log.read()[0]
+        assert row["model"] == "all-MiniLM-L6-v2"
+
+    def test_append_judge_stamped_model_wins_over_fallback(self, tmp_path: Path) -> None:
+        """The judge's own per-call provenance stamp beats the pipeline fallback
+        (a cascade step's model is what actually ran for that row)."""
+        log = JudgementLog(tmp_path / "log.jsonl")
+        log.append(
+            _judgement(provenance={"model": "gpt-4o-mini"}),
+            verdict=True,
+            model="pipeline-model",
+        )
+        row = log.read()[0]
+        assert row["model"] == "gpt-4o-mini"
+
     def test_append_missing_cost_defaults_to_zero(self, tmp_path: Path) -> None:
         log = JudgementLog(tmp_path / "log.jsonl")
         log.append(_judgement(provenance={}), verdict=True)

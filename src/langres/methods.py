@@ -3,9 +3,12 @@
 M3 races five resolution *methods* against each other on the same datasets. The
 :mod:`langres.core.benchmark` harness consumes a ``resolver_factory:
 Callable[[float], Resolver]`` (a clusterer threshold -> a built pipeline) and
-runs it through both evaluation tracks. This module is the single place that maps
-a method name to such a factory, so :func:`~langres.core.benchmark.run_method`
-can race *any* method on *any* dataset.
+runs it through both evaluation tracks. This module maps a method name to such
+a factory -- resolving the name through the one
+:mod:`langres.core.method_registry` (shared with the verbs and
+``Resolver.from_schema``, so a name means the same thing everywhere) -- and
+:func:`~langres.core.benchmark.run_method` can then race *any* method on *any*
+dataset.
 
 The five methods differ **only in the scorer** (the ``module`` slot) — blocking
 is held constant per dataset so the race compares judges, not blockers:
@@ -54,32 +57,18 @@ imports no dataset (no ``langres.data``), so it stays free of the
 ``core -> data -> core`` cycle the harness was designed to avoid.
 """
 
-import warnings
 from collections.abc import Callable
 from typing import Any, Protocol
 
-# ``_cost_track`` is the harness's spend aggregator. We deliberately reuse it
-# (rather than re-implement its cost-key fallback math) so cascade spend totals
-# stay identical to every other method's; it is a stable same-package internal
-# that the harness's own tests also import directly.
-# Relocated to ``langres.clients.openrouter.dspy_price_per_1k`` (dspy-free,
-# layer-neutral) so both this module and ``langres.core.presets`` can share it
-# without a ``core -> methods -> core`` import cycle. Aliased to the old
-# private name since existing call sites in this module reference it.
-from langres.clients.openrouter import dspy_price_per_1k as _dspy_price_per_1k
+from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.comparator import Comparator, StringComparator
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
-from langres.core.judges.fellegi_sunter import FellegiSunterJudge
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.comparator import Comparator
+from langres.core.method_registry import get_method
 from langres.core.models import PairwiseJudgement
 from langres.core.module import Module
-from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP, CascadeModule
-from langres.core.modules.llm_judge import LLMJudge
-from langres.core.modules.rapidfuzz import RapidfuzzModule
-from langres.core.modules.random_forest_judge import RandomForestJudge
+from langres.core.modules.cascade import CASCADE_LLM_DECISION_STEP
 from langres.core.resolver import Resolver
 
 # The canonical method-name tuples live in the import-light ``_method_names``
@@ -88,9 +77,12 @@ from langres.core.resolver import Resolver
 # public ``langres.methods.ALL_METHODS`` etc. stay stable.
 from langres._method_names import ALL_METHODS, LLM_METHODS, ZERO_SPEND_METHODS
 
-#: Default LLM model id for the LLM/cascade methods. Overridden in W4 with the
-#: real frontier/GLM model; tests inject a mock client and ignore the model.
-DEFAULT_LLM_MODEL = "openrouter/openai/gpt-4o-mini"
+#: Default LLM model id for the LLM/cascade methods -- an alias of the one
+#: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``, the same
+#: literal behind ``presets.DEFAULT_AUTO_MODEL``) so the benchmark harness
+#: cannot drift from the verbs on the default. Tests inject a mock client and
+#: ignore the model.
+DEFAULT_LLM_MODEL = DEFAULT_OPENROUTER_MODEL
 
 
 class BlockingBenchmark(Protocol):
@@ -115,73 +107,6 @@ class BlockingBenchmark(Protocol):
         ...  # pragma: no cover
 
 
-def _field_getter(field: str) -> Callable[[Any], str]:
-    """A string extractor for ``field`` (missing / non-str -> empty string).
-
-    The ``-> ""`` for a missing value is RapidfuzzModule's documented convention
-    (``lambda x: x.address or ""``). Note this makes ``rapidfuzz`` score a field
-    that is absent on *both* records as a perfect match (``fuzz.ratio("", "")``
-    is ``100``), so missing data lifts the score — unlike the missing-aware
-    ``weighted_average``, which drops absent features. That asymmetry is an
-    *intrinsic* property of the classical string baseline, not a wiring bug: the
-    race is meant to surface exactly such method differences, so it is left as-is.
-    """
-
-    def get(entity: Any) -> str:
-        value = getattr(entity, field, None)
-        return value if isinstance(value, str) else ""
-
-    return get
-
-
-def _rapidfuzz_extractors(
-    schema: type[Any],
-) -> dict[str, tuple[Callable[[Any], str], float]]:
-    """Derive RapidfuzzModule field extractors from a schema's comparable fields.
-
-    Reuses ``Comparator.from_schema``'s field selection (``str | None`` fields,
-    ``id`` excluded) and weights, so ``rapidfuzz`` and ``weighted_average`` score
-    on the *same* fields — the race isolates the scorer, not the field set. (They
-    still differ in *missing-field handling*; see :func:`_field_getter`.)
-    """
-    specs = Comparator.from_schema(schema).feature_specs
-    return {spec.name: (_field_getter(spec.name), spec.weight) for spec in specs}
-
-
-def _build_cascade_module(
-    *,
-    llm_client: Any,
-    llm_model: str,
-    low_threshold: float,
-    high_threshold: float,
-) -> CascadeModule[Any]:
-    """Build a CascadeModule with an injected LLM client.
-
-    ``CascadeModule`` requires a non-empty ``llm_api_key`` at construction even
-    when no pair escalates. We satisfy that with a placeholder and inject the real
-    client (a mock in tests, the live client in W4) so no live key is ever needed
-    at build time. The injected client must be **OpenAI-shaped** — cascade calls
-    ``client.chat.completions.create(...)``, not the ``completion(...)`` an
-    ``llm_judge`` (LiteLLM) client exposes.
-    """
-    with warnings.catch_warnings():
-        # CascadeModule is deprecated in favor of CascadeJudge (T3), but this
-        # benchmark method registry still constructs it deliberately (migration
-        # tracked in TODOS.md). Suppress the DeprecationWarning at this one
-        # sanctioned construction site so run_methods("cascade") stays
-        # noise-free for callers.
-        warnings.simplefilter("ignore", DeprecationWarning)
-        module: CascadeModule[Any] = CascadeModule(
-            llm_model=llm_model,
-            llm_api_key="injected",
-            low_threshold=low_threshold,
-            high_threshold=high_threshold,
-        )
-    if llm_client is not None:
-        module._llm_client = llm_client
-    return module
-
-
 def _make_module_builder(
     method: str,
     schema: type[Any],
@@ -193,76 +118,38 @@ def _make_module_builder(
 ) -> tuple[Callable[[], Module[Any]], Comparator[Any] | None]:
     """Resolve a method name to its (module-builder, comparator) pair.
 
+    A thin adapter over the one :mod:`langres.core.method_registry` (the #55
+    unification): the name means exactly what it means on the verbs' and
+    ``Resolver.from_schema``'s paths, and each spec's builder owns the
+    construction details this module used to hand-roll (the DSPy price pin,
+    cascade's injected-client shape, lazy heavy imports).
+
     The module builder is called once per resolver (fresh scorer each threshold);
     the comparator (if any) is shared across thresholds — it is stateless.
+
+    Raises:
+        UnknownMethodError: (a ``ValueError``) for an unknown method name,
+            with the registered names and a did-you-mean suggestion.
     """
-    if method == "rapidfuzz":
-        extractors = _rapidfuzz_extractors(schema)
-        return (lambda: RapidfuzzModule(field_extractors=extractors)), None
-    if method == "weighted_average":
-        comparator: Comparator[Any] = Comparator.from_schema(schema)
-        specs = comparator.feature_specs
-        return (lambda: WeightedAverageJudge(feature_specs=specs)), comparator
-    if method == "embedding_cosine":
-        return (lambda: EmbeddingScoreJudge()), None
-    if method == "llm_judge":
-        return (lambda: LLMJudge(client=llm_client, model=llm_model)), None
-    if method == "dspy_judge":
-        # ``dspy_judge`` takes a **DSPy LM** as its injected client — a
-        # ``dspy.LM(...)`` for real runs or a ``dspy.utils.dummies.DummyLM`` in
-        # tests — NOT the LiteLLM ``client.completion(...)`` shape ``llm_judge``
-        # expects. Imported lazily so building any other method's factory (and
-        # plain ``import langres.methods``) never imports ``dspy``.
-        from langres.core.modules.dspy_judge import DSPyJudge
-
-        # Wire the honest-cost seam: DSPyJudge prices each pair as
-        # ``tokens/1000 * price_per_1k_tokens`` into ``provenance["cost_usd"]`` that
-        # the DEFAULT ``_cost_track`` reads — but its price defaults to $0, so a real
-        # paid run would report $0 and the live budget-stop would never fire. Pin the
-        # per-1k price from the OpenRouter table so cost is honest with no custom
-        # ``cost_track_fn`` (unknown models keep $0; see ``_dspy_price_per_1k``).
-        price_per_1k = _dspy_price_per_1k(llm_model)
-
-        def build_dspy_judge() -> Module[Any]:
-            judge: DSPyJudge[Any] = DSPyJudge(lm=llm_client, model=llm_model)
-            judge.price_per_1k_tokens = price_per_1k
-            return judge
-
-        return build_dspy_judge, None
-    if method == "select_judge":
-        # ComEM-style set-wise judge (W1.1): same DSPy-LM injection contract as
-        # ``dspy_judge`` (a ``dspy.LM(...)`` / ``DummyLM``), lazily imported for
-        # the same import-safety reason, and priced from the same table — it
-        # differs only in scoring a whole anchor GROUP per call, not one pair.
-        from langres.core.modules.select_judge import SelectJudge
-
-        select_price_per_1k = _dspy_price_per_1k(llm_model)
-
-        def build_select_judge() -> Module[Any]:
-            judge: SelectJudge[Any] = SelectJudge(lm=llm_client, model=llm_model)
-            judge.price_per_1k_tokens = select_price_per_1k
-            return judge
-
-        return build_select_judge, None
-    if method == "cascade":
-        return (
-            lambda: _build_cascade_module(
-                llm_client=llm_client,
-                llm_model=llm_model,
-                low_threshold=cascade_low,
-                high_threshold=cascade_high,
-            )
-        ), None
-    if method == "fellegi_sunter":
-        fs_comparator: StringComparator[Any] = Comparator.from_schema(schema)
-        return (lambda: FellegiSunterJudge(comparator=fs_comparator)), fs_comparator
-    if method == "random_forest":
-        rf_comparator: StringComparator[Any] = Comparator.from_schema(schema)
-        return (lambda: RandomForestJudge(feature_specs=rf_comparator.feature_specs)), rf_comparator
-    raise ValueError(
-        f"unknown method {method!r}; choose one of "
-        f"{ALL_METHODS + ('fellegi_sunter', 'random_forest')}"
+    spec = get_method(method)
+    comparator: Comparator[Any] | None = (
+        Comparator.from_schema(schema) if spec.needs_comparator else None
     )
+    params: dict[str, Any] = (
+        {"cascade_low": cascade_low, "cascade_high": cascade_high} if method == "cascade" else {}
+    )
+
+    def build() -> Module[Any]:
+        return spec.build(
+            schema,
+            model=llm_model,
+            entity_noun="entity",
+            client=llm_client,
+            comparator=comparator,
+            **params,
+        )
+
+    return build, comparator
 
 
 def make_resolver_factory(

@@ -102,46 +102,48 @@ applies.)
 
 ---
 
-## 3. Wire it into the dispatch sites (make it selectable by name)
+## 3. Register it in the method registry (make it selectable by name)
 
-There is **no single registration seam** yet, so a new *public, name-selectable*
-judge must be wired into **up to three** dispatch sites, or it will be rejected by
-whichever path doesn't know it. `SelectJudge` needs only the first (it's a
-benchmark/experiment method, not a verbs/`from_schema` default):
-
-1. **`methods.py:_make_module_builder`** — the benchmark / method-registry path.
-   **Required for any name-selectable method.**
-2. **`core/resolver.py:_build_module_for_judge`** — what
-   `Resolver.from_schema(judge=...)` dispatches on. *Only if you want it as a
-   `from_schema` judge name.*
-3. **`core/presets.py:build_judge`** — what the verbs (`link`/`dedupe`, incl.
-   `"auto"`) dispatch on. *Only if you want it as a verb judge name.*
-
-These three are duplicated deliberately to keep the layering one-directional
-(`verbs -> presets -> Resolver`); see `.claude/rules/component-design.md`.
-
-### The `_make_module_builder` branch
-
-`make_resolver_factory` builds a `threshold -> Resolver` factory the benchmark
-harness consumes; `_make_module_builder` maps a **method name** to a
-`(module_builder, comparator)` pair. Adding a method is **one branch**:
+Since the v0.3 model-identity slice there is **one registration seam**:
+`langres.core.method_registry`. A `MethodSpec` carries the builder plus the
+name's identity metadata, and all three dispatch paths — the verbs
+(`presets.build_judge`), `Resolver.from_schema`
+(`resolver._build_module_for_judge`), and the benchmark harness
+(`methods._make_module_builder`) — resolve names through it, so registering
+once makes the name mean the same thing everywhere. Adding a method is **one
+builder function + one spec**:
 
 ```python
-# src/langres/methods.py, inside _make_module_builder(...)
-if method == "select_judge":
+# src/langres/core/method_registry.py
+def _build_select_judge(schema, *, model=None, entity_noun="entity",
+                        client=None, comparator=None) -> Module[Any]:
     # Lazy import: dspy must stay out of sys.modules unless this method is
-    # actually chosen (import langres.methods must not import dspy).
+    # actually chosen (the registry is eager-imported by langres.core).
     from langres.core.modules.select_judge import SelectJudge
 
-    select_price_per_1k = _dspy_price_per_1k(llm_model)
+    resolved_model = model or DEFAULT_OPENROUTER_MODEL
+    judge: SelectJudge[Any] = SelectJudge(lm=client, model=resolved_model)
+    judge.price_per_1k_tokens = dspy_price_per_1k(resolved_model)  # honest-cost seam
+    return judge
 
-    def build_select_judge() -> Module[Any]:
-        judge: SelectJudge[Any] = SelectJudge(lm=llm_client, model=llm_model)
-        judge.price_per_1k_tokens = select_price_per_1k  # honest-cost seam
-        return judge
-
-    return build_select_judge, None   # None -> self-contained, no Comparator
+register_method(MethodSpec(
+    name="select_judge",
+    build=_build_select_judge,
+    score_type="prob_group_llm",       # the family tag its judgements carry
+    default_threshold=0.7,             # E12: per-family threshold scales
+    default_model=DEFAULT_OPENROUTER_MODEL,  # what results report as `model`
+    accepts_model=True,                # honors a caller model= override
+    requires_extra="llm",              # actionable ImportError names the extra
+))
 ```
+
+Method ids are **bare names**; `/` is reserved for future `author/method`
+namespacing (model ids keep their slashes in the orthogonal `model=` kwarg).
+Two per-layer *policies* remain separate from registration: the verbs'
+allowlist (`presets._VERB_JUDGE_NAMES` — join it only if the judge is safe
+with no injected client and no fit step) and `from_schema`'s name tuple.
+`SelectJudge` joins neither (it's a benchmark/experiment method that needs an
+injected DSPy LM).
 
 Then declare its **membership** in the method tuples at the top of `methods.py`
 so the harness races it:
@@ -159,16 +161,17 @@ Membership placement encodes a real contract:
   differs: `llm_judge` wants a LiteLLM client (`client.completion(...)`),
   `cascade` an OpenAI-shaped one, and `dspy_judge`/`select_judge` a **DSPy LM**
   (`dspy.LM` / `DummyLM`). Document which your method expects.
-- **Neither tuple** — a method the builder recognizes but that needs an explicit
-  `fit` step (`fellegi_sunter`, `random_forest`); the `run_methods` race can't
-  build+fit it per grid threshold, so it's driven via `Resolver.fit(...)`
-  instead. Wire it into the builder but leave it out of the race tuples.
+- **Neither tuple** — a method the registry recognizes but that needs an
+  explicit `fit` step (`fellegi_sunter`, `random_forest`); the `run_methods`
+  race can't build+fit it per grid threshold, so it's driven via
+  `Resolver.fit(...)` instead. Register the spec but leave it out of the race
+  tuples.
 
 The `price_per_1k_tokens` assignment is the **honest-cost seam**: `SelectJudge`
 prices each call as `tokens/1000 * price_per_1k_tokens`, defaulting to `$0`. A
 real paid run must pin the price from the OpenRouter table
-(`_dspy_price_per_1k(llm_model)`), or cost would report `$0` and the live
-budget-stop would never fire.
+(`dspy_price_per_1k(model)` — the registry's DSPy builders do this), or cost
+would report `$0` and the live budget-stop would never fire.
 
 ---
 
@@ -270,9 +273,10 @@ companion tests — mirror both for your judge:
 - [ ] Correct `score_type` (add a literal to `models.py` if genuinely new).
 - [ ] Set-wise judges apply the group-call cost convention (`stamp_group_cost`).
 - [ ] Honest-cost seam wired (`price_per_1k_tokens` pinned for paid runs).
-- [ ] Selectable by name? Branch in `_make_module_builder` **+** the right method
-      tuple — and, if it's also a `from_schema`/verb judge, the other two
-      dispatch sites.
+- [ ] Selectable by name? One `MethodSpec` in `core/method_registry.py` **+**
+      the right method tuple — and, if it's also a `from_schema`/verb judge,
+      the per-layer allowlists (`presets._VERB_JUDGE_NAMES`, `from_schema`'s
+      tuple).
 - [ ] `@register` + `type_name` + pure `config` + `from_config` (no pickle).
 - [ ] Fresh-process (subprocess) reload proven in a test.
 - [ ] 100% coverage; all LLM paths on DummyLM at $0.

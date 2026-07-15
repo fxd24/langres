@@ -25,9 +25,11 @@ Both verbs share one small contract:
   judgement already produced on ``.partial_judgements`` (E9) -- see
   :mod:`langres.core.presets`'s module docstring for the resume recipe.
 - Results are self-describing (D2): every verb reports which judge actually
-  ran (``judge_used``), what its raw score means (``score_type`` -- see the
-  threshold-semantics note below), and the effective ``threshold`` the match
-  cut used -- so downstream flywheel steps (``select_for_review``,
+  ran (``judge_used``), which underlying **model** it ran
+  (``model`` -- the resolved LLM id, the embedder name, or ``None`` for
+  pure-string; never invisible), what its raw score means (``score_type`` --
+  see the threshold-semantics note below), and the effective ``threshold``
+  the match cut used -- so downstream flywheel steps (``select_for_review``,
   ``EvalReport``) can read the cut off the result instead of the caller
   remembering the float.
 - Threshold semantics differ across ``score_type`` scales (E12): a
@@ -71,13 +73,14 @@ from langres.core.models import (
 )
 from langres.core.module import Module
 from langres.core.presets import (
+    PAID_JUDGE_NAMES,
     JudgeName,
     build_embedding_candidate,
     build_resolver,
+    default_threshold_for,
     notice_pre_scoring_cost,
     resolve_judge,
 )
-from langres.core.presets import _DEFAULT_THRESHOLDS as _THRESHOLDS
 from langres.core.presets import _effective_budget
 
 __all__ = ["DedupeResult", "LinkVerdict", "dedupe", "link"]
@@ -94,6 +97,13 @@ class LinkVerdict(BaseModel):
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     reasoning: str | None = None
     judge_used: str
+    #: The underlying model that actually judged the pair: the resolved LLM id
+    #: (e.g. ``"openrouter/openai/gpt-4o-mini"``) for the LLM judges, the
+    #: sentence-transformers embedder for ``judge="embedding"``, an injected
+    #: ``Module``'s own ``model`` attribute for ``"custom"``, and ``None`` for
+    #: pure-string similarity (no model ran). The same value lands on the
+    #: ``JudgementLog`` rows when ``log=`` is set, so result and log agree.
+    model: str | None
     score_type: str
     #: The effective match cut ``match`` was decided at (the caller's
     #: ``threshold=``, or the judge's default when it was ``None``) -- feed it
@@ -114,13 +124,15 @@ class DedupeResult(list[set[str]]):
     """The clusters :func:`dedupe` returns -- a plain ``list[set[str]]``, self-describing.
 
     Behaves exactly like the list :meth:`~langres.core.resolver.Resolver.resolve`
-    returns; additionally carries ``judge_used``, ``score_type`` and the
-    effective ``threshold`` (D2) so a caller can inspect what actually ran --
-    and feed ``threshold`` straight to
+    returns; additionally carries ``judge_used``, ``model``, ``score_type`` and
+    the effective ``threshold`` (D2) so a caller can inspect what actually ran
+    -- and feed ``threshold`` straight to
     :func:`~langres.core.review.select_for_review` / ``EvalReport`` -- without
-    a separate call or a remembered constant. ``threshold`` is ``None`` only
-    for the ``len(records) < 2`` short-circuit, where no judge (and hence no
-    cut) was ever resolved.
+    a separate call or a remembered constant. ``model`` is the underlying
+    model id that scored the batch (see :attr:`LinkVerdict.model` for the
+    per-judge meaning); ``threshold`` and ``model`` are ``None`` for the
+    ``len(records) < 2`` short-circuit, where no judge (and hence no cut and
+    no model) was ever resolved.
     """
 
     def __init__(
@@ -130,16 +142,19 @@ class DedupeResult(list[set[str]]):
         judge_used: str,
         score_type: str,
         threshold: float | None,
+        model: str | None,
     ) -> None:
         super().__init__(clusters)
         self.judge_used = judge_used
         self.score_type = score_type
         self.threshold = threshold
+        self.model = model
 
     def __repr__(self) -> str:
         return (
             f"DedupeResult({list.__repr__(self)}, judge_used={self.judge_used!r}, "
-            f"score_type={self.score_type!r}, threshold={self.threshold!r})"
+            f"model={self.model!r}, score_type={self.score_type!r}, "
+            f"threshold={self.threshold!r})"
         )
 
 
@@ -267,7 +282,40 @@ def _check_no_duplicate_ids(ids: Sequence[str]) -> None:
 
 
 def _resolved_threshold(judge_used: str, threshold: float | None) -> float:
-    return _THRESHOLDS.get(judge_used, 0.5) if threshold is None else threshold
+    return default_threshold_for(judge_used) if threshold is None else threshold
+
+
+def _prompt_judge_params(
+    judge: JudgeName | Module[Any],
+    *,
+    prompt_template: str | None,
+    system_prompt: str | None,
+    response_parser: str | None,
+) -> dict[str, Any] | None:
+    """Collect the ``judge="prompt_llm"`` prompt-seam kwargs, loudly gated.
+
+    Passing a prompt-seam kwarg with any other judge raises instead of being
+    silently ignored -- the silent-``model=`` mistake this slice's design note
+    calls out is not repeated for the prompt seam.
+    """
+    params = {
+        key: value
+        for key, value in {
+            "prompt_template": prompt_template,
+            "system_prompt": system_prompt,
+            "response_parser": response_parser,
+        }.items()
+        if value is not None
+    }
+    if not params:
+        return None
+    if judge != "prompt_llm":
+        raise ValueError(
+            f"{', '.join(sorted(params))}: only valid with judge='prompt_llm' "
+            f"(got judge={judge!r}). Pass judge='prompt_llm', or construct an "
+            "LLMJudge yourself and pass it as judge=<Module>."
+        )
+    return params
 
 
 def _coerce_log(log: JudgementLog | str | Path | None) -> JudgementLog | None:
@@ -297,6 +345,9 @@ def link(
     threshold: float | None = None,
     budget_usd: float | None = None,
     log: JudgementLog | str | Path | None = None,
+    prompt_template: str | None = None,
+    system_prompt: str | None = None,
+    response_parser: str | None = None,
 ) -> LinkVerdict:
     """Decide whether two records refer to the same real-world entity.
 
@@ -306,44 +357,69 @@ def link(
             well-defined -- it scores the entity against itself.
         judge: ``"auto"`` (default; picks an LLM judge from the available API
             key and raises ``NoJudgeAvailableError`` when none is set),
-            ``"zero_shot_llm"``, ``"embedding"``, ``"string"`` (the explicit
-            offline opt-in), or a ``Module`` instance (e.g. an injected
-            ``DSPyJudge(lm=DummyLM(...))`` for a zero-spend test).
+            ``"zero_shot_llm"``, ``"prompt_llm"`` (the bring-your-own-prompt
+            ``LLMJudge`` -- see ``prompt_template``/``response_parser``),
+            ``"embedding"``, ``"string"`` (the explicit offline opt-in), or a
+            ``Module`` instance (e.g. an injected ``DSPyJudge(lm=DummyLM(...))``
+            for a zero-spend test).
         schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
             one from ``left``/``right``'s own keys.
-        model: Model id override for ``"zero_shot_llm"``.
+        model: Model id override for ``"zero_shot_llm"``/``"prompt_llm"``.
         entity_noun: Domain noun woven into the LLM judge's prompt.
         threshold: Match cutoff; ``None`` resolves to the judge's default --
             for ``judge="string"`` that is ``0.5`` on its ``"heuristic"``
-            score (see ``presets._DEFAULT_THRESHOLDS``). The effective value
+            score (see ``presets.default_threshold_for``). The effective value
             is reported back on :attr:`LinkVerdict.threshold`.
         budget_usd: Spend cap override (default $1; see
             :mod:`langres.core.presets`).
         log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
             or a path (wrapped in a default one). ``None`` (default): no
             logging, zero overhead. See :mod:`langres.core.judgement_log`.
+        prompt_template: ``judge="prompt_llm"`` only: a custom prompt with
+            ``{left}``/``{right}`` placeholders (a published paper's, or your
+            own domain prompt). Omit for the neutral default prompt.
+        system_prompt: ``judge="prompt_llm"`` only: optional system message
+            sent before the user prompt.
+        response_parser: ``judge="prompt_llm"`` only: a *registered* parser
+            name -- ``"score"`` (default) or ``"binary_yes_no"`` (the published
+            yes/no ER-prompt family); see
+            ``langres.core.modules.llm_judge.RESPONSE_PARSERS``. Named parsers
+            keep the judge serializable; for a custom callable, build an
+            ``LLMJudge`` yourself and pass it as ``judge=``.
 
     Returns:
         A :class:`LinkVerdict`.
 
     Raises:
         ValueError: On schema-inference errors (nested values, inconsistent
-            id presence).
+            id presence), or a prompt-seam kwarg with a non-``"prompt_llm"``
+            judge (never silently ignored).
         NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
             ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
             silent fallback.
         BudgetExceeded: If scoring this pair would cross the spend cap.
     """
+    judge_params = _prompt_judge_params(
+        judge,
+        prompt_template=prompt_template,
+        system_prompt=system_prompt,
+        response_parser=response_parser,
+    )
     if schema is None:
         resolved_schema, (left_record, right_record) = _infer([left, right])
     else:
         resolved_schema, left_record, right_record = schema, left, right
 
     module, judge_used, resolved_model = resolve_judge(
-        judge, resolved_schema, model=model, entity_noun=entity_noun, budget_usd=budget_usd
+        judge,
+        resolved_schema,
+        model=model,
+        entity_noun=entity_noun,
+        budget_usd=budget_usd,
+        judge_params=judge_params,
     )
 
-    if judge_used == "zero_shot_llm" and resolved_model is not None:
+    if judge_used in PAID_JUDGE_NAMES and resolved_model is not None:
         notice_pre_scoring_cost(resolved_model, 1, budget_usd=_effective_budget(budget_usd))
 
     candidate: ERCandidate[Any]
@@ -364,7 +440,9 @@ def link(
     log_sink = _coerce_log(log)
     scorer_module: Module[Any] = module
     if log_sink is not None:
-        scorer_module = LoggingModule(module, log=log_sink, threshold=resolved_threshold)
+        scorer_module = LoggingModule(
+            module, log=log_sink, threshold=resolved_threshold, model=resolved_model
+        )
 
     judgements = list(scorer_module.forward(iter([candidate])))
     if not judgements:
@@ -392,6 +470,7 @@ def link(
         score=judgement.score,
         reasoning=judgement.reasoning,
         judge_used=judge_used,
+        model=resolved_model,
         score_type=judgement.score_type,
         threshold=resolved_threshold,
         judgement=judgement,
@@ -413,6 +492,9 @@ def dedupe(
     threshold: float | None = None,
     budget_usd: float | None = None,
     log: JudgementLog | str | Path | None = None,
+    prompt_template: str | None = None,
+    system_prompt: str | None = None,
+    response_parser: str | None = None,
 ) -> DedupeResult:
     """Group a batch of records into entity clusters.
 
@@ -434,40 +516,54 @@ def dedupe(
             duplicate ``"id"`` raises.
         judge: ``"auto"`` (default; picks an LLM judge from the available API
             key and raises ``NoJudgeAvailableError`` when none is set),
-            ``"zero_shot_llm"``, ``"embedding"``, ``"string"`` (the explicit
-            offline opt-in), or a ``Module`` instance.
+            ``"zero_shot_llm"``, ``"prompt_llm"`` (the bring-your-own-prompt
+            ``LLMJudge`` -- see ``prompt_template``/``response_parser``),
+            ``"embedding"``, ``"string"`` (the explicit offline opt-in), or a
+            ``Module`` instance.
         schema: Optional explicit Pydantic schema. Omit to infer an ephemeral
             one from the records' own keys.
-        model: Model id override for ``"zero_shot_llm"``.
+        model: Model id override for ``"zero_shot_llm"``/``"prompt_llm"``.
         entity_noun: Domain noun woven into the LLM judge's prompt.
         threshold: Clusterer threshold; ``None`` resolves to the judge's
             default -- for ``judge="string"`` that is ``0.5`` on its
-            ``"heuristic"`` score (see ``presets._DEFAULT_THRESHOLDS``). The
+            ``"heuristic"`` score (see ``presets.default_threshold_for``). The
             effective value is reported back on the result's ``threshold``,
             ready for ``select_for_review(threshold=...)``.
         budget_usd: Spend cap override (default $1).
         log: Opt-in signal-log sink -- a :class:`~langres.core.judgement_log.JudgementLog`
             or a path (wrapped in a default one). ``None`` (default): no
             logging, zero overhead. See :mod:`langres.core.judgement_log`.
+        prompt_template: ``judge="prompt_llm"`` only: a custom prompt with
+            ``{left}``/``{right}`` placeholders. See :func:`link`.
+        system_prompt: ``judge="prompt_llm"`` only: optional system message.
+        response_parser: ``judge="prompt_llm"`` only: a *registered* parser
+            name (``"score"`` / ``"binary_yes_no"``). See :func:`link`.
 
     Returns:
         A :class:`DedupeResult` (a ``list[set[str]]`` of entity-id clusters).
 
     Raises:
-        ValueError: Duplicate ids, inconsistent id presence, or a nested
-            value under schema inference.
+        ValueError: Duplicate ids, inconsistent id presence, a nested value
+            under schema inference, or a prompt-seam kwarg with a
+            non-``"prompt_llm"`` judge (never silently ignored).
         NoJudgeAvailableError: With ``judge="auto"`` and no API key set,
             ``LANGRES_OFFLINE=1``, or an unpinned-price model -- never a
             silent fallback.
         BudgetExceeded: If scoring would cross the spend cap; the exception
             carries the judgements already produced on ``.partial_judgements``.
     """
+    judge_params = _prompt_judge_params(
+        judge,
+        prompt_template=prompt_template,
+        system_prompt=system_prompt,
+        response_parser=response_parser,
+    )
     if len(records) < 2:
         # [] -> [] and [x] -> [] (no pair possible): short-circuit BEFORE
         # judge resolution so a keyless empty/single-record call never raises
         # NoJudgeAvailableError -- zero spend is possible either way. No judge
-        # was resolved, so there is no effective threshold to report.
-        return DedupeResult([], judge_used="none", score_type="none", threshold=None)
+        # was resolved, so there is no effective threshold (or model) to report.
+        return DedupeResult([], judge_used="none", score_type="none", threshold=None, model=None)
 
     if schema is None:
         resolved_schema, resolved_records = _infer(records)
@@ -484,6 +580,7 @@ def dedupe(
         threshold=threshold,
         n_records=len(resolved_records),
         budget_usd=budget_usd,
+        judge_params=judge_params,
     )
     log_sink = _coerce_log(log)
     if log_sink is not None:
@@ -491,6 +588,7 @@ def dedupe(
             resolved.resolver.module,
             log=log_sink,
             threshold=resolved.resolver.clusterer.threshold,
+            model=resolved.model,
         )
     judgements = resolved.resolver.predict(resolved_records)
     clusters = resolved.resolver.clusterer.cluster(judgements)
@@ -501,6 +599,9 @@ def dedupe(
         score_type=score_type,
         # The clusterer's threshold IS the effective cut (threshold=None was
         # resolved to the judge's default inside build_resolver) -- the same
-        # value the LoggingModule above stamps on every logged verdict.
+        # value the LoggingModule above stamps on every logged verdict. The
+        # model, likewise, is the one the LoggingModule stamps on rows the
+        # judge didn't stamp itself.
         threshold=resolved.resolver.clusterer.threshold,
+        model=resolved.model,
     )

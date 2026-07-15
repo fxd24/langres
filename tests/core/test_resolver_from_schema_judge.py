@@ -112,6 +112,8 @@ class TestBuildModuleForJudgeDirect:
         comparator = Comparator.from_schema(ResolverJudgeCo)
         injected: DSPyJudge[ResolverJudgeCo] = DSPyJudge(lm=DummyLM([]))
         assert (
-            _build_module_for_judge(injected, comparator, model=None, entity_noun="entity")
+            _build_module_for_judge(
+                injected, ResolverJudgeCo, comparator, model=None, entity_noun="entity"
+            )
             is injected
         )

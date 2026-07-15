@@ -6,22 +6,30 @@ picking a judge from available API keys (failing fast with
 silent fallback to fuzzy matching), building its scorer Module, wiring a
 blocker by dataset size, and wrapping the scorer in a hard spend cap. It sits
 strictly ABOVE :class:`~langres.core.resolver.Resolver` (which must not import
-back from here -- see ``Resolver.from_schema``'s own, deliberately duplicated,
-low-level judge switch) and BELOW :mod:`langres.verbs`:
+back from here -- ``Resolver.from_schema`` keeps its own thin policy switch
+over the shared :mod:`~langres.core.method_registry`) and BELOW
+:mod:`langres.verbs`:
 
     verbs.py -> core/presets.py -> Resolver -> {Blocker, Comparator, Module, Clusterer}
 
 Nothing here is domain-specific: every function takes a Pydantic ``schema``
-type and works for any schema (see ``build_judge``'s ``"string"``/``"embedding"``
-branches, which derive their fields from the schema, never a hard-coded name).
+type and works for any schema (the registry's ``"string"``/``"embedding"``
+builders derive their fields from the schema, never a hard-coded name).
 
 Threshold semantics differ across judges (E12): ``"heuristic"`` (string),
-``"sim_cos"`` (embedding), and ``"prob_llm"`` (zero_shot_llm) are three
-different score scales, so one hand-picked ``threshold=0.7`` is not
-comparable across them. :data:`_DEFAULT_THRESHOLDS` gives each judge kind its
-own sane default; pass ``threshold=`` explicitly to override, and calibrate a
-real one with :func:`~langres.core.calibration.derive_threshold` once you have
-labels.
+``"sim_cos"`` (embedding), and ``"prob_llm"`` (zero_shot_llm / prompt_llm) are
+different score scales, so one hand-picked ``threshold=0.7`` is not comparable
+across them. Each judge's :class:`~langres.core.method_registry.MethodSpec`
+carries its own sane default (``default_threshold``); pass ``threshold=``
+explicitly to override, and calibrate a real one with
+:func:`~langres.core.calibration.derive_threshold` once you have labels.
+
+Judge construction is NOT hand-rolled here anymore: every name resolves
+through the one :mod:`langres.core.method_registry` (the #55 unification), so
+a judge name means the same thing on this path, on
+``Resolver.from_schema``'s, and on the benchmark harness's. This layer keeps
+only its *policy*: which names the verbs expose (:data:`JudgeName`), the
+``"auto"`` key-based resolution, and the spend cap.
 
 Spend cap (adopted CEO decision #8 + Eng E1/E9): every judge -- including the
 free ones -- is wrapped in :class:`_SpendCappedModule`, a small
@@ -61,8 +69,11 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.method_registry import (
+    DEFAULT_EMBEDDING_MODEL,
+    UnknownMethodError,
+    get_method,
+)
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.module import Module
 from langres.core.resolver import Resolver
@@ -79,18 +90,41 @@ if TYPE_CHECKING:
     from langres.core.indexes.vector_index import FAISSIndex
 
 #: The judge names the verb layer understands, plus the "auto" meta-value that
-#: :func:`choose_auto_judge` resolves down to one of the other three.
-JudgeName = Literal["auto", "zero_shot_llm", "embedding", "string"]
+#: :func:`choose_auto_judge` resolves down to one of the others.
+JudgeName = Literal["auto", "zero_shot_llm", "prompt_llm", "embedding", "string"]
 
-#: Default clusterer/match threshold per resolved judge kind (D3). Different
-#: ``score_type`` scales make one global constant meaningless; pass
-#: ``threshold=`` explicitly to override, or derive one from labels with
-#: :func:`~langres.core.calibration.derive_threshold`.
-_DEFAULT_THRESHOLDS: dict[str, float] = {
-    "string": 0.5,
-    "embedding": 0.5,
-    "zero_shot_llm": 0.7,
-}
+#: The concrete judge names the verbs expose (:data:`JudgeName` minus
+#: ``"auto"``) -- the verb-layer *policy* allowlist over the shared
+#: :mod:`~langres.core.method_registry`. Benchmark-only method names
+#: (``rapidfuzz``, ``cascade``, the fit-requiring trained family, ...) resolve
+#: through the same registry but are deliberately NOT reachable here: they
+#: need an injected client or an explicit fit step the verbs cannot provide.
+_VERB_JUDGE_NAMES: tuple[str, ...] = ("string", "embedding", "zero_shot_llm", "prompt_llm")
+
+#: The verb judges whose scoring makes PAID API calls -- gates the pre-scoring
+#: cost notice in :func:`build_resolver` and ``langres.link``.
+PAID_JUDGE_NAMES: tuple[str, ...] = ("zero_shot_llm", "prompt_llm")
+
+#: **The pinned default model for ``judge="auto"``** (and the fallback for an
+#: explicit ``judge="zero_shot_llm"``/``"prompt_llm"`` with no ``model=``).
+#:
+#: Policy: this is a deliberate, documented default -- an alias of
+#: ``langres.clients.openrouter.DEFAULT_OPENROUTER_MODEL`` (defined once so the
+#: verbs, ``Resolver.from_schema``, the method registry's LLM specs, and the
+#: benchmark harness can never drift on the literal). ``judge="auto"`` resolves
+#: to it when an ``OPENROUTER_API_KEY`` is discovered (the preferred route);
+#: with only an ``OPENAI_API_KEY`` set, auto routes direct-to-OpenAI via
+#: :data:`_OPENAI_MODEL` instead. Every result reports the resolved model
+#: (``LinkVerdict.model`` / ``DedupeResult.model``), so what ran is never
+#: invisible. **Changing this constant is a user-facing behavior change**
+#: (different quality, cost, and privacy posture for every default
+#: ``link()``/``dedupe()`` call) **and requires a CHANGELOG entry**.
+DEFAULT_AUTO_MODEL: str = DEFAULT_OPENROUTER_MODEL
+
+#: The direct-OpenAI route ``judge="auto"`` falls back to when only
+#: ``OPENAI_API_KEY`` is set (see :data:`DEFAULT_AUTO_MODEL`'s policy note --
+#: the same changelog-entry rule applies).
+_OPENAI_MODEL = "openai/gpt-5-mini"
 
 #: Default per-call spend cap for a presets-built judge (CEO decision #8),
 #: overridable via ``budget_usd=``. Zero-spend judges never approach it.
@@ -99,27 +133,38 @@ DEFAULT_BUDGET_USD = 1.0
 #: ``AllPairsBlocker`` is used at or below this many records; above it,
 #: :func:`build_resolver` switches to a ``VectorBlocker`` (O(N*k) instead of
 #: O(N^2)). An embedding judge always uses the VectorBlocker regardless of N
-#: (it needs the index's similarity score to score on).
+#: (it needs the index's similarity score to score on). The blocker's embedder
+#: is the shared ``method_registry.DEFAULT_EMBEDDING_MODEL``.
 _ALL_PAIRS_MAX_N = 100
 _VECTOR_K_NEIGHBORS = 10
-_VECTOR_MODEL_NAME = "all-MiniLM-L6-v2"
 
-#: judge="auto" model ids, keyed by which API key is present (choose_auto_judge).
-#: ``_OPENROUTER_MODEL`` aliases the shared constant (defined once in
-#: ``clients.openrouter`` -- also used by ``Resolver.from_schema``) so the two
-#: layers can't drift on the literal.
-_OPENROUTER_MODEL = DEFAULT_OPENROUTER_MODEL
-_OPENAI_MODEL = "openai/gpt-5-mini"
 
-#: Static ``PairwiseJudgement.score_type`` each judge kind emits -- used as a
-#: fallback label when no judgement was actually produced (e.g. a blocker
-#: that yields no candidate pairs; empty/single-record ``dedupe()`` calls
-#: short-circuit before judge resolution and never get here).
-_SCORE_TYPE_BY_JUDGE: dict[str, str] = {
-    "string": "heuristic",
-    "embedding": "sim_cos",
-    "zero_shot_llm": "prob_llm",
-}
+def default_threshold_for(judge_used: str) -> float:
+    """The decision threshold for ``judge_used`` when the caller passed ``None``.
+
+    Reads the judge's :class:`~langres.core.method_registry.MethodSpec`
+    (``default_threshold`` -- D3/E12: score scales differ per family, so each
+    method carries its own default). A name outside the registry (``"custom"``
+    for an injected ``Module``) falls back to ``0.5``.
+    """
+    try:
+        return get_method(judge_used).default_threshold
+    except UnknownMethodError:
+        return 0.5
+
+
+def _score_type_for(judge_used: str) -> str:
+    """The static ``PairwiseJudgement.score_type`` label for ``judge_used``.
+
+    Used as a fallback when no judgement was actually produced (e.g. a blocker
+    that yields no candidate pairs). ``"unknown"`` for names outside the
+    registry (an injected ``Module``).
+    """
+    try:
+        return get_method(judge_used).score_type
+    except UnknownMethodError:
+        return "unknown"
+
 
 #: Rough, deliberately worst-case-biased token count for the pre-scoring cost
 #: estimate (``notice_pre_scoring_cost``). The real, metered cost is what the
@@ -242,7 +287,7 @@ def choose_auto_judge(
             f"LLM spend is capped at ${DEFAULT_BUDGET_USD:.2f} by default (budget_usd=). "
             f"Guide: {_GETTING_STARTED_URL}"
         )
-    resolved_model = model or (_OPENROUTER_MODEL if settings.openrouter_api_key else _OPENAI_MODEL)
+    resolved_model = model or (DEFAULT_AUTO_MODEL if settings.openrouter_api_key else _OPENAI_MODEL)
     if dspy_price_per_1k(resolved_model) <= 0.0:
         raise NoJudgeAvailableError(
             f'judge="auto" selected {resolved_model!r}, but it has no pinned price in '
@@ -267,20 +312,32 @@ def build_judge(
     *,
     model: str | None = None,
     entity_noun: str = "entity",
+    judge_params: dict[str, Any] | None = None,
 ) -> Module[Any]:
     """Build the scorer Module for a resolved ``judge``.
 
+    Construction is delegated to the judge's
+    :class:`~langres.core.method_registry.MethodSpec` (the one registry all
+    three dispatch sites share); this function keeps the verb-layer policy:
+    only the :data:`_VERB_JUDGE_NAMES` are reachable here.
+
     Args:
-        judge: ``"zero_shot_llm"`` / ``"embedding"`` / ``"string"``, or a
-            ``Module`` instance passed through verbatim -- the escape hatch
-            (and the ``DummyLM``-injected-``DSPyJudge`` zero-spend test seam).
-            ``"auto"`` is NOT resolved here; call :func:`choose_auto_judge`
-            first (:func:`resolve_judge` does this).
-        schema: The entity schema (drives ``"string"``'s comparator and
-            ``"zero_shot_llm"``'s entity rendering). Works for ANY schema.
-        model: Model id for ``"zero_shot_llm"``. Defaults to the OpenRouter
-            gpt-4o-mini route when omitted.
+        judge: ``"zero_shot_llm"`` / ``"prompt_llm"`` / ``"embedding"`` /
+            ``"string"``, or a ``Module`` instance passed through verbatim --
+            the escape hatch (and the ``DummyLM``-injected-``DSPyJudge``
+            zero-spend test seam). ``"auto"`` is NOT resolved here; call
+            :func:`choose_auto_judge` first (:func:`resolve_judge` does this).
+        schema: The entity schema (drives ``"string"``'s comparator and the
+            LLM judges' entity rendering). Works for ANY schema.
+        model: Model id for the LLM judges. Defaults to
+            :data:`DEFAULT_AUTO_MODEL` when omitted; ignored by the others.
         entity_noun: Domain noun woven into the LLM judge's prompt.
+        judge_params: Judge-specific construction knobs, forwarded to the
+            spec's builder -- for ``"prompt_llm"``: ``prompt_template``,
+            ``system_prompt``, ``response_parser`` / ``record_serializer``
+            (registered names serialize; see
+            ``langres.core.modules.llm_judge.RESPONSE_PARSERS``). An unknown
+            param fails loudly (``TypeError``).
 
     Returns:
         A ready (uncapped) scorer Module.
@@ -289,38 +346,24 @@ def build_judge(
         ValueError: If ``judge`` is an unrecognized string (including
             ``"auto"``, which only :func:`choose_auto_judge`/:func:`resolve_judge`
             resolve).
-        ImportError: For ``"zero_shot_llm"`` when the ``[llm]`` extra (dspy)
-            is not installed -- re-raised with the install line.
+        ImportError: For an LLM judge when the ``[llm]`` extra is not
+            installed -- raised by the builder with the install line.
     """
     if isinstance(judge, Module):
         return judge
-    if judge == "string":
-        comparator: Comparator[Any] = Comparator.from_schema(schema)
-        return WeightedAverageJudge(feature_specs=comparator.feature_specs)
-    if judge == "embedding":
-        return EmbeddingScoreJudge()
-    if judge == "zero_shot_llm":
-        # Lazy: dspy must stay out of sys.modules unless a zero_shot_llm judge
-        # is actually chosen (mirrors langres.methods._make_module_builder).
-        # dspy ships in the [llm] extra but is imported at dspy_judge.py module
-        # level -- without the wrap, a plain `uv sync` user who just set a key
-        # (as the NoJudgeAvailableError copy told them to) hits a raw
-        # ModuleNotFoundError two errors deep in the advertised happy path.
-        try:
-            from langres.core.modules.dspy_judge import DSPyJudge
-        except ImportError as exc:
-            raise ImportError(
-                'judge="zero_shot_llm" needs the [llm] extra (dspy is not installed). '
-                f"Install it with {_INSTALL_LLM_EXTRA}."
-            ) from exc
-
-        resolved_model = model or _OPENROUTER_MODEL
-        dspy_module: DSPyJudge[Any] = DSPyJudge(model=resolved_model, entity_noun=entity_noun)
-        dspy_module.price_per_1k_tokens = dspy_price_per_1k(resolved_model)
-        return dspy_module
-    raise ValueError(
-        f"unknown judge {judge!r}; choose one of 'zero_shot_llm', 'embedding', "
-        "'string', 'auto', or pass a Module instance directly"
+    if judge not in _VERB_JUDGE_NAMES:
+        raise ValueError(
+            f"unknown judge {judge!r}; choose one of 'zero_shot_llm', 'prompt_llm', "
+            "'embedding', 'string', 'auto', or pass a Module instance directly"
+        )
+    spec = get_method(judge)
+    return spec.build(
+        schema,
+        model=model,
+        entity_noun=entity_noun,
+        client=None,
+        comparator=None,
+        **(judge_params or {}),
     )
 
 
@@ -398,11 +441,30 @@ class _SpendCappedModule(Module[Any]):
 
 
 class ResolvedModule(NamedTuple):
-    """:func:`resolve_judge`'s return: the capped scorer plus what was resolved."""
+    """:func:`resolve_judge`'s return: the capped scorer plus what was resolved.
+
+    ``model`` is the id of the underlying model that will actually score --
+    the resolved LLM id for the LLM judges, the pinned embedder
+    (:data:`~langres.core.method_registry.DEFAULT_EMBEDDING_MODEL`) for
+    ``"embedding"``, ``None`` for pure-string similarity, and an injected
+    ``Module``'s own ``model`` attribute (when it has a string one) for
+    ``"custom"``. The verbs stamp it on every result.
+    """
 
     module: Module[Any]
     judge_used: str
     model: str | None
+
+
+def _module_model(module: Module[Any]) -> str | None:
+    """An injected ``Module``'s self-reported model id (its ``model`` attribute).
+
+    Both LLM judge families expose ``model: str`` (``LLMJudge`` / ``DSPyJudge``
+    and friends); anything else -- absent or non-string -- honestly reports
+    ``None`` rather than fabricating an identity.
+    """
+    candidate = getattr(module, "model", None)
+    return candidate if isinstance(candidate, str) else None
 
 
 def resolve_judge(
@@ -412,6 +474,7 @@ def resolve_judge(
     model: str | None = None,
     entity_noun: str = "entity",
     budget_usd: float | None = None,
+    judge_params: dict[str, Any] | None = None,
 ) -> ResolvedModule:
     """Resolve ``judge`` (including ``"auto"``) to a spend-capped scorer Module.
 
@@ -420,42 +483,49 @@ def resolve_judge(
             ``Module`` instance (the escape hatch -- reported as
             ``judge_used="custom"``).
         schema: The entity schema.
-        model: Model id override for ``"zero_shot_llm"`` and ``"auto"``
-            (ignored otherwise). On the auto path the caller's model wins
-            over :func:`choose_auto_judge`'s key-derived pick.
+        model: Model id override for the LLM judges and ``"auto"`` (ignored
+            otherwise). On the auto path the caller's model wins over
+            :func:`choose_auto_judge`'s key-derived pick.
         entity_noun: Domain noun for the LLM judge's prompt.
         budget_usd: Spend cap override; defaults to :data:`DEFAULT_BUDGET_USD`.
+        judge_params: Judge-specific construction knobs (see
+            :func:`build_judge`).
 
     Returns:
         A :class:`ResolvedModule` with the capped module, the resolved judge
-        name, and the resolved model (only for ``"zero_shot_llm"``).
+        name, and the resolved underlying model id (see the class docstring
+        for what ``model`` means per judge).
 
     Raises:
         NoJudgeAvailableError: On the ``"auto"`` path when no API key is set
             or the selected model's price is unpinned (see
             :func:`choose_auto_judge`).
     """
-    resolved_model = model
-
     if isinstance(judge, Module):
-        judge_used = "custom"
-        judge_kind: JudgeName | Module[Any] = judge
-    elif judge == "auto":
-        resolved_kind, resolved_model = choose_auto_judge(
+        capped_instance = _SpendCappedModule(judge, budget_usd=_effective_budget(budget_usd))
+        return ResolvedModule(capped_instance, "custom", _module_model(judge))
+
+    resolved_model = model
+    if judge == "auto":
+        judge_used, resolved_model = choose_auto_judge(
             Settings(), model=model, budget_usd=budget_usd
         )
-        judge_kind = resolved_kind
-        judge_used = resolved_kind
     else:
-        judge_kind = judge
         judge_used = judge
 
-    if judge_used == "zero_shot_llm" and resolved_model is None:
-        resolved_model = _OPENROUTER_MODEL
-
-    built = build_judge(judge_kind, schema, model=resolved_model, entity_noun=entity_noun)
-    capped_budget = _effective_budget(budget_usd)
-    capped = _SpendCappedModule(built, budget_usd=capped_budget)
+    built = build_judge(
+        judge_used, schema, model=resolved_model, entity_noun=entity_noun, judge_params=judge_params
+    )
+    # build_judge validated the name, so the spec lookup cannot fail here. The
+    # spec is the identity authority: a judge that ignores model= (embedding,
+    # string) reports its fixed default_model -- never the caller's ignored
+    # override -- so the stamped identity is what actually ran.
+    spec = get_method(judge_used)
+    if spec.accepts_model:
+        resolved_model = resolved_model or spec.default_model
+    else:
+        resolved_model = spec.default_model
+    capped = _SpendCappedModule(built, budget_usd=_effective_budget(budget_usd))
     return ResolvedModule(capped, judge_used, resolved_model)
 
 
@@ -485,7 +555,7 @@ def _build_vector_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes.vector_index import FAISSIndex
 
-    embedder = SentenceTransformerEmbedder(_VECTOR_MODEL_NAME)
+    embedder = SentenceTransformerEmbedder(DEFAULT_EMBEDDING_MODEL)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     return VectorBlocker(
         vector_index=index,
@@ -565,11 +635,17 @@ def notice_pre_scoring_cost(
 
 
 class ResolvedJudge(NamedTuple):
-    """:func:`build_resolver`'s return: the pipeline plus what was resolved."""
+    """:func:`build_resolver`'s return: the pipeline plus what was resolved.
+
+    ``model`` carries the resolved underlying model id (see
+    :class:`ResolvedModule`) so ``dedupe()`` can stamp it on the result
+    instead of dropping it here.
+    """
 
     resolver: Resolver
     judge_used: str
     score_type: str
+    model: str | None
 
 
 def build_resolver(
@@ -581,6 +657,7 @@ def build_resolver(
     threshold: float | None,
     n_records: int,
     budget_usd: float | None = None,
+    judge_params: dict[str, Any] | None = None,
 ) -> ResolvedJudge:
     """Assemble a spend-capped Resolver for ``dedupe()``.
 
@@ -592,19 +669,26 @@ def build_resolver(
     Args:
         schema: The entity schema (any Pydantic model with an ``id`` field).
         judge: ``"auto"``, another :data:`JudgeName`, or a ``Module`` instance.
-        model: Model id override for ``"zero_shot_llm"``.
+        model: Model id override for the LLM judges.
         entity_noun: Domain noun for the LLM judge's prompt.
         threshold: Clusterer threshold; ``None`` resolves to the judge's
-            default (:data:`_DEFAULT_THRESHOLDS`, D3).
+            default (its ``MethodSpec.default_threshold``, D3).
         n_records: Size of the batch about to be resolved (drives the blocker
             choice and the pre-scoring cost estimate).
         budget_usd: Spend cap override; defaults to :data:`DEFAULT_BUDGET_USD`.
+        judge_params: Judge-specific construction knobs (see
+            :func:`build_judge`).
 
     Returns:
         A :class:`ResolvedJudge` with the assembled Resolver and judge metadata.
     """
     resolved = resolve_judge(
-        judge, schema, model=model, entity_noun=entity_noun, budget_usd=budget_usd
+        judge,
+        schema,
+        model=model,
+        entity_noun=entity_noun,
+        budget_usd=budget_usd,
+        judge_params=judge_params,
     )
 
     use_vector = resolved.judge_used == "embedding" or n_records > _ALL_PAIRS_MAX_N
@@ -615,14 +699,14 @@ def build_resolver(
         Comparator.from_schema(schema) if resolved.judge_used == "string" else None
     )
 
-    if resolved.judge_used == "zero_shot_llm" and resolved.model is not None:
+    if resolved.judge_used in PAID_JUDGE_NAMES and resolved.model is not None:
         n_pairs_est = _estimate_n_pairs(n_records, use_vector=use_vector)
         notice_pre_scoring_cost(
             resolved.model, n_pairs_est, budget_usd=_effective_budget(budget_usd)
         )
 
     resolved_threshold = (
-        _DEFAULT_THRESHOLDS.get(resolved.judge_used, 0.5) if threshold is None else threshold
+        default_threshold_for(resolved.judge_used) if threshold is None else threshold
     )
     resolver = Resolver(
         blocker=blocker,
@@ -630,5 +714,6 @@ def build_resolver(
         module=resolved.module,
         clusterer=Clusterer(threshold=resolved_threshold),
     )
-    score_type = _SCORE_TYPE_BY_JUDGE.get(resolved.judge_used, "unknown")
-    return ResolvedJudge(resolver, resolved.judge_used, score_type)
+    return ResolvedJudge(
+        resolver, resolved.judge_used, _score_type_for(resolved.judge_used), resolved.model
+    )
