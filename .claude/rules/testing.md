@@ -17,7 +17,7 @@ code. Verify as you go.** Read before writing tests or running the suite.
   manufactures low-value tests):
   - **`src/langres/core/**` and the data-prep contract
     (`src/langres/data/data_profile/**`, and `src/langres/data/mining.py`
-    coming next) → 95–100%.** This is the library contract users
+    coming next) → 95–100%.** These are the library contracts users
     serialize against and depend on (`Resolver.save`/`load`, the judge/blocker
     ABCs, the registry, the data-profile/mining diagnostics). Cover behavior
     *and* edge cases: empty inputs, `None`/MISSING, boundaries, error paths.
