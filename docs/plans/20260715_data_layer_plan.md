@@ -3,7 +3,19 @@
 > **Status:** Design + execution plan (2026-07-15). Turns the #86 data-prep survey
 > (`docs/research/20260707_data_prep_hard_case_mining_survey.md`) and the
 > training-surface design (`docs/research/20260714_training_surface_design.md` §5.1)
-> into a buildable, **composable** data-layer arc. Precedes any code — for review.
+> into a buildable, **composable** data-layer arc.
+>
+> **Build status (2026-07-15):**
+> - **PR-1 — the profile report: SHIPPED.** The `DataProfileReport` seam + the full
+>   section battery (`HeroSection`, `LabelStructureSection`, `CorpusFieldSection`,
+>   `SeparabilitySection`, `EmbeddingSection`, `EmbeddingComparisonSection`), the
+>   memory-efficient consumed-only `EmbeddingSource` (`ArraySource` / `NpySource`),
+>   the `from_benchmark` / `from_records` builders (+ the `[semantic]`-gated
+>   `from_embedder` on-ramp), the `langres.eval` public surface, the offline
+>   `examples/quickstart_profile.py`, and the `docs/reference/data-profile.md`
+>   reference all landed (Waves 0–2 of §7).
+> - **PR-2 — the mining seam + mining-readiness: not started** (§4 + the
+>   `MiningReadinessSection` of §2.1; Wave 3 of §7). Unchanged from this plan.
 
 ---
 
@@ -272,16 +284,18 @@ langres`.
 
 ## 7. Build sequence (each wave in its own worktree)
 
-- **Wave 1 — seam + tabular sections.** `ProfileSection` base, `DataProfileReport`
-  container, `core/_report_html.py` scaffold, `LabelStructureSection`,
-  `CorpusFieldSection`, `.to_html()` shell. *Exit:* profile a benchmark's labels+fields
+- **Wave 1 — seam + tabular sections. ✅ SHIPPED (PR-1).** `ProfileSection` base,
+  `DataProfileReport` container, `core/_report_html.py` scaffold, `LabelStructureSection`,
+  `CorpusFieldSection`, `.to_html()` shell. *Exit met:* profile a benchmark's labels+fields
   to a self-contained HTML tearsheet at `$0`; composing a subset works; omitting inputs
   never raises.
-- **Wave 2 — separability + embeddings (multi-model).** `SeparabilitySection`,
-  `EmbeddingSection`, `EmbeddingComparisonSection`, `profile_embeddings({...})`, optional
-  `from_embedder` behind `[semantic]`. *Exit:* pass 2 embedders → 2 sections + comparison
-  in the tearsheet; no embedder → report still renders.
-- **Wave 3 — mining seam + readiness.** `mine_misclassified`, `sample_negatives`,
+- **Wave 2 — separability + embeddings (multi-model) + builders + hero. ✅ SHIPPED (PR-1).**
+  `SeparabilitySection`, `EmbeddingSection`, `EmbeddingComparisonSection`,
+  `profile_embedding`/`profile_embedding_comparison`, `HeroSection`, the
+  `from_benchmark`/`from_records` builders, and the optional `from_embedder` behind
+  `[semantic]`. *Exit met:* pass 2 embedders → 2 sections + comparison in the tearsheet;
+  no embedder → report still renders.
+- **Wave 3 — mining seam + readiness. ← PR-2 (not started).** `mine_misclassified`, `sample_negatives`,
   `denoise_pairs`, `MiningReadinessSection`. *Exit:* mine hard positives + random
   negatives on one benchmark, denoise, profile the mined set in the tearsheet.
 - **Stage 3 (north-star, separate epic):** `attribute_examples` + `flipped` + `ColVal`
