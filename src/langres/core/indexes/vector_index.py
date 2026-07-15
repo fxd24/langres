@@ -13,8 +13,15 @@ Key design principles:
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import ClassVar, Literal, Protocol, cast
+
+# faiss and torch each vendor their own libomp; on macOS loading both in one
+# process can abort with a duplicate-OpenMP-runtime error (exit 139). Opting
+# into the documented workaround before faiss loads keeps the dev/test flow
+# (parallel pytest) stable. No effect once an OpenMP runtime is already loaded.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import faiss
 import numpy as np
