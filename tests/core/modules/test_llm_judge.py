@@ -253,9 +253,7 @@ def test_llm_judge_uses_custom_prompt(mock_llm_client):
     ``{left}``/``{right}`` placeholders)."""
     custom_prompt = "Are these the same? {left} vs {right}"
 
-    module = LLMMatcher(
-        client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
-    )
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt)
 
     assert module.prompt_template == custom_prompt
 

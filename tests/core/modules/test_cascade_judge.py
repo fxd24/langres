@@ -345,7 +345,9 @@ class TestProvenanceMerge:
 
 class TestOneGuard:
     def test_student_yielding_zero_judgements_raises(self) -> None:
-        cascade = CascadeMatcher(student=ZeroJudge({}), escalation=ScriptedJudge({}), band=(0.3, 0.7))
+        cascade = CascadeMatcher(
+            student=ZeroJudge({}), escalation=ScriptedJudge({}), band=(0.3, 0.7)
+        )
         with pytest.raises(RuntimeError, match="student judge produced 0 judgements"):
             list(cascade.forward(iter([_pair("a", "b")])))
 

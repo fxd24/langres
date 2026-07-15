@@ -684,7 +684,9 @@ class TestAutoSelectionNotice:
     ) -> None:
         events: list[str] = []
         self._patch_auto_path(monkeypatch, events)
-        verdict = link({"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Corp"}, matcher="auto")
+        verdict = link(
+            {"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Corp"}, matcher="auto"
+        )
         assert verdict.judge_used == "zero_shot_llm"
         selection = [i for i, e in enumerate(events) if "selected the LLM judge" in e]
         assert len(selection) == 1

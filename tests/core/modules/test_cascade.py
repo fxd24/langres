@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 # DeprecationWarning module-wide so the suite output stays readable.
 # test_cascade_module_init_emits_deprecation_warning still asserts the warning
 # fires: pytest.warns installs its own "always" filter inside the block.
-pytestmark = pytest.mark.filterwarnings("ignore:CascadeChainMatcher is deprecated:DeprecationWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:CascadeChainMatcher is deprecated:DeprecationWarning"
+)
 
 
 def test_cascade_module_initialization():

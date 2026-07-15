@@ -631,9 +631,7 @@ async def test_forward_async_with_custom_prompt_template(mock_llm_client, mock_l
     mock_llm_client.acompletion.return_value = mock_llm_response
 
     custom_prompt = "Compare: {left} vs {right}"
-    module = LLMMatcher(
-        client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
-    )
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt)
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),

@@ -232,4 +232,6 @@ class TestThreeSitesResolveIdentically:
         from langres.core.resolver import Resolver
 
         with pytest.raises(ValueError, match="prompt_llm"):
-            Resolver.from_schema(RegistryCompany, matcher="string", prompt_template="x{left}{right}")
+            Resolver.from_schema(
+                RegistryCompany, matcher="string", prompt_template="x{left}{right}"
+            )

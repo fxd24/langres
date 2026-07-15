@@ -227,7 +227,9 @@ class SelectMatcher(GroupwiseMatcher[SchemaT]):
                 with dspy.context(lm=lm, track_usage=True):
                     prediction = self._program(anchor=anchor_text, candidates=members_text)
             except AdapterParseError as error:
-                logger.warning("SelectMatcher parse failure for group %s: %s", group.group_id, error)
+                logger.warning(
+                    "SelectMatcher parse failure for group %s: %s", group.group_id, error
+                )
                 prompt_tokens, completion_tokens = _salvage_usage(lm)
                 cost = self._cost_usd(prompt_tokens, completion_tokens)
                 yield from self._select_error_judgements(

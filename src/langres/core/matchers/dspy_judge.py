@@ -264,7 +264,9 @@ class DSPyMatcher(Matcher[SchemaT]):
                 with dspy.context(lm=lm, track_usage=True):
                     prediction = self._program(left=left, right=right)
             except AdapterParseError as error:
-                logger.warning("DSPyMatcher parse failure for %s vs %s: %s", left_id, right_id, error)
+                logger.warning(
+                    "DSPyMatcher parse failure for %s vs %s: %s", left_id, right_id, error
+                )
                 # The LM completion WAS billed even though parsing failed. Salvage
                 # whatever token counts DSPy recorded and flag the cost as
                 # untrackable (``cost_untracked``) so downstream accounting does not

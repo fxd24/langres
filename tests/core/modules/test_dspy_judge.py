@@ -230,7 +230,9 @@ def test_get_lm_builds_dspy_lm_lazily(mocker) -> None:  # type: ignore[no-untype
 def test_get_lm_forwards_temperature(mocker) -> None:  # type: ignore[no-untyped-def]
     """A non-default temperature reaches the lazily-constructed ``dspy.LM``."""
     build = mocker.patch("dspy.LM", return_value=object())
-    judge: DSPyMatcher[CompanySchema] = DSPyMatcher(model="openrouter/z-ai/glm-5.2", temperature=0.7)
+    judge: DSPyMatcher[CompanySchema] = DSPyMatcher(
+        model="openrouter/z-ai/glm-5.2", temperature=0.7
+    )
     judge._get_lm()
     build.assert_called_once_with("openrouter/z-ai/glm-5.2", cache=False, temperature=0.7)
 

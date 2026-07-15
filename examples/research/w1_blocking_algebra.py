@@ -148,7 +148,9 @@ def _judged_candidates(
     candidates = _build_vector_candidates(blocker, corpus, records)
 
     comparator: Comparator[Any] = Comparator.from_schema(schema)
-    judge: WeightedAverageMatcher[Any] = WeightedAverageMatcher(feature_specs=comparator.feature_specs)
+    judge: WeightedAverageMatcher[Any] = WeightedAverageMatcher(
+        feature_specs=comparator.feature_specs
+    )
 
     compared = [
         c.model_copy(update={"comparison": comparator.compare(c.left, c.right)}) for c in candidates

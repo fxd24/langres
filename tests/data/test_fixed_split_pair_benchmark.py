@@ -374,7 +374,9 @@ def test_random_forest_floor_runs_honestly_on_amazon_google() -> None:
         pair_split_loader=load_amazon_google_pair_splits,
     )
     train = bench.build("train")
-    judge: RandomForestMatcher[ProductSchema] = RandomForestMatcher(feature_specs=bench.feature_specs)
+    judge: RandomForestMatcher[ProductSchema] = RandomForestMatcher(
+        feature_specs=bench.feature_specs
+    )
     judge.fit(iter(train.candidates), train.labels)
 
     result = evaluate_fixed_split_honest(judge, bench, derive_on="train")

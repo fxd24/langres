@@ -59,7 +59,9 @@ from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
 # module-wide so the suite output stays readable.
 # test_cascade_factory_suppresses_cascade_module_deprecation is unaffected:
 # it re-arms filters itself via warnings.catch_warnings + simplefilter.
-pytestmark = pytest.mark.filterwarnings("ignore:CascadeChainMatcher is deprecated:DeprecationWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:CascadeChainMatcher is deprecated:DeprecationWarning"
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic, embedding-free benchmark (FakeVectorIndex) for fast tests
@@ -608,7 +610,9 @@ def test_budgeted_runner_isolates_per_call_failure() -> None:
 
 def test_budgeted_runner_tallies_cascade_llm_cost_usd_key() -> None:
     """Cascade's ``llm_cost_usd`` provenance flows through the runner's fallback tally."""
-    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(llm_api_key="injected", llm_model="mock")
+    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(
+        llm_api_key="injected", llm_model="mock"
+    )
     cascade._llm_client = _MockOpenAIClient()
     cascade._embedding_model = _ConstantEmbeddingModel(_ESCALATE)
 
@@ -625,7 +629,9 @@ def test_budgeted_runner_tallies_cascade_llm_cost_usd_key() -> None:
 
 
 def test_cascade_cost_track_surfaces_escalation() -> None:
-    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(llm_api_key="injected", llm_model="mock")
+    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(
+        llm_api_key="injected", llm_model="mock"
+    )
     cascade._llm_client = _MockOpenAIClient()
     # 2 escalate (LLM), 1 early-exits low -> escalation rate 2/3.
     cascade._embedding_model = _ScriptedEmbeddingModel([_ESCALATE, _EXIT_LOW, _ESCALATE])
