@@ -41,6 +41,11 @@ from langres.data.data_profile.embedding_source import (
     NpySource,
     cosine_signal,
 )
+from langres.data.data_profile.failure_mode import (
+    FailureModeSection,
+    FailureSlice,
+    profile_failure_mode,
+)
 from langres.data.data_profile.hero import HeroSection, build_hero
 from langres.data.data_profile.label_structure import (
     LabelStructureSection,
@@ -65,6 +70,8 @@ __all__ = [
     "HeroSection",
     "LabelStructureSection",
     "MiningReadinessSection",
+    "FailureModeSection",
+    "FailureSlice",
     "CorpusFieldSection",
     "FieldStat",
     "SeparabilitySection",
@@ -74,6 +81,7 @@ __all__ = [
     "build_hero",
     "profile_label_structure",
     "profile_mining_readiness",
+    "profile_failure_mode",
     "profile_corpus_fields",
     "profile_separability",
     "profile_embedding",
