@@ -93,9 +93,14 @@ def test_finetune_kind_routes_to_pr_f_stub() -> None:
         _resolver().fit(RECORDS, method=_FinetuneMethod())
 
 
-def test_prompt_kind_routes_to_pr_c_stub() -> None:
-    """A ``kind="prompt"`` method routes to a *different* branch (PR-C) -- proves routing."""
-    with pytest.raises(NotImplementedError, match=r"method kind 'prompt'.*lands in PR-C"):
+def test_prompt_kind_routes_to_pr_c_prompt_fit() -> None:
+    """A ``kind="prompt"`` method routes to the real PR-C ``_fit_prompt`` branch.
+
+    ``_fit_prompt`` requires a compilable DSPyMatcher; the no-hook module here is
+    not one, so it raises that clear error -- which *proves routing* (a different
+    branch than finetune/calibrate) without a paid DSPy compile.
+    """
+    with pytest.raises(ValueError, match=r"prompt-optimization needs a DSPyMatcher"):
         _resolver().fit(RECORDS, method=_PromptMethod())
 
 

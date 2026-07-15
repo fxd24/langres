@@ -700,16 +700,122 @@ class Resolver:
         seed: int,
         method: Method,
     ) -> Self:
-        """Fit via prompt-optimization (``method.kind == "prompt"``) -- STUB.
+        """Fit via prompt-optimization (``method.kind == "prompt"``).
 
-        Wired into ``fit``'s ``method=`` dispatch; the concrete
-        DSPy-compile-under-fit body lands in PR-C. Until then this raises with
-        that pointer.
+        Tunes a compilable :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`'s
+        prompt from labeled pairs by compiling its DSPy program against a gold set
+        -- the optimizer named by ``method.optimizer`` (``BootstrapFewShot`` for
+        :class:`~langres.core.methods_prompt.Bootstrap`, ``MIPROv2`` for
+        :class:`~langres.core.methods_prompt.MIPRO`). Supervision comes from either
+        id-keyed ``pairs`` (joined via :func:`~langres.core.harvest.align_pairs`,
+        whose optional entity-disjoint ``split`` yields the ``valid`` fold
+        ``MIPROv2`` uses as its valset) or pre-aligned ``labels``. Sets
+        :attr:`fit_report_` naming the demos learned + teacher model + declared
+        budget, and returns ``self`` so ``resolver.fit(...).resolve(...)`` chains.
+
+        The budget seam: ``method.budget_usd`` caps the compile via the existing
+        :class:`~langres.clients.openrouter.SpendMonitor`. DSPy-compile spend
+        capture is deferred to issue #100 -- today the compile records ``$0`` (the
+        ``DummyLM`` CI path is genuinely free; the paid ``MIPROv2`` path stays
+        uncosted until #100 wires real spend through this same guard).
+
+        Raises:
+            ValueError: If the module is not a ``DSPyMatcher``
+                (prompt-optimization needs a compilable scorer); if both
+                ``labels`` and ``pairs`` are given, or neither.
         """
-        raise NotImplementedError(
-            f"method kind 'prompt' dispatch is wired but its fit path lands in "
-            f"PR-C ({method.describe()})."
+        # Lazy imports: keep ``dspy`` (and litellm-adjacent client code) out of a
+        # bare ``import langres`` -- they load only when a prompt-optimize fit runs.
+        from langres.clients.openrouter import SpendMonitor
+        from langres.core.matchers.dspy_judge import DSPyMatcher
+
+        matcher_name = type(self.module).__name__
+        if not isinstance(self.module, DSPyMatcher):
+            raise ValueError(
+                f"method.kind='prompt' prompt-optimization needs a DSPyMatcher in "
+                f"the module slot (a compilable DSPy scorer), but this Resolver's "
+                f"matcher is {matcher_name}. Build it with matcher=DSPyMatcher(...) "
+                f"to prompt-optimize, or drop method= to use {matcher_name}'s own "
+                f"fit path."
+            )
+        if self.module.compiled:
+            raise ValueError(
+                "this DSPyMatcher is already compiled -- prompt-optimization "
+                "compiles a fresh program once per matcher instance and DSPy "
+                "cannot recompile in place. Build a new DSPyMatcher(...) for "
+                "another prompt-optimize round."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (pre-aligned with the blocked candidates) or "
+                "pairs= (id-keyed labels align_pairs() joins), not both."
+            )
+        optimizer = getattr(method, "optimizer", None)
+        if optimizer is None:
+            raise ValueError(
+                f"method.kind='prompt' needs a PromptMethod exposing .optimizer "
+                f"(e.g. Bootstrap()/MIPRO()); got {type(method).__name__} "
+                f"({method.describe()})."
+            )
+
+        # Assemble labeled candidates (train + optional valid), reusing the same
+        # id-join + entity-disjoint split as the SupervisedFitMixin pairs path.
+        coverage = None
+        valid_candidates: Sequence[ERCandidate[Any]] = []
+        valid_labels: Sequence[bool] = []
+        if pairs is not None:
+            aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+            train_candidates: Sequence[ERCandidate[Any]] = aligned.train.candidates
+            train_labels: Sequence[bool] = aligned.train.labels
+            valid_candidates = aligned.valid.candidates
+            valid_labels = aligned.valid.labels
+            coverage = aligned.coverage
+        elif labels is not None:
+            train_candidates = self.candidates(data)
+            train_labels = labels
+        else:
+            raise ValueError(
+                f"prompt-optimization ({method.describe()}) needs gold labels to "
+                "tune the prompt from: pass pairs=<id-keyed labels> or "
+                "labels=<pre-aligned with the blocked candidates>."
+            )
+
+        trainset = self.module.examples_from_candidates(train_candidates, train_labels)
+        valset = (
+            self.module.examples_from_candidates(valid_candidates, valid_labels)
+            if valid_candidates
+            else None
         )
+
+        budget_usd = getattr(method, "budget_usd", None)
+        monitor = SpendMonitor(budget_usd=budget_usd) if budget_usd is not None else None
+        compile_kwargs = method.compile_kwargs() if hasattr(method, "compile_kwargs") else {}
+        self.module.compile(trainset, valset, optimizer=optimizer, **compile_kwargs)
+
+        # See the docstring's budget note: DSPy-compile spend is not yet captured
+        # (#100), so the monitor observes $0 today. The seam is wired so real
+        # spend flows through this cap once #100 lands.
+        spend_usd = 0.0
+        if monitor is not None:
+            monitor.add(spend_usd)
+            monitor.check()
+
+        self.fit_report_ = FitReport.build(
+            trainable=(
+                f"{matcher_name} ({method.describe()}; "
+                f"teacher={self.module.model}, demos={self.module.n_demos})"
+            ),
+            trained=True,
+            n_train=len(train_labels),
+            n_valid=len(valid_labels),
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            cost=spend_usd if monitor is not None else None,
+            run_ref=current_run.get(),
+        )
+        return self
 
     def _fit_finetune(
         self,
