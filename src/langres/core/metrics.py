@@ -1301,10 +1301,14 @@ def log_loss(confidences: list[float], outcomes: list[bool]) -> float:
     That heavy tail makes it the natural loss-like steering signal for the
     autoresearch loop, which optimizes a loss rather than a saturated F1.
 
-    Each probability is clamped to ``[eps, 1 - eps]`` (``eps = _LOG_LOSS_EPS =
-    1e-15``) before the log, so a confident-and-wrong ``p = 0`` / ``p = 1`` gives
-    a large finite loss instead of ``+inf``; the per-item penalty is therefore
-    capped near ``-log(eps) ~= 34.5``.
+    Numerically, the probability the forecaster assigned to the *realized*
+    outcome (``p`` for a ``True``, ``1 - p`` for a ``False``) is clamped to
+    ``[eps, 1 - eps]`` (``eps = _LOG_LOSS_EPS = 1e-15``) before the log. Clamping
+    that realized-class probability directly -- rather than clamping ``p`` and
+    subtracting -- keeps a confident-and-wrong ``p = 0`` / ``p = 1`` exact:
+    ``1 - 1.0`` is ``0.0`` before the clamp, avoiding the float cancellation of
+    ``1 - (1 - eps)``. So a confident mistake gives a large *finite* loss (the
+    per-item penalty is capped near ``-log(eps) ~= 34.5``) instead of ``+inf``.
 
     Args:
         confidences: Predicted probabilities in ``[0, 1]``.
@@ -1326,8 +1330,8 @@ def log_loss(confidences: list[float], outcomes: list[bool]) -> float:
     _validate_calibration(confidences, outcomes)
     total = 0.0
     for p, y in zip(confidences, outcomes, strict=True):
-        clamped = min(max(p, _LOG_LOSS_EPS), 1.0 - _LOG_LOSS_EPS)
-        total += math.log(clamped) if y else math.log(1.0 - clamped)
+        realized = p if y else 1.0 - p
+        total += math.log(min(max(realized, _LOG_LOSS_EPS), 1.0 - _LOG_LOSS_EPS))
     return -total / len(confidences)
 
 

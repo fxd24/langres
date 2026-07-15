@@ -176,9 +176,7 @@ def test_log_loss_constant_half_is_log_two() -> None:
 
 def test_log_loss_is_symmetric_under_label_flip() -> None:
     # Flipping every (p, y) to (1-p, not y) leaves the loss unchanged.
-    assert log_loss([0.9, 0.1], [True, False]) == pytest.approx(
-        log_loss([0.1, 0.9], [False, True])
-    )
+    assert log_loss([0.9, 0.1], [True, False]) == pytest.approx(log_loss([0.1, 0.9], [False, True]))
 
 
 def test_log_loss_small_vector() -> None:

@@ -207,17 +207,17 @@ def test_is_better_minimize_single_goal() -> None:
 
 def test_is_better_multi_goal_dominating() -> None:
     obj = Objective.pareto([("recall", "maximize"), ("precision", "maximize")])
-    assert obj.is_better(
-        {"recall": 0.9, "precision": 0.9}, {"recall": 0.8, "precision": 0.8}
-    ) is True
+    assert (
+        obj.is_better({"recall": 0.9, "precision": 0.9}, {"recall": 0.8, "precision": 0.8}) is True
+    )
 
 
 def test_is_better_multi_goal_incomparable_keeps_incumbent() -> None:
     obj = Objective.pareto([("recall", "maximize"), ("precision", "maximize")])
     # Better on recall, worse on precision: incomparable -> not better.
-    assert obj.is_better(
-        {"recall": 0.9, "precision": 0.7}, {"recall": 0.8, "precision": 0.8}
-    ) is False
+    assert (
+        obj.is_better({"recall": 0.9, "precision": 0.7}, {"recall": 0.8, "precision": 0.8}) is False
+    )
 
 
 def test_is_better_missing_metric_raises() -> None:

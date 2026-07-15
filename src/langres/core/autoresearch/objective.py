@@ -46,8 +46,7 @@ def _require(metrics: Mapping[str, float], name: str) -> float:
         return metrics[name]
     except KeyError:
         raise ValueError(
-            f"metric {name!r} is missing from the metrics mapping "
-            f"(available: {sorted(metrics)})"
+            f"metric {name!r} is missing from the metrics mapping (available: {sorted(metrics)})"
         ) from None
 
 
@@ -259,4 +258,6 @@ def _to_constraints(triples: Iterable[tuple[str, str, float]]) -> tuple[Constrai
     :meth:`Constraint.__post_init__` is the real runtime guard that rejects an
     unknown operator with a clear ``ValueError``.
     """
-    return tuple(Constraint(metric, cast(ConstraintOp, op), threshold) for metric, op, threshold in triples)
+    return tuple(
+        Constraint(metric, cast(ConstraintOp, op), threshold) for metric, op, threshold in triples
+    )
