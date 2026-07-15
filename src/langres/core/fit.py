@@ -1,26 +1,34 @@
-"""Fit-hook contracts: how a Matcher opts into being trainable (W1.0, E6).
+"""Fit-hook contracts: how a pipeline role opts into being trainable (W1.0, E6).
 
-Two runtime-checkable, structural `Protocol`s -- **not** abstract methods on
-the base ``Matcher``. Adding an abstract ``fit``/``fit_unlabeled`` to ``Matcher``
-would break every existing, non-learnable module (``WeightedAverageMatcher``,
-``LLMMatcher``, ...), which is not the goal here: most judges stay heuristic or
-zero-shot and never need a fit hook. Instead, a module *opts in* structurally
-by implementing the method with the matching name and signature; callers (the
-Resolver) detect this with ``isinstance(module, SupervisedFitMixin)`` /
-``isinstance(module, UnsupervisedFitMixin)``.
+Runtime-checkable, structural `Protocol`s -- **not** abstract methods on any
+base class. Adding an abstract ``fit`` to ``Matcher`` would break every
+existing, non-learnable matcher (``WeightedAverageMatcher``, ``LLMMatcher``,
+...), which is not the goal here: most components stay heuristic or zero-shot
+and never need a fit hook. Instead, a component *opts in* structurally by
+implementing the method with the matching name and signature; callers (the
+Resolver) detect this with ``isinstance(component, <Mixin>)``.
 
-- ``SupervisedFitMixin``: for judges that learn from labeled pairs (e.g. a
-  future ``RandomForestMatcher`` fitting an sklearn RandomForest over
-  ``ComparisonVector.similarities``).
-- ``UnsupervisedFitMixin``: for judges that learn without labels (e.g. a
-  future ``FellegiSunterMatcher`` fitting m/u probabilities via EM).
+Three pipeline roles can be trained, each with its own fit signature:
 
-See ``Resolver.fit()`` for how these are consumed, and
+- **Matcher** -- ``SupervisedFitMixin`` (``fit(candidates, labels)``, e.g. a
+  ``RandomForestMatcher`` fitting an sklearn forest over
+  ``ComparisonVector.similarities``) and ``UnsupervisedFitMixin``
+  (``fit_unlabeled(candidates)``, e.g. a ``FellegiSunterMatcher`` fitting m/u
+  probabilities via EM).
+- **Blocker** -- ``BlockerFitMixin`` (``fit_blocker(records, pairs)``: learn a
+  high-recall blocking key/index from known match pairs). Contract-only here;
+  the concrete ``TrainableVectorBlocker`` is a later PR -- this makes learned
+  blocking *expressible* in the role taxonomy.
+- **Calibrator** -- ``CalibratorFitMixin`` (``fit_calibrator(scores, labels)``:
+  learn a score->probability map). Contract-only here; the concrete
+  Platt/isotonic impl is a later PR.
+
+See ``Resolver.fit()`` for how the matcher mixins are consumed, and
 docs/TECHNICAL_OVERVIEW.md ("Fit-hook contract") for the full picture.
 """
 
 from collections.abc import Iterator, Sequence
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -67,5 +75,50 @@ class UnsupervisedFitMixin(Protocol[SchemaT]):
         Args:
             candidates: The blocked (and, if a comparator is configured,
                 comparison-attached) candidate stream to learn from.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+
+@runtime_checkable
+class BlockerFitMixin(Protocol):
+    """A Blocker that learns its blocking scheme from known match pairs.
+
+    Implement ``fit_blocker(records, pairs)`` to opt in; no subclassing required
+    (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
+    Contract-only for now -- the concrete ``TrainableVectorBlocker`` is a later
+    PR; this makes learned blocking *expressible* in the role taxonomy without
+    shipping an impl.
+    """
+
+    def fit_blocker(self, records: Sequence[Any], pairs: Sequence[tuple[str, str]]) -> None:
+        """Fit the blocker's parameters from records + known match pairs.
+
+        Args:
+            records: The raw records to index (same shape ``Blocker.stream``
+                accepts).
+            pairs: Known ``(left_id, right_id)`` match pairs -- the recall target
+                the learned blocking key/index must keep.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+
+@runtime_checkable
+class CalibratorFitMixin(Protocol):
+    """A calibrator that learns a score->probability map from scores + labels.
+
+    Implement ``fit_calibrator(scores, labels)`` to opt in; no subclassing
+    required (structural typing via ``isinstance()``). Contract-only for now --
+    the concrete Platt/isotonic impl is a later PR; this makes score calibration
+    *expressible* as its own fit role, distinct from a matcher's
+    ``fit(candidates, labels)``.
+    """
+
+    def fit_calibrator(self, scores: Sequence[float], labels: Sequence[bool]) -> None:
+        """Fit the calibrator's parameters from scores + gold labels.
+
+        Args:
+            scores: The matcher scores to calibrate, positionally aligned with
+                ``labels``.
+            labels: Gold match/non-match labels for each score.
         """
         ...  # pragma: no cover — Protocol method body, never executed
