@@ -355,7 +355,7 @@ def link(
         left: The first record (a plain dict).
         right: The second record. ``link(a, a)`` (the same record twice) is
             well-defined -- it scores the entity against itself.
-        judge: ``"auto"`` (default; picks an LLM judge from the available API
+        matcher: ``"auto"`` (default; picks an LLM judge from the available API
             key and raises ``NoMatcherAvailableError`` when none is set),
             ``"zero_shot_llm"``, ``"prompt_llm"`` (the bring-your-own-prompt
             ``LLMMatcher`` -- see ``prompt_template``/``response_parser``),
@@ -514,7 +514,7 @@ def dedupe(
             ``NoMatcherAvailableError``. Every record must have a unique
             ``"id"`` (or none at all -- positional ids are assigned); a
             duplicate ``"id"`` raises.
-        judge: ``"auto"`` (default; picks an LLM judge from the available API
+        matcher: ``"auto"`` (default; picks an LLM judge from the available API
             key and raises ``NoMatcherAvailableError`` when none is set),
             ``"zero_shot_llm"``, ``"prompt_llm"`` (the bring-your-own-prompt
             ``LLMMatcher`` -- see ``prompt_template``/``response_parser``),

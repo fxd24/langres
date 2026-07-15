@@ -377,7 +377,7 @@ class Resolver:
                 floor.
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
-            judge: ``"string"`` (default -- identical to pre-existing
+            matcher: ``"string"`` (default -- identical to pre-existing
                 behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
                 above), ``"zero_shot_llm"``, ``"prompt_llm"`` (the
                 bring-your-own-prompt ``LLMMatcher`` -- with a *registered*
