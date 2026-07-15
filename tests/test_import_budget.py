@@ -81,6 +81,44 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
 
 
+# The autoresearch facade (``langres.optimize`` / ``langres.score_blocking``,
+# PR P-C) is eager-exported from ``langres/__init__.py`` -- so a bare
+# ``import langres`` must expose both as callables WHILE staying import-light:
+# ``langres/optimize.py``'s module top is stdlib/typing only (every factory /
+# data / metrics / faiss import is lazy inside a function body), so pulling the
+# module into the eager graph must not drag torch / faiss / sentence-transformers
+# / litellm / scikit-learn into ``sys.modules``. Fresh-process for an unpolluted
+# import state (same pattern as the checks above).
+_OPTIMIZE_FACADE_HEAVY_DEPS = [
+    "torch",
+    "faiss",
+    "sentence_transformers",
+    "litellm",
+    "sklearn",
+]
+
+_OPTIMIZE_FACADE_SCRIPT = (
+    "import sys; import langres; "
+    "assert callable(langres.optimize), 'langres.optimize missing or not callable'; "
+    "assert callable(langres.score_blocking), 'langres.score_blocking missing or not callable'; "
+    "leaked = [m for m in {modules!r} if m in sys.modules]; "
+    "assert not leaked, f'optimize facade leaked heavy modules on bare import: {{leaked}}'; "
+    "print('OK')"
+).format(modules=_OPTIMIZE_FACADE_HEAVY_DEPS)
+
+
+def test_optimize_facade_is_eager_and_import_light() -> None:
+    """``langres.optimize``/``score_blocking`` are callable on bare import, pulling no heavy dep."""
+    result = subprocess.run(
+        [sys.executable, "-c", _OPTIMIZE_FACADE_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"optimize-facade import-budget check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # The prompt-optimize ``Method`` objects (``Bootstrap`` / ``MIPRO`` / ``GEPA``)
 # are pure config a caller constructs at the fit call site -- constructing one
 # (even ``GEPA(reflection_model=...)``, which names a DSPy optimizer) must never

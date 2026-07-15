@@ -61,6 +61,7 @@ from langres.core import (
 )
 from langres.core.models import MatcherAbstainedError
 from langres.core.presets import DEFAULT_AUTO_MODEL, NoMatcherAvailableError
+from langres.optimize import optimize, score_blocking
 from langres.verbs import LinkVerdict, dedupe, link
 
 if TYPE_CHECKING:
@@ -103,7 +104,9 @@ __all__ = [
     "gold_pairs_from_clusters",
     "harvest_labeled_pairs",
     "link",
+    "optimize",
     "run_finetune",
+    "score_blocking",
     "select_for_review",
 ]
 
