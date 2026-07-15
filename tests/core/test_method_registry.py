@@ -128,6 +128,25 @@ class TestBuiltinSpecs:
             assert spec.default_threshold == 0.7, name
             assert spec.requires_extra == "llm", name
 
+    def test_random_forest_declares_the_trained_extra(self) -> None:
+        """The supervised forest needs scikit-learn, so its spec names the extra."""
+        spec = get_method("random_forest")
+        assert spec.requires_extra == "trained"
+        assert spec.needs_comparator is True
+        assert spec.score_type == "prob_rf"
+
+    def test_trained_extra_error_is_actionable(self) -> None:
+        """The [trained]-absent path points at ``langres[trained]`` (mirrors the
+        LLM-family ``_llm_extra_error``), not a bare ModuleNotFoundError."""
+        from langres.core.method_registry import _trained_extra_error
+
+        err = _trained_extra_error("random_forest", "scikit-learn")
+        assert isinstance(err, ImportError)
+        message = str(err)
+        assert "[trained] extra" in message
+        assert "scikit-learn is not installed" in message
+        assert "langres[trained]" in message
+
     def test_embedding_reports_the_pinned_embedder_as_its_model(self) -> None:
         spec = get_method("embedding")
         assert spec.default_model == DEFAULT_EMBEDDING_MODEL == "all-MiniLM-L6-v2"
