@@ -286,7 +286,7 @@ def _resolved_threshold(judge_used: str, threshold: float | None) -> float:
 
 
 def _prompt_judge_params(
-    judge: MatcherName | Matcher[Any],
+    matcher: MatcherName | Matcher[Any],
     *,
     prompt_template: str | None,
     system_prompt: str | None,
@@ -309,10 +309,10 @@ def _prompt_judge_params(
     }
     if not params:
         return None
-    if judge != "prompt_llm":
+    if matcher != "prompt_llm":
         raise ValueError(
             f"{', '.join(sorted(params))}: only valid with matcher='prompt_llm' "
-            f"(got matcher={judge!r}). Pass matcher='prompt_llm', or construct an "
+            f"(got matcher={matcher!r}). Pass matcher='prompt_llm', or construct an "
             "LLMMatcher yourself and pass it as matcher=<Matcher>."
         )
     return params
@@ -338,7 +338,7 @@ def link(
     left: dict[str, Any],
     right: dict[str, Any],
     *,
-    judge: MatcherName | Matcher[Any] = "auto",
+    matcher: MatcherName | Matcher[Any] = "auto",
     schema: type[BaseModel] | None = None,
     model: str | None = None,
     entity_noun: str = "entity",
@@ -400,7 +400,7 @@ def link(
         BudgetExceeded: If scoring this pair would cross the spend cap.
     """
     judge_params = _prompt_judge_params(
-        judge,
+        matcher,
         prompt_template=prompt_template,
         system_prompt=system_prompt,
         response_parser=response_parser,
@@ -411,7 +411,7 @@ def link(
         resolved_schema, left_record, right_record = schema, left, right
 
     module, judge_used, resolved_model = resolve_judge(
-        judge,
+        matcher,
         resolved_schema,
         model=model,
         entity_noun=entity_noun,
@@ -485,7 +485,7 @@ def link(
 def dedupe(
     records: list[dict[str, Any]],
     *,
-    judge: MatcherName | Matcher[Any] = "auto",
+    matcher: MatcherName | Matcher[Any] = "auto",
     schema: type[BaseModel] | None = None,
     model: str | None = None,
     entity_noun: str = "entity",
@@ -553,7 +553,7 @@ def dedupe(
             carries the judgements already produced on ``.partial_judgements``.
     """
     judge_params = _prompt_judge_params(
-        judge,
+        matcher,
         prompt_template=prompt_template,
         system_prompt=system_prompt,
         response_parser=response_parser,
@@ -574,7 +574,7 @@ def dedupe(
 
     resolved = build_resolver(
         resolved_schema,
-        matcher=judge,
+        judge=matcher,
         model=model,
         entity_noun=entity_noun,
         threshold=threshold,

@@ -307,7 +307,7 @@ class Resolver:
         comparator: Optional pre-stage turning each pair into a
             ComparisonVector. When ``None``, the module is called directly
             (e.g. a self-contained ``RapidfuzzMatcher``).
-        module: The scorer Matcher that yields PairwiseJudgements.
+        matcher: The scorer Matcher that yields PairwiseJudgements.
         clusterer: Groups matched pairs into entity clusters.
 
     Example:
@@ -315,7 +315,7 @@ class Resolver:
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
+            matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
         clusters = resolver.resolve(COMPANY_RECORDS)
@@ -327,12 +327,12 @@ class Resolver:
         self,
         blocker: Blocker[Any],
         comparator: Comparator[Any] | None,
-        module: Matcher[Any],
+        matcher: Matcher[Any],
         clusterer: Clusterer,
     ) -> None:
         self.blocker = blocker
         self.comparator = comparator
-        self.module = module
+        self.module = matcher
         self.clusterer = clusterer
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
         # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
@@ -350,7 +350,7 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
-        judge: "_FromSchemaJudge | Matcher[Any]" = "string",
+        matcher: "_FromSchemaJudge | Matcher[Any]" = "string",
         model: str | None = None,
         entity_noun: str = "entity",
         prompt_template: str | None = None,
@@ -420,16 +420,16 @@ class Resolver:
             }.items()
             if value is not None
         }
-        if judge_params and judge != "prompt_llm":
+        if judge_params and matcher != "prompt_llm":
             raise ValueError(
                 f"{', '.join(sorted(judge_params))}: only valid with matcher='prompt_llm' "
-                f"(got matcher={judge!r})."
+                f"(got matcher={matcher!r})."
             )
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
         module = _build_module_for_judge(
-            judge,
+            matcher,
             schema,
             comparator,
             model=model,
@@ -438,13 +438,13 @@ class Resolver:
         )
         blocker: Blocker[Any] = (
             _build_embedding_blocker(schema)
-            if judge == "embedding"
+            if matcher == "embedding"
             else AllPairsBlocker(schema=schema)
         )
         return cls(
             blocker=blocker,
             comparator=comparator,
-            module=module,
+            matcher=module,
             clusterer=Clusterer(threshold=threshold),
         )
 
@@ -868,7 +868,7 @@ class Resolver:
         return cls(
             blocker=blocker,
             comparator=comparator,
-            module=module,
+            matcher=module,
             clusterer=clusterer,
         )
 

@@ -1200,8 +1200,3 @@ class LLMMatcher(Matcher[SchemaT]):
             ScoreInspectionReport with statistics, examples, and recommendations
         """
         return _inspect_scores_impl(judgements, sample_size)
-
-
-# Backward-compatible public alias. ``LLMMatcher`` is the public name; existing
-# imports of ``LLMMatcher`` keep working.
-LLMMatcher = LLMMatcher
