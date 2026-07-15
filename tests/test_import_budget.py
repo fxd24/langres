@@ -692,5 +692,5 @@ class TestModulesPackageLazyGetattr:
             raise ModuleNotFoundError("No module named 'litellm'")
 
         monkeypatch.setattr(modules_pkg.importlib, "import_module", _fail)
-        with pytest.raises(ImportError, match=r"langres\.core\.modules\.LLMMatcher.*llm"):
+        with pytest.raises(ImportError, match=r"langres\.core\.matchers\.LLMMatcher.*llm"):
             modules_pkg.LLMMatcher  # noqa: B018
