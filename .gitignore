@@ -57,6 +57,9 @@ pip-delete-this-directory.txt
 # Eval tearsheet written by examples/quickstart_eval.py
 tearsheet.html
 
+# Data-profile tearsheet written by examples/quickstart_profile.py
+data_profile.html
+
 # Unit test / coverage reports
 htmlcov/
 .tox/

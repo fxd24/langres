@@ -49,6 +49,8 @@ def test_dir_and_all_list_the_curated_surface() -> None:
     surface = {
         "evaluate",
         "EvalReport",
+        "DataProfileReport",
+        "from_embedder",
         "DEFAULT_PAIR_GRID",
         "list_benchmarks",
         "get_benchmark",
