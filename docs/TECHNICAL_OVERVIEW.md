@@ -735,6 +735,33 @@ digest). `FitReport` is import-light (Pydantic + `harvest`/`metrics` only, no
 sklearn/torch) and references the enclosing `RunRecord`'s `attempt_id` via
 `run_ref` for lineage rather than duplicating it.
 
+### Training strategies: the `method=` seam + `describe()`
+
+Beyond the module-hook default above, `Resolver.fit(..., method=<Method>)` takes
+a `langres.core.methods_api.Method` — a declarative object naming *how* to train
+— and dispatches on `method.kind` to a per-kind handler *before* the
+isinstance-on-the-module chain (`method=None` leaves that default byte-for-byte
+unchanged):
+
+- **prompt-optimize** (`kind="prompt"`, implemented) — `Bootstrap()` /
+  `MIPRO(auto=..., budget_usd=...)` from `langres.core.methods_prompt` compile a
+  `DSPyMatcher`'s prompt from labeled pairs (the optimizer's `BootstrapFewShot` /
+  `MIPROv2`). Supervision comes from `pairs=` (reusing `align_pairs` + the
+  entity-disjoint split, whose `valid` fold feeds `MIPROv2`'s valset) or
+  pre-aligned `labels=`. The `FitReport` names the demos learned, teacher model,
+  and declared budget. Requires a `DSPyMatcher` (else a clear error); DSPy stays
+  lazy-imported, so `Bootstrap()`/`MIPRO()` construct without pulling `dspy`.
+  `budget_usd` threads through the existing `SpendMonitor` seam (DSPy-compile
+  spend capture is deferred to #100, so it observes `$0` today).
+- **fine-tune** (`kind="finetune"`) / **calibrate** (`kind="calibrate"`) — wired
+  stubs raising a clear NotImplementedError naming their PR.
+
+`Resolver.describe()` is the pre-fit honesty device: a per-component string
+tagging each pipeline role **TRAINABLE** (implements a `langres.core.fit`
+Protocol, or is a prompt-compilable `DSPyMatcher`) or **frozen**. A pure string
+builder — it never trains, imports a backend, or mutates state — so it is safe to
+call on a fresh Resolver to see what a `fit()` would (and would not) tune.
+
 ## 9. Blocking Algebra + Merge-Resistant Clustering (W1.3)
 
 ### KeyBlocker (`langres.core.blockers.key`)

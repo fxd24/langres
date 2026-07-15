@@ -589,9 +589,11 @@ class Resolver:
                 (``_fit_prompt`` / ``_fit_finetune`` / ``_fit_calibrate``) instead
                 of the isinstance-on-the-module default above; when ``None`` (the
                 default), behavior is exactly the module-hook path described here.
-                Those handlers are thin stubs today -- the concrete per-kind fit
-                paths land in later PRs (prompt in PR-C, finetune in PR-F,
-                calibrate in PR-D).
+                Prompt-optimization is implemented (:class:`~langres.core.methods_prompt.Bootstrap`
+                / :class:`~langres.core.methods_prompt.MIPRO` compile a
+                ``DSPyMatcher``'s prompt -- see :meth:`_fit_prompt`); the
+                fine-tune (PR-F) and calibrate (PR-D) handlers are still stubs
+                that raise a clear NotImplementedError naming their PR.
 
         Returns:
             ``self``, so ``resolver.fit(data).resolve(data)`` chains.
@@ -686,8 +688,9 @@ class Resolver:
     # land in disjoint methods -- prompt-optimize in PR-C, fine-tune in PR-F,
     # calibrate in PR-D -- rather than colliding on one shared branch. Every
     # handler takes the full fit context (data + supervision + split/seed + the
-    # Method itself) so its PR fills in only the body, not the call site. Until
-    # then each is a thin stub raising a clear, PR-naming NotImplementedError.
+    # Method itself) so its PR fills in only the body, not the call site.
+    # ``_fit_prompt`` is implemented; ``_fit_finetune`` / ``_fit_calibrate``
+    # remain thin stubs raising a clear, PR-naming NotImplementedError.
     # ------------------------------------------------------------------
 
     def _fit_prompt(
