@@ -52,11 +52,16 @@ from langres.core.fit import (
     SupervisedFitMixin,
     UnsupervisedFitMixin,
 )
-from langres.core.fit_report import FitReport
+from langres.core.fit_report import CalibrationDelta, FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
 from langres.core.methods_api import Method
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
-from langres.core.metrics import PairMetrics, classify_pairs
+from langres.core.metrics import (
+    PairMetrics,
+    brier_score,
+    classify_pairs,
+    expected_calibration_error,
+)
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.registry import get_component
@@ -332,6 +337,11 @@ class Resolver:
             (e.g. a self-contained ``RapidfuzzMatcher``).
         matcher: The scorer Matcher that yields PairwiseJudgements.
         clusterer: Groups matched pairs into entity clusters.
+        calibrator: Optional fitted
+            :class:`~langres.core.fit.CalibratorFitMixin` that maps each
+            judgement's raw ``score`` to a calibrated probability before
+            clustering. ``None`` (the default) leaves scores untouched; set by
+            ``fit(method=Platt()/Isotonic())``.
 
     Example:
         comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
@@ -352,11 +362,15 @@ class Resolver:
         comparator: Comparator[Any] | None,
         matcher: Matcher[Any],
         clusterer: Clusterer,
+        calibrator: CalibratorFitMixin | None = None,
     ) -> None:
         self.blocker = blocker
         self.comparator = comparator
         self.module = matcher
         self.clusterer = clusterer
+        # Optional score->probability map, set by fit(method=Platt()/Isotonic())
+        # and applied in _judgements(); None leaves raw scores untouched.
+        self.calibrator = calibrator
         # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
         # None until fit() runs (never serialized -- it is a fit-time artifact).
         self.fit_report_: FitReport | None = None
@@ -959,14 +973,153 @@ class Resolver:
         seed: int,
         method: Method,
     ) -> Self:
-        """Fit via score calibration (``method.kind == "calibrate"``) -- STUB.
+        """Fit via score calibration (``method.kind == "calibrate"``): learn a score→prob map.
 
-        Wired into ``fit``'s ``method=`` dispatch; the concrete Platt/isotonic
-        calibration body lands in PR-D. Until then this raises with that pointer.
+        Scores the labeled train candidates with the current matcher, fits a fresh
+        :class:`~langres.core.calibration.Calibrator` (strategy from
+        ``method.strategy``) on those ``(score, label)`` pairs, and attaches it as
+        :attr:`calibrator` so :meth:`predict`/:meth:`resolve` map every raw score
+        to a calibrated probability. Supervision comes from id-keyed ``pairs``
+        (joined via :func:`~langres.core.harvest.align_pairs`, whose optional
+        entity-disjoint ``split`` gives a held-out fold) or pre-aligned ``labels``.
+
+        The honest test: when a ``valid`` split exists, the ``FitReport`` carries
+        the Brier/ECE **before vs after** calibration on that held-out fold (raw
+        matcher scores vs the fitted map) -- a real calibrator drives both down.
+        Does NOT retrain or touch the matcher, and does NOT change the clusterer:
+        calibration only makes the score a true probability so the existing
+        threshold is meaningful.
+
+        Raises:
+            ImportError: If scikit-learn (the ``[trained]`` extra) is not installed.
+            ValueError: If ``method`` exposes no ``.strategy`` (not a
+                :class:`~langres.core.methods_calibrate.CalibrateMethod`); if both
+                ``labels`` and ``pairs`` are given, or neither; or if the matcher
+                emits no scores to calibrate (a pure decider).
         """
-        raise NotImplementedError(
-            f"method kind 'calibrate' dispatch is wired but its fit path lands in "
-            f"PR-D ({method.describe()})."
+        try:
+            from langres.core.calibration import Calibrator
+        except ImportError as exc:  # pragma: no cover - core-only env
+            raise ImportError(
+                "score calibration (method='calibrate') needs scikit-learn (the "
+                "'trained' extra): pip install 'langres[trained]' "
+                "(or uv add 'langres[trained]')."
+            ) from exc
+
+        strategy = getattr(method, "strategy", None)
+        if strategy is None:
+            raise ValueError(
+                f"method.kind='calibrate' needs a CalibrateMethod exposing .strategy "
+                f"(e.g. Platt()/Isotonic()); got {type(method).__name__} "
+                f"({method.describe()})."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (pre-aligned with the blocked candidates) or "
+                "pairs= (id-keyed labels align_pairs() joins), not both."
+            )
+
+        coverage = None
+        valid_candidates: Sequence[ERCandidate[Any]] = []
+        valid_labels: Sequence[bool] = []
+        if pairs is not None:
+            aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+            train_candidates: Sequence[ERCandidate[Any]] = aligned.train.candidates
+            train_labels: Sequence[bool] = aligned.train.labels
+            valid_candidates = aligned.valid.candidates
+            valid_labels = aligned.valid.labels
+            coverage = aligned.coverage
+        elif labels is not None:
+            train_candidates = self.candidates(data)
+            train_labels = labels
+        else:
+            raise ValueError(
+                f"score calibration ({method.describe()}) needs gold labels: pass "
+                "pairs=<id-keyed labels> or labels=<pre-aligned with the blocked "
+                "candidates>."
+            )
+
+        train_scores, train_score_labels = self._scored_labeled_pairs(
+            train_candidates, train_labels
+        )
+        if not train_scores:
+            raise ValueError(
+                f"{type(self.module).__name__} produced no scores to calibrate: score "
+                "calibration needs a ranking matcher (one that emits "
+                "PairwiseJudgement.score), not a pure decider."
+            )
+        calibrator = Calibrator(method=strategy)
+        calibrator.fit_calibrator(train_scores, train_score_labels)
+        self.calibrator = calibrator
+
+        calibration = self._calibration_delta(strategy, calibrator, valid_candidates, valid_labels)
+
+        self.fit_report_ = FitReport.build(
+            trainable=f"Calibrator ({strategy})",
+            trained=True,
+            n_train=len(train_score_labels),
+            n_valid=len(valid_labels),
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            calibration=calibration,
+            run_ref=current_run.get(),
+        )
+        return self
+
+    def _scored_labeled_pairs(
+        self, candidates: Sequence[ERCandidate[Any]], labels: Sequence[bool]
+    ) -> tuple[list[float], list[bool]]:
+        """Score ``candidates`` with the matcher and join scores back to labels by id.
+
+        Returns ``(scores, labels)`` for the ranking judgements only (``score is
+        not None``), keyed by the unordered ``{left_id, right_id}`` pair so the
+        join is robust to any reordering/filtering the matcher's ``forward`` does.
+        """
+        label_by_pair = {
+            frozenset({str(c.left.id), str(c.right.id)}): bool(label)
+            for c, label in zip(candidates, labels, strict=True)
+        }
+        scores: list[float] = []
+        aligned_labels: list[bool] = []
+        for judgement in self.module.forward(iter(candidates)):
+            if judgement.score is None:
+                continue
+            key = frozenset({judgement.left_id, judgement.right_id})
+            if key in label_by_pair:
+                scores.append(judgement.score)
+                aligned_labels.append(label_by_pair[key])
+        return scores, aligned_labels
+
+    def _calibration_delta(
+        self,
+        strategy: str,
+        calibrator: CalibratorFitMixin,
+        valid_candidates: Sequence[ERCandidate[Any]],
+        valid_labels: Sequence[bool],
+    ) -> CalibrationDelta | None:
+        """Brier/ECE before-vs-after calibration on the held-out ``valid`` split.
+
+        ``None`` when there is no valid split (nothing held out to measure on) or
+        the matcher emits no scores over it. Raw matcher scores are already in
+        ``[0, 1]`` (``PairwiseJudgement.score``'s contract), so both metrics are
+        always defined on the "before" side.
+        """
+        if not valid_candidates:
+            return None
+        valid_scores, valid_score_labels = self._scored_labeled_pairs(
+            valid_candidates, valid_labels
+        )
+        if not valid_scores:
+            return None
+        after = calibrator.transform(valid_scores)
+        return CalibrationDelta(
+            method=strategy,
+            brier_before=brier_score(valid_scores, valid_score_labels),
+            brier_after=brier_score(after, valid_score_labels),
+            ece_before=expected_calibration_error(valid_scores, valid_score_labels),
+            ece_after=expected_calibration_error(after, valid_score_labels),
         )
 
     def _fit_from_pairs(
@@ -1067,8 +1220,46 @@ class Resolver:
         return list(self._candidates(records))
 
     def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
-        """Block records into candidates and score them into judgements."""
-        return self.module.forward(self._candidates(records))
+        """Block records into candidates, score them, and calibrate if fitted.
+
+        When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
+        every ranking judgement's raw ``score`` is mapped to a calibrated
+        probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
+        clusterer thresholds on a real probability. Pure pass-through otherwise.
+        """
+        judgements = self.module.forward(self._candidates(records))
+        if self.calibrator is None:
+            return judgements
+        return self._apply_calibrator(judgements, self.calibrator)
+
+    def _apply_calibrator(
+        self, judgements: Iterator[PairwiseJudgement], calibrator: CalibratorFitMixin
+    ) -> Iterator[PairwiseJudgement]:
+        """Map each ranking judgement's ``score`` through the fitted calibrator.
+
+        Deciders (``score is None``) pass through untouched -- there is no score to
+        calibrate. A mapped judgement keeps its ids/decision, retags
+        ``score_type="calibrated_prob"``, and records the raw score under
+        ``provenance["calibration"]`` for auditability.
+        """
+        for judgement in judgements:
+            if judgement.score is None:
+                yield judgement
+                continue
+            calibrated = calibrator.transform([judgement.score])[0]
+            yield judgement.model_copy(
+                update={
+                    "score": calibrated,
+                    "score_type": "calibrated_prob",
+                    "provenance": {
+                        **judgement.provenance,
+                        "calibration": {
+                            "method": getattr(calibrator, "method", None),
+                            "raw_score": judgement.score,
+                        },
+                    },
+                }
+            )
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.
@@ -1197,15 +1388,19 @@ class Resolver:
     # ------------------------------------------------------------------
 
     def _slots(self) -> list[tuple[str, object]]:
-        """Ordered (slot_name, component) pairs, skipping an absent comparator.
+        """Ordered (slot_name, component) pairs, skipping absent optional slots.
 
         The slot name doubles as the sidecar subdirectory name for components
-        that own out-of-band state.
+        that own out-of-band state. The comparator and calibrator are optional
+        slots, emitted only when set; the clusterer stays last so the legacy
+        positional load fallback (``ordered[-1]`` is the clusterer) still holds.
         """
         slots: list[tuple[str, object]] = [("blocker", self.blocker)]
         if self.comparator is not None:
             slots.append(("comparator", self.comparator))
         slots.append(("module", self.module))
+        if self.calibrator is not None:
+            slots.append(("calibrator", self.calibrator))
         slots.append(("clusterer", self.clusterer))
         return slots
 
@@ -1325,12 +1520,14 @@ class Resolver:
         # with a custom ``type_name`` (e.g. a "phonetic_comparator" Comparator)
         # still loads into the right slot. Older/hand-written manifests have no
         # ``slot``; those fall back to positional + type_name identification.
+        calibrator_spec: ComponentSpec | None = None
         by_slot = {spec.slot: spec for spec in manifest.components if spec.slot}
         if by_slot:
             blocker_spec = by_slot.get("blocker")
             comparator_spec = by_slot.get("comparator")
             module_spec = by_slot.get("module")
             clusterer_spec = by_slot.get("clusterer")
+            calibrator_spec = by_slot.get("calibrator")
             if blocker_spec is None or module_spec is None or clusterer_spec is None:
                 raise ValueError(
                     "Malformed artifact manifest: missing required slot among "
@@ -1366,12 +1563,18 @@ class Resolver:
         )
         module = _rebuild_component(module_spec, state_dir=in_dir / "module")
         clusterer = _rebuild_component(clusterer_spec, state_dir=in_dir / "clusterer")
+        calibrator = (
+            _rebuild_component(calibrator_spec, state_dir=in_dir / "calibrator")
+            if calibrator_spec is not None
+            else None
+        )
 
         return cls(
             blocker=blocker,
             comparator=comparator,
             matcher=module,
             clusterer=clusterer,
+            calibrator=calibrator,
         )
 
     @staticmethod

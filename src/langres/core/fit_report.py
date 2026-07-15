@@ -32,6 +32,29 @@ from langres.core.harvest import GoldCoverage
 from langres.core.metrics import PairMetrics
 
 
+class CalibrationDelta(BaseModel):
+    """Before-vs-after calibration quality for a ``method="calibrate"`` fit.
+
+    Measured on the held-out ``valid`` split (the honest test): the matcher's raw
+    scores vs the scores mapped through the fitted
+    :class:`~langres.core.calibration.Calibrator`. Lower is better for both -- a
+    real calibrator drives ``brier``/``ece`` down.
+
+    Attributes:
+        method: The calibrator map fitted (``"platt"`` / ``"isotonic"``).
+        brier_before / brier_after: :func:`~langres.core.metrics.brier_score` on
+            the raw vs calibrated valid scores (the headline number).
+        ece_before / ece_after: :func:`~langres.core.metrics.expected_calibration_error`
+            on the same (a secondary, binning-dependent diagnostic).
+    """
+
+    method: str
+    brier_before: float
+    brier_after: float
+    ece_before: float
+    ece_after: float
+
+
 class FitReport(BaseModel):
     """Digest of one ``Resolver.fit()`` call. Build with :meth:`build`.
 
@@ -62,6 +85,8 @@ class FitReport(BaseModel):
             / local dir string, or a ``{base, adapter}`` dict whose shape also
             encodes merge status), else ``None``. Serialize with
             :func:`~langres.core.matchers.model_ref.to_config`.
+        calibration: Before-vs-after Brier/ECE for a ``method="calibrate"`` fit
+            (on the ``valid`` split), else ``None``.
         run_ref: The enclosing run's ``attempt_id`` (lineage reference to the
             machine :class:`~langres.core.runs.RunRecord`), or ``None``.
     """
@@ -79,6 +104,7 @@ class FitReport(BaseModel):
     cost: float | None = None
     gpu_seconds: float | None = None
     model_ref: str | dict[str, str] | None = None
+    calibration: CalibrationDelta | None = None
     run_ref: str | None = None
 
     @classmethod
@@ -97,6 +123,7 @@ class FitReport(BaseModel):
         cost: float | None = None,
         gpu_seconds: float | None = None,
         model_ref: str | dict[str, str] | None = None,
+        calibration: CalibrationDelta | None = None,
         run_ref: str | None = None,
     ) -> FitReport:
         """Assemble a FitReport from the artefacts of one ``fit()`` call.
@@ -119,6 +146,7 @@ class FitReport(BaseModel):
             cost=cost,
             gpu_seconds=gpu_seconds,
             model_ref=model_ref,
+            calibration=calibration,
             run_ref=run_ref,
         )
 
@@ -182,7 +210,11 @@ class FitReport(BaseModel):
 
         lines.append("## Held-out pair metrics (valid split)")
         if self.metrics is None:
-            if self.split is not None:
+            if self.n_valid > 0:
+                # A held-out split exists but this fit reports no pair P/R/F1 (e.g.
+                # a calibrate fit, whose held-out signal is the calibration delta).
+                lines.append("- No held-out pair P/R/F1 computed for this fit.")
+            elif self.split is not None:
                 lines.append(
                     "- The requested split produced no held-out pairs (all labeled "
                     "entities are connected -- no entity-disjoint valid is possible)."
@@ -198,6 +230,15 @@ class FitReport(BaseModel):
                 f"- TP/FP/FN: {m.tp}/{m.fp}/{m.fn} @ threshold {m.threshold:.4f}",
             ]
         lines.append("")
+
+        if self.calibration is not None:
+            cal = self.calibration
+            lines += [
+                f"## Calibration ({cal.method}, valid split — lower is better)",
+                f"- Brier: {cal.brier_before:.4f} → {cal.brier_after:.4f}",
+                f"- ECE:   {cal.ece_before:.4f} → {cal.ece_after:.4f}",
+                "",
+            ]
 
         return "\n".join(lines)
 
