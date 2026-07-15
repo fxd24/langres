@@ -42,10 +42,9 @@ Optuna/LLAMBO proposer swap.
   (penalizes confident mistakes far more than `brier_score`; per-item penalty
   clamped near `-log(1e-15)` so a confident-and-wrong `p=0/1` is large but finite).
 - **`examples/research/blocking_recall_autoresearch.py`** — the E1 proof: the loop
-  hill-climbs blocking recall@budget on amazon_google at **$0, offline**. Incumbent
-  `candidate_recall` climbs `0.7568 → 0.8129 → 0.8317 → 0.8388` (`k = 5 → 40`),
-  `k = 80` is rejected as over-budget (RR `0.9776` < `0.985`), and all 20 trials
-  (4 accepted / 16 rejected) are logged off-git.
+  hill-climbs blocking recall@budget on amazon_google at **$0, offline** (measured
+  climb + budget-rejection numbers in
+  [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)).
 
 ### Model identity + one method registry (v0.3 slice, closes #103)
 
