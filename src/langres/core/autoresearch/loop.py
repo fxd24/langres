@@ -93,7 +93,7 @@ def run_loop(
     split_id: str | None = None,
     seeds: dict[str, int] | None = None,
     store: str | Any | None = None,
-    tracker: ExperimentTracker = NoOpTracker(),
+    tracker: ExperimentTracker | None = None,
     dedup: bool = True,
 ) -> LoopResult:
     """Run the ``propose → run → evaluate → keep-if-better`` loop over ``configs``.
@@ -140,13 +140,16 @@ def run_loop(
         store: Where to persist run records — a path / ``RunStore`` / ``None``.
             ``None`` writes **nothing** (the offline path); the loop still returns
             the same ``LoopResult``.
-        tracker: Experiment tracker forwarded to ``capture_run`` (default no-op).
+        tracker: Experiment tracker forwarded to ``capture_run``; ``None``
+            (default) uses a fresh :class:`~langres.core.trackers.NoOpTracker`
+            rather than a shared instance.
         dedup: When ``True`` (default), skip a config whose ``recipe_id`` was
             already scored this run.
 
     Returns:
         A :class:`LoopResult` with the best incumbent and the full trial trail.
     """
+    tracker = tracker or NoOpTracker()
     best_config: dict[str, Any] | None = None
     best_metrics: dict[str, float] | None = None
     best_attempt_id: str | None = None
