@@ -8,7 +8,9 @@ import pytest
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
+from langres.core.harvest import LabeledPair
 from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
+from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.resolver import Resolver, _build_module_for_judge
@@ -101,8 +103,67 @@ class TestFromSchemaJudgeOptions:
             Resolver.from_schema(ResolverJudgeCo, matcher="auto")  # type: ignore[arg-type]
 
     def test_unknown_judge_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="unsupported judge"):
+        with pytest.raises(ValueError, match="unsupported judge") as exc_info:
             Resolver.from_schema(ResolverJudgeCo, matcher="not-a-real-judge")  # type: ignore[arg-type]
+        # All five allowed shorthands are named in the guidance (random_forest joined
+        # the original four).
+        message = str(exc_info.value)
+        for name in ("string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"):
+            assert name in message
+
+
+class TestFromSchemaRandomForestJudge:
+    """matcher="random_forest": the supervised sklearn forest shorthand (PR-RF).
+
+    Requires the ``[trained]`` extra (scikit-learn); the suite runs under
+    ``--all-extras``, and this module already assumes heavy extras (it imports
+    ``dspy`` at the top), so no skip guard is needed.
+    """
+
+    def test_random_forest_judge_builds(self) -> None:
+        resolver = Resolver.from_schema(ResolverJudgeCo, matcher="random_forest")
+        assert isinstance(resolver.module, RandomForestMatcher)
+        assert resolver.module.type_name == "random_forest"
+
+    def test_random_forest_judge_reads_trainable_before_fit(self) -> None:
+        """A ``SupervisedFitMixin`` matcher: describe() tags it TRAINABLE."""
+        resolver = Resolver.from_schema(ResolverJudgeCo, matcher="random_forest")
+        matcher_line = next(
+            line for line in resolver.describe().splitlines() if line.startswith("matcher:")
+        )
+        assert "RandomForestMatcher" in matcher_line
+        assert "TRAINABLE" in matcher_line
+
+    def test_random_forest_trains_from_pairs_and_resolves(self) -> None:
+        """End-to-end DoD example 1: from_schema builds it, fit(pairs=...) trains it
+        (fit_report_ populated), and resolve() then returns clusters."""
+        resolver = Resolver.from_schema(ResolverJudgeCo, matcher="random_forest")
+        # Two entity-disjoint components, so a split can hold one whole component
+        # out (mirrors tests/core/test_fit_report.py's proven fixture shape).
+        records = [
+            {"id": "a1", "name": "Acme"},
+            {"id": "a2", "name": "Acme"},
+            {"id": "a3", "name": "Aardvark"},
+            {"id": "b1", "name": "Beta"},
+            {"id": "b2", "name": "Beta"},
+            {"id": "b3", "name": "Bumble"},
+        ]
+        pairs = [
+            LabeledPair(left_id="a1", right_id="a2", score=None, label=True, source="correction"),
+            LabeledPair(left_id="a1", right_id="a3", score=None, label=False, source="correction"),
+            LabeledPair(left_id="b1", right_id="b2", score=None, label=True, source="correction"),
+            LabeledPair(left_id="b1", right_id="b3", score=None, label=False, source="correction"),
+        ]
+
+        resolver.fit(records, pairs=pairs, split=0.5, seed=0)
+
+        report = resolver.fit_report_
+        assert report is not None
+        assert report.trained is True
+        assert report.n_train > 0
+        assert report.trainable == "RandomForestMatcher (SupervisedFitMixin)"
+        # A fit forest scores, so the pipeline runs end-to-end.
+        assert isinstance(resolver.resolve(records), list)
 
 
 class TestBuildModuleForJudgeDirect:
