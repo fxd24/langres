@@ -7,11 +7,15 @@ composition over the Wave-1 profiler functions -- it computes nothing new. Both
 entry points converge on one internal assembler (:func:`_assemble`) so the two
 paths return the *same* pinned section layout:
 
-    hero -> label-structure -> separability -> corpus-fields -> embeddings ->
-    embedding-comparison
+    hero -> label-structure -> separability -> [mining-readiness] ->
+    corpus-fields -> embeddings -> embedding-comparison
 
 Each section is included only when its input is present; omitting an input drops
-that section silently (never a raise). ``include=`` narrows the set further -- it
+that section silently (never a raise). Mining readiness is the one section this
+package does not *compute* -- it is a precomputed
+:class:`~langres.data.data_profile.mining_readiness.MiningReadinessSection` the
+caller assembles from the miners (which need scikit-learn) and passes in, keeping
+this package import-light. ``include=`` narrows the set further -- it
 is a **selector of section kinds** (it validates its keys and raises on an unknown
 one, because a typo there means "select nothing you meant to"), never a data
 input.
