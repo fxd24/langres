@@ -154,7 +154,16 @@ class CorpusFieldSection(ProfileSection):
         return self.n_fields_total - len(self.fields)
 
     # ------------------------------------------------------------ row rendering
-    _HEADERS = ("field", "non-null", "distinct", "unique", "mean len", "median len", "length", "flags")
+    _HEADERS = (
+        "field",
+        "non-null",
+        "distinct",
+        "unique",
+        "mean len",
+        "median len",
+        "length",
+        "flags",
+    )
 
     def _display_cells(self, field: FieldStat) -> tuple[str, ...]:
         """One field's cells as display strings (markdown + HTML share this)."""
@@ -187,8 +196,11 @@ class CorpusFieldSection(ProfileSection):
         if not self.fields:
             lines.append("| _(no fields)_ |" + " |" * (len(self._HEADERS) - 1))
         if self._truncated > 0:
-            lines += ["", f"_Showing {len(self.fields)} of {self.n_fields_total} fields "
-                      f"(most-missing first); {self._truncated} truncated._"]
+            lines += [
+                "",
+                f"_Showing {len(self.fields)} of {self.n_fields_total} fields "
+                f"(most-missing first); {self._truncated} truncated._",
+            ]
         return "\n".join(lines)
 
     @property

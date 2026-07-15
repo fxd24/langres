@@ -95,9 +95,7 @@ class TestProfileSeparability:
         def none_signal(a: Hashable, b: Hashable) -> float | None:
             return None
 
-        assert (
-            profile_separability([("1", "2")], [("3", "4")], none_signal, name="string") is None
-        )
+        assert profile_separability([("1", "2")], [("3", "4")], none_signal, name="string") is None
 
     def test_one_sided_negative_empty_keeps_with_hint(self) -> None:
         signal = string_signal(_RECORDS, _Schema)
@@ -141,9 +139,7 @@ class TestProfileSeparability:
         def constant(a: Hashable, b: Hashable) -> float | None:
             return 0.5
 
-        section = profile_separability(
-            [("1", "2")], [("3", "4")], constant, name="const", n_bins=5
-        )
+        section = profile_separability([("1", "2")], [("3", "4")], constant, name="const", n_bins=5)
         assert section is not None
         assert section.hist_edges[0] < section.hist_edges[-1]
         html = "".join(section.panels())

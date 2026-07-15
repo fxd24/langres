@@ -59,8 +59,10 @@ class _FakeBenchmark:
         self,
     ) -> tuple[list[CompanySchema], list[set[str]], set[frozenset[str]]]:
         corpus = [CompanySchema(**record) for record in _RECORDS]
-        return corpus, [set(cluster) for cluster in _CLUSTERS], gold_pairs_from_clusters(
-            [set(cluster) for cluster in _CLUSTERS]
+        return (
+            corpus,
+            [set(cluster) for cluster in _CLUSTERS],
+            gold_pairs_from_clusters([set(cluster) for cluster in _CLUSTERS]),
         )
 
 
@@ -204,7 +206,9 @@ class TestInternalHelpers:
         assert first == second
 
     def test_embed_text_joins_string_fields_except_id(self) -> None:
-        text = _embed_text({"id": "1", "name": "Acme", "n": 3, "note": "  "}, id_key="id", text_key=None)
+        text = _embed_text(
+            {"id": "1", "name": "Acme", "n": 3, "note": "  "}, id_key="id", text_key=None
+        )
         assert text == "Acme"  # id skipped, non-str skipped, blank skipped
 
     def test_embed_text_uses_explicit_key(self) -> None:

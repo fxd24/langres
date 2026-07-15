@@ -364,7 +364,9 @@ def bar_chart(
     x0 = bin_edges[0] if bin_edges else 0.0
     x1 = bin_edges[-1] if bin_edges else 1.0
 
-    scaled = [(label, stroke, _rescale_counts(counts, normalize)) for label, stroke, counts in series]
+    scaled = [
+        (label, stroke, _rescale_counts(counts, normalize)) for label, stroke, counts in series
+    ]
 
     finite_counts = [c for _, _, counts in scaled for c in counts if math.isfinite(c)]
     y_max = max(finite_counts) if finite_counts else 0.0

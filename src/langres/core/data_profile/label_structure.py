@@ -38,7 +38,9 @@ _MAX_SIZE_BINS = 20
 _COLOR_CLUSTERS = "#4361ee"
 
 
-def _shannon_entropy_bits(size_distribution: Sequence[tuple[int, int]], n_records: int) -> float | None:
+def _shannon_entropy_bits(
+    size_distribution: Sequence[tuple[int, int]], n_records: int
+) -> float | None:
     """Shannon entropy (bits) of the cluster-size distribution, with a log(0) guard.
 
     Treats a record's cluster membership as the random variable: a cluster of
@@ -67,7 +69,9 @@ def _shannon_entropy_bits(size_distribution: Sequence[tuple[int, int]], n_record
     return entropy
 
 
-def _size_histogram(size_distribution: Sequence[tuple[int, int]]) -> tuple[list[float], list[float]]:
+def _size_histogram(
+    size_distribution: Sequence[tuple[int, int]],
+) -> tuple[list[float], list[float]]:
     """Build ``(edges, counts)`` for the cluster-size bar chart from a size map.
 
     One bar per integer cluster size ``1..max_size``; when ``max_size`` exceeds
@@ -136,9 +140,7 @@ class LabelStructureSection(ProfileSection):
     # ------------------------------------------------------------- shared render
     def _metrics_kv(self) -> list[tuple[str, str]]:
         """The headline metrics as ``(label, display)`` pairs (markdown + HTML share this)."""
-        imbalance = (
-            f"1:{self.imbalance_ratio:,.0f}" if self.imbalance_ratio is not None else "n/a"
-        )
+        imbalance = f"1:{self.imbalance_ratio:,.0f}" if self.imbalance_ratio is not None else "n/a"
         return [
             ("records", f"{self.n_records:,}"),
             ("clusters", f"{self.n_clusters:,}"),
@@ -157,8 +159,17 @@ class LabelStructureSection(ProfileSection):
     def to_markdown(self) -> str:
         """Markdown: a metrics table plus the cluster-size distribution table."""
         lines = [f"## {self.title}", "", "| metric | value |", "|---|---|"]
-        lines += [f"| {_report_html._md_cell(k)} | {_report_html._md_cell(v)} |" for k, v in self._metrics_kv()]
-        lines += ["", "### Cluster-size distribution", "", "| cluster size | clusters |", "|---|---|"]
+        lines += [
+            f"| {_report_html._md_cell(k)} | {_report_html._md_cell(v)} |"
+            for k, v in self._metrics_kv()
+        ]
+        lines += [
+            "",
+            "### Cluster-size distribution",
+            "",
+            "| cluster size | clusters |",
+            "|---|---|",
+        ]
         if self.size_distribution:
             lines += [f"| {size} | {count} |" for size, count in self.size_distribution]
         else:

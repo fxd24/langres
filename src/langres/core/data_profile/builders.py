@@ -473,9 +473,7 @@ def _validate_include(include: Collection[str]) -> None:
         )
 
 
-def _embed_text(
-    record: Mapping[str, Any], *, id_key: str, text_key: str | None
-) -> str:
+def _embed_text(record: Mapping[str, Any], *, id_key: str, text_key: str | None) -> str:
     """The text to embed for one record.
 
     Uses ``record[text_key]`` when a key is given; otherwise joins every non-empty

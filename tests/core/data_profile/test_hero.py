@@ -22,9 +22,7 @@ def _perfect_signal(left: Hashable, right: Hashable) -> float | None:
 
 def _label_and_sep() -> tuple[object, object]:
     label = profile_label_structure([{"1", "2"}, {"3"}], n_records=3)
-    sep = profile_separability(
-        [("1", "2")], [("1", "3")], _perfect_signal, name="string"
-    )
+    sep = profile_separability([("1", "2")], [("1", "3")], _perfect_signal, name="string")
     return label, sep
 
 
