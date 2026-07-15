@@ -298,6 +298,26 @@ def line_chart(
     return "".join(parts)
 
 
+def _rescale_counts(counts: list[float], mode: Literal["none", "density", "max"]) -> list[float]:
+    """Scale one series' ``counts`` for the ``bar_chart`` ``normalize`` mode.
+
+    ``"none"`` returns ``counts`` unchanged (the identity -- so existing callers
+    are byte-for-byte unaffected). ``"density"`` divides by the sum of the
+    series' finite counts (each series then sums to 1). ``"max"`` divides by the
+    series' finite maximum (each series then peaks at 1). Non-finite entries are
+    passed through untouched (``bar_chart`` drops them at render time), and a
+    degenerate total (``<= 0``: an empty or all-zero series) is left as-is to
+    avoid a divide-by-zero -- no bars would be drawn for it either way.
+    """
+    if mode == "none":
+        return counts
+    finite = [c for c in counts if math.isfinite(c)]
+    total = sum(finite) if mode == "density" else (max(finite) if finite else 0.0)
+    if total <= 0.0:
+        return counts
+    return [c / total if math.isfinite(c) else c for c in counts]
+
+
 def bar_chart(
     bin_edges: list[float],
     series: list[tuple[str, str, list[float]]],
@@ -306,6 +326,7 @@ def bar_chart(
     height: int = 260,
     x_label: str = "",
     y_label: str = "",
+    normalize: Literal["none", "density", "max"] = "none",
 ) -> str:
     """Render an overlaid grouped bar chart as a self-contained ``<svg>`` string.
 
@@ -323,6 +344,14 @@ def bar_chart(
         height: SVG height in pixels.
         x_label: X-axis title (html-escaped).
         y_label: Y-axis title (html-escaped).
+        normalize: How to scale each series before drawing (default ``"none"``,
+            which leaves counts untouched -- existing callers are unaffected).
+            ``"density"`` scales each series so it sums to 1; ``"max"`` scales
+            each series to its own maximum. Both make a positives-vs-negatives
+            histogram legible under ER class imbalance (1:1000+), where the raw
+            negative bars would otherwise dwarf the positives into invisibility.
+            Scaling is per-series, so the two series share the y-axis on
+            comparable footing.
 
     Returns:
         A complete ``<svg ...>...</svg>`` string.
@@ -335,7 +364,9 @@ def bar_chart(
     x0 = bin_edges[0] if bin_edges else 0.0
     x1 = bin_edges[-1] if bin_edges else 1.0
 
-    finite_counts = [c for _, _, counts in series for c in counts if math.isfinite(c)]
+    scaled = [(label, stroke, _rescale_counts(counts, normalize)) for label, stroke, counts in series]
+
+    finite_counts = [c for _, _, counts in scaled for c in counts if math.isfinite(c)]
     y_max = max(finite_counts) if finite_counts else 0.0
     if y_max <= 0.0:
         y_max = 1.0  # avoid a degenerate y range; no bars are drawn either way
@@ -358,7 +389,7 @@ def bar_chart(
     )
 
     n_bins = max(len(bin_edges) - 1, 0)
-    for _label, stroke, counts in series:
+    for _label, stroke, counts in scaled:
         fill = _esc(stroke)
         for i in range(min(n_bins, len(counts))):
             count = counts[i]
@@ -375,6 +406,6 @@ def bar_chart(
                 f'fill="{fill}" fill-opacity="0.55"/>'
             )
 
-    parts.extend(_legend([(label, stroke) for label, stroke, _ in series], plot_left, plot_top))
+    parts.extend(_legend([(label, stroke) for label, stroke, _ in scaled], plot_left, plot_top))
     parts.append("</svg>")
     return "".join(parts)

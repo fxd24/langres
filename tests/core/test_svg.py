@@ -4,9 +4,12 @@ Tested by STRUCTURE (element counts, parsed attributes, escaped substrings),
 never by full-string equality, so cosmetic tweaks don't churn the suite.
 """
 
+import math
 import re
 
-from langres.core._svg import Series, _scale, bar_chart, line_chart
+import pytest
+
+from langres.core._svg import Series, _rescale_counts, _scale, bar_chart, line_chart
 
 
 def _polyline_points(svg: str) -> list[tuple[float, float]]:
@@ -14,6 +17,11 @@ def _polyline_points(svg: str) -> list[tuple[float, float]]:
     match = re.search(r'<polyline[^>]*points="([^"]*)"', svg)
     assert match is not None, "expected a <polyline> in the output"
     return [(float(x), float(y)) for x, y in (p.split(",") for p in match.group(1).split())]
+
+
+def _rect_heights(svg: str) -> list[float]:
+    """Parse every ``<rect ... height="...">`` height into a float list, in order."""
+    return [float(h) for h in re.findall(r'<rect[^>]*\bheight="([^"]*)"', svg)]
 
 
 class TestScale:
@@ -187,3 +195,70 @@ class TestBarChart:
         out = bar_chart([0.0, 1.0], [("g & <n>", "#0a0", [2.0])])
         assert "g &amp; &lt;n&gt;" in out
         assert "<n>" not in out
+
+
+class TestRescaleCounts:
+    """The per-series scaling behind ``bar_chart(normalize=...)``."""
+
+    def test_none_is_identity(self) -> None:
+        assert _rescale_counts([1.0, 2.0, 3.0], "none") == [1.0, 2.0, 3.0]
+
+    def test_density_sums_to_one(self) -> None:
+        out = _rescale_counts([1.0, 3.0], "density")
+        assert sum(out) == pytest.approx(1.0)
+        assert out == pytest.approx([0.25, 0.75])
+
+    def test_max_peaks_at_one(self) -> None:
+        out = _rescale_counts([2.0, 4.0], "max")
+        assert max(out) == pytest.approx(1.0)
+        assert out == pytest.approx([0.5, 1.0])
+
+    def test_degenerate_all_zero_left_as_is(self) -> None:
+        assert _rescale_counts([0.0, 0.0], "density") == [0.0, 0.0]
+        assert _rescale_counts([], "max") == []
+
+    def test_non_finite_passed_through_and_excluded_from_scale(self) -> None:
+        out = _rescale_counts([2.0, float("nan")], "density")
+        assert out[0] == pytest.approx(1.0)  # only the finite 2.0 sets the total
+        assert math.isnan(out[1])
+
+
+class TestBarChartNormalize:
+    def test_none_matches_the_default(self) -> None:
+        edges = [0.0, 0.5, 1.0]
+        series = [("g", "#0a0", [3.0, 1.0]), ("n", "#a00", [1.0, 4.0])]
+        # Backward compatibility: the explicit "none" is byte-identical to the
+        # pre-existing (normalize-free) call every current caller makes.
+        assert bar_chart(edges, series, normalize="none") == bar_chart(edges, series)
+
+    def test_none_keeps_imbalanced_series_incomparable(self) -> None:
+        # Raw counts: a 1-vs-1000 split renders the small bar ~1/1000 the tall one.
+        out = bar_chart([0.0, 1.0], [("s", "#0a0", [1.0]), ("b", "#a00", [1000.0])])
+        heights = _rect_heights(out)
+        assert len(heights) == 2
+        assert heights[0] < heights[1]
+
+    def test_max_makes_each_series_peak_at_full_height(self) -> None:
+        # Under class imbalance (the whole point): max-normalizing lifts the tiny
+        # series so both peak at the same (full) height and are legible together.
+        out = bar_chart(
+            [0.0, 1.0], [("s", "#0a0", [1.0]), ("b", "#a00", [1000.0])], normalize="max"
+        )
+        heights = _rect_heights(out)
+        assert len(heights) == 2
+        assert heights[0] == pytest.approx(heights[1])
+
+    def test_density_scales_series_to_unit_area(self) -> None:
+        # A two-bin series [2, 2] -> [0.5, 0.5]: both bars equal, and their
+        # heights reflect the density (sums to 1), not the raw counts.
+        out = bar_chart([0.0, 0.5, 1.0], [("a", "#0a0", [2.0, 2.0])], normalize="density")
+        heights = _rect_heights(out)
+        assert len(heights) == 2
+        assert heights[0] == pytest.approx(heights[1])
+
+    def test_normalize_all_zero_series_draws_no_bars(self) -> None:
+        for mode in ("density", "max"):
+            out = bar_chart([0.0, 1.0], [("z", "#0a0", [0.0])], normalize=mode)  # type: ignore[arg-type]
+            assert "<rect" not in out
+            assert out.count("<svg") == 1
+            assert "NaN" not in out and "Infinity" not in out

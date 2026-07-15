@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         evaluate,
         gold_pairs_from_clusters,
     )
+    from langres.core.data_profile import DataProfileReport
     from langres.core.eval_report import EvalReport
     from langres.core.metrics import (
         average_precision_score,
@@ -57,6 +58,7 @@ __all__ = [
     "calculate_pairwise_metrics",
     "candidates_for",
     "classify_pairs",
+    "DataProfileReport",
     "DEFAULT_PAIR_GRID",
     "evaluate",
     "EvalReport",
@@ -77,6 +79,7 @@ __all__ = [
 _LAZY: dict[str, str] = {
     "evaluate": "langres.core.benchmark",
     "EvalReport": "langres.core.eval_report",
+    "DataProfileReport": "langres.core.data_profile",
     "DEFAULT_PAIR_GRID": "langres.core.benchmark",
     "gold_pairs_from_clusters": "langres.core.benchmark",
     "list_benchmarks": "langres.data.registry",
