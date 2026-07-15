@@ -148,9 +148,14 @@ class TransformersBackend:
             tokenizer, model = self._tokenizer, self._model
             input_ids = self._encode(messages)
             prompt_len = int(input_ids.shape[1])
+            # One sequence, no padding -> an all-ones mask is exact; passing it
+            # explicitly silences transformers' "attention mask not set" warning
+            # (pad_token == eos_token) and its "unexpected behavior" caveat.
+            attention_mask = torch.ones_like(input_ids)
             with torch.no_grad():
                 generated = model.generate(
                     input_ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=self._max_new_tokens,
                     do_sample=False,
                     output_scores=want_logprobs,
