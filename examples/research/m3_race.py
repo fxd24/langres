@@ -175,13 +175,13 @@ LLM_NUM_RETRIES = 2
 
 
 class _OpenAICompletionClient:
-    """A ``.completion()``-shaped client for ``LLMJudge`` backed by the OpenAI SDK.
+    """A ``.completion()``-shaped client for ``LLMMatcher`` backed by the OpenAI SDK.
 
-    ``LLMJudge`` expects a LiteLLM-shaped ``client.completion(model=, messages=,
+    ``LLMMatcher`` expects a LiteLLM-shaped ``client.completion(model=, messages=,
     temperature=)`` returning a response with ``.choices[0].message.content``,
     ``.usage`` and ``.model``. We satisfy that with the OpenAI SDK pointed at
     OpenRouter and a **no-keep-alive** http client — bypassing litellm's pooled
-    sync client (the source of the stall) while keeping LLMJudge and
+    sync client (the source of the stall) while keeping LLMMatcher and
     ``litellm.completion_cost`` (which reads the OpenAI response) working unchanged.
     The ``openrouter/`` routing prefix is stripped for the OpenRouter endpoint.
     """
@@ -526,7 +526,7 @@ def smoke(glm_model: str) -> int:
     (patched) litellm cost so the operator can confirm cost is non-zero before any
     band-sized spend. Returns a process exit code.
     """
-    from langres.core.modules.llm_judge import LLMJudge
+    from langres.core.matchers.llm_judge import LLMMatcher
 
     corpus, _gc, _gp = load_amazon_google()
     a = next(r for r in corpus if r.source == "amazon")
@@ -537,7 +537,7 @@ def smoke(glm_model: str) -> int:
 
     def _one(model: str) -> float | None:
         register_runtime_model_price(model)
-        judge: LLMJudge[Any] = LLMJudge(client=client, model=model, entity_noun="product")
+        judge: LLMMatcher[Any] = LLMMatcher(client=client, model=model, entity_noun="product")
         try:
             js = list(judge.forward(iter([candidate])))
         except Exception as exc:  # noqa: BLE001 — smoke probe, report and continue
@@ -576,11 +576,11 @@ def smoke(glm_model: str) -> int:
 
 def pick_frontier(client: Any, candidate: ERCandidate[ProductSchema]) -> str | None:
     """Return the first frontier candidate that responds to a single probe call."""
-    from langres.core.modules.llm_judge import LLMJudge
+    from langres.core.matchers.llm_judge import LLMMatcher
 
     for model in FRONTIER_CANDIDATES:
         patch_litellm_prices(model)
-        judge: LLMJudge[Any] = LLMJudge(client=client, model=model, entity_noun="product")
+        judge: LLMMatcher[Any] = LLMMatcher(client=client, model=model, entity_noun="product")
         try:
             js = list(judge.forward(iter([candidate])))
         except Exception as exc:  # noqa: BLE001 — probe, try the next candidate

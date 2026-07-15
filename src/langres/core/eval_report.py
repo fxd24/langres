@@ -651,7 +651,7 @@ class EvalReport(BaseModel):
             return (
                 "<section><h2>Calibration</h2>"
                 '<p class="empty">No confidence signal — run '
-                'LLMJudge(confidence="logprob") to populate this panel.</p></section>'
+                'LLMMatcher(confidence="logprob") to populate this panel.</p></section>'
             )
         points = [(b.mean_confidence, b.observed_frequency) for b in self.reliability]
         svg = _svg.line_chart(

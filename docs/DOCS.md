@@ -99,9 +99,9 @@ Create minimal API reference pages that use mkdocstrings auto-generation:
 
 **docs/api/core/module.md**:
 ```markdown
-# Module
+# Matcher
 
-::: langres.core.Module
+::: langres.core.Matcher
     options:
       show_root_heading: true
       show_source: true
@@ -171,13 +171,13 @@ def compute_similarity(left: Entity, right: Entity, threshold: float = 0.5) -> f
 
     Example:
         ```python
-        from langres.core import Module
+        from langres.core import Matcher
         from langres.core.models import Entity
 
         left = Entity(id="1", attributes={"name": "Acme Corp"})
         right = Entity(id="2", attributes={"name": "ACME Corporation"})
 
-        module = Module()
+        module = Matcher()
         score = module.compute_similarity(left, right, threshold=0.7)
         print(f"Similarity: {score}")  # Output: Similarity: 0.85
         ```
@@ -360,7 +360,7 @@ nav:
       - Custom Modules: guides/custom-modules.md
   - API Reference:
       - Core:
-          - Module: api/core/module.md
+          - Matcher: api/core/module.md
           - Models: api/core/models.md
       # Add more as you build
   - Development:
@@ -438,7 +438,7 @@ langres provides a flexible, optimizable approach to entity resolution with a cl
 # Coming soon - install from PyPI
 # pip install langres
 
-from langres.core import Module
+from langres.core import Matcher
 from langres.core.models import Entity
 
 # Define entities
@@ -448,7 +448,7 @@ entities = [
 ]
 
 # Create and run module
-module = Module()
+module = Matcher()
 results = module.run(entities)
 ```
 
@@ -503,7 +503,7 @@ See the [POC Plan](development/poc.md) for:
 ### Critical for AI Consumption
 
 1. **Consistent Terminology**
-   - ✅ Pick one term and use everywhere: `Module` (not "Flow", "Matcher", "Comparator")
+   - ✅ Pick one term and use everywhere: `Matcher` (not "Flow", "Matcher", "Comparator")
    - ✅ Define terms on first use
    - ✅ Use the same term in docs, code, and docstrings
 
@@ -512,7 +512,7 @@ See the [POC Plan](development/poc.md) for:
    - ✅ "Configure the blocker (which generates candidate pairs) by..."
 
 3. **Proper Code Fencing**
-   - ❌ Use the `langres.Module` class and call `run()`
+   - ❌ Use the `langres.Matcher` class and call `run()`
    - ✅ Use code blocks with syntax highlighting (see examples above)
 
 4. **Clear Hierarchy**

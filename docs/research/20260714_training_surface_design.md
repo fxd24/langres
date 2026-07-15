@@ -6,7 +6,7 @@ Companion to `docs/plans/20260713_training_loop_plan.md` (amends its §3 framewo
 
 ## 0. Decisions (TL;DR)
 
-1. **Vocabulary: the pairwise scoring component is a `Matcher`** (was: judge / `Module`). Role renamed; the *record* vocabulary (`PairwiseJudgement`, `JudgementLog`, `LinkVerdict`, `predicted_match`) is kept. Breaking rename, done now while the surface has no external users and before hub method-ids ossify names.
+1. **Vocabulary: the pairwise scoring component is a `Matcher`** (was: judge / `Matcher`). Role renamed; the *record* vocabulary (`PairwiseJudgement`, `JudgementLog`, `LinkVerdict`, `predicted_match`) is kept. Breaking rename, done now while the surface has no external users and before hub method-ids ossify names.
 2. **API shape: A + B as two rungs of one ladder; C rejected.** A = explicit components (PyTorch mode — construct each trainable, call *its* `fit`). B = declare-then-fit (`Resolver.fit()` runs the canonical sequence over *declared* trainables) — admissible only with three honesty devices (§3.3). C (a `resolver.training.*` staged namespace, Splink-style) is rejected: a third dialect, +6–8 methods, reintroduces ordering footguns.
 3. **One verb: `fit`.** No `fit`/`optimize` split (the "paid or GPU-heavy" criterion did not survive review — a cross-encoder `fit` is GPU-heavy too). sklearn discipline: config in the constructor, data in `fit`, `clone()` to keep an original, hyperparameter search as a meta-object, **the recipe/lineage is an output** (FitReport/RunRecord), never an up-front config file.
 4. **No new top-level orchestration noun.** `TrainingRecipe` (an earlier draft) is dead — its composition intent is served by `Resolver`, its reproducibility intent by captured lineage (the G6 lesson from the DX audit: an intent already served by an existing layer under a better name does not get a new noun).
@@ -18,10 +18,10 @@ Companion to `docs/plans/20260713_training_loop_plan.md` (amends its §3 framewo
 
 ### 1.1 The finding
 
-Functionally, everything in the slot — `RandomForestJudge`, `FellegiSunterJudge`, `LLMJudge` — is the same component: candidate pair in, match score and/or decision out. The ER literature calls this the **matcher** (Magellan `MLMatcher`, Ditto "a matcher", DeepMatcher, MatchGPT, AnyMatch); ML calls it a pairwise classifier. The LLM is a classifier too — a zero-shot one. The distinction that matters downstream is **not** LLM-vs-classical but the contract families the code already draws: *ranker* (emits `score`; threshold decides) vs *decider* (emits binary `decision`) vs *abstain*, plus the `score_type` family tag.
+Functionally, everything in the slot — `RandomForestMatcher`, `FellegiSunterMatcher`, `LLMMatcher` — is the same component: candidate pair in, match score and/or decision out. The ER literature calls this the **matcher** (Magellan `MLMatcher`, Ditto "a matcher", DeepMatcher, MatchGPT, AnyMatch); ML calls it a pairwise classifier. The LLM is a classifier too — a zero-shot one. The distinction that matters downstream is **not** LLM-vs-classical but the contract families the code already draws: *ranker* (emits `score`; threshold decides) vs *decider* (emits binary `decision`) vs *abstain*, plus the `score_type` family tag.
 
 The real inconsistencies "judge" was hiding:
-- **Two role names for one slot**: verbs say `judge=`, `Resolver` constructor says `module=`, the ABC is `Module` (a vestigial PyTorch borrow).
+- **Two role names for one slot**: verbs say `matcher=`, `Resolver` constructor says `matcher=`, the ABC is `Matcher` (a vestigial PyTorch borrow).
 - **Two directories for one kind of thing**: `core/judges/` vs `core/modules/`.
 - **A false association**: in 2026 "LLM judge" connotes LLM-as-judge *evaluation of another model's outputs*; this component performs the primary task.
 
@@ -31,19 +31,19 @@ The real inconsistencies "judge" was hiding:
 |---|---|
 | `Blocker` | candidates |
 | `Comparator` | comparison vectors |
-| **`Matcher`** (was judge / `Module`) | **`PairwiseJudgement`** |
+| **`Matcher`** (was judge / `Matcher`) | **`PairwiseJudgement`** |
 | `Clusterer` | clusters → `LinkVerdict` |
 
 "A matcher renders a judgement." The judgement contract (score / decision / **abstain** — PR #106) is langres's distinctive honesty asset; it, `JudgementLog`, `LinkVerdict`, harvest/review vocabulary, and `predicted_match()` are unchanged.
 
 ### 1.3 Rename scope (one mechanical PR, no deprecation shims — no external users)
 
-- ABC: `Module` → `Matcher`; `GroupwiseModule` → `GroupwiseMatcher`. `core/judges/` + `core/modules/` merge into `core/matchers/`.
+- ABC: `Matcher` → `Matcher`; `GroupwiseMatcher` → `GroupwiseMatcher`. `core/judges/` + `core/modules/` merge into `core/matchers/`.
 - Classes: `LLMMatcher`, `DSPyMatcher`, `RandomForestMatcher`, `FellegiSunterMatcher`, `WeightedAverageMatcher`, `EmbeddingScoreMatcher`, `CascadeMatcher`, `SelectMatcher`, `ScriptedMatcher` (testing).
-- Kwargs/fields: verbs + `Resolver.from_schema` take `matcher=` (preset values `"auto" | "string" | "embedding" | "zero_shot_llm"` unchanged — they name mechanisms); `Resolver(matcher=…)` replaces `module=`; results report `matcher_used`; `NoJudgeAvailableError` → `NoMatcherAvailableError`.
+- Kwargs/fields: verbs + `Resolver.from_schema` take `matcher=` (preset values `"auto" | "string" | "embedding" | "zero_shot_llm"` unchanged — they name mechanisms); `Resolver(matcher=…)` replaces `matcher=`; results report `matcher_used`; `NoMatcherAvailableError` → `NoMatcherAvailableError`.
 - Registry `type_name`s: `llm_judge` → `llm_matcher`, etc. (artifact `_check_versions` already hard-fails cross-version; no artifacts in the wild to migrate).
 - The three dispatch sites (`methods.py:_make_module_builder`, `resolver.py:_build_module_for_judge`, `presets.py:build_judge`) rename accordingly — and remain the three sites until the hub design's single `MethodSpec` registry lands (its v0.3 step).
-- Deprecated `CascadeModule` (`cascade.py`): delete in the same PR if `methods.py` can move to `CascadeMatcher`; otherwise leave and delete separately.
+- Deprecated `CascadeChainMatcher` (`cascade.py`): delete in the same PR if `methods.py` can move to `CascadeMatcher`; otherwise leave and delete separately.
 - Docs/examples/CLAUDE.md/rules sweep in the same PR (docs-in-sync rule).
 
 **Timing rationale**: before the hub identity work publishes method ids, and before the training program adds new component classes. Every later week raises the price.

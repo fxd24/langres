@@ -33,16 +33,16 @@ from langres.core.benchmark import (
     run_method,
 )
 from langres.core.indexes.vector_index import FakeVectorIndex
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
-from langres.core.judges.fellegi_sunter import FellegiSunterJudge
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
+from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.cascade import CascadeModule
-from langres.core.modules.dspy_judge import DSPyJudge
-from langres.core.modules.llm_judge import LLMJudge
-from langres.core.modules.rapidfuzz import RapidfuzzModule
-from langres.core.modules.random_forest_judge import RandomForestJudge
-from langres.core.modules.select_judge import SelectJudge
+from langres.core.matchers.cascade import CascadeChainMatcher
+from langres.core.matchers.dspy_judge import DSPyMatcher
+from langres.core.matchers.llm_judge import LLMMatcher
+from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
+from langres.core.matchers.random_forest_judge import RandomForestMatcher
+from langres.core.matchers.select_judge import SelectMatcher
 from langres.core.resolver import Resolver
 from langres.methods import (
     ALL_METHODS,
@@ -54,12 +54,14 @@ from langres.methods import (
 from langres.core.blockers.vector import VectorBlocker
 from tests.conftest import PAID_TEST_SKIP_REASON, PAID_TESTS_ENABLED
 
-# A few tests below construct the (T3-deprecated) CascadeModule directly to
+# A few tests below construct the (T3-deprecated) CascadeChainMatcher directly to
 # exercise the benchmark path — silence its intentional DeprecationWarning
 # module-wide so the suite output stays readable.
 # test_cascade_factory_suppresses_cascade_module_deprecation is unaffected:
 # it re-arms filters itself via warnings.catch_warnings + simplefilter.
-pytestmark = pytest.mark.filterwarnings("ignore:CascadeModule is deprecated:DeprecationWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:CascadeChainMatcher is deprecated:DeprecationWarning"
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic, embedding-free benchmark (FakeVectorIndex) for fast tests
@@ -139,7 +141,7 @@ def _fake_response(content: str) -> SimpleNamespace:
 
 
 class _MockLiteLLMClient:
-    """LiteLLM-shaped client for ``LLMJudge`` (``client.completion(...)``)."""
+    """LiteLLM-shaped client for ``LLMMatcher`` (``client.completion(...)``)."""
 
     def __init__(
         self, content: str = "MATCH\nScore: 0.90\nReasoning: same", boom_on_call: int | None = None
@@ -157,7 +159,7 @@ class _MockLiteLLMClient:
         **_kwargs: Any,
     ) -> SimpleNamespace:
         # ``**_kwargs`` mirrors litellm.completion's real signature: on an
-        # ``openrouter/`` model LLMJudge threads ``extra_body`` (usage accounting
+        # ``openrouter/`` model LLMMatcher threads ``extra_body`` (usage accounting
         # + optional provider pin), which the client must accept and ignore here.
         self.calls += 1
         if self._boom_on_call is not None and self.calls == self._boom_on_call:
@@ -166,7 +168,7 @@ class _MockLiteLLMClient:
 
 
 class _MockOpenAIClient:
-    """OpenAI-shaped client for ``CascadeModule`` (``client.chat.completions.create``)."""
+    """OpenAI-shaped client for ``CascadeChainMatcher`` (``client.chat.completions.create``)."""
 
     def __init__(self, content: str = "MATCH\nScore: 0.80\nReasoning: x") -> None:
         self._content = content
@@ -254,26 +256,26 @@ def test_unknown_method_raises() -> None:
 @pytest.mark.parametrize(
     ("method", "module_type", "needs_comparator", "client"),
     [
-        ("rapidfuzz", RapidfuzzModule, False, None),
-        ("weighted_average", WeightedAverageJudge, True, None),
-        ("embedding_cosine", EmbeddingScoreJudge, False, None),
-        # The injected client must match each scorer's call shape: LLMJudge calls
-        # ``client.completion(...)`` (LiteLLM-shaped); CascadeModule calls
+        ("rapidfuzz", RapidfuzzMatcher, False, None),
+        ("weighted_average", WeightedAverageMatcher, True, None),
+        ("embedding_cosine", EmbeddingScoreMatcher, False, None),
+        # The injected client must match each scorer's call shape: LLMMatcher calls
+        # ``client.completion(...)`` (LiteLLM-shaped); CascadeChainMatcher calls
         # ``client.chat.completions.create(...)`` (OpenAI-shaped).
-        ("llm_judge", LLMJudge, False, _MockLiteLLMClient()),
-        ("cascade", CascadeModule, False, _MockOpenAIClient()),
+        ("llm_judge", LLMMatcher, False, _MockLiteLLMClient()),
+        ("cascade", CascadeChainMatcher, False, _MockOpenAIClient()),
         # ``dspy_judge`` takes a DSPy LM as its injected client (a ``DummyLM``
         # here), distinct from the LiteLLM/OpenAI clients above.
-        ("dspy_judge", DSPyJudge, False, _dummy_lm()),
+        ("dspy_judge", DSPyMatcher, False, _dummy_lm()),
         # ``select_judge`` (W1.1, ComEM-style set-wise) also takes a DSPy LM.
-        ("select_judge", SelectJudge, False, _dummy_lm()),
+        ("select_judge", SelectMatcher, False, _dummy_lm()),
         # ``fellegi_sunter``/``random_forest`` are the W1.2 trained family: both
         # need a comparator, and both are UNFIT immediately after the factory
         # (they must be fit via resolver.fit(...) before predict() works — see
         # the dedicated fit/predict tests below). Not raced through
         # ZERO_SPEND_METHODS/ALL_METHODS for that reason (see methods.py).
-        ("fellegi_sunter", FellegiSunterJudge, True, None),
-        ("random_forest", RandomForestJudge, True, None),
+        ("fellegi_sunter", FellegiSunterMatcher, True, None),
+        ("random_forest", RandomForestMatcher, True, None),
     ],
 )
 def test_factory_builds_valid_resolver(
@@ -293,31 +295,31 @@ def test_factory_builds_valid_resolver(
 def test_cascade_factory_without_client_does_not_require_live_key() -> None:
     """Building the cascade resolver with no injected client still succeeds.
 
-    The placeholder key satisfies CascadeModule's constructor; the real client is
+    The placeholder key satisfies CascadeChainMatcher's constructor; the real client is
     injected later (W4) — never a live-key requirement at build time. Here no
     client is injected, so the module's client stays unset.
     """
     resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
-    assert isinstance(resolver.module, CascadeModule)
+    assert isinstance(resolver.module, CascadeChainMatcher)
     assert resolver.module._llm_client is None
 
 
 def test_cascade_factory_suppresses_cascade_module_deprecation() -> None:
-    """methods.py's sanctioned CascadeModule construction stays noise-free (T3).
+    """methods.py's sanctioned CascadeChainMatcher construction stays noise-free (T3).
 
-    Direct ``CascadeModule(...)`` emits a ``DeprecationWarning`` (pointing to
-    ``CascadeJudge``), but the benchmark method registry still builds it
+    Direct ``CascadeChainMatcher(...)`` emits a ``DeprecationWarning`` (pointing to
+    ``CascadeMatcher``), but the benchmark method registry still builds it
     deliberately — its own construction site suppresses the warning so
     ``run_methods("cascade")`` users see no noise for a choice they didn't make.
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         resolver = make_resolver_factory("cascade", _FakeBlockingBenchmark())(0.5)
-    assert isinstance(resolver.module, CascadeModule)
+    assert isinstance(resolver.module, CascadeChainMatcher)
     deprecations = [
         w
         for w in caught
-        if issubclass(w.category, DeprecationWarning) and "CascadeModule" in str(w.message)
+        if issubclass(w.category, DeprecationWarning) and "CascadeChainMatcher" in str(w.message)
     ]
     assert deprecations == []
 
@@ -337,7 +339,7 @@ def test_dspy_judge_factory_prices_from_pinned_table() -> None:
         "dspy_judge", _FakeBlockingBenchmark(), llm_client=_dummy_lm(), llm_model=model
     )
     judge = factory(0.5).module
-    assert isinstance(judge, DSPyJudge)
+    assert isinstance(judge, DSPyMatcher)
     expected = per_token_worst_price(model) * 1_000.0
     assert judge.price_per_1k_tokens == pytest.approx(expected)
     assert judge.price_per_1k_tokens > 0.0
@@ -371,14 +373,14 @@ def test_dspy_judge_factory_unknown_model_keeps_zero_price() -> None:
         llm_model="unknown/model-not-in-table",
     )
     judge = factory(0.5).module
-    assert isinstance(judge, DSPyJudge)
+    assert isinstance(judge, DSPyMatcher)
     assert judge.price_per_1k_tokens == 0.0
 
 
 def test_select_judge_factory_prices_from_pinned_table() -> None:
     """The ``select_judge`` factory wires ``price_per_1k_tokens`` from the pinned table.
 
-    Mirrors ``test_dspy_judge_factory_prices_from_pinned_table``: SelectJudge reuses
+    Mirrors ``test_dspy_judge_factory_prices_from_pinned_table``: SelectMatcher reuses
     the same honest-cost seam (``price_per_1k_tokens`` / ``_cost_usd``), just priced
     per GROUP call instead of per pair.
     """
@@ -389,7 +391,7 @@ def test_select_judge_factory_prices_from_pinned_table() -> None:
         "select_judge", _FakeBlockingBenchmark(), llm_client=_dummy_lm(), llm_model=model
     )
     judge = factory(0.5).module
-    assert isinstance(judge, SelectJudge)
+    assert isinstance(judge, SelectMatcher)
     expected = per_token_worst_price(model) * 1_000.0
     assert judge.price_per_1k_tokens == pytest.approx(expected)
     assert judge.price_per_1k_tokens > 0.0
@@ -405,7 +407,7 @@ def test_select_judge_factory_unknown_model_keeps_zero_price() -> None:
         llm_model="unknown/model-not-in-table",
     )
     judge = factory(0.5).module
-    assert isinstance(judge, SelectJudge)
+    assert isinstance(judge, SelectMatcher)
     assert judge.price_per_1k_tokens == 0.0
 
 
@@ -510,7 +512,7 @@ def test_fellegi_sunter_end_to_end_via_resolver_fit_unlabeled() -> None:
     assert judgements
     assert all(j.score_type == "prob_fs" for j in judgements)
     assert all(0.0 <= j.score <= 1.0 for j in judgements)
-    assert isinstance(resolver.module, FellegiSunterJudge)
+    assert isinstance(resolver.module, FellegiSunterMatcher)
     assert resolver.module.prior is not None  # fit populated the learned state
 
 
@@ -529,7 +531,7 @@ def test_random_forest_end_to_end_via_resolver_fit_labels() -> None:
     assert judgements
     assert all(j.score_type == "prob_rf" for j in judgements)
     assert all(0.0 <= j.score <= 1.0 for j in judgements)
-    assert isinstance(resolver.module, RandomForestJudge)
+    assert isinstance(resolver.module, RandomForestMatcher)
 
 
 def test_random_forest_fit_requires_labels() -> None:
@@ -563,7 +565,7 @@ def test_cascade_runs_end_to_end_with_mock_client() -> None:
 
     # Force every pair into the uncertain band so each escalates to the LLM.
     cascade = resolver.module
-    assert isinstance(cascade, CascadeModule)
+    assert isinstance(cascade, CascadeChainMatcher)
     cascade._embedding_model = _ConstantEmbeddingModel(_ESCALATE)
 
     judgements = resolver.predict(_records())
@@ -579,7 +581,7 @@ def test_cascade_runs_end_to_end_with_mock_client() -> None:
 
 
 def test_budgeted_runner_preflight_cap_on_llm_module() -> None:
-    module: LLMJudge[CompanySchema] = LLMJudge(client=_MockLiteLLMClient(), model="mock")
+    module: LLMMatcher[CompanySchema] = LLMMatcher(client=_MockLiteLLMClient(), model="mock")
     runner = BudgetedModuleRunner(module, budget_usd=1.0, budget_soft_usd=1.0)
     # worst_case_per_pair = 1 * 0.5 = 0.5 -> floor(1.0/0.5) = 2 kept of 5.
     out = runner.run(_candidates(5), price_per_token_or_pair=0.5)
@@ -588,7 +590,7 @@ def test_budgeted_runner_preflight_cap_on_llm_module() -> None:
 
 
 def test_budgeted_runner_blind_cost_error_on_zero_price() -> None:
-    module: LLMJudge[CompanySchema] = LLMJudge(client=_MockLiteLLMClient(), model="mock")
+    module: LLMMatcher[CompanySchema] = LLMMatcher(client=_MockLiteLLMClient(), model="mock")
     runner = BudgetedModuleRunner(module, budget_usd=10.0, budget_soft_usd=10.0)
     with pytest.raises(BlindCostError, match="blind"):
         runner.run(_candidates(3), price_per_token_or_pair=0.0)
@@ -596,7 +598,7 @@ def test_budgeted_runner_blind_cost_error_on_zero_price() -> None:
 
 def test_budgeted_runner_isolates_per_call_failure() -> None:
     """A single failed LLM call is skipped; already-paid judgements survive."""
-    module: LLMJudge[CompanySchema] = LLMJudge(
+    module: LLMMatcher[CompanySchema] = LLMMatcher(
         client=_MockLiteLLMClient(boom_on_call=2), model="mock"
     )
     runner = BudgetedModuleRunner(module, budget_usd=100.0, budget_soft_usd=100.0)
@@ -608,7 +610,9 @@ def test_budgeted_runner_isolates_per_call_failure() -> None:
 
 def test_budgeted_runner_tallies_cascade_llm_cost_usd_key() -> None:
     """Cascade's ``llm_cost_usd`` provenance flows through the runner's fallback tally."""
-    cascade: CascadeModule[CompanySchema] = CascadeModule(llm_api_key="injected", llm_model="mock")
+    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(
+        llm_api_key="injected", llm_model="mock"
+    )
     cascade._llm_client = _MockOpenAIClient()
     cascade._embedding_model = _ConstantEmbeddingModel(_ESCALATE)
 
@@ -625,7 +629,9 @@ def test_budgeted_runner_tallies_cascade_llm_cost_usd_key() -> None:
 
 
 def test_cascade_cost_track_surfaces_escalation() -> None:
-    cascade: CascadeModule[CompanySchema] = CascadeModule(llm_api_key="injected", llm_model="mock")
+    cascade: CascadeChainMatcher[CompanySchema] = CascadeChainMatcher(
+        llm_api_key="injected", llm_model="mock"
+    )
     cascade._llm_client = _MockOpenAIClient()
     # 2 escalate (LLM), 1 early-exits low -> escalation rate 2/3.
     cascade._embedding_model = _ScriptedEmbeddingModel([_ESCALATE, _EXIT_LOW, _ESCALATE])
@@ -678,8 +684,8 @@ def test_fast_run_method_race_populates_both_tracks(method: str) -> None:
 def test_select_judge_run_method_race_through_harness() -> None:
     """select_judge (W1.1, ComEM-style set-wise) runs through run_method like any other method.
 
-    Proves the EXIT criterion "SelectJudge runs through the same harness with
-    DummyLM": GroupwiseModule.forward() derives groups from the pairwise stream
+    Proves the EXIT criterion "SelectMatcher runs through the same harness with
+    DummyLM": GroupwiseMatcher.forward() derives groups from the pairwise stream
     run_method feeds it (via the buffered default, not the native
     VectorBlocker.stream_groups() -- see the W1.1 results doc for the honest
     call-count measurement, which drives forward_groups() directly instead).

@@ -1,9 +1,9 @@
 """
-Comprehensive tests for langres.core.Module base class.
+Comprehensive tests for langres.core.Matcher base class.
 
-The Module is the abstract base class for all entity comparison logic.
+The Matcher is the abstract base class for all entity comparison logic.
 These tests validate:
-1. Cannot instantiate Module directly (ABC behavior)
+1. Cannot instantiate Matcher directly (ABC behavior)
 2. Can create concrete subclasses implementing forward()
 3. forward() accepts and yields correct types (Iterator[ERCandidate] -> Iterator[PairwiseJudgement])
 4. Generic typing works correctly with SchemaT
@@ -16,22 +16,22 @@ import numpy as np
 import pytest
 
 from langres.core import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 
 
 class TestModuleAbstractBehavior:
-    """Test that Module is a proper abstract base class."""
+    """Test that Matcher is a proper abstract base class."""
 
     def test_cannot_instantiate_module_directly(self):
-        """Module is abstract and cannot be instantiated without implementing forward()."""
+        """Matcher is abstract and cannot be instantiated without implementing forward()."""
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-            Module()  # type: ignore[abstract]
+            Matcher()  # type: ignore[abstract]
 
     def test_cannot_instantiate_module_with_incomplete_implementation(self):
         """Subclass without forward() implementation cannot be instantiated."""
 
-        class IncompleteModule(Module):
+        class IncompleteModule(Matcher):
             """Missing forward() implementation."""
 
             pass
@@ -44,10 +44,10 @@ class TestModuleConcreteImplementation:
     """Test that valid concrete implementations work correctly."""
 
     def test_can_create_concrete_module_with_forward_implementation(self):
-        """Concrete Module with forward() can be instantiated."""
+        """Concrete Matcher with forward() can be instantiated."""
 
-        class ValidModule(Module):
-            """Minimal valid Module implementation."""
+        class ValidModule(Matcher):
+            """Minimal valid Matcher implementation."""
 
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 """Yields a judgement for each candidate."""
@@ -98,7 +98,7 @@ class TestModuleConcreteImplementation:
     def test_forward_method_signature_accepts_iterator(self):
         """forward() accepts Iterator[ERCandidate] as input."""
 
-        class DummyModule(Module):
+        class DummyModule(Matcher):
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
@@ -160,7 +160,7 @@ class TestModuleConcreteImplementation:
     def test_forward_method_returns_iterator(self):
         """forward() returns an Iterator[PairwiseJudgement]."""
 
-        class DummyModule(Module):
+        class DummyModule(Matcher):
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
@@ -222,12 +222,12 @@ class TestModuleConcreteImplementation:
 
 
 class TestModuleWithRealData:
-    """Test Module implementations with real CompanySchema data."""
+    """Test Matcher implementations with real CompanySchema data."""
 
     def test_module_processes_single_candidate_pair(self):
-        """Module can process a single ERCandidate and yield a PairwiseJudgement."""
+        """Matcher can process a single ERCandidate and yield a PairwiseJudgement."""
 
-        class AlwaysMatchModule(Module):
+        class AlwaysMatchModule(Matcher):
             """Test module that always returns score=1.0."""
 
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
@@ -295,9 +295,9 @@ class TestModuleWithRealData:
         assert judgement.provenance == {"method": "always_match"}
 
     def test_module_processes_multiple_candidate_pairs(self):
-        """Module can process multiple candidates and yield multiple judgements."""
+        """Matcher can process multiple candidates and yield multiple judgements."""
 
-        class SequentialScoreModule(Module):
+        class SequentialScoreModule(Matcher):
             """Test module that assigns sequential scores."""
 
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
@@ -366,9 +366,9 @@ class TestModuleWithRealData:
             assert judgement.provenance["index"] == i
 
     def test_module_handles_empty_candidate_stream(self):
-        """Module gracefully handles an empty iterator of candidates."""
+        """Matcher gracefully handles an empty iterator of candidates."""
 
-        class DummyModule(Module):
+        class DummyModule(Matcher):
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(
@@ -418,10 +418,10 @@ class TestModuleWithRealData:
         assert results == []
 
     def test_module_preserves_candidate_data_integrity(self):
-        """Module correctly extracts IDs from nested CompanySchema objects."""
+        """Matcher correctly extracts IDs from nested CompanySchema objects."""
 
-        class IdExtractorModule(Module):
-            """Module that just extracts and validates ID pairs."""
+        class IdExtractorModule(Matcher):
+            """Matcher that just extracts and validates ID pairs."""
 
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
@@ -502,13 +502,13 @@ class TestModuleWithRealData:
 
 
 class TestModuleStreamingBehavior:
-    """Test that Module supports lazy/streaming evaluation."""
+    """Test that Matcher supports lazy/streaming evaluation."""
 
     def test_module_forward_is_lazy_generator(self):
         """forward() is a generator and doesn't process until consumed."""
 
-        class CountingModule(Module):
-            """Module that tracks how many candidates it has processed."""
+        class CountingModule(Matcher):
+            """Matcher that tracks how many candidates it has processed."""
 
             def __init__(self):
                 self.processed_count = 0
@@ -585,7 +585,7 @@ class TestModuleStreamingBehavior:
     def test_module_supports_partial_consumption(self):
         """Can partially consume the judgement stream without processing all candidates."""
 
-        class DummyModule(Module):
+        class DummyModule(Matcher):
             def forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]:
                 for candidate in candidates:
                     yield PairwiseJudgement(

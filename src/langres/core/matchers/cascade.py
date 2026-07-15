@@ -1,14 +1,14 @@
-"""CascadeModule implementation for hybrid embeddings + LLM with early exit.
+"""CascadeChainMatcher implementation for hybrid embeddings + LLM with early exit.
 
 This module implements the cascade pattern that optimizes cost while maintaining
 quality by using cheap embedding similarity checks for obvious cases and expensive
 LLM judgment only for uncertain cases.
 
 .. deprecated::
-    Prefer :class:`~langres.core.modules.cascade_judge.CascadeJudge`, which
-    cascades ANY two pairwise ``Module`` instances (student + escalation band)
+    Prefer :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`, which
+    cascades ANY two pairwise ``Matcher`` instances (student + escalation band)
     and round-trips through ``Resolver.save``/``load`` via the registry.
-    ``CascadeModule`` remains only for the ``methods.py`` benchmark path
+    ``CascadeChainMatcher`` remains only for the ``methods.py`` benchmark path
     (migration tracked in ``TODOS.md``).
 """
 
@@ -23,8 +23,8 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
-from langres.core.modules.llm_judge import (
+from langres.core.matcher import Matcher, SchemaT
+from langres.core.matchers.llm_judge import (
     DEFAULT_PROMPT,
     render_default_prompt,
 )
@@ -41,14 +41,14 @@ logger = logging.getLogger(__name__)
 # (e.g. ``langres.methods.cascade_cost_track``) import this rather than repeating
 # the literal, so a rename can't silently desync escalation accounting.
 CASCADE_LLM_DECISION_STEP = "llm_judgment"
-__all__ = ["CASCADE_LLM_DECISION_STEP", "CascadeModule", "DEFAULT_PROMPT"]
+__all__ = ["CASCADE_LLM_DECISION_STEP", "CascadeChainMatcher", "DEFAULT_PROMPT"]
 
 
-class CascadeModule(Module[SchemaT]):
+class CascadeChainMatcher(Matcher[SchemaT]):
     """Schema-agnostic cascade module: embeddings + LLM with early exit.
 
     .. deprecated::
-        Prefer :class:`~langres.core.modules.cascade_judge.CascadeJudge`
+        Prefer :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`
         (composes any two pairwise Modules, serializable via the registry).
         Constructing this class emits a ``DeprecationWarning``; only the
         ``methods.py`` benchmark path still builds it deliberately.
@@ -63,7 +63,7 @@ class CascadeModule(Module[SchemaT]):
     calling the LLM for the hardest cases.
 
     Example:
-        module = CascadeModule(
+        module = CascadeChainMatcher(
             embedding_model_name="all-MiniLM-L6-v2",
             llm_model="gpt-4o-mini",
             llm_api_key=os.getenv("OPENAI_API_KEY"),
@@ -94,12 +94,12 @@ class CascadeModule(Module[SchemaT]):
         Known debt tracked for M2 consolidation:
         - Not yet serializable: it carries no ``type_name`` / ``@register``, so it
           cannot live in a ``Resolver`` slot that ``save`` / ``load`` (unlike
-          ``LLMJudge``).
+          ``LLMMatcher``).
         - Instantiates ``SentenceTransformer`` internally rather than taking an
           injected client — an SRP/dependency-injection gap vs. the injected-client
-          pattern ``LLMJudge`` uses.
+          pattern ``LLMMatcher`` uses.
         - ``_extract_score`` / ``_extract_reasoning`` / ``_calculate_cost``
-          duplicate the same helpers in ``LLMJudge``.
+          duplicate the same helpers in ``LLMMatcher``.
     """
 
     def __init__(
@@ -113,7 +113,7 @@ class CascadeModule(Module[SchemaT]):
         llm_prompt_template: str | None = None,
         entity_noun: str = "entity",
     ):
-        """Initialize CascadeModule.
+        """Initialize CascadeChainMatcher.
 
         Args:
             embedding_model_name: Name of sentence-transformers model for embeddings
@@ -123,7 +123,7 @@ class CascadeModule(Module[SchemaT]):
             high_threshold: Embedding similarity threshold for early exit (match)
             llm_temperature: LLM sampling temperature (0.0 = deterministic)
             llm_prompt_template: Custom LLM prompt (uses the neutral
-                :data:`~langres.core.modules.llm_judge.DEFAULT_PROMPT`, rendered
+                :data:`~langres.core.matchers.llm_judge.DEFAULT_PROMPT`, rendered
                 for ``entity_noun``, if None)
             entity_noun: Domain noun woven into the default prompt (e.g.
                 "company", "product"). Ignored when ``llm_prompt_template`` is given.
@@ -132,10 +132,10 @@ class CascadeModule(Module[SchemaT]):
             ValueError: If thresholds are invalid or API key is missing
         """
         warnings.warn(
-            "CascadeModule is deprecated: use "
-            "langres.core.modules.cascade_judge.CascadeJudge, which cascades any "
+            "CascadeChainMatcher is deprecated: use "
+            "langres.core.matchers.cascade_judge.CascadeMatcher, which cascades any "
             "two pairwise Modules (student + escalation band) and round-trips "
-            "through Resolver.save/load. CascadeModule remains only for the "
+            "through Resolver.save/load. CascadeChainMatcher remains only for the "
             "methods.py benchmark path (migration tracked in TODOS.md).",
             DeprecationWarning,
             stacklevel=2,
@@ -403,7 +403,7 @@ class CascadeModule(Module[SchemaT]):
         """Explore scores without ground truth labels.
 
         This implementation delegates to a shared utility function that works
-        for all Module types since they all return PairwiseJudgement objects.
+        for all Matcher types since they all return PairwiseJudgement objects.
 
         Args:
             judgements: List of PairwiseJudgement objects to analyze

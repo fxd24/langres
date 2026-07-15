@@ -5,7 +5,7 @@ slots into one runnable, serializable pipeline:
 
     blocker      -> candidate generation + schema normalization
     comparator   -> (optional) missing-aware per-feature comparison
-    module       -> the scorer (a Module yielding PairwiseJudgements)
+    module       -> the scorer (a Matcher yielding PairwiseJudgements)
     clusterer    -> connected-components grouping of matched pairs
 
 ``resolve(records)`` orchestrates blocking -> (compare) -> score -> cluster.
@@ -46,11 +46,26 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
-from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.fit import (
+    BlockerFitMixin,
+    CalibratorFitMixin,
+    SupervisedFitMixin,
+    UnsupervisedFitMixin,
+)
+from langres.core.fit_report import CalibrationDelta, FitReport
+from langres.core.harvest import Correction, LabeledPair, align_pairs
+from langres.core.methods_api import Method
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
+from langres.core.metrics import (
+    PairMetrics,
+    brier_score,
+    classify_pairs,
+    expected_calibration_error,
+)
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.registry import get_component
+from langres.core.runs import current_run
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
@@ -62,7 +77,7 @@ if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
     # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
     # core-only `import langres` never pulls faiss/torch in for a Resolver
-    # that never uses judge="embedding".
+    # that never uses matcher="embedding".
     from langres.core.anchor_store import AnchorStore, ClusterDelta
     from langres.core.blockers.vector import VectorBlocker
 
@@ -72,23 +87,23 @@ logger = logging.getLogger(__name__)
 _MANIFEST_FILENAME = "resolver.json"
 
 #: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
-#: than ``langres.core.presets.JudgeName`` -- no ``"auto"``, since resolving
+#: than ``langres.core.presets.MatcherName`` -- no ``"auto"``, since resolving
 #: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
 #: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
 #: constructor argument.
-_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm"]
+_FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"]
 
 
 def _build_module_for_judge(
-    judge: "_FromSchemaJudge | Module[Any]",
+    judge: "_FromSchemaJudge | Matcher[Any]",
     schema: type[BaseModel],
     comparator: Comparator[Any],
     *,
     model: str | None,
     entity_noun: str,
     judge_params: dict[str, Any] | None = None,
-) -> Module[Any]:
-    """Build the scorer for ``Resolver.from_schema``'s ``judge=`` slot.
+) -> Matcher[Any]:
+    """Build the scorer for ``Resolver.from_schema``'s ``matcher=`` slot.
 
     Construction is delegated to the one
     :mod:`~langres.core.method_registry` (a core leaf, so no
@@ -98,13 +113,13 @@ def _build_module_for_judge(
     ``comparator`` is passed to the spec builder so custom
     ``weights=``/``exclude=`` flow into feature-spec-driven judges.
     """
-    if isinstance(judge, Module):
+    if isinstance(judge, Matcher):
         return judge
-    if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm"):
+    if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"):
         raise ValueError(
             f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
-            "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', or pass a "
-            "Module instance. 'auto' key-based resolution is a verbs-layer "
+            "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', 'random_forest', "
+            "or pass a Matcher instance. 'auto' key-based resolution is a verbs-layer "
             "feature -- use langres.link/langres.dedupe for that."
         )
     from langres.core.method_registry import get_method
@@ -116,7 +131,7 @@ def _build_module_for_judge(
         if dspy_price_per_1k(resolved_model) == 0.0:
             # An unpinned model self-reports $0/pair -- honest, not reassuring
             # (mirrors core.presets.notice_pre_scoring_cost's identical check).
-            # Resolver.from_schema has no spend cap at all (see its judge=
+            # Resolver.from_schema has no spend cap at all (see its matcher=
             # docstring), so this is strictly worse than the verbs' blind-cap
             # case: nothing would ever stop a runaway bill.
             warnings.warn(
@@ -138,10 +153,10 @@ def _build_module_for_judge(
 
 
 def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
-    """Build the ``VectorBlocker`` a ``judge="embedding"`` pipeline needs.
+    """Build the ``VectorBlocker`` a ``matcher="embedding"`` pipeline needs.
 
     ``AllPairsBlocker``'s candidates never carry ``similarity_score``, which
-    ``EmbeddingScoreJudge`` requires to score -- ``judge="embedding"`` must
+    ``EmbeddingScoreMatcher`` requires to score -- ``matcher="embedding"`` must
     always be paired with a ``VectorBlocker``, mirroring the identical rule
     ``core.presets.build_resolver`` applies for the verb layer (same model,
     same k, same cosine metric). Duplicated here rather than imported from
@@ -225,7 +240,7 @@ def _component_spec(obj: object, slot: str) -> ComponentSpec:
     if not isinstance(type_name, str):
         raise TypeError(
             f"{type(obj).__name__} is not serializable (no `type_name`/@register). "
-            f"Use a registered component (e.g. LLMJudge, WeightedAverageJudge) in "
+            f"Use a registered component (e.g. LLMMatcher, WeightedAverageMatcher) in "
             f"the {slot!r} slot."
         )
     return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
@@ -299,6 +314,19 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
     return component
 
 
+def _is_prompt_compilable(module: object) -> bool:
+    """Whether ``module`` is a prompt-optimizable (DSPy-style) matcher.
+
+    Structural, import-light check (no ``dspy`` import): a compilable scorer
+    exposes a ``compile(trainset, ...)`` method and a ``compiled`` flag -- the
+    :class:`~langres.core.matchers.dspy_judge.DSPyMatcher` shape. Used by
+    :meth:`Resolver.describe` to tag the matcher TRAINABLE and mirrors the
+    matcher the ``method.kind == "prompt"`` fit path requires, without pulling
+    ``dspy`` into a bare ``import langres``.
+    """
+    return callable(getattr(module, "compile", None)) and hasattr(module, "compiled")
+
+
 class Resolver:
     """Composable entity-resolution pipeline: blocker -> compare -> score -> cluster.
 
@@ -306,16 +334,21 @@ class Resolver:
         blocker: Candidate generator + schema normalizer.
         comparator: Optional pre-stage turning each pair into a
             ComparisonVector. When ``None``, the module is called directly
-            (e.g. a self-contained ``RapidfuzzModule``).
-        module: The scorer Module that yields PairwiseJudgements.
+            (e.g. a self-contained ``RapidfuzzMatcher``).
+        matcher: The scorer Matcher that yields PairwiseJudgements.
         clusterer: Groups matched pairs into entity clusters.
+        calibrator: Optional fitted
+            :class:`~langres.core.fit.CalibratorFitMixin` that maps each
+            judgement's raw ``score`` to a calibrated probability before
+            clustering. ``None`` (the default) leaves scores untouched; set by
+            ``fit(method=Platt()/Isotonic())``.
 
     Example:
         comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
-            module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+            matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
         clusters = resolver.resolve(COMPANY_RECORDS)
@@ -327,13 +360,20 @@ class Resolver:
         self,
         blocker: Blocker[Any],
         comparator: Comparator[Any] | None,
-        module: Module[Any],
+        matcher: Matcher[Any],
         clusterer: Clusterer,
+        calibrator: CalibratorFitMixin | None = None,
     ) -> None:
         self.blocker = blocker
         self.comparator = comparator
-        self.module = module
+        self.module = matcher
         self.clusterer = clusterer
+        # Optional score->probability map, set by fit(method=Platt()/Isotonic())
+        # and applied in _judgements(); None leaves raw scores untouched.
+        self.calibrator = calibrator
+        # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
+        # None until fit() runs (never serialized -- it is a fit-time artifact).
+        self.fit_report_: FitReport | None = None
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
         # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
         self._anchor_store: "AnchorStore | None" = None
@@ -350,7 +390,7 @@ class Resolver:
         threshold: float = 0.7,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
-        judge: "_FromSchemaJudge | Module[Any]" = "string",
+        matcher: "_FromSchemaJudge | Matcher[Any]" = "string",
         model: str | None = None,
         entity_noun: str = "entity",
         prompt_template: str | None = None,
@@ -361,10 +401,10 @@ class Resolver:
 
         Defaults to an ``AllPairsBlocker`` over the schema, a missing-aware
         ``StringComparator`` auto-derived from the schema's string fields (with
-        ``id`` excluded), a ``WeightedAverageJudge`` scorer, and a ``Clusterer``
-        at ``threshold``. ``judge="embedding"`` is the one exception to the
+        ``id`` excluded), a ``WeightedAverageMatcher`` scorer, and a ``Clusterer``
+        at ``threshold``. ``matcher="embedding"`` is the one exception to the
         ``AllPairsBlocker`` default: it wires a ``VectorBlocker`` instead,
-        since ``EmbeddingScoreJudge`` scores off the blocker's
+        since ``EmbeddingScoreMatcher`` scores off the blocker's
         ``similarity_score``, which only a ``VectorBlocker`` attaches.
 
         Args:
@@ -377,27 +417,31 @@ class Resolver:
                 floor.
             exclude: Field names to skip when deriving features. Defaults to
                 ``{"id"}`` (handled by the comparator).
-            judge: ``"string"`` (default -- identical to pre-existing
+            matcher: ``"string"`` (default -- identical to pre-existing
                 behavior), ``"embedding"`` (wires a ``VectorBlocker``, see
                 above), ``"zero_shot_llm"``, ``"prompt_llm"`` (the
-                bring-your-own-prompt ``LLMJudge`` -- with a *registered*
+                bring-your-own-prompt ``LLMMatcher`` -- with a *registered*
                 ``response_parser`` name the whole judge, prompt included,
-                ``save``/``load`` round-trips), or a ``Module`` instance. This
+                ``save``/``load`` round-trips), ``"random_forest"`` (a
+                supervised sklearn ``RandomForestMatcher`` over the comparator's
+                per-feature similarities -- needs the ``[trained]`` extra and is
+                TRAINABLE, so ``fit(records, pairs=...)``/``labels=...`` it with
+                labeled data before it can score), or a ``Matcher`` instance. This
                 is the low-level, explicit switch (no ``"auto"`` key-based
                 resolution and no spend cap -- that magic lives in
                 ``langres.link``/``langres.dedupe``). **Caution**:
-                ``judge="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
-                ``Module``) built here runs UNCAPPED -- there is no
+                ``matcher="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
+                ``Matcher``) built here runs UNCAPPED -- there is no
                 ``budget_usd`` on this method and nothing stops a runaway
                 bill. Use ``langres.link``/``langres.dedupe`` for the
                 built-in ``SpendMonitor`` cap.
-            model: Model id override for ``judge="zero_shot_llm"``/``"prompt_llm"``.
+            model: Model id override for ``matcher="zero_shot_llm"``/``"prompt_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
-            prompt_template: ``judge="prompt_llm"`` only: custom prompt with
+            prompt_template: ``matcher="prompt_llm"`` only: custom prompt with
                 ``{left}``/``{right}`` placeholders (see
-                :class:`~langres.core.modules.llm_judge.LLMJudge`).
-            system_prompt: ``judge="prompt_llm"`` only: optional system message.
-            response_parser: ``judge="prompt_llm"`` only: a *registered*
+                :class:`~langres.core.matchers.llm_judge.LLMMatcher`).
+            system_prompt: ``matcher="prompt_llm"`` only: optional system message.
+            response_parser: ``matcher="prompt_llm"`` only: a *registered*
                 parser name (``"score"`` / ``"binary_yes_no"`` -- see
                 ``llm_judge.RESPONSE_PARSERS``), serialized in the artifact.
 
@@ -420,16 +464,16 @@ class Resolver:
             }.items()
             if value is not None
         }
-        if judge_params and judge != "prompt_llm":
+        if judge_params and matcher != "prompt_llm":
             raise ValueError(
-                f"{', '.join(sorted(judge_params))}: only valid with judge='prompt_llm' "
-                f"(got judge={judge!r})."
+                f"{', '.join(sorted(judge_params))}: only valid with matcher='prompt_llm' "
+                f"(got matcher={matcher!r})."
             )
         comparator: Comparator[Any] = Comparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
         module = _build_module_for_judge(
-            judge,
+            matcher,
             schema,
             comparator,
             model=model,
@@ -438,13 +482,13 @@ class Resolver:
         )
         blocker: Blocker[Any] = (
             _build_embedding_blocker(schema)
-            if judge == "embedding"
+            if matcher == "embedding"
             else AllPairsBlocker(schema=schema)
         )
         return cls(
             blocker=blocker,
             comparator=comparator,
-            module=module,
+            matcher=module,
             clusterer=Clusterer(threshold=threshold),
         )
 
@@ -452,69 +496,680 @@ class Resolver:
     # Running the pipeline
     # ------------------------------------------------------------------
 
-    def fit(self, data: list[Any], labels: Sequence[bool] | None = None) -> Self:
+    def describe(self) -> str:
+        """Return a per-component "what would train vs what is frozen" digest.
+
+        The honesty device the caller reads *before* ``fit``: one line per
+        pipeline role naming the component and tagging it ``TRAINABLE`` (a fit
+        hook or a prompt-compile would tune it) or ``frozen`` (nothing to train).
+        A role is TRAINABLE when it implements the matching fit Protocol from
+        :mod:`langres.core.fit` -- a :class:`~langres.core.fit.BlockerFitMixin`
+        blocker, a :class:`~langres.core.fit.SupervisedFitMixin`/
+        :class:`~langres.core.fit.UnsupervisedFitMixin` matcher (or a
+        prompt-compilable :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`,
+        tuned by ``fit(method="prompt")``), or a
+        :class:`~langres.core.fit.CalibratorFitMixin` calibrator. The clusterer is
+        always frozen (a decision threshold, not a learned parameter).
+
+        Pure string builder: it reads slots and reports, never trains, imports a
+        backend, or mutates anything -- safe to call on a fresh Resolver. Example::
+
+            blocker:    AllPairsBlocker         — frozen
+            matcher:    DSPyMatcher             — TRAINABLE
+            calibrator: <none>                  — frozen
+            clusterer:  threshold=0.5           — frozen
+
+        Returns:
+            A newline-joined, column-aligned digest (no trailing newline).
+        """
+        calibrator = getattr(self, "calibrator", None)
+        matcher_trainable = isinstance(
+            self.module, (SupervisedFitMixin, UnsupervisedFitMixin)
+        ) or _is_prompt_compilable(self.module)
+        rows: list[tuple[str, str, bool]] = [
+            ("blocker", type(self.blocker).__name__, isinstance(self.blocker, BlockerFitMixin)),
+            ("matcher", type(self.module).__name__, matcher_trainable),
+            (
+                "calibrator",
+                "<none>" if calibrator is None else type(calibrator).__name__,
+                calibrator is not None and isinstance(calibrator, CalibratorFitMixin),
+            ),
+            ("clusterer", f"threshold={self.clusterer.threshold:g}", False),
+        ]
+        label_w = max(len(label) for label, _, _ in rows) + 1  # +1 for the trailing ":"
+        desc_w = max(len(desc) for _, desc, _ in rows)
+        return "\n".join(
+            f"{label + ':':<{label_w}} {desc:<{desc_w}} — {'TRAINABLE' if trainable else 'frozen'}"
+            for label, desc, trainable in rows
+        )
+
+    def fit(
+        self,
+        data: list[Any],
+        labels: Sequence[bool] | None = None,
+        *,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None = None,
+        split: float | None = None,
+        seed: int = 0,
+        method: Method | None = None,
+    ) -> Self:
         """Fit the module when it supports a fit hook; sklearn-style no-op otherwise.
 
-        Delegates to the module's fit hook when it implements one of the two
-        runtime-checkable Protocols in :mod:`langres.core.fit` (W1.0, E6):
+        Every non-raising path sets :attr:`fit_report_` (an sklearn
+        trailing-underscore, produced-by-fit digest) and returns ``self`` so
+        ``resolver.fit(...).resolve(...)`` still chains. Delegates to the module's
+        fit hook when it implements one of the runtime-checkable Protocols in
+        :mod:`langres.core.fit` (W1.0, E6):
 
         - :class:`~langres.core.fit.UnsupervisedFitMixin`
-          (``fit_unlabeled(candidates)``): called unconditionally with the
-          blocked (and, if a comparator is configured, comparison-attached)
-          candidate stream. ``labels`` is not used by this path.
-        - :class:`~langres.core.fit.SupervisedFitMixin`
-          (``fit(candidates, labels)``): called with ``labels`` when given;
-          **raises** rather than silently skipping training when ``labels``
-          is omitted -- a genuinely trainable module that never gets
-          trained is exactly the silent-no-op footgun this hook exists to
-          prevent.
+          (``fit_unlabeled(candidates)``): called with the blocked (and, if a
+          comparator is configured, comparison-attached) candidate stream.
+          ``labels``/``pairs`` are not used by this path (passing either raises).
+        - :class:`~langres.core.fit.SupervisedFitMixin` (``fit(candidates,
+          labels)``): trained from either pre-aligned ``labels`` or id-keyed
+          ``pairs`` (see below); **raises** rather than silently skipping when
+          neither is given -- a genuinely trainable module that never gets trained
+          is exactly the silent-no-op footgun this hook exists to prevent.
 
-        When the module implements **neither** hook, this is a no-op that
-        returns ``self`` -- unchanged sklearn-style symmetry so callers can
-        write ``resolver.fit(data).resolve(data)`` for non-learnable
-        pipelines (e.g. ``WeightedAverageJudge``) without branching -- UNLESS
-        ``labels`` was passed, in which case it raises rather than silently
-        discarding them.
+        Two ways to supply supervision for a ``SupervisedFitMixin`` matcher:
+
+        - ``labels``: a ``Sequence[bool]`` the caller has *already* positionally
+          aligned with the blocked candidates (the pre-existing contract). No
+          id-join happens, so the report carries no ``coverage``.
+        - ``pairs``: id-keyed labels (a ``corrections.jsonl`` path, or a
+          ``Sequence`` of :class:`~langres.core.harvest.LabeledPair` /
+          :class:`~langres.core.harvest.Correction`) that
+          :func:`~langres.core.harvest.align_pairs` joins to the candidates for
+          you -- with an optional entity-disjoint ``split`` for held-out metrics
+          and a :class:`~langres.core.harvest.GoldCoverage` guardrail. Pass at
+          most one of ``labels``/``pairs``.
+
+        When the module implements **neither** hook, this is a no-op that returns
+        ``self`` (unchanged sklearn-style symmetry for non-learnable pipelines
+        like ``WeightedAverageMatcher``) with a minimal ``fit_report_`` -- UNLESS
+        ``labels``/``pairs`` was passed, in which case it raises rather than
+        silently discarding them.
 
         Args:
             data: Raw records (dicts) in a stable list order, same shape as
                 ``resolve()``/``predict()`` accept.
-            labels: Gold match/non-match labels, positionally aligned with the
-                blocked candidates. Required (and only used) when the module
-                implements ``SupervisedFitMixin``.
+            labels: Gold labels pre-aligned with the blocked candidates. Only for
+                a ``SupervisedFitMixin`` module; mutually exclusive with ``pairs``.
+            pairs: Id-keyed labels ``align_pairs`` joins to the candidates. Only
+                for a ``SupervisedFitMixin`` module; mutually exclusive with
+                ``labels``.
+            split: Held-out fraction for the entity-disjoint ``pairs`` split
+                (``None`` = train on everything; only meaningful with ``pairs``).
+            seed: Seed for the entity-disjoint split.
+            method: An optional :class:`~langres.core.methods_api.Method` naming
+                *how* to train (prompt-optimize / fine-tune / calibrate). When
+                given, ``fit`` dispatches on ``method.kind`` to a per-kind handler
+                (``_fit_prompt`` / ``_fit_finetune`` / ``_fit_calibrate``) instead
+                of the isinstance-on-the-module default above; when ``None`` (the
+                default), behavior is exactly the module-hook path described here.
+                Prompt-optimization is implemented (:class:`~langres.core.methods_prompt.Bootstrap`
+                / :class:`~langres.core.methods_prompt.MIPRO` compile a
+                ``DSPyMatcher``'s prompt -- see :meth:`_fit_prompt`); the
+                fine-tune (PR-F) and calibrate (PR-D) handlers are still stubs
+                that raise a clear NotImplementedError naming their PR.
 
         Returns:
             ``self``, so ``resolver.fit(data).resolve(data)`` chains.
 
         Raises:
-            ValueError: If the module implements ``SupervisedFitMixin`` and
-                ``labels`` is omitted, or if ``labels`` is given but the
-                module implements neither fit hook.
+            ValueError: If both ``labels`` and ``pairs`` are given; if the module
+                implements ``SupervisedFitMixin`` and neither is given; or if
+                ``labels``/``pairs`` is given to a module that cannot use them.
+            NotImplementedError: If ``method`` is given but its ``kind``'s fit
+                path is not implemented yet (the seam is wired ahead of the
+                concrete methods; the error names the PR that will land it).
         """
+        if method is not None:
+            # The ``method=`` object seam: a Method names *how* to train and
+            # routes to its own per-kind handler below, so the concrete
+            # strategies that fill these in later touch DISJOINT methods instead
+            # of one shared branch. Each handler is a thin stub today, raising a
+            # clear NotImplementedError naming its PR. Guarded by ``is not None``
+            # so the ``method=None`` default leaves every existing fit path below
+            # byte-for-byte unchanged.
+            if method.kind == "prompt":
+                return self._fit_prompt(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            if method.kind == "finetune":
+                return self._fit_finetune(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            if method.kind == "calibrate":
+                return self._fit_calibrate(
+                    data, labels=labels, pairs=pairs, split=split, seed=seed, method=method
+                )
+            raise NotImplementedError(
+                f"method kind {method.kind!r} is not recognized: no langres Method "
+                f"implements it ({method.describe()})."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (a Sequence[bool] pre-aligned with the blocked "
+                "candidates) or pairs= (id-keyed labels align_pairs() joins for you), "
+                "not both."
+            )
+        if pairs is not None:
+            self.fit_report_ = self._fit_from_pairs(data, pairs, split=split, seed=seed)
+            return self
+
+        matcher_name = type(self.module).__name__
         if isinstance(self.module, SupervisedFitMixin):
             if labels is None:
                 raise ValueError(
-                    f"{type(self.module).__name__} requires labeled data: pass "
+                    f"{matcher_name} requires labeled data: pass "
                     "labels=<Sequence[bool] aligned with the blocked candidates> "
-                    "to fit()."
+                    "(or pairs=<id-keyed labels>) to fit()."
                 )
             self.module.fit(self._candidates(data), labels)
+            self.fit_report_ = FitReport.build(
+                trainable=f"{matcher_name} (SupervisedFitMixin)",
+                trained=True,
+                n_train=len(labels),
+                threshold=self.clusterer.threshold,
+                run_ref=current_run.get(),
+            )
             return self
         if isinstance(self.module, UnsupervisedFitMixin):
             if labels is not None:
                 raise ValueError(
-                    f"{type(self.module).__name__} does not support fit(labels=...): "
+                    f"{matcher_name} does not support fit(labels=...): "
                     "it implements UnsupervisedFitMixin, which trains without labels "
                     "(fit_unlabeled) -- drop the labels= argument."
                 )
-            self.module.fit_unlabeled(self._candidates(data))
+            candidates = self.candidates(data)
+            self.module.fit_unlabeled(iter(candidates))
+            self.fit_report_ = FitReport.build(
+                trainable=f"{matcher_name} (UnsupervisedFitMixin)",
+                trained=True,
+                n_train=len(candidates),
+                run_ref=current_run.get(),
+            )
             return self
         if labels is not None:
             raise ValueError(
-                f"{type(self.module).__name__} does not support fit(labels=...): "
+                f"{matcher_name} does not support fit(labels=...): "
                 "it implements neither SupervisedFitMixin nor UnsupervisedFitMixin."
             )
+        self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
+
+    # ------------------------------------------------------------------
+    # ``method=`` per-kind fit handlers (the object seam)
+    #
+    # Each ``Method.kind`` routes to its OWN handler so the concrete strategies
+    # land in disjoint methods -- prompt-optimize in PR-C, fine-tune in PR-F,
+    # calibrate in PR-D -- rather than colliding on one shared branch. Every
+    # handler takes the full fit context (data + supervision + split/seed + the
+    # Method itself) so its PR fills in only the body, not the call site.
+    # ``_fit_prompt`` is implemented; ``_fit_finetune`` / ``_fit_calibrate``
+    # remain thin stubs raising a clear, PR-naming NotImplementedError.
+    # ------------------------------------------------------------------
+
+    def _fit_prompt(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via prompt-optimization (``method.kind == "prompt"``).
+
+        Tunes a compilable :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`'s
+        prompt from labeled pairs by compiling its DSPy program against a gold set
+        -- the optimizer named by ``method.optimizer`` (``BootstrapFewShot`` for
+        :class:`~langres.core.methods_prompt.Bootstrap`, ``MIPROv2`` for
+        :class:`~langres.core.methods_prompt.MIPRO`). Supervision comes from either
+        id-keyed ``pairs`` (joined via :func:`~langres.core.harvest.align_pairs`,
+        whose optional entity-disjoint ``split`` yields the ``valid`` fold
+        ``MIPROv2`` uses as its valset) or pre-aligned ``labels``. Sets
+        :attr:`fit_report_` naming the demos learned + teacher model + declared
+        budget, and returns ``self`` so ``resolver.fit(...).resolve(...)`` chains.
+
+        The budget seam: ``method.budget_usd`` caps the compile via the existing
+        :class:`~langres.clients.openrouter.SpendMonitor`. DSPy-compile spend
+        capture is deferred to issue #100 -- today the compile records ``$0`` (the
+        ``DummyLM`` CI path is genuinely free; the paid ``MIPROv2`` path stays
+        uncosted until #100 wires real spend through this same guard).
+
+        Raises:
+            ValueError: If the module is not a ``DSPyMatcher``
+                (prompt-optimization needs a compilable scorer); if both
+                ``labels`` and ``pairs`` are given, or neither.
+        """
+        # Lazy imports: keep ``dspy`` (and litellm-adjacent client code) out of a
+        # bare ``import langres`` -- they load only when a prompt-optimize fit runs.
+        from langres.clients.openrouter import SpendMonitor
+        from langres.core.matchers.dspy_judge import DSPyMatcher
+
+        matcher_name = type(self.module).__name__
+        if not isinstance(self.module, DSPyMatcher):
+            raise ValueError(
+                f"method.kind='prompt' prompt-optimization needs a DSPyMatcher in "
+                f"the module slot (a compilable DSPy scorer), but this Resolver's "
+                f"matcher is {matcher_name}. Build it with matcher=DSPyMatcher(...) "
+                f"to prompt-optimize, or drop method= to use {matcher_name}'s own "
+                f"fit path."
+            )
+        if self.module.compiled:
+            raise ValueError(
+                "this DSPyMatcher is already compiled -- prompt-optimization "
+                "compiles a fresh program once per matcher instance and DSPy "
+                "cannot recompile in place. Build a new DSPyMatcher(...) for "
+                "another prompt-optimize round."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (pre-aligned with the blocked candidates) or "
+                "pairs= (id-keyed labels align_pairs() joins), not both."
+            )
+        optimizer = getattr(method, "optimizer", None)
+        if optimizer is None:
+            raise ValueError(
+                f"method.kind='prompt' needs a PromptMethod exposing .optimizer "
+                f"(e.g. Bootstrap()/MIPRO()); got {type(method).__name__} "
+                f"({method.describe()})."
+            )
+
+        # Assemble labeled candidates (train + optional valid), reusing the same
+        # id-join + entity-disjoint split as the SupervisedFitMixin pairs path.
+        coverage = None
+        valid_candidates: Sequence[ERCandidate[Any]] = []
+        valid_labels: Sequence[bool] = []
+        if pairs is not None:
+            aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+            train_candidates: Sequence[ERCandidate[Any]] = aligned.train.candidates
+            train_labels: Sequence[bool] = aligned.train.labels
+            valid_candidates = aligned.valid.candidates
+            valid_labels = aligned.valid.labels
+            coverage = aligned.coverage
+        elif labels is not None:
+            train_candidates = self.candidates(data)
+            train_labels = labels
+        else:
+            raise ValueError(
+                f"prompt-optimization ({method.describe()}) needs gold labels to "
+                "tune the prompt from: pass pairs=<id-keyed labels> or "
+                "labels=<pre-aligned with the blocked candidates>."
+            )
+
+        trainset = self.module.examples_from_candidates(train_candidates, train_labels)
+        valset = (
+            self.module.examples_from_candidates(valid_candidates, valid_labels)
+            if valid_candidates
+            else None
+        )
+
+        budget_usd = getattr(method, "budget_usd", None)
+        monitor = SpendMonitor(budget_usd=budget_usd) if budget_usd is not None else None
+        compile_kwargs = method.compile_kwargs() if hasattr(method, "compile_kwargs") else {}
+        self.module.compile(trainset, valset, optimizer=optimizer, **compile_kwargs)
+
+        # See the docstring's budget note: DSPy-compile spend is not yet captured
+        # (#100), so the monitor observes $0 today. The seam is wired so real
+        # spend flows through this cap once #100 lands.
+        spend_usd = 0.0
+        if monitor is not None:
+            monitor.add(spend_usd)
+            monitor.check()
+
+        self.fit_report_ = FitReport.build(
+            trainable=(
+                f"{matcher_name} ({method.describe()}; "
+                f"teacher={self.module.model}, demos={self.module.n_demos})"
+            ),
+            trained=True,
+            n_train=len(train_labels),
+            n_valid=len(valid_labels),
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            cost=spend_usd if monitor is not None else None,
+            run_ref=current_run.get(),
+        )
+        return self
+
+    def _fit_finetune(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via fine-tuning (``method.kind == "finetune"``): QLoRA train → serve.
+
+        Aligns the labeled ``pairs`` to candidates, fine-tunes ``method.base`` on
+        them (:func:`~langres.core.finetune.run_finetune`), repoints this
+        Resolver's matcher at the resulting ``model_ref`` as an in-process,
+        logprob-scoring :class:`~langres.core.matchers.llm_judge.LLMMatcher`, and
+        evaluates held-out pair P/R/F1 on the entity-disjoint ``valid`` split.
+        Records the GPU-seconds / derived-$ cost and the served ``model_ref`` in
+        :attr:`fit_report_`.
+
+        Heavy imports (``core.finetune`` → peft/trl on the training call;
+        ``LLMMatcher`` → litellm) are deferred to here so the ``method=None`` and
+        non-finetune fit paths never pay for them.
+
+        Raises:
+            TypeError: If ``method`` is not a :class:`~langres.core.finetune.QLoRA`.
+            ValueError: If neither ``pairs`` nor ``labels`` is given (fine-tuning
+                needs supervision), or both are.
+        """
+        from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
+        from langres.core.matchers.llm_judge import LLMMatcher
+        from langres.core.matchers.model_ref import to_config
+
+        if not isinstance(method, QLoRA):
+            raise TypeError(
+                f"method kind 'finetune' requires a QLoRA method; got "
+                f"{type(method).__name__} ({method.describe()})."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError("pass either labels= or pairs= to a finetune fit, not both.")
+        if labels is None and pairs is None:
+            raise ValueError(
+                "fine-tuning needs labeled supervision: pass pairs=<id-keyed labels> "
+                "(align_pairs joins them + gives a held-out split) or "
+                "labels=<Sequence[bool] aligned with the blocked candidates>."
+            )
+
+        candidates = self.candidates(data)
+        coverage = None
+        if pairs is not None:
+            aligned = align_pairs(candidates, pairs, split=split, seed=seed)
+            train_pairs = list(zip(aligned.train.candidates, aligned.train.labels, strict=True))
+            valid_pairs = list(zip(aligned.valid.candidates, aligned.valid.labels, strict=True))
+            coverage = aligned.coverage
+            n_valid = len(aligned.valid.labels)
+        else:
+            train_pairs = list(zip(candidates, cast("Sequence[bool]", labels), strict=True))
+            valid_pairs = []
+            n_valid = 0
+            split = None
+
+        # Preserve the outgoing matcher's record rendering (so what the model is
+        # trained on matches what it is served) when it is an LLMMatcher.
+        render = self._llm_render_config()
+        # Train AND serve on the SAME yes/no prompt: the model learns the
+        # FINETUNE_YES_NO_PROMPT completion, so the served matcher must send that
+        # prompt (not LLMMatcher's default "Score:" template) and read it with the
+        # binary yes/no parser -- otherwise serving asks a differently-worded
+        # question than training taught.
+        outcome = run_finetune(
+            train_pairs, method, prompt_template=FINETUNE_YES_NO_PROMPT, **render
+        )
+
+        # Repoint this Resolver at the fine-tuned model: an in-process,
+        # logprob-scoring yes/no LLMMatcher over the produced model_ref.
+        self.module = LLMMatcher(
+            model=to_config(outcome.model_ref),
+            confidence="logprob",
+            response_parser="binary_yes_no",
+            prompt_template=FINETUNE_YES_NO_PROMPT,
+            **render,
+        )
+
+        metrics: PairMetrics | None = None
+        if valid_pairs:
+            judgements = list(self.module.forward(iter([c for c, _ in valid_pairs])))
+            gold_pairs = {
+                frozenset({str(c.left.id), str(c.right.id)}) for c, label in valid_pairs if label
+            }
+            metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
+
+        self.fit_report_ = FitReport.build(
+            trainable=f"LLMMatcher (finetune: {outcome.method})",
+            trained=True,
+            n_train=outcome.n_train,
+            n_valid=n_valid,
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            metrics=metrics,
+            cost=outcome.dollars,
+            gpu_seconds=outcome.gpu_seconds,
+            model_ref=to_config(outcome.model_ref),
+            run_ref=current_run.get(),
+        )
+        return self
+
+    def _llm_render_config(self) -> dict[str, Any]:
+        """The current matcher's record serializer, to keep train == serve.
+
+        When ``self.module`` is an :class:`~langres.core.matchers.llm_judge.LLMMatcher`
+        this carries its ``record_serializer`` (by registered name) so a fine-tune
+        renders records the way they will be served. Only the serializer -- NOT the
+        ``prompt_template``: ``_fit_finetune`` pins both training and serving to
+        :data:`~langres.core.finetune.FINETUNE_YES_NO_PROMPT` (the outgoing matcher's
+        prompt may be the ``Score:`` scoring template, which the yes/no fine-tune
+        does not use). Empty for a non-LLM matcher (the finetune defaults apply).
+        """
+        from langres.core.matchers.llm_judge import LLMMatcher
+
+        if isinstance(self.module, LLMMatcher):
+            return {"record_serializer": self.module.config["record_serializer"]}
+        return {}
+
+    def _fit_calibrate(
+        self,
+        data: list[Any],
+        *,
+        labels: Sequence[bool] | None,
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction] | None,
+        split: float | None,
+        seed: int,
+        method: Method,
+    ) -> Self:
+        """Fit via score calibration (``method.kind == "calibrate"``): learn a score→prob map.
+
+        Scores the labeled train candidates with the current matcher, fits a fresh
+        :class:`~langres.core.calibration.Calibrator` (strategy from
+        ``method.strategy``) on those ``(score, label)`` pairs, and attaches it as
+        :attr:`calibrator` so :meth:`predict`/:meth:`resolve` map every raw score
+        to a calibrated probability. Supervision comes from id-keyed ``pairs``
+        (joined via :func:`~langres.core.harvest.align_pairs`, whose optional
+        entity-disjoint ``split`` gives a held-out fold) or pre-aligned ``labels``.
+
+        The honest test: when a ``valid`` split exists, the ``FitReport`` carries
+        the Brier/ECE **before vs after** calibration on that held-out fold (raw
+        matcher scores vs the fitted map) -- a real calibrator drives both down.
+        Does NOT retrain or touch the matcher, and does NOT change the clusterer:
+        calibration only makes the score a true probability so the existing
+        threshold is meaningful.
+
+        Raises:
+            ImportError: If scikit-learn (the ``[trained]`` extra) is not installed.
+            ValueError: If ``method`` exposes no ``.strategy`` (not a
+                :class:`~langres.core.methods_calibrate.CalibrateMethod`); if both
+                ``labels`` and ``pairs`` are given, or neither; or if the matcher
+                emits no scores to calibrate (a pure decider).
+        """
+        try:
+            from langres.core.calibration import Calibrator
+        except ImportError as exc:  # pragma: no cover - core-only env
+            raise ImportError(
+                "score calibration (method='calibrate') needs scikit-learn (the "
+                "'trained' extra): pip install 'langres[trained]' "
+                "(or uv add 'langres[trained]')."
+            ) from exc
+
+        strategy = getattr(method, "strategy", None)
+        if strategy is None:
+            raise ValueError(
+                f"method.kind='calibrate' needs a CalibrateMethod exposing .strategy "
+                f"(e.g. Platt()/Isotonic()); got {type(method).__name__} "
+                f"({method.describe()})."
+            )
+        if labels is not None and pairs is not None:
+            raise ValueError(
+                "pass either labels= (pre-aligned with the blocked candidates) or "
+                "pairs= (id-keyed labels align_pairs() joins), not both."
+            )
+
+        coverage = None
+        valid_candidates: Sequence[ERCandidate[Any]] = []
+        valid_labels: Sequence[bool] = []
+        if pairs is not None:
+            aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+            train_candidates: Sequence[ERCandidate[Any]] = aligned.train.candidates
+            train_labels: Sequence[bool] = aligned.train.labels
+            valid_candidates = aligned.valid.candidates
+            valid_labels = aligned.valid.labels
+            coverage = aligned.coverage
+        elif labels is not None:
+            train_candidates = self.candidates(data)
+            train_labels = labels
+        else:
+            raise ValueError(
+                f"score calibration ({method.describe()}) needs gold labels: pass "
+                "pairs=<id-keyed labels> or labels=<pre-aligned with the blocked "
+                "candidates>."
+            )
+
+        train_scores, train_score_labels = self._scored_labeled_pairs(
+            train_candidates, train_labels
+        )
+        if not train_scores:
+            raise ValueError(
+                f"{type(self.module).__name__} produced no scores to calibrate: score "
+                "calibration needs a ranking matcher (one that emits "
+                "PairwiseJudgement.score), not a pure decider."
+            )
+        calibrator = Calibrator(method=strategy)
+        calibrator.fit_calibrator(train_scores, train_score_labels)
+        self.calibrator = calibrator
+
+        calibration = self._calibration_delta(strategy, calibrator, valid_candidates, valid_labels)
+
+        self.fit_report_ = FitReport.build(
+            trainable=f"Calibrator ({strategy})",
+            trained=True,
+            n_train=len(train_score_labels),
+            n_valid=len(valid_labels),
+            split=split,
+            seed=seed,
+            coverage=coverage,
+            threshold=self.clusterer.threshold,
+            calibration=calibration,
+            run_ref=current_run.get(),
+        )
+        return self
+
+    def _scored_labeled_pairs(
+        self, candidates: Sequence[ERCandidate[Any]], labels: Sequence[bool]
+    ) -> tuple[list[float], list[bool]]:
+        """Score ``candidates`` with the matcher and join scores back to labels by id.
+
+        Returns ``(scores, labels)`` for the ranking judgements only (``score is
+        not None``), keyed by the unordered ``{left_id, right_id}`` pair so the
+        join is robust to any reordering/filtering the matcher's ``forward`` does.
+        """
+        label_by_pair = {
+            frozenset({str(c.left.id), str(c.right.id)}): bool(label)
+            for c, label in zip(candidates, labels, strict=True)
+        }
+        scores: list[float] = []
+        aligned_labels: list[bool] = []
+        for judgement in self.module.forward(iter(candidates)):
+            if judgement.score is None:
+                continue
+            key = frozenset({judgement.left_id, judgement.right_id})
+            if key in label_by_pair:
+                scores.append(judgement.score)
+                aligned_labels.append(label_by_pair[key])
+        return scores, aligned_labels
+
+    def _calibration_delta(
+        self,
+        strategy: str,
+        calibrator: CalibratorFitMixin,
+        valid_candidates: Sequence[ERCandidate[Any]],
+        valid_labels: Sequence[bool],
+    ) -> CalibrationDelta | None:
+        """Brier/ECE before-vs-after calibration on the held-out ``valid`` split.
+
+        ``None`` when there is no valid split (nothing held out to measure on) or
+        the matcher emits no scores over it. Raw matcher scores are already in
+        ``[0, 1]`` (``PairwiseJudgement.score``'s contract), so both metrics are
+        always defined on the "before" side.
+        """
+        if not valid_candidates:
+            return None
+        valid_scores, valid_score_labels = self._scored_labeled_pairs(
+            valid_candidates, valid_labels
+        )
+        if not valid_scores:
+            return None
+        after = calibrator.transform(valid_scores)
+        return CalibrationDelta(
+            method=strategy,
+            brier_before=brier_score(valid_scores, valid_score_labels),
+            brier_after=brier_score(after, valid_score_labels),
+            ece_before=expected_calibration_error(valid_scores, valid_score_labels),
+            ece_after=expected_calibration_error(after, valid_score_labels),
+        )
+
+    def _fit_from_pairs(
+        self,
+        data: list[Any],
+        pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction],
+        *,
+        split: float | None,
+        seed: int,
+    ) -> FitReport:
+        """Fit a ``SupervisedFitMixin`` matcher from id-keyed labels via ``align_pairs``.
+
+        Runs the id-join + entity-disjoint split + coverage in one place, trains
+        on the train split, and evaluates held-out pair P/R/F1 on the valid split
+        (when a split was given, via :func:`~langres.core.metrics.classify_pairs`
+        at the clusterer's threshold). Returns the assembled :class:`FitReport`.
+        """
+        matcher_name = type(self.module).__name__
+        if not isinstance(self.module, SupervisedFitMixin):
+            raise ValueError(
+                f"{matcher_name} does not support fit(pairs=...): pairs= supplies "
+                "labeled pairs for a SupervisedFitMixin matcher, and this matcher "
+                "implements no supervised fit hook. Use fit() with no labels for an "
+                "unsupervised/non-learnable matcher."
+            )
+        aligned = align_pairs(self.candidates(data), pairs, split=split, seed=seed)
+        self.module.fit(iter(aligned.train.candidates), aligned.train.labels)
+
+        metrics: PairMetrics | None = None
+        if aligned.valid.candidates:
+            judgements = list(self.module.forward(iter(aligned.valid.candidates)))
+            gold_pairs = {
+                frozenset({str(c.left.id), str(c.right.id)})
+                for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
+                if label
+            }
+            metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
+
+        return FitReport.build(
+            trainable=f"{matcher_name} (SupervisedFitMixin)",
+            trained=True,
+            n_train=len(aligned.train.labels),
+            n_valid=len(aligned.valid.labels),
+            split=split,
+            seed=seed,
+            coverage=aligned.coverage,
+            threshold=self.clusterer.threshold,
+            metrics=metrics,
+            run_ref=current_run.get(),
+        )
 
     def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
         """Block records into candidates, attaching comparisons if configured.
@@ -544,7 +1199,7 @@ class Resolver:
         comparator configured (the default for ``Resolver.from_schema``) --
         a caller that instead reaches into e.g. ``bench.build_blocker().stream(records)``
         directly gets candidates WITHOUT comparison vectors, which silently
-        changes what a comparison-reading judge (e.g. ``WeightedAverageJudge``)
+        changes what a comparison-reading judge (e.g. ``WeightedAverageMatcher``)
         sees.
 
         Prefer this over a raw ``blocker.stream(...)`` generator whenever the
@@ -565,8 +1220,46 @@ class Resolver:
         return list(self._candidates(records))
 
     def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
-        """Block records into candidates and score them into judgements."""
-        return self.module.forward(self._candidates(records))
+        """Block records into candidates, score them, and calibrate if fitted.
+
+        When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
+        every ranking judgement's raw ``score`` is mapped to a calibrated
+        probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
+        clusterer thresholds on a real probability. Pure pass-through otherwise.
+        """
+        judgements = self.module.forward(self._candidates(records))
+        if self.calibrator is None:
+            return judgements
+        return self._apply_calibrator(judgements, self.calibrator)
+
+    def _apply_calibrator(
+        self, judgements: Iterator[PairwiseJudgement], calibrator: CalibratorFitMixin
+    ) -> Iterator[PairwiseJudgement]:
+        """Map each ranking judgement's ``score`` through the fitted calibrator.
+
+        Deciders (``score is None``) pass through untouched -- there is no score to
+        calibrate. A mapped judgement keeps its ids/decision, retags
+        ``score_type="calibrated_prob"``, and records the raw score under
+        ``provenance["calibration"]`` for auditability.
+        """
+        for judgement in judgements:
+            if judgement.score is None:
+                yield judgement
+                continue
+            calibrated = calibrator.transform([judgement.score])[0]
+            yield judgement.model_copy(
+                update={
+                    "score": calibrated,
+                    "score_type": "calibrated_prob",
+                    "provenance": {
+                        **judgement.provenance,
+                        "calibration": {
+                            "method": getattr(calibrator, "method", None),
+                            "raw_score": judgement.score,
+                        },
+                    },
+                }
+            )
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.
@@ -695,15 +1388,19 @@ class Resolver:
     # ------------------------------------------------------------------
 
     def _slots(self) -> list[tuple[str, object]]:
-        """Ordered (slot_name, component) pairs, skipping an absent comparator.
+        """Ordered (slot_name, component) pairs, skipping absent optional slots.
 
         The slot name doubles as the sidecar subdirectory name for components
-        that own out-of-band state.
+        that own out-of-band state. The comparator and calibrator are optional
+        slots, emitted only when set; the clusterer stays last so the legacy
+        positional load fallback (``ordered[-1]`` is the clusterer) still holds.
         """
         slots: list[tuple[str, object]] = [("blocker", self.blocker)]
         if self.comparator is not None:
             slots.append(("comparator", self.comparator))
         slots.append(("module", self.module))
+        if self.calibrator is not None:
+            slots.append(("calibrator", self.calibrator))
         slots.append(("clusterer", self.clusterer))
         return slots
 
@@ -823,12 +1520,14 @@ class Resolver:
         # with a custom ``type_name`` (e.g. a "phonetic_comparator" Comparator)
         # still loads into the right slot. Older/hand-written manifests have no
         # ``slot``; those fall back to positional + type_name identification.
+        calibrator_spec: ComponentSpec | None = None
         by_slot = {spec.slot: spec for spec in manifest.components if spec.slot}
         if by_slot:
             blocker_spec = by_slot.get("blocker")
             comparator_spec = by_slot.get("comparator")
             module_spec = by_slot.get("module")
             clusterer_spec = by_slot.get("clusterer")
+            calibrator_spec = by_slot.get("calibrator")
             if blocker_spec is None or module_spec is None or clusterer_spec is None:
                 raise ValueError(
                     "Malformed artifact manifest: missing required slot among "
@@ -864,12 +1563,18 @@ class Resolver:
         )
         module = _rebuild_component(module_spec, state_dir=in_dir / "module")
         clusterer = _rebuild_component(clusterer_spec, state_dir=in_dir / "clusterer")
+        calibrator = (
+            _rebuild_component(calibrator_spec, state_dir=in_dir / "calibrator")
+            if calibrator_spec is not None
+            else None
+        )
 
         return cls(
             blocker=blocker,
             comparator=comparator,
-            module=module,
+            matcher=module,
             clusterer=clusterer,
+            calibrator=calibrator,
         )
 
     @staticmethod

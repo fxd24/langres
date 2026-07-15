@@ -19,10 +19,10 @@ at the grid-capped threshold) are stable.
 
 | dataset | scorer | thr | pair_P | pair_R | pair_F1 | bc_P | bc_R | bc_F1 | clus_F1 | floor_F1 | Δ_floor | usd | s/pair |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fodors_zagat | RapidfuzzModule | 0.80 | 0.6857 | 0.7273 | 0.7059 | 0.9922 | 0.9651 | 0.9785 | 0.8136 | 0.9317 | +0.0468 | 0.0000 | 0.003731 |
+| fodors_zagat | RapidfuzzMatcher | 0.80 | 0.6857 | 0.7273 | 0.7059 | 0.9922 | 0.9651 | 0.9785 | 0.8136 | 0.9317 | +0.0468 | 0.0000 | 0.003731 |
 | fodors_zagat | weighted_average_judge | 0.80 | 0.6944 | 0.7576 | 0.7246 | 0.9910 | 0.9690 | 0.9799 | 0.8197 | 0.9317 | +0.0482 | 0.0000 | 0.003739 |
 | fodors_zagat | embedding_score_judge | 0.80 | 0.0554 | 1.0000 | 0.1049 | 0.1988 | 1.0000 | 0.3316 | 0.0034 | 0.9317 | -0.6000 | 0.0000 | 0.003655 |
-| amazon_google | RapidfuzzModule | 0.80 | 0.0468 | 0.0976 | 0.0633 | 0.7156 | 0.7642 | 0.7391 | 0.0322 | 0.8545 | -0.1154 | 0.0000 | 0.000105 |
+| amazon_google | RapidfuzzMatcher | 0.80 | 0.0468 | 0.0976 | 0.0633 | 0.7156 | 0.7642 | 0.7391 | 0.0322 | 0.8545 | -0.1154 | 0.0000 | 0.000105 |
 | amazon_google | weighted_average_judge | 0.80 | 0.1538 | 0.1857 | 0.1683 | 0.8415 | 0.7902 | 0.8151 | 0.1353 | 0.8545 | -0.0394 | 0.0000 | 0.000106 |
 | amazon_google | embedding_score_judge | 0.80 | 0.1358 | 0.9357 | 0.2372 | 0.4538 | 0.9879 | 0.6219 | 0.0248 | 0.8545 | -0.2326 | 0.0000 | 0.000096 |
 
@@ -30,10 +30,10 @@ at the grid-capped threshold) are stable.
 
 | method | dataset | seed | threshold | bcubed_f1 | pair_f1 | usd_total | s_per_pair |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| RapidfuzzModule | fodors_zagat | 0 | 0.80 | 0.9785 | 0.7059 | 0.0000 | 0.003731 |
+| RapidfuzzMatcher | fodors_zagat | 0 | 0.80 | 0.9785 | 0.7059 | 0.0000 | 0.003731 |
 | weighted_average_judge | fodors_zagat | 0 | 0.80 | 0.9799 | 0.7246 | 0.0000 | 0.003739 |
 | embedding_score_judge | fodors_zagat | 0 | 0.80 | 0.3316 | 0.1049 | 0.0000 | 0.003655 |
-| RapidfuzzModule | amazon_google | 0 | 0.80 | 0.7391 | 0.0633 | 0.0000 | 0.000105 |
+| RapidfuzzMatcher | amazon_google | 0 | 0.80 | 0.7391 | 0.0633 | 0.0000 | 0.000105 |
 | weighted_average_judge | amazon_google | 0 | 0.80 | 0.8151 | 0.1683 | 0.0000 | 0.000106 |
 | embedding_score_judge | amazon_google | 0 | 0.80 | 0.6219 | 0.2372 | 0.0000 | 0.000096 |
 

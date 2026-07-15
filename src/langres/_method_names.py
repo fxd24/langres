@@ -9,7 +9,7 @@ ZERO_SPEND_METHODS: tuple[str, ...] = ("rapidfuzz", "weighted_average", "embeddi
 #: client the others take — see :func:`_make_module_builder`. ``select_judge``
 #: (W1.1, ComEM-style set-wise) additionally makes ONE LLM call per anchor
 #: GROUP instead of one call per pair — see
-#: :class:`~langres.core.modules.select_judge.SelectJudge`.
+#: :class:`~langres.core.matchers.select_judge.SelectMatcher`.
 LLM_METHODS: tuple[str, ...] = ("llm_judge", "cascade", "dspy_judge", "select_judge")
 
 #: Every method the registry can build, in race order.

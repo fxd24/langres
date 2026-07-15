@@ -1,10 +1,10 @@
-"""M4 DSPyJudge smoke: Signature -> ChainOfThought -> compile -> forward -> eval -> save/load.
+"""M4 DSPyMatcher smoke: Signature -> ChainOfThought -> compile -> forward -> eval -> save/load.
 
 The whole flow at **$0** with DSPy's ``DummyLM`` (no key, no network) on a handful
 of Amazon-Google test pairs — the plumbing a programmer using langres would drive:
 
 1. build ER candidates from the fixed AG pair split;
-2. compile a ``DSPyJudge`` against a tiny gold trainset (``BootstrapFewShot``);
+2. compile a ``DSPyMatcher`` against a tiny gold trainset (``BootstrapFewShot``);
 3. score the candidates and grade them with ``evaluate_judge_on_candidates``;
 4. save the compiled Resolver, reload it, and assert the reloaded judge scores the
    candidates identically — proving the compiled program round-trips.
@@ -27,7 +27,7 @@ from dspy.utils.dummies import DummyLM
 from langres.core import AllPairsBlocker, Clusterer, Resolver
 from langres.core.benchmark import evaluate_judge_on_candidates
 from langres.core.models import ERCandidate
-from langres.core.modules.dspy_judge import DSPyJudge
+from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.data.amazon_google import (
     ProductSchema,
     load_amazon_google,
@@ -57,7 +57,7 @@ def build_ag_smoke_candidates(
     """Build a balanced handful of ER candidates from the fixed AG test pair split.
 
     Reuses ``m3_race``'s pattern (corpus by id + fixed pair rows) but skips the
-    MiniLM embedding step — ``DSPyJudge`` reads the raw records, not a cosine — so
+    MiniLM embedding step — ``DSPyMatcher`` reads the raw records, not a cosine — so
     the smoke stays fast and $0. Takes ``per_class`` positive and ``per_class``
     negative rows so the trainset carries both labels (bootstrap can collect
     match-demos and the eval has real positives). Returns the candidates plus the
@@ -103,14 +103,14 @@ def _trainset(
 
 
 def run_smoke() -> None:
-    """Run the full zero-spend DSPyJudge plumbing and assert the round-trip is faithful."""
+    """Run the full zero-spend DSPyMatcher plumbing and assert the round-trip is faithful."""
     candidates, gold = build_ag_smoke_candidates()
     logger.info("Built %d AG candidates (%d positive gold pairs).", len(candidates), len(gold))
 
-    # 1) Compile a DSPyJudge against the tiny gold trainset (deterministic under DummyLM).
-    judge: DSPyJudge[ProductSchema] = DSPyJudge(lm=_dummy_lm(), entity_noun="product")
+    # 1) Compile a DSPyMatcher against the tiny gold trainset (deterministic under DummyLM).
+    judge: DSPyMatcher[ProductSchema] = DSPyMatcher(lm=_dummy_lm(), entity_noun="product")
     judge.compile(_trainset(candidates, gold), optimizer="bootstrap")
-    logger.info("Compiled DSPyJudge (bootstrap). compiled=%s", judge._compiled)
+    logger.info("Compiled DSPyMatcher (bootstrap). compiled=%s", judge._compiled)
 
     # 2) Score + grade the candidates at the pair level.
     result, _judgements = evaluate_judge_on_candidates(judge, candidates, gold, GRID)
@@ -129,7 +129,7 @@ def run_smoke() -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=ProductSchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     out_dir = Path("tmp/m4_dspy_smoke_artifact")
@@ -141,7 +141,7 @@ def run_smoke() -> None:
     before = [j.score for j in judge.forward(iter(candidates))]
 
     reloaded = Resolver.load(out_dir)
-    assert isinstance(reloaded.module, DSPyJudge)
+    assert isinstance(reloaded.module, DSPyMatcher)
     reloaded.module._lm = _dummy_lm()
     after = [j.score for j in reloaded.module.forward(iter(candidates))]
 
@@ -151,7 +151,7 @@ def run_smoke() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="M4 DSPyJudge smoke ($0, DummyLM).")
+    parser = argparse.ArgumentParser(description="M4 DSPyMatcher smoke ($0, DummyLM).")
     parser.add_argument(
         "--smoke",
         action="store_true",

@@ -1,4 +1,4 @@
-"""LLMJudge: serializable LLM-based entity-matching Module.
+"""LLMMatcher: serializable LLM-based entity-matching Matcher.
 
 This module uses OpenAI API (or compatible) for match judgments with natural
 language reasoning and calibrated probability scores.
@@ -9,11 +9,12 @@ Supports both direct OpenAI client and LiteLLM for enhanced observability.
 import asyncio
 import logging
 import math
+import os
 import re
 import string
 import time
 from collections.abc import Callable, Iterator
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import litellm
 from pydantic import BaseModel
@@ -25,12 +26,18 @@ except ImportError:
     RateLimitError = Exception
 
 from langres.clients.openrouter import parse_openrouter_billing
+from langres.core.matchers.model_ref import ModelRef, normalize_model_ref, to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import current_run
 from langres.core.usage import LLMUsage
+
+if TYPE_CHECKING:
+    # Torch/transformers-backed; imported lazily at runtime (never at module load)
+    # inside _inprocess_backend so the heavy stack stays out of a bare import.
+    from langres.core.matchers.transformers_backend import TransformersBackend
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +78,12 @@ def render_default_prompt(entity_noun: str = "entity") -> str:
 
 
 class LLMParseError(ValueError):
-    """Raised by :class:`LLMJudge` when ``on_parse_error='raise'`` and the
+    """Raised by :class:`LLMMatcher` when ``on_parse_error='raise'`` and the
     configured ``response_parser`` could not parse a score from a response."""
 
 
 class ParsedVerdict(BaseModel):
-    """The output of an :class:`LLMJudge` ``response_parser``.
+    """The output of an :class:`LLMMatcher` ``response_parser``.
 
     A parser returns EITHER a ``decision`` (the binary yes/no family) XOR a
     ``score`` (the rating family) — never both:
@@ -134,7 +141,7 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
     ``"yes" in text`` maps to ``True`` (MATCH) else ``False``. ``langres.data.
     peeters.parse_binary_answer`` is a thin ``int`` adapter over this function;
     there is only one code path so the ``$0`` offline replay validates the exact
-    parser the paid ``LLMJudge(response_parser=...)`` run will use.
+    parser the paid ``LLMMatcher(response_parser=...)`` run will use.
 
     Fidelity to the reference beats cleverness, so the crudeness is preserved on
     purpose:
@@ -160,7 +167,7 @@ def parse_binary_yes_no(content: str) -> ParsedVerdict:
 
 #: Below this combined yes+no probability mass, a first-token credence is refused
 #: (``p_yes=None``) rather than manufactured from noise — see
-#: :meth:`LLMJudge._confidence_from_response`.
+#: :meth:`LLMMatcher._confidence_from_response`.
 _CONFIDENCE_MASS_FLOOR = 1e-9
 
 
@@ -186,9 +193,9 @@ def default_record_serializer(entity: Any) -> str:
 
 
 #: Named ``response_parser`` registry: these names are accepted anywhere a
-#: parser is (``LLMJudge(response_parser=...)``, the verbs' / ``from_schema``'s
-#: ``judge="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
-#: in :attr:`LLMJudge.config`, so a saved paper-replication judge reloads with
+#: parser is (``LLMMatcher(response_parser=...)``, the verbs' / ``from_schema``'s
+#: ``matcher="prompt_llm"`` seam) and -- unlike a bare callable -- **serialize**
+#: in :attr:`LLMMatcher.config`, so a saved paper-replication judge reloads with
 #: its parser intact (the model-identity design note's round-trip fix).
 #: Adding an entry makes that name resolvable and serializable in-process.
 RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
@@ -197,7 +204,7 @@ RESPONSE_PARSERS: dict[str, Callable[[str], ParsedVerdict]] = {
 }
 
 #: Named ``record_serializer`` registry -- same contract as
-#: :data:`RESPONSE_PARSERS` (names serialize in :attr:`LLMJudge.config`;
+#: :data:`RESPONSE_PARSERS` (names serialize in :attr:`LLMMatcher.config`;
 #: custom callables do not).
 RECORD_SERIALIZERS: dict[str, Callable[[Any], str]] = {
     "json": default_record_serializer,
@@ -214,7 +221,7 @@ def _resolve_named(
     """Resolve a parser/serializer given by name, callable, or ``None``.
 
     Returns ``(callable, name)`` where ``name`` is the registered name to
-    serialize in :attr:`LLMJudge.config` -- ``None`` for a custom callable that
+    serialize in :attr:`LLMMatcher.config` -- ``None`` for a custom callable that
     is not in ``registry`` (documented as non-serializable: it reverts to the
     default on load).
 
@@ -330,8 +337,69 @@ class _RateLimiter:
             self._token_usage.append((time.time(), token_count))
 
 
+# Known LiteLLM provider-route prefixes. A ``model`` carrying one of these (or no
+# ``/`` at all, i.e. a bare OpenAI-style name like ``gpt-5-mini``) is an API model
+# served over the wire; a bare ``org/name`` that matches NONE of these is treated
+# as an HF Hub id and run in-process. This is a heuristic — ``api_base`` (served
+# endpoint) and a base+adapter ``ModelRef`` (always in-process) are unambiguous and
+# decided first; see :func:`_default_backend_kind`.
+_API_MODEL_PREFIXES = (
+    "openrouter/",
+    "openai/",
+    "azure/",
+    "azure_ai/",
+    "anthropic/",
+    "gemini/",
+    "vertex_ai/",
+    "bedrock/",
+    "together_ai/",
+    "fireworks_ai/",
+    "groq/",
+    "mistral/",
+    "codestral/",
+    "cohere/",
+    "deepseek/",
+    "deepinfra/",
+    "perplexity/",
+    "xai/",
+    "cerebras/",
+    "sambanova/",
+    "huggingface/",
+    "ollama/",
+    "ollama_chat/",
+    "replicate/",
+    "watsonx/",
+)
+
+
+def _default_backend_kind(
+    ref: ModelRef, api_base: str | None
+) -> Literal["litellm", "transformers"]:
+    """Route a :class:`ModelRef` (+ optional ``api_base``) to a completion backend.
+
+    Decision order, unambiguous cases first:
+
+    1. **base+adapter** (``ref.adapter`` set) → ``"transformers"`` — an unmerged
+       PEFT adapter can only be assembled in-process.
+    2. **``api_base`` set** → ``"litellm"`` — a served (vLLM/Ollama/OpenAI-compatible)
+       endpoint is reached through litellm regardless of the model id's shape.
+    3. **existing local directory** → ``"transformers"``.
+    4. **bare name (no ``/``) or a known provider prefix** → ``"litellm"``.
+    5. otherwise (an ``org/name`` HF Hub id) → ``"transformers"``.
+    """
+    if ref.adapter is not None:
+        return "transformers"
+    if api_base is not None:
+        return "litellm"
+    if os.path.isdir(ref.base):
+        return "transformers"
+    if "/" not in ref.base or ref.base.startswith(_API_MODEL_PREFIXES):
+        return "litellm"
+    return "transformers"
+
+
 @register("llm_judge")
-class LLMJudge(Module[SchemaT]):
+class LLMMatcher(Matcher[SchemaT]):
     """Schema-agnostic LLM-based matching module using LiteLLM.
 
     This module uses an LLM to make match judgments with natural language
@@ -355,7 +423,7 @@ class LLMJudge(Module[SchemaT]):
 
     Example:
         # Happy path: build the client from environment.
-        module = LLMJudge.from_env(model="gpt-5-mini")
+        module = LLMMatcher.from_env(model="gpt-5-mini")
 
         for judgement in module.forward(candidates):
             print(f"{judgement.left_id} vs {judgement.right_id}: {judgement.score}")
@@ -366,7 +434,7 @@ class LLMJudge(Module[SchemaT]):
         # Escape hatch: inject a pre-configured client (e.g. in tests).
         from langres.clients import create_llm_client, Settings
 
-        module = LLMJudge(client=create_llm_client(Settings()), model="gpt-5-mini")
+        module = LLMMatcher(client=create_llm_client(Settings()), model="gpt-5-mini")
 
     Note:
         Defaults to ``gpt-5-mini`` at ``temperature=0.0`` (deterministic, the ER
@@ -383,6 +451,16 @@ class LLMJudge(Module[SchemaT]):
         ``provider={"order": ["DeepInfra"], "allow_fallbacks": False}`` or
         ``provider={"only": ["Together"]}``. It is sent as OpenRouter's
         ``extra_body["provider"]`` routing block. Off OpenRouter it is ignored.
+
+    Note:
+        The same matcher runs a model over an **API** or **in-process**, decided
+        from ``model`` + ``api_base`` (see :meth:`__init__` and
+        :func:`_default_backend_kind`): an API name goes through litellm; a served
+        endpoint (``api_base=``) through litellm to that URL; an HF id / local dir
+        / base+adapter ref runs locally via a lazily-loaded transformers backend.
+        Both backends feed the identical parse + first-token-logprob→score step,
+        so ``run your fine-tuned model`` needs no new judge — just a different
+        ``model`` / ``api_base``. See ``examples/serve_your_model.py``.
     """
 
     # Registry key, mirrored as a class attribute so the Resolver's uniform
@@ -392,19 +470,20 @@ class LLMJudge(Module[SchemaT]):
     def __init__(
         self,
         client: Any = None,
-        model: str = "gpt-5-mini",
+        model: str | dict[str, str] = "gpt-5-mini",
         temperature: float = 0.0,
         prompt_template: str | None = None,
         entity_noun: str = "entity",
         provider: dict[str, Any] | None = None,
         *,
+        api_base: str | None = None,
         system_prompt: str | None = None,
         response_parser: Callable[[str], ParsedVerdict] | str | None = None,
         record_serializer: Callable[[Any], str] | str | None = None,
         on_parse_error: Literal["abstain", "raise"] = "abstain",
         confidence: Literal["none", "logprob"] = "none",
     ):
-        """Initialize LLMJudge.
+        """Initialize LLMMatcher.
 
         Args:
             client: Optional pre-configured LLM client (LiteLLM or OpenAI
@@ -412,10 +491,32 @@ class LLMJudge(Module[SchemaT]):
                 from the environment via ``create_llm_client(Settings())`` on
                 first use. Inject a client only as an escape hatch (e.g. tests
                 or a custom client); use :meth:`from_env` for the happy path.
-            model: Model name (e.g., "gpt-5-mini", "azure/gpt-5-mini")
+            model: The model to run, as a *weightless reference* (see
+                :class:`~langres.core.matchers.model_ref.ModelRef`):
+
+                - an API model name — ``"gpt-5-mini"``, ``"azure/gpt-5-mini"``,
+                  ``"openrouter/..."`` — served over the wire via litellm;
+                - an HF Hub id (``"your-org/your-ft-model"``) or a local model
+                  directory — run **in-process** via a lazily-loaded transformers
+                  backend (no server), unless ``api_base`` points at a served
+                  endpoint; or
+                - a base+adapter dict ``{"base": ..., "adapter": ...}`` (a QLoRA
+                  fine-tune served unmerged) — always run in-process.
+
+                The in-process route is chosen automatically for a local dir / HF
+                id / base+adapter ref when no ``api_base`` is given (see
+                :func:`_default_backend_kind`).
+            api_base: Optional base URL of a served, OpenAI-compatible endpoint
+                (vLLM, Ollama, a hosted gateway). When set, the request is routed
+                there via litellm with ``model`` as the served model id — this is
+                how you run *your own* fine-tuned model behind ``vllm serve`` /
+                ``ollama`` through the normal judge path. ``None`` (default) keeps
+                the provider's own endpoint (or the in-process backend for a local
+                model). Round-trips in :attr:`config` (a reference string, never
+                weights).
             temperature: Sampling temperature (0.0 = deterministic, 2.0 = random).
                 Defaults to ``0.0`` — ER papers score at temperature 0 for
-                reproducibility, and the sibling ``DSPyJudge`` already defaults
+                reproducibility, and the sibling ``DSPyMatcher`` already defaults
                 to 0.0 (this makes 0.0 the house default for the judge family).
             prompt_template: Custom prompt template. Must contain both ``{left}``
                 and ``{right}`` placeholders (the two records are substituted in
@@ -487,7 +588,17 @@ class LLMJudge(Module[SchemaT]):
             raise ValueError("confidence must be 'none' or 'logprob'")
 
         self.client = client
-        self.model = model
+        self.model_ref = normalize_model_ref(model)
+        # ``self.model`` stays the base id *string* for every existing consumer
+        # (litellm ``model=``, provenance, ``LLMUsage``); the full weightless ref
+        # (including any PEFT adapter) lives on ``self.model_ref``, and the raw
+        # ref serializes in :attr:`config` via :func:`to_config`.
+        self.model = self.model_ref.base
+        self.api_base = api_base
+        # Route to a backend once at construction (inputs are fixed): avoids a
+        # per-candidate filesystem stat and keeps sync/async paths consistent.
+        self._backend_kind = _default_backend_kind(self.model_ref, api_base)
+        self._backend: TransformersBackend | None = None
         self.temperature = temperature
         self.entity_noun = entity_noun
         self.provider = provider
@@ -514,8 +625,8 @@ class LLMJudge(Module[SchemaT]):
         cls,
         model: str = "gpt-5-mini",
         **kwargs: Any,
-    ) -> "LLMJudge[SchemaT]":
-        """Build an LLMJudge with a client constructed from the environment.
+    ) -> "LLMMatcher[SchemaT]":
+        """Build an LLMMatcher with a client constructed from the environment.
 
         The documented happy path: reads provider/tracing config from env via
         ``create_llm_client(Settings())``. ``kwargs`` are forwarded to
@@ -551,7 +662,12 @@ class LLMJudge(Module[SchemaT]):
         need it.
         """
         return {
-            "model": self.model,
+            # ``model`` serializes the full weightless ref: a plain string is
+            # byte-identical to before, a base+adapter widens to a dict (see
+            # ``to_config``). ``api_base`` (served-endpoint URL) round-trips too, so
+            # a resolver pointed at a served model reloads pointed at it.
+            "model": to_config(self.model_ref),
+            "api_base": self.api_base,
             "temperature": self.temperature,
             "prompt_template": self.prompt_template,
             "entity_noun": self.entity_noun,
@@ -564,18 +680,23 @@ class LLMJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "LLMJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "LLMMatcher[SchemaT]":
         """Rebuild from :attr:`config` via the lazy-client path (client from env).
 
-        Older artifacts without ``system_prompt`` / ``on_parse_error`` /
-        ``confidence`` / ``response_parser`` / ``record_serializer`` fall back
-        to the constructor defaults (``None`` / ``"abstain"`` / ``"none"`` /
-        the ``"score"`` parser / the ``"json"`` serializer).
+        Older artifacts without ``api_base`` / ``system_prompt`` /
+        ``on_parse_error`` / ``confidence`` / ``response_parser`` /
+        ``record_serializer`` fall back to the constructor defaults (``None`` /
+        ``None`` / ``"abstain"`` / ``"none"`` / the ``"score"`` parser / the
+        ``"json"`` serializer).
         """
         provider = config.get("provider")
         return cls(
             client=None,
-            model=str(config["model"]),
+            # ``model`` may be a str (plain/HF/local) or a base+adapter dict —
+            # ``normalize_model_ref`` in ``__init__`` accepts both, so it is passed
+            # through unchanged (no ``str()`` coercion that would mangle the dict).
+            model=config["model"],  # type: ignore[arg-type]
+            api_base=config.get("api_base"),  # type: ignore[arg-type]
             temperature=float(config["temperature"]),  # type: ignore[arg-type]
             prompt_template=str(config["prompt_template"]),
             entity_noun=str(config["entity_noun"]),
@@ -621,6 +742,36 @@ class LLMJudge(Module[SchemaT]):
         if self.confidence != "logprob":
             return {}
         return {"logprobs": True, "top_logprobs": 20}
+
+    def _api_kwargs(self) -> dict[str, Any]:
+        """Optional ``api_base`` override for a served, OpenAI-compatible endpoint.
+
+        Returns ``{"api_base": self.api_base}`` when :attr:`api_base` is set (a
+        vLLM/Ollama/gateway URL litellm routes the completion to), else ``{}``.
+        Merged at the completion call sites the **same** way as
+        :meth:`_logprobs_kwargs` and deliberately kept **out** of
+        :meth:`_completion_kwargs` — that method early-returns ``{}`` for any
+        non-``openrouter/`` model, so folding ``api_base`` into it would silently
+        drop it for a served OpenAI-compatible endpoint (and on the async path).
+        """
+        if self.api_base is None:
+            return {}
+        return {"api_base": self.api_base}
+
+    def _inprocess_backend(self) -> "TransformersBackend":
+        """The lazily-built in-process transformers backend for this matcher.
+
+        Constructed on first use from :attr:`model_ref` and cached; importing the
+        backend module (and torch/transformers) is deferred to here so a matcher
+        on the served/API path never pays the heavy import. Tests inject a fake via
+        ``matcher._backend = ...`` to exercise the shared logprob→score step
+        without torch.
+        """
+        if self._backend is None:
+            from langres.core.matchers.transformers_backend import TransformersBackend
+
+            self._backend = TransformersBackend(self.model_ref)
+        return self._backend
 
     def _confidence_from_response(self, response: Any) -> dict[str, Any] | None:
         """First-token P(Yes) credence from logprobs, or ``None`` when unavailable.
@@ -741,31 +892,46 @@ class LLMJudge(Module[SchemaT]):
                 candidate.right.id,  # type: ignore[attr-defined]
             )
 
-            # Call client (works for both LiteLLM and OpenAI)
-            client = self._get_client()
-            completion_kwargs = self._completion_kwargs()
-            # Standard top-level logprobs request (credence probe). Merged here,
-            # NOT inside _completion_kwargs (which returns {} off openrouter/ and
-            # would drop logprobs on plain OpenAI). {} when confidence is off.
-            completion_kwargs.update(self._logprobs_kwargs())
-            # Run correlation (S5): stamp the active tracking run + pair identity
-            # into litellm's ``metadata`` param (shared with the async path via
-            # ``_run_correlation_metadata``). ``None`` off a run keeps the call
-            # byte-identical -- no ``metadata`` key is added.
-            metadata = self._run_correlation_metadata(
-                client,
-                candidate.left.id,  # type: ignore[attr-defined]
-                candidate.right.id,  # type: ignore[attr-defined]
-                "llm_judgment",
-            )
-            if metadata is not None:
-                completion_kwargs["metadata"] = metadata
-            response = client.completion(
-                model=self.model,
-                messages=self._messages(prompt),
-                temperature=self.temperature,
-                **completion_kwargs,
-            )
+            if self._backend_kind == "transformers":
+                # In-process transformers backend: no client, no OpenRouter /
+                # api_base extras, no run-correlation metadata -- generation is
+                # local. The response mimics litellm's shape so the parse +
+                # confidence path below is identical to the served path.
+                response = self._inprocess_backend().complete(
+                    messages=self._messages(prompt),
+                    temperature=self.temperature,
+                    want_logprobs=self.confidence == "logprob",
+                )
+            else:
+                # Call client (works for both LiteLLM and OpenAI)
+                client = self._get_client()
+                completion_kwargs = self._completion_kwargs()
+                # Standard top-level logprobs request (credence probe). Merged here,
+                # NOT inside _completion_kwargs (which returns {} off openrouter/ and
+                # would drop logprobs on plain OpenAI). {} when confidence is off.
+                completion_kwargs.update(self._logprobs_kwargs())
+                # api_base: route to a served OpenAI-compatible endpoint (vLLM/
+                # Ollama/gateway) when set. Merged like logprobs, not folded into
+                # _completion_kwargs (which drops it off openrouter/). {} when unset.
+                completion_kwargs.update(self._api_kwargs())
+                # Run correlation (S5): stamp the active tracking run + pair identity
+                # into litellm's ``metadata`` param (shared with the async path via
+                # ``_run_correlation_metadata``). ``None`` off a run keeps the call
+                # byte-identical -- no ``metadata`` key is added.
+                metadata = self._run_correlation_metadata(
+                    client,
+                    candidate.left.id,  # type: ignore[attr-defined]
+                    candidate.right.id,  # type: ignore[attr-defined]
+                    "llm_judgment",
+                )
+                if metadata is not None:
+                    completion_kwargs["metadata"] = metadata
+                response = client.completion(
+                    model=self.model,
+                    messages=self._messages(prompt),
+                    temperature=self.temperature,
+                    **completion_kwargs,
+                )
 
             # Parse the verdict + fold in the optional first-token logprob
             # credence; an abstain routes through ``on_parse_error`` (never a
@@ -828,7 +994,7 @@ class LLMJudge(Module[SchemaT]):
             from langres.clients import create_llm_client
 
             client = create_llm_client()
-            module = LLMJudgeModule(client=client, model="gpt-4o-mini")
+            module = LLMMatcher(client=client, model="gpt-4o-mini")
 
             # Process 100 candidates with async batching
             candidates = list(blocker.forward(data))
@@ -990,11 +1156,25 @@ class LLMJudge(Module[SchemaT]):
         Note:
             Implements exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s max
         """
+        if self._backend_kind == "transformers":
+            # In-process backend: run the (synchronous, torch) generation in a
+            # worker thread so it doesn't block the event loop. No rate limiting /
+            # retries -- there is no remote API to throttle. Shares the exact same
+            # ``complete`` seam as the sync path.
+            return await asyncio.to_thread(
+                self._inprocess_backend().complete,
+                self._messages(prompt),
+                temperature=self.temperature,
+                want_logprobs=self.confidence == "logprob",
+            )
         client = self._get_client()
         completion_kwargs = self._completion_kwargs()
         # Standard top-level logprobs request (credence probe) — mirror the sync
         # merge. Kept out of _completion_kwargs so it also reaches plain OpenAI.
         completion_kwargs.update(self._logprobs_kwargs())
+        # api_base: route to a served OpenAI-compatible endpoint when set -- mirror
+        # the sync merge so async judging reaches the same endpoint.
+        completion_kwargs.update(self._api_kwargs())
         # Run correlation (S5): mirror forward()'s litellm ``metadata`` injection
         # on the async path -- async judging inside ``capture_run`` would otherwise
         # lose trace correlation. ``None`` off a run keeps the call byte-identical.
@@ -1200,8 +1380,3 @@ class LLMJudge(Module[SchemaT]):
             ScoreInspectionReport with statistics, examples, and recommendations
         """
         return _inspect_scores_impl(judgements, sample_size)
-
-
-# Backward-compatible public alias. ``LLMJudge`` is the public name; existing
-# imports of ``LLMJudgeModule`` keep working.
-LLMJudgeModule = LLMJudge

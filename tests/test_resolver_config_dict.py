@@ -31,7 +31,7 @@ def _company_resolver() -> "object":
         Clusterer,
         Comparator,
         Resolver,
-        WeightedAverageJudge,
+        WeightedAverageMatcher,
     )
     from langres.core.models import CompanySchema
 
@@ -39,7 +39,7 @@ def _company_resolver() -> "object":
     return Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
-        module=WeightedAverageJudge(feature_specs=comparator.feature_specs),
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
         clusterer=Clusterer(threshold=0.7),
     )
 
@@ -108,14 +108,14 @@ def test_config_dict_writes_nothing_to_disk(tmp_path: Path) -> None:
 
 def test_config_dict_omits_absent_comparator() -> None:
     """``comparator=None`` yields a 3-slot snapshot, mirroring ``save()``'s ``_slots``."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageJudge
+    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=WeightedAverageJudge(feature_specs=[FeatureSpec(name="name")]),
+        matcher=WeightedAverageMatcher(feature_specs=[FeatureSpec(name="name")]),
         clusterer=Clusterer(threshold=0.7),
     )
 

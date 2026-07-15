@@ -68,7 +68,7 @@ def _judgement(prompt_tokens: object, completion_tokens: object) -> PairwiseJudg
 def _judgement_with_usage(prompt_tokens: int, completion_tokens: int) -> PairwiseJudgement:
     """A judgement carrying both the legacy token keys and the nested usage vector.
 
-    Mirrors what ``LLMJudge``/``DSPyJudge`` actually write (see
+    Mirrors what ``LLMMatcher``/``DSPyMatcher`` actually write (see
     ``llm_judge.py::_build_provenance``): the legacy ``prompt_tokens``/
     ``completion_tokens`` keys plus the full ``LLMUsage.model_dump()`` under
     ``"usage"``.

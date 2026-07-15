@@ -1,4 +1,4 @@
-"""Phase 1 (#80): the honest, $0 RandomForestJudge pair-level floor on AG + Abt-Buy.
+"""Phase 1 (#80): the honest, $0 RandomForestMatcher pair-level floor on AG + Abt-Buy.
 
 "Prove the seam" Phase 1 asks a blunt question: *before* spending a cent on an
 LLM judge, how far does a purely local, supervised baseline get on the standard
@@ -11,7 +11,7 @@ This script answers it with **zero spend** (rapidfuzz + scikit-learn only):
        turns each dataset's fixed ``(id_a, id_b, label)`` splits into
        ``ERCandidate`` objects carrying a
        :class:`~langres.core.comparator.StringComparator` comparison vector.
-    2. :class:`~langres.core.modules.random_forest_judge.RandomForestJudge` is
+    2. :class:`~langres.core.matchers.random_forest_judge.RandomForestMatcher` is
        fit on the FULL train split's candidates + labels.
     3. :func:`~langres.data.fixed_split_pair_benchmark.evaluate_fixed_split_honest`
        grades it on the FULL test split at a threshold DERIVED ON TRAIN (Youden),
@@ -50,7 +50,7 @@ from typing import Any  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from langres.core.metrics import PairMetrics  # noqa: E402
-from langres.core.modules.random_forest_judge import RandomForestJudge  # noqa: E402
+from langres.core.matchers.random_forest_judge import RandomForestMatcher  # noqa: E402
 from langres.data.abt_buy import (  # noqa: E402
     AbtBuySchema,
     load_abt_buy,
@@ -106,7 +106,7 @@ def _metrics_dict(metrics: PairMetrics) -> dict[str, float | int]:
 
 
 def run_rf_floor(benchmark: FixedSplitPairBenchmark[Any]) -> tuple[HonestPairEval, dict[str, Any]]:
-    """Fit RandomForestJudge on train and grade it honestly on the full test split.
+    """Fit RandomForestMatcher on train and grade it honestly on the full test split.
 
     Args:
         benchmark: The dataset's fixed-split adapter.
@@ -118,7 +118,7 @@ def run_rf_floor(benchmark: FixedSplitPairBenchmark[Any]) -> tuple[HonestPairEva
     train = benchmark.build("train")
     test = benchmark.build("test")
 
-    judge: RandomForestJudge[Any] = RandomForestJudge(feature_specs=benchmark.feature_specs)
+    judge: RandomForestMatcher[Any] = RandomForestMatcher(feature_specs=benchmark.feature_specs)
     judge.fit(iter(train.candidates), train.labels)
 
     result = evaluate_fixed_split_honest(judge, benchmark, derive_on="train")
@@ -126,7 +126,7 @@ def run_rf_floor(benchmark: FixedSplitPairBenchmark[Any]) -> tuple[HonestPairEva
     ditto = DITTO_F1[benchmark.name]
     artifact: dict[str, Any] = {
         "dataset": benchmark.name,
-        "method": "RandomForestJudge",
+        "method": "RandomForestMatcher",
         "comparator": (
             "StringComparator — one rapidfuzz token_sort_ratio similarity per "
             "string field (single-metric floor, NOT multi-metric Magellan-class)"
@@ -160,10 +160,10 @@ def run_rf_floor(benchmark: FixedSplitPairBenchmark[Any]) -> tuple[HonestPairEva
 def format_report(artifacts: list[dict[str, Any]]) -> str:
     """Render the combined Markdown summary for all datasets."""
     lines = [
-        "# Phase 1 — RandomForestJudge honest pair-level floor ($0)",
+        "# Phase 1 — RandomForestMatcher honest pair-level floor ($0)",
         "",
         "Single-metric `StringComparator` (one rapidfuzz `token_sort_ratio` per "
-        "field) + `RandomForestJudge`, graded on the **full standard test split** "
+        "field) + `RandomForestMatcher`, graded on the **full standard test split** "
         "at a threshold **derived on train** (Youden). `argmax_on_test` is the "
         "leaky ceiling (threshold tuned on test) shown only to expose the honesty "
         "delta. This is a floor to beat, not a Magellan-class multi-feature "
@@ -208,7 +208,7 @@ def main() -> None:
     artifacts: list[dict[str, Any]] = []
 
     print("=" * 78)
-    print("Phase 1 — RandomForestJudge honest pair-level floor (seed-free, $0)")
+    print("Phase 1 — RandomForestMatcher honest pair-level floor (seed-free, $0)")
     print("=" * 78)
 
     for name, schema, corpus_loader, pair_split_loader in datasets:

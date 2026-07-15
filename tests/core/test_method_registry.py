@@ -26,7 +26,7 @@ from langres.core.method_registry import (
     list_methods,
     register_method,
 )
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.presets import DEFAULT_AUTO_MODEL
 
 
@@ -36,7 +36,7 @@ class RegistryCompany(BaseModel):
     address: str | None = None
 
 
-def _build(name: str, *, client: Any = None, **params: Any) -> Module[Any]:
+def _build(name: str, *, client: Any = None, **params: Any) -> Matcher[Any]:
     """Build ``name``'s module with the standard call convention."""
     return get_method(name).build(
         RegistryCompany,
@@ -100,23 +100,23 @@ class TestBuiltinSpecs:
     @pytest.mark.parametrize(
         ("name", "class_name"),
         [
-            ("string", "WeightedAverageJudge"),
-            ("weighted_average", "WeightedAverageJudge"),
-            ("embedding", "EmbeddingScoreJudge"),
-            ("embedding_cosine", "EmbeddingScoreJudge"),
-            ("zero_shot_llm", "DSPyJudge"),
-            ("dspy_judge", "DSPyJudge"),
-            ("prompt_llm", "LLMJudge"),
-            ("llm_judge", "LLMJudge"),
-            ("select_judge", "SelectJudge"),
-            ("cascade", "CascadeModule"),
-            ("fellegi_sunter", "FellegiSunterJudge"),
-            ("random_forest", "RandomForestJudge"),
+            ("string", "WeightedAverageMatcher"),
+            ("weighted_average", "WeightedAverageMatcher"),
+            ("embedding", "EmbeddingScoreMatcher"),
+            ("embedding_cosine", "EmbeddingScoreMatcher"),
+            ("zero_shot_llm", "DSPyMatcher"),
+            ("dspy_judge", "DSPyMatcher"),
+            ("prompt_llm", "LLMMatcher"),
+            ("llm_judge", "LLMMatcher"),
+            ("select_judge", "SelectMatcher"),
+            ("cascade", "CascadeChainMatcher"),
+            ("fellegi_sunter", "FellegiSunterMatcher"),
+            ("random_forest", "RandomForestMatcher"),
         ],
     )
     def test_each_name_builds_exactly_one_class(self, name: str, class_name: str) -> None:
-        """One name, one meaning -- the pre-registry 'llm_judge builds LLMJudge
-        but zero_shot_llm builds DSPyJudge' split-brain cannot recur silently."""
+        """One name, one meaning -- the pre-registry 'llm_judge builds LLMMatcher
+        but zero_shot_llm builds DSPyMatcher' split-brain cannot recur silently."""
         module = _build(name, client=Mock() if name == "cascade" else None)
         assert type(module).__name__ == class_name
 
@@ -127,6 +127,25 @@ class TestBuiltinSpecs:
             assert spec.accepts_model is True, name
             assert spec.default_threshold == 0.7, name
             assert spec.requires_extra == "llm", name
+
+    def test_random_forest_declares_the_trained_extra(self) -> None:
+        """The supervised forest needs scikit-learn, so its spec names the extra."""
+        spec = get_method("random_forest")
+        assert spec.requires_extra == "trained"
+        assert spec.needs_comparator is True
+        assert spec.score_type == "prob_rf"
+
+    def test_trained_extra_error_is_actionable(self) -> None:
+        """The [trained]-absent path points at ``langres[trained]`` (mirrors the
+        LLM-family ``_llm_extra_error``), not a bare ModuleNotFoundError."""
+        from langres.core.method_registry import _trained_extra_error
+
+        err = _trained_extra_error("random_forest", "scikit-learn")
+        assert isinstance(err, ImportError)
+        message = str(err)
+        assert "[trained] extra" in message
+        assert "scikit-learn is not installed" in message
+        assert "langres[trained]" in message
 
     def test_embedding_reports_the_pinned_embedder_as_its_model(self) -> None:
         spec = get_method("embedding")
@@ -171,7 +190,7 @@ class TestThreeSitesResolveIdentically:
         from langres.core.resolver import Resolver
 
         via_presets = build_judge("string", RegistryCompany)
-        via_from_schema = Resolver.from_schema(RegistryCompany, judge="string").module
+        via_from_schema = Resolver.from_schema(RegistryCompany, matcher="string").module
         assert type(via_presets) is type(via_from_schema)
 
     def test_benchmark_path_builds_llm_judge_via_the_registry(self) -> None:
@@ -185,7 +204,7 @@ class TestThreeSitesResolveIdentically:
             cascade_low=0.3,
             cascade_high=0.9,
         )
-        assert type(build()).__name__ == "LLMJudge"
+        assert type(build()).__name__ == "LLMMatcher"
         assert comparator is None
 
     def test_benchmark_path_unknown_method_is_a_value_error_with_suggestions(self) -> None:
@@ -204,7 +223,7 @@ class TestThreeSitesResolveIdentically:
     def test_from_schema_prompt_llm_saves_and_loads_the_named_parser(self, tmp_path: Any) -> None:
         """#103's acceptance shape: a bring-your-own-prompt judge is expressible
         by name, serializable, and round-trips its registered parser."""
-        from langres.core.modules.llm_judge import LLMJudge, parse_binary_yes_no
+        from langres.core.matchers.llm_judge import LLMMatcher, parse_binary_yes_no
         from langres.core.registry import _SCHEMA_REGISTRY, register_schema
         from langres.core.resolver import Resolver
 
@@ -212,18 +231,18 @@ class TestThreeSitesResolveIdentically:
             register_schema("RegistryCompany")(RegistryCompany)
         resolver = Resolver.from_schema(
             RegistryCompany,
-            judge="prompt_llm",
+            matcher="prompt_llm",
             prompt_template="Same {entity}? A: {left} B: {right}".replace("{entity}", "company"),
             system_prompt="You are a matcher.",
             response_parser="binary_yes_no",
         )
         module = resolver.module
-        assert isinstance(module, LLMJudge)
+        assert isinstance(module, LLMMatcher)
         assert module.config["response_parser"] == "binary_yes_no"
 
         resolver.save(tmp_path / "artifact")
         loaded = Resolver.load(tmp_path / "artifact")
-        assert isinstance(loaded.module, LLMJudge)
+        assert isinstance(loaded.module, LLMMatcher)
         assert loaded.module._parse is parse_binary_yes_no
         assert loaded.module.prompt_template == module.prompt_template
         assert loaded.module.system_prompt == "You are a matcher."
@@ -232,4 +251,6 @@ class TestThreeSitesResolveIdentically:
         from langres.core.resolver import Resolver
 
         with pytest.raises(ValueError, match="prompt_llm"):
-            Resolver.from_schema(RegistryCompany, judge="string", prompt_template="x{left}{right}")
+            Resolver.from_schema(
+                RegistryCompany, matcher="string", prompt_template="x{left}{right}"
+            )

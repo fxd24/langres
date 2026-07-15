@@ -2,7 +2,7 @@
 
 "Prove the seam" Phase 1 has an RF-judge $0 *floor* (see
 :mod:`examples.research.phase1_rf_floor`). This script produces the companion
-*paid* data point: a prompted :class:`~langres.core.modules.llm_judge.LLMJudge`
+*paid* data point: a prompted :class:`~langres.core.matchers.llm_judge.LLMMatcher`
 run over the FULL standard Amazon-Google / Abt-Buy literature **test** split under
 the SAME honest protocol, recording the **real OpenRouter cost**.
 
@@ -25,7 +25,7 @@ The methodology mirrors the RF floor exactly, so the two numbers are comparable:
        way the leaky "argmax-F1-on-test" number is also reported so the honesty
        delta is explicit.
 
-**Hard spend cap.** The real ``LLMJudge`` is judged **concurrently in chunks**
+**Hard spend cap.** The real ``LLMMatcher`` is judged **concurrently in chunks**
 (``--max-concurrent`` calls in flight via its ``forward_async`` -- ~an order of
 magnitude faster than the ~4s/call sequential path, and retry-backed). Every
 paid judgement's honest ``provenance["cost_usd"]`` is metered through ONE
@@ -86,7 +86,7 @@ from langres.clients.openrouter import (  # noqa: E402
 )
 from langres.core.metrics import classify_pairs, pair_pr_curve  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
-from langres.core.module import Module  # noqa: E402
+from langres.core.matcher import Matcher  # noqa: E402
 from langres.data.fixed_split_pair_benchmark import (  # noqa: E402
     DEFAULT_ARGMAX_GRID,
     FixedSplitPairBenchmark,
@@ -129,23 +129,23 @@ _MARKDOWN_NAME = "PHASE1_LLM_PLACEMENT.md"
 # ---------------------------------------------------------------------------
 
 
-class _MeteredJudge(Module[Any]):
+class _MeteredJudge(Matcher[Any]):
     """Wrap a judge, metering each judgement's real cost through a shared monitor.
 
     Reuses the exact spend-cap pattern of
-    :class:`~langres.core.presets._SpendCappedModule` and
+    :class:`~langres.core.presets._SpendCappedMatcher` and
     ``examples/research/w3_paid_smoke.py``'s ``_charge`` -- add each judgement's
     honest ``provenance["cost_usd"]`` to a :class:`SpendMonitor`, ``check()`` it,
     and re-raise :class:`BudgetExceeded` with every already-paid-for judgement on
     ``.partial_judgements``. The one difference (and the reason this is not just
-    ``_SpendCappedModule``): the monitor is **injected**, so ONE cumulative
+    ``_SpendCappedMatcher``): the monitor is **injected**, so ONE cumulative
     ledger spans the valid-derivation pass, the test pass, and every dataset in
     the run -- a genuinely run-wide hard cap.
 
     It also tallies this judge's own cost, call count, real-cost fraction, and
     served providers, so the caller can put the honest economics in the artifact.
 
-    A judge exposing an async ``forward_async`` (the real ``LLMJudge``) is driven
+    A judge exposing an async ``forward_async`` (the real ``LLMMatcher``) is driven
     **concurrently in chunks**: each chunk of ``chunk_size`` pairs is judged in
     parallel (up to ``max_concurrent`` calls in flight), then metered and
     cap-checked as a unit. That is ~an order of magnitude faster than the
@@ -156,7 +156,7 @@ class _MeteredJudge(Module[Any]):
 
     def __init__(
         self,
-        inner: Module[Any],
+        inner: Matcher[Any],
         *,
         monitor: SpendMonitor,
         max_concurrent: int = 50,
@@ -184,7 +184,7 @@ class _MeteredJudge(Module[Any]):
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         """Yield each judgement after charging its cost and enforcing the cap.
 
-        Dispatches on the wrapped judge: a real ``LLMJudge`` (anything exposing
+        Dispatches on the wrapped judge: a real ``LLMMatcher`` (anything exposing
         ``forward_async``) takes the concurrent, chunked path; everything else
         (the dry-run / mock judges) takes the unchanged sequential path. Both
         preserve the run-wide hard cap and carry the already-paid-for judgements
@@ -287,7 +287,7 @@ class _MeteredJudge(Module[Any]):
 
 def run_placement(
     benchmark: FixedSplitPairBenchmark[Any],
-    judge: Module[Any],
+    judge: Matcher[Any],
     *,
     derive_on: str,
     monitor: SpendMonitor,
@@ -299,8 +299,8 @@ def run_placement(
 
     Args:
         benchmark: The fixed-split adapter (records / gold / splits).
-        judge: The scorer to grade (an ``LLMJudge`` on the real path; any
-            ``Module`` in a test / dry run).
+        judge: The scorer to grade (an ``LLMMatcher`` on the real path; any
+            ``Matcher`` in a test / dry run).
         derive_on: ``"valid"`` / ``"train"`` -> derive the threshold on that
             split via :func:`evaluate_fixed_split_honest`; ``"fixed:<x>"`` ->
             skip the derive calls and grade test at the constant ``x``.
@@ -308,7 +308,7 @@ def run_placement(
             every pass and dataset of the run.
         argmax_grid: Thresholds swept for the leaky argmax-on-test comparison.
         max_concurrent: Parallel LLM calls in flight per chunk when the judge
-            exposes ``forward_async`` (the real ``LLMJudge``); ignored otherwise.
+            exposes ``forward_async`` (the real ``LLMMatcher``); ignored otherwise.
         chunk_size: Pairs judged concurrently before each cap ``check()`` on the
             async path -- the spend-overshoot bound.
 
@@ -335,7 +335,7 @@ def run_placement(
 
 
 def _eval_fixed_threshold(
-    judge: Module[Any],
+    judge: Matcher[Any],
     benchmark: FixedSplitPairBenchmark[Any],
     threshold: float,
     argmax_grid: Sequence[float],
@@ -383,7 +383,7 @@ def build_artifact(
     ditto = DITTO_F1[dataset]
     return {
         "dataset": dataset,
-        "method": "LLMJudge",
+        "method": "LLMMatcher",
         "model": model,
         "provider_requested": provider,
         "provider_served": sorted(meter.providers),
@@ -406,11 +406,11 @@ def build_artifact(
         "ditto_f1": ditto,
         "gap_to_ditto_f1": ditto - result.honest.f1,
         "notes": (
-            "Prompted LLMJudge on the FULL fixed test split. HONEST f1 applies a "
+            "Prompted LLMMatcher on the FULL fixed test split. HONEST f1 applies a "
             "threshold derived on the derive-split (or a fixed constant) to the "
             "whole test split; argmax_on_test tunes the cut on test itself "
             "(honesty_delta_f1 = argmax_on_test.f1 - honest.f1). gap_to_rf_floor_f1 "
-            "is honest.f1 minus the $0 RandomForestJudge floor (positive = the LLM "
+            "is honest.f1 minus the $0 RandomForestMatcher floor (positive = the LLM "
             "beats the local floor); gap_to_ditto_f1 is the remaining distance to "
             "the Ditto SOTA band. real_cost_usd is OpenRouter's actual billed cost "
             "(cost_is_real_frac of judgements) metered through the SpendMonitor."
@@ -474,13 +474,13 @@ def write_artifacts(artifact: dict[str, Any], out_dir: Path) -> tuple[Path, Path
 def format_report(artifacts: list[dict[str, Any]]) -> str:
     """Render the combined Markdown table over all placement artifacts."""
     lines = [
-        "# Phase 1 -- LLMJudge honest full-split placement (paid)",
+        "# Phase 1 -- LLMMatcher honest full-split placement (paid)",
         "",
-        "Prompted `LLMJudge` on the **full standard test split**, threshold "
+        "Prompted `LLMMatcher` on the **full standard test split**, threshold "
         "derived honestly (on VALID, or a fixed constant) and applied to all of "
         "test. `argmax-F1` is the leaky ceiling (cut tuned on test) shown only for "
         "the honesty delta. `real cost` is OpenRouter's actual billed spend. The "
-        "gap columns place the honest F1 against the $0 RandomForestJudge floor "
+        "gap columns place the honest F1 against the $0 RandomForestMatcher floor "
         "(0.360 AG / 0.404 Abt-Buy) and the Ditto SOTA band (0.756 / 0.893).",
         "",
         "| model | dataset | honest F1 | honest P | honest R | threshold | "
@@ -554,14 +554,14 @@ def build_benchmark(dataset: str) -> FixedSplitPairBenchmark[Any]:
     raise ValueError(f"unknown dataset {dataset!r}; choose amazon_google | abt_buy")
 
 
-def _build_llm_judge(model: str, provider: dict[str, Any] | None, entity_noun: str) -> Module[Any]:
-    """Build the real ``LLMJudge`` (lazy import -- pulls the ``[llm]`` extra)."""
-    from langres.core.modules.llm_judge import LLMJudge
+def _build_llm_judge(model: str, provider: dict[str, Any] | None, entity_noun: str) -> Matcher[Any]:
+    """Build the real ``LLMMatcher`` (lazy import -- pulls the ``[llm]`` extra)."""
+    from langres.core.matchers.llm_judge import LLMMatcher
 
-    return LLMJudge(model=model, provider=provider, entity_noun=entity_noun)
+    return LLMMatcher(model=model, provider=provider, entity_noun=entity_noun)
 
 
-class _DryRunJudge(Module[Any]):
+class _DryRunJudge(Matcher[Any]):
     """A deterministic, $0 stand-in for ``--dry-run`` (no key, no network).
 
     Scores each pair from its comparison vector (mean similarity when present,
@@ -649,7 +649,7 @@ def _run_one_dataset(
             )
             return None
 
-    judge: Module[Any] = (
+    judge: Matcher[Any] = (
         _DryRunJudge()
         if cfg.dry_run
         else _build_llm_judge(cfg.model, cfg.provider, _ENTITY_NOUN[dataset])
@@ -764,7 +764,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=_parse_derive_on,
         default="fixed:0.5",
         help="Threshold source: 'fixed:<0..1>' (default, single-loop safe) | 'valid' | 'train'. "
-        "valid/train each judge a second split, so the real LLMJudge path refuses them "
+        "valid/train each judge a second split, so the real LLMMatcher path refuses them "
         "(litellm allows one asyncio.run per process).",
     )
     parser.add_argument(
@@ -805,7 +805,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"would be blind. Pin its price first, or pick one of: {sorted(PRICES_PER_1M)}."
             )
             return 1
-        # Single-asyncio.run-per-process invariant. The real LLMJudge exposes
+        # Single-asyncio.run-per-process invariant. The real LLMMatcher exposes
         # forward_async, so every judge.forward() opens one asyncio.run. A
         # valid/train derive judges a SECOND split (derive + test), and --dataset
         # both judges a SECOND dataset -- either issues a second asyncio.run, which
@@ -813,7 +813,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # already paid. Refuse before spending (before the price probe below).
         if cfg.derive_on in ("valid", "train") or len(datasets) > 1:
             print(
-                f"[fatal] the real LLMJudge path allows exactly ONE asyncio.run per "
+                f"[fatal] the real LLMMatcher path allows exactly ONE asyncio.run per "
                 f"process, but derive_on={cfg.derive_on!r} + datasets={datasets} would "
                 f"issue more (valid/train judges a second split; --dataset both a second "
                 f"dataset) and trip litellm's cross-loop worker bug after the first pass "
@@ -831,7 +831,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     print("=" * 78)
-    print(f"Phase 1 -- LLMJudge placement | model={cfg.model} | datasets={datasets}")
+    print(f"Phase 1 -- LLMMatcher placement | model={cfg.model} | datasets={datasets}")
     print(f"derive_on={cfg.derive_on} | max_usd=${cfg.max_usd:.2f} | dry_run={cfg.dry_run}")
     print("=" * 78)
 

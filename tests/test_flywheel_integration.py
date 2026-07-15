@@ -9,7 +9,7 @@ that *silently no-op'd* on any binary judge before this contract existed
 having never started).
 
 Zero spend: hand-built :class:`PairwiseJudgement` objects stand in for a real
-``LLMJudge`` so no client is ever constructed.
+``LLMMatcher`` so no client is ever constructed.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _decider(
     decision: bool,
     confidence: float | None = None,
 ) -> PairwiseJudgement:
-    """A binary decider: a decision and no score (the shape a real LLMJudge emits)."""
+    """A binary decider: a decision and no score (the shape a real LLMMatcher emits)."""
     return PairwiseJudgement(
         left_id=left_id,
         right_id=right_id,

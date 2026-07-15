@@ -26,13 +26,13 @@ from pydantic import BaseModel
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
 
 
-class _NoHookModule(Module[CompanySchema]):
-    """Implements neither fit hook (mirrors WeightedAverageJudge/heuristic judges)."""
+class _NoHookModule(Matcher[CompanySchema]):
+    """Implements neither fit hook (mirrors WeightedAverageMatcher/heuristic judges)."""
 
     def forward(
         self, candidates: Iterator[ERCandidate[CompanySchema]]
@@ -45,7 +45,7 @@ class _NoHookModule(Module[CompanySchema]):
         raise NotImplementedError
 
 
-class _SupervisedModule(Module[CompanySchema]):
+class _SupervisedModule(Matcher[CompanySchema]):
     """Implements SupervisedFitMixin."""
 
     def __init__(self) -> None:
@@ -65,7 +65,7 @@ class _SupervisedModule(Module[CompanySchema]):
         self.fit_calls.append((len(list(candidates)), labels))
 
 
-class _UnsupervisedModule(Module[CompanySchema]):
+class _UnsupervisedModule(Matcher[CompanySchema]):
     """Implements UnsupervisedFitMixin."""
 
     def __init__(self) -> None:
@@ -99,11 +99,11 @@ RECORDS = [
 ]
 
 
-def _resolver(module: Module[CompanySchema]) -> Resolver:
+def _resolver(module: Matcher[CompanySchema]) -> Resolver:
     return Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=module,
+        matcher=module,
         clusterer=Clusterer(threshold=0.5),
     )
 
@@ -167,7 +167,7 @@ def test_fit_raises_when_labels_given_to_unsupervised_module() -> None:
 def test_fit_is_schema_agnostic_with_product_schema() -> None:
     """The fit() delegation logic works identically for a WidgetSchema pipeline."""
 
-    class _ProductUnsupervisedModule(Module[WidgetSchema]):
+    class _ProductUnsupervisedModule(Matcher[WidgetSchema]):
         def __init__(self) -> None:
             self.called = False
 
@@ -189,7 +189,7 @@ def test_fit_is_schema_agnostic_with_product_schema() -> None:
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=WidgetSchema),
         comparator=None,
-        module=module,
+        matcher=module,
         clusterer=Clusterer(threshold=0.5),
     )
     products = [{"id": "p1", "title": "iPhone"}, {"id": "p2", "title": "iPhone Pro"}]

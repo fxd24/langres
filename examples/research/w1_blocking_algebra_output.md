@@ -2,7 +2,7 @@
 
 Reference run of `examples/research/w1_blocking_algebra.py` on Fodors-Zagat (FZ) and
 Amazon-Google (AG), **zero LLM spend** (blocking is `KeyBlocker`/`VectorBlocker`,
-scoring is `WeightedAverageJudge` — no LLM calls anywhere). Embedding/FAISS
+scoring is `WeightedAverageMatcher` — no LLM calls anywhere). Embedding/FAISS
 nondeterminism moves the low-order digits slightly across machines; the
 headline conclusions are stable. Reproduce with:
 
@@ -56,7 +56,7 @@ benchmarks are linkage tasks whose true matches are all cross-source).
 
 ## 2. Clusterer comparison: base `Clusterer` vs `CorrelationClusterer` (C6)
 
-Same blocking (`VectorBlocker`, pinned k) + same `WeightedAverageJudge` +
+Same blocking (`VectorBlocker`, pinned k) + same `WeightedAverageMatcher` +
 same threshold (0.80, reused from `examples/research/m3_zero_spend_race_output.md`)
 for both rows — **only the clusterer differs**, isolating its effect.
 
@@ -108,7 +108,7 @@ from langres.core.clusterers.correlation import CorrelationClusterer
 
 resolver = Resolver(
     blocker=...,
-    module=...,
+    matcher=...,
     clusterer=CorrelationClusterer(threshold=0.7),  # opt-in, not the default
 )
 ```

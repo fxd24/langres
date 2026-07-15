@@ -6,9 +6,9 @@ rests on:
 
 1. **The full flow runs end-to-end and produces BOTH quality numbers.**
    ``run_smoke`` with injected DummyLMs (a pairwise-shaped one for
-   ``link``/``dedupe``/the AG pairwise arm, a select-shaped one for SelectJudge)
-   completes all four deliverables -- link, dedupe, a single SelectJudge group
-   call, the signal log, and the AG SelectJudge-vs-pairwise comparison -- and
+   ``link``/``dedupe``/the AG pairwise arm, a select-shaped one for SelectMatcher)
+   completes all four deliverables -- link, dedupe, a single SelectMatcher group
+   call, the signal log, and the AG SelectMatcher-vs-pairwise comparison -- and
    reports a pairwise F1 *and* a set-wise F1, at $0 real spend.
 
 2. **The SpendMonitor cap FIRES and carries partials.** With a tiny budget and a
@@ -37,7 +37,7 @@ _POOL = 4000
 
 
 def _pairwise_lm() -> DummyLM:
-    """A DummyLM keyed to DSPyJudge's ``PairwiseMatchSignature`` output fields."""
+    """A DummyLM keyed to DSPyMatcher's ``PairwiseMatchSignature`` output fields."""
     return DummyLM(
         [{"reasoning": "different variant", "match": "False", "match_probability": "0.1"}] * _POOL
     )
@@ -104,7 +104,7 @@ def test_spend_cap_fires_and_carries_partials(tmp_path: Path) -> None:
     """A tiny budget + nonzero fake per-call cost -> BudgetExceeded carrying partials.
 
     The real token cost is $0 (DummyLM), so we inject a nonzero ``cost_track_fn``:
-    the first metered paid unit (the SelectJudge group call) then trips the
+    the first metered paid unit (the SelectMatcher group call) then trips the
     SpendMonitor, which raises ``BudgetExceeded`` carrying the group's judgements
     on ``.partial_judgements``. This is the structural proof of the ≤$10 cap.
     """

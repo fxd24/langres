@@ -1,8 +1,8 @@
-"""SelectJudge: a ComEM-style set-wise judge (W1.1, S1 — the set-wise keystone).
+"""SelectMatcher: a ComEM-style set-wise judge (W1.1, S1 — the set-wise keystone).
 
-Ordinary judges (``LLMJudge``, ``DSPyJudge``, ...) make ONE LLM call per pair:
-K candidates scored against an anchor cost K calls. ``SelectJudge`` is a
-:class:`~langres.core.module.GroupwiseModule`: it makes ONE LLM call per
+Ordinary judges (``LLMMatcher``, ``DSPyMatcher``, ...) make ONE LLM call per pair:
+K candidates scored against an anchor cost K calls. ``SelectMatcher`` is a
+:class:`~langres.core.matcher.GroupwiseMatcher`: it makes ONE LLM call per
 *group* -- "which one of these K candidates (if any) matches the anchor?" --
 and decomposes the single answer into K :class:`PairwiseJudgement`\\ s. This
 mirrors the "selecting" strategy from Wang et al., "Match, Compare, or
@@ -14,8 +14,8 @@ illustrative skeleton in ``docs/TECHNICAL_OVERVIEW.md``) but enforcing a
 0-or-1 selection contract in code.
 
 Set-wise IN, pairwise OUT: :meth:`forward_groups` is the only method a caller
-needs; :meth:`~langres.core.module.GroupwiseModule.forward` (inherited,
-concrete) makes this a drop-in ``Module`` for the Resolver spine, benchmark
+needs; :meth:`~langres.core.matcher.GroupwiseMatcher.forward` (inherited,
+concrete) makes this a drop-in ``Matcher`` for the Resolver spine, benchmark
 dispatch, and ``inspect_scores`` -- zero downstream changes.
 
 **select_error handling (CEO #12):** the LLM's single-call answer can go
@@ -31,22 +31,22 @@ the run.
 
 **Group-call cost convention (E5):** the one LLM call's ``cost_usd`` is
 stamped on the FIRST judgement of the group via
-:func:`~langres.core.module.stamp_group_cost`; every sibling (including
+:func:`~langres.core.matcher.stamp_group_cost`; every sibling (including
 select_error siblings) carries ``$0``, and ``provenance["group_id"]`` is set
 on all of them, so cost aggregation downstream sums a group to exactly one
 call's cost.
 
 **Import-safety:** not eager-imported by ``langres.core`` (mirrors
-``DSPyJudge`` -- importing ``dspy`` opens a disk cache on import).
+``DSPyMatcher`` -- importing ``dspy`` opens a disk cache on import).
 
 **Serialization:** registered under ``"select_judge"`` (lazily -- see
 ``langres.core.registry._LAZY_COMPONENT_MODULES``) with a pure ``config``
 (``model``/``temperature``/``entity_noun``, never the DSPy LM), mirroring
-``DSPyJudge``'s no-pickle config-registry contract exactly. Unlike
-``DSPyJudge``, there is no ``compile()``/out-of-band program state here (no
+``DSPyMatcher``'s no-pickle config-registry contract exactly. Unlike
+``DSPyMatcher``, there is no ``compile()``/out-of-band program state here (no
 ``save_state``/``load_state``): ``from_config`` alone rebuilds an equivalent,
-uncompiled judge, the same as any other stateless judge (``LLMJudge``,
-``WeightedAverageJudge``).
+uncompiled judge, the same as any other stateless judge (``LLMMatcher``,
+``WeightedAverageMatcher``).
 """
 
 import json
@@ -59,8 +59,8 @@ from dspy.utils.exceptions import AdapterParseError
 
 from langres.core.groups import ERCandidateGroup
 from langres.core.models import PairwiseJudgement
-from langres.core.module import GroupwiseModule, SchemaT, stamp_group_cost
-from langres.core.modules.dspy_judge import _salvage_usage
+from langres.core.matcher import GroupwiseMatcher, SchemaT, stamp_group_cost
+from langres.core.matchers.dspy_judge import _salvage_usage
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.usage import LLMUsage
@@ -96,14 +96,14 @@ def _signature_for(entity_noun: str) -> Any:
 
 
 @register("select_judge")
-class SelectJudge(GroupwiseModule[SchemaT]):
+class SelectMatcher(GroupwiseMatcher[SchemaT]):
     """ComEM-style set-wise judge: one LLM call per group, not per pair.
 
     Example:
         # Zero-spend: inject a DummyLM, score groups from a blocker's stream_groups().
         from dspy.utils.dummies import DummyLM
 
-        judge = SelectJudge(lm=DummyLM([...]), entity_noun="product")
+        judge = SelectMatcher(lm=DummyLM([...]), entity_noun="product")
         for j in judge.forward_groups(blocker.stream_groups(records)):
             print(j.score, j.reasoning, j.provenance["cost_usd"])
     """
@@ -119,12 +119,12 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         temperature: float = 0.0,
         entity_noun: str = "entity",
     ) -> None:
-        """Initialize a SelectJudge.
+        """Initialize a SelectMatcher.
 
         Args:
             lm: Optional pre-built DSPy LM (``dspy.LM`` or ``DummyLM``). When
                 ``None`` a ``dspy.LM(model, cache=False)`` is built lazily on
-                first use, mirroring ``DSPyJudge``.
+                first use, mirroring ``DSPyMatcher``.
             model: OpenRouter/LiteLLM model id used when ``lm`` is built lazily.
             temperature: Sampling temperature for the lazily-built LM.
             entity_noun: Domain noun woven into the signature instructions.
@@ -134,7 +134,7 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         self.entity_noun = entity_noun
         self._lm = lm
         self._program: Any = dspy.ChainOfThought(_signature_for(entity_noun))
-        # Honest per-call cost = tokens * price, same seam as DSPyJudge: $0 by
+        # Honest per-call cost = tokens * price, same seam as DSPyMatcher: $0 by
         # default (zero-spend tests), pinned by the ``select_judge`` builder in
         # ``langres.methods`` from the OpenRouter price table for real runs.
         self.price_per_1k_tokens = 0.0
@@ -149,7 +149,7 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "SelectJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "SelectMatcher[SchemaT]":
         """Rebuild a fresh judge from :attr:`config` (no injected LM; built lazily)."""
         return cls(
             lm=None,
@@ -169,7 +169,7 @@ class SelectJudge(GroupwiseModule[SchemaT]):
         return (prompt_tokens + completion_tokens) / 1000.0 * self.price_per_1k_tokens
 
     def _render_entity(self, entity: SchemaT) -> str:
-        """Render a single entity for the prompt (LLMJudge/DSPyJudge's JSON convention)."""
+        """Render a single entity for the prompt (LLMMatcher/DSPyMatcher's JSON convention)."""
         return entity.model_dump_json(indent=2)
 
     def _render_members(self, members: list[SchemaT]) -> str:
@@ -227,7 +227,9 @@ class SelectJudge(GroupwiseModule[SchemaT]):
                 with dspy.context(lm=lm, track_usage=True):
                     prediction = self._program(anchor=anchor_text, candidates=members_text)
             except AdapterParseError as error:
-                logger.warning("SelectJudge parse failure for group %s: %s", group.group_id, error)
+                logger.warning(
+                    "SelectMatcher parse failure for group %s: %s", group.group_id, error
+                )
                 prompt_tokens, completion_tokens = _salvage_usage(lm)
                 cost = self._cost_usd(prompt_tokens, completion_tokens)
                 yield from self._select_error_judgements(

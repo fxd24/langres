@@ -51,25 +51,31 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # langres[llm]`` / ``langres[semantic]``), so importing them must be deferred
 # to the first actual access, exactly like ``dspy_judge``.
 #
+# ``calibrator`` (the Platt/isotonic ``Calibrator``) lives in
+# ``langres.core.calibration``, which imports scikit-learn at module scope (the
+# ``[trained]`` extra) -- so a saved Resolver carrying a fitted calibrator resolves
+# its ``type_name`` here without ``calibration`` being on the eager-import path.
+#
 # ``cascade_judge`` is pure-core (no heavy deps) and IS eager-imported today, so
 # this entry is redundant *right now* — it is kept deliberately as the same
 # saved-artifact safety net as its ``random_forest``/``correlation_clusterer`` peers
-# above: a ``CascadeJudge`` wrapping a fitted student is exactly what lands in a
+# above: a ``CascadeMatcher`` wrapping a fitted student is exactly what lands in a
 # saved ``Resolver`` artifact, so its ``type_name`` must keep resolving even if a
 # future eager-import trim (like W0.4's) drops it from ``core/__init__.py``. It
 # is here for parity with those peers, not because it needs dep deferral.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
-    "cascade_judge": "langres.core.modules.cascade_judge",
+    "calibrator": "langres.core.calibration",
+    "cascade_judge": "langres.core.matchers.cascade_judge",
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
-    "dspy_judge": "langres.core.modules.dspy_judge",
+    "dspy_judge": "langres.core.matchers.dspy_judge",
     "faiss_index": "langres.core.indexes.vector_index",
     "fake_embedder": "langres.core.embeddings",
-    "fellegi_sunter_judge": "langres.core.judges.fellegi_sunter",
+    "fellegi_sunter_judge": "langres.core.matchers.fellegi_sunter",
     "key_blocker": "langres.core.blockers.key",
-    "llm_judge": "langres.core.modules.llm_judge",
-    "random_forest": "langres.core.modules.random_forest_judge",
-    "select_judge": "langres.core.modules.select_judge",
+    "llm_judge": "langres.core.matchers.llm_judge",
+    "random_forest": "langres.core.matchers.random_forest_judge",
+    "select_judge": "langres.core.matchers.select_judge",
     "sentence_transformer_embedder": "langres.core.embeddings",
     "vector_blocker": "langres.core.blockers.vector",
 }

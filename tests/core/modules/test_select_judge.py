@@ -1,6 +1,6 @@
-"""Tests for SelectJudge: a ComEM-style set-wise judge (W1.1).
+"""Tests for SelectMatcher: a ComEM-style set-wise judge (W1.1).
 
-SelectJudge is a GroupwiseModule: one LLM call per group ("which single
+SelectMatcher is a GroupwiseMatcher: one LLM call per group ("which single
 candidate, if any, matches the anchor?") decomposed into K PairwiseJudgements,
 instead of K separate pairwise calls. These tests pin down:
 
@@ -14,11 +14,11 @@ instead of K separate pairwise calls. These tests pin down:
   ["select_error"], never a raised exception;
 - the empty-group short-circuit (no members -> no LLM call, no judgements);
 - inspect_scores() delegating to the shared, label-free report helper;
-- serialization: SelectJudge is registered (type_name/@register), has a pure
+- serialization: SelectMatcher is registered (type_name/@register), has a pure
   config (no lm/program), and a Resolver holding one in its module slot
   round-trips through save()/load() -- including in a FRESH PROCESS, so the
-  no-pickle config-registry artifact contract (the same one DSPyJudge
-  satisfies) holds for SelectJudge too.
+  no-pickle config-registry artifact contract (the same one DSPyMatcher
+  satisfies) holds for SelectMatcher too.
 
 DummyLM-driven throughout: $0, no network, matching the project's zero-spend
 LLM test convention (see tests/core/modules/test_dspy_judge.py).
@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 from langres.core.groups import ERCandidateGroup
 from langres.core.models import CompanySchema, PairwiseJudgement
-from langres.core.module import GroupwiseModule
-from langres.core.modules.select_judge import SelectJudge
+from langres.core.matcher import GroupwiseMatcher
+from langres.core.matchers.select_judge import SelectMatcher
 from langres.core.reports import ScoreInspectionReport
 
 
@@ -68,8 +68,8 @@ def _answer(selected_ids: str, *, reasoning: str = "because") -> dict[str, str]:
     return {"reasoning": reasoning, "selected_ids": selected_ids}
 
 
-def _judge(answers: list[dict[str, str]]) -> SelectJudge[CompanySchema]:
-    return SelectJudge(lm=DummyLM(answers), entity_noun="company")
+def _judge(answers: list[dict[str, str]]) -> SelectMatcher[CompanySchema]:
+    return SelectMatcher(lm=DummyLM(answers), entity_noun="company")
 
 
 # ---------------------------------------------------------------------------
@@ -78,9 +78,9 @@ def _judge(answers: list[dict[str, str]]) -> SelectJudge[CompanySchema]:
 
 
 def test_select_judge_is_a_groupwise_module() -> None:
-    """SelectJudge IS-A GroupwiseModule IS-A Module -- the Resolver spine dispatches unchanged."""
-    assert issubclass(SelectJudge, GroupwiseModule)
-    assert isinstance(_judge([]), GroupwiseModule)
+    """SelectMatcher IS-A GroupwiseMatcher IS-A Matcher -- the Resolver spine dispatches unchanged."""
+    assert issubclass(SelectMatcher, GroupwiseMatcher)
+    assert isinstance(_judge([]), GroupwiseMatcher)
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +130,8 @@ def test_forward_groups_no_selection_scores_every_member_zero() -> None:
 
 
 def test_forward_groups_is_schema_agnostic_with_product_schema() -> None:
-    """SelectJudge works with a second, unrelated schema (ProductSchema)."""
-    judge: SelectJudge[ProductSchema] = SelectJudge(
+    """SelectMatcher works with a second, unrelated schema (ProductSchema)."""
+    judge: SelectMatcher[ProductSchema] = SelectMatcher(
         lm=DummyLM([_answer('["p2"]')]), entity_noun="product"
     )
     group = ERCandidateGroup(
@@ -181,7 +181,7 @@ def test_forward_groups_empty_stream_yields_nothing() -> None:
 
 
 def test_forward_dispatches_via_groupwise_forward() -> None:
-    """The inherited GroupwiseModule.forward() (pairwise IN) reaches forward_groups()."""
+    """The inherited GroupwiseMatcher.forward() (pairwise IN) reaches forward_groups()."""
     from langres.core.models import ERCandidate
 
     judge = _judge([_answer('["b"]')])
@@ -321,7 +321,7 @@ def test_forward_groups_sets_group_id_on_all_judgements() -> None:
 
 
 def test_cost_usd_uses_pinned_price_seam() -> None:
-    """The honest-cost seam multiplies tokens by the injectable per-1k price (mirrors DSPyJudge)."""
+    """The honest-cost seam multiplies tokens by the injectable per-1k price (mirrors DSPyMatcher)."""
     judge = _judge([])
     assert judge._cost_usd(1000, 500) == 0.0  # default price 0.0 -> $0
     judge.price_per_1k_tokens = 2.0
@@ -370,7 +370,7 @@ def test_get_lm_builds_dspy_lm_lazily(mocker) -> None:  # type: ignore[no-untype
     """With no injected LM, _get_lm builds a dspy.LM(model, cache=False) once."""
     sentinel = object()
     build = mocker.patch("dspy.LM", return_value=sentinel)
-    judge: SelectJudge[CompanySchema] = SelectJudge(model="openrouter/z-ai/glm-5.2")
+    judge: SelectMatcher[CompanySchema] = SelectMatcher(model="openrouter/z-ai/glm-5.2")
     assert judge._lm is None
     assert judge._get_lm() is sentinel
     assert judge._get_lm() is sentinel  # cached
@@ -381,27 +381,27 @@ def test_injected_lm_is_used_and_never_rebuilt(mocker) -> None:  # type: ignore[
     """An injected LM wins -- dspy.LM is never constructed."""
     build = mocker.patch("dspy.LM")
     lm = DummyLM([])
-    judge: SelectJudge[CompanySchema] = SelectJudge(lm=lm)
+    judge: SelectMatcher[CompanySchema] = SelectMatcher(lm=lm)
     assert judge._get_lm() is lm
     build.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# Serialization: SelectJudge must satisfy the Resolver's no-pickle
-# config-registry artifact contract, exactly like its DSPyJudge sibling.
+# Serialization: SelectMatcher must satisfy the Resolver's no-pickle
+# config-registry artifact contract, exactly like its DSPyMatcher sibling.
 # ---------------------------------------------------------------------------
 
 
 def test_registered_under_select_judge_via_lazy_lookup() -> None:
-    """get_component("select_judge") resolves SelectJudge via the lazy registry."""
+    """get_component("select_judge") resolves SelectMatcher via the lazy registry."""
     from langres.core.registry import get_component
 
-    assert get_component("select_judge") is SelectJudge
+    assert get_component("select_judge") is SelectMatcher
 
 
 def test_config_is_pure_and_excludes_lm() -> None:
     """config is a plain, JSON-able dict -- never the injected DSPy LM."""
-    judge: SelectJudge[CompanySchema] = SelectJudge(
+    judge: SelectMatcher[CompanySchema] = SelectMatcher(
         model="openrouter/z-ai/glm-5.2", temperature=0.3, entity_noun="product"
     )
     config = judge.config
@@ -420,7 +420,7 @@ def test_from_config_builds_fresh_uncompiled_judge() -> None:
         "temperature": 0.3,
         "entity_noun": "product",
     }
-    judge = SelectJudge.from_config(config)
+    judge = SelectMatcher.from_config(config)
     assert judge.model == "openrouter/z-ai/glm-5.2"
     assert judge.temperature == 0.3
     assert judge.entity_noun == "product"
@@ -428,14 +428,14 @@ def test_from_config_builds_fresh_uncompiled_judge() -> None:
 
 
 def test_resolver_with_select_judge_saves_and_loads(tmp_path: Path) -> None:
-    """A Resolver with a SelectJudge in the module slot round-trips in-process."""
+    """A Resolver with a SelectMatcher in the module slot round-trips in-process."""
     from langres.core import AllPairsBlocker, Clusterer, Resolver
 
     judge = _judge([_answer('["b"]')])
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -446,7 +446,7 @@ def test_resolver_with_select_judge_saves_and_loads(tmp_path: Path) -> None:
     assert "lm" not in module_spec["config"]
 
     reloaded = Resolver.load(tmp_path)
-    assert isinstance(reloaded.module, SelectJudge)
+    assert isinstance(reloaded.module, SelectMatcher)
     assert reloaded.module.config == judge.config
 
 
@@ -456,7 +456,7 @@ def test_resolver_load_select_judge_in_fresh_process_and_scores_a_group(tmp_path
 
     Regression for the lazy-registration path (mirrors
     test_resolver_load_dspy_judge_in_fresh_process): ``@register("select_judge")``
-    only fires when ``langres.core.modules.select_judge`` is imported, and
+    only fires when ``langres.core.matchers.select_judge`` is imported, and
     ``langres.core`` deliberately does not import it (that would import
     ``dspy``). ``get_component`` imports it on demand, so a fresh process that
     only does ``from langres.core import Resolver`` still resolves the type --
@@ -469,7 +469,7 @@ def test_resolver_load_select_judge_in_fresh_process_and_scores_a_group(tmp_path
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -482,7 +482,7 @@ from langres.core.groups import ERCandidateGroup
 from langres.core.models import CompanySchema
 
 r = Resolver.load(r"{tmp_path}")
-assert type(r.module).__name__ == "SelectJudge", type(r.module).__name__
+assert type(r.module).__name__ == "SelectMatcher", type(r.module).__name__
 
 r.module._lm = DummyLM([{{"reasoning": "match", "selected_ids": '["b"]'}}])
 group = ERCandidateGroup(

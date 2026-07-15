@@ -21,7 +21,7 @@ prior batch (:meth:`AnchorStore.build`) that:
 :meth:`AnchorStore.assign` then answers the incremental question for one new
 record by reusing the resolver's *existing* seams — the vector index's
 single-record kNN (or all-pairs when there is no index) for candidate anchors,
-and the very same Comparator + Module judge the batch pipeline uses — and
+and the very same Comparator + Matcher judge the batch pipeline uses — and
 returns a :class:`ClusterDelta` carrying a **stable** entity id: ``link`` to an
 existing entity, or ``new`` with a freshly minted id.
 
@@ -170,7 +170,7 @@ class AnchorStore:
 
     Build one from a prior batch, then assign new records against it:
 
-        resolver = Resolver.from_schema(CompanySchema, judge="string")
+        resolver = Resolver.from_schema(CompanySchema, matcher="string")
         store = AnchorStore.build(resolver, records)   # dedicated pass
         delta = store.assign(new_record)               # -> ClusterDelta
         store.save("artifacts/anchors")
@@ -319,7 +319,7 @@ class AnchorStore:
 
         Generates candidate anchors (the vector index's single-record kNN when
         the resolver blocks on a vector index, else all anchors), runs the
-        resolver's own Comparator + Module judge on the ``(record, anchor)``
+        resolver's own Comparator + Matcher judge on the ``(record, anchor)``
         pairs, and links the record to the matched entity — or mints a new one
         when nothing clears the clusterer threshold. The record's assignment is
         recorded (append-only), so assigning a record whose id is already known
@@ -337,7 +337,7 @@ class AnchorStore:
 
         Cost: with no vector index (e.g. an ``AllPairsBlocker`` pipeline) assign
         judges the record against **every** anchor — O(n) judge calls per record.
-        With a *paid* judge (``judge="zero_shot_llm"``/any paid ``Module``) that
+        With a *paid* judge (``matcher="zero_shot_llm"``/any paid ``Matcher``) that
         is O(n) paid calls per assign, uncapped; prefer a ``VectorBlocker`` (kNN
         candidates) or a cheap judge for incremental assignment at scale.
 
@@ -445,7 +445,7 @@ class AnchorStore:
         Reuses the vector index's single-record ``search`` (the thin
         new-record-against-built-corpus path) when the resolver blocks on a
         vector index — attaching the same distance->similarity the batch path
-        computes, so an ``EmbeddingScoreJudge`` (which scores off
+        computes, so an ``EmbeddingScoreMatcher`` (which scores off
         ``similarity_score``) works incrementally. Falls back to every anchor
         (``similarity`` ``None``) when there is no index (e.g. an
         ``AllPairsBlocker``), the correct all-pairs behaviour for one new record.

@@ -1,6 +1,6 @@
-"""Tests for LLMJudgeModule (LLM-based matching).
+"""Tests for LLMMatcher (LLM-based matching).
 
-This test module validates the LLMJudgeModule implementation, which uses
+This test module validates the LLMMatcher implementation, which uses
 OpenAI API (or similar) for match judgments with natural language reasoning.
 """
 
@@ -13,7 +13,7 @@ from openai.types.chat.chat_completion import Choice
 
 from langres.clients.openrouter import SpendMonitor
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudge, LLMJudgeModule
+from langres.core.matchers.llm_judge import LLMMatcher, LLMMatcher
 from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,8 @@ def test_registered_under_llm_judge_via_lazy_lookup() -> None:
     (W0.4: litellm is optional, so ``llm_judge`` joined
     ``_LAZY_COMPONENT_MODULES`` alongside ``dspy_judge``.)
     """
-    assert get_component("llm_judge") is LLMJudge
-    assert LLMJudge.type_name == "llm_judge"
+    assert get_component("llm_judge") is LLMMatcher
+    assert LLMMatcher.type_name == "llm_judge"
 
 
 @pytest.fixture
@@ -72,8 +72,8 @@ def mock_llm_client():
 
 
 def test_llm_judge_initialization(mock_llm_client):
-    """Test LLMJudgeModule can be initialized with valid parameters."""
-    module = LLMJudgeModule(
+    """Test LLMMatcher can be initialized with valid parameters."""
+    module = LLMMatcher(
         client=mock_llm_client,
         model="gpt-4o-mini",
         temperature=0.0,
@@ -85,13 +85,13 @@ def test_llm_judge_initialization(mock_llm_client):
 
 
 def test_llm_judge_requires_valid_temperature(mock_llm_client):
-    """Test LLMJudgeModule validates temperature is in range [0, 2]."""
+    """Test LLMMatcher validates temperature is in range [0, 2]."""
     with pytest.raises(ValueError, match="temperature must be between 0.0 and 2.0"):
-        LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini", temperature=2.5)
+        LLMMatcher(client=mock_llm_client, model="gpt-4o-mini", temperature=2.5)
 
 
 def test_llm_judge_scores_single_pair(mock_llm_client):
-    """Test LLMJudgeModule scores a single entity pair."""
+    """Test LLMMatcher scores a single entity pair."""
     # Setup mock response
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -104,7 +104,7 @@ def test_llm_judge_scores_single_pair(mock_llm_client):
     mock_llm_client.completion.return_value = mock_response
 
     # Create module
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     # Create candidate pair
     candidate = ERCandidate(
@@ -128,7 +128,7 @@ def test_llm_judge_scores_single_pair(mock_llm_client):
 
 
 def test_llm_judge_extracts_score_from_response(mock_llm_client):
-    """Test LLMJudgeModule correctly extracts score from LLM response."""
+    """Test LLMMatcher correctly extracts score from LLM response."""
     mock_response = Mock()
     mock_response.choices = [Mock()]
     mock_response.choices[
@@ -139,7 +139,7 @@ def test_llm_judge_extracts_score_from_response(mock_llm_client):
     mock_response.usage.completion_tokens = 30
     mock_llm_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -155,7 +155,7 @@ def test_llm_judge_extracts_score_from_response(mock_llm_client):
 
 
 def test_llm_judge_tracks_cost_in_provenance(mock_llm_client, mocker):
-    """Test LLMJudgeModule tracks API cost in provenance via litellm pricing."""
+    """Test LLMMatcher tracks API cost in provenance via litellm pricing."""
     mock_response = Mock()
     mock_response.choices = [Mock()]
     mock_response.choices[0].message.content = "MATCH\nScore: 0.90\nReasoning: Same company."
@@ -166,10 +166,10 @@ def test_llm_judge_tracks_cost_in_provenance(mock_llm_client, mocker):
 
     # litellm.completion_cost owns pricing; stub it so the Mock response prices.
     completion_cost = mocker.patch(
-        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.000123
+        "langres.core.matchers.llm_judge.litellm.completion_cost", return_value=0.000123
     )
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -192,7 +192,7 @@ def test_llm_judge_tracks_cost_in_provenance(mock_llm_client, mocker):
 
 
 def test_llm_judge_handles_multiple_pairs(mock_llm_client):
-    """Test LLMJudgeModule processes multiple pairs in sequence."""
+    """Test LLMMatcher processes multiple pairs in sequence."""
     # Mock responses for each pair
     mock_resp1 = Mock()
     mock_resp1.choices = [Mock()]
@@ -210,7 +210,7 @@ def test_llm_judge_handles_multiple_pairs(mock_llm_client):
 
     mock_llm_client.completion.side_effect = [mock_resp1, mock_resp2]
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidates = [
         ERCandidate(
@@ -233,10 +233,10 @@ def test_llm_judge_handles_multiple_pairs(mock_llm_client):
 
 
 def test_llm_judge_handles_api_error(mock_llm_client):
-    """Test LLMJudgeModule handles API errors gracefully."""
+    """Test LLMMatcher handles API errors gracefully."""
     mock_llm_client.completion.side_effect = Exception("API Error")
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme Corporation"),
@@ -249,13 +249,11 @@ def test_llm_judge_handles_api_error(mock_llm_client):
 
 
 def test_llm_judge_uses_custom_prompt(mock_llm_client):
-    """Test LLMJudgeModule accepts custom prompt template (with the required
+    """Test LLMMatcher accepts custom prompt template (with the required
     ``{left}``/``{right}`` placeholders)."""
     custom_prompt = "Are these the same? {left} vs {right}"
 
-    module = LLMJudgeModule(
-        client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt
-    )
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini", prompt_template=custom_prompt)
 
     assert module.prompt_template == custom_prompt
 
@@ -282,7 +280,7 @@ def test_llm_judge_score_extraction_abstains_with_flag():
     mock_response.usage.completion_tokens_details = None
     mock_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(client=mock_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -299,7 +297,7 @@ def test_llm_judge_score_extraction_abstains_with_flag():
 
 
 def test_llm_judge_reasoning_extraction_fallback():
-    """Test that LLMJudgeModule falls back to full content when reasoning extraction fails."""
+    """Test that LLMMatcher falls back to full content when reasoning extraction fails."""
     # Mock response without "Reasoning:" prefix
     mock_client = Mock()
     mock_response = Mock()
@@ -311,7 +309,7 @@ def test_llm_judge_reasoning_extraction_fallback():
     mock_response.usage.completion_tokens = 20
     mock_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(client=mock_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -338,10 +336,10 @@ def test_llm_judge_cost_uses_litellm_completion_cost(mocker):
     mock_client.completion.return_value = mock_response
 
     completion_cost = mocker.patch(
-        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.036
+        "langres.core.matchers.llm_judge.litellm.completion_cost", return_value=0.036
     )
 
-    module = LLMJudgeModule(client=mock_client, model="gpt-4")
+    module = LLMMatcher(client=mock_client, model="gpt-4")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -367,11 +365,11 @@ def test_llm_judge_cost_falls_back_to_zero_on_exception(mocker, caplog):
     mock_client.completion.return_value = mock_response
 
     mocker.patch(
-        "langres.core.modules.llm_judge.litellm.completion_cost",
+        "langres.core.matchers.llm_judge.litellm.completion_cost",
         side_effect=Exception("unknown model"),
     )
 
-    module = LLMJudgeModule(client=mock_client, model="gpt-future-5")  # Unknown model
+    module = LLMMatcher(client=mock_client, model="gpt-future-5")  # Unknown model
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Acme"),
@@ -390,7 +388,7 @@ def test_llm_judge_cost_falls_back_to_zero_on_exception(mocker, caplog):
 
 
 def test_llm_judge_client_integration(mock_llm_client):
-    """Test LLMJudgeModule uses client.completion() API."""
+    """Test LLMMatcher uses client.completion() API."""
     mock_response = Mock()
     mock_response.choices = [Mock()]
     mock_response.choices[0].message.content = "MATCH\nScore: 0.90\nReasoning: Same company"
@@ -399,7 +397,7 @@ def test_llm_judge_client_integration(mock_llm_client):
     mock_response.usage.completion_tokens = 30
     mock_llm_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(
+    module = LLMMatcher(
         client=mock_llm_client,
         model="gpt-4o-mini",
         temperature=0.5,
@@ -425,7 +423,7 @@ def test_llm_judge_client_integration(mock_llm_client):
 
 
 def test_llm_judge_handles_missing_usage_info_in_response(mock_llm_client):
-    """Test LLMJudgeModule handles response with no usage information."""
+    """Test LLMMatcher handles response with no usage information."""
     # Setup mock response without usage info
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -433,7 +431,7 @@ def test_llm_judge_handles_missing_usage_info_in_response(mock_llm_client):
     mock_response.usage = None  # No usage information
     mock_llm_client.completion.return_value = mock_response
 
-    module = LLMJudgeModule(client=mock_llm_client, model="gpt-4o-mini")
+    module = LLMMatcher(client=mock_llm_client, model="gpt-4o-mini")
 
     candidate = ERCandidate(
         left=CompanySchema(id="c1", name="Test Company"),
@@ -463,9 +461,9 @@ def test_forward_records_real_openrouter_cost_and_provider(mocker):
         "MATCH\nScore: 0.9\nReasoning: Same company", real_cost=0.00042, provider="DeepInfra"
     )
     # If real cost is used, the pinned-table estimator must NOT be consulted.
-    completion_cost = mocker.patch("langres.core.modules.llm_judge.litellm.completion_cost")
+    completion_cost = mocker.patch("langres.core.matchers.llm_judge.litellm.completion_cost")
 
-    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    module = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2")
     j = list(module.forward([_pair()]))[0]
 
     assert j.provenance["cost_usd"] == pytest.approx(0.00042)
@@ -480,7 +478,7 @@ def test_spend_monitor_records_the_real_cost() -> None:
     client.completion.return_value = _openrouter_response(
         "MATCH\nScore: 0.8\nReasoning: x", real_cost=0.0031, provider="Together"
     )
-    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    module = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2")
 
     monitor = SpendMonitor(budget_usd=1.0)
     for j in module.forward([_pair()]):
@@ -504,10 +502,10 @@ def test_forward_falls_back_to_pinned_estimate_without_real_cost(mocker):
     client.completion.return_value = resp
 
     completion_cost = mocker.patch(
-        "langres.core.modules.llm_judge.litellm.completion_cost", return_value=0.00777
+        "langres.core.matchers.llm_judge.litellm.completion_cost", return_value=0.00777
     )
 
-    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    module = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2")
     j = list(module.forward([_pair()]))[0]
 
     assert j.provenance["cost_usd"] == pytest.approx(0.00777)
@@ -522,7 +520,7 @@ def test_openrouter_model_requests_usage_accounting() -> None:
     client.completion.return_value = _openrouter_response(
         "MATCH\nScore: 0.9\nReasoning: x", real_cost=0.0001, provider="DeepInfra"
     )
-    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2")
+    module = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2")
 
     list(module.forward([_pair()]))
 
@@ -538,7 +536,7 @@ def test_provider_pin_is_threaded_into_extra_body() -> None:
         "MATCH\nScore: 0.9\nReasoning: x", real_cost=0.0001, provider="DeepInfra"
     )
     pin = {"order": ["DeepInfra"], "allow_fallbacks": False}
-    module = LLMJudgeModule(client=client, model="openrouter/z-ai/glm-5.2", provider=pin)
+    module = LLMMatcher(client=client, model="openrouter/z-ai/glm-5.2", provider=pin)
 
     list(module.forward([_pair()]))
 
@@ -558,7 +556,7 @@ def test_non_openrouter_model_sends_no_extra_body() -> None:
     resp.usage.completion_tokens = 50
     client.completion.return_value = resp
 
-    module = LLMJudgeModule(client=client, model="gpt-5-mini", provider={"only": ["X"]})
+    module = LLMMatcher(client=client, model="gpt-5-mini", provider={"only": ["X"]})
     list(module.forward([_pair()]))
 
     assert "extra_body" not in client.completion.call_args.kwargs

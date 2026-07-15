@@ -116,7 +116,7 @@ give it your schema and two loaders, and `build(split)` returns the
 from pydantic import BaseModel
 
 from langres.eval import evaluate
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.data.fixed_split_pair_benchmark import FixedSplitPairBenchmark
 
 
@@ -138,9 +138,9 @@ bench = FixedSplitPairBenchmark.from_loaders(
 )
 data = bench.build("test")                          # candidates (comparison attached) + gold
 
-# Any Module works as the judge; WeightedAverageJudge scores the attached
+# Any Matcher works as the judge; WeightedAverageMatcher scores the attached
 # comparison vector using the auto-derived StringComparator's features.
-judge = WeightedAverageJudge(feature_specs=bench.feature_specs)
+judge = WeightedAverageMatcher(feature_specs=bench.feature_specs)
 
 # Default: sweep the grid. Warns that best_threshold is argmax-fitted to gold.
 result = evaluate(judge, data.candidates, data.gold)
@@ -152,8 +152,8 @@ fixed = evaluate(judge, data.candidates, data.gold, threshold=0.5)
 print(fixed.pair.f1, fixed.best_threshold, fixed.graded_threshold)  # best_threshold is None
 ```
 
-Swap the judge for anything else — an `EmbeddingScoreJudge`, an `LLMJudge`, a
-fitted `RandomForestJudge` — and the call is identical. `evaluate()` is already
+Swap the judge for anything else — an `EmbeddingScoreMatcher`, an `LLMMatcher`, a
+fitted `RandomForestMatcher` — and the call is identical. `evaluate()` is already
 spend-capped by default (`budget_usd=`, resolving to `DEFAULT_BUDGET_USD` =
 $1.00), so a **paid or compiled** judge can't run away; reach for the fuller
 `evaluate_judge_on_candidates` only when you need the **raw judgements** back, a
@@ -228,7 +228,7 @@ artifacts in *their* gold standard's `price`, e.g. `6.5600000000000005` vs our
 
 ### 4a. Run it *live* (paid), budget-capped
 
-The same harness can run a **real** `LLMJudge` over the identical 1206-pair slice
+The same harness can run a **real** `LLMMatcher` over the identical 1206-pair slice
 — the paper's `domain-complex-force` template, the Peeters per-dataset
 `record_serializer`, `response_parser=parse_binary_yes_no`, `temperature=0.0` —
 so the number is ours, not a replay. It is off by default and triple-guarded (an
@@ -263,7 +263,7 @@ without a price entry.
 
 The one deviation from the paper's setup is that we route the same dated snapshot
 through **OpenRouter** rather than calling OpenAI directly, so the live judge pins
-`provider={"order": ["OpenAI"], "allow_fallbacks": False}` (`LLMJudge(provider=…)`
+`provider={"order": ["OpenAI"], "allow_fallbacks": False}` (`LLMMatcher(provider=…)`
 → `extra_body["provider"]`) — OpenRouter must serve the request from OpenAI's own
 backend and can't silently swap in a different provider/quantization.
 
@@ -299,7 +299,7 @@ uv run python examples/research/peeters_llm_em_replication.py --mode live \
 ### 4c. First-token credence probe (`--logprobs`)
 
 `--logprobs` (`--mode live`) runs the *same* live judge with
-`LLMJudge(confidence="logprob")`: it requests first-token logprobs and records a
+`LLMMatcher(confidence="logprob")`: it requests first-token logprobs and records a
 P(Yes) credence per pair — `p_yes` (renormalised over the yes/no two-way subspace),
 `leaked_mass` (never normalised away), `p_yes_is_bound`, and `correct = verdict ==
 gold` — in **v2** result rows, so "does the model's own first-token credence predict

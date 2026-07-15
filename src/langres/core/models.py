@@ -35,7 +35,7 @@ class EntityProtocol(Protocol):
 
 # Generic type variable for ERCandidate
 # Note: Bound to BaseModel (not EntityProtocol) for Pydantic compatibility.
-# Blocker and Module use TYPE_CHECKING to bind to EntityProtocol for type safety.
+# Blocker and Matcher use TYPE_CHECKING to bind to EntityProtocol for type safety.
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
@@ -59,7 +59,7 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
     """
     Generic container for normalized entity pairs.
 
-    This is the standardized input to all Module.forward() implementations.
+    This is the standardized input to all Matcher.forward() implementations.
     The Blocker is responsible for normalizing raw data into this schema
     and generating candidate pairs.
 
@@ -75,9 +75,9 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
         comparison: Per-feature ``ComparisonVector`` for the two-phase pipeline.
             In phase one a Comparator stage attaches it (one entry per feature);
             in phase two the judge runs. Comparison-aware judges (e.g.
-            ``WeightedAverageJudge``) consume this vector and raise if it is
+            ``WeightedAverageMatcher``) consume this vector and raise if it is
             ``None`` (the Comparator stage was skipped). Self-contained judges
-            (e.g. ``LLMJudge``) ignore it and read the raw ``left``/``right``
+            (e.g. ``LLMMatcher``) ignore it and read the raw ``left``/``right``
             entities directly, so it stays ``None`` for them.
     """
 
@@ -90,7 +90,7 @@ class ERCandidate(BaseModel, Generic[SchemaT]):
 
 class PairwiseJudgement(BaseModel):
     """
-    Rich decision output from Module.forward() with full provenance.
+    Rich decision output from Matcher.forward() with full provenance.
 
     This model captures not just the match decision, but all metadata
     necessary for debugging, optimization, and cost tracking.
@@ -163,11 +163,11 @@ class PairwiseJudgement(BaseModel):
         return self.decision is None and self.score is None
 
 
-class JudgeAbstainedError(RuntimeError):
+class MatcherAbstainedError(RuntimeError):
     """A judge abstained where the caller needs a verdict.
 
     Raised by :func:`~langres.link` when the judge neither decided nor scored
-    (``PairwiseJudgement.is_abstain``) — e.g. an ``LLMJudge`` whose response
+    (``PairwiseJudgement.is_abstain``) — e.g. an ``LLMMatcher`` whose response
     failed to parse under the default ``on_parse_error="abstain"``.
 
     This is deliberately an exception rather than a ``match=None`` verdict: a
@@ -175,7 +175,7 @@ class JudgeAbstainedError(RuntimeError):
     a match", silently turning "I don't know" back into a confident no — the very
     conflation the decision/score split exists to remove. An exception cannot be
     ignored by accident. It subclasses ``RuntimeError`` (like
-    ``NoJudgeAvailableError``) so existing ``except RuntimeError`` handlers still
+    ``NoMatcherAvailableError``) so existing ``except RuntimeError`` handlers still
     catch it.
     """
 

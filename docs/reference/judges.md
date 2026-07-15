@@ -1,37 +1,37 @@
 # Judges
 
-Pairwise match scoring: the `Module` (judge) contract and its implementations.
+Pairwise match scoring: the `Matcher` (judge) contract and its implementations.
 
 ## The judge contract
 
-::: langres.core.module
+::: langres.core.matcher
 
 ## String judges
 
-::: langres.core.modules.rapidfuzz
+::: langres.core.matchers.rapidfuzz
 
 ## Embedding judges
 
-::: langres.core.judges.embedding_score
+::: langres.core.matchers.embedding_score
 
 ## LLM judges
 
-::: langres.core.modules.llm_judge
+::: langres.core.matchers.llm_judge
 
-::: langres.core.modules.dspy_judge
+::: langres.core.matchers.dspy_judge
 
-::: langres.core.modules.select_judge
+::: langres.core.matchers.select_judge
 
 ## Trained judges
 
-::: langres.core.modules.random_forest_judge
+::: langres.core.matchers.random_forest_judge
 
-::: langres.core.judges.fellegi_sunter
+::: langres.core.matchers.fellegi_sunter
 
-::: langres.core.judges.weighted_average
+::: langres.core.matchers.weighted_average
 
 ## Composition
 
-::: langres.core.modules.cascade_judge
+::: langres.core.matchers.cascade_judge
 
-::: langres.core.modules.cascade
+::: langres.core.matchers.cascade

@@ -2,8 +2,8 @@
 
 Zero-spend throughout: real network/LLM calls are never made. The
 "zero_shot_llm" branch is only ever exercised up to *construction* (verifying
-the DSPyJudge instance's model/price), never ``.forward()`` -- any pairwise
-scoring test injects a DummyLM-backed ``DSPyJudge`` or a tiny fake Module
+the DSPyMatcher instance's model/price), never ``.forward()`` -- any pairwise
+scoring test injects a DummyLM-backed ``DSPyMatcher`` or a tiny fake Matcher
 instead. "embedding" tests that need a real ``.encode()`` call load the local
 MiniLM model (no API key, no paid call) and are marked ``@pytest.mark.slow``.
 """
@@ -22,20 +22,20 @@ from langres.clients.openrouter import PRICES_PER_1M, BudgetExceeded
 from langres.clients.settings import Settings
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.vector import VectorBlocker
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
-from langres.core.judges.weighted_average import WeightedAverageJudge
+from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
+from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, stamp_group_cost
-from langres.core.modules.dspy_judge import DSPyJudge
+from langres.core.matcher import Matcher, stamp_group_cost
+from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.presets import (
     DEFAULT_AUTO_MODEL,
     DEFAULT_BUDGET_USD,
     _ALL_PAIRS_MAX_N,
-    NoJudgeAvailableError,
+    NoMatcherAvailableError,
     _build_vector_blocker,
     _estimate_n_pairs,
     _OPENAI_MODEL,
-    _SpendCappedModule,
+    _SpendCappedMatcher,
     _text_field_extractor,
     build_embedding_candidate,
     build_judge,
@@ -62,7 +62,7 @@ def _settings(*, openrouter: str | None = None, openai: str | None = None) -> Se
     return Settings(openrouter_api_key=openrouter, openai_api_key=openai)
 
 
-class _FakeCostlyModule(Module[object]):
+class _FakeCostlyModule(Matcher[object]):
     """Yields N judgements each costing a fixed amount -- for cap-breach tests."""
 
     def __init__(self, n: int, cost_each: float) -> None:
@@ -101,14 +101,14 @@ def _raw_group_judgements(n: int, group_id: str) -> list[PairwiseJudgement]:
     ]
 
 
-class _FakeGroupModule(Module[object]):
+class _FakeGroupModule(Matcher[object]):
     """Yields one group's judgements per the E5 group-cost convention.
 
     Full ``call_cost_usd`` on the first judgement, ``$0`` (plus
     ``group_end=True`` on the last) on the ``n_siblings`` remaining ones, all
     sharing ``provenance["group_id"]`` -- built via the real
-    :func:`~langres.core.module.stamp_group_cost`, the same helper
-    ``SelectJudge`` uses for one LLM call spanning a whole group.
+    :func:`~langres.core.matcher.stamp_group_cost`, the same helper
+    ``SelectMatcher`` uses for one LLM call spanning a whole group.
     """
 
     def __init__(self, first_cost: float, n_siblings: int, group_id: str = "g1") -> None:
@@ -125,10 +125,10 @@ class _FakeGroupModule(Module[object]):
         raise NotImplementedError
 
 
-class _LazyGroupsModule(Module[object]):
+class _LazyGroupsModule(Matcher[object]):
     """Concatenates several groups' judgement streams, tracking when each
     group's (paid) computation actually STARTS -- mirroring
-    ``GroupwiseModule.forward_groups``'s real contract: one paid LLM call per
+    ``GroupwiseMatcher.forward_groups``'s real contract: one paid LLM call per
     group, fired lazily only when the generator is advanced into that group,
     before it can yield anything to compare against (the exact shape of the
     #68-review bug: pulling one item past an already-drained group's last
@@ -152,7 +152,7 @@ class _LazyGroupsModule(Module[object]):
         raise NotImplementedError
 
 
-class _FakeMalformedGroupModule(Module[object]):
+class _FakeMalformedGroupModule(Matcher[object]):
     """A group-wise module that violates the E5 convention: never stamps
     ``group_end`` at all. Exercises the drain loop's defensive fallback --
     if the boundary marker never appears, draining runs to the end of the
@@ -223,7 +223,7 @@ class TestChooseAutoJudge:
         """The error IS the keyless persona's landing page: what / why the
         library refuses / fix A (key + install line) / fix B (explicit
         offline opt-in + caveat) / default-cap reassurance / guide URL."""
-        with pytest.raises(NoJudgeAvailableError) as excinfo:
+        with pytest.raises(NoMatcherAvailableError) as excinfo:
             choose_auto_judge(_settings())
         message = str(excinfo.value)
         assert "no API key" in message
@@ -264,7 +264,7 @@ class TestChooseAutoJudge:
         unpriced = {k: v for k, v in PRICES_PER_1M.items() if k != DEFAULT_AUTO_MODEL}
         with (
             patch.dict("langres.clients.openrouter.PRICES_PER_1M", unpriced, clear=True),
-            pytest.raises(NoJudgeAvailableError, match="no pinned price") as excinfo,
+            pytest.raises(NoMatcherAvailableError, match="no pinned price") as excinfo,
         ):
             choose_auto_judge(_settings(openrouter="or-key"))
         message = str(excinfo.value)
@@ -277,11 +277,11 @@ class TestChooseAutoJudge:
         assert (judge, model) == ("zero_shot_llm", _OPENAI_MODEL)
 
     def test_caller_model_override_runs_the_pinned_price_check(self) -> None:
-        with pytest.raises(NoJudgeAvailableError, match="no pinned price"):
+        with pytest.raises(NoMatcherAvailableError, match="no pinned price"):
             choose_auto_judge(_settings(openrouter="or-key"), model="unknown/model-not-in-table")
 
     def test_no_keys_raises_even_with_model_override(self) -> None:
-        with pytest.raises(NoJudgeAvailableError, match="no API key"):
+        with pytest.raises(NoMatcherAvailableError, match="no API key"):
             choose_auto_judge(_settings(), model=DEFAULT_AUTO_MODEL)
 
     def test_budget_usd_is_named_in_the_selection_notice(self) -> None:
@@ -295,7 +295,7 @@ class TestChooseAutoJudge:
         settings = Settings(
             langres_offline=True, openrouter_api_key="or-key", openai_api_key="oai-key"
         )
-        with pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE") as excinfo:
+        with pytest.raises(NoMatcherAvailableError, match="LANGRES_OFFLINE") as excinfo:
             choose_auto_judge(settings)
         message = str(excinfo.value)
         assert 'judge="string"' in message  # the offline opt-in fix
@@ -329,7 +329,7 @@ class _NoWarnings:
 class TestBuildJudge:
     def test_string_returns_weighted_average_judge_with_schema_features(self) -> None:
         module = build_judge("string", PresetCompany)
-        assert isinstance(module, WeightedAverageJudge)
+        assert isinstance(module, WeightedAverageMatcher)
         names = {spec.name for spec in module.feature_specs}
         assert names == {"name", "address"}
 
@@ -340,23 +340,23 @@ class TestBuildJudge:
         assert {s.name for s in product_module.feature_specs} == {"title", "brand"}
 
     def test_embedding_returns_embedding_score_judge(self) -> None:
-        assert isinstance(build_judge("embedding", PresetCompany), EmbeddingScoreJudge)
+        assert isinstance(build_judge("embedding", PresetCompany), EmbeddingScoreMatcher)
 
     def test_zero_shot_llm_returns_dspy_judge_with_default_model_and_pinned_price(self) -> None:
         module = build_judge("zero_shot_llm", PresetCompany, entity_noun="company")
-        assert isinstance(module, DSPyJudge)
+        assert isinstance(module, DSPyMatcher)
         assert module.model == DEFAULT_AUTO_MODEL
         assert module.entity_noun == "company"
         assert module.price_per_1k_tokens > 0.0
 
     def test_zero_shot_llm_respects_model_override(self) -> None:
         module = build_judge("zero_shot_llm", PresetCompany, model=_OPENAI_MODEL)
-        assert isinstance(module, DSPyJudge)
+        assert isinstance(module, DSPyMatcher)
         assert module.model == _OPENAI_MODEL
         assert module.price_per_1k_tokens > 0.0
 
     def test_module_instance_passed_through_verbatim(self) -> None:
-        injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
+        injected: DSPyMatcher[PresetCompany] = DSPyMatcher(lm=DummyLM([]), entity_noun="thing")
         assert build_judge(injected, PresetCompany) is injected
 
     def test_unknown_judge_name_raises(self) -> None:
@@ -372,7 +372,7 @@ class TestBuildJudge:
         lives in the [llm] extra but is imported at dspy_judge.py module
         level, so build_judge re-raises with the exact install guidance."""
         with (
-            patch.dict(sys.modules, {"langres.core.modules.dspy_judge": None}),
+            patch.dict(sys.modules, {"langres.core.matchers.dspy_judge": None}),
             pytest.raises(ImportError, match=r"uv sync --extra llm") as excinfo,
         ):
             build_judge("zero_shot_llm", PresetCompany)
@@ -380,19 +380,19 @@ class TestBuildJudge:
 
 
 # ---------------------------------------------------------------------------
-# _SpendCappedModule / resolve_judge
+# _SpendCappedMatcher / resolve_judge
 # ---------------------------------------------------------------------------
 
 
 class TestSpendCappedModule:
     def test_zero_cost_judgements_never_trip_the_cap(self) -> None:
-        module = _SpendCappedModule(_FakeCostlyModule(5, 0.0), budget_usd=0.01)
+        module = _SpendCappedMatcher(_FakeCostlyModule(5, 0.0), budget_usd=0.01)
         candidates = iter([_candidate(str(i)) for i in range(5)])
         judgements = list(module.forward(candidates))
         assert len(judgements) == 5
 
     def test_cap_breach_raises_budget_exceeded_with_partial_judgements(self) -> None:
-        module = _SpendCappedModule(_FakeCostlyModule(5, 0.5), budget_usd=0.9)
+        module = _SpendCappedMatcher(_FakeCostlyModule(5, 0.5), budget_usd=0.9)
         candidates = iter([_candidate(str(i)) for i in range(5)])
         with pytest.raises(BudgetExceeded) as excinfo:
             list(module.forward(candidates))
@@ -403,21 +403,21 @@ class TestSpendCappedModule:
 
     def test_inspect_scores_delegates_to_wrapped_module(self) -> None:
         inner = build_judge("string", PresetCompany)
-        module = _SpendCappedModule(inner, budget_usd=1.0)
+        module = _SpendCappedMatcher(inner, budget_usd=1.0)
         report = module.inspect_scores([])
         assert report is not None
 
     def test_cap_breach_drains_group_siblings_into_partial_judgements(self) -> None:
         """A group-wise module's tripping judgement must not split its group (#68 review).
 
-        ``SelectJudge``-style modules stamp the FULL call cost onto the first
+        ``SelectMatcher``-style modules stamp the FULL call cost onto the first
         judgement of a group and $0 onto its K-1 siblings, all sharing
         ``provenance["group_id"]`` (E5). If the cap trips on that first
         judgement, the already-paid-for siblings must still be drained into
         ``partial_judgements`` -- a group must never be split across the cap
         boundary.
         """
-        module = _SpendCappedModule(
+        module = _SpendCappedMatcher(
             _FakeGroupModule(first_cost=1.0, n_siblings=2, group_id="g1"), budget_usd=0.9
         )
         candidates = iter([_candidate(str(i)) for i in range(3)])
@@ -434,8 +434,8 @@ class TestSpendCappedModule:
 
         Regression for the claude-review finding on this PR: detecting the
         group boundary by peeking at the next judgement's group_id (instead
-        of the group_end marker) resumes a lazy GroupwiseModule's generator
-        one group too far -- for a real module (SelectJudge) that fires the
+        of the group_end marker) resumes a lazy GroupwiseMatcher's generator
+        one group too far -- for a real module (SelectMatcher) that fires the
         next group's paid LLM call before there's anything to compare
         against, silently discarding it. ``_LazyGroupsModule.groups_computed``
         makes that "was the next group's paid call fired at all" question
@@ -444,7 +444,7 @@ class TestSpendCappedModule:
         away).
         """
         fake = _LazyGroupsModule([(1.0, 1, "g1"), (0.0, 1, "g2")])
-        module = _SpendCappedModule(fake, budget_usd=0.9)
+        module = _SpendCappedMatcher(fake, budget_usd=0.9)
         candidates = iter([_candidate(str(i)) for i in range(4)])
         with pytest.raises(BudgetExceeded) as excinfo:
             list(module.forward(candidates))
@@ -461,7 +461,7 @@ class TestSpendCappedModule:
         violation) still drains to the end of its stream rather than looping
         forever or crashing -- exercises the drain loop's non-break exit path.
         """
-        module = _SpendCappedModule(
+        module = _SpendCappedMatcher(
             _FakeMalformedGroupModule(first_cost=1.0, n_siblings=2, group_id="g1"), budget_usd=0.9
         )
         candidates = iter([_candidate(str(i)) for i in range(3)])
@@ -472,7 +472,7 @@ class TestSpendCappedModule:
 
     def test_cap_breach_without_group_id_is_unchanged(self) -> None:
         """Pairwise (no group_id) modules keep the pre-existing single-judgement cap behavior."""
-        module = _SpendCappedModule(_FakeCostlyModule(5, 0.5), budget_usd=0.9)
+        module = _SpendCappedMatcher(_FakeCostlyModule(5, 0.5), budget_usd=0.9)
         candidates = iter([_candidate(str(i)) for i in range(5)])
         with pytest.raises(BudgetExceeded) as excinfo:
             list(module.forward(candidates))
@@ -496,7 +496,7 @@ class TestResolveJudge:
         resolved = resolve_judge("string", PresetCompany)
         assert resolved.judge_used == "string"
         assert resolved.model is None
-        assert isinstance(resolved.module, _SpendCappedModule)
+        assert isinstance(resolved.module, _SpendCappedMatcher)
         assert resolved.module._budget_usd == DEFAULT_BUDGET_USD
 
     def test_custom_budget_usd_override(self) -> None:
@@ -510,7 +510,7 @@ class TestResolveJudge:
         assert resolved.module._module.model == DEFAULT_AUTO_MODEL  # type: ignore[attr-defined]
 
     def test_injected_module_reports_judge_used_custom(self) -> None:
-        injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
+        injected: DSPyMatcher[PresetCompany] = DSPyMatcher(lm=DummyLM([]), entity_noun="thing")
         resolved = resolve_judge(injected, PresetCompany)
         assert resolved.judge_used == "custom"
         assert resolved.module._module is injected
@@ -523,13 +523,13 @@ class TestResolveJudge:
             resolved = resolve_judge("auto", PresetCompany)
         assert resolved.judge_used == "zero_shot_llm"
         assert resolved.model == DEFAULT_AUTO_MODEL
-        assert isinstance(resolved.module._module, DSPyJudge)
+        assert isinstance(resolved.module._module, DSPyMatcher)
 
     def test_auto_resolution_raises_without_keys(self) -> None:
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
-            pytest.raises(NoJudgeAvailableError),
+            pytest.raises(NoMatcherAvailableError),
         ):
             resolve_judge("auto", PresetCompany)
 
@@ -537,7 +537,7 @@ class TestResolveJudge:
         """LANGRES_OFFLINE=1 forces the keyless fail-fast path WITHOUT any
         dotenv patching -- hermetic even inside a repo whose .env carries a
         real key (the process env beats the .env file). This is the
-        documented, deterministic way to test NoJudgeAvailableError; before
+        documented, deterministic way to test NoMatcherAvailableError; before
         it existed, no environment manipulation could produce a keyless run
         in-repo (popping the vars just let .env refill them)."""
         with (
@@ -546,7 +546,7 @@ class TestResolveJudge:
                 {"LANGRES_OFFLINE": "1", "OPENROUTER_API_KEY": "fake-not-a-real-key"},
                 clear=True,
             ),
-            pytest.raises(NoJudgeAvailableError, match="LANGRES_OFFLINE"),
+            pytest.raises(NoMatcherAvailableError, match="LANGRES_OFFLINE"),
         ):
             resolve_judge("auto", PresetCompany)
 
@@ -556,7 +556,7 @@ class TestResolveJudge:
         absent, so ``OPENROUTER_API_KEY="" OPENAI_API_KEY=""`` fails fast."""
         with (
             patch.dict("os.environ", {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=True),
-            pytest.raises(NoJudgeAvailableError, match="no API key"),
+            pytest.raises(NoMatcherAvailableError, match="no API key"),
         ):
             resolve_judge("auto", PresetCompany)
 
@@ -687,7 +687,7 @@ class TestBuildResolver:
     def test_zero_shot_llm_explicit_unpinned_model_warns_blind_cap(self) -> None:
         """M1 regression: an explicit judge="zero_shot_llm" with an unpinned
         model= must warn that the spend cap is blind (construction only --
-        DummyLM-equivalent zero-spend, DSPyJudge is never .forward()ed here),
+        DummyLM-equivalent zero-spend, DSPyMatcher is never .forward()ed here),
         not silently proceed under a reassuring but false $0.0000 estimate."""
         with pytest.warns(UserWarning, match="CANNOT enforce a limit") as record:
             build_resolver(
@@ -715,7 +715,7 @@ class TestBuildResolver:
             )
 
     def test_custom_module_uses_n_based_blocker_rule_and_no_notice(self) -> None:
-        injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
+        injected: DSPyMatcher[PresetCompany] = DSPyMatcher(lm=DummyLM([]), entity_noun="thing")
         with warnings_none():
             resolved = build_resolver(
                 PresetCompany,
@@ -839,7 +839,7 @@ class TestResolveJudgeModelIdentity:
         assert resolved.model == DEFAULT_AUTO_MODEL
 
     def test_injected_module_reports_its_own_model_attribute(self) -> None:
-        injected: DSPyJudge[PresetCompany] = DSPyJudge(lm=DummyLM([]), entity_noun="thing")
+        injected: DSPyMatcher[PresetCompany] = DSPyMatcher(lm=DummyLM([]), entity_noun="thing")
         resolved = resolve_judge(injected, PresetCompany)
         assert resolved.judge_used == "custom"
         assert resolved.model == injected.model

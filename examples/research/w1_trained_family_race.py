@@ -1,9 +1,9 @@
-"""W1.2 trained-family replication — FellegiSunterJudge + RandomForestJudge, $0.
+"""W1.2 trained-family replication — FellegiSunterMatcher + RandomForestMatcher, $0.
 
 Races the two W1.2 "trained family" judges — the first learn-with-no-labels
-proof (:class:`~langres.core.judges.fellegi_sunter.FellegiSunterJudge`, EM over
+proof (:class:`~langres.core.matchers.fellegi_sunter.FellegiSunterMatcher`, EM over
 random-sampled u + the blocked candidates for m/prior) and a Magellan-style
-supervised RandomForest (:class:`~langres.core.modules.random_forest_judge.RandomForestJudge`) — on
+supervised RandomForest (:class:`~langres.core.matchers.random_forest_judge.RandomForestMatcher`) — on
 all three $0 replication datasets:
 
     FodorsZagatBenchmark   — saturated, clean multi-field identity data
@@ -139,7 +139,7 @@ def run_trained_family_replication(seed: int = SEED) -> list[TrainedCell]:
             # own grid); 0.5 is an arbitrary placeholder for the factory call.
             # Uses the class-default hyperparameters (the same construction
             # methods.py wires) -- see docs/research/20260702_w1_trained_family_results.md
-            # for what happens (and doesn't help) if FellegiSunterJudge's EM
+            # for what happens (and doesn't help) if FellegiSunterMatcher's EM
             # iteration budget is widened past the default.
             resolver = make_resolver_factory(method, bench)(0.5)
             _train_candidates, train_labels = _blocked_candidates_and_labels(
@@ -194,7 +194,7 @@ def format_report(cells: list[TrainedCell]) -> str:
 def main() -> None:
     """Run the deterministic, zero-spend trained-family replication and print it."""
     print("=" * 78)
-    print("W1.2 trained-family replication — FellegiSunterJudge + RandomForestJudge (seed=0)")
+    print("W1.2 trained-family replication — FellegiSunterMatcher + RandomForestMatcher (seed=0)")
     print("=" * 78)
 
     cells = run_trained_family_replication(SEED)

@@ -11,7 +11,7 @@ teacher, the model/budget pre-flight, and serializing a
 result doc -- so neither script re-implements them.
 
 **$0 / import-safety:** nothing here imports ``dspy`` at module load;
-:func:`build_real_teacher` imports :class:`~langres.core.modules.dspy_judge.DSPyJudge`
+:func:`build_real_teacher` imports :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`
 lazily (only on the real path), so the scripts and their ``simulated=True``
 verification import cleanly in a lean env with no ``[llm]`` extra. ``print`` is
 allowed under ``examples/``.
@@ -31,7 +31,7 @@ from langres.clients.openrouter import (
 )
 
 if TYPE_CHECKING:
-    from langres.core.module import Module
+    from langres.core.matcher import Matcher
 
     from examples.flywheel_closed_loop import ClosedLoopReport, FZRecord
 
@@ -43,10 +43,10 @@ DEFAULT_MODEL = "openrouter/openai/gpt-4o-mini"
 RESULTS_DIR = Path("data/benchmarks/flywheel")
 
 
-def build_real_teacher(model: str, *, entity_noun: str) -> Module[FZRecord]:
+def build_real_teacher(model: str, *, entity_noun: str) -> Matcher[FZRecord]:
     """Build a REAL DSPy frontier teacher with an honest per-1k price wired in.
 
-    Lazily imports :class:`~langres.core.modules.dspy_judge.DSPyJudge` (the
+    Lazily imports :class:`~langres.core.matchers.dspy_judge.DSPyMatcher` (the
     ``[llm]`` extra) so the simulated path never needs ``dspy``. The pinned
     price makes ``provenance["cost_usd"]`` honest, which is what the outer
     :class:`~examples.flywheel_closed_loop._OuterSpendCap` meters and enforces.
@@ -57,11 +57,11 @@ def build_real_teacher(model: str, *, entity_noun: str) -> Module[FZRecord]:
             (``"restaurant"`` for Fodors-Zagat, ``"product"`` for Amazon-Google).
 
     Returns:
-        A price-wired ``DSPyJudge`` ready to score ``FZRecord`` candidates.
+        A price-wired ``DSPyMatcher`` ready to score ``FZRecord`` candidates.
     """
-    from langres.core.modules.dspy_judge import DSPyJudge
+    from langres.core.matchers.dspy_judge import DSPyMatcher
 
-    judge: DSPyJudge[FZRecord] = DSPyJudge(model=model, entity_noun=entity_noun)
+    judge: DSPyMatcher[FZRecord] = DSPyMatcher(model=model, entity_noun=entity_noun)
     judge.price_per_1k_tokens = dspy_price_per_1k(model)
     return judge
 

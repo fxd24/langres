@@ -85,7 +85,7 @@ This is the primary "hello world" use case for langres.
 - **DX layer:** `langres.dedupe(records)` (schema-optional, zero-label,
   spend-capped).
 - **Core path:** `Resolver.from_schema(schema).resolve(records)`, composing an
-  `AllPairsBlocker`/`VectorBlocker`, a `StringComparator` + judge (`Module`),
+  `AllPairsBlocker`/`VectorBlocker`, a `StringComparator` + judge (`Matcher`),
   and a `core.Clusterer`.
 
 ### Use Case 2: Entity Linking (Asymmetric Resolution)
@@ -209,7 +209,7 @@ The langres architecture is flexible enough to support this. It requires impleme
 
 **langres Implementation (Out of Scope):**
 
-This is architecturally different. Our `core.Module` is stateless and pairwise. Collective resolution requires a stateful, graph-native inference engine. langres is not designed for this.
+This is architecturally different. Our `core.Matcher` is stateless and pairwise. Collective resolution requires a stateful, graph-native inference engine. langres is not designed for this.
 
 ### Use Case 5: Streaming Resolution
 
@@ -259,7 +259,7 @@ exists, and the intended (not-yet-built) design otherwise.
 | 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap |
 | 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** |
 | 4. Master Data Creation | `core.Canonicalizer` (survivorship + `enrich` loop) | ✅ **Shipping** |
-| Set-wise / trained judge families | `SelectJudge` (set-wise), `FellegiSunterJudge`, `RandomForestJudge`, `CascadeJudge` | ✅ **Shipping** |
+| Set-wise / trained judge families | `SelectMatcher` (set-wise), `FellegiSunterMatcher`, `RandomForestMatcher`, `CascadeMatcher` | ✅ **Shipping** |
 | 9. Negative Constraints | constrained `Clusterer` — not built | 🚧 Roadmap |
 | Human-in-the-Loop | `select_for_review` + `ReviewQueue` + the `langres` CLI (`review`/`export-csv`/`import-csv`); harvest (`Correction`/`CorrectionLog`, `harvest_labeled_pairs`) → `derive_threshold` / judge `fit()` | ✅ **Shipping** |
 | Data Generation | synthetic generator — not built | 🚧 Roadmap |

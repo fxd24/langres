@@ -1,8 +1,8 @@
 """Tests for the fit-hook Protocols: SupervisedFitMixin, UnsupervisedFitMixin.
 
 These are runtime-checkable structural Protocols (W1.0 contracts-only; E6): a
-Module opts in by implementing the method, not by subclassing. No abstract fit
-method is added to the base Module ABC (that would break every existing
+Matcher opts in by implementing the method, not by subclassing. No abstract fit
+method is added to the base Matcher ABC (that would break every existing
 module), so these tests verify isinstance()-based structural detection instead
 of ABC-enforced instantiation failures.
 """
@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 
 
@@ -24,8 +24,8 @@ class ProductSchema(BaseModel):
     title: str
 
 
-class _NonLearnableModule(Module[CompanySchema]):
-    """A module implementing neither fit hook (e.g. WeightedAverageJudge-like)."""
+class _NonLearnableModule(Matcher[CompanySchema]):
+    """A module implementing neither fit hook (e.g. WeightedAverageMatcher-like)."""
 
     def forward(
         self, candidates: Iterator[ERCandidate[CompanySchema]]
@@ -46,8 +46,8 @@ class _NonLearnableModule(Module[CompanySchema]):
         raise NotImplementedError  # not exercised in these tests
 
 
-class _SupervisedModule(Module[CompanySchema]):
-    """A module implementing SupervisedFitMixin (e.g. a future RandomForestJudge)."""
+class _SupervisedModule(Matcher[CompanySchema]):
+    """A module implementing SupervisedFitMixin (e.g. a future RandomForestMatcher)."""
 
     def __init__(self) -> None:
         self.fit_calls: list[tuple[list[ERCandidate[CompanySchema]], Sequence[bool]]] = []
@@ -66,8 +66,8 @@ class _SupervisedModule(Module[CompanySchema]):
         self.fit_calls.append((list(candidates), labels))
 
 
-class _UnsupervisedModule(Module[CompanySchema]):
-    """A module implementing UnsupervisedFitMixin (e.g. a future FellegiSunterJudge)."""
+class _UnsupervisedModule(Matcher[CompanySchema]):
+    """A module implementing UnsupervisedFitMixin (e.g. a future FellegiSunterMatcher)."""
 
     def __init__(self) -> None:
         self.fit_unlabeled_calls: list[list[ERCandidate[CompanySchema]]] = []
@@ -141,7 +141,7 @@ def test_unsupervised_mixin_fit_unlabeled_receives_candidates() -> None:
 def test_fit_mixins_are_schema_agnostic_with_product_schema() -> None:
     """The Protocols are generic over SchemaT — a ProductSchema module also matches."""
 
-    class _ProductSupervisedModule(Module[ProductSchema]):
+    class _ProductSupervisedModule(Matcher[ProductSchema]):
         def forward(
             self, candidates: Iterator[ERCandidate[ProductSchema]]
         ) -> Iterator[PairwiseJudgement]:

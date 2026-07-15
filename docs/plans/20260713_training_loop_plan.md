@@ -42,7 +42,7 @@ threshold never tuned on test):
 
 | honest pairwise F1 | Amazon-Google | Abt-Buy | real cost |
 |---|---|---|---|
-| RandomForestJudge floor ($0, single-metric) | 0.360 | 0.404 | $0 |
+| RandomForestMatcher floor ($0, single-metric) | 0.360 | 0.404 | $0 |
 | `deepseek-v4-flash` zero-shot LLM | 0.575 | 0.680 | $0.19 + $0.18 |
 | `deepseek-v4-pro` zero-shot LLM | 0.614 | 0.737 | $2.56 + $2.27 |
 | **Ditto (published, fine-tuned)** | **0.756** | **0.893** | — |
@@ -165,7 +165,7 @@ costs almost no new code once T1 lands.
 - **Models.** Student = Qwen3-0.6B (or GPT-2-124M for size fidelity — decision
   at run time; 0.6B aligns with the #85 ladder). No paid teacher: the miner is
   a **local classifier**. Fidelity deviation: they used AutoGluon; we start
-  with the in-repo sklearn stack (`RandomForestJudge`'s family) as the miner
+  with the in-repo sklearn stack (`RandomForestMatcher`'s family) as the miner
   and add `autogluon` as a dev-only dep **only if** numbers disappoint.
 - **Cost.** $0 paid. GPU ≈ 1–3 h per held-out fold; run 2 headline folds (AG,
   AB) rather than all 8.
@@ -312,7 +312,7 @@ ceiling is explained, not mysterious.
    (unsloth, trl/peft, optionally autogluon) stay dev-group-only** — never
    production extras.
 3. **Local-LLM student serving** — decision, not code: Option A (recommended)
-   wrap the fine-tuned checkpoint behind the existing `LLMJudge` via a local
+   wrap the fine-tuned checkpoint behind the existing `LLMMatcher` via a local
    OpenAI-compatible server (`api_base`) — zero core changes, evaluates through
    the *identical* seam as the paid teacher; Option B, a small in-process
    transformers judge (~150 LOC) if serving on the 3070 box proves awkward.

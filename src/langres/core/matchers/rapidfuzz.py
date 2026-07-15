@@ -1,4 +1,4 @@
-"""RapidfuzzModule implementation for classical string matching.
+"""RapidfuzzMatcher implementation for classical string matching.
 
 This module computes weighted string similarity scores using rapidfuzz. It is
 schema-agnostic, accepting field extractors and weights to work with any
@@ -11,14 +11,14 @@ from typing import Any, Literal
 from rapidfuzz import fuzz
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 
 # Supported rapidfuzz algorithms
 Algorithm = Literal["ratio", "token_sort_ratio", "token_set_ratio"]
 
 
-class RapidfuzzModule(Module[SchemaT]):
+class RapidfuzzMatcher(Matcher[SchemaT]):
     """Schema-agnostic string similarity module using rapidfuzz.
 
     This module computes weighted string similarity scores across multiple fields
@@ -27,7 +27,7 @@ class RapidfuzzModule(Module[SchemaT]):
 
     Example:
         # For companies
-        module = RapidfuzzModule(
+        module = RapidfuzzMatcher(
             field_extractors={
                 "name": (lambda x: x.name, 0.7),
                 "address": (lambda x: x.address or "", 0.3),
@@ -37,7 +37,7 @@ class RapidfuzzModule(Module[SchemaT]):
         )
 
         # For products (different schema, same module!)
-        module = RapidfuzzModule(
+        module = RapidfuzzMatcher(
             field_extractors={
                 "title": (lambda x: x.title, 0.8),
                 "brand": (lambda x: x.brand or "", 0.2),
@@ -66,7 +66,7 @@ class RapidfuzzModule(Module[SchemaT]):
         threshold: float = 0.5,
         algorithm: Algorithm = "ratio",
     ):
-        """Initialize RapidfuzzModule.
+        """Initialize RapidfuzzMatcher.
 
         Args:
             field_extractors: Dictionary mapping field names to (extractor, weight)
@@ -186,7 +186,7 @@ class RapidfuzzModule(Module[SchemaT]):
         """Explore scores without ground truth labels.
 
         This implementation delegates to a shared utility function that works
-        for all Module types since they all return PairwiseJudgement objects.
+        for all Matcher types since they all return PairwiseJudgement objects.
 
         Args:
             judgements: List of PairwiseJudgement objects to analyze

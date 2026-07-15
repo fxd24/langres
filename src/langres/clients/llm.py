@@ -25,7 +25,7 @@ def create_llm_client(settings: Settings | None = None, enable_langfuse: bool = 
                         env vars *and* the ``langfuse`` package -- it's dev-group
                         only, not part of the ``[llm]`` extra's install promise,
                         see the Note below). Defaults to False: tracing is an
-                        explicit opt-in, so ``LLMJudge``'s internal
+                        explicit opt-in, so ``LLMMatcher``'s internal
                         ``create_llm_client(Settings())`` calls (and every other
                         caller that doesn't pass this kwarg) work on a plain
                         ``pip install langres[llm]`` with no langfuse installed.

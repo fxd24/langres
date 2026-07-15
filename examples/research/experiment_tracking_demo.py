@@ -127,7 +127,7 @@ def main() -> None:
                 config_context(threshold, parent_run_id=sweep.attempt_id),
                 store=store,
             ) as run:
-                clusters = list(dedupe(records, judge="string", threshold=threshold))
+                clusters = list(dedupe(records, matcher="string", threshold=threshold))
                 metrics = pair_prf(clusters, gold_pairs)
                 run.log_metrics(
                     metrics,

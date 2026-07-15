@@ -103,7 +103,7 @@ def test_parse_binary_answer_delegates_to_canonical_parser(answer: str) -> None:
     parsers disagreed; after unification both must agree and return MATCH (the
     paper's ``check_for_prediction`` deletes punctuation -> "yes").
     """
-    from langres.core.modules.llm_judge import parse_binary_yes_no
+    from langres.core.matchers.llm_judge import parse_binary_yes_no
 
     assert parse_binary_answer(answer) == 1
     assert parse_binary_answer(answer) == int(parse_binary_yes_no(answer).decision)
@@ -143,9 +143,9 @@ def test_build_candidates_aligns_with_sample_order() -> None:
 
 
 def test_llm_rendering_reproduces_archived_prompts_byte_exact() -> None:
-    """The template+serializer an LLMJudge uses reproduces the $0-validated prompt.
+    """The template+serializer an LLMMatcher uses reproduces the $0-validated prompt.
 
-    LLMJudge renders each pair as ``template.replace("{left}", serializer(left))``
+    LLMMatcher renders each pair as ``template.replace("{left}", serializer(left))``
     ``.replace("{right}", serializer(right))`` (literal substitution). This must
     equal ``render_sample_prompts``' prompt byte-for-byte, so the PAID run pays
     for the exact prompt the offline replay already validated at F1 95.15.

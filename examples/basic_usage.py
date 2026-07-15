@@ -45,7 +45,7 @@ def main() -> None:
     print(f"  Left entity: {candidate.left.name}")
     print(f"  Right entity: {candidate.right.name}")
 
-    # 3. Create a pairwise judgement (simulating a Module's decision)
+    # 3. Create a pairwise judgement (simulating a Matcher's decision)
     print("\n3. Creating PairwiseJudgement...")
     judgement = PairwiseJudgement(
         left_id=candidate.left.id,

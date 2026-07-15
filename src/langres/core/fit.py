@@ -1,26 +1,36 @@
-"""Fit-hook contracts: how a Module opts into being trainable (W1.0, E6).
+"""Fit-hook contracts: how a pipeline role opts into being trainable (W1.0, E6).
 
-Two runtime-checkable, structural `Protocol`s -- **not** abstract methods on
-the base ``Module``. Adding an abstract ``fit``/``fit_unlabeled`` to ``Module``
-would break every existing, non-learnable module (``WeightedAverageJudge``,
-``LLMJudge``, ...), which is not the goal here: most judges stay heuristic or
-zero-shot and never need a fit hook. Instead, a module *opts in* structurally
-by implementing the method with the matching name and signature; callers (the
-Resolver) detect this with ``isinstance(module, SupervisedFitMixin)`` /
-``isinstance(module, UnsupervisedFitMixin)``.
+Runtime-checkable, structural `Protocol`s -- **not** abstract methods on any
+base class. Adding an abstract ``fit`` to ``Matcher`` would break every
+existing, non-learnable matcher (``WeightedAverageMatcher``, ``LLMMatcher``,
+...), which is not the goal here: most components stay heuristic or zero-shot
+and never need a fit hook. Instead, a component *opts in* structurally by
+implementing the method with the matching name and signature; callers (the
+Resolver) detect this with ``isinstance(component, <Mixin>)``.
 
-- ``SupervisedFitMixin``: for judges that learn from labeled pairs (e.g. a
-  future ``RandomForestJudge`` fitting an sklearn RandomForest over
-  ``ComparisonVector.similarities``).
-- ``UnsupervisedFitMixin``: for judges that learn without labels (e.g. a
-  future ``FellegiSunterJudge`` fitting m/u probabilities via EM).
+Three pipeline roles can be trained, each with its own fit signature:
 
-See ``Resolver.fit()`` for how these are consumed, and
+- **Matcher** -- ``SupervisedFitMixin`` (``fit(candidates, labels)``, e.g. a
+  ``RandomForestMatcher`` fitting an sklearn forest over
+  ``ComparisonVector.similarities``) and ``UnsupervisedFitMixin``
+  (``fit_unlabeled(candidates)``, e.g. a ``FellegiSunterMatcher`` fitting m/u
+  probabilities via EM).
+- **Blocker** -- ``BlockerFitMixin`` (``fit_blocker(records, pairs)``: learn a
+  high-recall blocking key/index from known match pairs). Contract-only here;
+  the concrete ``TrainableVectorBlocker`` is a later PR -- this makes learned
+  blocking *expressible* in the role taxonomy.
+- **Calibrator** -- ``CalibratorFitMixin`` (``fit_calibrator(scores, labels)``
+  learns a score->probability map; ``transform(scores)`` applies it). The
+  concrete Platt/isotonic
+  :class:`~langres.core.calibration.Calibrator` implements it, consumed by
+  ``Resolver.fit(method=Platt()/Isotonic())``.
+
+See ``Resolver.fit()`` for how the matcher mixins are consumed, and
 docs/TECHNICAL_OVERVIEW.md ("Fit-hook contract") for the full picture.
 """
 
 from collections.abc import Iterator, Sequence
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -34,7 +44,7 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 @runtime_checkable
 class SupervisedFitMixin(Protocol[SchemaT]):
-    """A Module that learns from labeled candidate pairs.
+    """A Matcher that learns from labeled candidate pairs.
 
     Implement ``fit(candidates, labels)`` to opt in; no subclassing required
     (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
@@ -55,7 +65,7 @@ class SupervisedFitMixin(Protocol[SchemaT]):
 
 @runtime_checkable
 class UnsupervisedFitMixin(Protocol[SchemaT]):
-    """A Module that learns from candidate pairs without labels.
+    """A Matcher that learns from candidate pairs without labels.
 
     Implement ``fit_unlabeled(candidates)`` to opt in; no subclassing required
     (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
@@ -67,5 +77,64 @@ class UnsupervisedFitMixin(Protocol[SchemaT]):
         Args:
             candidates: The blocked (and, if a comparator is configured,
                 comparison-attached) candidate stream to learn from.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+
+@runtime_checkable
+class BlockerFitMixin(Protocol):
+    """A Blocker that learns its blocking scheme from known match pairs.
+
+    Implement ``fit_blocker(records, pairs)`` to opt in; no subclassing required
+    (structural typing via ``isinstance()``, enabled by ``@runtime_checkable``).
+    Contract-only for now -- the concrete ``TrainableVectorBlocker`` is a later
+    PR; this makes learned blocking *expressible* in the role taxonomy without
+    shipping an impl.
+    """
+
+    def fit_blocker(self, records: Sequence[Any], pairs: Sequence[tuple[str, str]]) -> None:
+        """Fit the blocker's parameters from records + known match pairs.
+
+        Args:
+            records: The raw records to index (same shape ``Blocker.stream``
+                accepts).
+            pairs: Known ``(left_id, right_id)`` match pairs -- the recall target
+                the learned blocking key/index must keep.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+
+@runtime_checkable
+class CalibratorFitMixin(Protocol):
+    """A calibrator that learns a score->probability map and applies it.
+
+    Implement ``fit_calibrator(scores, labels)`` (learn) and ``transform(scores)``
+    (apply) to opt in; no subclassing required (structural typing via
+    ``isinstance()``). The role is two-sided: a fitted calibrator is only useful
+    if the predict path can push scores through it, so the apply half is part of
+    the contract. The concrete Platt/isotonic
+    :class:`~langres.core.calibration.Calibrator` implements both;
+    :meth:`~langres.core.resolver.Resolver._fit_calibrate` fits it and
+    :meth:`~langres.core.resolver.Resolver.predict` applies it.
+    """
+
+    def fit_calibrator(self, scores: Sequence[float], labels: Sequence[bool]) -> None:
+        """Fit the calibrator's parameters from scores + gold labels.
+
+        Args:
+            scores: The matcher scores to calibrate, positionally aligned with
+                ``labels``.
+            labels: Gold match/non-match labels for each score.
+        """
+        ...  # pragma: no cover — Protocol method body, never executed
+
+    def transform(self, scores: Sequence[float]) -> list[float]:
+        """Map raw scores to calibrated probabilities in ``[0, 1]``.
+
+        Args:
+            scores: Raw matcher scores to calibrate.
+
+        Returns:
+            One calibrated probability per input score.
         """
         ...  # pragma: no cover — Protocol method body, never executed

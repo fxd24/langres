@@ -1,7 +1,7 @@
 """Tests for ERCandidateGroup and the derived pairwise-to-group helper.
 
 ERCandidateGroup represents "anchor + K candidate members" — the set-wise
-input contract that GroupwiseModule.forward_groups() consumes (W1.0
+input contract that GroupwiseMatcher.forward_groups() consumes (W1.0
 contracts-only; see docs/TECHNICAL_OVERVIEW.md "Group contract"). These tests
 are schema-agnostic: both CompanySchema and a local ProductSchema exercise the
 model and the derivation helper.

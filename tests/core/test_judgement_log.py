@@ -1,7 +1,7 @@
-"""Tests for langres.core.judgement_log (JudgementLog / LoggingModule).
+"""Tests for langres.core.judgement_log (JudgementLog / LoggingMatcher).
 
 The opt-in signal-log seam (W0.2): a JSONL sink (``JudgementLog``) plus a
-boundary-component ``Module`` wrapper (``LoggingModule``) that logs each
+boundary-component ``Matcher`` wrapper (``LoggingMatcher``) that logs each
 ``PairwiseJudgement`` as it streams past, without breaking generator
 laziness. Zero-spend throughout -- everything here uses plain fake Modules,
 never a real judge.
@@ -18,9 +18,9 @@ from typing import Any, Literal
 import pytest
 
 from langres.clients.openrouter import BudgetExceeded
-from langres.core.judgement_log import JudgementLog, LoggingModule
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 from langres.core.runs import RunContext, capture_run
 
@@ -52,10 +52,10 @@ def _judgement(
     )
 
 
-class _CountingModule(Module[object]):
+class _CountingModule(Matcher[object]):
     """Yields ``judgements`` one at a time, tracking how many were pulled.
 
-    Used to prove ``LoggingModule.forward`` is lazy -- it must not pull more
+    Used to prove ``LoggingMatcher.forward`` is lazy -- it must not pull more
     than the caller asked for.
     """
 
@@ -75,11 +75,11 @@ class _CountingModule(Module[object]):
         raise NotImplementedError
 
 
-class _BudgetBreachingModule(Module[object]):
+class _BudgetBreachingModule(Matcher[object]):
     """Yields ``yielded``, then raises ``BudgetExceeded`` whose
     ``partial_judgements`` also carries ``tripping`` -- the judgement that
     was produced (and paid for) but never yielded, mirroring
-    ``core.presets._SpendCappedModule``'s raise-before-yield behavior on the
+    ``core.presets._SpendCappedMatcher``'s raise-before-yield behavior on the
     call that crosses the cap."""
 
     def __init__(self, yielded: list[PairwiseJudgement], tripping: PairwiseJudgement) -> None:
@@ -153,7 +153,7 @@ class TestJudgementLogAppend:
         assert row["confidence_source"] == "none"
 
     def test_append_reads_cost_from_llm_cost_usd_key(self, tmp_path: Path) -> None:
-        """The cost bug: CascadeModule writes spend under ``llm_cost_usd`` (not
+        """The cost bug: CascadeChainMatcher writes spend under ``llm_cost_usd`` (not
         ``cost_usd``), so a bare ``.get("cost_usd")`` persisted 0.0 for every
         cascade row. The row must carry the real cost."""
         log = JudgementLog(tmp_path / "log.jsonl")
@@ -220,7 +220,7 @@ class TestJudgementLogAppend:
         """A judgement without its own provenance model logs the caller's resolved id.
 
         This is the log half of the model-identity contract: the verbs pass
-        their resolved ``model`` through ``LoggingModule``, so log rows and
+        their resolved ``model`` through ``LoggingMatcher``, so log rows and
         the result's ``model`` field agree even for judges (string/embedding)
         that never stamp ``provenance["model"]`` themselves.
         """
@@ -421,7 +421,7 @@ class TestJudgementLogDecisionBackfill:
 
 
 # ---------------------------------------------------------------------------
-# LoggingModule
+# LoggingMatcher
 # ---------------------------------------------------------------------------
 
 
@@ -430,7 +430,7 @@ class TestLoggingModule:
         judgements = [_judgement("a", "b", 0.9), _judgement("c", "d", 0.1)]
         inner = _CountingModule(judgements)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         result = list(wrapped.forward(iter([])))
 
@@ -440,7 +440,7 @@ class TestLoggingModule:
         judgements = [_judgement("a", "b", 0.9), _judgement("c", "d", 0.1)]
         inner = _CountingModule(judgements)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         list(wrapped.forward(iter([])))
 
@@ -452,7 +452,7 @@ class TestLoggingModule:
         judgements = [_judgement("a", "b", 0.9), _judgement("c", "d", 0.1)]
         inner = _CountingModule(judgements)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         list(wrapped.forward(iter([])))
 
@@ -464,7 +464,7 @@ class TestLoggingModule:
         judgements = [_judgement(str(i), str(i + 1), 0.9) for i in range(5)]
         inner = _CountingModule(judgements)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         gen = wrapped.forward(iter([]))
         next(gen)  # pull exactly one judgement
@@ -473,7 +473,7 @@ class TestLoggingModule:
         assert len(log.read()) == 1
 
     def test_inspect_scores_delegates_to_the_wrapped_module(self, tmp_path: Path) -> None:
-        class _Reporting(Module[object]):
+        class _Reporting(Matcher[object]):
             def forward(
                 self, candidates: Iterator[ERCandidate[object]]
             ) -> Iterator[PairwiseJudgement]:
@@ -491,7 +491,7 @@ class TestLoggingModule:
                 )
 
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(_Reporting(), log=log, threshold=0.5)
+        wrapped = LoggingMatcher(_Reporting(), log=log, threshold=0.5)
 
         report = wrapped.inspect_scores([_judgement()], sample_size=3)
 
@@ -500,9 +500,9 @@ class TestLoggingModule:
 
 class TestLoggingModuleBudgetExceeded:
     """Regression (codex review, PR #62): a paid judgement that trips a
-    ``_SpendCappedModule``'s budget is recorded on ``BudgetExceeded.
+    ``_SpendCappedMatcher``'s budget is recorded on ``BudgetExceeded.
     partial_judgements`` but never yielded (the cap raises before yielding
-    it) -- so a ``LoggingModule`` wrapping the cap must not silently drop it
+    it) -- so a ``LoggingMatcher`` wrapping the cap must not silently drop it
     from the log. Every judgement that was actually produced, including the
     tripping one, must appear in the JSONL exactly once."""
 
@@ -511,7 +511,7 @@ class TestLoggingModuleBudgetExceeded:
         tripping = _judgement("c", "d", 0.95)
         inner = _BudgetBreachingModule(yielded, tripping)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         with pytest.raises(BudgetExceeded):
             list(wrapped.forward(iter([])))
@@ -526,7 +526,7 @@ class TestLoggingModuleBudgetExceeded:
         tripping = _judgement("c", "d", 0.95)
         inner = _BudgetBreachingModule(yielded, tripping)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         with pytest.raises(BudgetExceeded) as excinfo:
             list(wrapped.forward(iter([])))
@@ -539,7 +539,7 @@ class TestLoggingModuleBudgetExceeded:
         tripping = _judgement("c", "d", 0.95)
         inner = _BudgetBreachingModule([], tripping)
         log = JudgementLog(tmp_path / "log.jsonl")
-        wrapped = LoggingModule(inner, log=log, threshold=0.5)
+        wrapped = LoggingMatcher(inner, log=log, threshold=0.5)
 
         with pytest.raises(BudgetExceeded):
             list(wrapped.forward(iter([])))

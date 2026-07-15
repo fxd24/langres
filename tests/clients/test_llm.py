@@ -178,8 +178,8 @@ class TestCreateLLMClient:
 
     def test_create_llm_client_default_does_not_require_langfuse_installed(self, monkeypatch):
         """The [llm]-only contract: enable_langfuse now defaults to False, so
-        create_llm_client(Settings()) -- exactly what LLMJudge.from_env()/
-        LLMJudge._get_client() call internally -- must succeed even when
+        create_llm_client(Settings()) -- exactly what LLMMatcher.from_env()/
+        LLMMatcher._get_client() call internally -- must succeed even when
         langfuse isn't installed (it's dev-group only, not part of [llm]).
 
         Simulates absence by making ``langfuse`` unimportable (the standard
@@ -197,7 +197,7 @@ class TestCreateLLMClient:
     def test_create_llm_client_no_args_default_does_not_require_langfuse_installed(
         self, monkeypatch
     ):
-        """Same contract as above, but via the no-Settings call LLMJudge's
+        """Same contract as above, but via the no-Settings call LLMMatcher's
         ``forward_async`` path (langres/core/modules/llm_judge.py:370) uses."""
         monkeypatch.setitem(sys.modules, "langfuse", None)
         with patch("langres.clients.llm.litellm") as mock_litellm:

@@ -4,7 +4,7 @@ Every test runs at **$0** with a mocked judge -- no key, no network, no
 ``litellm``. They drive ``run_placement`` on a tiny FAKE
 :class:`~langres.data.fixed_split_pair_benchmark.FixedSplitPairBenchmark` (built
 from an in-memory corpus + splits, no dataset loader, no ``[semantic]`` extra),
-so this suite never imports ``LLMJudge`` or a real dataset. They assert the
+so this suite never imports ``LLMMatcher`` or a real dataset. They assert the
 script:
 
 - computes honest P/R/F1 and writes the JSON + Markdown artifacts;
@@ -49,7 +49,7 @@ from examples.research.phase1_llm_placement import (
 from langres.clients.openrouter import BudgetExceeded, SpendMonitor
 from langres.core.comparator import StringComparator
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 from langres.data.fixed_split_pair_benchmark import FixedSplitPairBenchmark
 
 
@@ -90,7 +90,7 @@ def _benchmark() -> FixedSplitPairBenchmark[_Rec]:
     )
 
 
-class _MockJudge(Module[_Rec]):
+class _MockJudge(Matcher[_Rec]):
     """A deterministic $0..$N mock: known matches score high, else low.
 
     Args:
@@ -124,7 +124,7 @@ class _MockJudge(Module[_Rec]):
         raise NotImplementedError
 
 
-class _AsyncMockJudge(Module[_Rec]):
+class _AsyncMockJudge(Matcher[_Rec]):
     """A judge exposing BOTH a sync ``forward`` and an async ``forward_async``.
 
     ``forward_async`` returns the same deterministic, flat-cost judgements as

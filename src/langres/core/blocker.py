@@ -29,22 +29,22 @@ class Blocker(ABC, Generic[SchemaT]):
        N² comparisons (e.g., using blocking keys, ANN search, or other techniques)
     2. **Normalize Schema**: Act as the ETL layer, transforming raw data from
        one or more sources into the clean, internal Pydantic schema that the
-       Module expects
+       Matcher expects
 
     Design principles:
-    - Separation of concerns: Blocker loads and normalizes; Module compares
+    - Separation of concerns: Blocker loads and normalizes; Matcher compares
     - Streaming first: stream() is a generator for memory efficiency
-    - Schema normalization: All data cleaning happens here, before Module
+    - Schema normalization: All data cleaning happens here, before Matcher
     - High recall: Blocking should have ≥95% recall (don't miss true matches)
 
     The Blocker is responsible for:
     - Reading raw data from various sources (dicts, DataFrames, databases, etc.)
     - Normalizing field names and types to match the internal schema
     - Generating candidate pairs using efficient blocking techniques
-    - Yielding ERCandidate[SchemaT] objects ready for Module comparison
+    - Yielding ERCandidate[SchemaT] objects ready for Matcher comparison
 
     The Blocker is NOT responsible for:
-    - Comparing entities (that's the Module's job)
+    - Comparing entities (that's the Matcher's job)
     - Making match decisions
     - Clustering entities
 

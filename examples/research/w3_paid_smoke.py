@@ -1,8 +1,8 @@
-"""W3 paid smoke: the ≤$10, SpendMonitor-capped "measure the SelectJudge claim" run.
+"""W3 paid smoke: the ≤$10, SpendMonitor-capped "measure the SelectMatcher claim" run.
 
 This is the W3 / U4 deliverable: a single, budget-capped operator script that,
 run WITH a real OpenRouter key, exercises the langres paid surface end-to-end and
-produces the one substantive number W3 exists to get -- **SelectJudge (set-wise,
+produces the one substantive number W3 exists to get -- **SelectMatcher (set-wise,
 one LLM call per anchor group) vs. an ordinary pairwise judge, same real model,
 graded side by side on Amazon-Google.**
 
@@ -12,15 +12,15 @@ cap so the run structurally cannot cross ``--budget`` (default $9, ceiling $10):
 1. ``langres.link()`` on one pair and ``langres.dedupe()`` on a small record set
    -- the user-facing verbs, on a real model, with honest per-call cost read back
    from the signal log.
-2. A single **SelectJudge GROUP call** -- one LLM call judging a whole anchor
+2. A single **SelectMatcher GROUP call** -- one LLM call judging a whole anchor
    group -- proving the set-wise cost lever on a real model (1 call for K members).
 3. A :class:`~langres.core.judgement_log.JudgementLog` signal log emitted by the
    verb calls in (1) (the flywheel inlet), read back to report row count + cost.
-4. **SelectJudge-vs-pairwise QUALITY on Amazon-Google.** The SAME real model is
-   run (a) as a pairwise :class:`~langres.core.modules.dspy_judge.DSPyJudge` over
+4. **SelectMatcher-vs-pairwise QUALITY on Amazon-Google.** The SAME real model is
+   run (a) as a pairwise :class:`~langres.core.matchers.dspy_judge.DSPyMatcher` over
    an AG candidate set (one call per pair), graded pairwise-F1 once via
    :func:`~langres.core.benchmark.evaluate_judge_on_candidates`; and (b) as a
-   :class:`~langres.core.modules.select_judge.SelectJudge` over the SAME candidate
+   :class:`~langres.core.matchers.select_judge.SelectMatcher` over the SAME candidate
    pairs re-shaped into per-anchor groups (one call per group), graded with the
    same :func:`~langres.core.metrics.pair_pr_curve`. Both F1 (+ P/R) and the honest
    cost of each are reported side by side, so the set-wise quality *and* cost lever
@@ -40,7 +40,7 @@ Spend safety (read twice):
   cross ``--budget``. A breach raises
   :class:`~langres.clients.openrouter.BudgetExceeded` carrying the judgements
   already produced on ``.partial_judgements`` (the same partials contract
-  ``_SpendCappedModule`` uses).
+  ``_SpendCappedMatcher`` uses).
 * ``--model`` must be priced in
   :data:`~langres.clients.openrouter.PRICES_PER_1M` (else the cap would be blind);
   ``main`` refuses an unpriced model and refuses ``--budget > $10``.
@@ -101,8 +101,8 @@ from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs  # no
 from langres.core.judgement_log import JudgementLog  # noqa: E402
 from langres.core.metrics import pair_pr_curve  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
-from langres.core.modules.dspy_judge import DSPyJudge  # noqa: E402
-from langres.core.modules.select_judge import SelectJudge  # noqa: E402
+from langres.core.matchers.dspy_judge import DSPyMatcher  # noqa: E402
+from langres.core.matchers.select_judge import SelectMatcher  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402
     ProductSchema,
     load_amazon_google,
@@ -200,18 +200,18 @@ class SmokeConfig:
 
 def _build_dspy_judge(
     model: str, lm: Any, prices: dict[str, tuple[float, float]]
-) -> DSPyJudge[Any]:
-    """A pairwise DSPyJudge with an honest per-1k price wired in (0 under DummyLM)."""
-    judge: DSPyJudge[Any] = DSPyJudge(lm=lm, model=model, entity_noun=ENTITY_NOUN)
+) -> DSPyMatcher[Any]:
+    """A pairwise DSPyMatcher with an honest per-1k price wired in (0 under DummyLM)."""
+    judge: DSPyMatcher[Any] = DSPyMatcher(lm=lm, model=model, entity_noun=ENTITY_NOUN)
     judge.price_per_1k_tokens = dspy_price_per_1k(model, prices)
     return judge
 
 
 def _build_select_judge(
     model: str, lm: Any, prices: dict[str, tuple[float, float]]
-) -> SelectJudge[Any]:
-    """A set-wise SelectJudge with the same honest per-1k price wired in."""
-    judge: SelectJudge[Any] = SelectJudge(lm=lm, model=model, entity_noun=ENTITY_NOUN)
+) -> SelectMatcher[Any]:
+    """A set-wise SelectMatcher with the same honest per-1k price wired in."""
+    judge: SelectMatcher[Any] = SelectMatcher(lm=lm, model=model, entity_noun=ENTITY_NOUN)
     judge.price_per_1k_tokens = dspy_price_per_1k(model, prices)
     return judge
 
@@ -219,7 +219,7 @@ def _build_select_judge(
 def _charge(monitor: SpendMonitor, cost_usd: float, produced: Sequence[PairwiseJudgement]) -> None:
     """Add a paid unit's honest cost, then enforce the cap (partials on breach).
 
-    Mirrors ``_SpendCappedModule``'s contract: on a :class:`BudgetExceeded` the
+    Mirrors ``_SpendCappedMatcher``'s contract: on a :class:`BudgetExceeded` the
     exception carries the judgements already produced (and paid for) on
     ``.partial_judgements`` -- so the caller can recover exactly what the money
     already bought instead of losing it.
@@ -303,7 +303,7 @@ def run_smoke(
             (``link``/``dedupe``/the AG pairwise arm). ``None`` -> each judge
             builds its own real ``dspy.LM`` from ``cfg.model``. Pass a ``DummyLM``
             for a $0 test.
-        select_lm: Optional DSPy LM injected into every SelectJudge. Same contract.
+        select_lm: Optional DSPy LM injected into every SelectMatcher. Same contract.
         cost_track_fn: Optional cost function ``judgements -> CostTrack``; defaults
             to the honest token-priced ``make_token_cost_track(cfg.model)``. A test
             can inject a nonzero-cost stub to make the cap fire at $0 real spend.
@@ -350,14 +350,14 @@ def run_smoke(
     verdict = link(
         _LINK_LEFT,
         _LINK_RIGHT,
-        judge=_build_dspy_judge(cfg.model, dspy_lm, prices),
+        matcher=_build_dspy_judge(cfg.model, dspy_lm, prices),
         entity_noun=ENTITY_NOUN,
         budget_usd=max(0.01, monitor.remaining),
         log=log,
     )
     clusters = dedupe(
         _DEDUPE_RECORDS,
-        judge=_build_dspy_judge(cfg.model, dspy_lm, prices),
+        matcher=_build_dspy_judge(cfg.model, dspy_lm, prices),
         entity_noun=ENTITY_NOUN,
         threshold=0.5,
         budget_usd=max(0.01, monitor.remaining),
@@ -382,7 +382,7 @@ def run_smoke(
         verb_cost,
     )
 
-    # --- (2) one SelectJudge GROUP call (the set-wise cost lever) -----------
+    # --- (2) one SelectMatcher GROUP call (the set-wise cost lever) -----------
     group = _demo_group(ag_candidates)
     select_judge = _build_select_judge(cfg.model, select_lm, prices)
     group_judgements = list(select_judge.forward_groups(iter([group])))
@@ -396,13 +396,13 @@ def run_smoke(
         "cost_usd": group_cost,
     }
     logger.info(
-        "[2] SelectJudge group call: 1 LLM call judged %d members -> %d judgements, cost $%.4f",
+        "[2] SelectMatcher group call: 1 LLM call judged %d members -> %d judgements, cost $%.4f",
         len(group.members),
         len(group_judgements),
         group_cost,
     )
 
-    # --- (4) AG SelectJudge-vs-pairwise QUALITY ----------------------------
+    # --- (4) AG SelectMatcher-vs-pairwise QUALITY ----------------------------
     # Pairwise arm: one call per pair, judged once, hard-capped by a runner.
     pairwise_judge = _build_dspy_judge(cfg.model, dspy_lm, prices)
     runner = BudgetedModuleRunner(
@@ -481,7 +481,7 @@ def main() -> int:
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(
-        description="W3 paid smoke: SpendMonitor-capped SelectJudge-vs-pairwise on Amazon-Google."
+        description="W3 paid smoke: SpendMonitor-capped SelectMatcher-vs-pairwise on Amazon-Google."
     )
     parser.add_argument(
         "--budget", type=float, default=DEFAULT_BUDGET_USD, help="Hard spend cap (USD)."

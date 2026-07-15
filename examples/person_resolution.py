@@ -4,14 +4,14 @@ This is the runnable proof that langres's target architecture — semantic
 blocking (real sentence-transformer embeddings + FAISS ANN) feeding an LLM judge,
 clustered into entities, and round-tripped through ``save``/``load`` — actually
 runs on Person-shaped records. It is wired **manually** from ``langres.core``
-primitives via ``Resolver(...)`` (the declarative ``from_schema(blocker=, judge=)``
+primitives via ``Resolver(...)`` (the declarative ``from_schema(blocker=, matcher=)``
 builder is intentionally out of scope for M0.5).
 
 It stays deterministic and free by injecting a tiny **fake** LLM client whose
 ``completion(...)`` returns canned ``MATCH/NO_MATCH`` text derived from a
 name-normalization rule that mirrors how an LLM would judge these records
 (accent-stripped, lower-cased, order-insensitive, initial-aware). Swap that fake
-for ``LLMJudge.from_env(...)`` and the exact same pipeline calls a real model.
+for ``LLMMatcher.from_env(...)`` and the exact same pipeline calls a real model.
 
 Run it::
 
@@ -21,13 +21,13 @@ What it shows:
 
 1. Build the strong-path ``Resolver`` manually: ``VectorBlocker`` (declarative
    ``schema=`` + ``text_field=``, cosine FAISS) -> ``comparator=None`` (the judge
-   reads raw entities) -> ``LLMJudge`` -> ``Clusterer``.
+   reads raw entities) -> ``LLMMatcher`` -> ``Clusterer``.
 2. Resolve a small Person fixture with known duplicates into entity clusters.
 3. Report **blocking Pair-Completeness** (the M1-critical "is blocking even
    catching the duplicates" signal) and **honest cost** (0.0 with the fake).
 4. ``save`` the pipeline to a human-readable, pickle-free ``resolver.json``,
    reload it, re-attach the fake client, and prove the clustering is identical.
-5. Optionally run one real pair through ``LLMJudge.from_env`` when
+5. Optionally run one real pair through ``LLMMatcher.from_env`` when
    ``OPENROUTER_API_KEY`` is set (skipped cleanly otherwise).
 
 ``print`` is allowed in examples (this is demonstration, not library code).
@@ -55,7 +55,7 @@ from langres.core.metrics import (
     evaluate_blocking,
 )
 from langres.core.models import PairwiseJudgement
-from langres.core.modules.llm_judge import LLMJudge
+from langres.core.matchers.llm_judge import LLMMatcher
 
 # ----------------------------------------------------------------------------
 # Schema + fixture: a handful of people with KNOWN duplicates.
@@ -166,7 +166,7 @@ class _FakeResponse:
 class FakeLLMClient:
     """A canned, deterministic stand-in for a real LLM client.
 
-    Implements only the ``.completion(...)`` surface ``LLMJudge.forward`` calls.
+    Implements only the ``.completion(...)`` surface ``LLMMatcher.forward`` calls.
     It extracts the two record names from the rendered prompt and answers
     ``MATCH``/``NO_MATCH`` via :func:`_names_match`, so the whole pipeline runs
     offline, for free, and identically on every invocation.
@@ -213,8 +213,8 @@ def build_resolver(client: Any, *, k_neighbors: int = 5, threshold: float = 0.5)
     """Wire the embeddings + LLM strong path manually into a Resolver.
 
     Args:
-        client: The LLM client injected into the ``LLMJudge`` (the deterministic
-            :class:`FakeLLMClient` here; ``LLMJudge.from_env`` in production).
+        client: The LLM client injected into the ``LLMMatcher`` (the deterministic
+            :class:`FakeLLMClient` here; ``LLMMatcher.from_env`` in production).
         k_neighbors: Nearest neighbours per record for the vector blocker.
         threshold: Clusterer match threshold over judge scores.
 
@@ -231,7 +231,7 @@ def build_resolver(client: Any, *, k_neighbors: int = 5, threshold: float = 0.5)
         text_field="name",
         k_neighbors=k_neighbors,
     )
-    judge: LLMJudge[PersonSchema] = LLMJudge(
+    judge: LLMMatcher[PersonSchema] = LLMMatcher(
         client=client,
         model="openrouter/openai/gpt-4o-mini",
         temperature=0.0,
@@ -240,7 +240,7 @@ def build_resolver(client: Any, *, k_neighbors: int = 5, threshold: float = 0.5)
     return Resolver(
         blocker=blocker,
         comparator=None,  # the LLM judge reads raw entities; no comparison vector
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=threshold),
     )
 
@@ -308,7 +308,7 @@ def run_demo() -> dict[str, Any]:
 
 
 def maybe_live_smoke() -> None:
-    """Run ONE real pair through ``LLMJudge.from_env`` if a key is present.
+    """Run ONE real pair through ``LLMMatcher.from_env`` if a key is present.
 
     Gated on ``OPENROUTER_API_KEY`` so the default run is offline and free.
     Cost is trivial (a single pair). Prints the real ``completion_cost``.
@@ -321,7 +321,7 @@ def maybe_live_smoke() -> None:
 
     from langres.core.models import ERCandidate
 
-    judge: LLMJudge[PersonSchema] = LLMJudge.from_env(
+    judge: LLMMatcher[PersonSchema] = LLMMatcher.from_env(
         model="openrouter/openai/gpt-4o-mini", temperature=0.0, entity_noun="person"
     )
     pair: ERCandidate[PersonSchema] = ERCandidate(

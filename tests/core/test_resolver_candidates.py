@@ -74,7 +74,7 @@ def test_candidates_attaches_comparison_vectors_when_comparator_configured() -> 
     attach comparison vectors exactly like _candidates() does. A caller that
     instead reaches into e.g. ``bench.build_blocker().stream(records)`` gets
     candidates WITHOUT them, silently changing what a comparison-reading judge
-    (e.g. WeightedAverageJudge) sees -- see the method's docstring."""
+    (e.g. WeightedAverageMatcher) sees -- see the method's docstring."""
     resolver = _resolver()
     result = resolver.candidates(_RECORDS)
 

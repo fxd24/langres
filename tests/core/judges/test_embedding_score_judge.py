@@ -1,8 +1,8 @@
-"""Tests for EmbeddingScoreJudge (the embedding-cosine scorer Module).
+"""Tests for EmbeddingScoreMatcher (the embedding-cosine scorer Matcher).
 
 The judge is the zero-spend scorer that turns a ``VectorBlocker``'s attached
 ``similarity_score`` into a ``PairwiseJudgement`` (no Comparator, no LLM). It
-must be registry-serializable exactly like ``WeightedAverageJudge``: register
+must be registry-serializable exactly like ``WeightedAverageMatcher``: register
 under ``embedding_score_judge``, round-trip through a Resolver artifact, and load
 in a fresh process via the public package alone.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from langres.core.judges.embedding_score import EmbeddingScoreJudge
+from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.registry import get_component
 
@@ -36,7 +36,7 @@ def _candidate(similarity: float | None) -> ERCandidate[CompanySchema]:
 
 def test_score_equals_similarity_score() -> None:
     """The emitted judgement's score is exactly the candidate's similarity_score."""
-    judge: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge(threshold=0.5)
+    judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher(threshold=0.5)
     [judgement] = list(judge.forward(iter([_candidate(0.83)])))
 
     assert judgement.left_id == "a"
@@ -49,7 +49,7 @@ def test_score_equals_similarity_score() -> None:
 
 def test_decision_step_reflects_threshold() -> None:
     """decision_step records match/no-match against the judge threshold (score unchanged)."""
-    judge: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge(threshold=0.7)
+    judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher(threshold=0.7)
 
     [above] = list(judge.forward(iter([_candidate(0.71)])))
     [at] = list(judge.forward(iter([_candidate(0.70)])))
@@ -64,7 +64,7 @@ def test_decision_step_reflects_threshold() -> None:
 
 def test_missing_similarity_raises_with_actionable_message() -> None:
     """A None similarity_score (non-VectorBlocker upstream) raises a clear ValueError."""
-    judge: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge()
+    judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher()
     with pytest.raises(ValueError, match="VectorBlocker"):
         list(judge.forward(iter([_candidate(None)])))
 
@@ -72,14 +72,14 @@ def test_missing_similarity_raises_with_actionable_message() -> None:
 def test_rejects_out_of_range_threshold() -> None:
     """The threshold is validated to ``[0, 1]`` at construction."""
     with pytest.raises(ValueError, match="threshold"):
-        EmbeddingScoreJudge(threshold=1.5)
+        EmbeddingScoreMatcher(threshold=1.5)
     with pytest.raises(ValueError, match="threshold"):
-        EmbeddingScoreJudge(threshold=-0.1)
+        EmbeddingScoreMatcher(threshold=-0.1)
 
 
 def test_inspect_scores_delegates_to_shared_util() -> None:
-    """inspect_scores returns a report over the judged pairs (shared Module utility)."""
-    judge: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge()
+    """inspect_scores returns a report over the judged pairs (shared Matcher utility)."""
+    judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher()
     judgements = list(judge.forward(iter([_candidate(0.4), _candidate(0.9)])))
     report = judge.inspect_scores(judgements, sample_size=2)
     assert report.total_judgements == 2
@@ -91,32 +91,32 @@ def test_inspect_scores_delegates_to_shared_util() -> None:
 
 
 def test_is_registered_with_type_name() -> None:
-    """EmbeddingScoreJudge is discoverable in the registry under its type_name."""
-    assert get_component("embedding_score_judge") is EmbeddingScoreJudge
-    assert EmbeddingScoreJudge.type_name == "embedding_score_judge"
+    """EmbeddingScoreMatcher is discoverable in the registry under its type_name."""
+    assert get_component("embedding_score_judge") is EmbeddingScoreMatcher
+    assert EmbeddingScoreMatcher.type_name == "embedding_score_judge"
 
 
 def test_config_round_trips() -> None:
     """config -> from_config rebuilds an equivalent judge (JSON-serializable)."""
-    original: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge(threshold=0.62)
+    original: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher(threshold=0.62)
     config = original.config
 
     assert config == {"threshold": 0.62}
     json.dumps(config)  # must be JSON-serializable
 
-    rebuilt = EmbeddingScoreJudge.from_config(config)
+    rebuilt = EmbeddingScoreMatcher.from_config(config)
     assert rebuilt.threshold == pytest.approx(0.62)
 
 
 def test_resolver_with_embedding_judge_saves_and_loads(tmp_path: Path) -> None:
-    """A Resolver with an EmbeddingScoreJudge in the module slot round-trips offline."""
+    """A Resolver with an EmbeddingScoreMatcher in the module slot round-trips offline."""
     from langres.core import AllPairsBlocker, Clusterer, Resolver
 
-    judge: EmbeddingScoreJudge[CompanySchema] = EmbeddingScoreJudge(threshold=0.55)
+    judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher(threshold=0.55)
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=judge,
+        matcher=judge,
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -127,7 +127,7 @@ def test_resolver_with_embedding_judge_saves_and_loads(tmp_path: Path) -> None:
     assert module_spec["config"]["threshold"] == pytest.approx(0.55)
 
     reloaded = Resolver.load(tmp_path)
-    assert isinstance(reloaded.module, EmbeddingScoreJudge)
+    assert isinstance(reloaded.module, EmbeddingScoreMatcher)
     assert reloaded.module.threshold == pytest.approx(0.55)
 
 
@@ -145,7 +145,7 @@ def test_resolver_load_registers_judge_in_a_fresh_process(tmp_path: Path) -> Non
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=None,
-        module=EmbeddingScoreJudge(threshold=0.55),
+        matcher=EmbeddingScoreMatcher(threshold=0.55),
         clusterer=Clusterer(threshold=0.7),
     )
     resolver.save(tmp_path)
@@ -161,7 +161,7 @@ def test_resolver_load_registers_judge_in_a_fresh_process(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 0, (
-        "fresh-process Resolver.load failed (EmbeddingScoreJudge not registered on "
+        "fresh-process Resolver.load failed (EmbeddingScoreMatcher not registered on "
         f"the import-langres.core path).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     assert "UnknownComponentType" not in result.stderr

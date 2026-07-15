@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel
 
 from langres.core.harvest import Correction
-from langres.core.judgement_log import JudgementLog, LoggingModule
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.review import ReviewItem, ReviewQueue, _is_well_formed, select_for_review
 from langres.testing import ScriptedJudge
@@ -273,7 +273,7 @@ def test_uncertainty_on_confidenceless_binary_log_raises_not_empty() -> None:
 
 def test_uncertainty_on_logged_binary_judge_raises_end_to_end(tmp_path: Path) -> None:
     """The real flywheel path: a binary judge whose 0/1 scores are logged by
-    LoggingModule produces a log the uncertainty selector cannot rank -- proving
+    LoggingMatcher produces a log the uncertainty selector cannot rank -- proving
     the no-op bug is caught on the actual logged shape, not just hand-written rows."""
     candidates = [
         ERCandidate(
@@ -293,7 +293,7 @@ def test_uncertainty_on_logged_binary_judge_raises_end_to_end(tmp_path: Path) ->
     judge: ScriptedJudge[CompanySchema] = ScriptedJudge(
         lambda cand: 1.0 if cand.left.id == "a" else 0.0
     )
-    list(LoggingModule(judge, log=log, threshold=0.5).forward(iter(candidates)))
+    list(LoggingMatcher(judge, log=log, threshold=0.5).forward(iter(candidates)))
 
     rows = log.read()
     assert rows and all(row["score"] in (0.0, 1.0) for row in rows)  # genuinely binary
@@ -326,7 +326,7 @@ def test_uncertainty_ranks_by_confidence_least_confident_first() -> None:
 
 def test_uncertainty_mixed_log_does_not_drop_score_only_rows() -> None:
     """A MIXED log -- some rows carry a logprob confidence, some only a score
-    (a CascadeJudge: cheap-student score-only rows + escalated logprob rows) --
+    (a CascadeMatcher: cheap-student score-only rows + escalated logprob rows) --
     must review BOTH bands. The score-only uncertain pair must not vanish just
     because a confidence-bearing row exists (the silent no-op, relocated). The
     credence-ranked row comes first, then the score-ranked one."""

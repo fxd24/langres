@@ -5,7 +5,7 @@ hand-rolled dispatch switches -- ``core/presets.py:build_judge`` (the verbs),
 ``core/resolver.py:_build_module_for_judge`` (``Resolver.from_schema``), and
 ``methods.py:_make_module_builder`` (the benchmark harness) -- and the same
 string could mean different things per layer (``llm_judge`` the *method* built
-``LLMJudge`` while ``zero_shot_llm`` the *judge name* built ``DSPyJudge``).
+``LLMMatcher`` while ``zero_shot_llm`` the *judge name* built ``DSPyMatcher``).
 All three sites now resolve through this one registry, so a judge name maps to
 exactly one construction everywhere, together with its identity metadata: the
 score family it emits, its default decision threshold, and the underlying
@@ -44,7 +44,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from langres.core.comparator import Comparator
-from langres.core.module import Module
+from langres.core.matcher import Matcher
 
 __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
@@ -55,7 +55,7 @@ __all__ = [
     "register_method",
 ]
 
-#: The sentence-transformers model behind ``judge="embedding"`` and every
+#: The sentence-transformers model behind ``matcher="embedding"`` and every
 #: preset-built ``VectorBlocker`` (both the verbs' and ``Resolver.from_schema``'s
 #: pipelines pin it). Defined once here so the two construction sites cannot
 #: drift, and so the ``"embedding"`` spec below can report it as the judge's
@@ -65,6 +65,11 @@ DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 #: Install line for the ``[llm]`` extra, woven into the actionable ImportError
 #: an LLM-family builder raises when its lazy import fails.
 _INSTALL_LLM_EXTRA = "`uv sync --extra llm` or `pip install 'langres[llm]'`"
+
+#: Install line for the ``[trained]`` extra, woven into the actionable
+#: ImportError the supervised ``random_forest`` builder raises when scikit-learn
+#: is absent (the same shape as ``_INSTALL_LLM_EXTRA``).
+_INSTALL_TRAINED_EXTRA = "`uv sync --extra trained` or `pip install 'langres[trained]'`"
 
 
 class UnknownMethodError(ValueError):
@@ -120,7 +125,7 @@ class MethodSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    build: Callable[..., Module[Any]]
+    build: Callable[..., Matcher[Any]]
     score_type: str
     default_threshold: float = 0.5
     default_model: str | None = None
@@ -203,6 +208,14 @@ def _llm_extra_error(name: str, missing: str) -> ImportError:
     )
 
 
+def _trained_extra_error(name: str, missing: str) -> ImportError:
+    """The actionable [trained]-extra ImportError the random-forest builder raises."""
+    return ImportError(
+        f'judge "{name}" needs the [trained] extra ({missing} is not installed). '
+        f"Install it with {_INSTALL_TRAINED_EXTRA}."
+    )
+
+
 def _feature_specs(schema: type[BaseModel], comparator: Comparator[Any] | None) -> Any:
     """Feature specs from the caller's comparator (custom weights win) or the schema."""
     return (comparator if comparator is not None else Comparator.from_schema(schema)).feature_specs
@@ -215,11 +228,11 @@ def _build_string(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``string`` / ``weighted_average``: missing-aware weighted string similarity."""
-    from langres.core.judges.weighted_average import WeightedAverageJudge
+    from langres.core.matchers.weighted_average import WeightedAverageMatcher
 
-    return WeightedAverageJudge(feature_specs=_feature_specs(schema, comparator))
+    return WeightedAverageMatcher(feature_specs=_feature_specs(schema, comparator))
 
 
 def _build_embedding(
@@ -229,11 +242,11 @@ def _build_embedding(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``embedding`` / ``embedding_cosine``: pass the blocker's cosine similarity through."""
-    from langres.core.judges.embedding_score import EmbeddingScoreJudge
+    from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
 
-    return EmbeddingScoreJudge()
+    return EmbeddingScoreMatcher()
 
 
 def _build_zero_shot_llm(
@@ -243,18 +256,18 @@ def _build_zero_shot_llm(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``zero_shot_llm`` / ``dspy_judge``: the DSPy ChainOfThought judge, price pinned."""
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
 
     try:
-        from langres.core.modules.dspy_judge import DSPyJudge
+        from langres.core.matchers.dspy_judge import DSPyMatcher
     except ImportError as exc:
         raise _llm_extra_error("zero_shot_llm", "dspy") from exc
 
     resolved_model = model or DEFAULT_OPENROUTER_MODEL
-    judge: DSPyJudge[Any] = DSPyJudge(lm=client, model=resolved_model, entity_noun=entity_noun)
-    # Honest-cost seam: DSPyJudge prices each pair as tokens/1000 * price. Its
+    judge: DSPyMatcher[Any] = DSPyMatcher(lm=client, model=resolved_model, entity_noun=entity_noun)
+    # Honest-cost seam: DSPyMatcher prices each pair as tokens/1000 * price. Its
     # price defaults to $0, so without this pin a real paid run would report $0
     # and the verbs' spend cap could never trip (unknown models stay $0 --
     # the callers warn about that blind cap).
@@ -270,10 +283,10 @@ def _build_prompt_llm(
     client: Any = None,
     comparator: Comparator[Any] | None = None,
     **params: Any,
-) -> Module[Any]:
-    """``prompt_llm`` / ``llm_judge``: the prompt-seam ``LLMJudge`` (issue #103).
+) -> Matcher[Any]:
+    """``prompt_llm`` / ``llm_judge``: the prompt-seam ``LLMMatcher`` (issue #103).
 
-    ``params`` flow straight into :class:`~langres.core.modules.llm_judge.LLMJudge`
+    ``params`` flow straight into :class:`~langres.core.matchers.llm_judge.LLMMatcher`
     (``prompt_template``, ``system_prompt``, ``response_parser`` /
     ``record_serializer`` -- registered *names* serialize, see
     ``llm_judge.RESPONSE_PARSERS`` -- ``on_parse_error``, ``temperature``,
@@ -282,11 +295,11 @@ def _build_prompt_llm(
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 
     try:
-        from langres.core.modules.llm_judge import LLMJudge
+        from langres.core.matchers.llm_judge import LLMMatcher
     except ImportError as exc:
         raise _llm_extra_error("prompt_llm", "litellm") from exc
 
-    judge: LLMJudge[Any] = LLMJudge(
+    judge: LLMMatcher[Any] = LLMMatcher(
         client=client,
         model=model or DEFAULT_OPENROUTER_MODEL,
         entity_noun=entity_noun,
@@ -302,17 +315,17 @@ def _build_select_judge(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``select_judge``: ComEM-style set-wise judge (one LLM call per anchor group)."""
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL, dspy_price_per_1k
 
     try:
-        from langres.core.modules.select_judge import SelectJudge
+        from langres.core.matchers.select_judge import SelectMatcher
     except ImportError as exc:
         raise _llm_extra_error("select_judge", "dspy") from exc
 
     resolved_model = model or DEFAULT_OPENROUTER_MODEL
-    judge: SelectJudge[Any] = SelectJudge(lm=client, model=resolved_model)
+    judge: SelectMatcher[Any] = SelectMatcher(lm=client, model=resolved_model)
     judge.price_per_1k_tokens = dspy_price_per_1k(resolved_model)
     return judge
 
@@ -324,17 +337,17 @@ def _build_rapidfuzz(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``rapidfuzz``: classical string baseline over the schema's comparable fields.
 
     Reuses ``Comparator.from_schema``'s field selection and weights so
     ``rapidfuzz`` and ``weighted_average`` score on the *same* fields. The
-    ``-> ""`` for a missing value is RapidfuzzModule's documented convention;
+    ``-> ""`` for a missing value is RapidfuzzMatcher's documented convention;
     it makes a field absent on *both* records a perfect match -- an intrinsic
     property of the classical baseline, deliberately preserved (the benchmark
     race is meant to surface exactly such method differences).
     """
-    from langres.core.modules.rapidfuzz import RapidfuzzModule
+    from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 
     def field_getter(field: str) -> Callable[[Any], str]:
         def get(entity: Any) -> str:
@@ -345,7 +358,7 @@ def _build_rapidfuzz(
 
     specs = _feature_specs(schema, comparator)
     extractors = {spec.name: (field_getter(spec.name), spec.weight) for spec in specs}
-    return RapidfuzzModule(field_extractors=extractors)
+    return RapidfuzzMatcher(field_extractors=extractors)
 
 
 def _build_cascade(
@@ -357,10 +370,10 @@ def _build_cascade(
     comparator: Comparator[Any] | None = None,
     cascade_low: float = 0.3,
     cascade_high: float = 0.9,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``cascade``: embedding early-exit + LLM on the uncertain band.
 
-    ``CascadeModule`` requires a non-empty ``llm_api_key`` at construction even
+    ``CascadeChainMatcher`` requires a non-empty ``llm_api_key`` at construction even
     when no pair escalates; a placeholder satisfies that and the real client (a
     mock in tests, a live one in paid runs) is injected, so no live key is ever
     needed at build time. The injected client must be **OpenAI-shaped**
@@ -370,17 +383,17 @@ def _build_cascade(
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 
     try:
-        from langres.core.modules.cascade import CascadeModule
+        from langres.core.matchers.cascade import CascadeChainMatcher
     except ImportError as exc:
         raise _llm_extra_error("cascade", "litellm") from exc
 
     with warnings.catch_warnings():
-        # CascadeModule is deprecated in favor of CascadeJudge (T3), but this
+        # CascadeChainMatcher is deprecated in favor of CascadeMatcher (T3), but this
         # registry still constructs it deliberately (migration tracked in
         # TODOS.md). Suppress the DeprecationWarning at this one sanctioned
         # construction site so run_methods("cascade") stays noise-free.
         warnings.simplefilter("ignore", DeprecationWarning)
-        module: Module[Any] = CascadeModule(
+        module: Matcher[Any] = CascadeChainMatcher(
             llm_model=model or DEFAULT_OPENROUTER_MODEL,
             llm_api_key="injected",
             low_threshold=cascade_low,
@@ -398,15 +411,15 @@ def _build_fellegi_sunter(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``fellegi_sunter``: unsupervised EM-fit probabilistic record linkage."""
     from langres.core.comparator import StringComparator
-    from langres.core.judges.fellegi_sunter import FellegiSunterJudge
+    from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
 
     fs_comparator = comparator if comparator is not None else Comparator.from_schema(schema)
-    # FellegiSunterJudge is typed against StringComparator, the concrete class
+    # FellegiSunterMatcher is typed against StringComparator, the concrete class
     # Comparator.from_schema returns (Comparator is its alias-in-spirit here).
-    return FellegiSunterJudge(comparator=cast(StringComparator[Any], fs_comparator))
+    return FellegiSunterMatcher(comparator=cast(StringComparator[Any], fs_comparator))
 
 
 def _build_random_forest(
@@ -416,11 +429,14 @@ def _build_random_forest(
     entity_noun: str = "entity",
     client: Any = None,
     comparator: Comparator[Any] | None = None,
-) -> Module[Any]:
+) -> Matcher[Any]:
     """``random_forest``: supervised sklearn forest over comparator similarities."""
-    from langres.core.modules.random_forest_judge import RandomForestJudge
+    try:
+        from langres.core.matchers.random_forest_judge import RandomForestMatcher
+    except ImportError as exc:
+        raise _trained_extra_error("random_forest", "scikit-learn") from exc
 
-    return RandomForestJudge(feature_specs=_feature_specs(schema, comparator))
+    return RandomForestMatcher(feature_specs=_feature_specs(schema, comparator))
 
 
 def _register_builtins() -> None:
@@ -471,7 +487,7 @@ def _register_builtins() -> None:
         ),
         # -- The benchmark-harness method names (methods.py race) ------------
         # Historical aliases keep their exact pre-registry construction; each
-        # name has ONE meaning everywhere now (e.g. "llm_judge" builds LLMJudge
+        # name has ONE meaning everywhere now (e.g. "llm_judge" builds LLMMatcher
         # on every path -- it shares prompt_llm's builder).
         MethodSpec(
             name="rapidfuzz",

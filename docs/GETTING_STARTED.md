@@ -55,7 +55,7 @@ and the CLI.
 langres has **one** front door with two honest lanes. Pick yours before you
 start.
 
-### Keyless lane — `judge="string"` ($0, offline)
+### Keyless lane — `matcher="string"` ($0, offline)
 
 No API key, no network, no model download. rapidfuzz string similarity does the
 matching. Good for a first taste and for CI; weaker on messy real data. **This
@@ -70,31 +70,31 @@ records = [
     {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
 ]
 
-result = dedupe(records, judge="string", threshold=0.6)
+result = dedupe(records, matcher="string", threshold=0.6)
 # result       -> [{'1', '2'}]      (singletons like '3' are dropped)
 # result.judge_used == "string", result.score_type == "heuristic"
 ```
 
-### Keyed lane — `judge="auto"` (the default; bring an LLM)
+### Keyed lane — `matcher="auto"` (the default; bring an LLM)
 
-`dedupe(records)` defaults to `judge="auto"`, which picks a real LLM judge from
+`dedupe(records)` defaults to `matcher="auto"`, which picks a real LLM judge from
 `OPENROUTER_API_KEY` / `OPENAI_API_KEY` and names the model — and that money is
 involved — *before* any paid call, under a **default $1 spend cap**:
 
 ```python
-from langres import dedupe, NoJudgeAvailableError
+from langres import dedupe, NoMatcherAvailableError
 
 try:
-    result = dedupe(records)                 # judge="auto"; needs a key + [llm]
-except NoJudgeAvailableError as exc:
+    result = dedupe(records)                 # matcher="auto"; needs a key + [llm]
+except NoMatcherAvailableError as exc:
     print(exc)  # no key -> a clean, actionable error, NOT a wrong answer
 ```
 
 **Fail, don't fall back.** With no key, `"auto"` **raises
-`NoJudgeAvailableError`** (root-exported from `langres`) instead of quietly
+`NoMatcherAvailableError`** (root-exported from `langres`) instead of quietly
 degrading to fuzzy matching: unsupervised string matching over-merges on
 unlabeled data — one silent bad answer is worse than one loud error. Offline
-matching is always available, but only as the *explicit* `judge="string"`
+matching is always available, but only as the *explicit* `matcher="string"`
 opt-in. A spend-cap breach likewise raises `BudgetExceeded` (also root-exported)
 carrying the partial judgements — never a silent bill.
 
@@ -102,8 +102,8 @@ carrying the partial judgements — never a silent bill.
 key variables does not make a run keyless inside a project whose `.env` carries
 a key — langres reads the `.env` in the current working directory (env vars win
 over it; there is no parent-directory walk-up). Two deterministic switches:
-set `LANGRES_OFFLINE=1` and `judge="auto"` treats every key as absent (an
-explicit `judge=` choice in code is unaffected), or set the key variables to
+set `LANGRES_OFFLINE=1` and `matcher="auto"` treats every key as absent (an
+explicit `matcher=` choice in code is unaffected), or set the key variables to
 the **empty string** (`OPENROUTER_API_KEY="" OPENAI_API_KEY=""`) — an empty
 env var wins over `.env` and counts as absent. Full discovery order:
 `langres.core.presets.choose_auto_judge`.
@@ -121,7 +121,7 @@ extras, one per capability:
 ```bash
 uv sync                     # core: the keyless "string" lane, $0
 uv sync --extra llm         # [llm]: the LLM teacher for the keyed lane / bootstrap
-uv sync --extra trained     # [trained]: scikit-learn behind RandomForestJudge + derive_threshold
+uv sync --extra trained     # [trained]: scikit-learn behind RandomForestMatcher + derive_threshold
 # (need both? `uv sync --extra llm --extra trained`)
 ```
 
@@ -138,12 +138,12 @@ covers all seven.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
-Start with the teacher. `dedupe(records)` (default `judge="auto"`) blocks
+Start with the teacher. `dedupe(records)` (default `matcher="auto"`) blocks
 (pre-selects the record pairs worth comparing), scores every candidate pair
 with the LLM, and clusters — spend-capped:
 
 ```python
-result = dedupe(records)                    # judge="auto", $1 cap by default
+result = dedupe(records)                    # matcher="auto", $1 cap by default
 # result.judge_used names the model that ran; override the cap with budget_usd=
 ```
 
@@ -157,7 +157,7 @@ it records every judge call (ids, score, verdict, model, cost) to a JSONL file
 with **zero overhead when omitted**. This is the flywheel *inlet*:
 
 ```python
-result = dedupe(records, log="judgements.jsonl")   # or judge="string" to stay $0
+result = dedupe(records, log="judgements.jsonl")   # or matcher="string" to stay $0
 ```
 
 Depth: [`EXPERIMENTS.md` § Signal log](EXPERIMENTS.md) for the record shape and
@@ -226,24 +226,24 @@ Depth: [`EXPERIMENTS.md` § Flywheel harvest](EXPERIMENTS.md) and
 ### 5. Train the cheap student
 
 Now spend the harvested labels on making the judgement cheaper. This demo fits
-a `RandomForestJudge` — a **trainable judge**, the loop's $0 stand-in for the
+a `RandomForestMatcher` — a **trainable judge**, the loop's $0 stand-in for the
 cheaper model — on the harvested labels, then calibrates *its own* threshold on
 *its own* scores:
 
 ```python
-from langres.core.modules.random_forest_judge import RandomForestJudge
+from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.calibration import derive_threshold
 
-student = RandomForestJudge(feature_specs=comparator.feature_specs)
+student = RandomForestMatcher(feature_specs=comparator.feature_specs)
 student.fit(iter(train_candidates), train_labels)          # labels from step 4
 student_threshold = derive_threshold(student_scores, heldout_labels)
 ```
 
 > **The classical student is the $0 plumbing demo — the production rung is a
-> cheaper LLM.** This step's `RandomForestJudge` is Magellan-style supervised
+> cheaper LLM.** This step's `RandomForestMatcher` is Magellan-style supervised
 > matching, shipped as an honest baseline and free plumbing for the loop. The
 > LLM-native pattern is to spend the same harvested labels on **prompt-tuning a
-> smaller LLM** (`DSPyJudge`): a precision-tuned DSPy prompt signature let a cheap
+> smaller LLM** (`DSPyMatcher`): a precision-tuned DSPy prompt signature let a cheap
 > model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
 > automatic MIPROv2 *compilation* was measured and cut — the signature is the
 > lever). Fine-tuning a small LM on these labels is the roadmap's next rung.
@@ -256,16 +256,16 @@ Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and
 
 ### 6. Cascade — cheap everywhere, frontier only at the margin
 
-`CascadeJudge` runs the student on every pair and escalates **only** pairs whose
+`CascadeMatcher` runs the student on every pair and escalates **only** pairs whose
 student score lands in an uncertainty `band` back to the frontier judge. One
 threshold cuts the mixed student/teacher stream (both emit `[0, 1]`
 probabilities):
 
 ```python
-from langres.core.modules.cascade_judge import CascadeJudge
+from langres.core.matchers.cascade_judge import CascadeMatcher
 
-cascade = CascadeJudge(student=student, escalation=teacher, band=(0.35, 0.65))
-result = dedupe(records, judge=cascade, threshold=student_threshold)
+cascade = CascadeMatcher(student=student, escalation=teacher, band=(0.35, 0.65))
+result = dedupe(records, matcher=cascade, threshold=student_threshold)
 ```
 
 > **Derive the band from data, don't hard-code it.** A `±0.15` constant is the
@@ -273,19 +273,19 @@ result = dedupe(records, judge=cascade, threshold=student_threshold)
 > [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py)
 > widens the band around the student threshold until it captures ~20% of
 > calibration-split scores, and prints the derivation. Beyond pairwise cascading, **set-wise judging**
-> (`SelectJudge`) is the direction that judges a whole candidate group at once —
+> (`SelectMatcher`) is the direction that judges a whole candidate group at once —
 > see [`docs/ADDING_A_METHOD.md`](ADDING_A_METHOD.md).
 
 ### 7. Save and load the whole pipeline
 
 Freeze the configured pipeline — schema, blocker, judge (including a fitted
-CascadeJudge student), threshold — into a reusable artifact. Drop to the
+CascadeMatcher student), threshold — into a reusable artifact. Drop to the
 `Resolver` the verbs sit on:
 
 ```python
 from langres import Resolver
 
-resolver = Resolver.from_schema(Contact, judge=cascade, threshold=student_threshold)
+resolver = Resolver.from_schema(Contact, matcher=cascade, threshold=student_threshold)
 resolver.save("artifacts/contacts_v1")            # resolver.json + per-child sidecars
 reloaded = Resolver.load("artifacts/contacts_v1") # fitted student round-trips, no pickle
 ```

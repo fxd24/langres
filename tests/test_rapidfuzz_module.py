@@ -1,6 +1,6 @@
-"""Tests for RapidfuzzModule (Approach 1: Classical String Matching).
+"""Tests for RapidfuzzMatcher (Approach 1: Classical String Matching).
 
-The RapidfuzzModule is a schema-agnostic module that computes string similarity
+The RapidfuzzMatcher is a schema-agnostic module that computes string similarity
 scores using rapidfuzz. It accepts field extractors and weights to work with any
 Pydantic schema type.
 """
@@ -8,7 +8,7 @@ Pydantic schema type.
 from pydantic import BaseModel
 
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.modules.rapidfuzz import RapidfuzzModule
+from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 
 
 # Test schema: Product (demonstrates schema-agnostic design)
@@ -22,8 +22,8 @@ class ProductSchema(BaseModel):
 
 
 def test_rapidfuzz_module_with_company_schema():
-    """Test RapidfuzzModule works with CompanySchema."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher works with CompanySchema."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.7),
             "address": (lambda x: x.address or "", 0.3),
@@ -57,8 +57,8 @@ def test_rapidfuzz_module_with_company_schema():
 
 
 def test_rapidfuzz_module_with_product_schema():
-    """Test RapidfuzzModule works with different schema (ProductSchema)."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher works with different schema (ProductSchema)."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "title": (lambda x: x.title, 0.8),
             "brand": (lambda x: x.brand or "", 0.2),
@@ -90,8 +90,8 @@ def test_rapidfuzz_module_with_product_schema():
 
 
 def test_rapidfuzz_module_exact_match():
-    """Test RapidfuzzModule gives perfect score for exact matches."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher gives perfect score for exact matches."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -109,8 +109,8 @@ def test_rapidfuzz_module_exact_match():
 
 
 def test_rapidfuzz_module_completely_different():
-    """Test RapidfuzzModule gives low score for completely different strings."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher gives low score for completely different strings."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -128,8 +128,8 @@ def test_rapidfuzz_module_completely_different():
 
 
 def test_rapidfuzz_module_weighted_fields():
-    """Test RapidfuzzModule correctly applies field weights."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher correctly applies field weights."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.8),
             "address": (lambda x: x.address or "", 0.2),
@@ -149,8 +149,8 @@ def test_rapidfuzz_module_weighted_fields():
 
 
 def test_rapidfuzz_module_multiple_candidates():
-    """Test RapidfuzzModule processes multiple candidates correctly."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher processes multiple candidates correctly."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -193,8 +193,8 @@ def test_rapidfuzz_module_multiple_candidates():
 
 
 def test_rapidfuzz_module_streaming_behavior():
-    """Test RapidfuzzModule returns a generator (streaming)."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher returns a generator (streaming)."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -217,8 +217,8 @@ def test_rapidfuzz_module_streaming_behavior():
 
 
 def test_rapidfuzz_module_threshold_parameter():
-    """Test RapidfuzzModule threshold parameter is stored."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher threshold parameter is stored."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -229,10 +229,10 @@ def test_rapidfuzz_module_threshold_parameter():
 
 
 def test_rapidfuzz_module_algorithm_parameter():
-    """Test RapidfuzzModule accepts algorithm parameter."""
+    """Test RapidfuzzMatcher accepts algorithm parameter."""
     # Test with different algorithms
     for algorithm in ["ratio", "token_sort_ratio", "token_set_ratio"]:
-        module = RapidfuzzModule(
+        module = RapidfuzzMatcher(
             field_extractors={
                 "name": (lambda x: x.name, 1.0),
             },
@@ -252,8 +252,8 @@ def test_rapidfuzz_module_algorithm_parameter():
 
 
 def test_rapidfuzz_module_handles_empty_fields():
-    """Test RapidfuzzModule handles None/empty fields gracefully."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher handles None/empty fields gracefully."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.6),
             "address": (lambda x: x.address or "", 0.4),
@@ -275,8 +275,8 @@ def test_rapidfuzz_module_handles_empty_fields():
 
 
 def test_rapidfuzz_module_provenance_includes_algorithm():
-    """Test RapidfuzzModule includes algorithm in provenance."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher includes algorithm in provenance."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -295,8 +295,8 @@ def test_rapidfuzz_module_provenance_includes_algorithm():
 
 
 def test_rapidfuzz_module_typo_detection():
-    """Test RapidfuzzModule can detect typos with reasonable similarity."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher can detect typos with reasonable similarity."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -315,8 +315,8 @@ def test_rapidfuzz_module_typo_detection():
 
 
 def test_rapidfuzz_module_abbreviation_detection():
-    """Test RapidfuzzModule handles abbreviations."""
-    module = RapidfuzzModule(
+    """Test RapidfuzzMatcher handles abbreviations."""
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },
@@ -335,13 +335,13 @@ def test_rapidfuzz_module_abbreviation_detection():
 
 
 def test_rapidfuzz_module_field_extractors_are_configurable():
-    """Test RapidfuzzModule accepts arbitrary field extractors."""
+    """Test RapidfuzzMatcher accepts arbitrary field extractors."""
 
     # Complex extractor: combine multiple fields
     def full_name_extractor(x: CompanySchema) -> str:
         return f"{x.name} {x.address or ''}"
 
-    module = RapidfuzzModule(
+    module = RapidfuzzMatcher(
         field_extractors={
             "full_name": (full_name_extractor, 1.0),
         },
@@ -359,27 +359,27 @@ def test_rapidfuzz_module_field_extractors_are_configurable():
 
 
 def test_rapidfuzz_module_invalid_threshold_raises_error():
-    """Test RapidfuzzModule raises ValueError for invalid threshold."""
+    """Test RapidfuzzMatcher raises ValueError for invalid threshold."""
     import pytest
 
     # Threshold too low
     with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
-        RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=-0.1)
+        RapidfuzzMatcher(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=-0.1)
 
     # Threshold too high
     with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
-        RapidfuzzModule(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=1.5)
+        RapidfuzzMatcher(field_extractors={"name": (lambda x: x.name, 1.0)}, threshold=1.5)
 
 
 def test_rapidfuzz_module_invalid_algorithm_raises_error():
-    """Test RapidfuzzModule raises ValueError for unsupported algorithm."""
+    """Test RapidfuzzMatcher raises ValueError for unsupported algorithm."""
     import pytest
 
     with pytest.raises(
         ValueError,
         match="algorithm must be one of: ratio, token_sort_ratio, token_set_ratio",
     ):
-        RapidfuzzModule(
+        RapidfuzzMatcher(
             field_extractors={"name": (lambda x: x.name, 1.0)},
             threshold=0.5,
             algorithm="invalid_algorithm",  # type: ignore[arg-type]
@@ -387,9 +387,9 @@ def test_rapidfuzz_module_invalid_algorithm_raises_error():
 
 
 def test_rapidfuzz_module_auto_normalizes_weights():
-    """Test RapidfuzzModule auto-normalizes weights to sum to 1.0."""
+    """Test RapidfuzzMatcher auto-normalizes weights to sum to 1.0."""
     # Provide weights that don't sum to 1.0
-    module = RapidfuzzModule(
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 2.0),
             "address": (lambda x: x.address or "", 1.0),
@@ -405,7 +405,7 @@ def test_rapidfuzz_module_auto_normalizes_weights():
 def test_rapidfuzz_module_normalized_weights_produce_valid_scores():
     """Test that normalized weights produce scores in [0, 1] range."""
     # Provide weights that sum to 3.0
-    module = RapidfuzzModule(
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
             "address": (lambda x: x.address or "", 1.0),
@@ -427,9 +427,9 @@ def test_rapidfuzz_module_normalized_weights_produce_valid_scores():
 
 
 def test_rapidfuzz_module_handles_all_zero_weights():
-    """Test RapidfuzzModule handles all zero weights by distributing evenly."""
+    """Test RapidfuzzMatcher handles all zero weights by distributing evenly."""
     # Provide all zero weights
-    module = RapidfuzzModule(
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 0.0),
             "address": (lambda x: x.address or "", 0.0),
@@ -459,10 +459,10 @@ def test_rapidfuzz_module_handles_all_zero_weights():
 
 
 def test_rapidfuzz_module_inspect_scores():
-    """Test RapidfuzzModule.inspect_scores() delegates to shared implementation."""
+    """Test RapidfuzzMatcher.inspect_scores() delegates to shared implementation."""
     from langres.core.models import PairwiseJudgement
 
-    module = RapidfuzzModule(
+    module = RapidfuzzMatcher(
         field_extractors={
             "name": (lambda x: x.name, 1.0),
         },

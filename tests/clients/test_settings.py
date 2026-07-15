@@ -13,14 +13,14 @@ class TestSettings:
     """Tests for Settings class."""
 
     def test_settings_openrouter_api_key_from_env(self):
-        """OPENROUTER_API_KEY loads into settings.openrouter_api_key (judge="auto" seam)."""
+        """OPENROUTER_API_KEY loads into settings.openrouter_api_key (matcher="auto" seam)."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "or-test123"}, clear=True):
             settings = Settings()
             assert settings.openrouter_api_key == "or-test123"
 
     def test_settings_openrouter_api_key_defaults_to_none(self):
-        """Absent OPENROUTER_API_KEY leaves the field None (judge="auto" then
-        raises NoJudgeAvailableError -- fail fast, never a silent fallback)."""
+        """Absent OPENROUTER_API_KEY leaves the field None (matcher="auto" then
+        raises NoMatcherAvailableError -- fail fast, never a silent fallback)."""
         with (
             patch.dict(os.environ, {}, clear=True),
             patch("pydantic_settings.sources.DotEnvSettingsSource.__call__", return_value={}),
@@ -193,7 +193,7 @@ class TestKeyDiscoveryContract:
     ) -> None:
         """The per-key keyless mechanism: OPENROUTER_API_KEY="" must WIN over
         the .env value (env_ignore_empty stays False -- see model_config) and
-        read as falsy, so judge="auto" treats it as no key. If this test ever
+        read as falsy, so matcher="auto" treats it as no key. If this test ever
         fails, no environment manipulation can force a keyless run inside a
         repo whose .env carries a real key."""
         (tmp_path / ".env").write_text("OPENROUTER_API_KEY=fake-from-dotenv\n")

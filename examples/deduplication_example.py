@@ -9,7 +9,7 @@ Source: Manually curated and verified against Zefix business registry
 Key features:
 1. **Realistic labeled data**: Real-world ground truth with quality verification
 2. **Stratified train/test split**: Preserves cluster size distribution (singletons, pairs, etc.)
-3. **Full pipeline**: VectorBlocker → LLMJudge → Clusterer with optimization
+3. **Full pipeline**: VectorBlocker → LLMMatcher → Clusterer with optimization
 4. **Comprehensive evaluation**: Blocking recall, LLM judge F1, BCubed F1
 
 This example shows how to:
@@ -47,7 +47,7 @@ from langres.core.metrics import (
     calculate_pairwise_metrics,
     evaluate_blocking,
 )
-from langres.core.modules.llm_judge import LLMJudgeModule
+from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data, stratified_dedup_split
@@ -131,11 +131,11 @@ def run_deduplication_pipeline(
         return [], [], candidates
 
     # ==================================================================================
-    # STEP 2: Score Pairs using LLMJudgeModule
+    # STEP 2: Score Pairs using LLMMatcher
     # ==================================================================================
-    logger.info("Scoring pairs with LLMJudgeModule...")
+    logger.info("Scoring pairs with LLMMatcher...")
 
-    llm_judge: LLMJudgeModule[OrganizationSchema] = LLMJudgeModule(
+    llm_judge: LLMMatcher[OrganizationSchema] = LLMMatcher(
         client=llm_client,
         model=azure_model,
         temperature=1.0,  # GPT-5 models only support temperature=1.0

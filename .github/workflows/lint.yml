@@ -29,7 +29,10 @@ jobs:
         # symbols that W0.4 made lazy (still statically type-checked via
         # TYPE_CHECKING imports) -- a core-only `uv sync` wouldn't have
         # torch/faiss/litellm/scikit-learn installed for it to check against.
-        run: uv sync --all-extras
+        # --no-extra finetune: peft/trl/bitsandbytes are treated as untyped
+        # (pyproject mypy override) and core.finetune imports them lazily, so the
+        # type check needs neither installed -- keep the heavy/Linux-only deps out.
+        run: uv sync --all-extras --no-extra finetune
 
       - name: Run ruff check
         run: uv run ruff check .

@@ -1,14 +1,14 @@
-"""DSPyJudge: a serializable, compilable DSPy ChainOfThought entity-matching Module.
+"""DSPyMatcher: a serializable, compilable DSPy ChainOfThought entity-matching Matcher.
 
-This is the M4 "learnable scorer seam": a :class:`~langres.core.module.Module`
+This is the M4 "learnable scorer seam": a :class:`~langres.core.matcher.Matcher`
 whose match decision comes from a DSPy ``ChainOfThought`` program over a typed
 :class:`PairwiseMatchSignature`. Because the program is a DSPy artifact it can be
-**compiled** against a gold set (``BootstrapFewShot`` / ``MIPROv2``) to tune the
-prompt from data — the direct answer to M3's finding that a cheap judge's
-precision collapses under a generic, hand-written prompt.
+**compiled** against a gold set (``BootstrapFewShot`` / ``MIPROv2`` / ``GEPA``)
+to tune the prompt from data — the direct answer to M3's finding that a cheap
+judge's precision collapses under a generic, hand-written prompt.
 
-It mirrors :class:`~langres.core.modules.llm_judge.LLMJudge`'s serializable shape
-so a Resolver with a DSPyJudge in the ``module`` slot can ``save`` / ``load``:
+It mirrors :class:`~langres.core.matchers.llm_judge.LLMMatcher`'s serializable shape
+so a Resolver with a DSPyMatcher in the ``module`` slot can ``save`` / ``load``:
 
 - pure :attr:`config` (``model`` / ``temperature`` / ``entity_noun`` — never the
   ``dspy.LM`` client or the program bytes);
@@ -35,7 +35,7 @@ import dspy
 from dspy.utils.exceptions import AdapterParseError
 
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.module import Module, SchemaT
+from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.runs import RunContext, RunStore, capture_run
@@ -106,6 +106,31 @@ def _pair_metric(example: dspy.Example, prediction: Any, trace: Any = None) -> b
     return bool(prediction.match) == bool(example.match)
 
 
+def _gepa_metric(
+    example: dspy.Example,
+    prediction: Any,
+    trace: Any = None,
+    pred_name: str | None = None,
+    pred_trace: Any = None,
+) -> float:
+    """GEPA-shaped compilation metric: 1.0 when the predicted ``match`` is correct.
+
+    ``dspy.GEPA`` validates (in its constructor) that the metric accepts *five*
+    arguments — ``(gold, pred, trace, pred_name, pred_trace)`` — and rejects the
+    three-argument :func:`_pair_metric` that ``BootstrapFewShot`` / ``MIPROv2``
+    take. This is the same match-decision metric, adapted to that signature and
+    returning a scalar score (``1.0``/``0.0``) GEPA can rank on its Pareto
+    frontier.
+
+    A *feedback-returning* metric — ``dspy.Prediction(score=..., feedback=...)``,
+    letting GEPA reflect on *why* a pair was misjudged rather than only on the
+    score — would sharpen the reflection, but it is a deliberate future
+    enhancement, not built now (simplicity-first): the scalar path already
+    exercises the full reflective-evolution loop.
+    """
+    return 1.0 if _pair_metric(example, prediction) else 0.0
+
+
 def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
     """Content-address a ``trainset`` so compiles on DIFFERENT labels get DIFFERENT ids.
 
@@ -128,14 +153,14 @@ def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
 
 
 @register("dspy_judge")
-class DSPyJudge(Module[SchemaT]):
+class DSPyMatcher(Matcher[SchemaT]):
     """DSPy ``ChainOfThought`` entity-matching scorer — compilable and serializable.
 
     Example:
         # Zero-spend: inject a DummyLM, compile against a gold set, then score.
         from dspy.utils.dummies import DummyLM
 
-        judge = DSPyJudge(lm=DummyLM([...]), entity_noun="product")
+        judge = DSPyMatcher(lm=DummyLM([...]), entity_noun="product")
         judge.compile(trainset, optimizer="bootstrap")
         for j in judge.forward(candidates):
             print(j.score, j.reasoning, j.provenance["cost_usd"])
@@ -153,7 +178,7 @@ class DSPyJudge(Module[SchemaT]):
         entity_noun: str = "entity",
         program: Any = None,
     ) -> None:
-        """Initialize a DSPyJudge.
+        """Initialize a DSPyMatcher.
 
         Args:
             lm: Optional pre-built DSPy LM (``dspy.LM`` or ``DummyLM``). When
@@ -204,6 +229,17 @@ class DSPyJudge(Module[SchemaT]):
         return self._compiled
 
     @property
+    def n_demos(self) -> int:
+        """Total bootstrapped few-shot demos across the program's predictors.
+
+        ``0`` before :meth:`compile` (a bare ``ChainOfThought`` carries none);
+        the count the ``FitReport`` surfaces after a prompt-optimize fit as "what
+        the compile learned". Mirrors the demo-count probe :meth:`load_state`
+        uses to infer compilation on markerless artifacts.
+        """
+        return sum(len(predictor.demos) for _, predictor in self._program.named_predictors())
+
+    @property
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the LM, program, or secrets)."""
         return {
@@ -213,7 +249,7 @@ class DSPyJudge(Module[SchemaT]):
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "DSPyJudge[SchemaT]":
+    def from_config(cls, config: dict[str, object]) -> "DSPyMatcher[SchemaT]":
         """Rebuild a fresh (uncompiled) judge from :attr:`config`.
 
         The program is uncompiled; :meth:`load_state` overwrites it with the saved
@@ -231,8 +267,38 @@ class DSPyJudge(Module[SchemaT]):
         return (prompt_tokens + completion_tokens) / 1000.0 * self.price_per_1k_tokens
 
     def _render_entity(self, entity: SchemaT) -> str:
-        """Render an entity for the prompt (LLMJudge's JSON convention)."""
+        """Render an entity for the prompt (LLMMatcher's JSON convention)."""
         return entity.model_dump_json(indent=2)
+
+    def examples_from_candidates(
+        self, candidates: Sequence[ERCandidate[SchemaT]], labels: Sequence[bool]
+    ) -> list[dspy.Example]:
+        """Build a :meth:`compile` trainset from labeled candidates.
+
+        Each pair becomes a ``dspy.Example`` whose ``left`` / ``right`` inputs are
+        rendered *exactly* as :meth:`forward` renders them (via
+        :meth:`_render_entity`), so the demos the optimizer learns reflect what the
+        program sees at inference; ``match`` carries the gold label. This is the
+        candidate->``dspy.Example`` bridge ``Resolver.fit(method=<prompt>)`` uses
+        to feed :meth:`compile`, keeping the rendering convention owned by the
+        matcher rather than duplicated at the call site.
+
+        Args:
+            candidates: Blocked candidate pairs to train on, positionally aligned
+                with ``labels`` (e.g. ``align_pairs(...).train.candidates``).
+            labels: Gold match/non-match labels for each candidate.
+
+        Returns:
+            One ``dspy.Example`` per candidate, inputs marked ``left`` / ``right``.
+        """
+        return [
+            dspy.Example(
+                left=self._render_entity(candidate.left),
+                right=self._render_entity(candidate.right),
+                match=bool(label),
+            ).with_inputs("left", "right")
+            for candidate, label in zip(candidates, labels, strict=True)
+        ]
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
         """Score each candidate pair with the DSPy program, yielding PairwiseJudgements.
@@ -250,7 +316,7 @@ class DSPyJudge(Module[SchemaT]):
         """
         if not self._compiled:
             logger.warning(
-                "DSPyJudge.forward is running on an UNCOMPILED program — the prompt "
+                "DSPyMatcher.forward is running on an UNCOMPILED program — the prompt "
                 "is untuned. Call compile(trainset) before benchmarking to avoid "
                 "silently scoring with an untuned judge."
             )
@@ -264,7 +330,9 @@ class DSPyJudge(Module[SchemaT]):
                 with dspy.context(lm=lm, track_usage=True):
                     prediction = self._program(left=left, right=right)
             except AdapterParseError as error:
-                logger.warning("DSPyJudge parse failure for %s vs %s: %s", left_id, right_id, error)
+                logger.warning(
+                    "DSPyMatcher parse failure for %s vs %s: %s", left_id, right_id, error
+                )
                 # The LM completion WAS billed even though parsing failed. Salvage
                 # whatever token counts DSPy recorded and flag the cost as
                 # untrackable (``cost_untracked``) so downstream accounting does not
@@ -322,6 +390,10 @@ class DSPyJudge(Module[SchemaT]):
         valset: Sequence[dspy.Example] | None = None,
         *,
         optimizer: str = "bootstrap",
+        auto: str = "light",
+        reflection_model: str | None = None,
+        reflection_minibatch_size: int = 3,
+        max_metric_calls: int | None = None,
         tracker: ExperimentTracker | None = None,
         store: str | Path | RunStore | None = None,
         parent_run_id: str | None = None,
@@ -343,8 +415,24 @@ class DSPyJudge(Module[SchemaT]):
                 gold ``match``) the optimizer tunes against.
             valset: Optional validation set (used by ``mipro``).
             optimizer: ``"bootstrap"`` (``BootstrapFewShot`` — deterministic under
-                ``DummyLM``, the zero-spend path) or ``"mipro"`` (``MIPROv2
-                auto="light"`` — the paid path, exercised only by the example).
+                ``DummyLM``, the zero-spend path), ``"mipro"`` (``MIPROv2`` — the
+                paid path, exercised only by the example), or ``"gepa"``
+                (``dspy.GEPA`` — reflective Genetic-Pareto instruction evolution;
+                runs zero-spend under ``DummyLM`` for both the student and the
+                reflection LM).
+            auto: Search-budget preset (``"light"`` / ``"medium"`` / ``"heavy"``)
+                for ``"mipro"`` and ``"gepa"``; ignored by ``"bootstrap"``, and
+                by ``"gepa"`` when ``max_metric_calls`` is given. Threaded from
+                the method's ``auto`` field by ``Resolver.fit``.
+            reflection_model: ``"gepa"`` only — LM id for GEPA's reflection step.
+                ``None`` reuses this matcher's own LM (:meth:`_get_lm`), which is
+                what keeps the ``DummyLM`` path zero-spend while still satisfying
+                GEPA's required-reflection-LM contract.
+            reflection_minibatch_size: ``"gepa"`` only — examples reflected over
+                per step (``dspy.GEPA`` default 3).
+            max_metric_calls: ``"gepa"`` only — precise metric-call budget; when
+                set it supersedes ``auto`` (``dspy.GEPA`` takes exactly one budget
+                knob). ``None`` falls back to the ``auto`` preset.
             tracker: Experiment tracker for the compile run (``None`` — the
                 default — resolves to a no-op via ``resolve_tracker``).
             store: Where to persist the compile :class:`RunRecord` (default: none).
@@ -358,8 +446,10 @@ class DSPyJudge(Module[SchemaT]):
             ``_compiled`` set, and ``_compile_run_id`` stamped — so callers can
             chain ``judge.compile(...).forward(...)``.
         """
-        if optimizer not in ("bootstrap", "mipro"):
-            raise ValueError(f"unknown optimizer {optimizer!r}; choose 'bootstrap' or 'mipro'")
+        if optimizer not in ("bootstrap", "mipro", "gepa"):
+            raise ValueError(
+                f"unknown optimizer {optimizer!r}; choose 'bootstrap', 'mipro', or 'gepa'"
+            )
         tracker = resolve_tracker(tracker)
         context = RunContext(
             experiment="dspy_compile",
@@ -387,11 +477,39 @@ class DSPyJudge(Module[SchemaT]):
                     self._program = dspy.BootstrapFewShot(metric=_pair_metric).compile(
                         self._program, trainset=list(trainset), **kwargs
                     )
+                elif optimizer == "gepa":
+                    # Reflective Genetic-Pareto evolution: GEPA runs the program on
+                    # the trainset, reflects (in natural language, via reflection_lm)
+                    # on the traces, and evolves the *instruction* on a Pareto
+                    # frontier. Two hard requirements from dspy.GEPA's constructor:
+                    #  (1) the metric must be 5-arg (_gepa_metric, not _pair_metric);
+                    #  (2) reflection_lm must be non-None -- reuse this matcher's own
+                    #      LM when unset (so a DummyLM student also reflects at $0).
+                    # GEPA also takes EXACTLY ONE budget knob, so pass max_metric_calls
+                    # when given, else the auto preset.
+                    reflection_lm = (
+                        dspy.LM(reflection_model) if reflection_model else self._get_lm()
+                    )
+                    gepa_budget = (
+                        {"max_metric_calls": max_metric_calls}
+                        if max_metric_calls is not None
+                        else {"auto": auto}
+                    )
+                    self._program = dspy.GEPA(
+                        metric=_gepa_metric,
+                        reflection_lm=reflection_lm,
+                        reflection_minibatch_size=reflection_minibatch_size,
+                        **gepa_budget,
+                    ).compile(
+                        self._program,
+                        trainset=list(trainset),
+                        valset=list(valset) if valset is not None else None,
+                    )
                 else:  # "mipro"  # pragma: no cover - paid, non-deterministic path
                     # Exercised only by the paid example (MIPROv2 proposes+evaluates
                     # instructions via real LM calls; it is not deterministic under
                     # DummyLM, so it is kept out of the zero-spend unit suite).
-                    self._program = dspy.MIPROv2(metric=_pair_metric, auto="light").compile(
+                    self._program = dspy.MIPROv2(metric=_pair_metric, auto=auto).compile(
                         self._program,
                         trainset=list(trainset),
                         valset=list(valset) if valset is not None else None,

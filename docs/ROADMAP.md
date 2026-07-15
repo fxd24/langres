@@ -17,7 +17,7 @@ that runs at inference elsewhere.
 Three stacked definitions of "usable", all true at once:
 
 1. **Seam** — every method (rapidfuzz, embeddings, LLM judge, DSPy-distilled
-   judge, GLinker, GLiNER extraction) is wrapped behind one `Blocker`/`Module`
+   judge, GLinker, GLiNER extraction) is wrapped behind one `Blocker`/`Matcher`
    interface, so you can swap and **benchmark them head-to-head on your data**.
 2. **Training framework** — you `fit` / `optimize` / `distill` a pipeline and it
    produces a **versioned artifact** (extractors + blocking funnel + judge +
@@ -73,8 +73,8 @@ raw → [enrich: extractors / GLiNER / (later) web-search] → feature bag
 |---|---|---|
 | **Enricher / feature source** (extractors incl. `GLiNERExtractor`; later web-search/Exa, registries) | populate & **augment** the feature bag from text or external sources | new (extraction); web-search **deferred, slotted** |
 | **Blocker** | feature bag → candidate pairs (high recall) | exists (Vector/AllPairs); add funnel + per-feature union |
-| **Comparator** | pair → per-feature comparison vector (missing-aware) | seed in `RapidfuzzModule.field_extractors`; generalise |
-| **Module (judge)** | comparison/raw → `PairwiseJudgement` | exists (rapidfuzz/LLM/cascade); add DSPy + GLinker adapters |
+| **Comparator** | pair → per-feature comparison vector (missing-aware) | seed in `RapidfuzzMatcher.field_extractors`; generalise |
+| **Matcher (judge)** | comparison/raw → `PairwiseJudgement` | exists (rapidfuzz/LLM/cascade); add DSPy + GLinker adapters |
 | **Clusterer** | judgements (pos+neg) → clusters | exists (connected components); add cannot-link |
 | **Bootstrapper** | entities → gold set (sample→label→mine→report) | new — **critical path** |
 | **Benchmark** | race methods on gold set → metric table | ~70% (eval exists); add harness |
@@ -152,13 +152,13 @@ flagship loop (§2.4) as a named use case in `USE_CASES.md` and promote UC4 ther
 
 | Method | Wrapped as | Use |
 |---|---|---|
-| rapidfuzz | Comparator + Module | cheap baseline |
+| rapidfuzz | Comparator + Matcher | cheap baseline |
 | embedding ANN (FAISS/Qdrant) | Blocker | high-recall candidate gen |
 | GLiNER / GLiNER2 | Extractor | feature extraction → blocking keys + comparison features |
-| LLM judge (litellm) | Module | strong judge / teacher |
-| **DSPy-distilled judge** | Module | cheap student compiled from the teacher (the differentiator) |
-| **GLinker** (`gliner-linker`, pg_trgm retrieval) | Blocker + Module | candidate — fit for record↔record is **unverified** (trained on mention↔description; see §8), benchmarked as one option in M3 |
-| Fellegi-Sunter / logistic | Module | learned weighted comparison |
+| LLM judge (litellm) | Matcher | strong judge / teacher |
+| **DSPy-distilled judge** | Matcher | cheap student compiled from the teacher (the differentiator) |
+| **GLinker** (`gliner-linker`, pg_trgm retrieval) | Blocker + Matcher | candidate — fit for record↔record is **unverified** (trained on mention↔description; see §8), benchmarked as one option in M3 |
+| Fellegi-Sunter / logistic | Matcher | learned weighted comparison |
 
 **Benchmark on two axes:** (a) the consumer's own Person/Program gold sets
 (dogfood + real validity), and (b) standard ER benchmarks (DBLP-ACM, Abt-Buy,
@@ -202,7 +202,7 @@ Each milestone has a **measurable exit criterion**. Targets inherit the POC bars
 **blocking recall ≥ 0.95**, **BCubed F1 ≥ 0.85** for the hybrid judge.
 
 ### M0 — Contract & spine
-Build the `Resolver` container (compose Blocker+Comparator+Module+Clusterer;
+Build the `Resolver` container (compose Blocker+Comparator+Matcher+Clusterer;
 `save`/`load`) and the entity feature-bag + missing-aware Comparator abstraction.
 - **Exit:** existing example runs through `Resolver.save/load` round-trip and
   produces identical clusters before/after; one external adapter stub compiles.
@@ -215,7 +215,7 @@ coverage report. Produce the consumer's **People (board-members) gold set**.
 
 ### M2 — Walking skeleton end-to-end + baseline
 feature bag → block → baseline judge → cluster → eval → **artifact**. The shipped
-baseline judge is the zero-spend `WeightedAverageJudge` over the feature bag;
+baseline judge is the zero-spend `WeightedAverageMatcher` over the feature bag;
 richer judges (embedding cascade, `gliner-linker`, LLM) are raced in M3. Shipped on
 Fodors-Zagat (Person artifact + consumer load-and-run is M5, see below).
 - **Exit (SHIPPED):** **BCubed F1 baseline reported** on held-out gold; the saved
@@ -268,14 +268,14 @@ plumbing and yields a first honest signal; composability is *earned* by real reu
 not accreted up front.
 
 **Delivered (all validated zero-spend):**
-- `DSPyJudge` — import-safe (`import langres.core` never imports `dspy`),
-  `compile(bootstrap|mipro)`, honest per-pair cost, serializable — behind the `Module`
+- `DSPyMatcher` — import-safe (`import langres.core` never imports `dspy`),
+  `compile(bootstrap|mipro)`, honest per-pair cost, serializable — behind the `Matcher`
   contract.
 - `derive_threshold(scores, labels)` (Youden / percentile) — kills the "thresholds
   set by hand, not from the data" sin (M3's cascade `0.3/0.9`).
 - `run_methods(...) -> BenchmarkTable` experiment facade + `langres.clients.openrouter`
   (price-pinning + `SpendMonitor` cumulative-spend guard).
-- **Proven end-to-end at $0** (DummyLM): a *compiled* DSPyJudge runs through
+- **Proven end-to-end at $0** (DummyLM): a *compiled* DSPyMatcher runs through
   `evaluate_judge_on_candidates` (judged-once, pairwise-F1, SOTA-comparable — the right
   surface for a compiled/paid judge; `run_methods` is the cheap-method race). See
   [`docs/EXPERIMENTS.md`](EXPERIMENTS.md), `examples/research/m4_experiment_loop.py`.
@@ -308,7 +308,7 @@ moved to two shapes it did **not** yet express. All three are now **shipped** be
 one seam — each additive, backward-compatible, and *earned* by a real experiment (not
 built speculatively):
 - **S1 (highest-leverage): a set-wise judgement contract — SHIPPED.** `SetJudgement`
-  / `ERCandidateGroup` + a groupwise `SelectJudge` that still yields
+  / `ERCandidateGroup` + a groupwise `SelectMatcher` that still yields
   `PairwiseJudgement` (downstream untouched), scoring an anchor against a whole
   candidate group in **one LLM call** (35× fewer calls at the group sizes in the W1
   benchmark). **Quality is measured, not assumed, and the result is nuanced.** The W3
@@ -321,10 +321,10 @@ built speculatively):
 - **Blocking pair-set algebra — SHIPPED.** `KeyBlocker` + `CompositeBlocker`
   (union / intersection / difference) + embedder sweep; recall-first composition. A
   `CorrelationClusterer` (merge-resistant) joins the clusterer family.
-- **S2: a `fit()` / `fit_unlabeled()` Module hook — SHIPPED** (`langres.core.fit`
-  protocols; `Resolver.fit`). Homes the **trained-judge family**: `FellegiSunterJudge`
+- **S2: a `fit()` / `fit_unlabeled()` Matcher hook — SHIPPED** (`langres.core.fit`
+  protocols; `Resolver.fit`). Homes the **trained-judge family**: `FellegiSunterMatcher`
   (classical Fellegi–Sunter EM, **unsupervised** — high-recall/low-precision on the W1.2
-  race) and `RandomForestJudge` (Magellan-style sklearn random forest, **supervised** — the
+  race) and `RandomForestMatcher` (Magellan-style sklearn random forest, **supervised** — the
   precision lever), both serializable without pickle.
 - (Full C / S / B delta table in the research doc + #55.)
 
@@ -365,7 +365,7 @@ into the golden record** (§2.4 flagship loop).
   a hard one — see
   [`docs/research/20260703_w2_person_benchmark_results.md`](research/20260703_w2_person_benchmark_results.md).
 - **Paid quality signal (W3).** The one substantive paid measurement — set-wise
-  `SelectJudge` vs pairwise on the same model — is **model-dependent, not a clean
+  `SelectMatcher` vs pairwise on the same model — is **model-dependent, not a clean
   win**: +0.049 pair-F1 on gpt-4o, −0.068 on gpt-4o-mini (see M4.5 · S1 above and
   [`docs/research/20260703_w3_paid_smoke_results.md`](research/20260703_w3_paid_smoke_results.md)).
 - **DX evidence (measured, `docs/FRICTION_LOG.md`).** The newcomer path is fast and

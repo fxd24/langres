@@ -1,16 +1,21 @@
-"""Tests for the data-driven threshold helper ``derive_threshold``.
+"""Tests for the calibration module: ``derive_threshold`` + the ``Calibrator``.
 
-All tests are deterministic and cost $0: they exercise the pure function on
-small synthetic score/label sets. Coverage focuses on the two derivation
-methods (Youden's J and percentile), the in-range guarantee, and every
-degenerate input (all-one-class, single point, ties, mismatched lengths,
-empty, bad arguments).
+All tests are deterministic and cost $0: they exercise pure functions / the
+NumPy-applied calibrator on small synthetic score/label sets. Coverage focuses
+on the two threshold-derivation methods (Youden's J and percentile) and their
+degenerate inputs, plus the fittable Platt/isotonic :class:`Calibrator` -- the
+honest before/after Brier/ECE proof, its fit guards, and the JSON config
+round-trip that reconstructs a fitted, scikit-learn-free map.
 """
+
+import json
 
 import numpy as np
 import pytest
 
-from langres.core.calibration import derive_threshold
+from langres.core.calibration import Calibrator, derive_threshold
+from langres.core.fit import CalibratorFitMixin
+from langres.core.metrics import brier_score, expected_calibration_error
 
 
 def test_youden_separates_clean_bimodal() -> None:
@@ -162,3 +167,120 @@ def test_unknown_method_raises() -> None:
     """An unrecognized method is a clear error (defensive, beyond the type hint)."""
     with pytest.raises(ValueError, match="method"):
         derive_threshold([0.1, 0.9], [False, True], method="bogus")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Calibrator: the fittable score->probability map (Platt / isotonic).
+# ---------------------------------------------------------------------------
+
+
+def _miscalibrated_set(n: int = 400, seed: int = 1) -> tuple[list[float], list[bool]]:
+    """A deliberately miscalibrated set: correct ranking, over-confident scores.
+
+    Outcomes are Bernoulli(raw), but the observed score squashes ``raw`` away from
+    0.5 (``0.5 + sign·sqrt|raw-0.5|``) -- the ranking is preserved while the score
+    systematically over-states its confidence, so a real calibrator must lower
+    both Brier and ECE.
+    """
+    rng = np.random.default_rng(seed)
+    raw = rng.uniform(0.0, 1.0, n)
+    labels = rng.uniform(0.0, 1.0, n) < raw
+    scores = np.clip(0.5 + np.sign(raw - 0.5) * np.sqrt(np.abs(raw - 0.5)), 0.0, 1.0)
+    return scores.tolist(), [bool(x) for x in labels]
+
+
+@pytest.mark.parametrize("method", ["platt", "isotonic"])
+def test_calibration_lowers_brier_and_ece(method: str) -> None:
+    """The honest proof: fitting a calibrator drives Brier AND ECE down.
+
+    On a set that ranks correctly but is over-confident, both Platt and isotonic
+    must produce a strictly better Brier score and a no-worse ECE than the raw,
+    uncalibrated scores -- otherwise the map is not really calibrating.
+    """
+    scores, labels = _miscalibrated_set()
+    brier_before = brier_score(scores, labels)
+    ece_before = expected_calibration_error(scores, labels)
+
+    cal = Calibrator(method)  # type: ignore[arg-type]
+    cal.fit_calibrator(scores, labels)
+    calibrated = cal.transform(scores)
+
+    assert all(0.0 <= p <= 1.0 for p in calibrated)
+    assert brier_score(calibrated, labels) < brier_before
+    assert expected_calibration_error(calibrated, labels) <= ece_before
+
+
+def test_calibrator_satisfies_the_fit_protocol() -> None:
+    """A Calibrator IS a CalibratorFitMixin (structural: fit_calibrator + transform)."""
+    assert isinstance(Calibrator("platt"), CalibratorFitMixin)
+
+
+def test_platt_is_the_default_method() -> None:
+    """Omitting ``method`` builds a Platt (logistic) calibrator."""
+    assert Calibrator().method == "platt"
+
+
+def test_unknown_method_rejected_at_construction() -> None:
+    """An unsupported strategy is a clear error, not a late surprise at fit."""
+    with pytest.raises(ValueError, match="platt.*isotonic"):
+        Calibrator("sigmoidal")  # type: ignore[arg-type]
+
+
+def test_transform_before_fit_raises() -> None:
+    """Applying an unfit calibrator is a clear RuntimeError, not silent garbage."""
+    cal = Calibrator("platt")
+    assert not cal.fitted
+    with pytest.raises(RuntimeError, match="before fit"):
+        cal.transform([0.5])
+
+
+def test_fit_needs_both_classes() -> None:
+    """A single-class label set cannot define a calibration map."""
+    cal = Calibrator("platt")
+    with pytest.raises(ValueError, match="both classes"):
+        cal.fit_calibrator([0.1, 0.5, 0.9], [True, True, True])
+
+
+def test_fit_rejects_mismatched_and_empty() -> None:
+    """Length-mismatched and empty inputs are clear errors."""
+    cal = Calibrator("isotonic")
+    with pytest.raises(ValueError, match="equal length"):
+        cal.fit_calibrator([0.1, 0.2, 0.3], [True, False])
+    with pytest.raises(ValueError, match="non-empty"):
+        cal.fit_calibrator([], [])
+
+
+@pytest.mark.parametrize("method", ["platt", "isotonic"])
+def test_from_config_round_trips_a_fitted_calibrator(method: str) -> None:
+    """save/load fidelity: config -> JSON -> from_config maps identically.
+
+    The learned params are plain floats carried inline in ``config`` (no weight
+    files), and ``transform`` is pure NumPy -- so a reconstructed calibrator
+    scores byte-identically to the freshly-fit one it came from.
+    """
+    scores, labels = _miscalibrated_set(n=120, seed=3)
+    cal = Calibrator(method)  # type: ignore[arg-type]
+    cal.fit_calibrator(scores, labels)
+
+    config = json.loads(json.dumps(cal.config))  # prove the config is JSON-safe
+    rebuilt = Calibrator.from_config(config)
+
+    assert rebuilt.method == method
+    assert rebuilt.fitted
+    probe = [0.0, 0.15, 0.37, 0.5, 0.63, 0.88, 1.0]
+    assert rebuilt.transform(probe) == cal.transform(probe)
+
+
+def test_transform_clips_to_unit_interval() -> None:
+    """Isotonic outputs stay in [0, 1] even for out-of-range inputs (clip)."""
+    cal = Calibrator("isotonic")
+    cal.fit_calibrator([0.2, 0.4, 0.6, 0.8], [False, False, True, True])
+    out = cal.transform([-5.0, 0.5, 5.0])
+    assert all(0.0 <= p <= 1.0 for p in out)
+
+
+def test_call_is_transform() -> None:
+    """``calibrator(scores)`` is sugar for ``calibrator.transform(scores)``."""
+    cal = Calibrator("platt")
+    cal.fit_calibrator([0.1, 0.4, 0.6, 0.9], [False, False, True, True])
+    assert cal([0.3, 0.7]) == cal.transform([0.3, 0.7])

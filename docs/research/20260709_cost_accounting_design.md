@@ -88,7 +88,7 @@ cost is a **single scalar that almost nothing writes**.
 **What exists and is honest:**
 
 - Per-call cost facts already exist, in memory, on every `PairwiseJudgement`.
-  `LLMJudge.forward` stamps `provenance` with `model`, `cost_usd`,
+  `LLMMatcher.forward` stamps `provenance` with `model`, `cost_usd`,
   **`cost_is_real`** (bool: OpenRouter-billed vs. pinned estimate), `provider`
   (the upstream serving provider), `prompt_tokens`, `completion_tokens`
   (`llm_judge.py:429-438`; async path identical at `:588-598`).
@@ -101,7 +101,7 @@ cost is a **single scalar that almost nothing writes**.
 - `SpendMonitor` (`openrouter.py:399-455`) is a **passive ledger** (`add` /
   `check`), not a meter — it accumulates whatever honest per-call cost the caller
   feeds it and warns/raises on the total. Real per-call cost is computed upstream
-  in `LLMJudge._billing`.
+  in `LLMMatcher._billing`.
 
 **What is missing or broken:**
 
@@ -119,7 +119,7 @@ cost is a **single scalar that almost nothing writes**.
   attached.
 - **The benchmark path never opens a run.** `benchmark.py`
   (`run_method`/`run_methods`) has zero `capture_run` calls. `capture_run` is
-  wired into exactly one production seam: `DSPyJudge.compile`
+  wired into exactly one production seam: `DSPyMatcher.compile`
   (`dspy_judge.py:368`).
 - **DSPy compile records `$0`.** That one wired seam carries an in-source NOTE
   deferring the fix to #100: "this compile run records $0 spend … deferred to
@@ -134,7 +134,7 @@ cost is a **single scalar that almost nothing writes**.
 - **Three budget mechanisms, three defaults, two failure semantics:**
   | Mechanism | Where | Default | On breach |
   |---|---|---|---|
-  | `_SpendCappedModule` | presets / verbs (`presets.py:290`) | `DEFAULT_BUDGET_USD = 1.0` (`presets.py:97`) | **raises** `BudgetExceeded` (carries `partial_judgements`) |
+  | `_SpendCappedMatcher` | presets / verbs (`presets.py:290`) | `DEFAULT_BUDGET_USD = 1.0` (`presets.py:97`) | **raises** `BudgetExceeded` (carries `partial_judgements`) |
   | `BudgetedModuleRunner` | benchmark (`benchmark.py:924`) | `budget_usd=20.0`, soft `15.0` (`benchmark.py:971-972`) | **silently truncates** the input, returns what was scored |
   | `TeacherLabeler` cap | bootstrap (`labelers.py:201-204`) | its own | pre-flight truncate (mirrors the runner) |
 - **The `Resolver` artifact carries components only.** `ArtifactManifest`
@@ -208,7 +208,7 @@ Separating them is the core architectural move.
 1. **Metering — facts, in `core`.** Count what happened: tokens by class,
    provider, model, and the provider-reported cost when the provider gives one.
    Facts never encode a price *decision*. This lives where the call is made
-   (`LLMJudge`, and later any embedding client) and already half-exists in
+   (`LLMMatcher`, and later any embedding client) and already half-exists in
    `provenance`.
 2. **Pricing — policy, in the tracking layer, effective-dated.** Turn tokens into
    dollars. Prices are *policy* (negotiated rates, provider choice, they move over
@@ -317,7 +317,7 @@ litellm `model_prices_and_context_window.json` + `litellm.register_model`.
   (1.25× at 5m TTL, 2.0× at 1h) and reads at 0.1× [supplied]. Minimum cacheable
   prefix on OpenAI is 1024 tokens — so a ~66-token pairwise ER prompt can **never**
   cache, but **DSPy-compiled prompts** (bootstrapped demos + long instructions)
-  and **`SelectJudge`'s shared-anchor set-wise prompts** routinely clear 1024
+  and **`SelectMatcher`'s shared-anchor set-wise prompts** routinely clear 1024
   tokens of stable prefix. Those are exactly the paths where langres's cost story
   lives (cheap distilled student, one-call-per-group set-wise), and today langres
   **cannot see** whether it is re-paying full price for the same prefix thousands
@@ -428,7 +428,7 @@ price_book_version: str | None = None         # which prices produced derived_co
 
 **Why `usage_by_key`, not a single flat `usage` vector?** Pricing is keyed on
 `(model, provider, effective_date)` (§6.2). A run that mixes models — a
-`CascadeJudge` is *defined* by cheap-student-then-expensive-teacher — or that
+`CascadeMatcher` is *defined* by cheap-student-then-expensive-teacher — or that
 OpenRouter routes to two serving providers of the same model (~10× apart, §5)
 would collapse into one anonymous token total, and re-pricing could then only
 apply a single price row to the aggregate. That silently corrupts spend, which is
@@ -589,7 +589,7 @@ basis can't drift across three files.
   (comment `:45`)
 - `SpendMonitor` (passive ledger): `openrouter.py:399-455`;
   `BudgetExceeded` (+`partial_judgements`): `:383-396`
-- Three budget mechanisms: `_SpendCappedModule` `src/langres/core/presets.py:290`
+- Three budget mechanisms: `_SpendCappedMatcher` `src/langres/core/presets.py:290`
   (`DEFAULT_BUDGET_USD=1.0` `:97`); `BudgetedModuleRunner`
   `src/langres/core/benchmark.py:924` (`20.0`/`15.0` `:971-972`);
   `TeacherLabeler` `src/langres/bootstrap/labelers.py:201-204`
