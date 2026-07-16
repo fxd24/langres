@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 
 from langres.clients import create_llm_client
 from langres.clients.settings import Settings
-from langres.core import PipelineDebugger
+from langres.core.debugging import PipelineDebugger
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.embeddings import SentenceTransformerEmbedder

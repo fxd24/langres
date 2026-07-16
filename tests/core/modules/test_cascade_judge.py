@@ -624,7 +624,8 @@ class TestSerialization:
         """Full Resolver round trip: fitted RandomForestMatcher student survives save/load
         via the cascade's SerializableState sidecar (zero Resolver changes)."""
         pytest.importorskip("sklearn")
-        from langres.core import AllPairsBlocker, Resolver
+        from langres.core import Resolver
+        from langres.core.blockers import AllPairsBlocker
         from langres.core.comparator import StringComparator
         from langres.core.matchers.random_forest_judge import RandomForestMatcher
 

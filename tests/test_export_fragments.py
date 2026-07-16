@@ -45,18 +45,13 @@ _ROOT_FRAGMENTS = _fragments(langres._exports)
 _ALL_FRAGMENTS = _CORE_FRAGMENTS + _ROOT_FRAGMENTS
 
 
-def _lazy_submodules(frag: ModuleType) -> tuple[str, ...]:
-    """Root fragments declare no ``LAZY_SUBMODULES`` -- only ``core`` has any."""
-    return tuple(getattr(frag, "LAZY_SUBMODULES", ()))
-
-
 def _ids(frags: list[ModuleType]) -> list[str]:
     return [f.__name__.removeprefix("langres.") for f in frags]
 
 
 def test_fragments_are_discovered() -> None:
     """Guard the guard: these tests are worthless if discovery finds nothing."""
-    assert len(_CORE_FRAGMENTS) >= 10
+    assert len(_CORE_FRAGMENTS) >= 8
     assert len(_ROOT_FRAGMENTS) >= 5
 
 
@@ -69,12 +64,12 @@ class TestFragmentContract:
             assert hasattr(frag, attr), f"{frag.__name__} is missing {attr}"
 
     def test_names_is_derived_not_hand_maintained(self, frag: ModuleType) -> None:
-        """``NAMES == (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)``.
+        """``NAMES == (*__all__, *LAZY_SYMBOLS)``.
 
         Hand-editing ``NAMES`` is how a name silently drops out of (or sneaks
         into) the public surface.
         """
-        expected = (*frag.__all__, *_lazy_submodules(frag), *frag.LAZY_SYMBOLS)
+        expected = (*frag.__all__, *frag.LAZY_SYMBOLS)
         assert tuple(frag.NAMES) == expected
 
     def test_extras_only_describe_lazy_symbols(self, frag: ModuleType) -> None:
@@ -195,7 +190,3 @@ class TestCoreExtraBySymbolIsTotal:
     def test_every_core_lazy_symbol_has_an_extra(self) -> None:
         missing = set(langres.core._LAZY_SYMBOLS) - set(langres.core._EXTRA_BY_SYMBOL)
         assert not missing, f"core lazy symbols without a [extra] hint: {sorted(missing)}"
-
-    def test_core_submodules_are_not_given_extras(self) -> None:
-        """The lazy submodules are dev/eval tooling, not pip extras."""
-        assert not (langres.core._LAZY_SUBMODULES & set(langres.core._EXTRA_BY_SYMBOL))

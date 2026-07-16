@@ -137,11 +137,50 @@ class TangleBaseline:
 
 
 # ---------------------------------------------------------------------------
-# THE BASELINES. Measured on the `refactor/kill-runtime-cycle` merge with:
+# THE BASELINES. Re-measured on `refactor/kill-runtime-cycle` (the runtime cycle
+# is gone), stacked on the facade-emptying wave before it, with:
 #     uv run python tools/import_graph.py kinds
 # Lower these freely when you decouple something -- that is the ratchet working.
 # RAISING either number means your change coupled the codebase further: say why,
 # in a comment, right here, and expect review to push back.
+#
+# Two waves ratcheted this down, in order:
+#
+#  1. The facade-emptying wave (`langres.core` stopped re-exporting
+#     implementations): all-edges 43 -> 39, tangled 48 -> 44. The four that left
+#     were `core/_exports/_clustering`, `_matchers` and `_eval` (deleted or
+#     reduced to contracts) plus `core.matchers.cascade_judge`, which only
+#     reached the cycle through the `_matchers` re-export. The runtime view did
+#     NOT move (12) -- that wave's measured finding was that emptying the facade
+#     *cannot* shrink it, because the runtime cycle was never closed by the
+#     component re-exports. It was closed by `core/resolver.py`'s toplevel
+#     `import langres`, present solely to read `langres.__version__` when
+#     stamping an artifact: the floor importing the ceiling for a version string.
+#
+#  2. Killing exactly that edge (this wave). The version string moved to
+#     `langres/_version.py`, a stdlib-only leaf that imports no langres, so
+#     `resolver` and `cli` read it without depending on the root. That wave's
+#     prediction held exactly: runtime 12 -> 0, and all-edges 39 -> 10 with it.
+#
+# Two more measured facts for whoever plans the next wave (both from
+# `tools/import_graph.py counterfactual --mapping tools/refactor_target_packages.json`):
+#
+#  * Package knots went 18 -> 16 -> **15** (all edges) and 11 -> 10 -> **9**
+#    (toplevel). The facade wave killed `benchmarks <-> core` and
+#    `core <-> optimize`; this one killed `architectures <-> root` in both views
+#    (`core/resolver.py` maps to `architectures`, and its `import langres` was
+#    that knot's only edge). `langres._version` maps to `core` for this reason --
+#    see the mapping's own `_comment`.
+#  * The biggest knot, `components <-> core`, went from (65 + 16) to **(65 + 1)**
+#    edges. All 65 run components -> core (implementations importing contracts --
+#    the direction the layering wants). The ONE survivor is
+#    `core/_exports/_blocking -> core.comparator`, which exists only because the
+#    `Comparator` ABC shares `core/comparator.py` with `StringComparator`, and
+#    the target mapping sends that whole module to `components`. Splitting that
+#    one module at symbol granularity (ABC -> core, StringComparator ->
+#    components) collapses the largest knot to a clean one-way dependency. That
+#    is the "contract-first split ... never specified at symbol granularity"
+#    the mapping's own `_comment` flags.
 # ---------------------------------------------------------------------------
 
 # Runtime view: EMPTY. A bare `import langres` executes no import cycle at all.
@@ -166,10 +205,10 @@ RUNTIME = TangleBaseline(
 )
 
 # All-edges view: 24 modules across four cycles, the largest being 10. Killing the
-# runtime cycle collapsed this view too (48/43 -> 24/10): the root, both `_exports`
-# trees, `verbs` and `optimize` were only ever tangled here *via* the same
-# `resolver -> langres` edge, so they left with it. What remains are four genuinely
-# lazy knots, none touching the root:
+# runtime cycle collapsed this view too (39 -> 10, tangled 44 -> 24): the root,
+# both `_exports` trees, `verbs` and `optimize` were only ever tangled here *via*
+# that same `resolver -> langres` edge, so they left with it. What remains are
+# four genuinely lazy knots, none of them touching the root:
 #   10  the matcher/presets/resolver + methods/benchmark knot (litellm seam)
 #    9  the `data.data_profile.*` section graph
 #    3  {core.analysis, core.reports, plotting.blockers}

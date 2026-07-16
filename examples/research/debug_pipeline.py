@@ -5,12 +5,8 @@ This example demonstrates how to use PipelineDebugger to analyze the quality
 of candidate generation, scoring, and clustering in an entity resolution pipeline.
 """
 
-from langres.core import (
-    CompanySchema,
-    ERCandidate,
-    PairwiseJudgement,
-    PipelineDebugger,
-)
+from langres.core import CompanySchema, ERCandidate, PairwiseJudgement
+from langres.core.debugging import PipelineDebugger
 
 
 def main() -> None:

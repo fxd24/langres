@@ -26,13 +26,9 @@ import pytest
 
 def _company_resolver() -> "object":
     """A 4-slot Resolver over built-in, registered components."""
-    from langres.core import (
-        AllPairsBlocker,
-        Clusterer,
-        Comparator,
-        Resolver,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     comparator = Comparator.from_schema(CompanySchema)
@@ -108,7 +104,9 @@ def test_config_dict_writes_nothing_to_disk(tmp_path: Path) -> None:
 
 def test_config_dict_omits_absent_comparator() -> None:
     """``comparator=None`` yields a 3-slot snapshot, mirroring ``save()``'s ``_slots``."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
 
