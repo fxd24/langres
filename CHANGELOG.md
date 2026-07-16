@@ -32,13 +32,23 @@ stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limi
 
 #### Changed / migration
 
-- **A paid `Matcher` on a `Resolver` that previously ran unbounded now raises
-  `BudgetExceeded` past $1.00.** Free matchers (`"string"`, `"embedding"`) meter $0
-  and never trip. Pass `budget_usd=` to raise it, or
-  `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out
+- **A paid `Matcher` scoring through `resolve()` / `predict()` on a `Resolver` that
+  previously ran unbounded now raises `BudgetExceeded` past $1.00.** Free matchers
+  (`"string"`, `"embedding"`) meter $0 and never trip. Pass `budget_usd=` to raise
+  it, or `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out
   deliberately. `budget_usd=None` means "the default", **never** "uncapped" — you
   cannot disable the cap by forgetting to pass it. `BudgetExceeded.partial_judgements`
   still carries everything already paid for.
+
+#### Known gap (scoped deliberately, not fixed here)
+
+- **The cap covers the scoring path (`resolve` / `predict`) only.** `fit(method=Platt()
+  / Isotonic())` and `distil()` score through `self.module.forward` directly and are
+  still **uncapped**. `fit(..., pairs=...)`'s validation pass is uncapped too, though
+  its matcher must be a `SupervisedFitMixin` (sklearn, $0). Capping `distil()` properly
+  means metering DSPy's compile calls, which never reach `self.module.forward` at all —
+  a partial cap there would read as protection while covering little, so it is left
+  visibly open rather than half-closed.
 
 **The guarantee, stated honestly:** spend is bounded by `budget_usd` **plus the cost
 of at most one further call**. An LLM call's cost is not knowable until it has been

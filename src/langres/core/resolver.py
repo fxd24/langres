@@ -384,6 +384,13 @@ class Resolver:
                 :data:`~langres.core.spend_cap.UNCAPPED_BUDGET_USD`
                 (``float("inf")``) for that, deliberately and in writing. A
                 free matcher (string/embedding) meters $0 and never trips.
+
+                Scope, precisely: the cap meters the **scoring** path --
+                :meth:`resolve` and :meth:`predict` -- across every call on this
+                instance, and bounds spend at ``budget_usd`` plus at most one
+                further call (see :mod:`langres.core.spend_cap`).
+                :meth:`fit` (Platt/Isotonic calibration) and :meth:`distil`
+                score through ``self.module`` directly and are NOT capped yet.
         """
         self.blocker = blocker
         self.comparator = comparator
