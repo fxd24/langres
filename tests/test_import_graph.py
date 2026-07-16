@@ -11,15 +11,12 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parent.parent / "tools"
-sys.path.insert(0, str(TOOLS))
-
-from import_graph import (  # noqa: E402
+# `tools` is on the path via [tool.pytest.ini_options] pythonpath in pyproject.toml.
+from import_graph import (
     DEFAULT_PACKAGE_ROOT,
     ImportKind,
     MappingError,
@@ -29,6 +26,8 @@ from import_graph import (  # noqa: E402
     counterfactual,
     main,
 )
+
+TOOLS = Path(__file__).resolve().parent.parent / "tools"
 
 
 @pytest.fixture(scope="module")

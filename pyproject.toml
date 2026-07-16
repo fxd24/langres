@@ -216,7 +216,10 @@ exclude-newer = "2026-07-08"
 minversion = "6.0"
 addopts = "-v --cov=langres --cov-report=term-missing --cov-report=html --cov-fail-under=90 -m 'not integration and not finetune'"
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "tools" puts the repo's dev instruments (tools/import_graph.py) on the path so
+# tests/test_import_graph.py can import them without a sys.path hack. They are
+# tooling, not shipped library code, so they stay out of src/.
+pythonpath = ["src", "tools"]
 markers = [
     "slow: marks tests as slow running (e.g., embedding models, ML inference)",
     "integration: marks tests that require external API credentials or resources. DO NOT use for testcontainer database tests (fast enough for continuous testing).",
