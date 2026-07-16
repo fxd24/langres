@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.matchers.fellegi_sunter import _GUARD_EPS, _PROB_EPS, FellegiSunterMatcher
 from langres.core.models import CompanySchema, ERCandidate

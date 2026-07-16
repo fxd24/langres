@@ -165,22 +165,34 @@ class TangleBaseline:
 # Two more measured facts for whoever plans the next wave (both from
 # `tools/import_graph.py counterfactual --mapping tools/refactor_target_packages.json`):
 #
-#  * Package knots went 18 -> 16 -> **15** (all edges) and 11 -> 10 -> **9**
-#    (toplevel). The facade wave killed `benchmarks <-> core` and
-#    `core <-> optimize`; this one killed `architectures <-> root` in both views
-#    (`core/resolver.py` maps to `architectures`, and its `import langres` was
-#    that knot's only edge). `langres._version` maps to `core` for this reason --
-#    see the mapping's own `_comment`.
-#  * The biggest knot, `components <-> core`, went from (65 + 16) to **(65 + 1)**
-#    edges. All 65 run components -> core (implementations importing contracts --
-#    the direction the layering wants). The ONE survivor is
-#    `core/_exports/_blocking -> core.comparator`, which exists only because the
-#    `Comparator` ABC shares `core/comparator.py` with `StringComparator`, and
-#    the target mapping sends that whole module to `components`. Splitting that
-#    one module at symbol granularity (ABC -> core, StringComparator ->
-#    components) collapses the largest knot to a clean one-way dependency. That
-#    is the "contract-first split ... never specified at symbol granularity"
-#    the mapping's own `_comment` flags.
+#  * Package knots went 18 -> 16 -> 15 -> **14** (all edges) and 11 -> 10 -> 9 ->
+#    **8** (toplevel). The facade wave killed `benchmarks <-> core` and
+#    `core <-> optimize`; the runtime-cycle wave killed `architectures <-> root`
+#    in both views (`core/resolver.py` maps to `architectures`, and its
+#    `import langres` was that knot's only edge); W1's comparator split killed
+#    `components <-> core`, the biggest one (see below). `langres._version` maps
+#    to `core` for this reason -- see the mapping's own `_comment`.
+#  * The biggest knot, `components <-> core`, went from (65 + 16) to (65 + 1) to
+#    **GONE** (W1). The 65 always ran components -> core (implementations
+#    importing contracts -- the direction the layering wants); the ONE survivor
+#    was `core/_exports/_blocking -> core.comparator`, which existed only because
+#    the `Comparator` ABC shared `core/comparator.py` with `StringComparator`, so
+#    the target mapping sent that whole module to `components`. W1 split it at
+#    symbol granularity (ABC -> `core.comparator`, `StringComparator` ->
+#    `core.comparators`), and `components -> core` is now a clean ONE-WAY
+#    dependency -- it is no longer a mutual pair at all, so it has dropped off
+#    the counterfactual's list. Mutual pairs: 15 -> 14 (all edges), 9 -> 8
+#    (toplevel).
+#
+#    Measured caveat for whoever plans the next split: the file-sharing was NOT
+#    the only contract -> impl link. `Comparator.from_schema` -- an ABC
+#    classmethod whose body constructed `StringComparator` -- would have
+#    re-created the same backwards edge from the new module, so splitting the
+#    file alone RELOCATES the knot rather than removing it. It had to go (callers
+#    now use `StringComparator.from_schema`, the identical factory the ABC merely
+#    delegated to). Expect the same shape in the reports.py / benchmark.py splits
+#    the mapping's `_comment` still flags: grep the ABC for references to its own
+#    concrete subclasses before predicting an edge count.
 # ---------------------------------------------------------------------------
 
 # Runtime view: EMPTY. A bare `import langres` executes no import cycle at all.

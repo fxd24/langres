@@ -17,7 +17,7 @@ import sys
 import numpy as np
 import pytest
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import FeatureSpec
 from langres.core.finetune import LabeledCandidate
 from langres.core.models import CompanySchema, ERCandidate

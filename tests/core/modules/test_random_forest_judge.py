@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.matchers.random_forest_judge import RandomForestMatcher

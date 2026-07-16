@@ -522,7 +522,7 @@ _MOVED_OFF_THE_FACADE: dict[str, str] = {
     "CompositeBlocker": "langres.core.blockers",
     "KeyBlocker": "langres.core.blockers",
     "VectorBlocker": "langres.core.blockers",
-    "StringComparator": "langres.core.comparator",
+    "StringComparator": "langres.core.comparators",
     "AnchorStore": "langres.core.anchor_store",
     "Canonicalizer": "langres.core.canonicalizer",
     "CorrelationClusterer": "langres.core.clusterers",

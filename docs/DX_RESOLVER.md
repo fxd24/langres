@@ -119,7 +119,7 @@ The four-slot constructor is unchanged for advanced use — swap in a
 scorer:
 
 ```python
-comparator = Comparator.from_schema(CompanySchema, weights={...})
+comparator = StringComparator.from_schema(CompanySchema, weights={...})
 Resolver(
     blocker=AllPairsBlocker(schema=CompanySchema),
     comparator=comparator,

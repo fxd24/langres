@@ -168,9 +168,9 @@ class TestFromSchemaRandomForestJudge:
 
 class TestBuildModuleForJudgeDirect:
     def test_returns_module_instance_verbatim(self) -> None:
-        from langres.core.comparator import Comparator
+        from langres.core.comparators import StringComparator
 
-        comparator = Comparator.from_schema(ResolverJudgeCo)
+        comparator = StringComparator.from_schema(ResolverJudgeCo)
         injected: DSPyMatcher[ResolverJudgeCo] = DSPyMatcher(lm=DummyLM([]))
         assert (
             _build_module_for_judge(

@@ -56,6 +56,13 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 # ``[trained]`` extra) -- so a saved Resolver carrying a fitted calibrator resolves
 # its ``type_name`` here without ``calibration`` being on the eager-import path.
 #
+# ``comparator`` (the rapidfuzz ``StringComparator``) joined this map in W1, when it
+# was split out of ``langres.core.comparator`` into ``langres.core.comparators.string``
+# so the ABC could stop importing its own implementation. Nothing on the eager path
+# imports the impl module any more, so without this entry a saved Resolver's
+# ``"type_name": "comparator"`` would stop resolving in a fresh process. rapidfuzz is a
+# core dep, so this is a layering deferral, not a dep deferral.
+#
 # ``cascade_judge`` is pure-core (no heavy deps) and IS eager-imported today, so
 # this entry is redundant *right now* — it is kept deliberately as the same
 # saved-artifact safety net as its ``random_forest``/``correlation_clusterer`` peers
@@ -66,6 +73,7 @@ _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "calibrator": "langres.core.calibration",
     "cascade_judge": "langres.core.matchers.cascade_judge",
+    "comparator": "langres.core.comparators.string",
     "composite_blocker": "langres.core.blockers.composite",
     "correlation_clusterer": "langres.core.clusterers.correlation",
     "dspy_judge": "langres.core.matchers.dspy_judge",

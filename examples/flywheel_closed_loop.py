@@ -65,7 +65,7 @@ from pydantic import BaseModel
 
 from langres.clients.openrouter import BudgetExceeded, SpendMonitor
 from langres.core.calibration import derive_threshold
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.harvest import (
     Correction,
     CorrectionLog,

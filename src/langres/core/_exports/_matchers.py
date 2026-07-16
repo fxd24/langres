@@ -1,4 +1,5 @@
-"""The ``Matcher`` (judge) **contract**: the ABCs and the group-cost helper.
+"""The ``Matcher`` (judge) **contract**: the ABCs, the opt-in capability
+Protocol, and the group-cost helper.
 
 Only the contract lives here. The concrete matcher family
 (``CascadeMatcher``, ``EmbeddingScoreMatcher``, ``FellegiSunterMatcher``,
@@ -16,10 +17,12 @@ See ``langres.core._exports`` for the fragment contract, and
 ``langres.core.__init__`` for why the facade carries contracts only.
 """
 
+from langres.core.inspection import Inspectable
 from langres.core.matcher import GroupwiseMatcher, Matcher, stamp_group_cost
 
 __all__ = [
     "GroupwiseMatcher",
+    "Inspectable",
     "Matcher",
     "stamp_group_cost",
 ]

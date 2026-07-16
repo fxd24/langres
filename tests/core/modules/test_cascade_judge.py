@@ -626,7 +626,7 @@ class TestSerialization:
         pytest.importorskip("sklearn")
         from langres.core import Resolver
         from langres.core.blockers import AllPairsBlocker
-        from langres.core.comparator import StringComparator
+        from langres.core.comparators import StringComparator
         from langres.core.matchers.random_forest_judge import RandomForestMatcher
 
         comparator = StringComparator.from_schema(CompanySchema)

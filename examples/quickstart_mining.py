@@ -19,7 +19,7 @@ Run it:
     uv run python examples/quickstart_mining.py
 """
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.models import CompanySchema, ERCandidate
 from langres.data import (
     augment_by_attribute,

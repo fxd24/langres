@@ -10,11 +10,8 @@ import datetime
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import (
-    Comparator,
-    NoComparableFeatures,
-    StringComparator,
-)
+from langres.core.comparator import Comparator, NoComparableFeatures
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, FeatureSpec
 from langres.core.models import CompanySchema
 
@@ -151,12 +148,6 @@ class TestFromSchema:
     def test_no_comparable_features_raises(self) -> None:
         with pytest.raises(NoComparableFeatures):
             StringComparator.from_schema(_NoStringSchema)
-
-    def test_callable_via_base_class(self) -> None:
-        # The exit test calls Comparator.from_schema(...); it must return a
-        # working concrete comparator.
-        comp = Comparator.from_schema(CompanySchema)
-        assert isinstance(comp, StringComparator)
 
 
 class TestValidation:

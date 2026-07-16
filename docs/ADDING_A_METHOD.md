@@ -33,8 +33,9 @@ scoring logic has, the output contract is pairwise**.
 `ERCandidateGroup`s from the pairwise stream and dispatches to your
 `forward_groups`, then flattens the result back to pairwise. **Set-wise in,
 pairwise out** — the group structure never leaks past the class boundary, so the
-Resolver spine needs no changes. You implement only `forward_groups` and
-`inspect_scores`.
+Resolver spine needs no changes. You implement only `forward_groups` — plus, if
+you want the label-free inspection path, `inspect_scores` (opt-in via the
+`Inspectable` Protocol; see `core.Matcher` in `docs/TECHNICAL_OVERVIEW.md`).
 
 ### Riding the `ComparisonVector` seam
 

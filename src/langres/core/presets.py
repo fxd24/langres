@@ -69,6 +69,8 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
+from langres.core.inspection import _ensure_inspectable
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,
     UnknownMethodError,
@@ -437,7 +439,8 @@ class _SpendCappedMatcher(Matcher[Any]):
             yield judgement
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
-        return self._module.inspect_scores(judgements, sample_size)
+        """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""
+        return _ensure_inspectable(self._module).inspect_scores(judgements, sample_size)
 
 
 class ResolvedModule(NamedTuple):
@@ -537,7 +540,7 @@ def _text_field_extractor(schema: type[BaseModel]) -> Any:
     ``str | None`` field except ``id``) rather than assuming a field named
     ``"name"`` or similar.
     """
-    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+    field_names = [spec.name for spec in StringComparator.from_schema(schema).feature_specs]
 
     def extract(entity: Any) -> str:
         parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
@@ -696,7 +699,7 @@ def build_resolver(
         _build_vector_blocker(schema) if use_vector else AllPairsBlocker(schema=schema)
     )
     comparator: Comparator[Any] | None = (
-        Comparator.from_schema(schema) if resolved.judge_used == "string" else None
+        StringComparator.from_schema(schema) if resolved.judge_used == "string" else None
     )
 
     if resolved.judge_used in PAID_JUDGE_NAMES and resolved.model is not None:

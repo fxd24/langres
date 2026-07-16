@@ -243,10 +243,10 @@ class MyCustomBlocker(Blocker):
 
 **What it's not:** It is not a data loader. It must operate on the clean, normalized schema provided by the Blocker. This separation of concerns is what makes it reusable.
 
-**Key Methods (both are `abstractmethod`s — a subclass must implement both):**
+**Key Methods:**
 
-- `forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]`: your custom comparison logic — one judgement per pair.
-- `inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> ScoreInspectionReport`: label-free exploration of a run's score distribution (used before you have ground truth).
+- `forward(self, candidates: Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]`: your custom comparison logic — one judgement per pair. This is the **only `abstractmethod`**: implementing it is the whole of what it means to be a Matcher.
+- `inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> ScoreInspectionReport`: label-free exploration of a run's score distribution (used before you have ground truth). **Optional and opt-in** — implement it to satisfy the `Inspectable` Protocol (`langres.core.inspection`, re-exported from `langres.core`); callers detect it with `isinstance(matcher, Inspectable)`. Skip it and your Matcher still constructs and runs; only the label-free inspection path is unavailable (the two wrappers that forward it — the spend cap and the JudgementLog — raise `TypeError` naming `Inspectable`).
 
 **Example (Custom Judge):**
 
@@ -287,9 +287,9 @@ class MyProductJudge(Matcher[MyInternalSchema]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        # Required alongside forward(): summarize the score distribution and
-        # suggest a threshold before you have labels. Body elided — the shipped
-        # judges delegate to a shared implementation.
+        # OPTIONAL (opt-in via the Inspectable Protocol): summarize the score
+        # distribution and suggest a threshold before you have labels. Body
+        # elided — the shipped judges delegate to a shared implementation.
         ...
 ```
 
@@ -612,8 +612,8 @@ whatever pairwise `ERCandidate` stream it receives (via
 only ever sees a flat pairwise stream, never the blocker object, so it
 cannot reach a blocker's native grouping) and dispatches to the abstract
 `forward_groups()`, decomposing the result back to `Iterator[PairwiseJudgement]`.
-Concrete set-wise judges implement only `forward_groups()` and
-`inspect_scores()`. Because the group structure never leaves `forward()`,
+Concrete set-wise judges implement only `forward_groups()` (plus, to be
+inspectable, `inspect_scores()`). Because the group structure never leaves `forward()`,
 the Resolver execution spine (`Resolver._judgements` → `module.forward`),
 `inspect_scores`, the JudgementLog boundary, and benchmark dispatch
 (`BudgetedModuleRunner`, `run_method`) all work unchanged.

@@ -26,12 +26,13 @@ import pytest
 
 def _company_resolver() -> "object":
     """A 4-slot Resolver over built-in, registered components."""
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.comparators import StringComparator
     from langres.core.blockers import AllPairsBlocker
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     return Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,

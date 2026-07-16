@@ -47,7 +47,7 @@ from examples.research.phase1_llm_placement import (
     write_artifacts,
 )
 from langres.clients.openrouter import BudgetExceeded, SpendMonitor
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.data.fixed_split_pair_benchmark import FixedSplitPairBenchmark

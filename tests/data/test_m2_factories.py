@@ -20,7 +20,7 @@ import pytest
 
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.resolver import Resolver
