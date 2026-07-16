@@ -71,6 +71,36 @@ asymmetry that makes this a ratchet:
 still accepting 43, so a later regression back to 43 sails through green. Exact
 equality keeps the committed number equal to the truth, always.
 
+Why not import-linter (yet)
+---------------------------
+Measured against import-linter 2.13 / grimp 3.15, not assumed:
+
+* **grimp cannot see the runtime view at all.** ``DirectImport``
+  (``grimp/domain/valueobjects.py``) carries only importer/imported/line -- no
+  scope field. ``exclude_type_checking_imports`` exists (top-level
+  ``[tool.importlinter]`` only), but there is **no equivalent for function-local
+  imports**: ``def build(): import faiss`` is recorded as a plain edge. langres
+  has 63 function-local edges and 102 edges that exist *only* lazily -- the
+  deliberate extras seam that ``tests/test_import_budget.py`` mandates. So a
+  ``forbidden`` contract on the heavy deps would fire on the architecture working
+  as designed, and import-linter could only ever gate the 43 view, never the 12.
+* **A ``layers`` contract is not writable today.** ``layers.py`` raises
+  ``ValueError: Missing layer ... does not exist`` -- a hard crash, not a report
+  -- and the target packages don't exist yet. Their order isn't decided either.
+* **The contracts that *are* true today are not useful.** Only ``cli``, ``eval``,
+  ``testing``, ``bootstrap`` and ``_method_names`` sit outside the package cycle;
+  an ``independence`` contract over those five would assert a regression nobody
+  could plausibly commit. Everything worth gating is already gated, and better:
+  cycles by this file (both views), eager-heavy-imports by
+  ``test_import_budget.py`` (which executes the import and reads ``sys.modules``
+  -- ground truth, zero false positives on lazy seams).
+
+import-linter earns its place when the refactor's target packages exist and their
+order is decided: a ``layers`` contract then asserts *direction*, which this gate
+deliberately does not. Until then ``tools/import_graph.py counterfactual
+--mapping ...`` answers "what would this split do to the cycles?" with no new
+dependency.
+
 Cost: pure AST parsing, no imports executed, no network, ~1s. It runs in the
 per-PR ``test`` job (``.github/workflows/test.yml``), not just ``test-full``.
 """
