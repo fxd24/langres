@@ -25,7 +25,8 @@
 | 2 | `toplevel=386, function-local=63, type-checking=56`; 99 lazy-only edges; SCCs `[5]` / `[29,3,2]` | **CORRECTED (numbers) / CONFIRMED (conclusion)** — true counts are 391/63/59, 102 lazy-only. **SCCs are byte-identical.** The load-bearing lazy-import finding stands |
 | 3 | `core/benchmark.py` has 14 importers across four streams | **CORRECTED** — 15. Every named line number is exact; the 15th (`core/__init__.py:115`) was *hidden by a bug in the measuring script* |
 | 4 | Stream B→A = 12, A→B = 3 → bidirectional | **CONFIRMED (conclusion) / CORRECTED (count)** — B→A = 13, A→B = 3. All three named A→B edges exact. **Ordering B after A cannot fix it** |
-| 5 | naive file-move → **14** cross-package cycles; contract-first → **6** | **NOT REPRODUCIBLE** — no definition of "cycle" yields 14 (see §5). The "6" has **no reproducible definition at all**: the contract-first split was never specified at symbol granularity |
+| 5 | naive file-move → **14** cross-package cycles; contract-first → **6** | **NOT REPRODUCIBLE** — no definition of "cycle" yields 14 (see §6). The "6" has **no reproducible definition at all**: the contract-first split was never specified at symbol granularity |
+| 6 | W1 drives `core → reports` to zero by thinning the ABCs | **CORRECTED** — `reports` has fan-in 22; `Blocker.evaluate` and `Clusterer.inspect_clusters` are **concrete** (`Clusterer` is not even an ABC), so dropping `@abstractmethod` removes nothing. W1 removes 1 of 3 edges (§6.4) |
 
 **A fifth evidence error, in the instrument itself.** The rescued `tmp/w0-graph/graph.py`
 mis-resolves `from PKG import SUBMODULE`, crediting the edge to the package rather than the
@@ -361,15 +362,15 @@ The minority direction is the one to break. `[RUNTIME]` = present in toplevel-on
 
 | # | knot | break | fix |
 |---|---|---|---|
-| 1 | `components ↔ core` | `core → components` (**16**) | `core/__init__.py:27–58` re-exports every component. Facade problem (§6.4) |
+| 1 | `components ↔ core` | `core → components` (**16**) | `core/__init__.py:27–58` re-exports every component. Facade problem (§6.5) |
 | 2 | `architectures ↔ core` | `core → architectures` (2) | `core/__init__.py:60,89` → `method_registry`, `resolver`. Facade |
 | 3 | `core ↔ curation` | `core → curation` (4) | `core/__init__.py:28,33,48,90` → `anchor_store`, `canonicalizer`, `harvest`, `review`. Facade |
 | 4 | `core ↔ training` | `core → training` (3) | `core/__init__.py:69,70,132` → `methods_calibrate`, `methods_prompt`, `calibration`. Facade |
 | 5 | `benchmarks ↔ core` `[LAZY]` | `core → benchmarks` (1) | `core/__init__.py:115` → `core.benchmark`. Facade. **The edge the ad-hoc bug hid (§4)** |
 | 6 | `core ↔ optimize` `[LAZY]` | `core → optimize` (1) | `core/__init__.py:115` → `core.optimizers`. Facade |
-| 7 | `core ↔ metrics` | `metrics → core` (3) | `analysis:17`, `debugging:37`, `metrics:24` → `core.models`. **Not a cycle if `core` holds only contracts** — this is the split working as intended; the back-edge is `core/__init__` re-exporting metrics |
-| 8 | `core ↔ report` | `report → core` (2) | `eval_report:50`, `reports:31` → `core.models`. Same shape as #7 |
-| 9 | `core ↔ tracking` | `tracking → core` (2) | `judgement_log:49,50` → `core.models`, `core.matcher`. Same shape as #7 |
+| 7 | `core ↔ metrics` | `core → metrics` (4) | **Not** the minority direction: `metrics → core` is 3 edges all to `core.models` — the *intended* dependency, leave it. Break `core:37,115` (facade) **plus two real edges**: `blocker.py:274`, `clusterer.py:341` (function-local) → `analysis`/`metrics` |
+| 8 | `core ↔ report` | `core → report` (4) | Same shape. `report → core` (2, both `→ core.models`) is intended. Break `core:47` (facade) **plus `blocker.py:16`, `clusterer.py:15`, `matcher.py:16` → `core.reports`** — see §6.4, this is the knot W1 claims to zero and does not |
+| 9 | `core ↔ tracking` | `core → tracking` (4) | Same shape; `tracking → core` (2) intended. Break `core:56,91,105,136` — **pure facade**, dissolves with §6.5 |
 | 10 | `metrics ↔ report` | `metrics → report` (1) | `analysis:18` → `core.reports`. Real: `analysis` mixes metric computation with report models. Dissolves **only if** `reports.py` is actually split — the unspecified split (§6.2) |
 | 11 | `architectures ↔ benchmarks` | `architectures → benchmarks` (1) | `methods.py:64` → `core.benchmark`, against `benchmark.py:435,871` → `methods`. **A live 2-cycle today**, spanning Stream A and W4 |
 | 12 | `benchmarks ↔ report` | `report → benchmarks` (1) | `eval_report.py:38` → `core.benchmark`. Needs the `Benchmark` Protocol extracted to `core/` — the unspecified split |
@@ -383,7 +384,44 @@ The minority direction is the one to break. `[RUNTIME]` = present in toplevel-on
 Seven of the 18 (#5, #6, #14–#18) are **lazy-only**: no runtime cycle exists. They are
 import-linter artifacts, and §2.1 decides whether they need waivers or a scoped contract.
 
-### 6.4 The facade is the biggest single lever — and it is not enough
+> **Methodological note.** "Break the minority direction" is a useful default but *not* a
+> rule — for #7–#9 it points the wrong way. There, the minority (`metrics|report|tracking →
+> core`) is 2–3 edges landing on `core.models`: that is the **intended** contract dependency
+> and must survive. The majority direction is the defect. Direction of *intent* beats edge
+> count; the counts are an input to the judgement, not the judgement.
+
+### 6.4 "`core → reports` → zero" is false — independently confirmed here
+
+The plan claims W1 drives `core → reports` to zero by thinning the ABCs (dropping
+`@abstractmethod`). The graph says otherwise. `core.reports` has **fan-in 22** (§3), and the
+`core → report` direction (knot #8) is:
+
+```
+core -> report: 4 edges
+     langres.core:47      [toplevel] -> langres.core.fit_report      (facade)
+     langres.core.blocker:16   [toplevel] -> langres.core.reports
+     langres.core.clusterer:15 [toplevel] -> langres.core.reports
+     langres.core.matcher:16   [toplevel] -> langres.core.reports
+```
+
+`blocker.py:16` imports `BlockerEvaluationReport` for `Blocker.evaluate()`
+(`blocker.py:222`); `clusterer.py:15` imports `ClusterInspectionReport` for
+`Clusterer.inspect_clusters()` (`clusterer.py:102`). Are those abstract? Asked of Python
+rather than inferred from decorators:
+
+```
+Blocker abstract methods   : ['inspect_candidates', 'stream']
+Clusterer abstract methods : AttributeError: __abstractmethods__
+=> evaluate abstract?         False
+=> inspect_clusters abstract? False
+```
+
+Both are **concrete**, **so dropping `@abstractmethod` removes neither import**. (`Clusterer`
+is not an ABC at all — it has no `__abstractmethods__`, so "thin the ABC" is a no-op there.)
+W1 removes exactly one of the three (`matcher.py:16`). The 12 `core.matchers.* →
+core.reports` edges also survive by design ("keep every implementation"). The knot stays.
+
+### 6.5 The facade is the biggest single lever — and it is not enough
 
 Knots #1–#6 — **6 of 18** — have a minority direction consisting **100%** of edges from one
 file, `core/__init__.py`. It re-exports the library (fan-out 43, the package ceiling), so
@@ -448,7 +486,7 @@ for k in sorted(cross):
 3. **Three named edges beat any sequencing** (§5): A→B is 3 edges, two of them
    function-local. `resolver.py:44` (§6.3 #13) alone closes the runtime [5] SCC.
 4. **`core/__init__.py` is the fattest single dependency in the package** (fan-out 43) and
-   solely causes 6 of 18 knots — but emptying it, not relabelling it, is what pays (§6.4).
+   solely causes 6 of 18 knots — but emptying it, not relabelling it, is what pays (§6.5).
 5. **The measurement must stay in-repo.** Four evidence errors reached a plan; a fifth lived
    in the instrument and silently hid the one edge (§4) that most undercuts the plan's
    thesis. `tools/import_graph.py` is committed and gated by `test_edges_match_grimp_exactly`
