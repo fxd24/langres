@@ -356,8 +356,33 @@ class TestDenoisePairs:
         assert len(cleaned) == 11
         assert flagged == []
 
+    def test_honours_feature_specs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """feature_specs pins denoise's feature space (parity with mine_misclassified_pairs).
+
+        Without it, a matcher trained on a custom feature SUBSET would be denoised
+        in the full default feature space -- a mismatch. Spy on _feature_matrix to
+        assert the explicit subset is threaded through, not the derived default.
+        """
+        import langres.data.mining as mining_mod
+
+        labeled = _separable_dataset(n_positive=20, n_negative=20)
+        subset = [FeatureSpec(name="name")]
+        captured: list[list[FeatureSpec]] = []
+        real_feature_matrix = mining_mod._feature_matrix
+
+        def spy(labeled_arg: list[LabeledCandidate], specs: list[FeatureSpec]) -> list[list[float]]:
+            captured.append(list(specs))
+            return real_feature_matrix(labeled_arg, specs)
+
+        monkeypatch.setattr(mining_mod, "_feature_matrix", spy)
+        denoise_pairs(labeled, feature_specs=subset, cv=4, seed=0)
+        assert captured and captured[0] == subset
+
     def test_agrees_with_cleanlab_on_same_probabilities(self) -> None:
-        """Cross-check: our confident-joint flags match cleanlab on the same OOF probs."""
+        """Cross-check: our confident-joint (Northcutt et al.) core overlaps cleanlab
+        on the same OOF probs -- partial overlap (jaccard >= 0.5), not byte-parity:
+        we run the confident-joint core, not Cleanlab's full prune-by-noise-rate pipeline.
+        """
         cleanlab_filter = pytest.importorskip("cleanlab.filter")
 
         clean = _separable_dataset(n_positive=40, n_negative=40)

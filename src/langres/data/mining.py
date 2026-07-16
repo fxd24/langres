@@ -235,6 +235,7 @@ def denoise_pairs(
     labeled: Sequence[LabeledCandidate],
     *,
     method: str = "confident_learning",
+    feature_specs: Sequence[FeatureSpec] | None = None,
     cv: int = 5,
     seed: int = 0,
 ) -> tuple[list[LabeledCandidate], list[LabeledCandidate]]:
@@ -248,9 +249,17 @@ def denoise_pairs(
     given label. Robust to class imbalance because the threshold is per-class, not
     a global 0.5.
 
+    Caveat -- confident learning cannot perfectly separate label noise from
+    *genuinely hard* positives (both look alike to the model), so it may flag a
+    real hard positive as suspected noise. Running :func:`denoise_pairs` *before*
+    :func:`mine_misclassified_pairs` therefore competes with hard-positive mining:
+    it can strip the very boundary positives mining targets. Order accordingly.
+
     Args:
         labeled: Comparison-attached labeled candidates. Must contain both classes.
         method: Denoise strategy; only ``"confident_learning"`` is supported.
+        feature_specs: Features to featurize with; when ``None``, derived from the
+            union of the candidates' comparison levels (see module docs).
         cv: Requested out-of-fold folds (reduced when a class is small; when a
             fold cannot hold both classes, nothing is flagged and the split is
             ``(all, [])``, logged).
@@ -270,7 +279,7 @@ def denoise_pairs(
         )
     materialized = list(labeled)
     _require_both_classes(materialized, fn="denoise_pairs")
-    specs = _resolve_feature_specs(materialized, feature_specs=None)
+    specs = _resolve_feature_specs(materialized, feature_specs=feature_specs)
     x = _feature_matrix(materialized, specs)
     y = [int(label) for _, label in materialized]
 
