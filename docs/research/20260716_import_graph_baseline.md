@@ -89,6 +89,15 @@ The 15 phantoms are all *into package `__init__` files* (`data_profile/* → lan
 submodule edges (`data_profile/* → core._report_html|_svg`, `data/* → data._benchmark_utils`,
 `langres.core → core.benchmark|metrics|optimizers`).
 
+> **Reproducibility of *this* table, specifically.** The ad-hoc scripts lived in `tmp/`
+> (gitignored) and are deliberately **not** committed — they are superseded and wrong, and
+> vendoring them would just orphan dead code. So the 485/15/23 column is a *historical
+> record*, not a re-runnable command: it is the one set of numbers in this doc a reader
+> cannot re-derive. What *is* pinned is the behaviour that matters — the bug is a regression
+> test (`test_from_package_import_submodule_credits_the_submodule`) and the corrected edge
+> set is gated against grimp (`test_edges_match_grimp_exactly`). The scripts dying with their
+> worktree is exactly why the instrument is now in-repo.
+
 > **A hypothesis that did not survive.** The expectation — mine and the orchestrator's — was
 > that routing edges through `langres.core`'s `__init__` (a member of both SCCs) would
 > **manufacture** cycles, so the corrected tangle should be *smaller*. **That is false.** The
