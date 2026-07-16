@@ -10,14 +10,15 @@ module carries only the seam: the :class:`ExperimentTracker` Protocol, the
 mirroring :func:`langres.core.presets.resolve_judge`).
 
 The concrete backend adapters (``MlflowTracker`` in ``mlflow_tracker.py``,
-``WandbTracker`` in ``wandb_tracker.py``) are added by later streams and pull
-their heavy dependency (``mlflow`` / ``wandb``) lazily. They are exposed here via
-a PEP 562 module ``__getattr__`` so ``from langres.core.trackers import
-MlflowTracker`` works, but importing this package -- and therefore ``import
-langres`` -- never pulls ``mlflow``/``wandb`` into ``sys.modules``. Until those
-adapter modules exist, accessing the name (or ``resolve_tracker("mlflow")``)
-raises a clear :class:`ImportError` naming the ``pip install 'langres[<backend>]'``
-extra to install -- which is the correct, testable behavior now.
+``WandbTracker`` in ``wandb_tracker.py``, ``TrackioTracker`` in
+``trackio_tracker.py``) pull their heavy dependency (``mlflow`` / ``wandb`` /
+``trackio``) lazily. They are exposed here via a PEP 562 module ``__getattr__``
+so ``from langres.core.trackers import MlflowTracker`` works, but importing this
+package -- and therefore ``import langres`` -- never pulls
+``mlflow``/``wandb``/``trackio`` into ``sys.modules``. When an adapter's extra
+isn't installed, accessing the name (or ``resolve_tracker("mlflow")``) raises a
+clear :class:`ImportError` naming the ``pip install 'langres[<backend>]'`` extra
+to install.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ __all__ = [
 _ADAPTERS: dict[str, tuple[str, str]] = {
     "mlflow": ("langres.core.trackers.mlflow_tracker", "MlflowTracker"),
     "wandb": ("langres.core.trackers.wandb_tracker", "WandbTracker"),
+    "trackio": ("langres.core.trackers.trackio_tracker", "TrackioTracker"),
 }
 
 
@@ -217,13 +219,16 @@ def resolve_tracker(
     Mirrors :func:`langres.core.presets.resolve_judge`:
 
     * ``None`` -> :class:`NoOpTracker` (no persistence, zero overhead).
-    * ``"mlflow"`` / ``"wandb"`` -> the lazily-loaded backend adapter (a helpful
-      :class:`ImportError` when the extra is absent).
+    * ``"mlflow"`` / ``"wandb"`` / ``"trackio"`` -> the lazily-loaded backend
+      adapter (a helpful :class:`ImportError` when the extra is absent).
+      ``"trackio"`` is local-first: no credentials/network unless the caller
+      also configures an HF Space (``TRACKIO_SPACE_ID`` / ``TrackioTracker``).
     * an ``ExperimentTracker`` instance -> returned as-is (dependency injection).
     * a sequence of specs -> a :class:`MultiTracker` over the resolved children.
 
     Raises:
-        ImportError: A ``"mlflow"``/``"wandb"`` spec whose extra is not installed.
+        ImportError: A ``"mlflow"``/``"wandb"``/``"trackio"`` spec whose extra is
+            not installed.
         ValueError: An unrecognized backend string.
     """
     if spec is None:
@@ -232,7 +237,8 @@ def resolve_tracker(
         if spec not in _ADAPTERS:
             raise ValueError(
                 f"unknown tracker backend {spec!r}; choose 'mlflow', 'wandb', "
-                "pass an ExperimentTracker instance, or a sequence of these"
+                "'trackio', pass an ExperimentTracker instance, or a sequence of "
+                "these"
             )
         return _load_adapter_class(spec)()  # type: ignore[no-any-return]
     if isinstance(spec, ExperimentTracker):
@@ -246,15 +252,17 @@ def resolve_tracker(
 
 
 def __getattr__(name: str) -> Any:
-    """PEP 562: expose ``MlflowTracker``/``WandbTracker`` via lazy adapter import.
+    """PEP 562: expose ``MlflowTracker``/``WandbTracker``/``TrackioTracker`` lazily.
 
-    Keeps ``mlflow``/``wandb`` out of ``sys.modules`` on a bare ``import
-    langres`` -- the class object is only resolved on first attribute access,
-    and surfaces the missing-extra ``ImportError`` if the backend isn't
-    installed (or its adapter module isn't added yet).
+    Keeps ``mlflow``/``wandb``/``trackio`` out of ``sys.modules`` on a bare
+    ``import langres`` -- the class object is only resolved on first attribute
+    access, and surfaces the missing-extra ``ImportError`` if the backend isn't
+    installed.
     """
     if name == "MlflowTracker":
         return _load_adapter_class("mlflow")
     if name == "WandbTracker":
         return _load_adapter_class("wandb")
+    if name == "TrackioTracker":
+        return _load_adapter_class("trackio")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

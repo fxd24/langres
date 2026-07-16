@@ -63,6 +63,18 @@ class Settings(BaseSettings):
             file store; MlflowTracker enables it out of the box).
         MLFLOW_EXPERIMENT: MLflow experiment name (default: "langres"). Read by
             the MLflow tracker (MlflowTracker.start_run), not by capture_run.
+        HF_TOKEN: Hugging Face write token. Only needed by the Trackio tracker
+            (TrackioTracker / resolve_tracker("trackio")) when syncing to an HF
+            Space (TRACKIO_SPACE_ID set) -- a purely local Trackio run needs no
+            token. huggingface_hub itself also reads HF_TOKEN (and the legacy
+            HUGGING_FACE_HUB_TOKEN) directly, so this field is mainly for
+            explicit construction (Settings(hf_token=...)); either source
+            satisfies TrackioTracker's credential guard.
+        TRACKIO_SPACE_ID: HF Space ("user/space") to sync Trackio runs to
+            (optional). Unset -> local-first, no credentials/network. Read by
+            TrackioTracker.start_run, not by capture_run.
+        TRACKIO_DATASET_ID: HF Dataset to additionally sync Trackio metrics to
+            (optional; requires TRACKIO_SPACE_ID). Read by TrackioTracker.start_run.
 
     Example:
         # Load from environment variables
@@ -122,6 +134,11 @@ class Settings(BaseSettings):
     run_store_path: str | None = None
     mlflow_tracking_uri: str | None = None
     mlflow_experiment: str = "langres"
+
+    # Trackio (experiment tracking, local-first): HF Space/Dataset sync is opt-in.
+    hf_token: str | None = None
+    trackio_space_id: str | None = None
+    trackio_dataset_id: str | None = None
 
     @field_validator("langres_offline", mode="before")
     @classmethod

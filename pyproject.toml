@@ -107,14 +107,22 @@ finetune = [
     # path; install unsloth yourself (`pip install unsloth`) for its speedups.
 ]
 # Experiment-tracking backends for the ExperimentTracker seam (core/trackers/).
-# Each is loaded lazily by its adapter (mlflow_tracker.py / wandb_tracker.py) so
-# `import langres` never pulls them -- installing the extra names the fix that
-# resolve_tracker's ImportError points at (`pip install 'langres[mlflow]'`).
+# Each is loaded lazily by its adapter (mlflow_tracker.py / wandb_tracker.py /
+# trackio_tracker.py) so `import langres` never pulls them -- installing the
+# extra names the fix that resolve_tracker's ImportError points at
+# (`pip install 'langres[mlflow]'`).
 mlflow = [
     "mlflow>=2.9",
 ]
 wandb = [
     "wandb>=0.16",
+]
+# trackio is pre-1.0; the adapter is coded against the verified 0.20.2 API
+# (`trackio.init(..., space_id=, dataset_id=, config=)` -> a Run handle;
+# `Run.log`/`Run.finish`). Capped below 1.0 (that major is unverified) -- bump
+# deliberately after re-verifying the API, since a pre-1.0 rename could move it.
+trackio = [
+    "trackio>=0.20,<1",
 ]
 
 [build-system]
@@ -178,6 +186,7 @@ dev = [
     "ruff>=0.15.2",
     "scikit-learn>=1.7.2",
     "testcontainers[qdrant]>=4.13.2",
+    "trackio>=0.20,<1",
     "types-networkx>=3.5.0.20251001",
     "wandb>=0.22.3",
 ]

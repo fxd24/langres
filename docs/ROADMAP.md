@@ -397,9 +397,11 @@ persisted to a local `RunStore` JSONL.
   and `examples/research/blocking_recall_autoresearch.py`.
 - **Deferred (do not reference as existing):** the **matching** vertical (steering a
   judge on `log_loss` / AUC-PR) and small-LM fine-tuning; an Optuna/LLAMBO proposer
-  swap; and a durable off-laptop **Trackio + Hugging Face** dashboard with the
-  winning artifact pushed to the Hub (an optional `tracker=` hook is wired but
-  defaults to a no-op — persistence is **local JSONL only** today).
+  swap; and pushing the winning artifact to the Hub.
+- **Shipped:** a durable off-laptop dashboard via the **Trackio** tracker
+  (`tracker=resolve_tracker("trackio")`, local-first — no credentials unless an HF
+  Space is configured). Local `RunStore` JSONL persistence (`store=`) remains the
+  default and is independent of the tracker.
 
 ---
 

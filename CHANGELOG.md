@@ -7,9 +7,10 @@
 A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pipeline
 against a **loss-like** objective instead of a saturated F1. M1 proves the loop on
 the **blocking** vertical; the matching vertical (`log_loss` / AUC-PR steering) and
-small-LM fine-tuning are deferred, as is a durable off-laptop **Trackio + Hugging
-Face** dashboard (an optional `tracker=` hook is wired but no-op by default) and an
-Optuna/LLAMBO proposer swap.
+small-LM fine-tuning are deferred, as is an Optuna/LLAMBO proposer swap. A durable
+off-laptop dashboard is no longer deferred: `tracker=resolve_tracker("trackio")`
+(local-first; an HF Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs
+straight into `optimize`/`run_loop` via the existing `tracker=` hook (see below).
 
 #### Added
 
@@ -718,10 +719,14 @@ still pulls no `mlflow`/`wandb`).
   exit, and sets the `current_run` contextvar. **`store=None` writes nothing.**
 - **`ExperimentTracker` Protocol + adapters** (`langres.core.trackers`) — an
   Accelerate-style seam (`NoOpTracker` null default, `MultiTracker` fan-out to run
-  MLflow *and* W&B at once, `resolve_tracker` dispatch) with lazy **MLflow** and **W&B**
-  adapters behind the `[mlflow]` / `[wandb]` extras (a missing extra raises a helpful
-  `pip install 'langres[<backend>]'` `ImportError`). MLflow defaults to a local file
-  store out of the box; W&B supports keyless `offline`/`disabled` runs for CI/no-key use.
+  MLflow *and* W&B at once, `resolve_tracker` dispatch) with lazy **MLflow**, **W&B**,
+  and **Trackio** adapters behind the `[mlflow]` / `[wandb]` / `[trackio]` extras (a
+  missing extra raises a helpful `pip install 'langres[<backend>]'` `ImportError`).
+  MLflow defaults to a local file store out of the box; W&B supports keyless
+  `offline`/`disabled` runs for CI/no-key use; **Trackio is local-first** (a local
+  SQLite store, zero credentials) with an opt-in HF Space/Dataset sync
+  (`space_id`/`dataset_id`) gated behind an actionable `ValueError` when no
+  `HF_TOKEN` is available — verified against the installed trackio 0.20.2 API.
 - **LLM trace correlation** — `capture_run` sets `current_run`; `JudgementLog` records
   the active `run_id`, and `LLMJudge` injects litellm `metadata` (`langres_attempt_id`
   + pair ids + decision step) on **both** the sync (`forward`) and async
@@ -733,7 +738,9 @@ still pulls no `mlflow`/`wandb`).
   later eval run threads it into `parent_run_id` (compile → eval lineage).
 - **`Settings`** — `RUN_STORE_PATH`, `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT` (the
   MLflow ones consumed by `MlflowTracker`; a zero-config default `store` from
-  `RUN_STORE_PATH` is deferred to the benchmark wrap — pass `store=` explicitly today).
+  `RUN_STORE_PATH` is deferred to the benchmark wrap — pass `store=` explicitly today),
+  and `HF_TOKEN` / `TRACKIO_SPACE_ID` / `TRACKIO_DATASET_ID` (consumed by
+  `TrackioTracker` / `create_trackio_tracker`; all optional -- local runs need none).
   Docs: `docs/EXPERIMENTS.md`; runnable zero-spend
   `examples/research/experiment_tracking_demo.py`.
 
