@@ -33,15 +33,29 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - Mark slow tests with `@pytest.mark.slow`, integration tests with `@pytest.mark.integration`
   - **Mark any heavy test `@pytest.mark.slow`** (loads embedding/ML models, runs
     torch inference, etc.). CI runs the **fast** subset (`not slow`) on every
-    PR; the **slow** tests + the coverage gate run on **every merge to main
+    PR; the **slow** tests + the coverage gates run on **every merge to main
     (push)** + **on demand** (`workflow_dispatch`) via the `test-full` job. So
     per-PR CI does not gate coverage or exercise slow ML paths — mislabeling a
-    heavy test as fast slows every PR, and the coverage floor is verified on
+    heavy test as fast slows every PR, and the coverage floors are verified on
     each merge to main, not per-PR. Run the full suite locally
     (`uv run pytest`) before merging a change to ML/embedding code.
+    (While the architecture refactor is in flight, `test-full` also runs on
+    every merge to the `feat/arch-refactor` integration branch.)
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
+- **Two gates run on `test-full`, and they are not the same number as this
+  policy.** The repo-wide floor is 90% (`--cov-fail-under` in `pyproject.toml`).
+  The `core` contract additionally has its own path-scoped gate
+  (`coverage report --include="src/langres/core/*" --precision=2
+  --fail-under=98` in `.github/workflows/test.yml`). That 98 is a **regression
+  ratchet** pinned just under the measured value (98.84% at `ba4b1b7`), not the
+  policy — the *target* remains 95–100%. It exists because the repo-wide 90%
+  floor sits ~9 points below actual coverage, so the contract could be quietly
+  declassified with CI green throughout. Raise it as the real number climbs; if
+  it blocks legitimate work, lower it deliberately rather than deleting it.
+  **When the contract moves to a new package, extend that `--include` glob** or
+  the gate silently stops covering it.
 - Type-check as you go: `uv run mypy src/`
 
 ## Development Workflow (Human-Like Iteration)

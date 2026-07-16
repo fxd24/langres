@@ -1,7 +1,7 @@
 name: Test
 
 # Per-PR: run the FAST suite only (slow ML tests excluded -- see the `test`
-# job). The full suite incl. slow tests + the 95% coverage gate runs on every
+# job). The full suite incl. slow tests + the coverage gates runs on every
 # merge to main (push) + on demand (workflow_dispatch) via the `test-full` job,
 # so slow embedding/ML tests don't cost ~10min on every PR. This repo is public,
 # so Actions minutes are free/unlimited -- per-merge coverage is worth it, while
@@ -9,11 +9,33 @@ name: Test
 on:
   pull_request:
   push:
-    branches: [main]
+    # TEMPORARY (architecture refactor): `feat/arch-refactor` is the integration
+    # branch the refactor's sub-PRs merge into. Without it here, `test-full` --
+    # the ONLY job that runs the slow tests and enforces the coverage gates --
+    # would not run for the entire refactor, and a regression would surface only
+    # at the final merge to main. REVERT THIS LIST TO `[main]` once the refactor
+    # has landed and the integration branch is deleted.
+    branches: [main, feat/arch-refactor]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # `pull_request`: one group per PR ref, so a new push supersedes the previous
+  # run (`cancel-in-progress` below) -- the usual minute-saving behaviour.
+  #
+  # `push` / `workflow_dispatch`: one group PER COMMIT (`github.sha`). Runs on
+  # the same branch must NOT share a group: `test-full` is the only place the
+  # slow tests and the coverage gates run, and a cancelled run is not a green
+  # run. With a shared per-branch group, two merges in quick succession cancel
+  # the first commit's `test-full` outright, and -- because GitHub also evicts a
+  # *pending* run when a newer one queues ("any existing pending job or workflow
+  # in the same concurrency group will be canceled") -- merely setting
+  # `cancel-in-progress: false` would NOT fix it, it would only move the loss
+  # from "cancelled while running" to "cancelled while pending". Keying the
+  # group on the SHA gives every merge commit its own group, so each one is
+  # gated on its own merits. This has already bitten `main` (6 of the last 30
+  # push runs were cancelled), and matters more once sub-PRs land on the
+  # integration branch above.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -21,7 +43,7 @@ jobs:
   # load heavy torch models and dominate wall-time). Coverage is collected but
   # NOT gated here (`--cov-fail-under=0` overrides the pyproject default),
   # because the excluded slow tests are the only cover for some ML paths -- the
-  # 95% floor is enforced on `test-full` below.
+  # coverage floors are enforced on `test-full` below.
   test:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -99,10 +121,11 @@ jobs:
       - name: Verify the core-only flywheel loop (examples/flywheel_min.py) works
         run: uv run python examples/flywheel_min.py
 
-  # Full suite INCLUDING the slow embedding/ML tests, plus the 95% coverage gate
-  # (inherited from pyproject addopts). Runs on every merge to main (push) + on
+  # Full suite INCLUDING the slow embedding/ML tests, plus the coverage gates:
+  # the repo-wide floor (inherited from pyproject addopts) and the core-contract
+  # floor (a separate step). Runs on every merge to main (push) + on
   # demand (workflow_dispatch) -- NOT per PR -- so ML regressions and the
-  # coverage floor are enforced on every merge without paying ~10min on every
+  # coverage floors are enforced on every merge without paying ~10min on every
   # PR. Trigger an ad-hoc run before a release or a risky ML change with the
   # "Run workflow" button (workflow_dispatch). Do NOT mark this a required
   # status check (it is skipped on PR events).
@@ -134,7 +157,15 @@ jobs:
         # imports keep the full suite green without peft/trl/bitsandbytes here.
         run: uv sync --all-extras --no-extra finetune
 
-      - name: Run full suite incl. slow tests (95% coverage gate)
+      - name: Run full suite incl. slow tests (repo-wide coverage gate)
+        # The floor is `--cov-fail-under` in pyproject.toml (90% at time of
+        # writing) -- deliberately NOT restated here. This step was previously
+        # named "(95% coverage gate)" while actually enforcing 90: ba90aef
+        # lowered the floor 95 -> 90 when it adopted the tiered policy and left
+        # this name behind, and the stale name was later read as if it were the
+        # configuration. A name that duplicates a value owned by another file
+        # drifts from it; this one names the gate, not the number.
+        #
         # --cov-report=xml (on top of the pyproject default term/html reports)
         # emits coverage.xml for the Codecov upload below. This is the ONLY job
         # that runs the full suite, so it's the only place coverage is honest --
@@ -150,6 +181,44 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
           fail_ci_if_error: false
+
+      # Second, PATH-SCOPED gate. The tiered policy (.claude/rules/testing.md)
+      # holds the `langres.core` library contract -- what users serialize against
+      # -- to a higher bar than the rest of the repo, but that tier was enforced
+      # by HUMAN REVIEW only: a path glob in a markdown rule, not a gate. The
+      # repo-wide floor is 90% while actual coverage is ~99%, so ~9 points of
+      # slack (order 1,000 statements) could go dark with CI green the whole way.
+      # The architecture refactor makes that concrete -- it moves most of `core/`
+      # into new packages, and nothing would notice the contract being quietly
+      # declassified on the way.
+      #
+      # Reads the .coverage data left by the run above (the FULL suite -- the
+      # slow ML tests are the only cover for some paths, so this number is only
+      # honest here). --fail-under applies to the --include subset alone.
+      #
+      # 98 = the measured `core/*` coverage (98.84% at ba4b1b7) rounded down.
+      # It is a REGRESSION RATCHET, not the policy: the policy target stays
+      # 95-100%, and a 95 floor here would let ~370 more units of the contract
+      # vanish before firing. Raise it as the real number climbs; if it ever
+      # blocks legitimate work, lower it deliberately rather than deleting it.
+      #
+      # !! KEEP THE GLOB IN SYNC !! As refactor waves relocate the contract out
+      # of `core/` (components/, architectures/, ... -- see the tier definition
+      # in .claude/rules/testing.md), ADD the new paths here. If the glob ever
+      # matches NOTHING, `coverage report` exits 1 ("No data to report.") and
+      # this step goes red rather than passing vacuously -- but a PARTIAL move
+      # still passes while silently covering less of the contract, so this is a
+      # real maintenance obligation, not a self-healing gate.
+      #
+      # Deliberately AFTER the Codecov upload: that upload is advisory, and when
+      # this gate fails you still want the data published to diagnose the drop.
+      #
+      # --precision=2 is LOAD-BEARING, not cosmetic: coverage compares the total
+      # ROUNDED to `precision`, which defaults to 0. Without it, round(97.6) = 98
+      # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
+      # With it the comparison is exact and 98 means 98.
+      - name: Coverage gate -- langres.core contract
+        run: uv run coverage report --include="src/langres/core/*" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra
