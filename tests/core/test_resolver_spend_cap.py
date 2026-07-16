@@ -8,11 +8,15 @@ the cap lived in ``core.presets``, which ``Resolver`` is architecturally
 forbidden to import, so only ``link``/``dedupe`` were ever capped.
 """
 
+import ast
+import pathlib
 from collections.abc import Iterator
 
 import pytest
 from pydantic import BaseModel
 
+import langres
+from langres.core.anchor_store import AnchorStore
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.judgement_log import JudgementLog, LoggingMatcher
@@ -241,3 +245,93 @@ class TestCapDoesNotDisturbTheMatcherSlot:
         rather than uncapped."""
         resolver = Resolver.from_schema(CapCo, matcher="string", budget_usd=2.0)
         assert resolver._spend_monitor.budget_usd == 2.0
+
+
+class TestEverySeamSharesTheOneLedger:
+    """The hole this class exists to keep shut.
+
+    ``.module`` is a PUBLIC attribute holding the RAW matcher (the slot must stay
+    unwrapped for ``save()``/``fit()`` -- see the class above). So any collaborator
+    can reach through it and score with no cap and no ledger, which is exactly
+    what ``AnchorStore._judge`` did: ``self._resolver.module.forward(...)``. A
+    long-lived store calling ``assign`` per arriving record is the *worst* case
+    for an unbounded paid matcher.
+    """
+
+    def test_assign_bills_against_the_resolvers_ledger(self) -> None:
+        """THE proof: an AnchorStore pass moves the SAME meter resolve() moves.
+
+        Mutation test -- restore ``self._resolver.module.forward(...)`` in
+        ``AnchorStore._judge`` and this fails: ``spent`` never moves past what
+        build()'s resolve() paid, because the raw matcher reports to nobody.
+        """
+        matcher = _CountingCostlyMatcher(cost_each=0.10)
+        resolver = _resolver(matcher, budget_usd=10.0)
+        store = AnchorStore.build(resolver, RECORDS)
+
+        spent_after_build = resolver._spend_monitor.spent
+        assert spent_after_build > 0.0, "build()'s resolve() should already have billed"
+
+        store.assign({"id": "3", "name": "Acme Corp"})
+
+        assert resolver._spend_monitor.spent > spent_after_build
+        # The ledger agrees with the matcher's own call count: nothing was
+        # scored off-ledger.
+        assert resolver._spend_monitor.spent == pytest.approx(0.10 * matcher.produced)
+
+    def test_a_tripped_ledger_makes_assign_cost_nothing(self) -> None:
+        """Money safety, end to end: once the budget is gone, assign() stops
+        paying. Pre-cap, every assign() on a spent Resolver kept billing."""
+        matcher = _CountingCostlyMatcher(cost_each=0.60)
+        resolver = _resolver(matcher, budget_usd=1.0)
+        store = AnchorStore.build(resolver, RECORDS)  # resolve(): 1 pair, $0.60
+
+        with pytest.raises(BudgetExceeded):
+            store.assign({"id": "3", "name": "Acme Corp"})
+
+        paid_so_far = matcher.produced
+        with pytest.raises(BudgetExceeded):
+            store.assign({"id": "4", "name": "Acme Corp"})
+        assert matcher.produced == paid_so_far, "a tripped cap must cost $0, not one more call"
+
+    def test_assign_and_resolve_cannot_each_spend_a_full_budget(self) -> None:
+        """One Resolver == ONE budget, whichever seam does the spending."""
+        matcher = _CountingCostlyMatcher(cost_each=0.60)
+        resolver = _resolver(matcher, budget_usd=1.0)
+        store = AnchorStore.build(resolver, RECORDS)
+
+        with pytest.raises(BudgetExceeded):
+            store.assign({"id": "3", "name": "Acme Corp"})
+        # The store drained the shared ledger, so the Resolver's OWN scoring
+        # path is now refused too -- one meter, not two.
+        with pytest.raises(BudgetExceeded):
+            resolver.resolve(RECORDS)
+
+    def test_no_src_site_scores_through_a_raw_module_slot(self) -> None:
+        """The structural guard: ban ``<anything>.module.forward(...)`` in src/.
+
+        The bug was never "AnchorStore is wrong" -- it was that the capped scorer
+        was built inline at ONE call site, so every other caller silently got the
+        raw matcher. ``Resolver._scorer()`` is now the single seam; this sweep is
+        what stops the next caller from re-opening the hole. Parsed, not grepped:
+        a docstring saying "module.forward" is not a call.
+        """
+        src_root = pathlib.Path(langres.__file__).parent
+        offenders = []
+        for path in sorted(src_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "forward"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "module"
+                ):
+                    offenders.append(f"{path}:{node.lineno}: {ast.unparse(node.func)}(...)")
+
+        assert offenders == [], (
+            "these sites score through the RAW matcher slot -- no spend cap, no "
+            "ledger, unbounded bill. Route them through Resolver._scorer():\n  "
+            + "\n  ".join(offenders)
+        )

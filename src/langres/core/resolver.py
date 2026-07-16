@@ -769,20 +769,24 @@ class Resolver:
         :attr:`fit_report_` naming the demos learned + teacher model + declared
         budget, and returns ``self`` so ``resolver.fit(...).resolve(...)`` chains.
 
-        The budget seam: ``method.budget_usd`` caps the compile via the existing
-        :class:`~langres.clients.openrouter.SpendMonitor`. DSPy-compile spend
-        capture is deferred to issue #100 -- today the compile records ``$0`` (the
-        ``DummyLM`` CI path is genuinely free; the paid ``MIPROv2`` path stays
-        uncosted until #100 wires real spend through this same guard).
+        The budget seam: ``method.budget_usd`` caps the compile via its own
+        :class:`~langres.core.spend.SpendMonitor` -- deliberately NOT this
+        Resolver's ``budget_usd`` ledger, because DSPy's compile calls never
+        reach ``self.module.forward`` and so cannot be metered by
+        :meth:`_scorer`. DSPy-compile spend capture is deferred to issue #100 --
+        today the compile records ``$0`` (the ``DummyLM`` CI path is genuinely
+        free; the paid ``MIPROv2`` path stays uncosted until #100 wires real
+        spend through this same guard). This is the one scoring-adjacent path a
+        Resolver's cap does not bound; see the CHANGELOG's known-gap note.
 
         Raises:
             ValueError: If the module is not a ``DSPyMatcher``
                 (prompt-optimization needs a compilable scorer); if both
                 ``labels`` and ``pairs`` are given, or neither.
         """
-        # Lazy imports: keep ``dspy`` (and litellm-adjacent client code) out of a
-        # bare ``import langres`` -- they load only when a prompt-optimize fit runs.
-        from langres.clients.openrouter import SpendMonitor
+        # Lazy import: keep ``dspy`` out of a bare ``import langres`` -- it loads
+        # only when a prompt-optimize fit runs. (``SpendMonitor`` needs no lazy
+        # import: it is a dependency-free core leaf, imported at module scope.)
         from langres.core.matchers.dspy_judge import DSPyMatcher
 
         matcher_name = type(self.module).__name__
@@ -958,7 +962,7 @@ class Resolver:
 
         metrics: PairMetrics | None = None
         if valid_pairs:
-            judgements = list(self.module.forward(iter([c for c, _ in valid_pairs])))
+            judgements = list(self._scorer().forward(iter([c for c, _ in valid_pairs])))
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)}) for c, label in valid_pairs if label
             }
@@ -1118,7 +1122,7 @@ class Resolver:
         }
         scores: list[float] = []
         aligned_labels: list[bool] = []
-        for judgement in self.module.forward(iter(candidates)):
+        for judgement in self._scorer().forward(iter(candidates)):
             if judgement.score is None:
                 continue
             key = frozenset({judgement.left_id, judgement.right_id})
@@ -1185,7 +1189,7 @@ class Resolver:
 
         metrics: PairMetrics | None = None
         if aligned.valid.candidates:
-            judgements = list(self.module.forward(iter(aligned.valid.candidates)))
+            judgements = list(self._scorer().forward(iter(aligned.valid.candidates)))
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)})
                 for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
@@ -1254,24 +1258,55 @@ class Resolver:
         """
         return list(self._candidates(records))
 
+    def _scorer(self) -> SpendCappedMatcher:
+        """This Resolver's matcher, metered by its ONE spend ledger.
+
+        **The only supported way to score through ``self.module``.** Reaching for
+        the raw ``self.module.forward(...)`` gets you an *uncapped* scorer that
+        bills straight past ``budget_usd`` and never touches this instance's
+        ledger. That is not hypothetical: ``.module`` is a public attribute, and
+        :class:`~langres.core.anchor_store.AnchorStore` reached through it and
+        scored uncapped -- inside the very change that added the cap. Route every
+        new scoring path here and that hole cannot reopen;
+        ``tests/core/test_resolver_spend_cap.py`` pins it with an AST sweep.
+
+        Two properties this method exists to hold together:
+
+        * **The monitor is per-instance, built once in :meth:`__init__`** -- so
+          ``resolve``, ``predict``, ``fit`` and an ``AnchorStore`` pass all draw
+          down ONE cumulative budget instead of each getting a fresh one.
+        * **The wrapper is rebuilt per call, deliberately.** Caching it in
+          ``__init__`` would pin the matcher as it was *then*, and ``self.module``
+          is reassignable: ``dedupe`` wraps it in a ``LoggingMatcher`` after
+          construction (``verbs.py``) and ``fit(method=Finetune())`` replaces it
+          outright. A cached wrapper would silently meter -- and score through --
+          the stale matcher, emptying the judgement log. Rebuilding costs an
+          object; the ledger it shares is what actually persists.
+
+        The cap deliberately does NOT live in the ``module`` slot: ``save()``'s
+        registry and ``fit()``'s isinstance checks both read ``self.module`` and
+        must see the real component, not a wrapper.
+
+        Returns:
+            A :class:`~langres.core.spend_cap.SpendCappedMatcher` around the
+            *current* ``self.module``, sharing this instance's ledger.
+        """
+        return SpendCappedMatcher(self.module, monitor=self._spend_monitor)
+
     def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
         """Block records into candidates, score them, and calibrate if fitted.
 
-        Scoring runs through this Resolver's spend cap (``budget_usd=``), whose
-        ledger is shared across every :meth:`resolve`/:meth:`predict` call on
-        this instance -- so two successive resolves cannot each spend a full
-        budget. The wrapper is rebuilt per call but the
-        :class:`~langres.core.spend.SpendMonitor` is not: that is what makes the
-        cap cumulative while still metering whatever ``self.module`` is *now*
-        (callers reassign it -- ``dedupe`` wraps it in a ``LoggingMatcher``).
+        Scoring runs through :meth:`_scorer`, so this Resolver's spend cap
+        (``budget_usd=``) and its ledger are shared across every
+        :meth:`resolve`/:meth:`predict` call on this instance -- two successive
+        resolves cannot each spend a full budget.
 
         When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
         every ranking judgement's raw ``score`` is mapped to a calibrated
         probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
         clusterer thresholds on a real probability. Pure pass-through otherwise.
         """
-        scorer = SpendCappedMatcher(self.module, monitor=self._spend_monitor)
-        judgements = scorer.forward(self._candidates(records))
+        judgements = self._scorer().forward(self._candidates(records))
         if self.calibrator is None:
             return judgements
         return self._apply_calibrator(judgements, self.calibrator)

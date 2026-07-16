@@ -27,12 +27,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
 
-from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import GroupwiseMatcher, Matcher, SchemaT
 from langres.core.registry import get_component, register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.serialization import SerializableState
+from langres.core.spend import BudgetExceeded
 
 #: ``decision_step`` stamped on pairs the student answered (score outside the
 #: band). The tier is rewritten into ``decision_step`` -- not only provenance --
