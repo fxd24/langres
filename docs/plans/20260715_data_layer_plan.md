@@ -299,7 +299,7 @@ langres`.
   `denoise_pairs`, `MiningReadinessSection`. *Exit:* mine hard positives + random
   negatives on one benchmark, denoise, profile the mined set in the tearsheet.
 - **Stage 3 (north-star, separate epic):** `attribute_examples` + `flipped` + `ColVal`
-  schema-free serializer → `TrainedLMMatcher` → the **leave-one-out generalist harness**
+  schema-free serializer → the existing `finetune()`/serve seam (an unbuilt classification-head trainer variant for AnyMatch fidelity) → the **leave-one-out generalist harness**
   (pool mined pairs across the 10-dataset registry, hold one out, zero-shot eval) — the
   AnyMatch "one ER model across all benchmarks" payoff (F1 81.96 reference). Consumes
   Waves 1–3; scoped in its own plan.

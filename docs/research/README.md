@@ -32,7 +32,7 @@ on. It is the answer to *"where do we write down everything we find in research?
 | [`20260710_dx_audit_examples_we_wish_we_had.md`](20260710_dx_audit_examples_we_wish_we_had.md) | audit | DX audit: the examples we wish we had (every claim run/verified against `main`). |
 | [`20260710_logprob_credence_probe.md`](20260710_logprob_credence_probe.md) | results | The logprob-credence probe — does an LLM judge know when it's wrong? A **gate** run before adding `confidence` to `PairwiseJudgement`. |
 | [`20260713_model_identity_and_hub.md`](20260713_model_identity_and_hub.md) | design | Model identity + a publishing seam — the "HF-transformers moment": tie the verbs to which model is used. |
-| [`20260714_training_surface_design.md`](20260714_training_surface_design.md) | design | The training surface — judge→`Matcher` rename, one-verb `fit`, the **miner contract** (plain functions → `LabeledPair`), `TrainedLMMatcher`, `ColVal`. |
+| [`20260714_training_surface_design.md`](20260714_training_surface_design.md) | design | The training surface — judge→`Matcher` rename, one-verb `fit`, the **miner contract** (plain functions → `LabeledPair`), the `finetune()`/serve path, `ColVal`. |
 | [`20260715_data_prep_architecture.md`](20260715_data_prep_architecture.md) ⭐ | design | **Data-preparation architecture** — the method-*shape* taxonomy, the failure-mode-driven curation loop (profile → diagnose → fix → train), the existing-code reuse map, AnyMatch-first build order, and the experiment backlog. The *design* over the #86 survey. |
 
 **Related, elsewhere:** `docs/plans/20260715_data_layer_plan.md` (the buildable profiler +

@@ -240,7 +240,7 @@ candidate, here is the existing seam it plugs into and the **only** delta to wri
 | **BADGE** (`acquire`) | `select_for_review` already ranks by margin; `VectorBlocker` already produces per-record embeddings | pair-embedding features + **k-means++ seeding** over (margin-scaled) embeddings. ≈ one function; no new dep (numpy) |
 | **Blocking-derived hard-neg** (`select`) | `Blocker.candidates` + their scores; `JudgementLog` verdicts | filter: `score ≥ threshold ∧ label = non-match`. Pure reuse |
 | **EL2N difficulty** (`select`) | `JudgementLog.score` is `p(match)` | compute `\|1 − p(gold)\|`, sort. No training |
-| **Matcher→blocker distillation** (`relabel`→embedder) | `CascadeMatcher`/`LLMMatcher` already score pairs into `JudgementLog`; `[semantic]` has sentence-transformers | wrap those margins as `MarginMSELoss` targets; a `TrainedEmbedder` sibling to `TrainedLMMatcher` |
+| **Matcher→blocker distillation** (`relabel`→embedder) | `CascadeMatcher`/`LLMMatcher` already score pairs into `JudgementLog`; `[semantic]` has sentence-transformers | wrap those margins as `MarginMSELoss` targets; a `TrainedEmbedder` sibling to the `finetune()` path |
 | **Confident-learning denoise** (`relabel`) | `RandomForestMatcher` / sklearn already in `[trained]` | k-fold CV → confident joint. The planned `denoise_pairs` |
 | **Snorkel label model** (`relabel`) | `StringComparator` sims, blocking keys, cheap judge are all cheap labeling functions | a light label-model aggregator (or FlyingSquid closed-form) over their votes |
 | **Coreset / SemDeDup / prototypicality** (`select`) | `VectorBlocker` embeddings | k-center-greedy / near-dup / centroid-distance over existing vectors |
@@ -350,7 +350,7 @@ value-per-effort.
    — it operates on *sources*, not `LabeledPair`s, so it's a different currency and a
    different epic (Stage-3 LOO harness / autoresearch).
 4. **The blocker-embedding training home.** A `TrainedEmbedder` sibling to
-   `TrainedLMMatcher` (same fit protocol), fed by the distillation `relabel` step. Confirm
+   the `finetune()` path (same fit protocol), fed by the distillation `relabel` step. Confirm
    the fit-protocol shape covers both a classification head (matcher) and a contrastive
    objective (embedder).
 5. **Cleanlab as a dep.** Built-in confident-learning first (sklearn, no new dep); Cleanlab
