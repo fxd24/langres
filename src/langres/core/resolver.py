@@ -385,12 +385,20 @@ class Resolver:
                 (``float("inf")``) for that, deliberately and in writing. A
                 free matcher (string/embedding) meters $0 and never trips.
 
-                Scope, precisely: the cap meters the **scoring** path --
-                :meth:`resolve` and :meth:`predict` -- across every call on this
-                instance, and bounds spend at ``budget_usd`` plus at most one
-                further call (see :mod:`langres.core.spend_cap`).
-                :meth:`fit` (Platt/Isotonic calibration) and :meth:`distil`
-                score through ``self.module`` directly and are NOT capped yet.
+                Scope, precisely: the cap meters **every seam that scores
+                through the matcher** -- :meth:`resolve`, :meth:`predict`,
+                :meth:`fit`, and
+                :meth:`~langres.core.anchor_store.AnchorStore.assign` -- across
+                every call on this instance, because they all route through
+                :meth:`_scorer`. It bounds spend at ``budget_usd`` plus at most
+                one further call (see :mod:`langres.core.spend_cap`).
+
+                The one exception, deliberately: :meth:`distil` /
+                ``fit(method=MIPRO())``. DSPy's compile calls never reach
+                ``self.module.forward``, so this ledger cannot observe them; it
+                caps them via its own ``method.budget_usd`` monitor instead
+                (which records $0 until issue #100 captures compile spend). See
+                :meth:`_fit_prompt`.
         """
         self.blocker = blocker
         self.comparator = comparator

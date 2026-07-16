@@ -34,6 +34,16 @@ built. The real layering is:)
      uncapped (`spend_cap.UNCAPPED_BUDGET_USD` is the deliberate opt-out).
      The cap wraps at *scoring* time and never sits in the `module` slot, so
      `fit()`'s isinstance checks and `save()` still see the raw matcher.
+   - **Scoring through the matcher? Go through `Resolver._scorer()`.** Because
+     the slot stays raw, `self.module` is a *public, uncapped* scorer: calling
+     `.module.forward(...)` bills past `budget_usd` and reports to no ledger.
+     That is not theoretical — `AnchorStore._judge` did exactly this and spent
+     uncapped. `_scorer()` is the ONE seam (`resolve` / `predict` / `fit` /
+     `AnchorStore.assign` all use it); `tests/core/test_resolver_spend_cap.py`
+     AST-bans `<any>.module.forward(...)` in `src/`. Note it returns a *fresh*
+     wrapper around the CURRENT `self.module` sharing one long-lived
+     `SpendMonitor` — the monitor is the durable thing; caching the wrapper
+     would pin a stale matcher (`dedupe` re-wraps the slot after construction).
    - `Resolver.link` / `stream_against` are reserved `NotImplementedError` stubs
      (M5 incremental/cross-source work) — do not document them as working.
 

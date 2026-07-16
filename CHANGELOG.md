@@ -30,6 +30,17 @@ stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limi
 - **A cap that has already tripped now costs $0 on the next call** instead of paying
   for one more judgement before refusing.
 
+- **Every seam that scores through the matcher now shares ONE ledger.**
+  `AnchorStore._judge` reached through the Resolver's public `.module` attribute and
+  scored with the **raw** matcher — no cap, no ledger — so a paid `LLMMatcher` billed
+  without limit on every `assign()`, and a long-lived store is exactly the
+  many-`assign()` object that turns that into a real bill. The cause was structural:
+  the capped scorer was built inline at one call site, so every *other* caller
+  silently got the raw matcher. There is now a single internal accessor
+  (`Resolver._scorer()`); `resolve` / `predict` / `fit` / `AnchorStore.assign` all
+  route through it, and an AST sweep in the test suite bans
+  `<anything>.module.forward(...)` in `src/` so the next caller cannot reopen it.
+
 #### Changed / migration
 
 - **A paid `Matcher` scoring through `resolve()` / `predict()` on a `Resolver` that
@@ -39,16 +50,30 @@ stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limi
   deliberately. `budget_usd=None` means "the default", **never** "uncapped" — you
   cannot disable the cap by forgetting to pass it. `BudgetExceeded.partial_judgements`
   still carries everything already paid for.
+- **`AnchorStore.assign()` now bills against its Resolver's budget** and raises
+  `BudgetExceeded` once that budget is gone (it previously spent unbounded). Build the
+  store from a `Resolver` with a `budget_usd=` sized for the store's whole lifetime,
+  not for one batch — `AnchorStore.build()`'s own `resolve()` pass draws down the same
+  ledger every later `assign()` draws from.
+- **`fit(method=Platt()/Isotonic())` is now capped too** — previously disclosed as a
+  known gap, now closed. Its scoring pass **is** its entire bill (the sklearn
+  calibrator itself is $0), so metering it is complete protection, not the partial
+  kind rejected for `distil()` below. `fit(..., pairs=...)` and
+  `fit(method=Finetune())` validation passes route through the same accessor; both
+  are $0 paths in practice (sklearn / a local fine-tuned LM), so the cap is a no-op
+  there — they go through it for uniformity, because "every `.forward()` on the
+  matcher is metered" is a rule that can be enforced, and "some are" is what caused
+  the `AnchorStore` hole.
 
 #### Known gap (scoped deliberately, not fixed here)
 
-- **The cap covers the scoring path (`resolve` / `predict`) only.** `fit(method=Platt()
-  / Isotonic())` and `distil()` score through `self.module.forward` directly and are
-  still **uncapped**. `fit(..., pairs=...)`'s validation pass is uncapped too, though
-  its matcher must be a `SupervisedFitMixin` (sklearn, $0). Capping `distil()` properly
-  means metering DSPy's compile calls, which never reach `self.module.forward` at all —
-  a partial cap there would read as protection while covering little, so it is left
-  visibly open rather than half-closed.
+- **`distil()` / `fit(method=MIPRO())` is not bound by the Resolver's `budget_usd`.**
+  DSPy's compile calls never reach `self.module.forward`, so the scoring accessor
+  cannot see them — a cap there would read as protection while covering nothing. It
+  keeps its own separate `method.budget_usd` monitor, which today observes **$0**
+  because DSPy-compile spend capture is itself deferred (issue #100). So a paid
+  `MIPROv2` compile is **effectively unbounded** until #100 lands. Left visibly open
+  rather than half-closed.
 
 **The guarantee, stated honestly:** spend is bounded by `budget_usd` **plus the cost
 of at most one further call**. An LLM call's cost is not knowable until it has been
