@@ -3,23 +3,37 @@
 The architecture refactor's central risk is that a wave couples two more modules
 together and no gate notices. That is not hypothetical -- **PR #169** (the
 ``core/__init__`` fragment split) grew the module SCC from **29 to 43** and the
-package SCC from **8 to 9**, and CI stayed green the whole way. This file is the
+runtime SCC from **5 to 12**, and CI stayed green the whole way. This file is the
 gate that would have caught it.
 
 Why SCC membership, and not "mutual pairs"
 ------------------------------------------
 The obvious metric -- count the pairs of modules that import each other -- is
-**gameable by pure re-export indirection**, and PR #169 proves it. Across that
-same merge the mutual-pair count went *down* (4 -> 3) while nothing whatsoever was
-decoupled: the knot ``langres <-> langres.core`` "disappeared" only because
-``langres/__init__`` now reaches core via ``langres._exports``. A 2-cycle became a
-3-cycle. Same loop, one more relay on it -- and a mutual-pair ratchet would have
-scored that merge as an *improvement*.
+**worse than useless here**, and PR #169 proves it. Measured across that merge
+(``tools/import_graph.py`` run against ``858d605^1`` and ``858d605``):
+
+===========================  ==========  ===========
+metric                       pre #169    post #169
+===========================  ==========  ===========
+modules in a cycle (all)     34          48
+largest SCC (all edges)      29          43
+largest SCC (runtime)        5           12
+**mutual pairs**             **6**       **6**
+===========================  ==========  ===========
+
+The mutual-pair count did not merely go down -- it did not move *at all*. The
+same six pairs, before and after, while the runtime tangle more than doubled. The
+knot ``langres <-> langres.core`` stopped being a mutual pair only because
+``langres/__init__`` now reaches core via ``langres._exports``: a 2-cycle became a
+3-cycle. Same loop, one more relay on it. (At the *package* level the metric is
+actively perverse -- it improves, 4 -> 3.) A mutual-pair ratchet would have waved
+PR #169 through without a flicker.
 
 So this gate counts **membership of a strongly connected component**: the set of
 modules you cannot untangle from each other, however many hops the loop takes.
 Adding a relay module to a cycle makes that set *bigger*, never smaller. That is
-the property that makes the ratchet honest.
+the property that makes the ratchet honest, and it is why no metric here counts
+edges or pairs.
 
 The two views, and why both are pinned
 --------------------------------------
