@@ -1,0 +1,89 @@
+{
+  "_comment": [
+    "Proposed module -> target-package mapping for the langres architecture refactor,",
+    "transcribed from the refactor plan's target layout. Input to:",
+    "  uv run python tools/import_graph.py counterfactual --mapping tools/refactor_target_packages.json",
+    "",
+    "This encodes a NAIVE FILE-MOVE: every module lands whole in its target package.",
+    "It deliberately does NOT model the plan's 'contract-first' split of reports.py /",
+    "benchmark.py / _report_html.py, because that split was never specified at symbol",
+    "granularity -- see docs/research/import_graph_baseline.md, claim 5.",
+    "",
+    "'exact' wins over 'prefix'; among prefixes the longest match wins."
+  ],
+  "prefix": {
+    "langres.bootstrap": "curation",
+    "langres.clients": "clients",
+    "langres.core.adapters": "components",
+    "langres.core.autoresearch": "optimize",
+    "langres.core.blockers": "components",
+    "langres.core.clusterers": "components",
+    "langres.core.indexes": "components",
+    "langres.core.matchers": "components",
+    "langres.core.optimizers": "optimize",
+    "langres.core.trackers": "tracking",
+    "langres.data": "datasets",
+    "langres.data.data_profile": "profile",
+    "langres.plotting": "plotting"
+  },
+  "exact": {
+    "langres": "root",
+    "langres._method_names": "architectures",
+    "langres.cli": "root",
+    "langres.clients.tracking": "tracking",
+
+    "langres.core": "core",
+    "langres.core.blocker": "core",
+    "langres.core.clusterer": "core",
+    "langres.core.feature": "core",
+    "langres.core.fit": "core",
+    "langres.core.groups": "core",
+    "langres.core.matcher": "core",
+    "langres.core.matchers.model_ref": "core",
+    "langres.core.methods_api": "core",
+    "langres.core.models": "core",
+    "langres.core.registry": "core",
+    "langres.core.serialization": "core",
+    "langres.core.usage": "core",
+
+    "langres.core.comparator": "components",
+    "langres.core.embeddings": "components",
+
+    "langres.core.method_registry": "architectures",
+    "langres.core.presets": "architectures",
+    "langres.core.resolver": "architectures",
+    "langres.methods": "architectures",
+    "langres.verbs": "architectures",
+
+    "langres.core._report_html": "report",
+    "langres.core._svg": "report",
+    "langres.core.eval_report": "report",
+    "langres.core.fit_report": "report",
+    "langres.core.reports": "report",
+
+    "langres.core.analysis": "metrics",
+    "langres.core.debugging": "metrics",
+    "langres.core.diagnostics": "metrics",
+    "langres.core.metrics": "metrics",
+
+    "langres.core.benchmark": "benchmarks",
+    "langres.eval": "benchmarks",
+    "langres.testing": "benchmarks",
+
+    "langres.core.anchor_store": "curation",
+    "langres.core.canonicalizer": "curation",
+    "langres.core.harvest": "curation",
+    "langres.core.review": "curation",
+    "langres.data.mining": "curation",
+
+    "langres.core.calibration": "training",
+    "langres.core.finetune": "training",
+    "langres.core.methods_calibrate": "training",
+    "langres.core.methods_prompt": "training",
+
+    "langres.core.judgement_log": "tracking",
+    "langres.core.runs": "tracking",
+
+    "langres.optimize": "optimize"
+  }
+}

@@ -58,9 +58,6 @@ class ImportKind(StrEnum):
     TYPE_CHECKING = "type-checking"
 
 
-LAZY_KINDS = frozenset({ImportKind.FUNCTION_LOCAL, ImportKind.TYPE_CHECKING})
-
-
 @dataclass(frozen=True, slots=True)
 class Edge:
     """One resolved import of a first-party module by another."""
@@ -389,7 +386,10 @@ def cmd_cycles(graph: ImportGraph, args: argparse.Namespace) -> None:
 
 def cmd_counterfactual(graph: ImportGraph, args: argparse.Namespace) -> None:
     mapping = PackageMapping.from_json(args.mapping)
-    for label, kinds in (("ALL edges (import-linter)", None), ("TOPLEVEL only (runtime)", (ImportKind.TOPLEVEL,))):
+    for label, kinds in (
+        ("ALL edges (import-linter)", None),
+        ("TOPLEVEL only (runtime)", (ImportKind.TOPLEVEL,)),
+    ):
         result = counterfactual(graph, mapping, kinds)
         _out(f"=== {label} ===")
         if result.unmapped:
@@ -404,7 +404,9 @@ def cmd_counterfactual(graph: ImportGraph, args: argparse.Namespace) -> None:
             for (src, dst), edges in sorted(result.cross_edges.items()):
                 _out(f"      {src} -> {dst}: {len(edges)} edges")
                 for edge in edges[: args.show_edges]:
-                    _out(f"          {edge.importer}:{edge.lineno} [{edge.kind}] -> {edge.imported}")
+                    _out(
+                        f"          {edge.importer}:{edge.lineno} [{edge.kind}] -> {edge.imported}"
+                    )
         _out()
 
 
@@ -440,7 +442,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     cf = subs.add_parser("counterfactual", help="cross-package cycles under a proposed mapping")
     cf.add_argument("--mapping", type=Path, required=True, help="JSON {exact:{}, prefix:{}}")
-    cf.add_argument("--show-edges", type=int, default=0, metavar="N", help="list up to N edges each")
+    cf.add_argument(
+        "--show-edges", type=int, default=0, metavar="N", help="list up to N edges each"
+    )
     cf.set_defaults(func=cmd_counterfactual)
     return parser
 
