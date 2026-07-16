@@ -1,8 +1,15 @@
 # Import-Graph Baseline — re-deriving the architecture refactor's numbers
 
-> **Status:** Results / audit (2026-07-16). Measured on `main` @ `4e5b736` with
-> `tools/import_graph.py`, committed in the same change. Every number below carries the
-> exact command that reproduces it.
+> ## ⚠️ Point-in-time record — §1–§8 measure `4e5b736`
+>
+> **Every number in §1–§8 was measured on `main` @ `4e5b736` (pre-W-1) and is frozen at that
+> commit.** They are a *historical baseline*, not a live claim about `main`. W-1 (PRs
+> #169/#170) has since changed the graph — see **§9, the post-W-1 delta @ `858d605`**, for
+> what moved and what did not. Re-run any command below against a later tree and expect
+> different numbers; that is the tool working, not the doc rotting.
+>
+> **Status:** Results / audit (2026-07-16). Measured with `tools/import_graph.py`, committed
+> in the same change. Every number below carries the exact command that reproduces it.
 >
 > **Why this exists:** the refactor plan's wave *order* rests on one quantitative claim —
 > *"naive file-move split → 14 cross-package cycles; contract-first → 6"* — produced by an
@@ -18,6 +25,8 @@
 ---
 
 ## 0. Verdict table
+
+*(Measured @ `4e5b736`. §9 carries the post-W-1 delta.)*
 
 | # | Claim | Verdict |
 |---|---|---|
@@ -500,3 +509,138 @@ for k in sorted(cross):
    in the instrument and silently hid the one edge (§4) that most undercuts the plan's
    thesis. `tools/import_graph.py` is committed and gated by `test_edges_match_grimp_exactly`
    so the next claim can be re-run instead of re-argued.
+
+---
+
+## 9. Post-W-1 delta — measured @ `858d605`
+
+W-1 landed after §1–§8 were measured: **#170** promoted `ModelRef` to `langres.core.model_ref`
+(+ a shim at the old path), and **#169** split `core/__init__.py` 325 → 104 lines into **17
+new export fragments**. #169 targeted exactly the structure §3/§6.5 identified as the fattest
+dependency in the package. So: did it move the tangle, or only the merge conflicts?
+
+**The tool survived the change and still matches grimp** — on a tree with **148 modules**
+(was 128) and 40 new toplevel edges:
+
+```
+uv run pytest tests/test_import_graph.py::test_edges_match_grimp_exactly
+1 passed
+```
+
+That is a stronger validation than it was at `4e5b736`: the instrument tracked a real
+structural change edge-for-edge without amendment.
+
+### 9.1 The tangle did not shrink. It grew — by exactly the fragments
+
+```bash
+uv run python tools/import_graph.py kinds
+```
+
+| | `4e5b736` | `858d605` | |
+|---|---|---|---|
+| modules | 128 | **148** | +20 |
+| toplevel unique edges | 391 | **431** | +40 (fragment indirection) |
+| function-local | 63 | 63 | — |
+| type-checking | 59 | 59 | — |
+| lazy-only edges | 102 | 102 | — |
+| **SCC, all edges** | `[29,3,2]` | **`[43,3,2]`** | **+14** |
+| **SCC, toplevel only** | `[5]` | **`[12]`** | **+7** |
+
+Attributed, not eyeballed:
+
+```
+ALL-edges tangle : 29 -> 43  (+14)
+  left   : []
+  ALL 14 new members are W-1 export fragments? True
+TOPLEVEL tangle  : 5 -> 12  (+7)
+  ALL new members are W-1 export fragments? True
+```
+
+**Not one module left either tangle.** All 14 (resp. 7) new members are W-1's own fragments,
+pulled straight in. The runtime tangle **more than doubled**, 5 → 12.
+
+This is §6.5's finding reproduced by experiment, at a cost: **relabelling is not emptying.**
+`core/__init__.py`'s fan-out fell 43 → 12, but the dependencies did not evaporate — they
+moved into fragments that inherited the tangle. The 43 was redistributed, not removed.
+
+### 9.2 The counterfactual is unchanged
+
+```bash
+uv run python tools/import_graph.py counterfactual --mapping tools/refactor_target_packages.json
+```
+
+| | `4e5b736` | `858d605` |
+|---|---|---|
+| largest SCC (all / toplevel) | 15 / 11 | **15 / 11** |
+| mutual pairs (all / toplevel) | 18 / 11 | **18 / 11** |
+| knots solely facade-caused | 6 of 18 | **6 of 18** |
+
+Same 18 knots, same names, one edge count moved (`core ↔ curation` 4+9 → 5+9). The six
+facade-caused knots are still 100% facade-caused — the edges simply have new homes:
+
+```
+components <-> core: 100% facade (16 edges) from
+    ['_exports._blocking', '_exports._clustering', '_exports._matchers', '_exports._semantic']
+architectures <-> core: 100% facade (2)  from ['_exports._methods', '_exports._resolver']
+core <-> training:      100% facade (3)  from ['_exports._training']
+benchmarks <-> core:    100% facade (1)  from ['_exports._eval']   # the old :115
+core <-> optimize:      100% facade (1)  from ['_exports._eval']   # the old :115
+core <-> curation:      100% facade (5)  from ['_exports._clustering', '._flywheel', '._training']
+```
+
+**W-1 changed nothing about the refactor's cycle problem.** On the plan's target layout the
+naive split still yields one 15-package tangle and the same 18 knots. Plainly: **on the
+tangle, W-1 bought merge-conflict relief and nothing else** — and it made the *current*
+graph's tangle measurably worse (§9.1).
+
+### 9.3 …but it did make the emptying wave's target crisp
+
+One real gain, and it is the wave-sizing input. `core/__init__.py`'s remaining fan-out of 12
+is now **entirely** the 12 fragments — it imports nothing else:
+
+```
+langres.core:39,45-55 [toplevel] -> langres.core._exports{,._blocking,._clustering,._eval,
+    ._flywheel,._matchers,._methods,._models,._resolver,._semantic,._tracking,._training}
+```
+
+And each fragment is a *pure* re-export unit, with no logic to relocate. `_blocking.py`'s
+entire top level, per `ast`:
+
+```
+{'Expr': 1, 'ImportFrom': 6, 'If': 1, 'Assign': 1, 'AnnAssign': 4}
+```
+
+— a docstring, six imports, one `if TYPE_CHECKING`, `__all__`, and four lazy-metadata
+assignments. Nothing else.
+
+So "kill `langres.core`'s component re-exports" changes shape:
+
+| | before W-1 | after W-1 |
+|---|---|---|
+| the target | lines 27–58 inside a 325-line `__init__` | **4 whole files**: `_exports/_blocking.py`, `_clustering.py`, `_matchers.py`, `_semantic.py` |
+| the `:115` harness import | one line among many | `_exports/_eval.py` |
+| the unit of deletion | a line range, by hand | a file, with a declared `__all__` naming its own blast radius |
+
+**Verdict: easier, narrowly.** W-1 did not help the tangle at all, and hurt the live graph —
+but it converted the emptying wave's target from surgery on a line range into deleting four
+domain-scoped files whose `__all__` enumerates exactly what must be codemodded. The cost is
+one more indirection hop for the codemod to see through (`langres.core` → `_exports` →
+`_blocking` → real module) and **20 new modules the plan's layout had no home for** (§9.4).
+
+### 9.4 W-1 created 20 homeless modules
+
+`test_shipped_refactor_mapping_covers_every_module` — the "no wave may discover a homeless
+file" gate — **failed on the rebase**, exactly as designed:
+
+```
+AssertionError: Left contains 20 more items, first extra item: 'langres._exports'
+```
+
+The plan's target layout has no home for `langres/_exports/*` (7), `core/_exports/*` (12), or
+`langres.core.model_ref` (1). `tools/refactor_target_packages.json` now maps them on the
+naive-file-move reading — **a fragment follows its parent `__init__`** (`langres/_exports/*`
+→ `root`, `core/_exports/*` → `core`), with `model_ref` keeping its plan-assigned `core` home
+at both its new path and the back-compat shim. **These are this doc's transcription
+decisions, not the plan's**, and the emptying wave should ratify or overrule them: if the
+component fragments are deleted rather than moved, `core/_exports/{_blocking,_clustering,
+_matchers,_semantic}.py` never need a target package at all.
