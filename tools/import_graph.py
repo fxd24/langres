@@ -258,7 +258,14 @@ class PackageMapping:
 
 @dataclass(frozen=True, slots=True)
 class Counterfactual:
-    """The cross-package cycle result of applying a `PackageMapping`."""
+    """The cross-package cycle result of applying a `PackageMapping`.
+
+    "How many cycles?" has no single answer, so report the unit explicitly:
+    `cycles` (SCCs of the package graph) is what an import-linter `layers` contract
+    fails on, while `mutual_pairs` is the actionable unit a human breaks one at a
+    time. Counting elementary circuits is meaningless here -- the real graph has
+    tens of thousands.
+    """
 
     cycles: list[list[str]]
     cross_edges: dict[tuple[str, str], list[Edge]]
@@ -267,6 +274,11 @@ class Counterfactual:
     @property
     def cycle_count(self) -> int:
         return len(self.cycles)
+
+    @property
+    def mutual_pairs(self) -> list[tuple[str, str]]:
+        """Package pairs that import each other -- one fixable knot each."""
+        return sorted({(a, b) for a, b in self.cross_edges if (b, a) in self.cross_edges if a < b})
 
 
 def counterfactual(
@@ -396,9 +408,13 @@ def cmd_counterfactual(graph: ImportGraph, args: argparse.Namespace) -> None:
             _out(f"  UNMAPPED MODULES ({len(result.unmapped)}) -- mapping is incomplete:")
             for module in result.unmapped:
                 _out(f"      {module}")
-        _out(f"  cross-package cycles: {result.cycle_count}")
+        _out(f"  cross-package cycles (SCCs of the package graph): {result.cycle_count}")
         for cycle in result.cycles:
             _out(f"      [{len(cycle)}] {' <-> '.join(cycle)}")
+        _out(f"  mutual package pairs (one fixable knot each): {len(result.mutual_pairs)}")
+        for src, dst in result.mutual_pairs:
+            there, back = len(result.cross_edges[(src, dst)]), len(result.cross_edges[(dst, src)])
+            _out(f"      {src} <-> {dst}  ({there} + {back} edges)")
         if args.show_edges:
             _out("  cross-package edges:")
             for (src, dst), edges in sorted(result.cross_edges.items()):

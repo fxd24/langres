@@ -320,6 +320,7 @@ def test_counterfactual_reports_cross_package_cycle_and_unmapped(tmp_path):
 
     assert result.cycles == [["left", "right"]]
     assert result.cycle_count == 1
+    assert result.mutual_pairs == [("left", "right")]
     assert {k: len(v) for k, v in result.cross_edges.items()} == {
         ("left", "right"): 1,
         ("right", "left"): 1,
@@ -334,6 +335,7 @@ def test_counterfactual_ignores_intra_package_edges(tmp_path):
     mapping = PackageMapping(exact={}, prefix={"fixt": "one"})
     result = counterfactual(graph, mapping)
     assert result.cycles == []
+    assert result.mutual_pairs == []
     assert result.cross_edges == {}
     assert result.unmapped == []
 
