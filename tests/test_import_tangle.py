@@ -46,8 +46,10 @@ TYPE_CHECKING, which lets us gate two genuinely different graphs:
   lazy function-body import from an eager one (grimp's ``DirectImport`` carries no
   scope field), so every deliberate lazy-extras seam counts as a real edge here.
 
-The two numbers are far apart (12 vs 43) precisely *because* langres uses lazy
-imports on purpose. Pinning only one would hide half the tangle.
+The two numbers are far apart (0 vs 10) precisely *because* langres uses lazy
+imports on purpose. Pinning only one would hide half the tangle -- and the runtime
+view being *empty* is exactly why: pinning only the all-edges 10 would let a new
+eager cycle grow back with the gate still green.
 
 Per view we pin two complementary facts, and both are load-bearing:
 
@@ -87,10 +89,11 @@ Measured against import-linter 2.13 / grimp 3.15, not assumed:
 * **A ``layers`` contract is not writable today.** ``layers.py`` raises
   ``ValueError: Missing layer ... does not exist`` -- a hard crash, not a report
   -- and the target packages don't exist yet. Their order isn't decided either.
-* **The contracts that *are* true today are not useful.** Only ``cli``, ``eval``,
-  ``testing``, ``bootstrap`` and ``_method_names`` sit outside the package cycle;
-  an ``independence`` contract over those five would assert a regression nobody
-  could plausibly commit. Everything worth gating is already gated, and better:
+* **The contracts that *are* true today are not useful.** With the runtime cycle
+  gone, 13 of the 14 direct children of ``langres`` sit outside the all-edges
+  tangle (only ``langres.methods`` is still in it); an ``independence`` contract
+  over them would assert a regression nobody could plausibly commit. Everything
+  worth gating is already gated, and better:
   cycles by this file (both views), eager-heavy-imports by
   ``test_import_budget.py`` (which executes the import and reads ``sys.modules``
   -- ground truth, zero false positives on lazy seams).
@@ -126,76 +129,65 @@ class TangleBaseline:
     largest_scc: int
     tangled: frozenset[str]
 
+    #: ``sccs()`` only ever returns components with >1 member, so the fully
+    #: decoupled state is expressible exactly and without a sentinel: an empty
+    #: ``tangled`` and ``largest_scc = 0`` mean "no module is in any cycle" --
+    #: the same pair ``_report``'s ``max(..., default=0)`` computes for it. 0 is
+    #: a measurement here, never "unmeasured".
+
 
 # ---------------------------------------------------------------------------
-# THE BASELINES. Measured on ba4b1b7 (PR #171 merge) with:
+# THE BASELINES. Measured on the `refactor/kill-runtime-cycle` merge with:
 #     uv run python tools/import_graph.py kinds
 # Lower these freely when you decouple something -- that is the ratchet working.
 # RAISING either number means your change coupled the codebase further: say why,
 # in a comment, right here, and expect review to push back.
 # ---------------------------------------------------------------------------
 
-# Runtime view: 12 modules, one cycle. This is the export-fragment knot --
-# `langres/__init__` -> `_exports/*` -> `core` -> `core/_exports/*` -> `resolver`
-# -> `presets` and back up to `verbs`. Every one of these executes on a bare
-# `import langres`.
+# Runtime view: EMPTY. A bare `import langres` executes no import cycle at all.
+#
+# It was 12 modules -- the export-fragment knot, `langres/__init__` ->
+# `_exports/*` -> `core` -> `core/_exports/*` -> `resolver` -> `presets` and back
+# up to `verbs`. That loop had exactly ONE edge closing it: `core/resolver.py`
+# did a toplevel `import langres` to read `langres.__version__` for the artifact
+# manifest -- the floor importing the ceiling for a version string. The string
+# now lives in `langres/_version.py`, a stdlib-only leaf that imports no langres,
+# so `resolver` and `cli` read it without depending on the root and the loop has
+# no edge left to close. (Verified by dropping that single edge from the graph
+# and recomputing Tarjan: 12 -> 0. Nothing else was needed.)
+#
+# This zero is the ratchet's whole point: it is now IMPOSSIBLE to add an eager
+# cycle to langres without this test failing. Do not raise it back.
 RUNTIME = TangleBaseline(
     view="runtime (toplevel edges only -- what `import langres` executes)",
     kinds=(ImportKind.TOPLEVEL,),
-    largest_scc=12,
-    tangled=frozenset(
-        {
-            "langres",
-            "langres._exports",
-            "langres._exports._core",
-            "langres._exports._flywheel",
-            "langres._exports._training",
-            "langres._exports._verbs",
-            "langres.core",
-            "langres.core._exports",
-            "langres.core._exports._resolver",
-            "langres.core.presets",
-            "langres.core.resolver",
-            "langres.verbs",
-        }
-    ),
+    largest_scc=0,
+    tangled=frozenset(),
 )
 
-# All-edges view: 48 modules across three cycles, the largest being 43. The other
-# two are small and independent: {core.analysis, core.reports, plotting.blockers}
-# and {core.runs, core.trackers}. `tangled` covers all three; `largest_scc` pins
-# the 43 so those cycles cannot silently merge into it.
+# All-edges view: 24 modules across four cycles, the largest being 10. Killing the
+# runtime cycle collapsed this view too (48/43 -> 24/10): the root, both `_exports`
+# trees, `verbs` and `optimize` were only ever tangled here *via* the same
+# `resolver -> langres` edge, so they left with it. What remains are four genuinely
+# lazy knots, none touching the root:
+#   10  the matcher/presets/resolver + methods/benchmark knot (litellm seam)
+#    9  the `data.data_profile.*` section graph
+#    3  {core.analysis, core.reports, plotting.blockers}
+#    2  {core.runs, core.trackers}
+# `tangled` covers all four; `largest_scc` pins the 10 so they cannot silently
+# merge into one.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
-    largest_scc=43,
+    largest_scc=10,
     tangled=frozenset(
         {
-            "langres",
-            "langres._exports",
-            "langres._exports._core",
-            "langres._exports._data",
-            "langres._exports._flywheel",
-            "langres._exports._optimize",
-            "langres._exports._training",
-            "langres._exports._verbs",
             "langres.clients.openrouter",
-            "langres.core",
-            "langres.core._exports",
-            "langres.core._exports._clustering",
-            "langres.core._exports._eval",
-            "langres.core._exports._flywheel",
-            "langres.core._exports._matchers",
-            "langres.core._exports._methods",
-            "langres.core._exports._resolver",
             "langres.core.analysis",
             "langres.core.anchor_store",
             "langres.core.benchmark",
-            "langres.core.eval_report",
             "langres.core.finetune",
-            "langres.core.judgement_log",
             "langres.core.matchers.cascade",
-            "langres.core.matchers.cascade_judge",
             "langres.core.matchers.llm_judge",
             "langres.core.method_registry",
             "langres.core.presets",
@@ -203,22 +195,17 @@ ALL_EDGES = TangleBaseline(
             "langres.core.resolver",
             "langres.core.runs",
             "langres.core.trackers",
-            "langres.data.data_profile",
             "langres.data.data_profile.base",
             "langres.data.data_profile.builders",
             "langres.data.data_profile.corpus_field",
             "langres.data.data_profile.embedding_section",
-            "langres.data.data_profile.embedding_source",
             "langres.data.data_profile.failure_mode",
             "langres.data.data_profile.hero",
             "langres.data.data_profile.label_structure",
             "langres.data.data_profile.mining_readiness",
             "langres.data.data_profile.separability",
-            "langres.data.registry",
             "langres.methods",
-            "langres.optimize",
             "langres.plotting.blockers",
-            "langres.verbs",
         }
     ),
 )

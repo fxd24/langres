@@ -43,11 +43,16 @@ per-*name*; only a brand new domain touches this module. See
 """
 
 import importlib
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _metadata_version
 from typing import Any
 
 from langres import _exports
+
+# Re-exported (`as` marks it explicit for type checkers -- langres ships
+# py.typed, and `__version__` is not in `__all__` to carry the re-export). The
+# computation lives in a stdlib-only leaf so `core.resolver` can read the
+# version WITHOUT importing this package: that one edge was the whole runtime
+# import cycle. See `langres/_version.py` and `tests/test_import_tangle.py`.
+from langres._version import __version__ as __version__
 
 # Bind each fragment's EAGER names into this namespace. Every star-import is
 # bounded by that fragment's own `__all__`, so this imports exactly the names
@@ -63,14 +68,6 @@ from langres._exports._verbs import *  # noqa: F403
 #: The composed public surface -- every fragment's slice, deduplicated and
 #: sorted (see :data:`langres._exports.NAMES`).
 __all__ = list(_exports.NAMES)
-
-# Single source of truth is pyproject.toml; resolved from installed metadata so
-# a version bump can never miss this string again. Falls back for source trees
-# imported without installation.
-try:
-    __version__ = _metadata_version("langres")
-except PackageNotFoundError:  # pragma: no cover - only hit on uninstalled source trees
-    __version__ = "0.0.0.dev0"
 
 #: ``name -> owning module`` for root exports resolved on first access (PEP
 #: 562, mirroring ``langres.core.__getattr__``).
