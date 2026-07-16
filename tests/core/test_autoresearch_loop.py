@@ -222,3 +222,147 @@ def test_trial_is_a_frozen_dataclass() -> None:
     trial = Trial({"blocker": "vector"}, {"r": 1.0}, True, "rid", "aid", "completed")
     with pytest.raises((AttributeError, TypeError)):
         trial.accepted = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Tracker spec (DX: ``tracker="trackio"`` resolved internally via
+# ``core.trackers.resolve_tracker`` -- mirrors ``judge="..."`` presets).
+# ---------------------------------------------------------------------------
+
+
+class _SpyTracker:
+    """Minimal in-memory ``ExperimentTracker`` double -- records every call it gets."""
+
+    name = "spy"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def start_run(self, context: Any, *, run_name: str | None = None) -> None:
+        self.calls.append("start_run")
+
+    def log_params(self, params: Any) -> None:
+        self.calls.append("log_params")
+
+    def log_metrics(self, metrics: Any, *, step: int | None = None) -> None:
+        self.calls.append("log_metrics")
+
+    def log_artifact(self, key: str, value: str) -> None:
+        self.calls.append("log_artifact")
+
+    def set_tags(self, tags: Any) -> None:
+        self.calls.append("set_tags")
+
+    def finish(self, *, status: str) -> None:
+        self.calls.append("finish")
+
+    @property
+    def run_url(self) -> str | None:
+        return None
+
+    @property
+    def native(self) -> Any:
+        return self
+
+
+def test_tracker_none_default_never_raises() -> None:
+    result = run_loop(
+        [_cfg("a")],
+        _scorer({"a": {"r": 1.0}}),
+        Objective.maximize("r"),
+        experiment="e",
+        dataset_name="d",
+        tracker=None,
+    )
+    assert result.best_config == _cfg("a")
+
+
+def test_tracker_instance_is_driven_through_the_loop() -> None:
+    spy = _SpyTracker()
+    run_loop(
+        [_cfg("a")],
+        _scorer({"a": {"r": 1.0}}),
+        Objective.maximize("r"),
+        experiment="e",
+        dataset_name="d",
+        tracker=spy,
+    )
+    assert spy.calls == ["start_run", "log_metrics", "finish"]
+
+
+def test_tracker_string_resolves_to_the_named_backend_and_is_driven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``tracker="trackio"`` resolves to a real ``TrackioTracker`` end to end.
+
+    ``trackio`` is mocked exactly like ``tests/test_trackio_tracker.py``'s
+    ``fake_trackio`` fixture -- no network, no real HF login -- so this proves
+    the spec resolved AND the resulting tracker actually got driven by
+    ``capture_run``, not just that ``resolve_tracker`` returns the right type.
+    """
+    import langres.core.trackers.trackio_tracker as trackio_mod
+
+    class _FakeRun:
+        def __init__(self) -> None:
+            self.log_calls: list[Any] = []
+
+        def log(self, data: Any, step: int | None = None) -> None:
+            self.log_calls.append((data, step))
+
+        def finish(self) -> None:
+            pass
+
+    class _FakeTrackio:
+        def __init__(self) -> None:
+            self.init_kwargs: dict[str, Any] | None = None
+            self.run = _FakeRun()
+
+        def init(self, **kwargs: Any) -> Any:
+            self.init_kwargs = kwargs
+            return self.run
+
+    fake = _FakeTrackio()
+    monkeypatch.setattr(trackio_mod, "trackio", fake)
+
+    run_loop(
+        [_cfg("a")],
+        _scorer({"a": {"r": 1.0}}),
+        Objective.maximize("r"),
+        experiment="e",
+        dataset_name="d",
+        tracker="trackio",
+    )
+    assert fake.init_kwargs is not None  # TrackioTracker.start_run really fired
+
+
+def test_tracker_sequence_fans_out_to_every_child() -> None:
+    a, b = _SpyTracker(), _SpyTracker()
+    run_loop(
+        [_cfg("x")],
+        _scorer({"x": {"r": 1.0}}),
+        Objective.maximize("r"),
+        experiment="e",
+        dataset_name="d",
+        tracker=[a, b],
+    )
+    assert a.calls == ["start_run", "log_metrics", "finish"]
+    assert b.calls == ["start_run", "log_metrics", "finish"]
+
+
+def test_tracker_unknown_backend_string_raises_before_any_config_is_scored() -> None:
+    scored: list[str] = []
+
+    def scorer(config: Mapping[str, Any]) -> dict[str, float]:
+        scored.append(config["id"])
+        return {"r": 1.0}
+
+    with pytest.raises(ValueError, match="unknown"):
+        run_loop(
+            [_cfg("a")],
+            scorer,
+            Objective.maximize("r"),
+            experiment="e",
+            dataset_name="d",
+            tracker="not-a-backend",
+        )
+    assert scored == []  # the spec is resolved before the loop scores anything

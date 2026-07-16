@@ -39,6 +39,7 @@ __all__ = [
     "ExperimentTracker",
     "MultiTracker",
     "NoOpTracker",
+    "TrackerSpec",
     "resolve_tracker",
 ]
 
@@ -192,6 +193,14 @@ class MultiTracker:
         return self.trackers
 
 
+#: The tracker spec accepted at every ``tracker=`` seam (``run_loop``,
+#: ``optimize``): a backend name, an already-built instance, a sequence of
+#: either (fan-out), or ``None`` (no-op). Mirrors the judge/matcher spec
+#: convention -- callers write ``tracker="trackio"``, not
+#: ``tracker=resolve_tracker("trackio")``.
+TrackerSpec = str | ExperimentTracker | Sequence[str | ExperimentTracker] | None
+
+
 def _load_adapter_class(backend: str) -> type[Any]:
     """Import a backend adapter class, or raise a helpful missing-extra ImportError.
 
@@ -211,9 +220,7 @@ def _load_adapter_class(backend: str) -> type[Any]:
     return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
-def resolve_tracker(
-    spec: None | str | ExperimentTracker | Sequence[Any],
-) -> ExperimentTracker:
+def resolve_tracker(spec: TrackerSpec) -> ExperimentTracker:
     """Resolve a tracker spec to a concrete :class:`ExperimentTracker`.
 
     Mirrors :func:`langres.core.presets.resolve_judge`:

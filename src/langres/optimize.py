@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from langres.core.embeddings import EmbeddingProvider
     from langres.core.indexes.vector_index import VectorIndex
     from langres.core.runs import RunStore
-    from langres.core.trackers import ExperimentTracker
+    from langres.core.trackers import TrackerSpec
 
 
 def _resolve_benchmark(benchmark: str | Benchmark[Any]) -> Benchmark[Any]:
@@ -196,7 +196,7 @@ def optimize(
     dedup: bool = True,
     split: str = "full",
     embedder: EmbeddingProvider | None = None,
-    tracker: ExperimentTracker | None = None,
+    tracker: TrackerSpec = None,
 ) -> LoopResult:
     """Search ``space`` for the blocking config ``objective`` prefers on ``benchmark``.
 
@@ -226,7 +226,12 @@ def optimize(
             ``"full"`` — M1 measures blocking over the whole loaded corpus.
         embedder: Optional pre-built embedder for the vector index (a
             ``FakeEmbedder`` keeps tests offline); production leaves it ``None``.
-        tracker: Optional experiment tracker; defaults to a no-op.
+        tracker: Experiment tracker spec -- a backend name (``"trackio"``/
+            ``"mlflow"``/``"wandb"``), an ``ExperimentTracker`` instance, a
+            sequence of either (fan-out), or ``None`` (default; no-op).
+            Forwarded to :func:`~langres.core.autoresearch.loop.run_loop`,
+            which resolves it via
+            :func:`~langres.core.trackers.resolve_tracker`.
 
     Returns:
         The :class:`~langres.core.autoresearch.loop.LoopResult` (best incumbent +
@@ -234,7 +239,6 @@ def optimize(
     """
     from langres.core.autoresearch.loop import run_loop
     from langres.core.runs import dataset_fingerprint
-    from langres.core.trackers import NoOpTracker
 
     bench = _resolve_benchmark(benchmark)
     dataset_name = benchmark if isinstance(benchmark, str) else bench.name
@@ -270,6 +274,6 @@ def optimize(
         split_id=split,
         seeds={"optimize": seed} if seed is not None else None,
         store=store,
-        tracker=tracker or NoOpTracker(),
+        tracker=tracker,
         dedup=dedup,
     )

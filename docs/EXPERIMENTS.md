@@ -374,13 +374,20 @@ accepted = [r for r in records if (r.metrics or {}).get("accepted") == 1.0]
 ```
 
 The `RunStore` JSONL is the durable local record; `store=None` skips it entirely
-(the offline path). For a durable, off-laptop **dashboard**, pass a tracker:
+(the offline path). For a durable, off-laptop **dashboard**, pass a `tracker=`
+**spec** — a backend name, an already-built instance, a sequence of either
+(fan-out), or `None` (the default, no-op) — and `optimize` resolves it internally
+via `resolve_tracker`, mirroring the `matcher="..."` string dispatch:
 
 ```python
-from langres.core.trackers import resolve_tracker
-
 # Local-first: no credentials, no network -- writes to a local trackio SQLite store.
-result = optimize(space, objective, "amazon_google", tracker=resolve_tracker("trackio"))
+result = optimize(space, objective, "amazon_google", tracker="trackio")
+
+# An instance configures the backend (e.g. HF-Space sync); a sequence fans out
+# to several backends at once.
+from langres.core.trackers import TrackioTracker
+result = optimize(space, objective, "amazon_google",
+                   tracker=[TrackioTracker(space_id="user/space"), "mlflow"])
 ```
 
 Set `HF_TOKEN` and configure a `space_id` (`TrackioTracker(space_id="user/space")` or

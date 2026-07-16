@@ -399,9 +399,9 @@ persisted to a local `RunStore` JSONL.
   judge on `log_loss` / AUC-PR) and small-LM fine-tuning; an Optuna/LLAMBO proposer
   swap; and pushing the winning artifact to the Hub.
 - **Shipped:** a durable off-laptop dashboard via the **Trackio** tracker
-  (`tracker=resolve_tracker("trackio")`, local-first — no credentials unless an HF
-  Space is configured). Local `RunStore` JSONL persistence (`store=`) remains the
-  default and is independent of the tracker.
+  (`tracker="trackio"`, local-first — no credentials unless an HF Space is
+  configured). Local `RunStore` JSONL persistence (`store=`) remains the default
+  and is independent of the tracker.
 
 ---
 
