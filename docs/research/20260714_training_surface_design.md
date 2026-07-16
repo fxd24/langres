@@ -95,7 +95,7 @@ report = resolver.fit(records, pairs="corrections.jsonl")
 
 The maintainer's criterion: over-simplification that hides what happens underneath *adds* cognitive load. PyTorch's virtue — you know what you're training — is restored inside a one-call API by:
 
-1. **Declared-at-construction**: nothing trains that you didn't name. `TrainedLMMatcher(base="Qwen/Qwen3-1.7B", method=QLoRA(r=16), serializer=ColVal(mode=1))` states the architecture, the method, and the rank in the user's own code.
+1. **Declared-at-construction**: nothing trains that you didn't name. `finetune(pairs, method=QLoRA(base="Qwen/Qwen3-1.7B", r=16), record_serializer="colval")` states the base, the method, and the rank in the user's own code.
 2. **`resolver.describe()`** — pre-fit: which slots *would* train (and how), which are frozen.
 3. **`FitReport`** — post-fit, returned from every `fit`: per-slot what trained (mechanism, learned-param summary), on how much data (train/valid split sizes, label provenance incl. silver-teacher identity), at what cost (tokens/$ for paid fits, GPU time for local), thresholds/bands derived, and validation metrics. Doubles as the lineage record (feeds RunRecord and the hub model card: base model, data recipe, license chain, eval provenance).
 
@@ -132,7 +132,7 @@ Deferred, doors kept open (nothing in the surface forecloses them): `partial_fit
 The training-loop plan's targets ride these; note **UC-AnyMatch never touches the Resolver** — it is a matcher + eval harness, so this A-layer *is* the AnyMatch tooling gap:
 
 1. **Miners as plain functions**, not strategy objects: `mine_misclassified(dataset, miner=…, cap=…)` (AnyMatch hard-positives), `sample_negatives(dataset, ratio=…, seed=…)`, `attribute_examples(pool, cap=…)`, `flipped(pairs)`, `mine_hard_negatives(blocker_log, …)` (the #86 blocking-derived strategy). All produce `LabeledPair`s — printable, inspectable data prep (the label-noise inspection the #86 survey demands). Hard-positive and hard-negative mining stay **separate functions** (opposite failure modes), routed by consumer (fine-tune wants hard; DSPy demo pools want easy-correct).
-2. **`TrainedLMMatcher`** — the trainable-LM matcher: `base=` (HF id), `method=` (`QLoRA(r, alpha)` | `FullFinetune()` — AnyMatch fidelity needs full-FT GPT-2), `head=` (`"classification"` | generative), `serializer=`, epochs/lr. Implements the fit protocol; checkpoint to `state_dir` sidecar (safetensors, no pickle); lazy heavy imports; training-only deps (unsloth/trl/peft) stay dev-group-only.
+2. **`finetune()` verb** — the trainable-LM path shipped as a standalone **function**, not a matcher class: `finetune(pairs, method=QLoRA(base=…, r=…), record_serializer="colval")` fine-tunes the base LM and returns a weightless `ModelRef` (base + adapter) that the existing `LLMMatcher(model=ref)` serves in-process, or `vllm serve` behind `LLMMatcher(api_base=…)`; `Resolver.fit(records, pairs=…, method=QLoRA(…))` wraps it into the canonical sequence + a `FitReport`. Lazy heavy imports; training-only deps (peft/trl/bitsandbytes) live in the `[finetune]` extra. *(As built: the standalone matcher-class name proposed here was rejected — "trained" is vacuous, every model is trained — and never built; the path is this function. AnyMatch's full-FT-GPT-2 / classification-head route stays an **unbuilt classification-head finetune-trainer variant** — a future extension of the finetune seam — distinct from the shipped generative QLoRA fine-tune.)*
 3. **`ColVal` serializer** — one Ditto-style `COL <val>…` textualizer (AnyMatch modes 1–4; `N/A` for missing), shared by trained matchers, LLM prompts, and the replication.
 4. **`CrossEncoderMatcher`** — the Ditto-method-class baseline (sentence-transformers), same fit protocol; completeness yardstick per the training plan's LLM-native framing.
 5. **Local student serving** — per the training plan §3.3 Option A: fine-tuned checkpoints served behind `LLMMatcher` via a local OpenAI-compatible `api_base` (same seam as the paid teacher), with the in-process matcher as fallback.
@@ -167,9 +167,9 @@ report = resolver.fit(records, pairs=silver)                      # report: demo
 
 **QLoRA fine-tune**
 ```python
-student = TrainedLMMatcher(base="Qwen/Qwen3-1.7B", method=QLoRA(r=16),
-                           serializer=ColVal(mode=1), epochs=3)   # NEW component
-student.fit(train_cands, silver)                                  # GPU; safetensors sidecar
+ref = finetune(train_pairs, method=QLoRA(base="Qwen/Qwen3-1.7B", r=16, epochs=3),
+               record_serializer="colval")                       # GPU -> weightless ModelRef
+matcher = LLMMatcher(model=ref)                                  # served in-process (or `vllm serve`)
 ```
 
 **AnyMatch replication (core layer; no Resolver)**
@@ -178,8 +178,11 @@ pool  = [get_benchmark(n) for n in NINE if n != holdout]
 pairs = concat(mine_misclassified(d, miner="random_forest", cap=400)   # NEW miners
                + sample_negatives(d, ratio=2, seed=42) for d in pool)
 pairs += attribute_examples(pool, cap=600) + flipped(pairs)
-matcher = TrainedLMMatcher(base="gpt2", head="classification", serializer=ColVal(mode=1))
-matcher.fit(pairs)
+# Paper-faithful AnyMatch = full-FT GPT-2 with a classification head — UNBUILT:
+# a classification-head finetune-trainer variant of the finetune() seam.
+# Shipped generative-QLoRA path today:
+ref = finetune(pairs, method=QLoRA(base="gpt2"), record_serializer="colval")
+matcher = LLMMatcher(model=ref)
 f1 = evaluate(matcher, get_benchmark(holdout).candidates("test"), threshold=0.5)
 ```
 
@@ -205,7 +208,7 @@ result = resolver.resolve(records)         # result.matches / result.review_queu
 |---|---|---|
 | **0a — rename** | the Matcher rename (§1.3), one mechanical PR incl. docs sweep | before hub ids + new components ossify "judge" |
 | **0b — seams** | `align_pairs` bridge; fit protocols beyond the matcher; `FitReport` + `describe()` + `Resolver.fit` canonical sequence; `budget_usd` plumbing | serves every shape and use case |
-| **0c — training components** | miners (misclassified, random-neg, attribute, flipped, blocking-derived hard-neg); `ColVal`; `TrainedLMMatcher` scaffold (CI dry-run on `tiny_fixture`); GPU smoke (Unsloth QLoRA Qwen3-0.6B overfits 100 pairs on the 3070) | = training plan Wave 0, re-expressed |
+| **0c — training components** | miners (misclassified, random-neg, attribute, flipped, blocking-derived hard-neg); `ColVal`; `finetune()` verb + `QLoRATrainer` (CI dry-run on `tiny_fixture`); GPU smoke (Unsloth QLoRA Qwen3-0.6B overfits 100 pairs on the 3070) | = training plan Wave 0, re-expressed |
 | **1 — AnyMatch (T2)** | LOO harness over the registry pool; native run (Qwen3-0.6B QLoRA + sklearn miner) first, paper-faithful (GPT-2 full-FT, AutoGluon) as ablation if numbers disappoint | maintainer decision 2026-07-13: AnyMatch leads |
 | **2+** | T1 gold ladder → teacher tune + silver (≤$5 gate) → silver students → T4-H1 blocking probes | per the training plan; unchanged |
 | later | calibrator slot + Bands; `TrainableVectorBlocker` (T4-H2 material); `CrossEncoderMatcher` baseline | classical-gap items, sequenced behind the program |
