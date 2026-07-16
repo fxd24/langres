@@ -88,3 +88,20 @@ def test_config_round_trip_is_weightless_and_stable(model: str | dict[str, str])
     # strings -- no bytes -- and re-normalizes to the identical ref.
     json.dumps(config_value)
     assert normalize_model_ref(config_value) == ref
+
+
+def test_old_matchers_path_re_exports_the_same_objects() -> None:
+    """The back-compat shim is a pure re-export -- not a second, divergent copy.
+
+    ``ModelRef`` now lives in ``langres.core.model_ref`` (it is a weightless
+    contract, not a matcher). Everything above imports it through the old
+    ``langres.core.matchers.model_ref`` path, so this asserts the two paths hand
+    back the *identical* objects -- an ``==``-only check would pass even if the
+    shim redefined its own class, which would break isinstance/round-trips.
+    """
+    from langres.core import model_ref as new_path
+    from langres.core.matchers import model_ref as shim
+
+    assert shim.ModelRef is new_path.ModelRef
+    assert shim.normalize_model_ref is new_path.normalize_model_ref
+    assert shim.to_config is new_path.to_config

@@ -20,7 +20,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from langres.core.matchers.model_ref import ModelRef
+from langres.core.model_ref import ModelRef
 
 # ---------------------------------------------------------------------------
 # Minimal LiteLLM/OpenAI-shaped response objects.

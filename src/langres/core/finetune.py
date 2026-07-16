@@ -2,7 +2,7 @@
 
 The standalone training primitive of the training surface: given labeled candidate
 pairs, fine-tune a small base LM (LoRA / 4-bit QLoRA) to answer the yes/no match
-prompt, and return a :class:`~langres.core.matchers.model_ref.ModelRef` (base +
+prompt, and return a :class:`~langres.core.model_ref.ModelRef` (base +
 adapter) that the existing :class:`~langres.core.matchers.llm_judge.LLMMatcher`
 serves in-process — no new matcher class, no Resolver. ``Resolver.fit(...,
 method=QLoRA(...))`` wraps this (see ``Resolver._fit_finetune``).
@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import Field
 
-from langres.core.matchers.model_ref import ModelRef, normalize_model_ref
+from langres.core.model_ref import ModelRef, normalize_model_ref
 from langres.core.methods_api import Method
 
 if TYPE_CHECKING:
@@ -289,7 +289,7 @@ def finetune(
     """Fine-tune ``method.base`` on labeled ``pairs`` → a weightless ``model_ref``.
 
     The standalone primitive (plan example 3): returns a
-    :class:`~langres.core.matchers.model_ref.ModelRef` you serve through
+    :class:`~langres.core.model_ref.ModelRef` you serve through
     ``LLMMatcher(model=ref)`` (in-process) or ``vllm serve`` — NOT a Resolver, NOT
     a new component. Use :func:`run_finetune` instead when you also want the cost
     digest (GPU-seconds / dollars / merge status); ``Resolver.fit(...,

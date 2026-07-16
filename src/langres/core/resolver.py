@@ -869,7 +869,7 @@ class Resolver:
         """
         from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
         from langres.core.matchers.llm_judge import LLMMatcher
-        from langres.core.matchers.model_ref import to_config
+        from langres.core.model_ref import to_config
 
         if not isinstance(method, QLoRA):
             raise TypeError(

@@ -84,7 +84,7 @@ class FitReport(BaseModel):
         model_ref: The weightless model reference a fine-tune produced (a base id
             / local dir string, or a ``{base, adapter}`` dict whose shape also
             encodes merge status), else ``None``. Serialize with
-            :func:`~langres.core.matchers.model_ref.to_config`.
+            :func:`~langres.core.model_ref.to_config`.
         calibration: Before-vs-after Brier/ECE for a ``method="calibrate"`` fit
             (on the ``valid`` split), else ``None``.
         run_ref: The enclosing run's ``attempt_id`` (lineage reference to the
