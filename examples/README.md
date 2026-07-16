@@ -58,6 +58,16 @@ flywheel harvest → closed-loop flywheel → person:
   confident-learning denoise a labeled pair set, then print a
   `MiningReadinessSection`. Offline and $0; uses the `[trained]` extra (sklearn)
   for the out-of-fold RandomForest behind the featurizing miners.
+- **`recipe_lift_proof.py`** — the data-prep payoff: on abt_buy's all-pairs
+  blocked pool a curated training recipe (denoise + hard positives + attribute
+  augmentation + 2:1 balance) beats the mean of equal-budget random draws on
+  held-out pair F1. Prints baseline vs recipe F1 + margin. Offline and $0
+  (`RandomForestMatcher`); self-contained OpenMP guard.
+- **`curation_loop.py`** — the failure-mode flywheel end to end: run a matcher,
+  log its judgements, build a `FailureModeSection` to find the failing slice,
+  mine/augment that slice with the Wave-A miners, retrain, and confirm the
+  targeted slice's error rate dropped. Offline and $0; self-contained OpenMP
+  guard.
 
 ## Example Data
 

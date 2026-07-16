@@ -421,8 +421,10 @@ def augment_by_attribute(
 def _nonempty_string_fields(record: Any) -> set[str]:
     """Names of the record's non-empty string fields, excluding ``id``.
 
-    These are exactly the attributes a string comparator compares and a text
-    serializer renders, so blanking one is a meaningful "missing field" signal.
+    These are the record's content attributes -- what a string comparator
+    compares -- so blanking one is a meaningful "missing field" signal. ``id``
+    is excluded because it is a primary key, never a content field to blank
+    (a text serializer may still render it).
     """
     return {
         field

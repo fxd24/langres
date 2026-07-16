@@ -8,14 +8,13 @@ entry points converge on one internal assembler (:func:`_assemble`) so the two
 paths return the *same* pinned section layout:
 
     hero -> label-structure -> separability -> [mining-readiness] ->
-    corpus-fields -> embeddings -> embedding-comparison
+    [failure-mode] -> corpus-fields -> embeddings -> embedding-comparison
 
 Each section is included only when its input is present; omitting an input drops
-that section silently (never a raise). Mining readiness is the one section this
-package does not *compute* -- it is a precomputed
-:class:`~langres.data.data_profile.mining_readiness.MiningReadinessSection` the
-caller assembles from the miners (which need scikit-learn) and passes in, keeping
-this package import-light. ``include=`` narrows the set further -- it
+that section silently (never a raise). Mining readiness and failure mode are the
+two sections this package does not *compute* -- each is a precomputed section the
+caller assembles from the miners / a matcher's judgement log (both needing
+scikit-learn or a matcher run) and passes in, keeping this package import-light. ``include=`` narrows the set further -- it
 is a **selector of section kinds** (it validates its keys and raises on an unknown
 one, because a typo there means "select nothing you meant to"), never a data
 input.
@@ -48,6 +47,7 @@ from langres.data.data_profile.embedding_source import (
     NpySource,
     cosine_signal,
 )
+from langres.data.data_profile.failure_mode import FailureModeSection
 from langres.data.data_profile.hero import build_hero
 from langres.data.data_profile.label_structure import profile_label_structure
 from langres.data.data_profile.mining_readiness import MiningReadinessSection
@@ -72,6 +72,7 @@ _KNOWN_KINDS: frozenset[str] = frozenset(
         "hero",
         "label_structure",
         "mining_readiness",
+        "failure_mode",
         "separability",
         "corpus_field",
         "embedding",
@@ -99,6 +100,7 @@ def from_benchmark(
     include: Collection[str] | None = None,
     embeddings: Sequence[EmbeddingSource] | None = None,
     mining_readiness: MiningReadinessSection | None = None,
+    failure_mode: FailureModeSection | None = None,
     negatives_cap: int = _DEFAULT_NEGATIVES_CAP,
     top_n_fields: int = 50,
     seed: int = _NEGATIVES_SEED,
@@ -127,6 +129,10 @@ def from_benchmark(
             :class:`~langres.data.data_profile.mining_readiness.MiningReadinessSection`
             (built by the caller from the miners -- this package runs no matcher).
             Omitting it drops the mining-readiness section.
+        failure_mode: Optional precomputed
+            :class:`~langres.data.data_profile.failure_mode.FailureModeSection`
+            (built by the caller from a matcher's judgement log + gold -- this
+            package runs no matcher). Omitting it drops the failure-mode section.
         negatives_cap: Cap on sampled non-matching pairs for the separability
             chart (logged when it truncates).
         top_n_fields: Row cap for the corpus-field table.
@@ -162,6 +168,7 @@ def from_benchmark(
         seed=seed,
         id_key="id",
         mining_readiness=mining_readiness,
+        failure_mode=failure_mode,
     )
 
 
@@ -172,6 +179,7 @@ def from_records(
     schema: "type[BaseModel] | None" = None,
     embeddings: Sequence[EmbeddingSource] | None = None,
     mining_readiness: MiningReadinessSection | None = None,
+    failure_mode: FailureModeSection | None = None,
     include: Collection[str] | None = None,
     id_key: str = "id",
     negatives_cap: int = _DEFAULT_NEGATIVES_CAP,
@@ -198,6 +206,9 @@ def from_records(
         mining_readiness: Optional precomputed
             :class:`~langres.data.data_profile.mining_readiness.MiningReadinessSection`
             (see :func:`from_benchmark`).
+        failure_mode: Optional precomputed
+            :class:`~langres.data.data_profile.failure_mode.FailureModeSection`
+            (see :func:`from_benchmark`).
         include: Optional selector of section *kinds* (see :func:`from_benchmark`).
         id_key: The record field holding the id used for pairs / embedding
             alignment (default ``"id"``).
@@ -222,6 +233,7 @@ def from_records(
         seed=seed,
         id_key=id_key,
         mining_readiness=mining_readiness,
+        failure_mode=failure_mode,
     )
 
 
@@ -332,14 +344,16 @@ def _assemble(
     seed: int,
     id_key: str,
     mining_readiness: MiningReadinessSection | None = None,
+    failure_mode: FailureModeSection | None = None,
 ) -> DataProfileReport:
     """Compose the pinned default section set; ``include=`` narrows it.
 
     Builds each section only when its input is present, in the pinned order, then
-    prepends the derived hero and applies the ``include=`` kind filter. A
-    ``mining_readiness`` section, when supplied, is a **precomputed** input the
-    caller assembled from the miners (this package never runs a matcher), inserted
-    after the label-structure / separability blocks.
+    prepends the derived hero and applies the ``include=`` kind filter. The
+    ``mining_readiness`` and ``failure_mode`` sections, when supplied, are
+    **precomputed** inputs the caller assembled from the miners / a matcher's
+    judgement log (this package never runs a matcher), inserted after the
+    label-structure / separability blocks.
     """
     sources = list(embeddings or [])
     id_map = _index_by_id(records, id_key)
@@ -364,6 +378,9 @@ def _assemble(
 
     if mining_readiness is not None:
         body.append(mining_readiness)
+
+    if failure_mode is not None:
+        body.append(failure_mode)
 
     fields = profile_corpus_fields(records, top_n=top_n_fields)
     if fields is not None:
