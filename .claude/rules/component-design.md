@@ -27,6 +27,13 @@ built. The real layering is:)
    - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
      (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
      `.save`/`.load` serialize it via the config-registry (no pickle).
+   - **Spend-capped too** (B1), not just the verbs: `budget_usd=` on the
+     constructor and `from_schema`, defaulting to `DEFAULT_BUDGET_USD`. The
+     `SpendMonitor` is built ONCE per instance, so N `resolve()` calls share one
+     budget instead of getting a fresh one each. `None` = the default, **not**
+     uncapped (`spend_cap.UNCAPPED_BUDGET_USD` is the deliberate opt-out).
+     The cap wraps at *scoring* time and never sits in the `module` slot, so
+     `fit()`'s isinstance checks and `save()` still see the raw matcher.
    - `Resolver.link` / `stream_against` are reserved `NotImplementedError` stubs
      (M5 incremental/cross-source work) — do not document them as working.
 

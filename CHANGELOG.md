@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### `Resolver` is spend-capped (B1) — **behavior change**
+
+`Resolver` — the whole low-level public API — had **no budget guard at all**. The
+spend cap lived in `langres.core.presets`, which `Resolver` is architecturally
+forbidden to import, so only `langres.link` / `langres.dedupe` were ever capped;
+`from_schema`'s own docstring advertised the hole ("runs **UNCAPPED** … nothing
+stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limit.
+
+#### Added
+
+- **`budget_usd=` on `Resolver(...)` and `Resolver.from_schema(...)`.** Defaults to
+  `DEFAULT_BUDGET_USD` ($1.00) — the same default the verbs have always had.
+- **`langres.core.spend_cap`** — `SpendCappedMatcher` (the one enforcer),
+  `DEFAULT_BUDGET_USD`, `UNCAPPED_BUDGET_USD`, `effective_budget`.
+- **`langres.core.spend`** — `SpendMonitor` / `BudgetExceeded`, moved out of
+  `langres.clients.openrouter` (a pure USD ledger with nothing OpenRouter-specific
+  about it, which `core` must be able to reach). **Both names remain importable
+  from `langres.clients.openrouter`**, and `langres.BudgetExceeded` is unchanged.
+
+#### Fixed
+
+- **The cap's `SpendMonitor` is now built once per instance, not per `forward()`
+  call.** It was rebuilt on every call, so `r.resolve(a); r.resolve(b)` spent **2x**
+  the budget and N resolves spent N x. Harmless for a one-shot verb call; wrong for
+  a long-lived object. Two `resolve()` calls on one `Resolver` now share one budget.
+- **A cap that has already tripped now costs $0 on the next call** instead of paying
+  for one more judgement before refusing.
+
+#### Changed / migration
+
+- **A paid `Matcher` on a `Resolver` that previously ran unbounded now raises
+  `BudgetExceeded` past $1.00.** Free matchers (`"string"`, `"embedding"`) meter $0
+  and never trip. Pass `budget_usd=` to raise it, or
+  `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out
+  deliberately. `budget_usd=None` means "the default", **never** "uncapped" — you
+  cannot disable the cap by forgetting to pass it. `BudgetExceeded.partial_judgements`
+  still carries everything already paid for.
+
+**The guarantee, stated honestly:** spend is bounded by `budget_usd` **plus the cost
+of at most one further call**. An LLM call's cost is not knowable until it has been
+made, so "check before" can only mean "am I already at/over budget? then refuse the
+next call". No doc here claims more.
+
 ### Autoresearch: the self-tuning loop over blocking (epic #145, M1)
 
 A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pipeline

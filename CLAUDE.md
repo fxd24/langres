@@ -53,7 +53,8 @@ langres/
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
-│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm/prompt_llm), DEFAULT_AUTO_MODEL, NoJudgeAvailableError, spend cap
+│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm/prompt_llm), DEFAULT_AUTO_MODEL, NoJudgeAvailableError
+│   │   ├── spend.py, spend_cap.py  # SpendMonitor/BudgetExceeded ledger + SpendCappedMatcher (the ONE enforcer) + DEFAULT_BUDGET_USD; core leaves, so BOTH presets and Resolver can cap
 │   │   ├── method_registry.py  # ONE MethodSpec registry: judge/method name -> builder + identity (all three dispatch paths resolve here)
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
