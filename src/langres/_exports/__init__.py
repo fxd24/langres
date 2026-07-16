@@ -23,7 +23,24 @@ is therefore always *derived*, never hand-maintained::
 Unlike ``core``'s, this contract has no ``LAZY_SUBMODULES`` (the root resolves
 no submodules lazily), and ``EXTRA_BY_SYMBOL`` is a *subset* of
 ``LAZY_SYMBOLS``: a lazy symbol absent from it needs no extra, and an
-ImportError from it is a genuine bug that propagates unchanged.
+ImportError from it is a genuine bug that propagates unchanged. (``core``'s
+must be *total* -- its ``__getattr__`` indexes the map rather than ``.get()``
+-ing it; ``tests/test_export_fragments.py`` locks both rules.)
+
+**Root fragments vs. their ``core`` namesakes.** Several names appear in both
+trees (``_training``, ``_flywheel``) -- this is re-export, not duplication, and
+the two have distinct jobs:
+
+* ``langres/core/_exports/*`` **owns** the export: it imports from the
+  implementation module (``langres.core.harvest``, ``langres.core.fit_report``,
+  ...) and decides eager-vs-lazy for ``langres.core``.
+* ``langres/_exports/*`` **re-surfaces** a curated subset at the root, mostly
+  importing from ``langres.core`` itself (already-eager names come for free).
+  The root is a smaller, opinionated front door -- ``langres.core`` exports 103
+  names, the root 36 -- so it is deliberately NOT a mirror.
+
+A name therefore lives in a root fragment only if it is part of the paved-road
+surface. Adding one to ``core`` does not imply adding it here.
 
 **Adding an export**: edit the one fragment that owns its domain. **Adding a
 domain** (rare): add the fragment here (import + the three merges below) and one
