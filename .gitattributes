@@ -1,0 +1,32 @@
+# Merge policy for the per-domain export fragments (W-1a).
+#
+# langres/__init__.py and langres/core/__init__.py used to carry one sorted
+# ~100-name __all__ plus a shared eager import block -- the single worst
+# merge-conflict hotspot in the repo (21 touches in 30 days). A sorted list is
+# the exact shape git cannot auto-merge: N concurrent streams each inserting a
+# name at its sorted position = N guaranteed conflicts. The list now lives in
+# per-domain fragments so streams edit disjoint FILES.
+#
+# `merge=union` (a built-in git driver) closes the remaining case: two streams
+# appending to the SAME fragment. Instead of a conflict, git keeps both sides'
+# lines -- which is correct here precisely because the fragments are
+# append-mostly and the aggregation is order-insensitive and de-duplicating
+# (`sorted({...})` over every fragment's NAMES).
+#
+# The trade-off, stated honestly: union merge is not semantic. If one stream
+# REMOVES an export while another edits the same fragment, union resurrects the
+# removed __all__ entry without its import -- and `from ._x import *` then
+# raises AttributeError on import. That failure is immediate and loud (every
+# test collection dies; tests/test_import_budget.py is the gate), never silent
+# corruption -- which is what makes the trade acceptable for append-mostly
+# files. Removals are rare; additions are the hot path.
+src/langres/_exports/_*.py             merge=union
+src/langres/core/_exports/_*.py        merge=union
+
+# The `_*.py` globs above also match `__init__.py`. The aggregators are NOT
+# append-mostly -- they carry import blocks and the PEP-562 __getattr__, where
+# keeping both sides' lines would duplicate imports or split a function body.
+# Reset them to git's default 3-way text merge (conflict markers, human
+# resolves).
+src/langres/_exports/__init__.py       !merge
+src/langres/core/_exports/__init__.py  !merge

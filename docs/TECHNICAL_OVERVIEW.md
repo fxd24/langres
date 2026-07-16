@@ -61,6 +61,17 @@ seam in `langres/core/__init__.py` and `langres/clients/__init__.py`, so a bare
 `import langres` never drags torch / litellm / faiss / scikit-learn / ranx into
 `sys.modules`. `tests/test_import_budget.py` guards this.
 
+**Where the exports live.** `langres/__init__.py` and `langres/core/__init__.py`
+are thin aggregators: they keep the `__getattr__` seam but hold no per-*name*
+content. Each export — its eager import or its lazy `name -> module` + `[extra]`
+entry — lives in a per-domain fragment under `langres/_exports/` and
+`langres/core/_exports/` (see those packages' docstrings for the contract). To
+add a public symbol, edit the one fragment that owns its domain; the aggregator
+composes `__all__` and the lazy maps from whatever the fragments declare. This
+split exists because a single sorted ~100-name `__all__` is unmergeable: N
+parallel work-streams each inserting a name at its sorted position produce N
+guaranteed conflicts.
+
 ### core.review.ReviewQueue (Human-in-the-Loop)
 
 The HITL system splits a storage backend from a labeling surface:
