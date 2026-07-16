@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matcher import Matcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -174,6 +175,43 @@ class TestFromSchemaThreadsBudget:
     def test_from_schema_defaults_to_the_capped_default(self) -> None:
         resolver = Resolver.from_schema(CapCo, matcher="string")
         assert resolver._spend_monitor.budget_usd == DEFAULT_BUDGET_USD
+
+
+class TestCapComposesWithTheLoggingMatcher:
+    """dedupe() reassigns `resolver.module = LoggingMatcher(judge)`, so B1 flips
+    that path's composition from LoggingMatcher(Cap(judge)) to
+    Cap(LoggingMatcher(judge)). The flywheel needs EVERY paid judgement logged --
+    especially the one that trips the cap, which pre-B1 was never yielded and so
+    had to be recovered from BudgetExceeded.partial_judgements by hand."""
+
+    def test_the_tripping_judgement_is_still_logged_exactly_once(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        log = JudgementLog(tmp_path / "log.jsonl")
+        # 4 records -> 6 pairs at $0.6 each: $0.60 ok, $1.20 trips the $1.00 cap.
+        records = [{"id": str(i), "name": f"Acme {i}"} for i in range(4)]
+        resolver = _resolver(_CountingCostlyMatcher(cost_each=0.6), budget_usd=1.0)
+        resolver.module = LoggingMatcher(
+            resolver.module, log=log, threshold=0.5, model="fake/model"
+        )
+
+        with pytest.raises(BudgetExceeded) as excinfo:
+            resolver.predict(records)
+
+        rows = log.read()
+        logged = [(r["left_id"], r["right_id"]) for r in rows]
+        partial = [(j.left_id, j.right_id) for j in excinfo.value.partial_judgements]
+        assert logged == partial, "a paid judgement was logged but not reported (or vice versa)"
+        assert len(logged) == 2, f"expected the 2 paid judgements, got {logged}"
+        assert len(set(logged)) == len(logged), "a judgement was logged twice"
+
+    def test_spend_overshoots_by_at_most_the_tripping_call(self) -> None:
+        """The honest guarantee: budget + at most ONE further call. Not less --
+        the tripping call's cost is only knowable once it has been paid for."""
+        resolver = _resolver(_CountingCostlyMatcher(cost_each=0.6), budget_usd=1.0)
+        records = [{"id": str(i), "name": f"Acme {i}"} for i in range(4)]
+        with pytest.raises(BudgetExceeded):
+            resolver.predict(records)
+        assert resolver._spend_monitor.spent == pytest.approx(1.2)
+        assert resolver._spend_monitor.spent <= 1.0 + 0.6
 
 
 class TestCapDoesNotDisturbTheMatcherSlot:
