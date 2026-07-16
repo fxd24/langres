@@ -128,11 +128,26 @@ class TangleBaseline:
 
 
 # ---------------------------------------------------------------------------
-# THE BASELINES. Measured on ba4b1b7 (PR #171 merge) with:
+# THE BASELINES. Re-measured on the facade-emptying wave (`langres.core` stopped
+# re-exporting implementations) with:
 #     uv run python tools/import_graph.py kinds
 # Lower these freely when you decouple something -- that is the ratchet working.
 # RAISING either number means your change coupled the codebase further: say why,
 # in a comment, right here, and expect review to push back.
+#
+# Ratcheted DOWN by that wave: all-edges largest SCC 43 -> 39, tangled 48 -> 44.
+# The four that left are `core/_exports/_clustering`, `_matchers` and `_eval`
+# (deleted or reduced to contracts) plus `core.matchers.cascade_judge`, which
+# only reached the cycle through the `_matchers` re-export.
+#
+# The runtime view did NOT move (12), and that is the measured finding of the
+# wave: emptying the facade cannot shrink it, because the runtime cycle is not
+# closed by the component re-exports at all. It is closed by
+# `core/resolver.py`'s toplevel `import langres` -- present solely for
+# `langres.__version__` when stamping an artifact -- which makes the floor
+# (`core.resolver`) import the ceiling (the root package). The cycle is
+# root -> `_exports/_core` -> `core` -> `core/_exports/_resolver` ->
+# `core.resolver` -> root. Killing that one edge is what moves this number.
 # ---------------------------------------------------------------------------
 
 # Runtime view: 12 modules, one cycle. This is the export-fragment knot --
@@ -161,14 +176,14 @@ RUNTIME = TangleBaseline(
     ),
 )
 
-# All-edges view: 48 modules across three cycles, the largest being 43. The other
+# All-edges view: 44 modules across three cycles, the largest being 39. The other
 # two are small and independent: {core.analysis, core.reports, plotting.blockers}
 # and {core.runs, core.trackers}. `tangled` covers all three; `largest_scc` pins
-# the 43 so those cycles cannot silently merge into it.
+# the 39 so those cycles cannot silently merge into it.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
-    largest_scc=43,
+    largest_scc=39,
     tangled=frozenset(
         {
             "langres",
@@ -182,10 +197,7 @@ ALL_EDGES = TangleBaseline(
             "langres.clients.openrouter",
             "langres.core",
             "langres.core._exports",
-            "langres.core._exports._clustering",
-            "langres.core._exports._eval",
             "langres.core._exports._flywheel",
-            "langres.core._exports._matchers",
             "langres.core._exports._methods",
             "langres.core._exports._resolver",
             "langres.core.analysis",
@@ -195,7 +207,6 @@ ALL_EDGES = TangleBaseline(
             "langres.core.finetune",
             "langres.core.judgement_log",
             "langres.core.matchers.cascade",
-            "langres.core.matchers.cascade_judge",
             "langres.core.matchers.llm_judge",
             "langres.core.method_registry",
             "langres.core.presets",
