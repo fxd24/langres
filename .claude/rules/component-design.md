@@ -41,7 +41,8 @@ built. The real layering is:)
      and `core.harvest` (`harvest_labeled_pairs`, `Correction`/`CorrectionLog`,
      `derive_threshold_from_pairs`).
    - **`langres.core` itself re-exports only the *contracts*** — the models, the
-     `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the `Resolver` +
+     `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the opt-in
+     capability Protocols (`Inspectable`, the `fit` mixins), the `Resolver` +
      registry, the method registry, training/tracking. The implementations are
      imported from the package that owns them:
 
@@ -142,6 +143,16 @@ Extract when you see:
 1. **Blockers**: Must implement candidate generation (`stream`) and schema
    normalization.
 2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
+   `forward` is the **only** abstract method on `Matcher` — the contract is
+   deliberately thin. Optional capabilities are opt-in, runtime-checkable
+   structural Protocols, never abstract methods every judge must stub out:
+   score inspection is `core/inspection.py:Inspectable`
+   (`inspect_scores`; the shared body stays in
+   `core/reports.py:_inspect_scores_impl`, so opting in is a 2-line
+   pass-through) and the trainable roles are the mixins in `core/fit.py`.
+   Callers detect either with `isinstance(component, <Protocol>)`. Adding an
+   `@abstractmethod` to `Matcher` is a breaking change to every judge in the
+   repo *and* every user subclass — make the capability a Protocol instead.
    A *public, name-selectable* judge is registered **once**, in the single
    method registry (`core/method_registry.py` — the v0.3 unification that
    closed issue #55's three-site wiring debt): a `MethodSpec` carries the

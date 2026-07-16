@@ -56,6 +56,7 @@
     "langres.core.feature": "core",
     "langres.core.fit": "core",
     "langres.core.groups": "core",
+    "langres.core.inspection": "core",
     "langres.core.matcher": "core",
     "langres.core.model_ref": "core",
     "langres.core.matchers.model_ref": "core",

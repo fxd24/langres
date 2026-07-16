@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.reports import ScoreInspectionReport
 
 # Generic type variable for schema types (must be a Pydantic model)
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -36,6 +35,11 @@ class Matcher(ABC, Generic[SchemaT]):
     with full provenance.
 
     Key architectural points:
+    - **Thin contract**: ``forward()`` is the ONLY abstract method -- that is
+      the whole of what it means to be a Matcher. Optional capabilities are
+      opt-in structural Protocols, not abstract methods everyone must stub out:
+      score inspection is :class:`~langres.core.inspection.Inspectable`, and the
+      trainable roles are the mixins in :mod:`langres.core.fit`.
     - **Separation of Concerns**: Matcher only compares; it doesn't load or
       normalize data. The Blocker handles candidate generation and schema
       normalization.
@@ -157,29 +161,6 @@ class Matcher(ABC, Generic[SchemaT]):
         """
         pass  # pragma: no cover
 
-    @abstractmethod
-    def inspect_scores(
-        self, judgements: list[PairwiseJudgement], sample_size: int = 10
-    ) -> ScoreInspectionReport:
-        """Explore scores without ground truth labels.
-
-        Use this method to understand scoring output before labeling:
-        - Score distribution statistics
-        - High and low scoring examples with reasoning
-        - Threshold recommendations based on distribution
-
-        For quality evaluation with ground truth labels, use
-        PipelineDebugger.analyze_scores() instead.
-
-        Args:
-            judgements: List of PairwiseJudgement objects to analyze
-            sample_size: Number of examples to include (default: 10)
-
-        Returns:
-            ScoreInspectionReport with statistics, examples, and recommendations
-        """
-        pass  # pragma: no cover
-
 
 class GroupwiseMatcher(Matcher[SchemaT], ABC):
     """A Matcher whose scoring logic naturally operates on GROUPS, not pairs (W1.0, E2).
@@ -191,14 +172,15 @@ class GroupwiseMatcher(Matcher[SchemaT], ABC):
     output back to a flat ``Iterator[PairwiseJudgement]``. This is a
     deliberate design choice, not an accident: it means the existing Resolver
     execution spine (``Resolver._judgements`` -> ``module.forward``),
-    :meth:`Matcher.inspect_scores`, the JudgementLog boundary, and benchmark
+    ``inspect_scores``, the JudgementLog boundary, and benchmark
     dispatch (``BudgetedModuleRunner``, ``run_method``) all keep working with
     **zero changes** -- there is no parallel, group-aware execution path.
 
     Concrete set-wise judges (e.g. a future ComEM-style ``SelectMatcher`` that
     asks one LLM call "which of these K candidates match the anchor?" instead
-    of K separate pairwise calls) implement only :meth:`forward_groups` and
-    :meth:`Matcher.inspect_scores`. Set-wise IN, pairwise OUT: the group
+    of K separate pairwise calls) implement only :meth:`forward_groups` (plus,
+    if they want to be inspectable,
+    :class:`~langres.core.inspection.Inspectable`). Set-wise IN, pairwise OUT: the group
     structure never leaks past this class's boundary, so the clusterer, the
     metrics harness, and every other pairwise-only downstream consumer needs
     no changes either.

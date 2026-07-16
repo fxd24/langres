@@ -69,6 +69,7 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.inspection import Inspectable
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,
     UnknownMethodError,
@@ -437,6 +438,12 @@ class _SpendCappedMatcher(Matcher[Any]):
             yield judgement
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
+        """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""
+        if not isinstance(self._module, Inspectable):
+            raise TypeError(
+                f"{type(self._module).__name__} does not implement inspect_scores(); "
+                "see langres.core.inspection.Inspectable"
+            )
         return self._module.inspect_scores(judgements, sample_size)
 
 
