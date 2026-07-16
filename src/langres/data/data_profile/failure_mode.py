@@ -432,6 +432,10 @@ def _normalize_records(
     otherwise miss every lookup silently -- reporting every field-emptiness slice
     as all-empty and skipping the source slice. Normalizing keys once at entry
     keeps the str-conversion out of every per-pair helper.
+
+    The ``Hashable`` out-type (``str`` is a subtype) matches ``_build_slices``'s
+    parameter; ``Mapping``'s invariant key type blocks a ``dict[str, ...]`` return
+    from flowing there without widening every downstream helper.
     """
     normalized: dict[Hashable, Mapping[str, Any]] = {
         str(key): value for key, value in records.items()
