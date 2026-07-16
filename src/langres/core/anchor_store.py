@@ -498,7 +498,17 @@ class AnchorStore:
         )
 
     def _judge(self, candidates: list[ERCandidate[Any]]) -> list[PairwiseJudgement]:
-        """Score candidates with the resolver's SAME comparator + module judge."""
+        """Score candidates with the resolver's SAME comparator, cap and ledger.
+
+        Scores through :meth:`~langres.core.resolver.Resolver._scorer`, NOT the
+        raw ``resolver.module``: every ``assign`` bills against the same
+        ``budget_usd`` ledger as the Resolver's own ``resolve``/``predict``, so
+        one Resolver means one cumulative budget no matter which seam spends it.
+        Reaching through the public ``.module`` attribute -- as this did -- ran a
+        paid ``LLMMatcher`` with no budget guard at all, and an ``AnchorStore``
+        is exactly the long-lived, many-``assign`` object that turns that into a
+        real bill.
+        """
         comparator = self._resolver.comparator
         if comparator is not None:
             candidates = [
@@ -507,7 +517,7 @@ class AnchorStore:
                 )
                 for candidate in candidates
             ]
-        return list(self._resolver.module.forward(iter(candidates)))
+        return list(self._resolver._scorer().forward(iter(candidates)))
 
     def _mint(self) -> str:
         """Mint the next stable entity id from the append-only allocator."""

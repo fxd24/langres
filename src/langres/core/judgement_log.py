@@ -45,12 +45,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from langres.clients.openrouter import BudgetExceeded
 from langres.core.inspection import _ensure_inspectable
 from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 from langres.core.runs import current_run
+from langres.core.spend import BudgetExceeded
 
 __all__ = ["JudgementLog", "LoggingMatcher"]
 

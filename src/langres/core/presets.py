@@ -32,12 +32,15 @@ only its *policy*: which names the verbs expose (:data:`MatcherName`), the
 ``"auto"`` key-based resolution, and the spend cap.
 
 Spend cap (adopted CEO decision #8 + Eng E1/E9): every judge -- including the
-free ones -- is wrapped in :class:`_SpendCappedMatcher`, a small
-:class:`~langres.core.matcher.Matcher` that tallies each judgement's
-``provenance["cost_usd"]`` through a :class:`~langres.clients.openrouter.SpendMonitor`
-and raises :class:`~langres.clients.openrouter.BudgetExceeded` the moment
-cumulative spend would cross ``budget_usd`` (default
-:data:`DEFAULT_BUDGET_USD`). The exception carries every judgement already
+free ones -- is wrapped in
+:class:`~langres.core.spend_cap.SpendCappedMatcher` (re-exported here as
+``_SpendCappedMatcher``), a small :class:`~langres.core.matcher.Matcher` that
+tallies each judgement's ``provenance["cost_usd"]`` through a
+:class:`~langres.core.spend.SpendMonitor` and raises
+:class:`~langres.core.spend.BudgetExceeded` the moment cumulative spend crosses
+``budget_usd`` (default :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`).
+Spend is bounded by the budget plus at most one further call -- an LLM call's
+cost is only knowable once made. The exception carries every judgement already
 produced (and paid for) on ``.partial_judgements`` -- recover them with::
 
     try:
@@ -46,9 +49,12 @@ produced (and paid for) on ``.partial_judgements`` -- recover them with::
         already_scored = exc.partial_judgements  # list[PairwiseJudgement]
         # e.g. cluster just those, or raise budget_usd and retry
 
-A resolver built here is NOT guaranteed ``save()``-able (the spend-cap wrapper
-has no ``type_name``): for a durable artifact, build the pipeline directly
-with ``Resolver.from_schema`` instead.
+Where the cap is applied differs by verb, and deliberately:
+:func:`resolve_judge` wraps the scorer it returns (``link`` scores one pair
+itself, with no Resolver in the picture), while :func:`build_resolver` hands the
+*unwrapped* scorer to :class:`~langres.core.resolver.Resolver` along with
+``budget_usd`` and lets the Resolver's own per-instance cap enforce it (B1).
+There is exactly ONE cap on the ``dedupe`` path, not two.
 """
 
 from __future__ import annotations
@@ -60,8 +66,6 @@ from pydantic import BaseModel
 
 from langres.clients.openrouter import (
     DEFAULT_OPENROUTER_MODEL,
-    BudgetExceeded,
-    SpendMonitor,
     dspy_price_per_1k,
 )
 from langres.clients.settings import Settings
@@ -70,19 +74,28 @@ from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
-from langres.core.inspection import _ensure_inspectable
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,
     UnknownMethodError,
     get_method,
 )
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import ERCandidate
 from langres.core.matcher import Matcher
 from langres.core.resolver import Resolver
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+from langres.core.spend_cap import DEFAULT_BUDGET_USD as DEFAULT_BUDGET_USD
+from langres.core.spend_cap import SpendCappedMatcher, effective_budget
 
+# The spend cap MOVED to the core leaf `langres.core.spend_cap` (B1) so
+# `Resolver` -- which this module sits above and imports -- can enforce a budget
+# too. These aliases keep the historical private names importable from here:
+# `_SpendCappedMatcher` and `_effective_budget` are used by verbs.py,
+# benchmark.py, and tests/docs/examples across the repo. Plain assignments, not
+# `import X as _X` -- mypy only treats `import X as X` as an explicit re-export.
+_SpendCappedMatcher = SpendCappedMatcher
+_effective_budget = effective_budget
+
+if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
     # inside _build_vector_blocker (W0.4) so a core-only `import langres`
     # never pulls faiss/torch in for a caller who never picks judge="embedding"
@@ -127,10 +140,6 @@ DEFAULT_AUTO_MODEL: str = DEFAULT_OPENROUTER_MODEL
 #: ``OPENAI_API_KEY`` is set (see :data:`DEFAULT_AUTO_MODEL`'s policy note --
 #: the same changelog-entry rule applies).
 _OPENAI_MODEL = "openai/gpt-5-mini"
-
-#: Default per-call spend cap for a presets-built judge (CEO decision #8),
-#: overridable via ``budget_usd=``. Zero-spend judges never approach it.
-DEFAULT_BUDGET_USD = 1.0
 
 #: ``AllPairsBlocker`` is used at or below this many records; above it,
 #: :func:`build_resolver` switches to a ``VectorBlocker`` (O(N*k) instead of
@@ -183,11 +192,6 @@ def _notice(message: str) -> None:
     one channel instead -- tests assert on it with ``pytest.warns``.
     """
     warnings.warn(message, stacklevel=3)
-
-
-def _effective_budget(budget_usd: float | None) -> float:
-    """Resolve a caller's ``budget_usd=None`` to :data:`DEFAULT_BUDGET_USD` (DRY)."""
-    return DEFAULT_BUDGET_USD if budget_usd is None else budget_usd
 
 
 class NoMatcherAvailableError(RuntimeError):
@@ -369,80 +373,6 @@ def build_judge(
     )
 
 
-class _SpendCappedMatcher(Matcher[Any]):
-    """Wrap a Matcher, hard-stopping the moment cumulative cost crosses a budget.
-
-    Reuses :class:`~langres.clients.openrouter.SpendMonitor` for the tally +
-    threshold check, per pair, and re-raises its
-    :class:`~langres.clients.openrouter.BudgetExceeded` with every judgement
-    already produced (and paid for) attached as ``.partial_judgements`` (E9;
-    mirrors :class:`~langres.core.benchmark.BlindCostError`'s "set by the
-    catcher, not at raise time" pattern). For a group-wise module
-    (``SelectMatcher``), a group is never split across the cap boundary: the
-    already-paid-for siblings of a tripping judgement are drained in too (see
-    ``forward``'s ``provenance["group_end"]`` handling).
-
-    Deliberately NOT :class:`~langres.core.benchmark.BudgetedModuleRunner`:
-    that runner *silently truncates* past its soft cap (correct for the
-    benchmark harness, wrong here -- a verb call must raise, never silently
-    hand back a partially-scored, partially-clustered result).
-    """
-
-    def __init__(self, module: Matcher[Any], *, budget_usd: float) -> None:
-        self._module = module
-        self._budget_usd = budget_usd
-
-    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
-        monitor = SpendMonitor(budget_usd=self._budget_usd)
-        produced: list[PairwiseJudgement] = []
-        judgements = self._module.forward(candidates)
-        for judgement in judgements:
-            produced.append(judgement)
-            cost = judgement.provenance.get("cost_usd", 0.0)
-            monitor.add(float(cost) if cost is not None else 0.0)
-            try:
-                monitor.check()
-            except BudgetExceeded as exc:
-                # A group-wise module (SelectMatcher) stamps the full call cost
-                # on the group's first judgement and $0 on its K-1 siblings,
-                # all sharing provenance["group_id"] and with
-                # provenance["group_end"] = True on the LAST one (E5,
-                # stamp_group_cost). If the cap trips here, those
-                # already-paid-for siblings must still land in
-                # partial_judgements -- a group must never be split across
-                # the cap boundary. Drain them from the same underlying
-                # iterator up to (and including) the group_end marker.
-                #
-                # This must NOT peek at the next judgement's group_id to
-                # detect the boundary: for a real GroupwiseMatcher the
-                # generator is lazy, so pulling one item past the group's
-                # last already-materialized judgement resumes forward_groups
-                # and fires the NEXT group's paid LLM call before there is
-                # anything to compare against -- silently discarding that
-                # judgement and its cost. group_end lets the drain stop
-                # exactly at the boundary without ever pulling past it.
-                #
-                # Because a sibling always carries $0 cost, monitor.check()
-                # can only ever trip on a group's FIRST judgement (a passing
-                # check means spend was <= budget; adding $0 can't newly
-                # exceed it) -- so `judgement` here is always a group's first,
-                # never a mid-group sibling, and "not group_end" correctly
-                # means "there are siblings left to drain".
-                group_id = judgement.provenance.get("group_id")
-                if group_id is not None and not judgement.provenance.get("group_end"):
-                    for sibling in judgements:
-                        produced.append(sibling)
-                        if sibling.provenance.get("group_end"):
-                            break
-                exc.partial_judgements = list(produced)
-                raise
-            yield judgement
-
-    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
-        """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""
-        return _ensure_inspectable(self._module).inspect_scores(judgements, sample_size)
-
-
 class ResolvedModule(NamedTuple):
     """:func:`resolve_judge`'s return: the capped scorer plus what was resolved.
 
@@ -470,7 +400,7 @@ def _module_model(module: Matcher[Any]) -> str | None:
     return candidate if isinstance(candidate, str) else None
 
 
-def resolve_judge(
+def _resolve_judge_uncapped(
     judge: MatcherName | Matcher[Any],
     schema: type[BaseModel],
     *,
@@ -479,34 +409,19 @@ def resolve_judge(
     budget_usd: float | None = None,
     judge_params: dict[str, Any] | None = None,
 ) -> ResolvedModule:
-    """Resolve ``judge`` (including ``"auto"``) to a spend-capped scorer Matcher.
+    """:func:`resolve_judge`'s resolution WITHOUT the spend cap.
 
-    Args:
-        judge: ``"auto"``, one of the other :data:`MatcherName` values, or a
-            ``Matcher`` instance (the escape hatch -- reported as
-            ``judge_used="custom"``).
-        schema: The entity schema.
-        model: Model id override for the LLM judges and ``"auto"`` (ignored
-            otherwise). On the auto path the caller's model wins over
-            :func:`choose_auto_judge`'s key-derived pick.
-        entity_noun: Domain noun for the LLM judge's prompt.
-        budget_usd: Spend cap override; defaults to :data:`DEFAULT_BUDGET_USD`.
-        judge_params: Judge-specific construction knobs (see
-            :func:`build_judge`).
+    Split out so :func:`build_resolver` can hand the raw scorer to
+    :class:`~langres.core.resolver.Resolver`, which applies its own
+    per-instance cap (B1) -- wrapping here as well would put two monitors on
+    the same stream. Every caller that is not building a Resolver wants
+    :func:`resolve_judge`, which is this plus the cap.
 
-    Returns:
-        A :class:`ResolvedModule` with the capped module, the resolved judge
-        name, and the resolved underlying model id (see the class docstring
-        for what ``model`` means per judge).
-
-    Raises:
-        NoMatcherAvailableError: On the ``"auto"`` path when no API key is set
-            or the selected model's price is unpinned (see
-            :func:`choose_auto_judge`).
+    ``budget_usd`` is used only for the ``"auto"`` selection notice's text; it
+    caps nothing here.
     """
     if isinstance(judge, Matcher):
-        capped_instance = _SpendCappedMatcher(judge, budget_usd=_effective_budget(budget_usd))
-        return ResolvedModule(capped_instance, "custom", _module_model(judge))
+        return ResolvedModule(judge, "custom", _module_model(judge))
 
     resolved_model = model
     if judge == "auto":
@@ -528,8 +443,59 @@ def resolve_judge(
         resolved_model = resolved_model or spec.default_model
     else:
         resolved_model = spec.default_model
-    capped = _SpendCappedMatcher(built, budget_usd=_effective_budget(budget_usd))
-    return ResolvedModule(capped, judge_used, resolved_model)
+    return ResolvedModule(built, judge_used, resolved_model)
+
+
+def resolve_judge(
+    judge: MatcherName | Matcher[Any],
+    schema: type[BaseModel],
+    *,
+    model: str | None = None,
+    entity_noun: str = "entity",
+    budget_usd: float | None = None,
+    judge_params: dict[str, Any] | None = None,
+) -> ResolvedModule:
+    """Resolve ``judge`` (including ``"auto"``) to a spend-capped scorer Matcher.
+
+    The cap binds for the returned wrapper's whole lifetime, not per
+    ``forward()`` call, and bounds spend at ``budget_usd`` plus at most one
+    further call (see :mod:`langres.core.spend_cap`).
+
+    Args:
+        judge: ``"auto"``, one of the other :data:`MatcherName` values, or a
+            ``Matcher`` instance (the escape hatch -- reported as
+            ``judge_used="custom"``).
+        schema: The entity schema.
+        model: Model id override for the LLM judges and ``"auto"`` (ignored
+            otherwise). On the auto path the caller's model wins over
+            :func:`choose_auto_judge`'s key-derived pick.
+        entity_noun: Domain noun for the LLM judge's prompt.
+        budget_usd: Spend cap override; defaults to
+            :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`.
+        judge_params: Judge-specific construction knobs (see
+            :func:`build_judge`).
+
+    Returns:
+        A :class:`ResolvedModule` with the capped module, the resolved judge
+        name, and the resolved underlying model id (see the class docstring
+        for what ``model`` means per judge).
+
+    Raises:
+        NoMatcherAvailableError: On the ``"auto"`` path when no API key is set
+            or the selected model's price is unpinned (see
+            :func:`choose_auto_judge`).
+    """
+    resolved = _resolve_judge_uncapped(
+        judge,
+        schema,
+        model=model,
+        entity_noun=entity_noun,
+        budget_usd=budget_usd,
+        judge_params=judge_params,
+    )
+    return resolved._replace(
+        module=_SpendCappedMatcher(resolved.module, budget_usd=_effective_budget(budget_usd))
+    )
 
 
 def _text_field_extractor(schema: type[BaseModel]) -> Any:
@@ -685,7 +651,9 @@ def build_resolver(
     Returns:
         A :class:`ResolvedJudge` with the assembled Resolver and judge metadata.
     """
-    resolved = resolve_judge(
+    # Uncapped on purpose: the Resolver built below owns the cap for this
+    # pipeline (B1), so wrapping here too would meter the same stream twice.
+    resolved = _resolve_judge_uncapped(
         judge,
         schema,
         model=model,
@@ -716,6 +684,7 @@ def build_resolver(
         comparator=comparator,
         matcher=resolved.module,
         clusterer=Clusterer(threshold=resolved_threshold),
+        budget_usd=budget_usd,
     )
     return ResolvedJudge(
         resolver, resolved.judge_used, _score_type_for(resolved.judge_used), resolved.model

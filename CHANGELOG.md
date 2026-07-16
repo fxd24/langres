@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+### `Resolver` is spend-capped (B1) — **behavior change**
+
+`Resolver` — the whole low-level public API — had **no budget guard at all**. The
+spend cap lived in `langres.core.presets`, which `Resolver` is architecturally
+forbidden to import, so only `langres.link` / `langres.dedupe` were ever capped;
+`from_schema`'s own docstring advertised the hole ("runs **UNCAPPED** … nothing
+stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limit.
+
+#### Added
+
+- **`budget_usd=` on `Resolver(...)` and `Resolver.from_schema(...)`.** Defaults to
+  `DEFAULT_BUDGET_USD` ($1.00) — the same default the verbs have always had.
+- **`langres.core.spend_cap`** — `SpendCappedMatcher` (the one enforcer),
+  `DEFAULT_BUDGET_USD`, `UNCAPPED_BUDGET_USD`, `effective_budget`.
+- **`langres.core.spend`** — `SpendMonitor` / `BudgetExceeded`, moved out of
+  `langres.clients.openrouter` (a pure USD ledger with nothing OpenRouter-specific
+  about it, which `core` must be able to reach). **Both names remain importable
+  from `langres.clients.openrouter`**, and `langres.BudgetExceeded` is unchanged.
+
+#### Fixed
+
+- **The cap's `SpendMonitor` is now built once per instance, not per `forward()`
+  call.** It was rebuilt on every call, so `r.resolve(a); r.resolve(b)` spent **2x**
+  the budget and N resolves spent N x. Harmless for a one-shot verb call; wrong for
+  a long-lived object. Two `resolve()` calls on one `Resolver` now share one budget.
+- **A cap that has already tripped now costs $0 on the next call** instead of paying
+  for one more judgement before refusing.
+
+- **Every seam that scores through the matcher now shares ONE ledger.**
+  `AnchorStore._judge` reached through the Resolver's public `.module` attribute and
+  scored with the **raw** matcher — no cap, no ledger — so a paid `LLMMatcher` billed
+  without limit on every `assign()`, and a long-lived store is exactly the
+  many-`assign()` object that turns that into a real bill. The cause was structural:
+  the capped scorer was built inline at one call site, so every *other* caller
+  silently got the raw matcher. There is now a single internal accessor
+  (`Resolver._scorer()`); `resolve` / `predict` / `fit` / `AnchorStore.assign` all
+  route through it, and an AST sweep in the test suite bans
+  `<anything>.module.forward(...)` in `src/` so the next caller cannot reopen it.
+
+#### Changed / migration
+
+- **A paid `Matcher` scoring through `resolve()` / `predict()` on a `Resolver` that
+  previously ran unbounded now raises `BudgetExceeded` past $1.00.** Free matchers
+  (`"string"`, `"embedding"`) meter $0 and never trip. Pass `budget_usd=` to raise
+  it, or `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out
+  deliberately. `budget_usd=None` means "the default", **never** "uncapped" — you
+  cannot disable the cap by forgetting to pass it. `BudgetExceeded.partial_judgements`
+  still carries everything already paid for.
+- **`AnchorStore.assign()` now bills against its Resolver's budget** and raises
+  `BudgetExceeded` once that budget is gone (it previously spent unbounded). Build the
+  store from a `Resolver` with a `budget_usd=` sized for the store's whole lifetime,
+  not for one batch — `AnchorStore.build()`'s own `resolve()` pass draws down the same
+  ledger every later `assign()` draws from.
+- **`fit(method=Platt()/Isotonic())` is now capped too** — previously disclosed as a
+  known gap, now closed. Its scoring pass **is** its entire bill (the sklearn
+  calibrator itself is $0), so metering it is complete protection, not the partial
+  kind rejected for `distil()` below. `fit(..., pairs=...)` and
+  `fit(method=Finetune())` validation passes route through the same accessor; both
+  are $0 paths in practice (sklearn / a local fine-tuned LM), so the cap is a no-op
+  there — they go through it for uniformity, because "every `.forward()` on the
+  matcher is metered" is a rule that can be enforced, and "some are" is what caused
+  the `AnchorStore` hole.
+
+#### Known gap (scoped deliberately, not fixed here)
+
+- **`distil()` / `fit(method=MIPRO())` is not bound by the Resolver's `budget_usd`.**
+  DSPy's compile calls never reach `self.module.forward`, so the scoring accessor
+  cannot see them — a cap there would read as protection while covering nothing. It
+  keeps its own separate `method.budget_usd` monitor, which today observes **$0**
+  because DSPy-compile spend capture is itself deferred (issue #100). So a paid
+  `MIPROv2` compile is **effectively unbounded** until #100 lands. Left visibly open
+  rather than half-closed.
+
+**The guarantee, stated honestly:** spend is bounded by `budget_usd` **plus the cost
+of at most one further call**. An LLM call's cost is not knowable until it has been
+made, so "check before" can only mean "am I already at/over budget? then refuse the
+next call". No doc here claims more.
+
 ### Autoresearch: the self-tuning loop over blocking (epic #145, M1)
 
 A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pipeline

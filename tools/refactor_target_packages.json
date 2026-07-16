@@ -35,6 +35,17 @@
     "belongs at the bottom layer; putting it in root would re-invert the exact dependency",
     "that PR removed. Change it here if the plan says otherwise.",
     "",
+    "B1 added two modules the plan's layout had no home for, split across two packages",
+    "on purpose. langres.core.spend (the SpendMonitor/BudgetExceeded ledger, lifted out",
+    "of clients/openrouter.py) -> 'core': it is a zero-dependency leaf, like models and",
+    "usage beside it. langres.core.spend_cap (the SpendCappedMatcher enforcer) ->",
+    "'architectures', with the presets/resolver that apply it. Measured, not aesthetic:",
+    "the ledger must NOT land in a package that clients can only reach at toplevel --",
+    "openrouter re-exports both names for back-compat, and an eager re-export there is",
+    "the first toplevel clients -> core edge in the package, which drags clients into the",
+    "runtime cross-package cycle (9 -> 10). openrouter forwards them via a PEP 562",
+    "__getattr__ instead, so both views stay at their baseline (13 all-edges / 9 toplevel).",
+    "",
     "'exact' wins over 'prefix'; among prefixes the longest match wins."
   ],
   "prefix": {
@@ -77,6 +88,7 @@
     "langres.core.models": "core",
     "langres.core.registry": "core",
     "langres.core.serialization": "core",
+    "langres.core.spend": "core",
     "langres.core.usage": "core",
 
     "langres.core.embeddings": "components",
@@ -84,6 +96,7 @@
     "langres.core.method_registry": "architectures",
     "langres.core.presets": "architectures",
     "langres.core.resolver": "architectures",
+    "langres.core.spend_cap": "architectures",
     "langres.methods": "architectures",
     "langres.verbs": "architectures",
 

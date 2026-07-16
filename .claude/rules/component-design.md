@@ -27,6 +27,23 @@ built. The real layering is:)
    - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
      (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
      `.save`/`.load` serialize it via the config-registry (no pickle).
+   - **Spend-capped too** (B1), not just the verbs: `budget_usd=` on the
+     constructor and `from_schema`, defaulting to `DEFAULT_BUDGET_USD`. The
+     `SpendMonitor` is built ONCE per instance, so N `resolve()` calls share one
+     budget instead of getting a fresh one each. `None` = the default, **not**
+     uncapped (`spend_cap.UNCAPPED_BUDGET_USD` is the deliberate opt-out).
+     The cap wraps at *scoring* time and never sits in the `module` slot, so
+     `fit()`'s isinstance checks and `save()` still see the raw matcher.
+   - **Scoring through the matcher? Go through `Resolver._scorer()`.** Because
+     the slot stays raw, `self.module` is a *public, uncapped* scorer: calling
+     `.module.forward(...)` bills past `budget_usd` and reports to no ledger.
+     That is not theoretical — `AnchorStore._judge` did exactly this and spent
+     uncapped. `_scorer()` is the ONE seam (`resolve` / `predict` / `fit` /
+     `AnchorStore.assign` all use it); `tests/core/test_resolver_spend_cap.py`
+     AST-bans `<any>.module.forward(...)` in `src/`. Note it returns a *fresh*
+     wrapper around the CURRENT `self.module` sharing one long-lived
+     `SpendMonitor` — the monitor is the durable thing; caching the wrapper
+     would pin a stale matcher (`dedupe` re-wraps the slot after construction).
    - `Resolver.link` / `stream_against` are reserved `NotImplementedError` stubs
      (M5 incremental/cross-source work) — do not document them as working.
 

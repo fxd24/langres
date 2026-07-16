@@ -497,11 +497,14 @@ class TestResolveJudge:
         assert resolved.judge_used == "string"
         assert resolved.model is None
         assert isinstance(resolved.module, _SpendCappedMatcher)
-        assert resolved.module._budget_usd == DEFAULT_BUDGET_USD
+        # The budget lives on the cap's SpendMonitor now (B1): the monitor is
+        # built once per wrapper instead of per forward() call, so it -- not a
+        # stashed float -- is what the budget is read off.
+        assert resolved.module.monitor.budget_usd == DEFAULT_BUDGET_USD
 
     def test_custom_budget_usd_override(self) -> None:
         resolved = resolve_judge("string", PresetCompany, budget_usd=3.5)
-        assert resolved.module._budget_usd == 3.5
+        assert resolved.module.monitor.budget_usd == 3.5
 
     def test_zero_shot_llm_explicit_defaults_model_when_none(self) -> None:
         resolved = resolve_judge("zero_shot_llm", PresetCompany, model=None)

@@ -30,6 +30,11 @@ if TYPE_CHECKING:
     from langres.core.benchmark import CostTrack
     from langres.core.models import PairwiseJudgement
 
+    # Type-checker view of the back-compat re-exports; the runtime path is the
+    # PEP 562 module __getattr__ at the bottom of this file.
+    from langres.core.spend import BudgetExceeded as BudgetExceeded
+    from langres.core.spend import SpendMonitor as SpendMonitor
+
 logger = logging.getLogger(__name__)
 
 
@@ -425,79 +430,35 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Spend monitor
+# Spend monitor -- MOVED to langres.core.spend (B1), re-exported here
 # ---------------------------------------------------------------------------
 
+#: Back-compat aliases: the ledger's real home is :mod:`langres.core.spend`.
+#: It moved because it is pure USD arithmetic with nothing OpenRouter-specific
+#: about it, and because :class:`~langres.core.resolver.Resolver` has to enforce
+#: a budget -- which it cannot do by importing a ``clients`` module that imports
+#: ``core`` back.
+_MOVED_TO_CORE_SPEND = ("BudgetExceeded", "SpendMonitor")
 
-class BudgetExceeded(RuntimeError):
-    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget.
 
-    ``partial_judgements`` carries every judgement already produced (and paid
-    for) before the cap tripped (E9) -- populated by the catcher, not here
-    (see :class:`~langres.core.presets._SpendCappedMatcher`). Declared with a
-    default empty list so any future raiser is safe even if it never sets it,
-    and callers/mypy see the attribute without an ad hoc
-    ``# type: ignore[attr-defined]`` at the one call site that populates it.
+def __getattr__(name: str) -> Any:
+    """Resolve the moved spend-ledger names lazily (PEP 562).
+
+    ``from langres.clients.openrouter import SpendMonitor, BudgetExceeded`` is
+    load-bearing -- the benchmark harness, the examples and the root
+    ``langres.BudgetExceeded`` export all use it -- so the names stay reachable
+    from here forever.
+
+    Lazily, though, and deliberately: an eager ``from langres.core.spend import
+    ...`` at this module's top would be the first *toplevel* ``clients -> core``
+    import in the package. Measured with ``tools/import_graph.py
+    counterfactual``, that one edge drags ``clients`` into the refactor's
+    runtime cross-package cycle (9 packages -> 10). This module does not *use*
+    these names any more -- it only forwards them -- so a lazy alias is the
+    honest shape as well as the cheap one.
     """
+    if name in _MOVED_TO_CORE_SPEND:
+        from langres.core import spend
 
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
-        self.partial_judgements: list[PairwiseJudgement] = []
-
-
-class SpendMonitor:
-    """A KISS cumulative-cost ledger for budget-aware paid runs.
-
-    Accumulate the honest cost of each paid call with :meth:`add`, then call
-    :meth:`check` to log a warning once spend passes ``warn_frac * budget_usd``
-    and raise :class:`BudgetExceeded` once it passes ``budget_usd``. This is a
-    monitoring guard, not a hard cap: it never wraps or throttles the LM, it only
-    observes and warns/raises. Pure — no I/O beyond ``logging``.
-    """
-
-    def __init__(self, *, budget_usd: float = 5.0, warn_frac: float = 0.8) -> None:
-        """Initialize the ledger.
-
-        Args:
-            budget_usd: Total spend budget in USD. :meth:`check` raises past it.
-            warn_frac: Fraction of ``budget_usd`` at which :meth:`check` warns.
-        """
-        self._budget_usd = budget_usd
-        self._warn_frac = warn_frac
-        self._spent = 0.0
-
-    def add(self, cost_usd: float) -> None:
-        """Accumulate ``cost_usd`` into the running total."""
-        self._spent += cost_usd
-
-    @property
-    def budget_usd(self) -> float:
-        """The configured total spend budget (USD)."""
-        return self._budget_usd
-
-    @property
-    def spent(self) -> float:
-        """Cumulative spend recorded so far (USD)."""
-        return self._spent
-
-    @property
-    def remaining(self) -> float:
-        """Budget left before the cap (USD); negative once over budget."""
-        return self._budget_usd - self._spent
-
-    def check(self) -> None:
-        """Warn past the warn threshold; raise :class:`BudgetExceeded` past the budget.
-
-        Raises:
-            BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
-        """
-        if self._spent > self._budget_usd:
-            raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
-        if self._spent >= self._warn_frac * self._budget_usd:
-            logger.warning(
-                "spend $%.4f has passed %.0f%% of the $%.2f budget (remaining $%.4f)",
-                self._spent,
-                self._warn_frac * 100.0,
-                self._budget_usd,
-                self.remaining,
-            )
+        return getattr(spend, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
