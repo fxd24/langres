@@ -148,6 +148,22 @@ class TangleBaseline:
 # (`core.resolver`) import the ceiling (the root package). The cycle is
 # root -> `_exports/_core` -> `core` -> `core/_exports/_resolver` ->
 # `core.resolver` -> root. Killing that one edge is what moves this number.
+#
+# Two more measured facts for whoever plans the next wave (both from
+# `tools/import_graph.py counterfactual --mapping tools/refactor_target_packages.json`):
+#
+#  * Package knots went 18 -> 16 (all edges) and 11 -> 10 (toplevel). The two
+#    that died are `benchmarks <-> core` and `core <-> optimize`.
+#  * The biggest knot, `components <-> core`, went from (65 + 16) to **(65 + 1)**
+#    edges. All 65 run components -> core (implementations importing contracts --
+#    the direction the layering wants). The ONE survivor is
+#    `core/_exports/_blocking -> core.comparator`, which exists only because the
+#    `Comparator` ABC shares `core/comparator.py` with `StringComparator`, and
+#    the target mapping sends that whole module to `components`. Splitting that
+#    one module at symbol granularity (ABC -> core, StringComparator ->
+#    components) collapses the largest knot to a clean one-way dependency. That
+#    is the "contract-first split ... never specified at symbol granularity"
+#    the mapping's own `_comment` flags.
 # ---------------------------------------------------------------------------
 
 # Runtime view: 12 modules, one cycle. This is the export-fragment knot --
