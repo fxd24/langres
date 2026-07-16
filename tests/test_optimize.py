@@ -213,6 +213,56 @@ def test_optimize_records_seed_when_given(tmp_path: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tracker spec DX -- ``optimize(..., tracker="trackio")`` instead of
+# ``tracker=resolve_tracker("trackio")``. ``optimize`` just forwards the spec
+# into ``run_loop``, which is the one place it's resolved (see
+# ``tests/core/test_autoresearch_loop.py`` for the resolution-branch coverage).
+# ---------------------------------------------------------------------------
+
+
+def test_optimize_tracker_none_default_never_raises() -> None:
+    space = SearchSpace(blocker=("all_pairs",), text_field=("name",), k_neighbors=(5,))
+    result = optimize(
+        space, Objective.maximize("candidate_recall"), _MemoryBenchmark(), tracker=None
+    )
+    assert isinstance(result, LoopResult)
+
+
+def test_optimize_tracker_string_resolves_to_the_named_backend_and_is_driven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``tracker="trackio"`` end-to-end through ``optimize`` -- mocked like
+    ``tests/test_trackio_tracker.py``'s ``fake_trackio`` fixture (no network)."""
+    import langres.core.trackers.trackio_tracker as trackio_mod
+
+    class _FakeRun:
+        def __init__(self) -> None:
+            self.log_calls: list[Any] = []
+
+        def log(self, data: Any, step: int | None = None) -> None:
+            self.log_calls.append((data, step))
+
+        def finish(self) -> None:
+            pass
+
+    class _FakeTrackio:
+        def __init__(self) -> None:
+            self.init_kwargs: dict[str, Any] | None = None
+            self.run = _FakeRun()
+
+        def init(self, **kwargs: Any) -> Any:
+            self.init_kwargs = kwargs
+            return self.run
+
+    fake = _FakeTrackio()
+    monkeypatch.setattr(trackio_mod, "trackio", fake)
+
+    space = SearchSpace(blocker=("all_pairs",), text_field=("name",), k_neighbors=(5,))
+    optimize(space, Objective.maximize("candidate_recall"), _MemoryBenchmark(), tracker="trackio")
+    assert fake.init_kwargs is not None  # TrackioTracker.start_run really fired
+
+
+# ---------------------------------------------------------------------------
 # Slow: real embedder + FAISS on a registered benchmark
 # ---------------------------------------------------------------------------
 

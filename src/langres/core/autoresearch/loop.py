@@ -28,7 +28,7 @@ from typing import Any
 
 from langres.core.autoresearch.objective import Objective
 from langres.core.runs import RunContext, capture_run, compute_recipe_id
-from langres.core.trackers import ExperimentTracker, NoOpTracker
+from langres.core.trackers import TrackerSpec, resolve_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def run_loop(
     split_id: str | None = None,
     seeds: dict[str, int] | None = None,
     store: str | Any | None = None,
-    tracker: ExperimentTracker | None = None,
+    tracker: TrackerSpec = None,
     dedup: bool = True,
 ) -> LoopResult:
     """Run the ``propose → run → evaluate → keep-if-better`` loop over ``configs``.
@@ -140,16 +140,20 @@ def run_loop(
         store: Where to persist run records — a path / ``RunStore`` / ``None``.
             ``None`` writes **nothing** (the offline path); the loop still returns
             the same ``LoopResult``.
-        tracker: Experiment tracker forwarded to ``capture_run``; ``None``
-            (default) uses a fresh :class:`~langres.core.trackers.NoOpTracker`
-            rather than a shared instance.
+        tracker: Experiment tracker spec forwarded to ``capture_run`` --
+            a backend name (``"trackio"``/``"mlflow"``/``"wandb"``), an
+            ``ExperimentTracker`` instance, a sequence of either (fan-out via
+            :class:`~langres.core.trackers.MultiTracker`), or ``None``
+            (default; resolves to a fresh
+            :class:`~langres.core.trackers.NoOpTracker`). Resolved once via
+            :func:`~langres.core.trackers.resolve_tracker`.
         dedup: When ``True`` (default), skip a config whose ``recipe_id`` was
             already scored this run.
 
     Returns:
         A :class:`LoopResult` with the best incumbent and the full trial trail.
     """
-    tracker = tracker or NoOpTracker()
+    tracker = resolve_tracker(tracker)
     best_config: dict[str, Any] | None = None
     best_metrics: dict[str, float] | None = None
     best_attempt_id: str | None = None

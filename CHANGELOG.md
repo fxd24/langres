@@ -8,9 +8,9 @@ A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pi
 against a **loss-like** objective instead of a saturated F1. M1 proves the loop on
 the **blocking** vertical; the matching vertical (`log_loss` / AUC-PR steering) and
 small-LM fine-tuning are deferred, as is an Optuna/LLAMBO proposer swap. A durable
-off-laptop dashboard is no longer deferred: `tracker=resolve_tracker("trackio")`
-(local-first; an HF Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs
-straight into `optimize`/`run_loop` via the existing `tracker=` hook (see below).
+off-laptop dashboard is no longer deferred: `tracker="trackio"` (local-first; an HF
+Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs straight into
+`optimize`/`run_loop` via the existing `tracker=` hook (see below).
 
 #### Added
 
@@ -23,6 +23,13 @@ straight into `optimize`/`run_loop` via the existing `tracker=` hook (see below)
   persists **every** trial (accepted, over-budget reject, and scorer failure) to a
   local `RunStore` JSONL at `store=` (`store=None` writes nothing). **Local-only
   persistence today.**
+- **DX: `tracker=` on `optimize`/`run_loop` takes a spec, not a resolved
+  instance** — a backend name (`tracker="trackio"`), an already-built
+  `ExperimentTracker`, a sequence of either (fan-out), or `None` (default,
+  no-op). Both resolve it internally via `core.trackers.resolve_tracker`
+  (mirrors the `matcher="..."` preset convention), so the boilerplate
+  `tracker=resolve_tracker("trackio")` is no longer needed on the happy path;
+  `resolve_tracker` stays public for advanced/explicit use.
 - **`langres.score_blocking(config, benchmark, *, embedder=None, index=None) ->
   dict[str, float]`** — the concrete one-config blocking scorer `optimize` wraps,
   returning `candidate_recall` / `reduction_ratio` / `candidate_precision` /
