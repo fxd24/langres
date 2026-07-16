@@ -51,9 +51,14 @@ _HEAVY_MODULES = [
     "sentence_transformers",
     "sklearn",
     # Tracking backends (S1): the ExperimentTracker adapters must load mlflow/
-    # wandb lazily, never on a bare `import langres`.
+    # wandb/trackio lazily, never on a bare `import langres`. huggingface_hub
+    # is trackio's own transitive dependency and was absent from the eager
+    # import graph before trackio_tracker.py -- listed here so it can't
+    # silently become eager either.
     "mlflow",
     "wandb",
+    "trackio",
+    "huggingface_hub",
     # Fine-tune stack ([finetune], PR-F): peft/trl/bitsandbytes import lazily
     # inside core.finetune's QLoRATrainer.train, never on a bare `import langres`.
     "peft",

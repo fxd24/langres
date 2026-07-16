@@ -1,7 +1,8 @@
-"""wandb tracking client factory."""
+"""Experiment-tracker client factories (wandb, trackio)."""
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 import wandb
@@ -83,3 +84,56 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
     )
 
     return run
+
+
+def create_trackio_tracker(
+    settings: Settings | None = None,
+    *,
+    project: str | None = None,
+    space_id: str | None = None,
+    dataset_id: str | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> Any:
+    """Build a (not-yet-started) :class:`TrackioTracker` from settings + overrides.
+
+    Mirrors :func:`create_wandb_tracker`'s settings-driven construction, with
+    two differences forced by trackio's shape: ``trackio.init`` is not called
+    here (deferred to ``TrackioTracker.start_run``, matching
+    :class:`~langres.core.trackers.mlflow_tracker.MlflowTracker`'s
+    init-on-start-run pattern -- there is no live "run" object to configure
+    before a run starts), so the missing-HF-token guard also fires there, not
+    in this factory; and the import of :class:`TrackioTracker` (and therefore
+    ``trackio``) is local to this function body, not this module's top level --
+    this file already has an unconditional top-level ``import wandb`` (needed
+    so ``wandb_tracker.py``'s missing-extra ``ImportError`` surfaces correctly),
+    and importing ``trackio`` there too would make a ``langres[wandb]``-only
+    install fail merely by loading this module. Calling this factory always
+    requires the ``trackio`` extra; ``resolve_tracker("trackio")`` and
+    constructing :class:`TrackioTracker` directly do not need this factory at all.
+
+    Args:
+        settings: Source of ``trackio_space_id``/``trackio_dataset_id``/
+            ``hf_token`` fallbacks when the matching keyword is ``None``.
+            ``None`` -> :class:`Settings` from the environment.
+        project: The trackio project name. ``None`` -> resolved from the run's
+            experiment name at ``start_run`` time.
+        space_id: HF Space to sync to. ``None`` (default) -> local-first, no
+            credentials/network. Overrides ``settings.trackio_space_id``.
+        dataset_id: HF Dataset to additionally sync to (requires ``space_id``).
+            Overrides ``settings.trackio_dataset_id``.
+        config: Extra config merged with the run context at ``start_run``.
+
+    Returns:
+        An unstarted ``TrackioTracker`` -- call ``.start_run(...)`` to open it.
+    """
+    from langres.core.trackers.trackio_tracker import TrackioTracker
+
+    if settings is None:
+        settings = Settings()
+    return TrackioTracker(
+        settings,
+        project=project,
+        space_id=space_id if space_id is not None else settings.trackio_space_id,
+        dataset_id=dataset_id if dataset_id is not None else settings.trackio_dataset_id,
+        config=config,
+    )
