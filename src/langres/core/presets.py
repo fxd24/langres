@@ -83,14 +83,17 @@ from langres.core.models import ERCandidate
 from langres.core.matcher import Matcher
 from langres.core.resolver import Resolver
 
+from langres.core.spend_cap import DEFAULT_BUDGET_USD as DEFAULT_BUDGET_USD
+from langres.core.spend_cap import SpendCappedMatcher, effective_budget
+
 # The spend cap MOVED to the core leaf `langres.core.spend_cap` (B1) so
 # `Resolver` -- which this module sits above and imports -- can enforce a budget
-# too. Re-exported under the historical private names: `_SpendCappedMatcher`,
-# `DEFAULT_BUDGET_USD` and `_effective_budget` are imported from here by tests,
-# docs and examples across the repo.
-from langres.core.spend_cap import DEFAULT_BUDGET_USD as DEFAULT_BUDGET_USD
-from langres.core.spend_cap import SpendCappedMatcher as _SpendCappedMatcher
-from langres.core.spend_cap import effective_budget as _effective_budget
+# too. These aliases keep the historical private names importable from here:
+# `_SpendCappedMatcher` and `_effective_budget` are used by verbs.py,
+# benchmark.py, and tests/docs/examples across the repo. Plain assignments, not
+# `import X as _X` -- mypy only treats `import X as X` as an explicit re-export.
+_SpendCappedMatcher = SpendCappedMatcher
+_effective_budget = effective_budget
 
 if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily

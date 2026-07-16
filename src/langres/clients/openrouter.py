@@ -26,14 +26,14 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-# Re-export (PEP 484 `X as X` explicit-re-export form): these two MOVED to
-# langres.core.spend -- see the "Spend monitor" section below for why.
-from langres.core.spend import BudgetExceeded as BudgetExceeded
-from langres.core.spend import SpendMonitor as SpendMonitor
-
 if TYPE_CHECKING:
     from langres.core.benchmark import CostTrack
     from langres.core.models import PairwiseJudgement
+
+    # Type-checker view of the back-compat re-exports; the runtime path is the
+    # PEP 562 module __getattr__ at the bottom of this file.
+    from langres.core.spend import BudgetExceeded as BudgetExceeded
+    from langres.core.spend import SpendMonitor as SpendMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -430,13 +430,35 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Spend monitor
+# Spend monitor -- MOVED to langres.core.spend (B1), re-exported here
 # ---------------------------------------------------------------------------
-#
-# `SpendMonitor`/`BudgetExceeded` MOVED to `langres.core.spend` (B1). The ledger
-# is pure USD arithmetic with nothing OpenRouter-specific about it, and it has
-# to be reachable from `langres.core.resolver` -- which cannot import a
-# `clients` module that (transitively) imports it back. Re-exported here, not
-# aliased away: `from langres.clients.openrouter import SpendMonitor,
-# BudgetExceeded` is load-bearing for the benchmark harness, the examples and
-# the root `langres.BudgetExceeded` export, and all of it keeps working.
+
+#: Back-compat aliases: the ledger's real home is :mod:`langres.core.spend`.
+#: It moved because it is pure USD arithmetic with nothing OpenRouter-specific
+#: about it, and because :class:`~langres.core.resolver.Resolver` has to enforce
+#: a budget -- which it cannot do by importing a ``clients`` module that imports
+#: ``core`` back.
+_MOVED_TO_CORE_SPEND = ("BudgetExceeded", "SpendMonitor")
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the moved spend-ledger names lazily (PEP 562).
+
+    ``from langres.clients.openrouter import SpendMonitor, BudgetExceeded`` is
+    load-bearing -- the benchmark harness, the examples and the root
+    ``langres.BudgetExceeded`` export all use it -- so the names stay reachable
+    from here forever.
+
+    Lazily, though, and deliberately: an eager ``from langres.core.spend import
+    ...`` at this module's top would be the first *toplevel* ``clients -> core``
+    import in the package. Measured with ``tools/import_graph.py
+    counterfactual``, that one edge drags ``clients`` into the refactor's
+    runtime cross-package cycle (9 packages -> 10). This module does not *use*
+    these names any more -- it only forwards them -- so a lazy alias is the
+    honest shape as well as the cheap one.
+    """
+    if name in _MOVED_TO_CORE_SPEND:
+        from langres.core import spend
+
+        return getattr(spend, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

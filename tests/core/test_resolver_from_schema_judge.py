@@ -82,11 +82,15 @@ class TestFromSchemaJudgeOptions:
         assert resolver.module.model == "openai/gpt-5-mini"
 
     def test_zero_shot_llm_unpinned_model_warns_blind_cap(self) -> None:
-        """M1 regression: Resolver.from_schema builds an UNCAPPED pipeline
-        (see the matcher= docstring caution) -- an unpinned model must not
-        silently self-report $0/pair without any warning, since nothing here
-        would ever stop a runaway bill. Construction only (zero-spend)."""
-        with pytest.warns(UserWarning, match="UNCAPPED pipeline"):
+        """M1 regression: an unpinned model must not silently self-report
+        $0/pair without any warning.
+
+        Since B1 the from_schema pipeline IS spend-capped (``budget_usd=``), so
+        the warning is no longer "nothing stops a runaway bill" -- it is that
+        the cap is BLIND: a $0-metered model can never move the tally, so the
+        cap is real on paper and inert in practice. Construction only
+        (zero-spend)."""
+        with pytest.warns(UserWarning, match="can NEVER trip"):
             resolver = Resolver.from_schema(
                 ResolverJudgeCo, matcher="zero_shot_llm", model="unknown/model-not-in-table"
             )

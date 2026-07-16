@@ -156,7 +156,9 @@ class TestSpendCapBudgetEdges:
         assert len(list(capped.forward(_candidates()))) == 5
 
     def test_uncapped_budget_never_trips(self) -> None:
-        capped = SpendCappedMatcher(_CountingCostlyMatcher(5, 1_000.0), budget_usd=UNCAPPED_BUDGET_USD)
+        capped = SpendCappedMatcher(
+            _CountingCostlyMatcher(5, 1_000.0), budget_usd=UNCAPPED_BUDGET_USD
+        )
         assert len(list(capped.forward(_candidates()))) == 5
         assert capped.monitor.spent == 5_000.0
 
