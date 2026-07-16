@@ -6,7 +6,7 @@ are **implementations**, and ``langres.core`` no longer re-exports them -- impor
 them from the package that owns them::
 
     from langres.core.blockers import AllPairsBlocker, VectorBlocker
-    from langres.core.comparator import StringComparator
+    from langres.core.comparators import StringComparator
 
 See ``langres.core._exports`` for the fragment contract, and
 ``langres.core.__init__`` for why the facade carries contracts only.

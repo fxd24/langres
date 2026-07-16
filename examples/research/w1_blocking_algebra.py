@@ -37,6 +37,7 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import calculate_bcubed_metrics, evaluate_blocking
 from langres.core.models import ERCandidate
@@ -147,7 +148,7 @@ def _judged_candidates(
     records = [r.model_dump() for r in corpus]
     candidates = _build_vector_candidates(blocker, corpus, records)
 
-    comparator: Comparator[Any] = Comparator.from_schema(schema)
+    comparator: Comparator[Any] = StringComparator.from_schema(schema)
     judge: WeightedAverageMatcher[Any] = WeightedAverageMatcher(
         feature_specs=comparator.feature_specs
     )

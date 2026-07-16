@@ -46,6 +46,7 @@ from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.fit import (
     BlockerFitMixin,
     CalibratorFitMixin,
@@ -168,7 +169,7 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes.vector_index import FAISSIndex
 
-    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+    field_names = [spec.name for spec in StringComparator.from_schema(schema).feature_specs]
 
     def extract(entity: Any) -> str:
         parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
@@ -344,7 +345,7 @@ class Resolver:
             ``fit(method=Platt()/Isotonic())``.
 
     Example:
-        comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
+        comparator = StringComparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
         resolver = Resolver(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
@@ -469,7 +470,7 @@ class Resolver:
                 f"{', '.join(sorted(judge_params))}: only valid with matcher='prompt_llm' "
                 f"(got matcher={matcher!r})."
             )
-        comparator: Comparator[Any] = Comparator.from_schema(
+        comparator: Comparator[Any] = StringComparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
         module = _build_module_for_judge(

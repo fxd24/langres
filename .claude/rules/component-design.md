@@ -47,12 +47,19 @@ built. The real layering is:)
      imported from the package that owns them:
 
      ```python
-     from langres.core.blockers  import AllPairsBlocker, VectorBlocker
-     from langres.core.matchers  import CascadeMatcher, LLMMatcher
-     from langres.core.clusterers import CorrelationClusterer
-     from langres.core.embeddings import SentenceTransformerEmbedder
-     from langres.core.indexes   import FAISSIndex
+     from langres.core.blockers    import AllPairsBlocker, VectorBlocker
+     from langres.core.comparators import StringComparator
+     from langres.core.matchers    import CascadeMatcher, LLMMatcher
+     from langres.core.clusterers  import CorrelationClusterer
+     from langres.core.embeddings  import SentenceTransformerEmbedder
+     from langres.core.indexes     import FAISSIndex
      ```
+
+     The `Comparator` ABC vs `StringComparator` split (W1) is the worked example:
+     a contract that imports its own implementation — even indirectly, via a
+     factory like the old `Comparator.from_schema` — sits *above* the components
+     that depend on it. Build the default via the impl's own factory
+     (`StringComparator.from_schema`) instead.
 
      Re-exporting an implementation from `langres.core` puts the floor above the
      components it sits beneath and re-knots the import graph — `langres.core`

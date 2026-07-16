@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,
     MethodSpec,
@@ -169,7 +170,9 @@ class TestBuiltinSpecs:
 
     def test_custom_comparator_weights_flow_into_string_builder(self) -> None:
         """from_schema's weights=/exclude= customization must reach the judge."""
-        weighted = Comparator.from_schema(RegistryCompany, weights={"name": 0.9, "address": 0.1})
+        weighted = StringComparator.from_schema(
+            RegistryCompany, weights={"name": 0.9, "address": 0.1}
+        )
         module = get_method("string").build(
             RegistryCompany, model=None, entity_noun="entity", client=None, comparator=weighted
         )

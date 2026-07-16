@@ -11,7 +11,7 @@ floor so the missing-fields group is recovered. The bare
 ``Resolver.from_schema(CompanySchema)`` one-liner (equal weights) is covered
 separately and only asserts the >= 0.70 accuracy floor (it need not recover c4).
 
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from langres.core.metrics import calculate_bcubed_metrics
+from langres.core.comparators import StringComparator
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 # Name-dominant weights mirroring Approach 1 — required for the name-only
@@ -84,7 +85,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
@@ -137,7 +138,7 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
@@ -310,7 +311,7 @@ def _vector_resolver() -> "object":
         text_field="name",
         k_neighbors=5,
     )
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     return Resolver(
         blocker=blocker,
         comparator=comparator,
@@ -397,7 +398,7 @@ def _composite_vector_resolver(op: str = "union") -> "object":
         children=[key_blocker, vector_blocker],
         op=op,  # type: ignore[arg-type]
     )
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     return Resolver(
         blocker=composite,
         comparator=comparator,
@@ -450,7 +451,7 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
     inner = CompositeBlocker(children=[key_blocker_a, vector_blocker], op="union")
     outer = CompositeBlocker(children=[inner, key_blocker_b], op="union")
 
-    comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
     resolver = Resolver(
         blocker=outer,
         comparator=comparator,

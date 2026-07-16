@@ -43,7 +43,8 @@ from typing import Generic, TypeVar, cast
 from pydantic import BaseModel
 
 from langres.core.calibration import ThresholdMethod, derive_threshold
-from langres.core.comparator import Comparator, StringComparator
+from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import FeatureSpec
 from langres.core.metrics import PairMetrics, classify_pairs, pair_pr_curve
 from langres.core.models import ERCandidate

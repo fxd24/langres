@@ -64,6 +64,7 @@ from pydantic import BaseModel, Field, create_model
 
 from langres.core.blockers.all_pairs import schema_to_factory
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import (
     ERCandidate,
@@ -431,7 +432,7 @@ def link(
         right_entity = factory(right_record)
         candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="link")
         if judge_used == "string":
-            comparator: Comparator[Any] = Comparator.from_schema(resolved_schema)
+            comparator: Comparator[Any] = StringComparator.from_schema(resolved_schema)
             candidate = candidate.model_copy(
                 update={"comparison": comparator.compare(left_entity, right_entity)}
             )

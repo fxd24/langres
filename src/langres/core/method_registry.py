@@ -44,6 +44,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.matcher import Matcher
 
 __all__ = [
@@ -218,7 +219,9 @@ def _trained_extra_error(name: str, missing: str) -> ImportError:
 
 def _feature_specs(schema: type[BaseModel], comparator: Comparator[Any] | None) -> Any:
     """Feature specs from the caller's comparator (custom weights win) or the schema."""
-    return (comparator if comparator is not None else Comparator.from_schema(schema)).feature_specs
+    return (
+        comparator if comparator is not None else StringComparator.from_schema(schema)
+    ).feature_specs
 
 
 def _build_string(
@@ -340,7 +343,7 @@ def _build_rapidfuzz(
 ) -> Matcher[Any]:
     """``rapidfuzz``: classical string baseline over the schema's comparable fields.
 
-    Reuses ``Comparator.from_schema``'s field selection and weights so
+    Reuses ``StringComparator.from_schema``'s field selection and weights so
     ``rapidfuzz`` and ``weighted_average`` score on the *same* fields. The
     ``-> ""`` for a missing value is RapidfuzzMatcher's documented convention;
     it makes a field absent on *both* records a perfect match -- an intrinsic
@@ -413,12 +416,13 @@ def _build_fellegi_sunter(
     comparator: Comparator[Any] | None = None,
 ) -> Matcher[Any]:
     """``fellegi_sunter``: unsupervised EM-fit probabilistic record linkage."""
-    from langres.core.comparator import StringComparator
+    from langres.core.comparators import StringComparator
     from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
 
-    fs_comparator = comparator if comparator is not None else Comparator.from_schema(schema)
+    fs_comparator = comparator if comparator is not None else StringComparator.from_schema(schema)
     # FellegiSunterMatcher is typed against StringComparator, the concrete class
-    # Comparator.from_schema returns (Comparator is its alias-in-spirit here).
+    # StringComparator.from_schema returns; a caller-supplied `comparator` is only
+    # typed as the Comparator ABC, hence the cast.
     return FellegiSunterMatcher(comparator=cast(StringComparator[Any], fs_comparator))
 
 

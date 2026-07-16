@@ -6,7 +6,7 @@ weights) and reads each candidate's attached
 pipeline: a Comparator attaches a ``comparison`` to each candidate, then the
 judge scores it::
 
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     judge = WeightedAverageMatcher(feature_specs=comparator.feature_specs)
     candidates = (
         c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})

@@ -61,6 +61,7 @@ from langres.data.amazon_google import (  # noqa: E402
     load_amazon_google,
     load_amazon_google_pair_splits,
 )
+from langres.core.comparators import StringComparator  # noqa: E402
 from langres.data.fixed_split_pair_benchmark import (  # noqa: E402
     FixedSplitPairBenchmark,
     HonestPairEval,

@@ -42,7 +42,7 @@ import random
 import tempfile
 from pathlib import Path
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.finetune import LabeledCandidate
 from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matchers.random_forest_judge import RandomForestMatcher

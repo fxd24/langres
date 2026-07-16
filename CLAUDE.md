@@ -57,7 +57,7 @@ langres/
 │   │   ├── method_registry.py  # ONE MethodSpec registry: judge/method name -> builder + identity (all three dispatch paths resolve here)
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
-│   │   ├── comparator.py           # StringComparator, ComparisonVector
+│   │   ├── comparator.py, comparators/  # Comparator ABC (contract) + StringComparator (impl)
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── judgement_log.py        # JudgementLog + LoggingModule (logs every judge call: ids, score, verdict, model, cost)

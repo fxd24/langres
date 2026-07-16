@@ -8,7 +8,7 @@ the Resolver attaches it from the Comparator. These tests pin that behavior.
 
 import pytest
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
