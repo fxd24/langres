@@ -146,8 +146,22 @@ def _absolute_module(node: ast.ImportFrom, importer: str, is_package: bool) -> s
 
 
 def _is_type_checking_test(test: ast.expr) -> bool:
-    """True if an ``if`` test gates a TYPE_CHECKING block."""
-    return "TYPE_CHECKING" in ast.dump(test)
+    """True if an ``if`` test is exactly ``TYPE_CHECKING`` or ``<mod>.TYPE_CHECKING``.
+
+    Matched on the test node itself, never by searching *inside* it. Any search --
+    a substring of ``ast.dump`` or an ``ast.walk`` -- also fires on the cases that
+    must not match: ``if not TYPE_CHECKING:``, ``if x == "TYPE_CHECKING":``, or a
+    lookalike like ``if MY_TYPE_CHECKING_FLAG:``.
+
+    ``if not TYPE_CHECKING:`` deliberately does NOT count: its body *runs* at
+    runtime, so those imports are real runtime edges. Returning False leaves both
+    of its branches on the enclosing kind, which over-reports runtime edges rather
+    than hiding them -- the safe direction for a tool whose job is to never miss a
+    real import.
+    """
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
 
 
 def _iter_imports(node: ast.AST, kind: ImportKind) -> Iterator[tuple[ast.stmt, ImportKind]]:
@@ -225,6 +239,38 @@ def _edge_key(edge: Edge) -> tuple[str, str, str, int]:
 # --------------------------------------------------------------------------------------
 
 
+class MappingError(ValueError):
+    """A mapping file that cannot be trusted to produce a correct counterfactual."""
+
+
+def _checked_section(raw: object, path: Path, key: str) -> dict[str, str]:
+    """Validate one mapping section into a trustworthy ``dict[str, str]``."""
+    if not isinstance(raw, dict):
+        raise MappingError(
+            f"{path}: {key!r} must be a JSON object of module -> package, got {type(raw).__name__}"
+        )
+    checked: dict[str, str] = {}
+    for module, package in raw.items():
+        # `json.loads` only ever produces str keys, but `package` is arbitrary JSON.
+        # The key check costs one clause in a loop that has to exist anyway, and it
+        # keeps the declared `dict[str, str]` true of every instance, not just the
+        # ones json happened to build.
+        if not isinstance(module, str) or not isinstance(package, str):
+            raise MappingError(
+                f"{path}: {key!r} entries must be string -> string, got "
+                f"{type(module).__name__} -> {type(package).__name__} ({module!r}: {package!r})"
+            )
+        # An empty/whitespace name is not merely ugly: `counterfactual` skips any
+        # edge whose package is falsy, so "" would silently drop edges instead of
+        # failing, and `target()` could not tell it apart from "not covered".
+        if not module.strip() or not package.strip():
+            raise MappingError(
+                f"{path}: {key!r} has an empty module or package name ({module!r}: {package!r})"
+            )
+        checked[module] = package
+    return checked
+
+
 @dataclass(frozen=True, slots=True)
 class PackageMapping:
     """A proposed module -> target-package assignment.
@@ -237,8 +283,34 @@ class PackageMapping:
 
     @classmethod
     def from_json(cls, path: Path) -> PackageMapping:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return cls(exact=raw.get("exact", {}), prefix=raw.get("prefix", {}))
+        """Load a mapping file, rejecting anything that would silently mis-report.
+
+        A malformed mapping must never degrade to an empty or partial one: the
+        counterfactual would then print confidently wrong cycle counts, which is
+        the exact failure this tool exists to prevent. Both sections are required
+        -- an explicit ``{}`` is a deliberate statement, a missing key is a typo.
+        Unknown top-level keys are allowed (the shipped mapping carries a
+        ``_comment``).
+        """
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise MappingError(f"{path}: not valid JSON ({exc})") from exc
+        if not isinstance(raw, dict):
+            raise MappingError(
+                f"{path}: top level must be a JSON object with 'exact' and 'prefix' keys, "
+                f"got {type(raw).__name__}"
+            )
+        for key in ("exact", "prefix"):
+            if key not in raw:
+                raise MappingError(
+                    f"{path}: missing required key {key!r} "
+                    f"(expected a JSON object of module -> package; use {{}} if empty)"
+                )
+        return cls(
+            exact=_checked_section(raw["exact"], path, "exact"),
+            prefix=_checked_section(raw["prefix"], path, "prefix"),
+        )
 
     def target(self, module: str) -> str | None:
         """The package `module` lands in, or None if the mapping does not cover it."""
@@ -315,6 +387,12 @@ def counterfactual(
 
 def _out(line: str = "") -> None:
     print(line)  # noqa: T201  -- CLI output is this module's product
+
+
+def _err(line: str) -> None:
+    # stderr, not `_out`: an error must never land in the stdout stream a caller
+    # reads as the tool's data.
+    print(line, file=sys.stderr)  # noqa: T201  -- CLI diagnostics
 
 
 def _kind_filter(args: argparse.Namespace) -> tuple[ImportKind, ...] | None:
@@ -468,7 +546,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     graph = build_graph(args.package_root)
-    args.func(graph, args)
+    try:
+        args.func(graph, args)
+    except MappingError as exc:
+        # A bad mapping is user input, not a crash: report it like argparse would.
+        _err(f"error: {exc}")
+        return 2
     return 0
 
 

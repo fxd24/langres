@@ -10,6 +10,7 @@ numbers admissible as evidence. The originals in `tmp/w0-graph/` failed exactly 
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -21,7 +22,9 @@ sys.path.insert(0, str(TOOLS))
 from import_graph import (  # noqa: E402
     DEFAULT_PACKAGE_ROOT,
     ImportKind,
+    MappingError,
     PackageMapping,
+    _checked_section,
     build_graph,
     counterfactual,
     main,
@@ -122,6 +125,35 @@ def test_type_checking_else_branch_runs_at_runtime(tmp_path):
     kinds = {e.imported: e.kind for e in build_graph(pkg).edges}
     assert kinds["fixt.a"] is ImportKind.TYPE_CHECKING
     assert kinds["fixt.b"] is ImportKind.TOPLEVEL
+
+
+@pytest.mark.parametrize(
+    ("header", "condition", "expected"),
+    [
+        # The two real spellings of a type-checking guard.
+        ("from typing import TYPE_CHECKING", "TYPE_CHECKING", ImportKind.TYPE_CHECKING),
+        ("import typing", "typing.TYPE_CHECKING", ImportKind.TYPE_CHECKING),
+        # `not TYPE_CHECKING` inverts the guard: this body RUNS at runtime.
+        ("from typing import TYPE_CHECKING", "not TYPE_CHECKING", ImportKind.TOPLEVEL),
+        # Lookalikes a substring/subtree search would wrongly swallow.
+        ("MY_TYPE_CHECKING_FLAG = True", "MY_TYPE_CHECKING_FLAG", ImportKind.TOPLEVEL),
+        ("x = 'other'", "x == 'TYPE_CHECKING'", ImportKind.TOPLEVEL),
+    ],
+)
+def test_only_a_real_type_checking_guard_marks_its_body_lazy(header, condition, expected, tmp_path):
+    """A guard is matched structurally, not by searching the test for a string.
+
+    Every TOPLEVEL row is one the old `"TYPE_CHECKING" in ast.dump(test)` check got
+    wrong, and each error pointed the same dangerous way: a real runtime import
+    filed as lazy, i.e. hidden from the runtime view the tool exists to report.
+    """
+    pkg = _write_pkg(
+        tmp_path,
+        "fixt",
+        {"a.py": "", "user.py": f"{header}\nif {condition}:\n    from fixt import a\n"},
+    )
+    kinds = {e.imported: e.kind for e in build_graph(pkg).edges}
+    assert kinds["fixt.a"] is expected
 
 
 # --------------------------------------------------------------------------------------
@@ -355,6 +387,47 @@ def test_shipped_refactor_mapping_covers_every_module(graph):
 
 
 # --------------------------------------------------------------------------------------
+# Mapping validation: a bad mapping must fail loudly, never mis-report confidently
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ("{not json", "not valid JSON"),
+        ('["exact", "prefix"]', "top level must be a JSON object"),
+        ('{"prefix": {}}', "missing required key 'exact'"),
+        ('{"exact": {}}', "missing required key 'prefix'"),
+        ('{"exact": [], "prefix": {}}', "'exact' must be a JSON object"),
+        ('{"exact": {}, "prefix": "pkg"}', "'prefix' must be a JSON object"),
+        ('{"exact": {"a": 1}, "prefix": {}}', "must be string -> string"),
+        ('{"exact": {"": "pkg"}, "prefix": {}}', "empty module or package name"),
+        ('{"exact": {"a": "  "}, "prefix": {}}', "empty module or package name"),
+    ],
+)
+def test_malformed_mapping_is_rejected(payload, expected, tmp_path):
+    """Each payload previously yielded an empty/partial mapping -- and a confident
+    wrong cycle count from the counterfactual, with nothing to signal it."""
+    path = tmp_path / "m.json"
+    path.write_text(payload)
+    with pytest.raises(MappingError, match=re.escape(expected)):
+        PackageMapping.from_json(path)
+
+
+def test_non_string_mapping_key_is_rejected():
+    """`json.loads` cannot produce a non-string key, so this guards the constructor
+    invariant rather than a reachable file -- checked directly, at the seam."""
+    with pytest.raises(MappingError, match=re.escape("must be string -> string")):
+        _checked_section({1: "pkg"}, Path("m.json"), "exact")
+
+
+def test_a_valid_mapping_with_extra_top_level_keys_loads():
+    """The shipped mapping carries a `_comment`; unknown keys stay allowed."""
+    mapping = PackageMapping.from_json(TOOLS / "refactor_target_packages.json")
+    assert mapping.exact and mapping.prefix
+
+
+# --------------------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------------------
 
@@ -388,6 +461,20 @@ def test_cli_counterfactual_runs(capsys):
     out = capsys.readouterr().out
     assert "cross-package cycles" in out
     assert "mutual package pairs" in out
+
+
+def test_cli_reports_a_bad_mapping_cleanly(tmp_path, capsys):
+    """A bad mapping is user input: a clean stderr message + nonzero exit, no traceback.
+
+    stdout stays empty -- an error must not contaminate the stream a caller reads
+    as the tool's data.
+    """
+    path = tmp_path / "m.json"
+    path.write_text('{"prefix": {}}')
+    assert main(["counterfactual", "--mapping", str(path)]) == 2
+    captured = capsys.readouterr()
+    assert "missing required key 'exact'" in captured.err
+    assert captured.out == ""
 
 
 def test_cli_accepts_a_custom_package_root(tmp_path, capsys):
