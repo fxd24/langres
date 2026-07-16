@@ -34,8 +34,6 @@ __all__ = [
     "UnsupervisedFitMixin",
 ]
 
-LAZY_SUBMODULES: tuple[str, ...] = ()
-
 LAZY_SYMBOLS: dict[str, str] = {
     "Calibrator": "langres.core.calibration",
 }
@@ -44,4 +42,4 @@ EXTRA_BY_SYMBOL: dict[str, str] = {
     "Calibrator": "trained",
 }
 
-NAMES: tuple[str, ...] = (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)
+NAMES: tuple[str, ...] = (*__all__, *LAZY_SYMBOLS)
