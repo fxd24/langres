@@ -386,7 +386,8 @@ def test_cli_counterfactual_runs(capsys):
     ]
     assert main(argv) == 0
     out = capsys.readouterr().out
-    assert "cross-package cycles:" in out
+    assert "cross-package cycles" in out
+    assert "mutual package pairs" in out
 
 
 def test_cli_accepts_a_custom_package_root(tmp_path, capsys):
