@@ -275,6 +275,28 @@ class TestResolveTracker:
         with pytest.raises(ImportError, match=r"langres\[wandb\]"):
             resolve_tracker("wandb")
 
+    def test_trackio_string_raises_helpful_import_error_when_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``trackio`` extra -> a helpful ``langres[trackio]`` ImportError.
+
+        ``trackio`` is a real dev dependency in this env, so genuine absence
+        doesn't occur here. Simulate it by forcing the adapter import to fail
+        (mirrors the mlflow/wandb twins above).
+        """
+        import langres.core.trackers as trackers_mod
+
+        real_import = trackers_mod.importlib.import_module
+
+        def _fail_trackio_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.trackio_tracker":
+                raise ImportError("No module named 'trackio'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers_mod.importlib, "import_module", _fail_trackio_import)
+        with pytest.raises(ImportError, match=r"langres\[trackio\]"):
+            resolve_tracker("trackio")
+
     def test_unknown_backend_string_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="unknown"):
             resolve_tracker("not-a-backend")
@@ -346,6 +368,23 @@ class TestLazyAdapterGetattr:
         monkeypatch.setattr(trackers.importlib, "import_module", _fail_wandb_import)
         with pytest.raises(ImportError, match=r"langres\[wandb\]"):
             trackers.WandbTracker  # noqa: B018
+
+    def test_trackio_tracker_attribute_raises_helpful_import_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``trackers.TrackioTracker`` -> helpful ImportError when the extra is absent."""
+        import langres.core.trackers as trackers
+
+        real_import = trackers.importlib.import_module
+
+        def _fail_trackio_import(path: str, *a: Any, **k: Any) -> Any:
+            if path == "langres.core.trackers.trackio_tracker":
+                raise ImportError("No module named 'trackio'")
+            return real_import(path, *a, **k)
+
+        monkeypatch.setattr(trackers.importlib, "import_module", _fail_trackio_import)
+        with pytest.raises(ImportError, match=r"langres\[trackio\]"):
+            trackers.TrackioTracker  # noqa: B018
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
         import langres.core.trackers as trackers
