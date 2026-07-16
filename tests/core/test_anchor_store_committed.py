@@ -15,7 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from langres.core import AnchorStore, Resolver
+from langres.core import Resolver
+from langres.core.anchor_store import AnchorStore
 from langres.data.er_benchmarks import RestaurantSchema, load_fodors_zagat
 
 # A Fodors-Zagat gold match pair: Fodor's f534 <-> Zagat z219.
@@ -79,7 +80,7 @@ def test_fresh_process_round_trip(tmp_path: Path) -> None:
     # Reload + assign in a brand-new interpreter (no shared imports/registry).
     script = (
         "import json, sys\n"
-        "from langres.core import AnchorStore\n"
+        "from langres.core.anchor_store import AnchorStore\n"
         "from langres.data.er_benchmarks import load_fodors_zagat\n"
         "corpus, _ = load_fodors_zagat()\n"
         "held = next(r for r in corpus if r.id == 'z219').model_dump()\n"

@@ -17,7 +17,8 @@ Run it with:  ``uv run python examples/incremental_assign.py``
 import tempfile
 from pathlib import Path
 
-from langres.core import AnchorStore, CompanySchema, Resolver
+from langres.core import CompanySchema, Resolver
+from langres.core.anchor_store import AnchorStore
 
 # A prior batch: records 1 and 2 are the same company; 3 and 4 are unique.
 BATCH = [

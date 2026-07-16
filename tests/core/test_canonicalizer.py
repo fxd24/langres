@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from langres.core import Canonicalizer
+from langres.core.canonicalizer import Canonicalizer
 from langres.core.canonicalizer import (
     CANONICALIZER_VERSION,
     DEFAULT_STRATEGY,
@@ -315,7 +315,7 @@ def test_fresh_process_config_round_trip(tmp_path: Path) -> None:
 
     script = (
         "import json, sys\n"
-        "from langres.core import Canonicalizer\n"
+        "from langres.core.canonicalizer import Canonicalizer\n"
         f"canon = Canonicalizer.load({str(path)!r})\n"
         f"records = {records!r}\n"
         "golden = canon.canonicalize(records, entity_id='e0')\n"

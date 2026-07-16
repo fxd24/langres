@@ -1,38 +1,26 @@
-"""Candidate generation: the ``Blocker`` family + the ``Comparator`` feeding it.
+"""Candidate generation: the ``Blocker`` and ``Comparator`` **contracts**.
 
-See ``langres.core._exports`` for the fragment contract.
+Only the two ABCs live here. The concrete blockers (``AllPairsBlocker``,
+``CompositeBlocker``, ``KeyBlocker``, ``VectorBlocker``) and ``StringComparator``
+are **implementations**, and ``langres.core`` no longer re-exports them -- import
+them from the package that owns them::
+
+    from langres.core.blockers import AllPairsBlocker, VectorBlocker
+    from langres.core.comparator import StringComparator
+
+See ``langres.core._exports`` for the fragment contract, and
+``langres.core.__init__`` for why the facade carries contracts only.
 """
 
-from typing import TYPE_CHECKING
-
 from langres.core.blocker import Blocker
-from langres.core.blockers.all_pairs import AllPairsBlocker
-from langres.core.blockers.composite import CompositeBlocker
-from langres.core.blockers.key import KeyBlocker
-from langres.core.comparator import Comparator, StringComparator
-
-if TYPE_CHECKING:
-    # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
-    # without pulling faiss/torch into a bare `import langres`.
-    from langres.core.blockers.vector import VectorBlocker
+from langres.core.comparator import Comparator
 
 __all__ = [
-    "AllPairsBlocker",
     "Blocker",
     "Comparator",
-    "CompositeBlocker",
-    "KeyBlocker",
-    "StringComparator",
 ]
 
-LAZY_SUBMODULES: tuple[str, ...] = ()
+LAZY_SYMBOLS: dict[str, str] = {}
+EXTRA_BY_SYMBOL: dict[str, str] = {}
 
-LAZY_SYMBOLS: dict[str, str] = {
-    "VectorBlocker": "langres.core.blockers.vector",
-}
-
-EXTRA_BY_SYMBOL: dict[str, str] = {
-    "VectorBlocker": "semantic",
-}
-
-NAMES: tuple[str, ...] = (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)
+NAMES: tuple[str, ...] = (*__all__, *LAZY_SYMBOLS)

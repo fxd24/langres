@@ -79,13 +79,9 @@ def _wrongly_merged_pairs(
 
 def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     """A-D: in-process save/load round-trip, accuracy, over-merge, provenance."""
-    from langres.core import (
-        AllPairsBlocker,
-        Clusterer,
-        Comparator,
-        Resolver,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
@@ -136,13 +132,9 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
 
 def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     """E: reload in a fresh subprocess to catch registry/import side-effects."""
-    from langres.core import (
-        AllPairsBlocker,
-        Clusterer,
-        Comparator,
-        Resolver,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     comparator = Comparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
@@ -304,15 +296,11 @@ def test_resolver_load_warns_on_langres_version_skew(
 
 def _vector_resolver() -> "object":
     """Build a Resolver over a VectorBlocker + FAISSIndex (FakeEmbedder, fast)."""
-    from langres.core import (
-        Clusterer,
-        Comparator,
-        FAISSIndex,
-        FakeEmbedder,
-        Resolver,
-        VectorBlocker,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import VectorBlocker
+    from langres.core.embeddings import FakeEmbedder
+    from langres.core.indexes import FAISSIndex
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
@@ -387,17 +375,11 @@ def _composite_vector_resolver(op: str = "union") -> "object":
     "recall-first key + vector union" pattern documented in the blocking-algebra
     example and TECHNICAL_OVERVIEW.
     """
-    from langres.core import (
-        Clusterer,
-        Comparator,
-        CompositeBlocker,
-        FAISSIndex,
-        FakeEmbedder,
-        KeyBlocker,
-        Resolver,
-        VectorBlocker,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import CompositeBlocker, KeyBlocker, VectorBlocker
+    from langres.core.embeddings import FakeEmbedder
+    from langres.core.indexes import FAISSIndex
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
@@ -449,17 +431,11 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
     just one level -- a CompositeBlocker may itself wrap another CompositeBlocker
     (e.g. union of two intersections).
     """
-    from langres.core import (
-        Clusterer,
-        Comparator,
-        CompositeBlocker,
-        FAISSIndex,
-        FakeEmbedder,
-        KeyBlocker,
-        Resolver,
-        VectorBlocker,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core.blockers import CompositeBlocker, KeyBlocker, VectorBlocker
+    from langres.core.embeddings import FakeEmbedder
+    from langres.core.indexes import FAISSIndex
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
     index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=32), metric="cosine")
@@ -536,7 +512,8 @@ def test_resolver_without_comparator_uses_plain_module() -> None:
     """comparator=None drives a self-contained Matcher directly (no compare stage)."""
     from collections.abc import Iterator
 
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
     from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
     from langres.core.matcher import Matcher
     from langres.core.reports import ScoreInspectionReport
@@ -579,7 +556,9 @@ def test_resolver_without_comparator_uses_plain_module() -> None:
 
 def test_resolver_save_without_comparator_omits_slot(tmp_path: Path) -> None:
     """A comparator=None Resolver writes a 3-component manifest (no comparator)."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
 
@@ -625,14 +604,9 @@ def test_resolver_round_trips_comparator_subclass_with_custom_type_name(
     dropped. Here we assert the reloaded comparator IS the subclass AND the
     module slot is the real WeightedAverageMatcher.
     """
-    from langres.core import (
-        AllPairsBlocker,
-        Clusterer,
-        Comparator,
-        Resolver,
-        WeightedAverageMatcher,
-        register,
-    )
+    from langres.core import Clusterer, Comparator, Resolver, register
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
     from langres.core.models import CompanySchema
 
@@ -759,7 +733,8 @@ def test_resolver_persists_module_that_owns_state_directly(tmp_path: Path) -> No
 
     from pydantic import BaseModel as _BaseModel
 
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, register
+    from langres.core import Clusterer, Resolver, register
+    from langres.core.blockers import AllPairsBlocker
     from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
     from langres.core.matcher import Matcher
     from langres.core.reports import ScoreInspectionReport
@@ -837,7 +812,9 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
     The adapter sits in the blocker slot; save/load never calls its stubbed
     ``stream``/``forward``.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.adapters.glinker import GLinkerAdapter, GLinkerConfig
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema

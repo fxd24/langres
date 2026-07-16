@@ -38,7 +38,6 @@ __all__ = [
     "RunStore",
 ]
 
-LAZY_SUBMODULES: tuple[str, ...] = ()
 
 #: The backend tracker adapters (S3/S4): the ``trackers`` package's own
 #: ``__getattr__`` pulls the concrete adapter -- and its mlflow/wandb
@@ -53,4 +52,4 @@ EXTRA_BY_SYMBOL: dict[str, str] = {
     "WandbTracker": "wandb",
 }
 
-NAMES: tuple[str, ...] = (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)
+NAMES: tuple[str, ...] = (*__all__, *LAZY_SYMBOLS)

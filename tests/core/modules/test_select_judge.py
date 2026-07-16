@@ -429,7 +429,8 @@ def test_from_config_builds_fresh_uncompiled_judge() -> None:
 
 def test_resolver_with_select_judge_saves_and_loads(tmp_path: Path) -> None:
     """A Resolver with a SelectMatcher in the module slot round-trips in-process."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     judge = _judge([_answer('["b"]')])
     resolver = Resolver(
@@ -463,7 +464,8 @@ def test_resolver_load_select_judge_in_fresh_process_and_scores_a_group(tmp_path
     and the reloaded judge is actually exercised (forward_groups on a real
     group, DummyLM-injected), not just type-checked.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     judge = _judge([_answer('["b"]')])
     resolver = Resolver(

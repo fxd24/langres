@@ -193,7 +193,8 @@ def test_resolver_with_llm_judge_module_saves_and_loads(tmp_path: Path, mocker) 
     (env-reconstructed) client. We patch ``create_llm_client`` to raise so the
     test fails loudly if load ever tries to build a client (it must not).
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
     from langres.core.models import CompanySchema
 
     # If load builds a client, this blows up — proving load stays offline/lazy.
@@ -243,7 +244,8 @@ def test_resolver_load_registers_llm_judge_in_a_fresh_process(tmp_path: Path) ->
     The subprocess deliberately does NOT import ``langres.core.matchers.llm_judge``
     — that is the whole point of the check.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
     from langres.core.models import CompanySchema
 
     judge: LLMMatcher[CompanySchema] = LLMMatcher(
