@@ -110,13 +110,16 @@ class TrackioTracker:
 
     One :class:`~langres.core.runs.RunContext` becomes one Trackio run: the
     context is flattened into ``run.config`` (passed to ``trackio.init`` up
-    front, so it is captured even for a single-``log`` run), metrics stream via
-    ``run.log``, and ``log_artifact``/``set_tags`` do the closest honest mapping
-    given trackio 0.20.2 has no dedicated artifact or tag API -- both fold into
-    ``run.log``/``run.config`` respectively. :attr:`run_url` deep-links the HF
-    Space dashboard when ``space_id`` is configured (``None`` for local runs, which
-    have no static browsable URL outside a notebook embed); :attr:`native` is the
-    escape hatch to the underlying ``trackio.Run``.
+    front, so it is captured even for a single-``log`` run) and metrics stream via
+    ``run.log``. trackio 0.20.2 has no dedicated artifact or tag API, so
+    ``log_artifact``/``log_params``/``set_tags`` all persist through ``run.log``
+    (``log_artifact`` as a raw entry, ``log_params``/``set_tags`` under
+    ``param.``/``tag.`` prefixes) -- ``run.config`` alone is flushed only on the
+    first ``run.log``, so log entries are what make post-first-metric params/tags
+    durable. :attr:`run_url` deep-links the HF Space dashboard when a namespaced
+    ``space_id`` is configured (``None`` for local runs, which have no static
+    browsable URL outside a notebook embed); :attr:`native` is the escape hatch to
+    the underlying ``trackio.Run``.
     """
 
     name = "trackio"
@@ -168,6 +171,15 @@ class TrackioTracker:
         dataset_id = (
             self._dataset_id if self._dataset_id is not None else settings.trackio_dataset_id
         )
+        if dataset_id is not None and space_id is None:
+            # trackio.init raises the same condition itself, but only after other
+            # setup -- fail fast here so the misconfiguration names its own fix.
+            raise ValueError(
+                f"dataset_id={dataset_id!r} requires a space_id: a persistent HF "
+                "Dataset is only synced alongside an HF Space. Set a space_id "
+                "(constructor arg or TRACKIO_SPACE_ID), or drop dataset_id for a "
+                "local-only run."
+            )
         if space_id is not None:
             if settings.hf_token:
                 # setdefault: an explicit user-exported HF_TOKEN always wins.
@@ -185,9 +197,20 @@ class TrackioTracker:
         self._space_id = space_id
 
     def log_params(self, params: Mapping[str, Any]) -> None:
-        """Merge extra (flattened) params into the run config."""
+        """Persist extra (flattened) params on the run, under a ``param.<k>`` prefix.
+
+        trackio flushes ``run.config`` to its store only on the *first* ``run.log``
+        (a one-way latch), and ``finish()`` never flushes it -- so a config-only
+        update after the first metric would be silently dropped. We therefore
+        *also* emit the params as a ``run.log`` entry (``param.<key>``), which
+        always persists regardless of call order; ``config`` is updated too so
+        the in-memory :attr:`native` view (and the pre-first-log flush) stay
+        coherent.
+        """
         if self._run is not None:
-            self._run.config.update(_flatten(dict(params)))
+            flat = _flatten(dict(params))
+            self._run.config.update(flat)
+            self._run.log({f"param.{key}": value for key, value in flat.items()})
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
         """Stream metrics to *this* run (``run.log``). A no-op before :meth:`start_run`."""
@@ -200,13 +223,17 @@ class TrackioTracker:
             self._run.log({key: value})
 
     def set_tags(self, tags: Mapping[str, str]) -> None:
-        """Fold ``key:value`` labels into the run config (no dedicated tags API).
+        """Persist ``key:value`` labels on the run (no dedicated tags API).
 
-        Prefixed ``tag.<key>`` so a tag never silently overwrites a same-named
-        config entry from :meth:`start_run`/:meth:`log_params`.
+        Prefixed ``tag.<key>`` so a tag never collides with a config/param entry.
+        Emitted via ``run.log`` (not only ``run.config``) for the same
+        persistence reason as :meth:`log_params`: a config-only update after the
+        first ``run.log`` would never reach trackio's store.
         """
         if self._run is not None:
-            self._run.config.update({f"tag.{key}": value for key, value in tags.items()})
+            prefixed = {f"tag.{key}": value for key, value in tags.items()}
+            self._run.config.update(prefixed)
+            self._run.log(prefixed)
 
     def finish(self, *, status: str) -> None:
         """Record the terminal ``status`` then close *this* run (``run.finish``).
@@ -221,8 +248,14 @@ class TrackioTracker:
 
     @property
     def run_url(self) -> str | None:
-        """Deep link to the HF Space dashboard, or ``None`` for a local run."""
-        if self._run is None or self._space_id is None:
+        """Deep link to the HF Space dashboard, or ``None`` for a local run.
+
+        Returns ``None`` for a bare (namespace-less) ``space_id`` too -- the
+        ``user/space`` URL can't be built from it, and trackio would have created
+        the Space in the logged-in user's namespace, whose name we don't resolve
+        here.
+        """
+        if self._run is None or self._space_id is None or "/" not in self._space_id:
             return None
         user, space = self._space_id.split("/", 1)
         return _SPACE_URL.format(user=user, space=space)

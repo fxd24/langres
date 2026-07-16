@@ -117,9 +117,10 @@ mlflow = [
 wandb = [
     "wandb>=0.16",
 ]
-# trackio is pre-1.0 and actively renaming params (dataset_id -> bucket_id,
-# etc.) -- pinned to the installed 0.20 minor (allowing 1.0 is unverified;
-# bump deliberately after re-verifying the API against a new major).
+# trackio is pre-1.0; the adapter is coded against the verified 0.20.2 API
+# (`trackio.init(..., space_id=, dataset_id=, config=)` -> a Run handle;
+# `Run.log`/`Run.finish`). Capped below 1.0 (that major is unverified) -- bump
+# deliberately after re-verifying the API, since a pre-1.0 rename could move it.
 trackio = [
     "trackio>=0.20,<1",
 ]

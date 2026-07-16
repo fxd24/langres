@@ -231,6 +231,32 @@ class TestHfSyncCredentialGuard:
 
         assert fake_trackio.init_kwargs["space_id"] == "explicit/space"
 
+    def test_preexisting_hf_token_env_wins_over_settings_token(
+        self, fake_trackio: _FakeTrackio, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A user-exported HF_TOKEN is never clobbered by settings.hf_token.
+
+        Locks in the ``os.environ.setdefault`` precedence: the explicit ambient
+        token wins, and trackio's own huggingface_hub calls keep seeing it.
+        """
+        monkeypatch.setenv("HF_TOKEN", "preexisting-token")
+        tracker = TrackioTracker(Settings(hf_token="hf_explicit"), space_id="acme/langres-runs")
+        tracker.start_run(_context())  # must not raise (token present)
+
+        assert os.environ["HF_TOKEN"] == "preexisting-token"
+
+    def test_dataset_id_without_space_id_raises(
+        self, fake_trackio: _FakeTrackio, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dataset_id with no space_id is a misconfiguration -- fail fast, no init."""
+        monkeypatch.delenv("TRACKIO_SPACE_ID", raising=False)
+        tracker = TrackioTracker(Settings(), dataset_id="acme/ds")
+
+        with pytest.raises(ValueError, match=r"dataset_id.*requires a space_id"):
+            tracker.start_run(_context())
+
+        assert fake_trackio.init_kwargs is None
+
 
 class TestLogging:
     def test_log_metrics_routes_to_run_log(self, fake_trackio: _FakeTrackio) -> None:
@@ -251,12 +277,25 @@ class TestLogging:
         TrackioTracker().log_metrics({"f1": 0.5})
         assert fake_trackio.run.log_calls == []
 
-    def test_log_params_merges_into_config(self, fake_trackio: _FakeTrackio) -> None:
+    def test_log_params_merges_into_config_and_logs(self, fake_trackio: _FakeTrackio) -> None:
         tracker = TrackioTracker(Settings())
         tracker.start_run(_context())
         tracker.log_params({"extra": {"nested": 1}})
 
+        # Kept in config (in-memory / pre-first-log flush) AND emitted via run.log
+        # under a param. prefix (the durable path -- see below).
         assert fake_trackio.run.config["extra.nested"] == 1
+        assert fake_trackio.run.log_calls[-1] == ({"param.extra.nested": 1}, None)
+
+    def test_log_params_persists_after_a_metric(self, fake_trackio: _FakeTrackio) -> None:
+        """trackio flushes config only on the first run.log, so a param logged
+        AFTER a metric must still reach the store -- via its own run.log entry."""
+        tracker = TrackioTracker(Settings())
+        tracker.start_run(_context())
+        tracker.log_metrics({"f1": 0.9})  # first log latches config
+        tracker.log_params({"late": 1})
+
+        assert ({"param.late": 1}, None) in fake_trackio.run.log_calls
 
     def test_log_params_noop_before_start(self) -> None:
         TrackioTracker().log_params({"a": 1})  # must not raise
@@ -271,13 +310,26 @@ class TestLogging:
     def test_log_artifact_noop_before_start(self) -> None:
         TrackioTracker().log_artifact("k", "v")  # must not raise
 
-    def test_set_tags_folds_into_config_with_prefix(self, fake_trackio: _FakeTrackio) -> None:
+    def test_set_tags_folds_into_config_with_prefix_and_logs(
+        self, fake_trackio: _FakeTrackio
+    ) -> None:
         tracker = TrackioTracker(Settings())
         tracker.start_run(_context())
         tracker.set_tags({"env": "ci", "team": "er"})
 
         assert fake_trackio.run.config["tag.env"] == "ci"
         assert fake_trackio.run.config["tag.team"] == "er"
+        assert fake_trackio.run.log_calls[-1] == ({"tag.env": "ci", "tag.team": "er"}, None)
+
+    def test_set_tags_persists_after_a_metric(self, fake_trackio: _FakeTrackio) -> None:
+        """Same one-way-config-latch reason as params: a tag set after a metric
+        must still persist via run.log, not only the (already-flushed) config."""
+        tracker = TrackioTracker(Settings())
+        tracker.start_run(_context())
+        tracker.log_metrics({"f1": 0.9})
+        tracker.set_tags({"env": "ci"})
+
+        assert ({"tag.env": "ci"}, None) in fake_trackio.run.log_calls
 
     def test_set_tags_noop_before_start(self) -> None:
         TrackioTracker().set_tags({"a": "b"})  # must not raise
@@ -319,6 +371,16 @@ class TestRunUrlAndNative:
         tracker.start_run(_context())
 
         assert tracker.run_url == "https://acme-langres-runs.hf.space/"
+
+    def test_run_url_none_for_namespaceless_space_id(
+        self, fake_trackio: _FakeTrackio, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare (no ``/``) space_id can't build a user-space URL -> None, no crash."""
+        monkeypatch.setattr(huggingface_hub, "get_token", lambda: "cached-login-token")
+        tracker = TrackioTracker(Settings(), space_id="justareponame")
+        tracker.start_run(_context())
+
+        assert tracker.run_url is None
 
     def test_native_returns_underlying_run(self, fake_trackio: _FakeTrackio) -> None:
         tracker = TrackioTracker(Settings())

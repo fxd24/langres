@@ -11,6 +11,7 @@ the underlying run, that status maps to an exit code, and that
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
@@ -79,14 +80,15 @@ class _FakeWandb:
 def fake_wandb(monkeypatch: pytest.MonkeyPatch) -> _FakeWandb:
     """Patch the fake over the ``wandb`` the reused ``create_wandb_tracker`` init uses.
 
-    The adapter itself no longer references a module-global ``wandb`` (log/finish
-    route through ``self._run``), so only ``langres.clients.tracking.wandb`` -- the
-    ``wandb.init`` seam -- needs patching.
+    ``create_wandb_tracker`` now imports ``wandb`` lazily inside its own body (so
+    ``langres.clients.tracking`` -- and therefore ``create_trackio_tracker`` -- is
+    importable without the ``wandb`` extra), so the ``wandb.init`` seam is patched
+    at ``sys.modules["wandb"]``: an in-body ``import wandb`` binds to whatever is
+    there. The adapter itself never references a module-global ``wandb`` (log/finish
+    route through ``self._run``).
     """
     fake = _FakeWandb()
-    import langres.clients.tracking as tracking_mod
-
-    monkeypatch.setattr(tracking_mod, "wandb", fake)
+    monkeypatch.setitem(sys.modules, "wandb", fake)
     return fake
 
 
@@ -272,9 +274,7 @@ class TestRunUrlAndNative:
         self, monkeypatch: pytest.MonkeyPatch, settings: Settings
     ) -> None:
         fake = _FakeWandb(_FakeRun(url=None))
-        import langres.clients.tracking as tracking_mod
-
-        monkeypatch.setattr(tracking_mod, "wandb", fake)
+        monkeypatch.setitem(sys.modules, "wandb", fake)
 
         tracker = WandbTracker(settings)
         tracker.start_run(_context())

@@ -1,11 +1,17 @@
-"""Experiment-tracker client factories (wandb, trackio)."""
+"""Experiment-tracker client factories (wandb, trackio).
+
+``wandb`` and ``trackio`` are each pulled in only by the factory that needs it
+(``import wandb`` inside :func:`create_wandb_tracker`, the ``TrackioTracker``
+import inside :func:`create_trackio_tracker`), so importing this module -- which
+``from langres.clients import create_trackio_tracker`` does -- never requires the
+*other* backend's extra to be installed. A trackio-only install can therefore
+call ``create_trackio_tracker`` without ``wandb`` present, and vice versa.
+"""
 
 import logging
 import os
 from collections.abc import Mapping
 from typing import Any
-
-import wandb
 
 from langres.clients.settings import Settings
 
@@ -62,6 +68,17 @@ def create_wandb_tracker(settings: Settings | None = None, job_type: str = "opti
         - wandb.log({"metric_name": value})
         - wandb.log({"trial": trial_num, "f1": f1_score, "cost": cost_usd})
     """
+    # Lazy import so this module (and therefore create_trackio_tracker) is
+    # importable in a wandb-less install. A missing extra surfaces the same
+    # branded fix as resolve_tracker's other backends.
+    try:
+        import wandb
+    except ImportError as exc:
+        raise ImportError(
+            "the 'wandb' tracker requires the 'wandb' extra: "
+            "pip install 'langres[wandb]' (or uv add 'langres[wandb]')"
+        ) from exc
+
     if settings is None:
         settings = Settings()
 
