@@ -48,3 +48,20 @@ class Inspectable(Protocol):
             ScoreInspectionReport with statistics, examples, and recommendations.
         """
         ...  # pragma: no cover — Protocol method body, never executed
+
+
+def _ensure_inspectable(module: object) -> Inspectable:
+    """Narrow ``module`` to :class:`Inspectable`, or raise naming the contract.
+
+    For the wrapper matchers (the spend cap, the JudgementLog) that forward
+    ``inspect_scores`` to whatever they wrap: since opting in is optional, the
+    wrapped matcher may not implement it, and an unguarded delegation would
+    surface as a bare ``AttributeError``. Lives here so the check and its
+    wording stay in ONE place rather than drifting between wrappers.
+    """
+    if not isinstance(module, Inspectable):
+        raise TypeError(
+            f"{type(module).__name__} does not implement inspect_scores(); "
+            "see langres.core.inspection.Inspectable"
+        )
+    return module

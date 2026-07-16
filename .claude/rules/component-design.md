@@ -152,7 +152,7 @@ Extract when you see:
 2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
    `forward` is the **only** abstract method on `Matcher` — the contract is
    deliberately thin. Optional capabilities are opt-in, runtime-checkable
-   structural Protocols, never abstract methods every judge must stub out:
+   structural Protocols, never abstract methods that every judge must stub out:
    score inspection is `core/inspection.py:Inspectable`
    (`inspect_scores`; the shared body stays in
    `core/reports.py:_inspect_scores_impl`, so opting in is a 2-line

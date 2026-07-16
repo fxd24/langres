@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from langres.clients.openrouter import BudgetExceeded
-from langres.core.inspection import Inspectable
+from langres.core.inspection import _ensure_inspectable
 from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
@@ -275,9 +275,4 @@ class LoggingMatcher(Matcher[Any]):
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
         """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""
-        if not isinstance(self._module, Inspectable):
-            raise TypeError(
-                f"{type(self._module).__name__} does not implement inspect_scores(); "
-                "see langres.core.inspection.Inspectable"
-            )
-        return self._module.inspect_scores(judgements, sample_size)
+        return _ensure_inspectable(self._module).inspect_scores(judgements, sample_size)
