@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from langres.core import Canonicalizer
+from langres.core.canonicalizer import Canonicalizer
 from langres.core.canonicalizer import (
     CANONICALIZER_VERSION,
     DEFAULT_STRATEGY,

@@ -110,7 +110,8 @@ def test_config_round_trips() -> None:
 
 def test_resolver_with_embedding_judge_saves_and_loads(tmp_path: Path) -> None:
     """A Resolver with an EmbeddingScoreMatcher in the module slot round-trips offline."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     judge: EmbeddingScoreMatcher[CompanySchema] = EmbeddingScoreMatcher(threshold=0.55)
     resolver = Resolver(
@@ -140,7 +141,8 @@ def test_resolver_load_registers_judge_in_a_fresh_process(tmp_path: Path) -> Non
     The subprocess imports ONLY ``langres.core`` (the public package), never the
     judge module directly — that is the whole point of the check.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),

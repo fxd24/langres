@@ -26,7 +26,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from langres.core import AnchorStore, Canonicalizer, Resolver
+from langres.core import Resolver
+from langres.core.anchor_store import AnchorStore
+from langres.core.canonicalizer import Canonicalizer
 from langres.core.models import CompanySchema
 
 # ----------------------------------------------------------------------------

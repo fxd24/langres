@@ -21,21 +21,17 @@ import numpy as np
 import pytest
 
 from langres.core import (
-    AllPairsBlocker,
-    AnchorStore,
     Clusterer,
-    ClusterDelta,
     CompanySchema,
     Comparator,
-    CompositeBlocker,
-    EmbeddingScoreMatcher,
     ERCandidate,
-    KeyBlocker,
     Matcher,
     PairwiseJudgement,
     Resolver,
-    WeightedAverageMatcher,
 )
+from langres.core.anchor_store import AnchorStore, ClusterDelta
+from langres.core.blockers import AllPairsBlocker, CompositeBlocker, KeyBlocker
+from langres.core.matchers import EmbeddingScoreMatcher, WeightedAverageMatcher
 from langres.core.anchor_store import _schema_factory
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FakeEmbedder

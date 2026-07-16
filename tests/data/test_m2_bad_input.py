@@ -17,15 +17,11 @@ model loads. The two contracts under test are embedder-independent:
 import pydantic
 import pytest
 
-from langres.core import (
-    Clusterer,
-    Comparator,
-    FAISSIndex,
-    FakeEmbedder,
-    Resolver,
-    VectorBlocker,
-    WeightedAverageMatcher,
-)
+from langres.core import Clusterer, Comparator, Resolver
+from langres.core.blockers import VectorBlocker
+from langres.core.embeddings import FakeEmbedder
+from langres.core.indexes import FAISSIndex
+from langres.core.matchers import WeightedAverageMatcher
 from langres.data.er_benchmarks import RestaurantSchema
 
 

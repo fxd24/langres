@@ -24,7 +24,8 @@ from pathlib import Path
 from dspy import Example
 from dspy.utils.dummies import DummyLM
 
-from langres.core import AllPairsBlocker, Clusterer, Resolver
+from langres.core import Clusterer, Resolver
+from langres.core.blockers import AllPairsBlocker
 from langres.core.benchmark import evaluate_judge_on_candidates
 from langres.core.models import ERCandidate
 from langres.core.matchers.dspy_judge import DSPyMatcher
