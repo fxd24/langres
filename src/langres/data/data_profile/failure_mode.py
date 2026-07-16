@@ -360,10 +360,14 @@ def profile_failure_mode(
 
     score_edges, error_counts, success_counts = _score_overlay(confident, n_score_bands)
 
+    # Normalize record keys to str ONCE here (symmetric with _normalize_gold), so
+    # the slice lookups -- keyed by the stringified judgement ids -- hit even when
+    # the caller passed an int-keyed map.
+    slice_records = _normalize_records(records) if records is not None else None
     all_slices = _build_slices(
         confident,
         overall_rate,
-        records=records,
+        records=slice_records,
         id_key=id_key,
         source_key=source_key,
         n_score_bands=n_score_bands,
@@ -401,10 +405,37 @@ def _normalize_gold(gold_pairs: Collection[Collection[Hashable]]) -> set[frozens
     exactly two distinct ids) are dropped.
     """
     normalized: set[frozenset[str]] = set()
+    n_dropped = 0
     for pair in gold_pairs:
         key = frozenset(str(identifier) for identifier in pair)
         if len(key) == 2:
             normalized.add(key)
+        else:
+            n_dropped += 1
+    if n_dropped:
+        logger.warning(
+            "profile_failure_mode: dropped %d malformed gold pair(s) (not exactly two "
+            "distinct ids); this section logs omissions, never drops silently.",
+            n_dropped,
+        )
+    return normalized
+
+
+def _normalize_records(
+    records: Mapping[Hashable, Mapping[str, Any]],
+) -> dict[Hashable, Mapping[str, Any]]:
+    """Re-key a records map by ``str`` id, symmetric with :func:`_normalize_gold`.
+
+    The join stringifies judgement ids (the log stores ids as strings), so the
+    slice lookups (:func:`_either_empty`, :func:`_source_slices`) must find each
+    record by that same string key. A caller passing an ``int``-keyed map would
+    otherwise miss every lookup silently -- reporting every field-emptiness slice
+    as all-empty and skipping the source slice. Normalizing keys once at entry
+    keeps the str-conversion out of every per-pair helper.
+    """
+    normalized: dict[Hashable, Mapping[str, Any]] = {
+        str(key): value for key, value in records.items()
+    }
     return normalized
 
 
@@ -427,6 +458,18 @@ def _join_gold(judgements: Sequence[Mapping[str, Any]], gold: set[frozenset[str]
     return joined
 
 
+def _in_unit_range(score: float | None) -> bool:
+    """Whether a score is a real number in ``[0, 1]`` -- the only binnable range.
+
+    The overlay counts (via :func:`~langres.core._report_html._histogram`) drop
+    scores outside the ``[0, 1]`` edges, and a raw/signed-score judge can emit
+    such values. Both the overlay and the score-band slices exclude out-of-range
+    (and ``None``) scores through this one predicate, so the two views stay
+    consistent and a negative score can never index a negative band.
+    """
+    return score is not None and 0.0 <= score <= 1.0
+
+
 def _score_overlay(
     confident: Sequence[_Judged], n_bands: int
 ) -> tuple[list[float], list[float], list[float]]:
@@ -435,10 +478,11 @@ def _score_overlay(
     The diff of the error distribution against the success distribution along the
     score axis: two histograms sharing fixed ``[0, 1]`` edges so the bands line up
     (density normalization happens at render time). Confident pairs without a
-    score (a decision-only judge) contribute to neither.
+    score (a decision-only judge) or with an out-of-``[0, 1]`` score contribute to
+    neither -- consistent with the score-band slices (see :func:`_in_unit_range`).
     """
-    error_scores = [j.score for j in confident if j.error and j.score is not None]
-    success_scores = [j.score for j in confident if not j.error and j.score is not None]
+    error_scores = [j.score for j in confident if j.error and _in_unit_range(j.score)]
+    success_scores = [j.score for j in confident if not j.error and _in_unit_range(j.score)]
     if not error_scores and not success_scores:
         return [], [], []
     edges = [i / n_bands for i in range(n_bands + 1)]
@@ -486,13 +530,15 @@ def _slice(
 def _score_band_slices(
     confident: Sequence[_Judged], overall_rate: float | None, n_bands: int
 ) -> list[FailureSlice]:
-    """One slice per score band (pairs with a score); empty bands are dropped."""
-    scored = [j for j in confident if j.score is not None]
+    """One slice per score band; empty bands and out-of-``[0, 1]`` scores are dropped."""
+    # Exclude out-of-range scores (consistent with the overlay), so a negative
+    # score cannot produce a negative band index -> buckets[-1] KeyError.
+    scored = [j for j in confident if _in_unit_range(j.score)]
     if not scored:
         return []
     buckets: dict[int, list[_Judged]] = {b: [] for b in range(n_bands)}
     for j in scored:
-        assert j.score is not None  # narrowed by the filter above
+        assert j.score is not None  # narrowed by the _in_unit_range filter above
         band = min(int(j.score * n_bands), n_bands - 1)  # score==1.0 lands in the last band
         buckets[band].append(j)
     out: list[FailureSlice] = []

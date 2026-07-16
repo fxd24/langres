@@ -1,4 +1,4 @@
-"""Proof: a curated training recipe beats random pairs at an equal label budget.
+"""Proof: a curated training recipe beats random pairs at an equal training budget.
 
 This is the acceptance demonstration for the data-preparation layer. It asks one
 question and answers it with numbers, on a real benchmark, for $0:
@@ -6,6 +6,10 @@ question and answers it with numbers, on a real benchmark, for $0:
     Given a fixed budget of N training pairs drawn from a blocked candidate pool,
     does *curating* those N (balance + hard positives + denoise + augmentation)
     beat drawing them at random?
+
+Both arms draw the same N pairs from the *same fully-labeled pool*: the budget is
+training size N, not a labeling budget, and the arms differ only in how those N are
+*selected*.
 
 Why it works -- honestly. A blocked entity-resolution pool is dominated by
 non-matches (here an all-pairs blocked pool runs ~1:500 positive:negative). A
@@ -104,6 +108,8 @@ def assemble_recipe(
     Returns ``(recipe, n_flagged)`` -- the assembled pairs and how many the
     denoiser dropped.
     """
+    # Denoise-before-mine can strip genuine hard positives (denoise and hard-positive
+    # mining compete); the recipe accepts that here because the class-balance lift dominates.
     clean, flagged = denoise_pairs(train_pool, seed=SEED)
     hard = mine_misclassified_pairs(clean, cap=POS_CAP, seed=SEED)
     augmented = [
@@ -202,7 +208,7 @@ def main() -> None:
 
     verdict = "LIFT" if margin > 0 else "NO LIFT"
     print(
-        f"\n=> {verdict}: at an equal {budget}-pair budget, curation "
+        f"\n=> {verdict}: at an equal {budget}-pair training budget, curation "
         f"{'beats' if margin > 0 else 'does not beat'} random by {margin:+.4f} F1."
     )
     print(
