@@ -910,7 +910,8 @@ across every `k`), and drives the loop over `space.configs()`.
 - `embedder: EmbeddingProvider | None` — optional pre-built embedder (a fake keeps
   tests offline); production leaves it `None` to load the real SentenceTransformer.
 - `tracker: ExperimentTracker | None` — optional experiment tracker; defaults to a
-  no-op (the deferred Trackio/HF hook).
+  no-op. `resolve_tracker("trackio")` is local-first (no credentials/network); an HF
+  Space/Dataset sync is an opt-in `space_id`/`HF_TOKEN` config on top.
 
 ### score_blocking (the one-config scorer)
 
@@ -999,9 +1000,10 @@ Every trial (including over-budget rejects and scorer failures) is appended to t
 `store` path's `RunStore` JSONL (the `core.runs` spine, §2). `store=None` writes
 nothing; read a trail back with `RunStore(path).read()` (each `RunRecord`'s
 `metrics["accepted"]` is `1.0`/`0.0`, so the incumbent timeline is reconstructable
-from the store alone). This is **local-only for now**: a durable off-laptop
-dashboard (Trackio + Hugging Face + models-on-Hub) is deferred behind the optional
-`tracker=` hook (a no-op by default), as are an Optuna/LLAMBO proposer and the
-matching vertical (`log_loss` / AUC-PR steering) + fine-tuning. See
+from the store alone). `RunStore` is local-only by design; a durable off-laptop
+dashboard is available via `tracker=resolve_tracker("trackio")` (local-first; an
+HF Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) -- models-on-Hub is not
+built. Still deferred: an Optuna/LLAMBO proposer and the matching vertical
+(`log_loss` / AUC-PR steering) + fine-tuning. See
 [EXPERIMENTS.md](EXPERIMENTS.md#self-tuning-the-autoresearch-loop-langresoptimize)
 for the worked amazon_google proof and `examples/research/blocking_recall_autoresearch.py`.

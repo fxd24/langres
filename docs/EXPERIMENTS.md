@@ -373,13 +373,25 @@ records = RunStore("tmp/autoresearch/ag_blocking.jsonl").read()   # last-wins pe
 accepted = [r for r in records if (r.metrics or {}).get("accepted") == 1.0]
 ```
 
-This persistence is **local-only for now.** A durable, off-laptop dashboard
-(Trackio + Hugging Face, with the winning artifact pushed to the Hub) is
-**deferred** — an optional `tracker=` hook is wired into `optimize`/`run_loop` but
-defaults to a no-op. Also deferred: swapping the exhaustive grid proposer for an
-Optuna/LLAMBO one, and the **matching vertical** (steering a judge on `log_loss` /
-AUC-PR) plus small-LM fine-tuning. **M1 proves the loop on the blocking vertical
-only** (epic #145).
+The `RunStore` JSONL is the durable local record; `store=None` skips it entirely
+(the offline path). For a durable, off-laptop **dashboard**, pass a tracker:
+
+```python
+from langres.core.trackers import resolve_tracker
+
+# Local-first: no credentials, no network -- writes to a local trackio SQLite store.
+result = optimize(space, objective, "amazon_google", tracker=resolve_tracker("trackio"))
+```
+
+Set `HF_TOKEN` and configure a `space_id` (`TrackioTracker(space_id="user/space")` or
+`TRACKIO_SPACE_ID`) to additionally sync the dashboard to a Hugging Face Space (and
+`TRACKIO_DATASET_ID`/`dataset_id` for a persistent HF Dataset) — omitted, this stays
+local-only. Every trial the loop already logs to `RunStore` (accepted, over-budget
+rejects, and scorer failures alike) also streams to the tracker via the same
+`capture_run` call, so nothing needs to be wired twice. Also deferred: swapping the
+exhaustive grid proposer for an Optuna/LLAMBO one, and the **matching vertical**
+(steering a judge on `log_loss` / AUC-PR) plus small-LM fine-tuning. **M1 proves the
+loop on the blocking vertical only** (epic #145).
 
 ### Worked proof — climbing blocking recall@budget on amazon_google
 
