@@ -81,7 +81,8 @@ assert verdict.score_type == "prob_llm"
 ```
 
 ```python
-from langres.core import AllPairsBlocker, Clusterer, Resolver
+from langres.core import Clusterer, Resolver
+from langres.core.blockers import AllPairsBlocker
 
 resolver = Resolver(
     blocker=AllPairsBlocker(schema=Company),

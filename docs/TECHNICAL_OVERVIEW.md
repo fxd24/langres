@@ -411,7 +411,7 @@ the master id, never survivorship'd.
 **Example:**
 
 ```python
-from langres.core import Canonicalizer
+from langres.core.canonicalizer import Canonicalizer
 
 canon = Canonicalizer(
     default_strategy="most_complete",

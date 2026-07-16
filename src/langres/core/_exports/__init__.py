@@ -42,7 +42,7 @@ import + the ``__all__`` entry (eager), or the ``LAZY_SYMBOLS`` +
 ``EXTRA_BY_SYMBOL`` entry and a ``TYPE_CHECKING`` import (lazy). Nothing else
 changes: this module composes whatever the fragments declare.
 
-**Adding a domain** (rare): add the fragment here (import + the four merges
+**Adding a domain** (rare): add the fragment here (import + the three merges
 below) and one star-import line in ``langres/core/__init__.py``.
 
 **Keep lazy names lazy**: a symbol pulling an optional/heavy dependency
