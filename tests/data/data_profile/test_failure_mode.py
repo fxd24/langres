@@ -11,7 +11,10 @@ filter).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import pytest
 
 from langres.data.data_profile import (
     DataProfileReport,
@@ -300,6 +303,74 @@ class TestGracefulDegradation:
         section = profile_failure_mode(judgements, gold_pairs=[("a", "b")], records=records)
         assert section is not None
         assert any(s.dimension == "empty:extra" for s in section.slices)
+
+
+class TestReviewHardening:
+    """Cross-model review fixes: record-key normalization, score-band clamping, gold logging."""
+
+    def test_int_keyed_records_match_str_keyed_slices(self) -> None:
+        # The join stringifies judgement ids; a raw INT-keyed `records` map would
+        # miss every lookup, silently reporting `empty:name` as n=2 lift=1.0 and
+        # dropping the source slice. The str-keyed truth is n=1 lift=2.0 --
+        # normalizing the records keys once at entry makes both agree.
+        judgements = [
+            _row("1", "2", 0.90, True),  # gold match, predicted match -> correct
+            _row("3", "4", 0.40, False),  # gold match, predicted non-match -> FN error
+        ]
+        gold = [("1", "2"), ("3", "4")]
+        fields = {
+            "1": {"id": "1", "name": "Acme", "source": "abt"},
+            "2": {"id": "2", "name": "Acme Inc", "source": "buy"},
+            "3": {"id": "3", "name": "", "source": "abt"},  # name empty -> the error slice
+            "4": {"id": "4", "name": "Nimbus LLC", "source": "buy"},
+        }
+        str_records: dict[Any, dict[str, Any]] = {k: dict(v) for k, v in fields.items()}
+        int_records: dict[Any, dict[str, Any]] = {int(k): dict(v) for k, v in fields.items()}
+
+        str_section = profile_failure_mode(judgements, gold_pairs=gold, records=str_records)
+        int_section = profile_failure_mode(judgements, gold_pairs=gold, records=int_records)
+        assert str_section is not None and int_section is not None
+
+        # The str-keyed truth: empty:name concentrates the single error (n=1, lift=2.0).
+        str_empty = next(s for s in str_section.slices if s.dimension == "empty:name")
+        assert str_empty.n == 1
+        assert str_empty.error_rate == 1.0
+        assert str_empty.lift == 2.0
+        # Int-keyed lookups now hit the same records -> byte-identical slices.
+        assert int_section.rows() == str_section.rows()
+        assert any(s.dimension == "source" for s in int_section.slices)
+
+    def test_out_of_range_scores_do_not_crash_and_match_overlay(self) -> None:
+        # A raw/signed-score judge can emit scores outside [0, 1]. The score-band
+        # slice path must not crash on a negative band (buckets[-1] KeyError), and
+        # must exclude out-of-range scores consistently with the overlay (which
+        # drops them via _histogram).
+        judgements = [
+            _row("a", "b", -0.5, True),  # gold match, correct; score below 0
+            _row("c", "d", 1.5, False),  # gold non-match, correct; score above 1
+            _row("e", "f", 0.40, False),  # gold match -> FN error; in-range
+        ]
+        gold = [("a", "b"), ("e", "f")]
+        section = profile_failure_mode(judgements, gold_pairs=gold, n_score_bands=5)
+        assert section is not None
+        # Overlay drops the two out-of-range scores; only the in-range 0.4 error remains.
+        assert sum(section.error_counts) == 1
+        assert sum(section.success_counts) == 0
+        # Score-band slices cover only the in-range score (no negative-band crash).
+        band_pairs = sum(s.n for s in section.slices if s.dimension == "score_band")
+        assert band_pairs == 1
+
+    def test_malformed_gold_pairs_are_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        # This section's contract is "omissions logged, never silent": dropped
+        # malformed gold pairs (not exactly two distinct ids) must be counted+logged.
+        judgements = [_row("a", "b", 0.9, True)]
+        with caplog.at_level(logging.WARNING, logger="langres.data.data_profile.failure_mode"):
+            section = profile_failure_mode(
+                judgements, gold_pairs=[("a",), ("x", "y", "z"), ("a", "b")]
+            )
+        assert section is not None
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("malformed gold" in m.lower() and "2" in m for m in messages)
 
 
 class TestRenderLadder:
