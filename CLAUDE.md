@@ -49,7 +49,9 @@ langres/
 │   ├── optimize.py     # langres.optimize / score_blocking: import-light autoresearch facade over blocking search
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
+│   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
+│   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
 │   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
 │   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm/prompt_llm), DEFAULT_AUTO_MODEL, NoJudgeAvailableError, spend cap
 │   │   ├── method_registry.py  # ONE MethodSpec registry: judge/method name -> builder + identity (all three dispatch paths resolve here)
@@ -87,7 +89,7 @@ modules, a general `Optimizer`, a synthetic data generator.
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
 - `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `core.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `core.metrics`/`core.benchmark` (BCubed/pairwise metrics, `evaluate()`) stays importable without it.
 
-These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
+These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`. **Adding a public symbol?** The two package `__init__.py` files are thin aggregators holding no per-name content: add the export (eager import, or the lazy `name -> module` + `[extra]` entry) to the per-domain fragment that owns its domain under `langres/_exports/` or `langres/core/_exports/` — never to the sorted `__all__` itself. A heavy dep must go in `LAZY_SYMBOLS`, never a fragment's module scope: fragments are eagerly imported, so an import there lands in every bare `import langres`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 
