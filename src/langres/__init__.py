@@ -30,87 +30,39 @@ inside their fit paths). ``EvalReport``, ``gold_pairs_from_clusters``,
 never pulls the eval-report/benchmark modules -- or scikit-learn
 (``derive_threshold``, the ``[trained]`` extra) or litellm (``LLMMatcher``, the
 ``[llm]`` extra) -- into ``sys.modules``. See ``tests/test_import_budget.py``.
+
+**This module is a thin aggregator.** The exports -- eager imports included --
+live in per-domain fragments under :mod:`langres._exports`, one file per
+work-stream (verbs, optimize, core, flywheel, training, data). Both the sorted
+``__all__`` and the eager import block were merge-conflict hotspots: their lines
+belong to different streams, so any two streams collided on this file.
+
+**To add an export, edit the owning fragment, not this file.** Nothing below is
+per-*name*; only a brand new domain touches this module. See
+``langres/_exports/__init__.py`` for the fragment contract.
 """
 
 import importlib
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _metadata_version
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from langres.clients.openrouter import BudgetExceeded
-from langres.core import (
-    Bootstrap,
-    CompanySchema,
-    Correction,
-    CorrectionLog,
-    ERCandidate,
-    FitReport,
-    GEPA,
-    Isotonic,
-    JudgementLog,
-    MIPRO,
-    Method,
-    PairwiseJudgement,
-    Platt,
-    Resolver,
-    ReviewQueue,
-    align_pairs,
-    derive_threshold_from_pairs,
-    harvest_labeled_pairs,
-    select_for_review,
-)
-from langres.core.models import MatcherAbstainedError
-from langres.core.presets import DEFAULT_AUTO_MODEL, NoMatcherAvailableError
-from langres.optimize import optimize, score_blocking
-from langres.verbs import LinkVerdict, dedupe, link
+from langres import _exports
 
-if TYPE_CHECKING:
-    # Only reached by mypy (never at runtime) -- keeps the lazy names visible
-    # to `mypy --strict` without executing the imports below on a bare import.
-    from langres.core.benchmark import gold_pairs_from_clusters
-    from langres.core.calibration import derive_threshold
-    from langres.data.data_profile import DataProfileReport
-    from langres.core.eval_report import EvalReport
-    from langres.core.matchers.llm_judge import LLMMatcher
+# Bind each fragment's EAGER names into this namespace. Every star-import is
+# bounded by that fragment's own `__all__`, so this imports exactly the names
+# the fragment declares -- and nothing lazy (a lazy name is deliberately not
+# defined at runtime; see the _exports contract).
+from langres._exports._core import *  # noqa: F403
+from langres._exports._data import *  # noqa: F403
+from langres._exports._flywheel import *  # noqa: F403
+from langres._exports._optimize import *  # noqa: F403
+from langres._exports._training import *  # noqa: F403
+from langres._exports._verbs import *  # noqa: F403
 
-__all__ = [
-    "Bootstrap",
-    "BudgetExceeded",
-    "CompanySchema",
-    "DEFAULT_AUTO_MODEL",
-    "Correction",
-    "CorrectionLog",
-    "DataProfileReport",
-    "ERCandidate",
-    "EvalReport",
-    "FitReport",
-    "GEPA",
-    "Isotonic",
-    "MatcherAbstainedError",
-    "Method",
-    "MIPRO",
-    "JudgementLog",
-    "LinkVerdict",
-    "LLMMatcher",
-    "NoMatcherAvailableError",
-    "PairwiseJudgement",
-    "Platt",
-    "QLoRA",
-    "Resolver",
-    "ReviewQueue",
-    "align_pairs",
-    "dedupe",
-    "derive_threshold",
-    "derive_threshold_from_pairs",
-    "finetune",
-    "gold_pairs_from_clusters",
-    "harvest_labeled_pairs",
-    "link",
-    "optimize",
-    "run_finetune",
-    "score_blocking",
-    "select_for_review",
-]
+#: The composed public surface -- every fragment's slice, deduplicated and
+#: sorted (see :data:`langres._exports.NAMES`).
+__all__ = list(_exports.NAMES)
 
 # Single source of truth is pyproject.toml; resolved from installed metadata so
 # a version bump can never miss this string again. Falls back for source trees
@@ -121,36 +73,13 @@ except PackageNotFoundError:  # pragma: no cover - only hit on uninstalled sourc
     __version__ = "0.0.0.dev0"
 
 #: ``name -> owning module`` for root exports resolved on first access (PEP
-#: 562, mirroring ``langres.core.__getattr__``). ``EvalReport`` and
-#: ``gold_pairs_from_clusters`` are import-light but live in modules kept out
-#: of the eager import graph on purpose (``core.eval_report`` pulls
-#: ``core.benchmark``/``core.metrics``); ``derive_threshold`` imports
-#: scikit-learn at module scope (the ``[trained]`` extra).
-_LAZY_SYMBOLS: dict[str, str] = {
-    "EvalReport": "langres.core.eval_report",
-    "DataProfileReport": "langres.data.data_profile",
-    "derive_threshold": "langres.core.calibration",
-    "gold_pairs_from_clusters": "langres.core.benchmark",
-    # The LLM matcher (serve a fine-tuned model_ref, a vLLM api_base, or a paid
-    # judge). Importing the class pulls litellm -> the [llm] extra, so it stays
-    # lazy: a bare `import langres` never touches litellm.
-    "LLMMatcher": "langres.core.matchers.llm_judge",
-    # The finetune surface: the module is import-light (peft/trl/torch import
-    # lazily inside QLoRATrainer.train), so these symbols carry no [finetune] extra
-    # here -- an ImportError from importing the symbols is a genuine bug. The
-    # actionable "pip install langres[finetune]" hint is raised at train time.
-    "QLoRA": "langres.core.finetune",
-    "finetune": "langres.core.finetune",
-    "run_finetune": "langres.core.finetune",
-}
+#: 562, mirroring ``langres.core.__getattr__``).
+_LAZY_SYMBOLS: dict[str, str] = _exports.LAZY_SYMBOLS
 
 #: ``name -> extra`` for the lazy symbols where a missing dependency has a
 #: ``pip install langres[<extra>]`` fix. Symbols absent here need no extra --
 #: an ImportError from them is a genuine bug and propagates unchanged.
-_EXTRA_BY_SYMBOL: dict[str, str] = {
-    "derive_threshold": "trained",
-    "LLMMatcher": "llm",
-}
+_EXTRA_BY_SYMBOL: dict[str, str] = _exports.EXTRA_BY_SYMBOL
 
 
 def __getattr__(name: str) -> Any:
