@@ -45,7 +45,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from langres import __version__
+from langres._version import __version__
 from langres.core.harvest import Correction, CorrectionLog
 from langres.core.review import ReviewItem, ReviewQueue
 

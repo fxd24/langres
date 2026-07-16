@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
-import langres
+from langres._version import __version__ as LANGRES_VERSION
 from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
@@ -1418,7 +1418,7 @@ class Resolver:
         ]
         return ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
-            langres_version=langres.__version__,
+            langres_version=LANGRES_VERSION,
             components=components,
         )
 
@@ -1610,11 +1610,11 @@ class Resolver:
                 f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
                 f"schema changed incompatibly); re-save with this langres build."
             )
-        if manifest.langres_version != langres.__version__:
+        if manifest.langres_version != LANGRES_VERSION:
             logger.warning(
                 "Loading artifact written by langres %s into langres %s; "
                 "configs are forward-compatible within artifact version %s.",
                 manifest.langres_version,
-                langres.__version__,
+                LANGRES_VERSION,
                 ARTIFACT_VERSION,
             )

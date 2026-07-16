@@ -15,6 +15,15 @@
     "'core' home at BOTH its new path and the back-compat shim at the old one. These are",
     "transcription decisions, not the plan's: see the doc's post-W-1 delta section.",
     "",
+    "langres._version (the stdlib-only version leaf that killed the runtime cycle) is",
+    "mapped to 'core', NOT to 'root' as the naive-file-move reading would have it. This",
+    "is a transcription decision and it is measured, not aesthetic: 'root' re-creates an",
+    "architectures <-> root knot (16 mutual pairs all-edges / 10 toplevel) because",
+    "core/resolver.py reads the version; 'core' adds no cross-package edge at all (15 / 9",
+    "-- identical to leaving it unmapped). A zero-dependency leaf read by three packages",
+    "belongs at the bottom layer; putting it in root would re-invert the exact dependency",
+    "that PR removed. Change it here if the plan says otherwise.",
+    "",
     "'exact' wins over 'prefix'; among prefixes the longest match wins."
   ],
   "prefix": {
@@ -37,6 +46,7 @@
   "exact": {
     "langres": "root",
     "langres._method_names": "architectures",
+    "langres._version": "core",
     "langres.cli": "root",
     "langres.clients.tracking": "tracking",
 

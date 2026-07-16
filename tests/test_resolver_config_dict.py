@@ -154,7 +154,6 @@ def test_config_dict_recipe_id_stable_across_version_bump(
     artifact-schema bump would silently fork ``recipe_id`` and break idempotent
     replay. Version/provenance live on the RunContext, unhashed.
     """
-    import langres
     from langres.core import resolver as resolver_mod
     from langres.core.runs import RunContext, compute_recipe_id
 
@@ -170,8 +169,13 @@ def test_config_dict_recipe_id_stable_across_version_bump(
 
     baseline = _recipe_id()
 
-    # Simulate a package release + artifact-schema bump.
-    monkeypatch.setattr(langres, "__version__", "999.999.999")
+    # Simulate a package release + artifact-schema bump. Both constants are
+    # patched on `resolver_mod` -- where they are *looked up* -- because that is
+    # where `_build_manifest` reads them from. Patching `langres.__version__`
+    # instead would no-op silently (resolver binds the version from the
+    # `langres._version` leaf, not through the root) and this test would pass
+    # while simulating nothing.
+    monkeypatch.setattr(resolver_mod, "LANGRES_VERSION", "999.999.999")
     monkeypatch.setattr(resolver_mod, "ARTIFACT_VERSION", "999")
 
     assert _recipe_id() == baseline
