@@ -26,7 +26,7 @@ except ImportError:
     RateLimitError = Exception
 
 from langres.clients.openrouter import parse_openrouter_billing
-from langres.core.matchers.model_ref import ModelRef, normalize_model_ref, to_config
+from langres.core.model_ref import ModelRef, normalize_model_ref, to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
@@ -512,7 +512,7 @@ class LLMMatcher(Matcher[SchemaT]):
                 first use. Inject a client only as an escape hatch (e.g. tests
                 or a custom client); use :meth:`from_env` for the happy path.
             model: The model to run, as a *weightless reference* (see
-                :class:`~langres.core.matchers.model_ref.ModelRef`):
+                :class:`~langres.core.model_ref.ModelRef`):
 
                 - an API model name — ``"gpt-5-mini"``, ``"azure/gpt-5-mini"``,
                   ``"openrouter/..."`` — served over the wire via litellm;
