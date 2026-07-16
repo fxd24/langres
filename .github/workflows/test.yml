@@ -182,6 +182,44 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+      # Second, PATH-SCOPED gate. The tiered policy (.claude/rules/testing.md)
+      # holds the `langres.core` library contract -- what users serialize against
+      # -- to a higher bar than the rest of the repo, but that tier was enforced
+      # by HUMAN REVIEW only: a path glob in a markdown rule, not a gate. The
+      # repo-wide floor is 90% while actual coverage is ~99%, so ~9 points of
+      # slack (order 1,000 statements) could go dark with CI green the whole way.
+      # The architecture refactor makes that concrete -- it moves most of `core/`
+      # into new packages, and nothing would notice the contract being quietly
+      # declassified on the way.
+      #
+      # Reads the .coverage data left by the run above (the FULL suite -- the
+      # slow ML tests are the only cover for some paths, so this number is only
+      # honest here). --fail-under applies to the --include subset alone.
+      #
+      # 98 = the measured `core/*` coverage (98.84% at ba4b1b7) rounded down.
+      # It is a REGRESSION RATCHET, not the policy: the policy target stays
+      # 95-100%, and a 95 floor here would let ~370 more units of the contract
+      # vanish before firing. Raise it as the real number climbs; if it ever
+      # blocks legitimate work, lower it deliberately rather than deleting it.
+      #
+      # !! KEEP THE GLOB IN SYNC !! As refactor waves relocate the contract out
+      # of `core/` (components/, architectures/, ... -- see the tier definition
+      # in .claude/rules/testing.md), ADD the new paths here. If the glob ever
+      # matches NOTHING, `coverage report` exits 1 ("No data to report.") and
+      # this step goes red rather than passing vacuously -- but a PARTIAL move
+      # still passes while silently covering less of the contract, so this is a
+      # real maintenance obligation, not a self-healing gate.
+      #
+      # Deliberately AFTER the Codecov upload: that upload is advisory, and when
+      # this gate fails you still want the data published to diagnose the drop.
+      #
+      # --precision=2 is LOAD-BEARING, not cosmetic: coverage compares the total
+      # ROUNDED to `precision`, which defaults to 0. Without it, round(97.6) = 98
+      # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
+      # With it the comparison is exact and 98 means 98.
+      - name: Coverage gate -- langres.core contract
+        run: uv run coverage report --include="src/langres/core/*" --precision=2 --fail-under=98
+
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra
   # finetune`) and run the `finetune`-marked tests -- the CPU dry-run that actually

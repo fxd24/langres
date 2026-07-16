@@ -235,7 +235,16 @@ branch = true
 # and src/langres/data/mining.py coming next), behavior/smoke on
 # benchmark/experiment/harness code, so the blended whole-repo floor sits
 # below the core tier. Kept simple (one floor, no per-module omit lists).
-# Gated weekly by test-full, not per-PR.
+#
+# This floor is REPO-WIDE and deliberately relaxed; it is not the core tier's
+# floor. The core contract is gated separately (and higher) by the
+# "Coverage gate -- langres.core contract" step in .github/workflows/test.yml,
+# because a 90% repo-wide floor against ~99% actual coverage leaves enough slack
+# to let the contract go dark unnoticed.
+#
+# Enforced by test-full on every merge to main + on demand (workflow_dispatch),
+# not per-PR. (It was weekly when this comment was written; 2e46eae replaced the
+# weekly schedule with push-to-main and left the comment stale.)
 fail_under = 90
 exclude_lines = [
     "pragma: no cover",
