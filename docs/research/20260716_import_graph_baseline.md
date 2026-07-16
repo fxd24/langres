@@ -107,6 +107,19 @@ submodule edges (`data_profile/* → core._report_html|_svg`, `data/* → data._
 > set is gated against grimp (`test_edges_match_grimp_exactly`). The scripts dying with their
 > worktree is exactly why the instrument is now in-repo.
 
+> **A sixth instance of the same error — in this tool, caught in review.** The first cut of
+> `_is_type_checking_test` asked `"TYPE_CHECKING" in ast.dump(test)`: **a substring match on a
+> debug representation**. The identical class of mistake as the four it was built to audit,
+> committed inside the instrument. It would have filed `if not TYPE_CHECKING:` and
+> `if MY_TYPE_CHECKING_FLAG:` imports as lazy — *hiding real runtime edges*. Fixed to match the
+> test node structurally (bare `Name`, or `Attribute` like `typing.TYPE_CHECKING`), never by
+> searching inside it, since any search — `ast.dump` substring *or* `ast.walk` — reintroduces
+> the bug. Measured, it changes **no** output here: all 34 guards in `src/langres` use the bare
+> spelling, so it was latent-wrong rather than actively-wrong. The lesson is not that the
+> heuristic was harmless; it is that **"grep for the token" is the default failure mode of this
+> whole problem domain, and it survives contact with the author who is writing the doc about
+> it.** Only a structural check and a test that fails against the old implementation retire it.
+
 > **A hypothesis that did not survive.** The expectation — mine and the orchestrator's — was
 > that routing edges through `langres.core`'s `__init__` (a member of both SCCs) would
 > **manufacture** cycles, so the corrected tangle should be *smaller*. **That is false.** The
