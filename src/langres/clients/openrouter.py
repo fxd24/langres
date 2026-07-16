@@ -26,6 +26,11 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+# Re-export (PEP 484 `X as X` explicit-re-export form): these two MOVED to
+# langres.core.spend -- see the "Spend monitor" section below for why.
+from langres.core.spend import BudgetExceeded as BudgetExceeded
+from langres.core.spend import SpendMonitor as SpendMonitor
+
 if TYPE_CHECKING:
     from langres.core.benchmark import CostTrack
     from langres.core.models import PairwiseJudgement
@@ -427,77 +432,11 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 # ---------------------------------------------------------------------------
 # Spend monitor
 # ---------------------------------------------------------------------------
-
-
-class BudgetExceeded(RuntimeError):
-    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget.
-
-    ``partial_judgements`` carries every judgement already produced (and paid
-    for) before the cap tripped (E9) -- populated by the catcher, not here
-    (see :class:`~langres.core.presets._SpendCappedMatcher`). Declared with a
-    default empty list so any future raiser is safe even if it never sets it,
-    and callers/mypy see the attribute without an ad hoc
-    ``# type: ignore[attr-defined]`` at the one call site that populates it.
-    """
-
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
-        self.partial_judgements: list[PairwiseJudgement] = []
-
-
-class SpendMonitor:
-    """A KISS cumulative-cost ledger for budget-aware paid runs.
-
-    Accumulate the honest cost of each paid call with :meth:`add`, then call
-    :meth:`check` to log a warning once spend passes ``warn_frac * budget_usd``
-    and raise :class:`BudgetExceeded` once it passes ``budget_usd``. This is a
-    monitoring guard, not a hard cap: it never wraps or throttles the LM, it only
-    observes and warns/raises. Pure — no I/O beyond ``logging``.
-    """
-
-    def __init__(self, *, budget_usd: float = 5.0, warn_frac: float = 0.8) -> None:
-        """Initialize the ledger.
-
-        Args:
-            budget_usd: Total spend budget in USD. :meth:`check` raises past it.
-            warn_frac: Fraction of ``budget_usd`` at which :meth:`check` warns.
-        """
-        self._budget_usd = budget_usd
-        self._warn_frac = warn_frac
-        self._spent = 0.0
-
-    def add(self, cost_usd: float) -> None:
-        """Accumulate ``cost_usd`` into the running total."""
-        self._spent += cost_usd
-
-    @property
-    def budget_usd(self) -> float:
-        """The configured total spend budget (USD)."""
-        return self._budget_usd
-
-    @property
-    def spent(self) -> float:
-        """Cumulative spend recorded so far (USD)."""
-        return self._spent
-
-    @property
-    def remaining(self) -> float:
-        """Budget left before the cap (USD); negative once over budget."""
-        return self._budget_usd - self._spent
-
-    def check(self) -> None:
-        """Warn past the warn threshold; raise :class:`BudgetExceeded` past the budget.
-
-        Raises:
-            BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
-        """
-        if self._spent > self._budget_usd:
-            raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
-        if self._spent >= self._warn_frac * self._budget_usd:
-            logger.warning(
-                "spend $%.4f has passed %.0f%% of the $%.2f budget (remaining $%.4f)",
-                self._spent,
-                self._warn_frac * 100.0,
-                self._budget_usd,
-                self.remaining,
-            )
+#
+# `SpendMonitor`/`BudgetExceeded` MOVED to `langres.core.spend` (B1). The ledger
+# is pure USD arithmetic with nothing OpenRouter-specific about it, and it has
+# to be reachable from `langres.core.resolver` -- which cannot import a
+# `clients` module that (transitively) imports it back. Re-exported here, not
+# aliased away: `from langres.clients.openrouter import SpendMonitor,
+# BudgetExceeded` is load-bearing for the benchmark harness, the examples and
+# the root `langres.BudgetExceeded` export, and all of it keeps working.

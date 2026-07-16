@@ -67,6 +67,8 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.registry import get_component
 from langres.core.runs import current_run
+from langres.core.spend import SpendMonitor
+from langres.core.spend_cap import SpendCappedMatcher, effective_budget
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
@@ -132,15 +134,15 @@ def _build_module_for_judge(
         if dspy_price_per_1k(resolved_model) == 0.0:
             # An unpinned model self-reports $0/pair -- honest, not reassuring
             # (mirrors core.presets.notice_pre_scoring_cost's identical check).
-            # Resolver.from_schema has no spend cap at all (see its matcher=
-            # docstring), so this is strictly worse than the verbs' blind-cap
-            # case: nothing would ever stop a runaway bill.
+            # The Resolver IS spend-capped now (B1), but a cap fed $0 costs can
+            # never trip: the pipeline is capped on paper and blind in practice.
             warnings.warn(
                 f"model {resolved_model!r} has no pinned price in "
                 "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
-                "$0/pair cost. Resolver.from_schema builds an UNCAPPED pipeline "
-                "(no spend cap at all) -- pin its price in PRICES_PER_1M, or use "
-                "langres.link/langres.dedupe for the built-in spend cap.",
+                "$0/pair cost -- the Resolver's budget_usd spend cap tallies that "
+                "same $0 and can NEVER trip, so it will not stop a runaway bill. "
+                "Pin its price in PRICES_PER_1M, or use a model that already is, "
+                "to get real spend-cap protection.",
                 stacklevel=3,
             )
     return get_method(judge).build(
@@ -364,11 +366,35 @@ class Resolver:
         matcher: Matcher[Any],
         clusterer: Clusterer,
         calibrator: CalibratorFitMixin | None = None,
+        *,
+        budget_usd: float | None = None,
     ) -> None:
+        """Wire four components into one runnable pipeline.
+
+        Args:
+            blocker: Candidate generation + schema normalization.
+            comparator: Optional missing-aware per-feature comparison.
+            matcher: The scorer.
+            clusterer: Connected-components grouping.
+            calibrator: Optional score->probability map (set by ``fit``).
+            budget_usd: **Spend cap for this Resolver's whole lifetime**, in
+                USD. ``None`` (the default) resolves to
+                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD` -- it does
+                NOT mean "uncapped"; pass
+                :data:`~langres.core.spend_cap.UNCAPPED_BUDGET_USD`
+                (``float("inf")``) for that, deliberately and in writing. A
+                free matcher (string/embedding) meters $0 and never trips.
+        """
         self.blocker = blocker
         self.comparator = comparator
         self.module = matcher
         self.clusterer = clusterer
+        # ONE ledger for this Resolver's lifetime, so N resolve() calls share
+        # one budget instead of getting a fresh one each (B1). The monitor --
+        # not the wrapper -- is the durable thing: `self.module` is reassignable
+        # (dedupe() wraps it in a LoggingMatcher; distil() replaces it), so
+        # _judgements() re-wraps the CURRENT module around this same ledger.
+        self._spend_monitor = SpendMonitor(budget_usd=effective_budget(budget_usd))
         # Optional score->probability map, set by fit(method=Platt()/Isotonic())
         # and applied in _judgements(); None leaves raw scores untouched.
         self.calibrator = calibrator
@@ -397,6 +423,7 @@ class Resolver:
         prompt_template: str | None = None,
         system_prompt: str | None = None,
         response_parser: str | None = None,
+        budget_usd: float | None = None,
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
@@ -428,14 +455,9 @@ class Resolver:
                 per-feature similarities -- needs the ``[trained]`` extra and is
                 TRAINABLE, so ``fit(records, pairs=...)``/``labels=...`` it with
                 labeled data before it can score), or a ``Matcher`` instance. This
-                is the low-level, explicit switch (no ``"auto"`` key-based
-                resolution and no spend cap -- that magic lives in
-                ``langres.link``/``langres.dedupe``). **Caution**:
-                ``matcher="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
-                ``Matcher``) built here runs UNCAPPED -- there is no
-                ``budget_usd`` on this method and nothing stops a runaway
-                bill. Use ``langres.link``/``langres.dedupe`` for the
-                built-in ``SpendMonitor`` cap.
+                is the low-level, explicit switch: no ``"auto"`` key-based
+                resolution (that magic stays in ``langres.link``/``langres.dedupe``)
+                -- but a paid matcher IS spend-capped here, via ``budget_usd``.
             model: Model id override for ``matcher="zero_shot_llm"``/``"prompt_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
             prompt_template: ``matcher="prompt_llm"`` only: custom prompt with
@@ -445,6 +467,10 @@ class Resolver:
             response_parser: ``matcher="prompt_llm"`` only: a *registered*
                 parser name (``"score"`` / ``"binary_yes_no"`` -- see
                 ``llm_judge.RESPONSE_PARSERS``), serialized in the artifact.
+            budget_usd: Spend cap for the returned Resolver's whole lifetime
+                (see :meth:`__init__`). ``None`` resolves to
+                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`, NOT
+                "uncapped".
 
         Returns:
             A ready-to-run Resolver.
@@ -491,6 +517,7 @@ class Resolver:
             comparator=comparator,
             matcher=module,
             clusterer=Clusterer(threshold=threshold),
+            budget_usd=budget_usd,
         )
 
     # ------------------------------------------------------------------
@@ -1223,12 +1250,21 @@ class Resolver:
     def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
         """Block records into candidates, score them, and calibrate if fitted.
 
+        Scoring runs through this Resolver's spend cap (``budget_usd=``), whose
+        ledger is shared across every :meth:`resolve`/:meth:`predict` call on
+        this instance -- so two successive resolves cannot each spend a full
+        budget. The wrapper is rebuilt per call but the
+        :class:`~langres.core.spend.SpendMonitor` is not: that is what makes the
+        cap cumulative while still metering whatever ``self.module`` is *now*
+        (callers reassign it -- ``dedupe`` wraps it in a ``LoggingMatcher``).
+
         When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
         every ranking judgement's raw ``score`` is mapped to a calibrated
         probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
         clusterer thresholds on a real probability. Pure pass-through otherwise.
         """
-        judgements = self.module.forward(self._candidates(records))
+        scorer = SpendCappedMatcher(self.module, monitor=self._spend_monitor)
+        judgements = scorer.forward(self._candidates(records))
         if self.calibrator is None:
             return judgements
         return self._apply_calibrator(judgements, self.calibrator)
