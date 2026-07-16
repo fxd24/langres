@@ -107,14 +107,10 @@ per-PR ``test`` job (``.github/workflows/test.yml``), not just ``test-full``.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
-TOOLS = Path(__file__).resolve().parent.parent / "tools"
-sys.path.insert(0, str(TOOLS))
-
-from import_graph import ImportKind, build_graph  # noqa: E402
+# `tools` is on the path via [tool.pytest.ini_options] pythonpath in pyproject.toml.
+from import_graph import ImportKind, build_graph
 
 
 @dataclass(frozen=True, slots=True)
