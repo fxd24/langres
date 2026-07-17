@@ -215,8 +215,9 @@ class VectorLLMCascade(ERModel):
             "property of your model. FuzzyString saves and loads today. To persist "
             "an embedding pipeline now, build a Resolver/ERModel directly via "
             "ERModel.from_components(...) with a VectorBlocker constructed as "
-            "VectorBlocker(vector_index=..., schema=..., text_field='<field>') -- a "
-            "single named field, which is serializable, unlike a closure."
+            "VectorBlocker(vector_index=..., schema=..., text_field='your_text_field') "
+            "-- text_field takes the NAME of one text field on your schema (e.g. "
+            "'name'), and a named field is serializable, unlike a closure."
         )
 
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
