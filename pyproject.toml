@@ -141,6 +141,15 @@ build-backend = "hatchling.build"
 # (synthetic, BSD-3), fodors_zagat (small), and the peeters_sampled_test.csv
 # pair sets (id/label triples only -- no third-party record text, and the
 # replication seam's sampling stays inspectable from the wheel).
+#
+# !! THESE ARE PATH LITERALS AND THEY FAIL SILENTLY !! Rename a directory below
+# and every pattern quietly matches nothing: the build still succeeds, with zero
+# warnings, and publishes the corpora (measured: 2.16 MB -> 16.07 MB uncompressed
+# wheel, 87.7% third-party CSVs). tests/test_wheel_contents.py is the gate --
+# it builds the real artifacts and compares them against SHIPPED_NON_PY_FILES,
+# an independent allow manifest of what may ship, and separately asserts every
+# pattern here still matches a real file. Moving a dataset means updating BOTH
+# this list and that manifest; the test tells you if you missed one.
 exclude = [
     "src/langres/data/datasets/dblp_acm/*.csv",
     "src/langres/data/datasets/dblp_scholar/*.csv",
