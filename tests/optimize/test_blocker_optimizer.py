@@ -1,10 +1,10 @@
-"""Tests for langres.core.optimizers.blocker_optimizer module."""
+"""Tests for langres.optimize.blocker_optimizer module."""
 
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from langres.core.optimizers.blocker_optimizer import BlockerOptimizer
+from langres.optimize.blocker_optimizer import BlockerOptimizer
 
 
 class TestBlockerOptimizer:
@@ -45,7 +45,7 @@ class TestBlockerOptimizer:
             "k_neighbors": (5, 50),
         }
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
@@ -71,7 +71,7 @@ class TestBlockerOptimizer:
         objective = lambda trial, params: {"value": 1.0}
         search_space = {"embedding_model": ["model-a", "model-b", "model-c"]}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             optimizer = BlockerOptimizer(
                 objective_fn=objective, search_space=search_space, n_trials=1
             )
@@ -93,7 +93,7 @@ class TestBlockerOptimizer:
         objective = lambda trial, params: {"value": 1.0}
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective, search_space=search_space, n_trials=1
             )
@@ -116,7 +116,7 @@ class TestBlockerOptimizer:
             "k_neighbors": (5, 50),
         }
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective, search_space=search_space, n_trials=1
             )
@@ -140,7 +140,7 @@ class TestBlockerOptimizer:
         objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             mock_study = MagicMock()
             mock_optuna.create_study.return_value = mock_study
 
@@ -161,7 +161,7 @@ class TestBlockerOptimizer:
         objective = lambda trial, params: {"value": 0.15}
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             mock_study = MagicMock()
             mock_optuna.create_study.return_value = mock_study
 
@@ -184,9 +184,9 @@ class TestBlockerOptimizer:
 
         wandb_kwargs = {"project": "test-project", "entity": "test-team"}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             with patch(
-                "langres.core.optimizers.blocker_optimizer.WeightsAndBiasesCallback"
+                "langres.optimize.blocker_optimizer.WeightsAndBiasesCallback"
             ) as mock_wandb_callback:
                 mock_study = MagicMock()
                 mock_optuna.create_study.return_value = mock_study
@@ -215,7 +215,7 @@ class TestBlockerOptimizer:
         objective = lambda trial, params: {"value": 0.85}
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             mock_study = MagicMock()
             mock_optuna.create_study.return_value = mock_study
 
@@ -246,7 +246,7 @@ class TestBlockerOptimizer:
             "k_neighbors": (10, 10),  # Fixed value for deterministic test
         }
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective, search_space=search_space, n_trials=1
             )
@@ -292,7 +292,7 @@ class TestBlockerOptimizer:
         # Invalid parameter spec: neither list nor tuple
         search_space = {"k_neighbors": "invalid"}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
@@ -318,7 +318,7 @@ class TestBlockerOptimizer:
 
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
@@ -357,7 +357,7 @@ class TestBlockerOptimizer:
 
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
@@ -382,7 +382,7 @@ class TestBlockerOptimizer:
 
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
                 search_space=search_space,
@@ -408,7 +408,7 @@ class TestBlockerOptimizer:
 
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna"):
+        with patch("langres.optimize.blocker_optimizer.optuna"):
             # Don't specify primary_metric - should default to "value"
             optimizer = BlockerOptimizer(
                 objective_fn=objective,
@@ -465,7 +465,7 @@ class TestBlockerOptimizer:
 
         search_space = {"k_neighbors": (5, 50)}
 
-        with patch("langres.core.optimizers.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.optimize.blocker_optimizer.optuna") as mock_optuna:
             mock_study = MagicMock()
             mock_trial = MagicMock()
             mock_trial.params = {"k_neighbors": 10}

@@ -8,7 +8,7 @@ the ergonomic constructors, and every fail-loud validation branch.
 
 import pytest
 
-from langres.core.autoresearch.objective import (
+from langres.optimize.objective import (
     Constraint,
     Goal,
     Objective,

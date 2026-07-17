@@ -20,8 +20,8 @@ from examples.research.blocking_recall_autoresearch import (
     build_space,
     run_search,
 )
-from langres.core.autoresearch.loop import LoopResult
-from langres.core.autoresearch.search_space import SearchSpace
+from langres.optimize.loop import LoopResult
+from langres.optimize.search_space import SearchSpace
 from langres.core.runs import RunStore
 
 pytestmark = pytest.mark.slow

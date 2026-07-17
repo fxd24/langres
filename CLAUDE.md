@@ -46,7 +46,13 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
-│   ├── optimize.py     # langres.optimize / score_blocking: import-light autoresearch facade over blocking search
+│   ├── optimize/       # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
+│   │   ├── __init__.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every sibling import is lazy, incl. factory/loop)
+│   │   ├── objective.py    # the immutable keep-if-better scorer (Pareto + log_loss)
+│   │   ├── search_space.py # the declarative config grid the loop enumerates
+│   │   ├── factory.py      # config -> runnable blocker. HEAVY ([semantic] at module top) — lazy-import only
+│   │   ├── loop.py         # propose → run → evaluate → keep, over core.runs persistence
+│   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
@@ -66,9 +72,7 @@ langres/
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
-│   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
-│   │   ├── optimizers/             # BlockerOptimizer (Optuna)
-│   │   └── autoresearch/           # the langres.optimize engine: objective (keep-if-better) / search_space / factory / loop (propose→run→eval→keep)
+│   │   └── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
