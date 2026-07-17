@@ -1,49 +1,60 @@
-"""Resolver: the M0 spine that composes a full entity-resolution pipeline.
+"""``ERModel`` (aliased ``Resolver``): the model layer that composes a full ER pipeline.
 
-The Resolver is the **top-level container** of langres.core. It wires four
-slots into one runnable, serializable pipeline:
+The **top-level container** of ``langres.core``. It wires four slots into one
+runnable, serializable pipeline::
 
     blocker      -> candidate generation + schema normalization
     comparator   -> (optional) missing-aware per-feature comparison
     module       -> the scorer (a Matcher yielding PairwiseJudgements)
     clusterer    -> connected-components grouping of matched pairs
 
-``resolve(records)`` orchestrates blocking -> (compare) -> score -> cluster.
-``save(path)`` / ``load(path)`` round-trip the whole pipeline through a
-human-readable ``resolver.json`` manifest plus per-component sidecar state for
-any component that owns out-of-band state (e.g. a built FAISS index). Loading
-executes **no code and no pickle** — every slot is rebuilt from the component
-registry by its ``type_name``.
+The class is assembled from a linear chain of layers, each owning one
+responsibility and living in its own module, so no single file has to hold the
+whole model:
+
+===============================  ==========================================
+:mod:`langres.core._model_state`   what a model *is*: slots, identity, the
+                                   three construction doors, schema binding
+:mod:`langres.core._model_run`     how it *runs*: block -> (compare) -> score
+                                   -> cluster, plus ``dedupe``/``compare``
+:mod:`langres.core._model_persist` how it *persists*: the ``resolver.json``
+                                   manifest + per-slot sidecars (no pickle)
+:mod:`langres.core._artifacts`     the component <-> ``ComponentSpec`` adapters
+                                   ``_model_persist`` serializes each slot with
+===============================  ==========================================
+
+**What stays here, and why it is not arbitrary.** This module is the leaf: the
+place where a *concrete backend* is named, built, or swapped in. ``from_schema``
+and its two builders construct one; ``fit`` (with ``_fit_finetune``) trains one
+and repoints the matcher slot at it; ``build_anchor_store``/``assign`` hold the
+incremental state. Those are also, measurably, the only parts that cannot move:
+each reaches ``core.method_registry`` / ``core.finetune`` /
+``core.matchers.llm_judge`` / ``core.anchor_store``, every one of which reaches
+back here via ``openrouter -> benchmark -> resolver``. Hosting them in a new
+module would spread that existing knot across more modules -- the exact
+regression ``tests/test_import_tangle.py`` was written to catch (see PR #169).
+The layers above import strictly downward and add no cycle.
 
 Unified serialization convention
 ---------------------------------
-Wave 2 produced two component-config styles:
-
-- A ``config`` **property** returning a plain ``dict`` (comparator, blockers,
-  clusterer, judge).
-- A ``config()`` **method** returning a Pydantic ``BaseModel`` plus
-  ``type_name`` / ``config_model`` classvars (FAISSIndex, embedders).
-
-The Resolver does not pick one and rewrite the other. Instead it adapts both
-behind two tiny helpers — :func:`_component_spec` (object -> ``ComponentSpec``)
-and :func:`_rebuild_component` (``ComponentSpec`` -> object) — so every slot is
-serialized and reconstructed uniformly. Every Resolver-slot component exposes a
-``type_name`` class attribute so the spec helper can discover its registry key;
-the helpers normalize the dict-vs-model and property-vs-method differences.
+Wave 2 produced two component-config styles (a ``config`` property returning a
+dict, and a ``config()`` method returning a Pydantic model). The model layer does
+not pick one and rewrite the other -- :mod:`langres.core._artifacts` adapts both
+behind ``component_spec`` / ``rebuild_component``, so every slot serializes and
+reconstructs uniformly. See that module for the full convention.
 """
 
-import inspect
 import logging
 import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from pydantic import BaseModel
 
-from langres._version import __version__ as LANGRES_VERSION
+from langres.core._model_persist import ModelPersistence
+from langres.core._model_run import ModelRun
 from langres.core.blocker import Blocker
-from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
@@ -55,47 +66,27 @@ from langres.core.fit import (
 )
 from langres.core.fit_report import CalibrationDelta, FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
-from langres.core.inputs import check_no_duplicate_ids, normalize_records
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.matcher import Matcher
 from langres.core.methods_api import Method, UnsupportedMethodKind
-from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import (
     PairMetrics,
     brier_score,
     classify_pairs,
     expected_calibration_error,
 )
-from langres.core.models import (
-    ERCandidate,
-    MatcherAbstainedError,
-    PairwiseJudgement,
-    predicted_match,
-)
-from langres.core.matcher import Matcher
-from langres.core.results import DedupeResult, LinkVerdict
-from langres.core.registry import get_component, get_model, model_type_name
+from langres.core.models import ERCandidate
+from langres.core.registry import get_model
 from langres.core.runs import current_run
 from langres.core.spend import SpendMonitor
-from langres.core.spend_cap import SpendCappedMatcher, effective_budget
-from langres.core.serialization import (
-    ARTIFACT_VERSION,
-    ArtifactManifest,
-    ComponentSpec,
-    SerializableState,
-)
 
 if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
-    # inside _build_embedding_blocker and _ensure_index_built (W0.4) so a
-    # core-only `import langres` never pulls faiss/torch in for a Resolver
-    # that never uses matcher="embedding".
+    # inside _build_embedding_blocker so a core-only `import langres` never
+    # pulls faiss/torch in for a Resolver that never uses matcher="embedding".
     from langres.core.anchor_store import AnchorStore, ClusterDelta
     from langres.core.blockers.vector import VectorBlocker
 
 logger = logging.getLogger(__name__)
-
-# Slot names used as sidecar subdirectory names and for manifest ordering.
-_MANIFEST_FILENAME = "resolver.json"
 
 #: ``ERModel.from_schema``'s low-level matcher switch. There is deliberately no
 #: ``"auto"``: resolving one meant reading ``Settings``/env vars to find an API
@@ -196,149 +187,6 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
     )
 
 
-def _iter_vector_blockers(blocker: object) -> "Iterator[VectorBlocker[Any]]":
-    """Yield every ``VectorBlocker`` reachable from ``blocker``.
-
-    A plain ``VectorBlocker`` yields itself. A ``CompositeBlocker`` (the
-    blocking-algebra union/intersection/difference of child blockers) recurses
-    into ``children`` at arbitrary depth, so a composite wrapping another
-    composite still surfaces every nested ``VectorBlocker`` -- e.g. the
-    recall-first pattern ``CompositeBlocker([KeyBlocker(...), VectorBlocker(...)],
-    op="union")``. Index-free blockers (``AllPairsBlocker``, ``KeyBlocker``,
-    ``GLinkerAdapter``) contribute nothing.
-
-    Checks ``type_name`` rather than ``isinstance(blocker, VectorBlocker)``
-    deliberately (W0.4, mirrors :meth:`Resolver._ensure_index_built`'s own
-    docstring): this walks the blocker tree on every ``resolve()``/
-    ``predict()`` call, so an ``isinstance`` check would need ``VectorBlocker``
-    imported unconditionally, pulling faiss/sentence-transformers (the
-    ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
-    pipeline. ``CompositeBlocker`` itself has no heavy dependency, so it's
-    safe to ``isinstance``-check directly.
-    """
-    if getattr(blocker, "type_name", None) == "vector_blocker":
-        yield cast("VectorBlocker[Any]", blocker)
-    elif isinstance(blocker, CompositeBlocker):
-        for child in blocker.children:
-            yield from _iter_vector_blockers(child)
-
-
-def _component_config_dict(obj: object) -> dict[str, object]:
-    """Return a component's construction config as a plain JSON-able dict.
-
-    Bridges the two Wave 2 conventions:
-
-    - ``config`` **property** returning a ``dict`` -> returned as-is.
-    - ``config()`` **method** returning a Pydantic ``BaseModel`` -> dumped.
-    """
-    # Inspect ``config`` on the *class* so a property descriptor reads as
-    # non-callable while a real method reads as callable. (Checking the
-    # resolved value on the instance would misclassify a config stored as a
-    # plain instance attribute, e.g. a Pydantic model.)
-    config = obj.config() if callable(getattr(type(obj), "config", None)) else obj.config  # type: ignore[attr-defined]
-    if isinstance(config, BaseModel):
-        return config.model_dump()
-    return dict(config)
-
-
-def _component_spec(obj: object, slot: str) -> ComponentSpec:
-    """Serialize any Resolver-slot component into a :class:`ComponentSpec`.
-
-    Reads the component's ``type_name`` class attribute (the registry key) and
-    its construction config (via :func:`_component_config_dict`), and records the
-    ``slot`` name so :meth:`Resolver.load` can map the spec back self-describingly
-    rather than by position or hard-coded ``type_name``.
-    """
-    type_name = getattr(obj, "type_name", None)
-    if not isinstance(type_name, str):
-        raise TypeError(
-            f"{type(obj).__name__} is not serializable (no `type_name`/@register). "
-            f"Use a registered component (e.g. LLMMatcher, WeightedAverageMatcher) in "
-            f"the {slot!r} slot."
-        )
-    return ComponentSpec(type_name=type_name, slot=slot, config=_component_config_dict(obj))
-
-
-def _state_owner(component: object) -> SerializableState | None:
-    """Return the out-of-band-state owner for a slot component, if any.
-
-    Two cases own persistable state in M0:
-
-    - The component itself implements
-      :class:`~langres.core.serialization.SerializableState` (e.g. a FAISS index
-      used directly).
-    - The component wraps a vector index that implements ``SerializableState``
-      (e.g. a ``VectorBlocker`` holding a built ``FAISSIndex``). The nested index
-      holds the heavy state; the blocker config only references it.
-
-    Returns ``None`` for stateless components (AllPairs, comparator, judge,
-    clusterer).
-    """
-    if isinstance(component, SerializableState):
-        return component
-    index = getattr(component, "vector_index", None)
-    if isinstance(index, SerializableState):
-        return index
-    return None
-
-
-def _has_state(state_dir: Path | None) -> TypeGuard[Path]:
-    """True iff ``state_dir`` exists and holds at least one persisted state file.
-
-    An empty (or absent) sidecar dir signals "no out-of-band state to restore",
-    so callers must not invoke ``load_state`` on it — that would try to read a
-    missing state file (e.g. ``index.faiss``). Returning a ``TypeGuard`` narrows
-    ``state_dir`` to ``Path`` in the truthy branch for the type checker.
-    """
-    return state_dir is not None and state_dir.is_dir() and any(state_dir.iterdir())
-
-
-def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> Any:
-    """Rebuild a component from its :class:`ComponentSpec` via the registry.
-
-    Looks up the class by ``type_name`` and calls its ``from_config``. Components
-    whose ``from_config`` takes a Pydantic model (the FAISS/embedder convention)
-    declare a ``config_model`` classvar; we validate the dict into it first.
-    Components whose ``from_config`` accepts a ``state_dir`` (e.g. ``VectorBlocker``,
-    which restores its nested index's state) are given the slot's state dir.
-    Finally, if the rebuilt component is itself a
-    :class:`~langres.core.serialization.SerializableState` and a populated
-    ``state_dir`` exists, its state is restored directly.
-    """
-    cls = get_component(spec.type_name)
-    config_model = getattr(cls, "config_model", None)
-    config_arg = (
-        config_model.model_validate(spec.config) if config_model is not None else spec.config
-    )
-
-    # Pass state_dir only to from_config signatures that accept it, and only
-    # when the sidecar actually holds state (an empty/absent dir means none).
-    accepts_state_dir = "state_dir" in inspect.signature(cls.from_config).parameters  # type: ignore[attr-defined]
-    if accepts_state_dir and _has_state(state_dir):
-        component = cls.from_config(config_arg, state_dir=state_dir)  # type: ignore[attr-defined]
-    else:
-        component = cls.from_config(config_arg)  # type: ignore[attr-defined]
-
-    # Restore directly only when ``from_config`` did not already handle state
-    # itself (guards against a double ``load_state`` for a component that both
-    # accepts ``state_dir`` and implements SerializableState).
-    if not accepts_state_dir and isinstance(component, SerializableState) and _has_state(state_dir):
-        component.load_state(state_dir)
-    return component
-
-
-def _coerce_log(log: "JudgementLog | str | Path | None") -> JudgementLog | None:
-    """Normalize a ``log=`` argument to a :class:`JudgementLog`, or ``None``.
-
-    ``None`` stays ``None`` -- zero overhead, no wrap. A path is wrapped in a
-    fresh, default (``features=False``) log; an existing ``JudgementLog`` (e.g.
-    one built with ``features=True``) passes through unchanged.
-    """
-    if log is None or isinstance(log, JudgementLog):
-        return log
-    return JudgementLog(log)
-
-
 def _is_prompt_compilable(module: object) -> bool:
     """Whether ``module`` is a prompt-optimizable (DSPy-style) matcher.
 
@@ -352,7 +200,7 @@ def _is_prompt_compilable(module: object) -> bool:
     return callable(getattr(module, "compile", None)) and hasattr(module, "compiled")
 
 
-class ERModel:
+class ERModel(ModelRun, ModelPersistence):
     """A whole ER pipeline, named: blocker -> compare -> score -> cluster.
 
     **The thing W4 exists to give a name to.** Before it, nothing in langres
@@ -409,344 +257,23 @@ class ERModel:
         reloaded = ERModel.load("artifacts/company_v0")
     """
 
-    #: The ``Method.kind``s :meth:`fit` accepts; ``None`` (the default) accepts
-    #: every kind.
-    #:
-    #: This exists for the named architectures of W4 (``FuzzyString``,
-    #: ``VectorLLMCascade``, ...), which make the claim *one architecture = one
-    #: class = one identity*. That claim is falsifiable by ``fit`` itself:
-    #: :meth:`_fit_finetune` deliberately **repoints the matcher slot** at the
-    #: fine-tuned model, so ``FuzzyString().fit(method=QLoRA(...))`` would return
-    #: an LLM-backed pipeline still calling itself ``FuzzyString``. A subclass
-    #: declares the kinds it can absorb without ceasing to be itself; anything
-    #: else is refused at the :meth:`fit` boundary with
-    #: :class:`~langres.core.methods_api.UnsupportedMethodKind`.
-    #:
-    #: The base ``Resolver`` stays ``None`` -- **permissive on purpose**. It makes
-    #: no identity claim ("a resolver" is not a topology), so there is nothing for
-    #: a topology change to falsify, and every fit path it accepts today keeps
-    #: working unchanged.
-    #:
-    #: Alternatives considered and rejected (recorded so this is cheap to flip):
-    #:
-    #: - *A topology-changing ``fit()`` returns a NEW architecture instance*
-    #:   (sklearn ``clone``-like). More principled -- identity would follow the
-    #:   topology instead of constraining it -- but ``fit`` mutates in place and
-    #:   returns ``self``/metrics today, and the flywheel loop depends on that;
-    #:   changing the return contract is far more churn than this gate.
-    #: - *Downgrade the invariant to advisory* (document that ``fit`` may change
-    #:   what the class name means). Zero code, but it guts the whole point of
-    #:   naming architectures: a name that may silently describe something else is
-    #:   not an identity.
-    accepted_method_kinds: ClassVar[frozenset[str] | None] = None
-
-    def __init__(
-        self,
-        blocker: Blocker[Any],
-        comparator: Comparator[Any] | None,
-        matcher: Matcher[Any],
-        clusterer: Clusterer,
-        calibrator: CalibratorFitMixin | None = None,
-        *,
-        budget_usd: float | None = None,
-    ) -> None:
-        """Wire four components into one runnable pipeline.
-
-        Args:
-            blocker: Candidate generation + schema normalization.
-            comparator: Optional missing-aware per-feature comparison.
-            matcher: The scorer.
-            clusterer: Connected-components grouping.
-            calibrator: Optional score->probability map (set by ``fit``).
-            budget_usd: **Spend cap for this Resolver's whole lifetime**, in
-                USD. ``None`` (the default) resolves to
-                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD` -- it does
-                NOT mean "uncapped"; pass
-                :data:`~langres.core.spend_cap.UNCAPPED_BUDGET_USD`
-                (``float("inf")``) for that, deliberately and in writing. A
-                free matcher (string/embedding) meters $0 and never trips.
-
-                Scope, precisely: the cap meters **every seam that scores
-                through the matcher** -- :meth:`resolve`, :meth:`predict`,
-                :meth:`fit`, and
-                :meth:`~langres.core.anchor_store.AnchorStore.assign` -- across
-                every call on this instance, because they all route through
-                :meth:`_scorer`. It bounds spend at ``budget_usd`` plus at most
-                one further call (see :mod:`langres.core.spend_cap`).
-
-                The one exception, deliberately: :meth:`distil` /
-                ``fit(method=MIPRO())``. DSPy's compile calls never reach
-                ``self.module.forward``, so this ledger cannot observe them; it
-                caps them via its own ``method.budget_usd`` monitor instead
-                (which records $0 until issue #100 captures compile spend). See
-                :meth:`_fit_prompt`.
-        """
-        self._init_state(budget_usd=budget_usd)
-        self._wire(
-            blocker=blocker,
-            comparator=comparator,
-            matcher=matcher,
-            clusterer=clusterer,
-            calibrator=calibrator,
-        )
-
     def _init_state(self, *, budget_usd: float | None) -> None:
-        """Set up the non-slot state every construction door needs.
+        """Add the incremental-resolution state to the shared base state.
 
-        Split out of ``__init__`` so all three doors -- ``__init__``,
-        :meth:`from_components`, and a named architecture's own ergonomic
-        ``__init__`` -- share ONE definition of "a wired-up model's state",
-        instead of each remembering to build a monitor and null four fields.
+        Extends :meth:`~langres.core._model_state.ModelState._init_state` rather
+        than ``__init__``, so all three construction doors -- including
+        ``from_components``, which deliberately never runs ``__init__`` -- get the
+        anchor store nulled exactly once.
+
+        It lives here, with :meth:`build_anchor_store`/:meth:`assign` (the only
+        things that touch it), instead of on the base: typing it needs
+        ``AnchorStore``, and ``core.anchor_store`` imports this module back, so
+        naming it from the base layer would knot the graph.
         """
-        # ONE ledger for this model's lifetime, so N resolve() calls share one
-        # budget instead of getting a fresh one each (B1). The monitor -- not the
-        # wrapper -- is the durable thing: `self.module` is reassignable
-        # (fit(method=Finetune()) replaces it), so _scorer() re-wraps the CURRENT
-        # module around this same ledger.
-        self._spend_monitor = SpendMonitor(budget_usd=effective_budget(budget_usd))
-        # Optional score->probability map, set by fit(method=Platt()/Isotonic())
-        # and applied in _judgements(); None leaves raw scores untouched.
-        self.calibrator: CalibratorFitMixin | None = None
-        # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
-        # None until fit() runs (never serialized -- it is a fit-time artifact).
-        self.fit_report_: FitReport | None = None
+        super()._init_state(budget_usd=budget_usd)
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
         # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
         self._anchor_store: "AnchorStore | None" = None
-        # Slots start empty so a named architecture can defer binding until it
-        # knows the schema (see _topology). The base __init__ fills them at once.
-        #
-        # They are private + property-backed (below) rather than plain nullable
-        # attributes for a measured reason: annotating `self.blocker` as
-        # `Blocker | None` makes every one of the ~20 `self.blocker.stream(...)` /
-        # `self.clusterer.threshold` call sites in this file a mypy error, and
-        # `assert self.blocker is not None` at each is noise that also lies (it
-        # says "impossible" about a state that is reachable). The properties keep
-        # every consumer's type non-Optional and turn the unbound case into ONE
-        # directed message instead of `'NoneType' object has no attribute 'stream'`.
-        self._blocker: Blocker[Any] | None = None
-        self._comparator: Comparator[Any] | None = None
-        self._module: Matcher[Any] | None = None
-        self._clusterer: Clusterer | None = None
-
-    @property
-    def blocker(self) -> Blocker[Any]:
-        """The candidate generator. Raises if this model is not bound yet."""
-        self._require_bound("use the blocker")
-        return cast(Blocker[Any], self._blocker)
-
-    @blocker.setter
-    def blocker(self, value: Blocker[Any]) -> None:
-        self._blocker = value
-
-    @property
-    def comparator(self) -> Comparator[Any] | None:
-        """The optional per-feature comparison stage (genuinely ``None`` when unset)."""
-        return self._comparator
-
-    @comparator.setter
-    def comparator(self, value: Comparator[Any] | None) -> None:
-        self._comparator = value
-
-    @property
-    def module(self) -> Matcher[Any]:
-        """The scorer. Raises if this model is not bound yet.
-
-        Public and reassignable (``fit(method=QLoRA())`` repoints it), which is
-        exactly why :meth:`_scorer` rebuilds its wrapper per call rather than
-        caching one -- see that method.
-        """
-        self._require_bound("use the matcher")
-        return cast(Matcher[Any], self._module)
-
-    @module.setter
-    def module(self, value: Matcher[Any]) -> None:
-        self._module = value
-
-    @property
-    def clusterer(self) -> Clusterer:
-        """The grouping stage. Raises if this model is not bound yet."""
-        self._require_bound("use the clusterer")
-        return cast(Clusterer, self._clusterer)
-
-    @clusterer.setter
-    def clusterer(self, value: Clusterer) -> None:
-        self._clusterer = value
-
-    def _wire(
-        self,
-        *,
-        blocker: Blocker[Any],
-        comparator: Comparator[Any] | None,
-        matcher: Matcher[Any],
-        clusterer: Clusterer,
-        calibrator: CalibratorFitMixin | None = None,
-    ) -> None:
-        """Fill the four slots. The ONE place a model's topology is set."""
-        self.blocker = blocker
-        self.comparator = comparator
-        self.module = matcher
-        self.clusterer = clusterer
-        if calibrator is not None:
-            self.calibrator = calibrator
-
-    @classmethod
-    def from_components(
-        cls,
-        *,
-        blocker: Blocker[Any],
-        comparator: Comparator[Any] | None,
-        matcher: Matcher[Any],
-        clusterer: Clusterer,
-        calibrator: CalibratorFitMixin | None = None,
-        budget_usd: float | None = None,
-    ) -> Self:
-        """Build an instance from already-built components, **bypassing ``__init__``**.
-
-        The load-bearing decision of W4, and the reason :meth:`load` works at all.
-
-        The problem it solves, verified rather than assumed: :meth:`load` must
-        reconstruct the class the artifact names (PR #179's ``model_class``), and
-        it only has *components* to hand -- it rebuilt each slot from the registry.
-        But a named architecture's whole point is an ergonomic ``__init__``
-        (``FuzzyString(threshold=0.8)``, ``VectorLLMCascade(llm=...)``), which
-        does not accept ``blocker=``/``comparator=``/``matcher=``/``clusterer=``.
-        Calling it with those raises ``TypeError: unexpected keyword argument
-        'blocker'``. So the two headline goals -- "a saved architecture reloads as
-        itself" and "an architecture has an ergonomic constructor" -- collide, and
-        exactly one of them can go through ``__init__``. (``load`` predates the
-        collision: before ``model_class`` it always built the base class, so it
-        could not bite. #179 spotted it and deferred the fix here, in writing.)
-
-        The fix follows what every comparable framework does: **loading builds
-        from config, it does not replay constructor args.** ``from_pretrained``
-        does not re-run your ``__init__``'s argument parsing; ``load_state_dict``
-        restores state into an already-shaped object. So this door skips
-        ``__init__`` entirely (``__new__`` + the shared state/slot setup) and
-        wires the saved components straight in.
-
-        .. important::
-           **The invariant this buys, and its price:** because ``__init__`` never
-           runs, an architecture must keep **all** of its identity *in its slots*
-           -- the threshold in the ``Clusterer``, the weights in the
-           ``Comparator``, the backbone in the ``Matcher``. An architecture that
-           stashed extra state on ``self`` in ``__init__`` would come back from
-           ``load`` without it. That is not a limitation so much as the design:
-           the slots are the single source of truth, which is also exactly what
-           makes ``save`` able to write a *complete* config.
-           ``TestProof4WeightlessRoundTrip`` in
-           ``tests/architectures/test_w4_proofs.py`` pins it by re-saving a
-           freshly loaded model and diffing the config.
-
-        Args:
-            blocker: Candidate generator + schema normalizer.
-            comparator: Optional per-feature comparison stage.
-            matcher: The scorer.
-            clusterer: Connected-components grouping.
-            calibrator: Optional fitted score->probability map.
-            budget_usd: Spend cap for the new instance's lifetime (see
-                :meth:`__init__`). Deliberately NOT read from the artifact: a
-                budget is a *run policy*, not architecture, and is not in the
-                manifest -- a reloaded model gets this call's cap (defaulting to
-                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`), never a
-                stale one baked in months ago by whoever saved it.
-
-        Returns:
-            A wired instance of ``cls``, ready to run.
-        """
-        model = cls.__new__(cls)
-        model._init_state(budget_usd=budget_usd)
-        model._wire(
-            blocker=blocker,
-            comparator=comparator,
-            matcher=matcher,
-            clusterer=clusterer,
-            calibrator=calibrator,
-        )
-        return model
-
-    def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
-        """Build this architecture's components for ``schema``. The subclass hook.
-
-        A named architecture stores *hyperparameters* in its ``__init__`` and
-        implements this to turn them + a schema into the four slots -- which lets
-        ``FuzzyString().dedupe(records)`` work with no schema named anywhere: the
-        schema is inferred from the records, then handed here, on first use.
-
-        Returns:
-            The kwargs for :meth:`_wire` (``blocker``/``comparator``/
-            ``matcher``/``clusterer``).
-
-        Raises:
-            NotImplementedError: On the base ``ERModel``, which is always
-                component-wired at construction and so never needs to build a
-                topology of its own.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} has no components and defines no _topology(schema) hook, "
-            "so there is nothing to run. Either construct it with explicit components "
-            f"({type(self).__name__}(blocker=..., comparator=..., matcher=..., clusterer=...)), "
-            "or use a named architecture from langres.architectures (e.g. FuzzyString())."
-        )
-
-    @property
-    def is_bound(self) -> bool:
-        """Whether the four slots are filled and this model can run.
-
-        ``False`` only for a named architecture constructed without a ``schema=``
-        and not yet used -- it binds on its first :meth:`dedupe`/:meth:`compare`.
-        """
-        return self._blocker is not None
-
-    @property
-    def schema(self) -> type[BaseModel] | None:
-        """The schema this model is bound to, or ``None`` while unbound.
-
-        Derived from the blocker slot rather than stored: keeping it as separate
-        state would be a second source of truth that :meth:`from_components`
-        (which never runs ``__init__``) could not restore.
-        """
-        return None if self._blocker is None else getattr(self._blocker, "schema", None)
-
-    @property
-    def backbone(self) -> str | None:
-        """The underlying model that scores here -- an LLM id, an embedder -- or ``None``.
-
-        Honest by default: it reports the matcher's own ``model`` attribute (both
-        LLM matcher families expose one), and ``None`` when there is nothing with
-        weights in the scoring slot (pure string similarity) rather than
-        fabricating an identity. An architecture whose backbone lives elsewhere
-        (e.g. in the blocker's embedder) overrides this to say so.
-        """
-        candidate = getattr(self.module, "model", None)
-        return candidate if isinstance(candidate, str) else None
-
-    def _require_bound(self, action: str) -> None:
-        """Raise a directed error if this model has no components yet."""
-        if not self.is_bound:
-            raise RuntimeError(
-                f"cannot {action}: {type(self).__name__} has not been bound to a schema yet, "
-                "so it has no components. Pass schema=<YourModel> to the constructor, or "
-                "call dedupe()/compare() once (which infers a schema from the records and "
-                "binds). An inferred schema is ephemeral and does not survive save/load in a "
-                "fresh process -- pass schema= explicitly for anything you intend to persist."
-            )
-
-    def _bind(self, schema: type[BaseModel]) -> None:
-        """Build and wire this architecture's topology for ``schema``, if not already bound."""
-        if not self.is_bound:
-            self._wire(**self._topology(schema))
-
-    def _prepare(self, records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Normalize ``records`` and bind this model, returning the ready records.
-
-        The ONE front-door adapter (ported from the deleted verbs): a model bound
-        to an explicit schema normalizes against it; an unbound one infers a
-        schema from the records' own keys and binds to it here, on first use.
-        """
-        schema, normalized = normalize_records(records, self.schema)
-        self._bind(schema)
-        return normalized
 
     # ------------------------------------------------------------------
     # Construction convenience
@@ -1580,389 +1107,6 @@ class ERModel:
             run_ref=current_run.get(),
         )
 
-    def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
-        """Block records into candidates, attaching comparisons if configured.
-
-        Builds an index-backed blocker's index transparently before streaming,
-        so callers never call ``create_index`` themselves. Records are fed in
-        the caller's stable list order. Shared by ``_judgements`` (scoring)
-        and ``fit`` (training) -- both need the same candidate stream.
-        """
-        self._ensure_index_built(records)
-        candidates = self.blocker.stream(records)
-        if self.comparator is not None:
-            comparator = self.comparator
-            candidates = (
-                c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
-                for c in candidates
-            )
-        return candidates
-
-    def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
-        """Block records into a materialized list of judge-ready candidates.
-
-        The public counterpart to :meth:`_candidates`: same blocking (building
-        any index-backed blocker's index transparently) and the same
-        comparison-attachment behavior, but returns a **list** rather than a
-        generator. Comparison vectors ARE attached whenever this Resolver has a
-        comparator configured (the default for ``Resolver.from_schema``) --
-        a caller that instead reaches into e.g. ``bench.build_blocker().stream(records)``
-        directly gets candidates WITHOUT comparison vectors, which silently
-        changes what a comparison-reading judge (e.g. ``WeightedAverageMatcher``)
-        sees.
-
-        Prefer this over a raw ``blocker.stream(...)`` generator whenever the
-        candidates are consumed more than once -- e.g.
-        :func:`~langres.core.benchmark.evaluate_judge_on_candidates` both calls
-        ``len(candidates)`` and iterates the sequence twice (once to judge, once
-        to build the graded candidate pairs). Handing a generator to a caller
-        that iterates twice makes ``len()`` fail and the second pass silently
-        yield nothing.
-
-        Args:
-            records: Raw records (dicts) in a stable list order, same shape as
-                ``resolve()``/``predict()`` accept.
-
-        Returns:
-            The blocked candidates, materialized as a list (never a generator).
-        """
-        return list(self._candidates(records))
-
-    def _scorer(self, *, log: JudgementLog | None = None) -> SpendCappedMatcher:
-        """This model's matcher, metered by its ONE spend ledger.
-
-        **The only supported way to score through ``self.module``.** Reaching for
-        the raw ``self.module.forward(...)`` gets you an *uncapped* scorer that
-        bills straight past ``budget_usd`` and never touches this instance's
-        ledger. That is not hypothetical: ``.module`` is a public attribute, and
-        :class:`~langres.core.anchor_store.AnchorStore` reached through it and
-        scored uncapped -- inside the very change that added the cap. Route every
-        new scoring path here and that hole cannot reopen;
-        ``tests/core/test_resolver_spend_cap.py`` pins it with an AST sweep.
-
-        Two properties this method exists to hold together:
-
-        * **The monitor is per-instance, built once in :meth:`__init__`** -- so
-          ``resolve``, ``predict``, ``fit`` and an ``AnchorStore`` pass all draw
-          down ONE cumulative budget instead of each getting a fresh one.
-        * **The wrapper is rebuilt per call, deliberately.** Caching it in
-          ``__init__`` would pin the matcher as it was *then*, and ``self.module``
-          is reassignable: ``dedupe`` wraps it in a ``LoggingMatcher`` after
-          construction (``verbs.py``) and ``fit(method=Finetune())`` replaces it
-          outright. A cached wrapper would silently meter -- and score through --
-          the stale matcher, emptying the judgement log. Rebuilding costs an
-          object; the ledger it shares is what actually persists.
-
-        The cap deliberately does NOT live in the ``module`` slot: ``save()``'s
-        registry and ``fit()``'s isinstance checks both read ``self.module`` and
-        must see the real component, not a wrapper.
-
-        ``log`` composes INSIDE the cap, deliberately: the cap must meter every
-        judgement the log records, so it stays outermost. This is the same
-        nesting the deleted ``dedupe`` verb produced by reassigning
-        ``resolver.module = LoggingMatcher(...)`` before scoring -- but per call
-        and without permanently mutating the slot, so ``save()`` and ``fit()``'s
-        isinstance checks still see the real matcher.
-
-        Args:
-            log: Optional per-call judgement sink (see :meth:`dedupe`).
-
-        Returns:
-            A :class:`~langres.core.spend_cap.SpendCappedMatcher` around the
-            *current* ``self.module``, sharing this instance's ledger.
-        """
-        module = self.module
-        if log is not None:
-            module = LoggingMatcher(
-                module, log=log, threshold=self.clusterer.threshold, model=self.backbone
-            )
-        return SpendCappedMatcher(module, monitor=self._spend_monitor)
-
-    def _judgements(
-        self, records: list[Any], *, log: JudgementLog | None = None
-    ) -> Iterator[PairwiseJudgement]:
-        """Block records into candidates, score them, and calibrate if fitted.
-
-        Scoring runs through :meth:`_scorer`, so this model's spend cap
-        (``budget_usd=``) and its ledger are shared across every
-        :meth:`resolve`/:meth:`predict` call on this instance -- two successive
-        resolves cannot each spend a full budget.
-
-        When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
-        every ranking judgement's raw ``score`` is mapped to a calibrated
-        probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
-        clusterer thresholds on a real probability. Pure pass-through otherwise.
-        """
-        judgements = self._scorer(log=log).forward(self._candidates(records))
-        if self.calibrator is None:
-            return judgements
-        return self._apply_calibrator(judgements, self.calibrator)
-
-    def _apply_calibrator(
-        self, judgements: Iterator[PairwiseJudgement], calibrator: CalibratorFitMixin
-    ) -> Iterator[PairwiseJudgement]:
-        """Map each ranking judgement's ``score`` through the fitted calibrator.
-
-        Deciders (``score is None``) pass through untouched -- there is no score to
-        calibrate. A mapped judgement keeps its ids/decision, retags
-        ``score_type="calibrated_prob"``, and records the raw score under
-        ``provenance["calibration"]`` for auditability.
-        """
-        for judgement in judgements:
-            if judgement.score is None:
-                yield judgement
-                continue
-            calibrated = calibrator.transform([judgement.score])[0]
-            yield judgement.model_copy(
-                update={
-                    "score": calibrated,
-                    "score_type": "calibrated_prob",
-                    "provenance": {
-                        **judgement.provenance,
-                        "calibration": {
-                            "method": getattr(calibrator, "method", None),
-                            "raw_score": judgement.score,
-                        },
-                    },
-                }
-            )
-
-    def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
-        """Return the scored pairwise judgements before clustering.
-
-        Useful for observability/tuning: inspect scores and provenance without
-        committing to a clustering threshold.
-        """
-        return list(self._judgements(records))
-
-    def resolve(self, records: list[Any]) -> list[set[str]]:
-        """Resolve records into entity clusters (sets of IDs).
-
-        Orchestrates blocking -> (compare) -> score -> cluster. Singletons are
-        dropped by the Clusterer (it returns only connected components with an
-        edge), so the result contains only multi-record clusters.
-
-        Args:
-            records: Raw records (dicts) in a stable list order.
-
-        Returns:
-            A list of clusters, each a set of entity IDs.
-        """
-        return self.clusterer.cluster(self._judgements(records))
-
-    # ------------------------------------------------------------------
-    # The front door: dedupe a batch / compare one pair
-    # ------------------------------------------------------------------
-
-    def dedupe(
-        self, records: list[dict[str, Any]], *, log: JudgementLog | str | Path | None = None
-    ) -> DedupeResult:
-        """Group a batch of records into entity clusters. **The front door.**
-
-        The replacement for the deleted ``langres.dedupe`` verb, and the whole
-        point of the wave: identical ergonomics, except *you* named the model, so
-        nothing sniffs your environment for an API key and spends on what it
-        finds. ``FuzzyString().dedupe(records)`` costs $0 and needs no key
-        because ``FuzzyString`` cannot make a paid call, not because a heuristic
-        guessed well.
-
-        Schema-optional: an unbound architecture infers an ephemeral schema from
-        the records' own keys and binds to it here, on first use (see
-        :mod:`langres.core.inputs` for the normalization rules -- NaN, nested
-        values, id resolution).
-
-        Abstentions are left **unmerged** (the conservative reading -- the same
-        as "not a match" for edge-building) rather than aborting the batch: one
-        unparseable judgement among thousands should not sink a whole run. Pass
-        ``log=`` to see which pairs the matcher declined. This differs from
-        :meth:`compare`, which owes its single caller a verdict and so raises.
-
-        Args:
-            records: The records to dedupe (plain dicts). ``[]`` and a single
-                record both return ``[]`` (no pair exists), short-circuiting
-                before the model is ever bound or a matcher built -- so a
-                zero-pair call cannot construct a backbone or spend.
-                Every record needs a unique ``"id"`` (or none at all --
-                positional ids are then assigned); a duplicate raises.
-            log: Opt-in judgement sink -- a
-                :class:`~langres.core.judgement_log.JudgementLog` or a path
-                (wrapped in a default one). ``None`` (default): no logging, zero
-                overhead, no wrap. The flywheel inlet later harvested into
-                training pairs.
-
-        Returns:
-            A :class:`~langres.core.results.DedupeResult` -- a
-            ``list[set[str]]`` of id clusters that also reports the
-            ``architecture``, ``backbone``, ``score_type`` and effective
-            ``threshold`` that produced it.
-
-        Raises:
-            ValueError: Duplicate ids, inconsistent id presence, or a nested
-                value under an inferred schema.
-            BudgetExceeded: If scoring would cross this model's spend cap; the
-                exception carries the judgements already produced on
-                ``.partial_judgements``.
-        """
-        if len(records) < 2:
-            return DedupeResult(
-                [],
-                architecture=type(self).__name__,
-                backbone=None,
-                score_type="none",
-                threshold=None,
-            )
-        normalized = self._prepare(records)
-        check_no_duplicate_ids([record["id"] for record in normalized])
-        judgements = list(self._judgements(normalized, log=_coerce_log(log)))
-        clusters = self.clusterer.cluster(iter(judgements))
-        return DedupeResult(
-            clusters,
-            architecture=type(self).__name__,
-            backbone=self.backbone,
-            # The judgements' OWN score_type, not a per-name lookup table: the
-            # matcher that ran is the only honest authority on what its scores
-            # mean. "unknown" only when the blocker yielded no pair at all.
-            score_type=judgements[0].score_type if judgements else "unknown",
-            threshold=self.clusterer.threshold,
-        )
-
-    def compare(
-        self,
-        left: dict[str, Any],
-        right: dict[str, Any],
-        *,
-        log: JudgementLog | str | Path | None = None,
-    ) -> LinkVerdict:
-        """Decide whether two records refer to the same real-world entity.
-
-        The replacement for the deleted ``langres.link`` verb (which scored ONE
-        pair). It is deliberately **not** named ``link``: that name is reserved
-        for cross-source linkage over two record *sets*, which :meth:`link` still
-        stubs out honestly. Two incompatible things were called ``link`` before
-        this wave; ``compare`` is the pair one, under a name that says so.
-
-        ``compare(a, a)`` (an entity against itself) is well-defined and does not
-        raise -- the batch-uniqueness rule is :meth:`dedupe`'s, not this one's.
-
-        **Blocking cannot veto the pair.** Blocking is a recall optimization for
-        batches; a caller naming exactly two records has already decided this
-        pair is worth judging. So the blocker runs only to *attach* what the
-        matcher needs (e.g. a ``VectorBlocker``'s cosine ``similarity_score``,
-        which an embedding-backed matcher scores off), and if it yields nothing
-        the candidate is built directly instead. Silently answering "no match"
-        because a blocker filtered the pair out would be a lie.
-
-        Args:
-            left: The first record (a plain dict).
-            right: The second record.
-            log: Opt-in judgement sink (see :meth:`dedupe`).
-
-        Returns:
-            A :class:`~langres.core.results.LinkVerdict` (truthy iff it matched).
-
-        Raises:
-            MatcherAbstainedError: If the matcher neither scored nor decided.
-                ``compare`` owes its caller a verdict and will not fabricate one.
-            BudgetExceeded: If scoring this pair would cross the spend cap.
-        """
-        normalized = self._prepare([left, right])
-        candidate = self._pair_candidate(normalized)
-        judgements = list(self._scorer(log=_coerce_log(log)).forward(iter([candidate])))
-        if not judgements:
-            raise RuntimeError(
-                f"the {type(self.module).__name__} matcher produced no judgement for this pair; "
-                "every candidate must yield exactly one PairwiseJudgement. This indicates a bug "
-                "in the matcher."
-            )
-        judgement = judgements[0]
-        if self.calibrator is not None:
-            judgement = next(self._apply_calibrator(iter([judgement]), self.calibrator))
-
-        threshold = self.clusterer.threshold
-        predicted = predicted_match(judgement, threshold)
-        if predicted is None:
-            raise MatcherAbstainedError(
-                f"the {type(self.module).__name__} matcher abstained (no decision and no score) "
-                "on this pair, so compare() cannot return a verdict. An LLMMatcher abstains when "
-                "its response fails to parse (the default on_parse_error='abstain'); pass "
-                "on_parse_error='raise' to surface the parse failure itself, or catch "
-                "MatcherAbstainedError."
-            )
-        return LinkVerdict(
-            match=predicted,
-            score=judgement.score,
-            reasoning=judgement.reasoning,
-            architecture=type(self).__name__,
-            backbone=self.backbone,
-            score_type=judgement.score_type,
-            threshold=threshold,
-            judgement=judgement,
-        )
-
-    def _pair_candidate(self, records: list[dict[str, Any]]) -> ERCandidate[Any]:
-        """The ONE candidate for :meth:`compare` -- blocker-attached, never blocker-vetoed.
-
-        Runs the real pipeline first, so anything the blocker attaches (a
-        ``VectorBlocker``'s ``similarity_score``; the comparator's
-        ``ComparisonVector``) is present exactly as it would be in a batch. Falls
-        back to a directly-built candidate when the blocker yields nothing --
-        see :meth:`compare` on why a veto must not decide the verdict.
-        """
-        for candidate in self._candidates(records):
-            return candidate
-
-        from langres.core.blockers.all_pairs import schema_to_factory
-
-        schema = self.schema
-        if schema is None:
-            raise RuntimeError(
-                f"{type(self.blocker).__name__} yielded no candidate for this pair and exposes "
-                "no `schema`, so compare() cannot build the pair directly. Use a blocker that "
-                "carries its schema (AllPairsBlocker, VectorBlocker), or compare via dedupe()."
-            )
-        factory = schema_to_factory(schema)
-        left_entity, right_entity = (factory(record) for record in records)
-        candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="compare")
-        if self.comparator is not None:
-            candidate = candidate.model_copy(
-                update={"comparison": self.comparator.compare(left_entity, right_entity)}
-            )
-        return candidate
-
-    def _ensure_index_built(self, records: list[Any]) -> None:
-        """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
-
-        Embeds the records' text field and creates the index in place for each
-        index-backed blocker discovered via :func:`_iter_vector_blockers` --
-        whether ``self.blocker`` is a ``VectorBlocker`` directly, or one is
-        nested (at any depth) inside a ``CompositeBlocker``. A blocker with no
-        index (AllPairs, GLinker, KeyBlocker) contributes nothing. When an
-        index *is* already built (e.g. a freshly loaded FAISS index, or a
-        Resolver reused on the same records), the would-be corpus is compared
-        to the index's stored ``_corpus_texts``: identical -> reuse (never
-        re-embed, so restore + same-records round-trips are cheap); different
-        -> rebuild (so reusing the Resolver on a new record list scores
-        against the right corpus rather than a stale one).
-
-        No ``isinstance(..., VectorBlocker)`` anywhere in this walk (W0.4): see
-        :func:`_iter_vector_blockers`'s docstring for why -- this method runs
-        on every ``resolve()``/``predict()`` call regardless of blocker, so an
-        ``isinstance`` check would need ``VectorBlocker`` imported
-        unconditionally, pulling faiss/sentence-transformers (the
-        ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
-        pipeline.
-        """
-        for vector_blocker in _iter_vector_blockers(self.blocker):
-            entities = [vector_blocker.schema_factory(record) for record in records]
-            texts = [vector_blocker.text_field_extractor(entity) for entity in entities]
-
-            index = vector_blocker.vector_index
-            if vector_blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
-                continue  # Same corpus already indexed -> reuse, never re-embed.
-
-            logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
-            index.create_index(texts)
-
     # ------------------------------------------------------------------
     # Linking / streaming (M5)
     # ------------------------------------------------------------------
@@ -2028,153 +1172,41 @@ class ERModel:
             )
         return self._anchor_store.assign(record)
 
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _slots(self) -> list[tuple[str, object]]:
-        """Ordered (slot_name, component) pairs, skipping absent optional slots.
-
-        The slot name doubles as the sidecar subdirectory name for components
-        that own out-of-band state. The comparator and calibrator are optional
-        slots, emitted only when set; the clusterer stays last so the legacy
-        positional load fallback (``ordered[-1]`` is the clusterer) still holds.
-        """
-        slots: list[tuple[str, object]] = [("blocker", self.blocker)]
-        if self.comparator is not None:
-            slots.append(("comparator", self.comparator))
-        slots.append(("module", self.module))
-        if self.calibrator is not None:
-            slots.append(("calibrator", self.calibrator))
-        slots.append(("clusterer", self.clusterer))
-        return slots
-
-    def _build_manifest(self) -> ArtifactManifest:
-        """Assemble the in-memory :class:`ArtifactManifest` (no disk I/O).
-
-        Shared by :meth:`save` (which writes it, plus sidecars) and
-        :meth:`config_dict` (which returns it as a dict). Serializes each slot
-        component into a :class:`ComponentSpec` via :func:`_component_spec`,
-        which raises :class:`TypeError` for a component lacking a registry
-        ``type_name`` — that error is intentional and not swallowed here.
-
-        Also stamps ``model_class`` with this class's registered model name so a
-        named architecture survives ``save``/``load``. It is ``None`` for the
-        base ``Resolver`` and for any unregistered subclass — see
-        :func:`~langres.core.registry.model_type_name`.
-        """
-        components = [
-            _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
-        ]
-        return ArtifactManifest(
-            artifact_version=ARTIFACT_VERSION,
-            langres_version=LANGRES_VERSION,
-            model_class=model_type_name(type(self)),
-            components=components,
-        )
-
-    def config_dict(self) -> dict[str, object]:
-        """Return the resolver's hash-safe config snapshot, WITHOUT writing to disk.
-
-        Returns only the reproducible *config* the manifest wraps — the ordered
-        per-slot ``type_name`` + construction config under a ``components`` key —
-        and deliberately **omits** the volatile version/provenance envelope
-        (``artifact_version``, ``langres_version``) that :meth:`save` writes to
-        ``resolver.json``.
-
-        This is by design: the tracking layer feeds this dict to
-        ``RunContext.resolver_config``, which is inside
-        :func:`~langres.core.runs.compute_recipe_id`'s hash domain. Emitting the
-        version fields would fork ``recipe_id`` on every package or
-        artifact-schema bump, silently defeating idempotent replay. Version and
-        provenance live on :class:`~langres.core.runs.RunContext` as separate,
-        **unhashed** fields (e.g. ``RunContext.langres_version``); :meth:`save`
-        still records them on disk for artifact reconstruction.
-
-        Known limitation: this captures **declared** component config, not
-        compiled/optimized in-memory state — e.g. a DSPy-compiled program's tuned
-        prompts do not appear here. Persisting that state is out of scope for the
-        config snapshot (it round-trips via :class:`SerializableState` sidecars in
-        :meth:`save`, not through this dict).
-
-        Returns:
-            A plain, JSON-serializable dict with a single ``components`` key: the
-            ordered slot specs (each a ``type_name`` + ``config``). No version
-            fields — see above.
-
-        Raises:
-            TypeError: If a slot component lacks a registry ``type_name`` (same
-                contract as :meth:`save`; not swallowed).
-        """
-        return {"components": self._build_manifest().model_dump()["components"]}
-
-    def save(self, path: str | Path) -> None:
-        """Persist the whole pipeline to ``path`` as a self-describing artifact.
-
-        Writes ``resolver.json`` (a full :class:`ArtifactManifest`, including the
-        ``artifact_version`` + ``langres_version`` envelope that
-        :meth:`config_dict` intentionally omits) plus, for any slot component that
-        implements
-        :class:`~langres.core.serialization.SerializableState`, a sidecar state
-        directory named after the slot. The manifest records, per slot, the
-        component ``type_name`` and config (the embedder persists by
-        ``model_name`` only — no model bytes), plus this class's registered
-        ``model_class`` when it has one, so :meth:`load` can rebuild the same
-        architecture rather than a plain ``Resolver``.
-
-        Args:
-            path: Directory to write the artifact into (created if absent).
-        """
-        out_dir = Path(path)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        manifest = self._build_manifest()
-        for slot_name, component in self._slots():
-            owner = _state_owner(component)
-            if owner is not None:
-                state_dir = out_dir / slot_name
-                state_dir.mkdir(parents=True, exist_ok=True)
-                owner.save_state(state_dir)
-                # A SerializableState owner with nothing to persist (e.g. a
-                # VectorBlocker whose index was never built) writes no files;
-                # drop the empty sidecar so load() doesn't later try to read a
-                # missing state file from a dir that only signals "has state".
-                if not any(state_dir.iterdir()):
-                    state_dir.rmdir()
-
-        (out_dir / _MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
-        logger.info("Saved Resolver artifact to %s", out_dir)
-
     @classmethod
     def load(cls, path: str | Path) -> "Resolver":
-        """Reconstruct a Resolver from an artifact directory written by :meth:`save`.
+        """Reconstruct a Resolver from an artifact directory written by ``save``.
 
         Reads ``resolver.json``, validates the artifact version, and rebuilds
         each slot from the component registry by its ``type_name`` (no code
         execution, no pickle). Sidecar state is restored for any
-        :class:`~langres.core.serialization.SerializableState` component.
+        :class:`~langres.core.serialization.SerializableState` component. That
+        whole mechanism lives in
+        :meth:`~langres.core._model_persist.ModelPersistence._read_artifact`;
+        what stays here is the one decision that needs the ``ERModel`` name in
+        scope -- *which class* to build.
 
         Reconstructs the **class** the manifest names in ``model_class`` (a
-        registered architecture), not merely the one ``load`` was called on — so
+        registered architecture), not merely the one ``load`` was called on -- so
         ``Resolver.load(<a FuzzyString artifact>)`` hands back a ``FuzzyString``.
         An artifact with no ``model_class`` (every pre-0.4 one, and any
         unregistered subclass) builds ``cls``, exactly as before.
 
-        Reconstruction goes through :meth:`from_components`, **not** the class's
-        ``__init__`` — so a named architecture is free to have an ergonomic
-        constructor (``FuzzyString(threshold=0.8)``) that knows nothing about
-        component keywords. This is W4 paying the debt #179 recorded right here:
-        before ``model_class``, ``load`` always built the base class and the
+        Reconstruction goes through
+        :meth:`~langres.core._model_state.ModelState.from_components`, **not** the
+        class's ``__init__`` -- so a named architecture is free to have an
+        ergonomic constructor (``FuzzyString(threshold=0.8)``) that knows nothing
+        about component keywords. This is W4 paying the debt #179 recorded right
+        here: before ``model_class``, ``load`` always built the base class and the
         collision could not bite; after it, calling ``FuzzyString(blocker=...)``
         raised ``TypeError: unexpected keyword argument 'blocker'``. See
-        :meth:`from_components` for why building-from-config beats replaying
+        ``from_components`` for why building-from-config beats replaying
         constructor args, and for the one invariant it asks of an architecture.
 
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 
         Returns:
-            A Resolver equivalent to the one that was saved — of the saved
+            A Resolver equivalent to the one that was saved -- of the saved
             architecture's class when the manifest names one.
 
         Raises:
@@ -2184,63 +1216,7 @@ class ERModel:
                 process has not registered (usually: its module was never
                 imported).
         """
-        in_dir = Path(path)
-        manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
-        cls._check_versions(manifest)
-
-        # Map specs back to slots self-describingly. Each spec written by a
-        # current ``save`` carries its ``slot`` name, so a registered subclass
-        # with a custom ``type_name`` (e.g. a "phonetic_comparator" Comparator)
-        # still loads into the right slot. Older/hand-written manifests have no
-        # ``slot``; those fall back to positional + type_name identification.
-        calibrator_spec: ComponentSpec | None = None
-        by_slot = {spec.slot: spec for spec in manifest.components if spec.slot}
-        if by_slot:
-            blocker_spec = by_slot.get("blocker")
-            comparator_spec = by_slot.get("comparator")
-            module_spec = by_slot.get("module")
-            clusterer_spec = by_slot.get("clusterer")
-            calibrator_spec = by_slot.get("calibrator")
-            if blocker_spec is None or module_spec is None or clusterer_spec is None:
-                raise ValueError(
-                    "Malformed artifact manifest: missing required slot among "
-                    f"{[(c.slot, c.type_name) for c in manifest.components]}"
-                )
-        else:
-            # Legacy fallback: the comparator slot is present iff a spec has
-            # type_name == "comparator"; everything else is positional.
-            by_type = {spec.type_name: spec for spec in manifest.components}
-            comparator_spec = by_type.get("comparator")
-            ordered = list(manifest.components)
-            blocker_spec = ordered[0]
-            clusterer_spec = ordered[-1]
-            module_spec = next(
-                (
-                    spec
-                    for spec in ordered
-                    if spec not in (blocker_spec, clusterer_spec, comparator_spec)
-                ),
-                None,
-            )
-            if module_spec is None:
-                raise ValueError(
-                    f"Malformed artifact manifest: cannot identify a module spec among "
-                    f"{[c.type_name for c in manifest.components]}"
-                )
-
-        blocker = _rebuild_component(blocker_spec, state_dir=in_dir / "blocker")
-        comparator = (
-            _rebuild_component(comparator_spec, state_dir=in_dir / "comparator")
-            if comparator_spec is not None
-            else None
-        )
-        module = _rebuild_component(module_spec, state_dir=in_dir / "module")
-        clusterer = _rebuild_component(clusterer_spec, state_dir=in_dir / "clusterer")
-        calibrator = (
-            _rebuild_component(calibrator_spec, state_dir=in_dir / "calibrator")
-            if calibrator_spec is not None
-            else None
-        )
+        manifest, components = cls._read_artifact(path)
 
         # Reconstruct the class the artifact says it is, so a named architecture
         # round-trips as itself instead of decaying into a plain Resolver. Absent
@@ -2262,55 +1238,7 @@ class ERModel:
         # No cast needed: the issubclass guard above narrows ``target`` to
         # ``type[ERModel]`` for the type checker. from_components (NOT the class's
         # own __init__) is what lets an architecture keep an ergonomic signature.
-        return target.from_components(
-            blocker=blocker,
-            comparator=comparator,
-            matcher=module,
-            clusterer=clusterer,
-            calibrator=calibrator,
-        )
-
-    @staticmethod
-    def _check_versions(manifest: ArtifactManifest) -> None:
-        """Validate artifact compatibility; raise on an unreadably-new artifact.
-
-        ``ARTIFACT_VERSION`` is a monotonic integer-valued string bumped on an
-        incompatible layout change. Each bump breaks the config schema, so only
-        an artifact at the *exact* supported layout is readable: a *newer* layout
-        (this build is too old), an *older* layout (predates an incompatible
-        bump), or a malformed/non-integer layout are all hard errors — without
-        this guard an older artifact would fall through to a raw ``KeyError`` on
-        the changed config. A ``langres_version`` mismatch is logged as a
-        warning, not a failure — configs are forward-compatible *within* a layout
-        version.
-        """
-        try:
-            artifact_v = int(manifest.artifact_version)
-            current_v = int(ARTIFACT_VERSION)
-        except ValueError:  # malformed/non-integer layout version -> incompatible.
-            raise ValueError(
-                f"Artifact version {manifest.artifact_version!r} differs from "
-                f"supported {ARTIFACT_VERSION!r}; cannot load."
-            ) from None
-        if artifact_v > current_v:
-            raise ValueError(
-                f"Artifact version {manifest.artifact_version!r} is newer than this "
-                f"langres build supports ({ARTIFACT_VERSION!r}); upgrade langres to load it."
-            )
-        if artifact_v < current_v:
-            raise ValueError(
-                f"Artifact version {manifest.artifact_version!r} predates the supported "
-                f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
-                f"schema changed incompatibly); re-save with this langres build."
-            )
-        if manifest.langres_version != LANGRES_VERSION:
-            logger.warning(
-                "Loading artifact written by langres %s into langres %s; "
-                "configs are forward-compatible within artifact version %s.",
-                manifest.langres_version,
-                LANGRES_VERSION,
-                ARTIFACT_VERSION,
-            )
+        return target.from_components(**components)
 
 
 #: The pre-W4 name for :class:`ERModel`, kept as a plain alias.

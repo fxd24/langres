@@ -58,7 +58,11 @@ langres/
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
-│   │   ├── resolver.py     # ERModel (aliased Resolver): from_schema / dedupe / compare / resolve / save / load; no matcher="auto"
+│   │   ├── resolver.py     # ERModel (aliased Resolver): the class + from_schema / fit / the anchor surface; no matcher="auto"
+│   │   ├── _model_state.py     # ERModel layer: what a model IS — slots, identity, the 3 construction doors, schema binding
+│   │   ├── _model_run.py       # ERModel layer: how it RUNS — block → (compare) → score → cluster; dedupe / compare
+│   │   ├── _model_persist.py   # ERModel layer: how it PERSISTS — the resolver.json manifest + per-slot sidecars (no pickle)
+│   │   ├── _artifacts.py       # component ⇄ ComponentSpec adapters (the leaf _model_persist serializes each slot with)
 │   │   ├── inputs.py       # normalize_records: raw dicts -> (schema, normalized records); schema inference for a schema-less dedupe()/compare()
 │   │   ├── results.py      # LinkVerdict / DedupeResult — architecture + backbone + score_type + threshold
 │   │   ├── spend.py, spend_cap.py  # SpendMonitor/BudgetExceeded ledger + SpendCappedMatcher (the ONE enforcer) + DEFAULT_BUDGET_USD; core leaf, so ERModel/every architecture can cap
