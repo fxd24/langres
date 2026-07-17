@@ -131,6 +131,57 @@ def test_optimize_facade_is_eager_and_import_light() -> None:
     )
 
 
+# The engine must NOT live under the callable's name. `langres.optimize` is bound
+# to the optimize() FUNCTION (see `_exports/_optimize.py`), so a submodule under
+# that name is reachable by `from ... import ...` -- which goes through
+# sys.modules -- but NOT by attribute traversal, which finds the function and
+# stops. A layout that put the engine at `langres.optimize.*` shipped exactly
+# that: the `from` form worked while both dotted forms raised, and the whole test
+# suite stayed green because every in-repo call site uses the `from` form.
+#
+# So this asserts the two forms that BROKE, not just the one that worked -- a
+# check that only exercised the `from` form would have passed against the bug.
+# `objective` is the probe on purpose: pure-stdlib, so this needs no extra, and
+# the shadowing is a property of the NAME, not of any one submodule.
+#
+# Fresh-process: `import langres` (which the facade check above needs) would
+# populate sys.modules and let a dotted access succeed off an already-imported
+# parent, hiding the very failure this guards.
+_ENGINE_IMPORT_SCRIPT = (
+    "import langres.autoresearch.objective as o1; "
+    "assert o1.Objective is not None, 'import-as form: Objective missing'; "
+    "import langres.autoresearch.objective; "
+    "import langres; "
+    "assert langres.autoresearch.objective.Objective is not None, 'dotted-access form'; "
+    "from langres.autoresearch.objective import Objective; "
+    "assert Objective is langres.autoresearch.objective.Objective, 'from form disagrees'; "
+    "assert callable(langres.optimize), 'the facade must STILL be the callable'; "
+    "import langres.optimize as facade_mod; "
+    "assert facade_mod.__name__ == 'langres.optimize', 'plain module import broke'; "
+    "print('OK')"
+)
+
+
+def test_autoresearch_engine_is_importable_every_way() -> None:
+    """The engine resolves by ``import as``, dotted access, AND ``from`` -- not just ``from``.
+
+    The regression guard for the shadowed-name defect: the engine lives at
+    ``langres.autoresearch.*`` precisely because ``langres.optimize`` is a
+    callable and cannot carry submodules. This also pins that splitting them did
+    not cost the facade anything -- it is still the callable, and plain
+    ``import langres.optimize`` still resolves the module.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _ENGINE_IMPORT_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"engine import-form check failed -- the engine may be shadowed by the "
+        f"optimize callable again.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # The prompt-optimize ``Method`` objects (``Bootstrap`` / ``MIPRO`` / ``GEPA``)
 # are pure config a caller constructs at the fit call site -- constructing one
 # (even ``GEPA(reflection_model=...)``, which names a DSPy optimizer) must never

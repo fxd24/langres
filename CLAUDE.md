@@ -46,8 +46,9 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
-│   ├── optimize/       # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
-│   │   ├── __init__.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every sibling import is lazy, incl. factory/loop)
+│   ├── optimize.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every engine import is lazy). A MODULE, not a package — `langres.optimize` is a CALLABLE, so a submodule under that name is unreachable by attribute traversal (`import langres.optimize.loop as l` → ImportError). The engine lives next door:
+│   ├── autoresearch/   # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
+│   │   ├── __init__.py     # docstring only — exports NOTHING, which is what keeps it import-light (factory/blocker_optimizer are heavy)
 │   │   ├── objective.py    # the immutable keep-if-better scorer (Pareto + log_loss)
 │   │   ├── search_space.py # the declarative config grid the loop enumerates
 │   │   ├── factory.py      # config -> runnable blocker. HEAVY ([semantic] at module top) — lazy-import only

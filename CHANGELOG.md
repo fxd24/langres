@@ -93,31 +93,35 @@ while making the metric look better).
   `langres.eval.EvalReport` are unchanged** — those are the supported paths, and
   `EvalReport` was never in `langres.core.__all__`. Only the deep path advertised
   in the old README breaks.
-- **The autoresearch/optimizer engine** → **`langres.optimize`**.
-  `langres.core.optimizers` → `langres.optimize.blocker_optimizer`;
-  `langres.core.autoresearch.*` → `langres.optimize.*`. **`langres.optimize()` and
-  `score_blocking()` are unchanged** — the facade is the supported surface.
+- **The autoresearch/optimizer engine** → **`langres.autoresearch`**, behind the
+  unchanged **`langres.optimize`** facade.
+  `langres.core.optimizers` → `langres.autoresearch.blocker_optimizer`;
+  `langres.core.autoresearch.*` → `langres.autoresearch.*`. **`langres.optimize()`
+  and `score_blocking()` are unchanged** — the facade is the supported surface.
   `BlockerOptimizer` was in `langres.core.optimizers.__all__`, but never in
   `langres.__all__` or `langres.core.__all__`, so it was reachable only by deep
   import — the path documented in `docs/TECHNICAL_OVERVIEW.md`, which breaks.
 
-  **Migrate with the `from` form**, not the dotted form:
+  **Both import forms work**, as they did on the old `langres.core.optimizers`:
 
   ```python
-  from langres.optimize.blocker_optimizer import BlockerOptimizer   # works
+  from langres.autoresearch.blocker_optimizer import BlockerOptimizer   # works
 
-  import langres.optimize.blocker_optimizer as bo                   # ImportError
-  import langres.optimize.blocker_optimizer
-  langres.optimize.blocker_optimizer.BlockerOptimizer               # AttributeError
+  import langres.autoresearch.blocker_optimizer as bo                   # works
+  import langres.autoresearch.blocker_optimizer
+  langres.autoresearch.blocker_optimizer.BlockerOptimizer               # works
   ```
 
-  `langres.optimize` is a **callable** — that is the front door, and the root
-  package binds the name to the function. The engine's submodules now live under
-  that same shadowed name, so attribute traversal finds the function and stops.
-  The old `langres.core.optimizers.blocker_optimizer` supported both forms; its
-  replacement supports only `from ... import ...`. No test catches this because
-  every in-repo call site already uses the `from` form. Tracked as a follow-up:
-  the fix is to rename the *package* (the callable name is public API and stays).
+  The engine gets its own top-level name because **`langres.optimize` is a
+  callable**: that is the front door, and the root package binds the name to the
+  function. Anything under that name is therefore unreachable by attribute
+  traversal — traversal finds the function and stops. An interim layout put the
+  engine there and silently broke the two dotted forms above (`ImportError` /
+  `AttributeError`) while the `from` form kept working; no test caught it,
+  because every in-repo call site uses the `from` form. Splitting the names apart
+  fixes it: the engine is the `langres.autoresearch` package, the facade stays a
+  *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
+  working too), and `tests/test_import_budget.py` now asserts all three forms.
 
 #### Logger names follow the code that moved
 
@@ -286,12 +290,12 @@ Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs straight into
   `total_candidates`. Both `optimize` and `score_blocking` are **root exports and
   import-light** (heavy imports are lazy inside the call, so a bare `import langres`
   never pulls faiss; `tests/test_import_budget.py` guards it).
-- **`Objective`** (`langres.core.autoresearch.objective`) — the immutable
+- **`Objective`** (`langres.autoresearch.objective`) — the immutable
   keep-if-better scorer: `Objective.maximize` / `minimize` / `pareto`, feasibility
   `subject_to=[(metric, op, threshold), ...]` constraints, feasibility-first then
   strict-Pareto-dominance `is_better` (ties keep the incumbent). Pure-stdlib,
   metric-source-agnostic.
-- **`SearchSpace`** (`langres.core.autoresearch.search_space`) — a frozen,
+- **`SearchSpace`** (`langres.autoresearch.search_space`) — a frozen,
   declarative Cartesian grid of blocker configs; `configs()` yields config dicts
   with `k_neighbors` as the **innermost** axis (the index-reuse ordering contract).
   Pure-stdlib.

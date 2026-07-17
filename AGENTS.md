@@ -68,8 +68,10 @@ langres/
 │   │   ├── calibration.py          # derive_threshold
 │   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   │   └── usage.py                # LLMUsage + CostTrack — the token/cost leaf (imports nothing from langres)
-│   ├── optimize/       # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
-│   │   ├── __init__.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every sibling import is lazy)
+│   ├── optimize.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every engine import is lazy). A MODULE, not a package — `langres.optimize` is a CALLABLE, so a submodule under that name is unreachable by attribute traversal (`import langres.optimize.loop as l` → ImportError). The engine lives next door:
+│   ├── autoresearch/   # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
+│   │   ├── __init__.py     # docstring only — exports NOTHING, which is what keeps it import-light (factory/blocker_optimizer are heavy)
+│   │   ├── objective.py / search_space.py / factory.py / loop.py  # the keep-if-better scorer, the config grid, config→blocker (HEAVY), the propose→run→evaluate→keep driver
 │   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
