@@ -54,7 +54,16 @@ from langres.core.matcher import Matcher
 # below everything.
 from langres.core.spend_cap import effective_budget
 from langres.core.resolver import Resolver
-from langres.core.usage import LLMUsage
+
+# ``CostTrack``/``CostBasis`` live in the `core.usage` leaf, next to the
+# ``LLMUsage`` that ``CostTrack.usage`` holds: tokens are the fact, dollars are
+# derived, and both models on that sentence belong together. They lived here
+# until `clients/openrouter.py` -- the HTTP client, i.e. the floor -- had to
+# import this 1.7k-line harness to build one, which is what held a 9-module SCC
+# together (see `core/usage.py`'s docstring and `tests/test_import_tangle.py`).
+# The aggregator `_cost_track` below stays: it reads this harness's provenance
+# conventions, so moving it would cost `core.usage` its leaf property.
+from langres.core.usage import CostBasis, CostTrack, LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -175,56 +184,6 @@ class PipelineTrack(BaseModel):
     cluster_pairwise_f1: float
     delta_above_floor: float
     sanity_floor_f1: float
-
-
-#: How a run's cost was determined. A single ``cost_is_real: bool`` cannot express
-#: a run that mixes real OpenRouter-billed cost, a litellm/pinned-price estimate,
-#: a zero-cost local judge (no cost concept at all), and DSPy's billed-but-
-#: unparseable calls (``cost_untracked``) -- so :func:`_judgement_cost_basis`
-#: classifies each judgement into one of the four leaves, and
-#: :func:`_combined_cost_basis` collapses a run to ``"mixed"`` the moment two
-#: judgements disagree.
-CostBasis = Literal["real", "estimated", "mixed", "untracked", "none"]
-
-
-class CostTrack(BaseModel):
-    """Spend accounting for a method run. Zero-spend methods leave the optionals empty.
-
-    Attributes:
-        usd_total: Total measured spend across all judged test pairs.
-        usd_per_1k_pairs: Spend normalized per 1k candidate pairs.
-        est_usd_per_100k: Linear extrapolation to 100k pairs.
-        escalation_rate: Fraction of pairs escalated to the expensive stage
-            (cascade methods only); ``None`` for single-stage methods.
-        llm_calls_per_candidate: Mean LLM calls per candidate (cascade methods
-            only); ``None`` for zero-LLM methods.
-        usage: Token-usage vector summed across every judgement (tokens are the
-            fact; ``usd_total`` is derived from them where a real price is
-            known). All-zero for judges that report no usage (string/embedding,
-            or a judge that never populated ``provenance["usage"]``).
-        cost_basis: How ``usd_total`` was determined -- see :data:`CostBasis`.
-            ``"none"`` for an empty judgement list.
-    """
-
-    usd_total: float = 0.0
-    usd_per_1k_pairs: float = 0.0
-    est_usd_per_100k: float = 0.0
-    escalation_rate: float | None = None
-    llm_calls_per_candidate: float | None = None
-    usage: LLMUsage = Field(default_factory=LLMUsage)
-    cost_basis: CostBasis = "none"
-
-    @property
-    def cost_is_real(self) -> bool:
-        """Whether ``usd_total`` is entirely real, billed spend (``cost_basis == "real"``).
-
-        Kept for continuity with the pre-Task-3 boolean signal; prefer
-        :attr:`cost_basis` for the full picture (a run can be ``"estimated"``,
-        ``"mixed"``, ``"untracked"``, or ``"none"`` — all of which this reports
-        as ``False``, exactly as the old bool-only signal would have wanted for
-        anything short of "fully real").
-        """
-        return self.cost_basis == "real"
 
 
 class LatencyTrack(BaseModel):

@@ -27,8 +27,8 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langres.core.benchmark import CostTrack
     from langres.core.models import PairwiseJudgement
+    from langres.core.usage import CostTrack
 
     # Type-checker view of the back-compat re-exports; the runtime path is the
     # PEP 562 module __getattr__ at the bottom of this file.
@@ -274,8 +274,7 @@ def make_token_cost_track(
     Returns:
         A ``track(judgements) -> CostTrack`` closure priced against ``model``.
     """
-    from langres.core.benchmark import CostTrack
-    from langres.core.usage import LLMUsage
+    from langres.core.usage import CostTrack, LLMUsage
 
     in_per_1m, out_per_1m = _price_for(model, prices)
     in_per_tok, out_per_tok = in_per_1m / 1_000_000.0, out_per_1m / 1_000_000.0
