@@ -7,10 +7,10 @@ is part of the curation package now. This re-export keeps
 deletes this file. Import from ``langres.curation.canonicalizer``.
 """
 
-from langres.curation.canonicalizer import (
+from langres.curation.canonicalizer import (  # pragma: no cover
     Canonicalizer,
     CanonicalizerManifest,
     FieldContext,
 )
 
-__all__ = ["Canonicalizer", "CanonicalizerManifest", "FieldContext"]
+__all__ = ["Canonicalizer", "CanonicalizerManifest", "FieldContext"]  # pragma: no cover

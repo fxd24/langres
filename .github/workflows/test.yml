@@ -213,6 +213,16 @@ jobs:
       # remaining number look BETTER. That is the failure this comment exists to
       # prevent: the glob follows the contract, not the average.
       #
+      # The four `src/langres/curation/{anchor_store,canonicalizer,harvest,review}.py`
+      # files are the CONTRACT half of the curation package -- they moved out of
+      # `core/` when bootstrap dissolved in (W2). They are listed as FILES, not a
+      # `curation/*` glob, on purpose: the rest of curation (bootstrapper, labelers,
+      # miners, models, report, base, _pairs -- the former `langres.bootstrap`) is
+      # behavior/smoke-tier harness code, so a `curation/*` glob would drag it under
+      # this 98 floor. The temporary `core/{...}.py` re-export shims left behind carry
+      # `# pragma: no cover` (throwaway back-compat, deleted by the W2 sweep), so they
+      # do not declassify the number they no longer own.
+      #
       # !! `src/langres/optimize.py` IS LISTED SEPARATELY ON PURPOSE -- DO NOT
       # !! FOLD IT INTO AN `optimize/*` GLOB. The facade is a MODULE (a file), not
       # a package; the engine beside it is the `autoresearch/` package. Coverage
@@ -242,7 +252,7 @@ jobs:
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
+        run: uv run coverage report --include="src/langres/core/*,src/langres/curation/anchor_store.py,src/langres/curation/canonicalizer.py,src/langres/curation/harvest.py,src/langres/curation/review.py,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra

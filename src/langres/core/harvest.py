@@ -7,7 +7,7 @@ threshold from them) is part of the curation package now. This re-export keeps
 deletes this file. Import from ``langres.curation.harvest``.
 """
 
-from langres.curation.harvest import (
+from langres.curation.harvest import (  # pragma: no cover
     AlignedPairs,
     AlignedSplit,
     Correction,
@@ -20,7 +20,7 @@ from langres.curation.harvest import (
     harvest_labeled_pairs,
 )
 
-__all__ = [
+__all__ = [  # pragma: no cover
     "AlignedPairs",
     "AlignedSplit",
     "Correction",

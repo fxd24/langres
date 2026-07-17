@@ -67,10 +67,16 @@ a model is the user's job, not a heuristic's. The real layering is:)
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
      matchers (`LLMMatcher`, `EmbeddingScoreMatcher`, `WeightedAverageMatcher`,
      `CascadeMatcher` — cheap student + escalate-at-the-margin, …) and
-     `core.calibration.derive_threshold`. The flywheel seam lives here too:
-     `core.review.select_for_review` / `ReviewQueue` (pick the uncertain margin)
-     and `core.harvest` (`harvest_labeled_pairs`, `Correction`/`CorrectionLog`,
-     `derive_threshold_from_pairs`).
+     `core.calibration.derive_threshold`. The flywheel/labelling seam lives in
+     the **`langres.curation`** package (`review`, `harvest`, `anchor_store`,
+     `canonicalizer` + the dissolved `langres.bootstrap` cold-start): pick the
+     uncertain margin with `curation.review.select_for_review` / `ReviewQueue`,
+     harvest with `curation.harvest` (`harvest_labeled_pairs`,
+     `Correction`/`CorrectionLog`, `derive_threshold_from_pairs`). The harvest/
+     review symbols stay re-exported on the `langres.core` facade
+     (`langres.core.select_for_review`, …); the deep `langres.core.{review,
+     harvest,anchor_store,canonicalizer}` module paths are temporary W2-sweep
+     back-compat shims re-exporting from curation.
    - **`langres.core` itself re-exports only the *contracts*** — the models, the
      `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the opt-in
      capability Protocols (`Inspectable`, the `fit` mixins), the `Resolver` +

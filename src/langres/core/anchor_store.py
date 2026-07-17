@@ -7,10 +7,10 @@ of the curation package now. This re-export keeps
 deletes this file. Import from ``langres.curation.anchor_store``.
 """
 
-from langres.curation.anchor_store import (
+from langres.curation.anchor_store import (  # pragma: no cover
     AnchorStore,
     AnchorStoreManifest,
     ClusterDelta,
 )
 
-__all__ = ["AnchorStore", "AnchorStoreManifest", "ClusterDelta"]
+__all__ = ["AnchorStore", "AnchorStoreManifest", "ClusterDelta"]  # pragma: no cover

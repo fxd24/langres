@@ -6,6 +6,10 @@ now. This re-export keeps ``from langres.core.review import ...`` working for on
 wave; the W2 sweep deletes this file. Import from ``langres.curation.review``.
 """
 
-from langres.curation.review import ReviewItem, ReviewQueue, select_for_review
+from langres.curation.review import (  # pragma: no cover
+    ReviewItem,
+    ReviewQueue,
+    select_for_review,
+)
 
-__all__ = ["ReviewItem", "ReviewQueue", "select_for_review"]
+__all__ = ["ReviewItem", "ReviewQueue", "select_for_review"]  # pragma: no cover
