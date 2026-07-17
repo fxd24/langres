@@ -578,7 +578,7 @@ Listed, not silently fixed; each is a change with its own blast radius.
 | `core/clusterer.py` | `Clusterer(threshold=0.5)` | $t$ is a parameter of $\pi$, not of aggregation (§2). |
 
 **In fairness to the optimizers:** `BlockerOptimizer` accepts an arbitrary
-objective and `primary_metric`, and `core/autoresearch/objective.py` already
+objective and `primary_metric`, and `autoresearch/objective.py` already
 supports Pareto goals and constraints. The doctrine lives in the **guidance and
 `optimal_k`**, not the machinery.
 
