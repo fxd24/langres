@@ -501,7 +501,7 @@ class TestArchitecturesDefendIdentityAtFit:
 
         records: list[dict[str, Any]] = []
         pairs = []
-        from langres.core.harvest import LabeledPair
+        from langres.curation.harvest import LabeledPair
 
         for g, (x, y) in enumerate([("Acme", "Beta"), ("Gamma", "Delta"), ("Eps", "Zeta")]):
             x0, x1, y0 = f"g{g}x0", f"g{g}x1", f"g{g}y0"

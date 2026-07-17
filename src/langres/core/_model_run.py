@@ -143,7 +143,7 @@ class ModelRun(ModelState):
         the raw ``self.module.forward(...)`` gets you an *uncapped* scorer that
         bills straight past ``budget_usd`` and never touches this instance's
         ledger. That is not hypothetical: ``.module`` is a public attribute, and
-        :class:`~langres.core.anchor_store.AnchorStore` reached through it and
+        :class:`~langres.curation.anchor_store.AnchorStore` reached through it and
         scored uncapped -- inside the very change that added the cap. Route every
         new scoring path here and that hole cannot reopen;
         ``tests/core/test_resolver_spend_cap.py`` pins it with an AST sweep.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from langres.bootstrap import GoldSet
+from langres.curation import GoldSet
 
 ARTIFACT = (
     Path(__file__).resolve().parents[2] / "data" / "gold_sets" / "fodors_zagat" / "gold_set.json"

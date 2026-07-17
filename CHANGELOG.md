@@ -123,6 +123,30 @@ while making the metric look better).
   *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
   working too), and `tests/test_import_budget.py` now asserts all three forms.
 
+- **The human-in-the-loop labelling + cold-start seam** → **`langres.curation`**.
+  `review`, `harvest`, `anchor_store` and `canonicalizer` left `langres.core`, and
+  **all of `langres.bootstrap` dissolved in** (`langres.bootstrap` no longer
+  exists). *Supported surfaces are unchanged*: `langres.core.Correction`,
+  `CorrectionLog`, `harvest_labeled_pairs`, `derive_threshold_from_pairs`,
+  `select_for_review`, `ReviewQueue`, `align_pairs`, `LabeledPair` are still on the
+  `langres.core` facade (re-exported from `langres.curation.*`), so
+  `len(langres.core.__all__)` is unchanged. `AnchorStore`/`Canonicalizer` were
+  already deep-import-only (never on the facade) — import them from
+  `langres.curation.anchor_store` / `langres.curation.canonicalizer`.
+
+  Unlike the two relocations above (no shim — a `core` relay recreates the very
+  edges the move removes), the four deep module paths `langres.core.{review,
+  harvest,anchor_store,canonicalizer}` keep **temporary re-export shims** marked
+  `# TEMPORARY: deleted by the W2 sweep`. They are acyclic leaf modules nothing on
+  the eager path imports, so they add no cycle — `tests/test_import_tangle.py` is
+  unchanged at `[9, 3, 2, 2, 2]` / 18. **`langres.bootstrap` gets no shim**
+  (breaking for deep `langres.bootstrap` imports): import its contents from
+  `langres.curation` (`Bootstrapper`, `HardNegativeMiner`, `GoldPair`, `GoldSet`,
+  `GroundTruthLabeler`, `TeacherLabeler`, …), all still lazy where they were.
+  `data/mining.py` deliberately **stays** in `langres.data`: moving it would add a
+  new eager `langres.data → langres.curation` edge (its functions are re-exported
+  from `langres.data`) while it imports no `data/` internals to relocate.
+
 #### Observability moved to `langres.tracking` — non-breaking (shims kept)
 
 Run identity/persistence and experiment tracking are **observability, not ER
@@ -157,7 +181,12 @@ and the module-level SCCs are identical (`tests/test_import_tangle.py`).
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its
-logger name with it. Several moves in this release rename an emitting logger:
+logger name with it. Several moves in this release rename an emitting logger —
+including the whole `langres.curation` extraction above (`review`, `harvest`,
+`anchor_store`, `canonicalizer`, `bootstrapper`, `labelers` now emit under
+`langres.curation.*` instead of `langres.core.*` / `langres.bootstrap.*`). The
+table below lists the `ERModel`/engine moves; the same guidance applies to all of
+them:
 
 | records | was (0.3.0) | now |
 |---|---|---|

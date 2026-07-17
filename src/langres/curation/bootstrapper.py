@@ -3,8 +3,8 @@
 :class:`Bootstrapper` wires the Wave 1-3 pieces into one pass: it builds the
 blocker's vector index, materializes blocker candidates, optionally filters them
 with a caller-supplied predicate, mines a stratified subset, labels it, and
-assembles a :class:`~langres.bootstrap.models.GoldSet` plus a
-:class:`~langres.bootstrap.report.BootstrapReport`.
+assembles a :class:`~langres.curation.models.GoldSet` plus a
+:class:`~langres.curation.report.BootstrapReport`.
 
 It is a plain class with three injected dependencies (design-review W1) and is
 deliberately *entity-type-agnostic*: any domain-specific selection rule (e.g. the
@@ -16,9 +16,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from langres.bootstrap.base import Labeler, Miner
-from langres.bootstrap.models import GoldSet
-from langres.bootstrap.report import BootstrapReport
+from langres.curation.base import Labeler, Miner
+from langres.curation.models import GoldSet
+from langres.curation.report import BootstrapReport
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.models import ERCandidate
 

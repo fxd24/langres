@@ -629,8 +629,8 @@ _MOVED_OFF_THE_FACADE: dict[str, str] = {
     "KeyBlocker": "langres.core.blockers",
     "VectorBlocker": "langres.core.blockers",
     "StringComparator": "langres.core.comparators",
-    "AnchorStore": "langres.core.anchor_store",
-    "Canonicalizer": "langres.core.canonicalizer",
+    "AnchorStore": "langres.curation.anchor_store",
+    "Canonicalizer": "langres.curation.canonicalizer",
     "CorrelationClusterer": "langres.core.clusterers",
     "CascadeMatcher": "langres.core.matchers",
     "EmbeddingScoreMatcher": "langres.core.matchers",
@@ -764,7 +764,7 @@ class TestRootLazyGetattr:
 
     def test_harvest_surface_is_eagerly_root_exported(self) -> None:
         import langres
-        from langres.core import harvest
+        from langres.curation import harvest
 
         assert langres.Correction is harvest.Correction
         assert langres.CorrectionLog is harvest.CorrectionLog

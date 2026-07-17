@@ -17,8 +17,8 @@ from __future__ import annotations
 import pytest
 
 from examples.research.m1_bootstrap_fodors_zagat import run_bootstrap
-from langres.bootstrap.models import GoldSet
-from langres.bootstrap.report import BootstrapReport
+from langres.curation.models import GoldSet
+from langres.curation.report import BootstrapReport
 
 pytestmark = pytest.mark.slow
 

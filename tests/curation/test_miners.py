@@ -2,7 +2,7 @@
 
 import pytest
 
-from langres.bootstrap.miners import HardNegativeMiner, _percentile
+from langres.curation.miners import HardNegativeMiner, _percentile
 from langres.core.models import CompanySchema, ERCandidate
 
 

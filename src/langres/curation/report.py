@@ -21,7 +21,7 @@ coverage read from the gold-set metadata and pair provenance.
 
 This is a PLAIN Pydantic model: not ``@register``-ed, not part of the
 ``SerializableState`` protocol. The builder is pure and deterministic, so it is
-fully testable from synthetic :class:`~langres.bootstrap.models.GoldPair` data
+fully testable from synthetic :class:`~langres.curation.models.GoldPair` data
 with no LLM and no embeddings.
 """
 
@@ -29,7 +29,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from langres.bootstrap.models import GoldPair, GoldSet
+from langres.curation.models import GoldPair, GoldSet
 from langres.core.metrics import (
     ReliabilityBin,
     brier_score,
@@ -201,7 +201,7 @@ class BootstrapReport(BaseModel):
 
         Args:
             gold: The teacher-labeled pairs -- either a
-                :class:`~langres.bootstrap.models.GoldSet` (metadata is used for
+                :class:`~langres.curation.models.GoldSet` (metadata is used for
                 cost/mined counts) or a bare ``list[GoldPair]``.
             candidates: Post-blocking candidate pairs, used only for blocking
                 pair-completeness via

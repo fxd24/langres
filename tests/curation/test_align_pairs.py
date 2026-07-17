@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from langres.core.harvest import (
+from langres.curation.harvest import (
     AlignedPairs,
     Correction,
     CorrectionLog,

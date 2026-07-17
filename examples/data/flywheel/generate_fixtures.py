@@ -39,7 +39,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from langres.core.harvest import Correction, CorrectionLog
+from langres.curation.harvest import Correction, CorrectionLog
 from langres.tracking.judgement_log import JudgementLog
 
 #: Scenario parameters (chosen so the demo is decisive and non-flaky; see module

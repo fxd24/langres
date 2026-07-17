@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 from langres.core.methods_api import Method
 from langres.core.methods_calibrate import CalibrateMethod, Isotonic, Platt
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement

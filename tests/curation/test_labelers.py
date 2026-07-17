@@ -9,7 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from langres.bootstrap.labelers import (
+from langres.curation.labelers import (
     BlindCostError,
     FakeLabeler,
     GroundTruthLabeler,

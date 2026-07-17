@@ -1,12 +1,12 @@
 """Abstract interfaces for cold-start gold-set bootstrapping (M1).
 
 Two tools cooperate to turn raw blocker candidates into a labeled
-:class:`~langres.bootstrap.models.GoldSet`:
+:class:`~langres.curation.models.GoldSet`:
 
 - A :class:`Miner` selects *which* candidate pairs are worth labeling (e.g.
   hard-negative / stratified sampling) — it neither labels nor spends.
 - A :class:`Labeler` assigns a match / non-match label to candidate pairs,
-  emitting one :class:`~langres.bootstrap.models.GoldPair` per candidate. The
+  emitting one :class:`~langres.curation.models.GoldPair` per candidate. The
   label may come from a teacher LLM, benchmark ground truth, or a human.
 
 These are plain ABCs, NOT Resolver slot components: they are not registered via
@@ -21,7 +21,7 @@ must be able to rely on the contract here regardless of the concrete class.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from langres.bootstrap.models import GoldPair
+from langres.curation.models import GoldPair
 from langres.core.models import ERCandidate
 
 

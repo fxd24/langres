@@ -16,7 +16,7 @@ import pytest
 from pydantic import BaseModel
 
 import langres
-from langres.core.anchor_store import AnchorStore
+from langres.curation.anchor_store import AnchorStore
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.tracking.judgement_log import JudgementLog, LoggingMatcher

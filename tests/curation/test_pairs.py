@@ -1,6 +1,6 @@
 """Tests for the shared canonical pair-key helper."""
 
-from langres.bootstrap._pairs import canonical_pair_key
+from langres.curation._pairs import canonical_pair_key
 
 
 def test_canonical_pair_key_is_order_independent() -> None:

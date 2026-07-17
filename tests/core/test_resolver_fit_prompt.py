@@ -19,7 +19,7 @@ from collections.abc import Iterator
 import pytest
 from dspy.utils.dummies import DummyLM
 
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 from langres.core.matcher import Matcher
 from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.methods_api import Method

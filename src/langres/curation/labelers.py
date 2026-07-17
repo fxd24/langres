@@ -1,6 +1,6 @@
 """Labelers for cold-start gold-set bootstrapping (M1).
 
-Three concrete labelers, all emitting :class:`~langres.bootstrap.models.GoldPair`:
+Three concrete labelers, all emitting :class:`~langres.curation.models.GoldPair`:
 
 - :class:`GroundTruthLabeler`: deterministic, zero-spend labeling from a known
   positive-pair set. Used to prove the bootstrap loop end-to-end with no cost.
@@ -17,9 +17,9 @@ import math
 from itertools import combinations
 from typing import Any
 
-from langres.bootstrap._pairs import canonical_pair_key
-from langres.bootstrap.base import Labeler
-from langres.bootstrap.models import GoldPair
+from langres.curation._pairs import canonical_pair_key
+from langres.curation.base import Labeler
+from langres.curation.models import GoldPair
 from langres.core.benchmark import BlindCostError
 from langres.core.models import ERCandidate, predicted_match
 from langres.core.matchers.llm_judge import LLMMatcher
@@ -27,7 +27,7 @@ from langres.core.matchers.llm_judge import LLMMatcher
 logger = logging.getLogger(__name__)
 
 # ``BlindCostError`` moved to ``langres.core.benchmark`` (shared with the core
-# budgeted runner); imported here so ``langres.bootstrap`` keeps re-exporting it
+# budgeted runner); imported here so ``langres.curation`` keeps re-exporting it
 # and ``TeacherLabeler`` continues to raise the same type.
 __all__ = [
     "BlindCostError",

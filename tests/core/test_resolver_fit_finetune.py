@@ -21,7 +21,7 @@ import pytest
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.finetune import TrainOutcome
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.methods_api import Method
 from langres.core.models import CompanySchema, PairwiseJudgement

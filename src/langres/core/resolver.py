@@ -65,7 +65,7 @@ from langres.core.fit import (
     UnsupervisedFitMixin,
 )
 from langres.core.fit_report import CalibrationDelta, FitReport
-from langres.core.harvest import Correction, LabeledPair, align_pairs
+from langres.curation.harvest import Correction, LabeledPair, align_pairs
 from langres.core.matcher import Matcher
 from langres.core.methods_api import Method, UnsupportedMethodKind
 from langres.core.metrics import (
@@ -83,7 +83,7 @@ if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
     # inside _build_embedding_blocker so a core-only `import langres` never
     # pulls faiss/torch in for a Resolver that never uses matcher="embedding".
-    from langres.core.anchor_store import AnchorStore, ClusterDelta
+    from langres.curation.anchor_store import AnchorStore, ClusterDelta
     from langres.core.blockers.vector import VectorBlocker
 
 logger = logging.getLogger(__name__)
@@ -475,11 +475,11 @@ class ERModel(ModelRun, ModelPersistence):
           aligned with the blocked candidates (the pre-existing contract). No
           id-join happens, so the report carries no ``coverage``.
         - ``pairs``: id-keyed labels (a ``corrections.jsonl`` path, or a
-          ``Sequence`` of :class:`~langres.core.harvest.LabeledPair` /
-          :class:`~langres.core.harvest.Correction`) that
-          :func:`~langres.core.harvest.align_pairs` joins to the candidates for
+          ``Sequence`` of :class:`~langres.curation.harvest.LabeledPair` /
+          :class:`~langres.curation.harvest.Correction`) that
+          :func:`~langres.curation.harvest.align_pairs` joins to the candidates for
           you -- with an optional entity-disjoint ``split`` for held-out metrics
-          and a :class:`~langres.core.harvest.GoldCoverage` guardrail. Pass at
+          and a :class:`~langres.curation.harvest.GoldCoverage` guardrail. Pass at
           most one of ``labels``/``pairs``.
 
         When the module implements **neither** hook, this is a no-op that returns
@@ -660,7 +660,7 @@ class ERModel(ModelRun, ModelPersistence):
         -- the optimizer named by ``method.optimizer`` (``BootstrapFewShot`` for
         :class:`~langres.core.methods_prompt.Bootstrap`, ``MIPROv2`` for
         :class:`~langres.core.methods_prompt.MIPRO`). Supervision comes from either
-        id-keyed ``pairs`` (joined via :func:`~langres.core.harvest.align_pairs`,
+        id-keyed ``pairs`` (joined via :func:`~langres.curation.harvest.align_pairs`,
         whose optional entity-disjoint ``split`` yields the ``valid`` fold
         ``MIPROv2`` uses as its valset) or pre-aligned ``labels``. Sets
         :attr:`fit_report_` naming the demos learned + teacher model + declared
@@ -916,7 +916,7 @@ class ERModel(ModelRun, ModelPersistence):
         ``method.strategy``) on those ``(score, label)`` pairs, and attaches it as
         :attr:`calibrator` so :meth:`predict`/:meth:`resolve` map every raw score
         to a calibrated probability. Supervision comes from id-keyed ``pairs``
-        (joined via :func:`~langres.core.harvest.align_pairs`, whose optional
+        (joined via :func:`~langres.curation.harvest.align_pairs`, whose optional
         entity-disjoint ``split`` gives a held-out fold) or pre-aligned ``labels``.
 
         The honest test: when a ``valid`` split exists, the ``FitReport`` carries
@@ -1138,9 +1138,9 @@ class ERModel(ModelRun, ModelPersistence):
             entity_prefix: Prefix for minted entity ids (default ``"e"``).
 
         Returns:
-            The built :class:`~langres.core.anchor_store.AnchorStore`.
+            The built :class:`~langres.curation.anchor_store.AnchorStore`.
         """
-        from langres.core.anchor_store import AnchorStore
+        from langres.curation.anchor_store import AnchorStore
 
         self._anchor_store = AnchorStore.build(self, records, entity_prefix=entity_prefix)
         return self._anchor_store
@@ -1150,7 +1150,7 @@ class ERModel(ModelRun, ModelPersistence):
 
         Incremental single-record resolution against the anchor set built by
         :meth:`build_anchor_store`: returns a
-        :class:`~langres.core.anchor_store.ClusterDelta` that either ``link``\\ s
+        :class:`~langres.curation.anchor_store.ClusterDelta` that either ``link``\\ s
         the record to an existing entity (with a stable id) or marks it ``new``.
         Distinct from the reserved cross-source :meth:`link` /
         :meth:`stream_against` stubs — ``assign`` is single-record incremental
@@ -1160,7 +1160,7 @@ class ERModel(ModelRun, ModelPersistence):
             record: A raw record dict, same shape as ``resolve()`` accepts.
 
         Returns:
-            A :class:`~langres.core.anchor_store.ClusterDelta`.
+            A :class:`~langres.curation.anchor_store.ClusterDelta`.
 
         Raises:
             RuntimeError: If :meth:`build_anchor_store` was not called first.

@@ -9,14 +9,14 @@ data, and how well does it hold out?" for a single ``fit()``:
   fit hook actually ran (``trained``) -- an honest no-op is not a silent success;
 - **on how much** -- train/valid sizes and the split provenance;
 - **did blocking keep the positives** -- the
-  :class:`~langres.core.harvest.GoldCoverage` from
-  :func:`~langres.core.harvest.align_pairs`;
+  :class:`~langres.curation.harvest.GoldCoverage` from
+  :func:`~langres.curation.harvest.align_pairs`;
 - **how well does it hold out** -- pair P/R/F1 on the entity-disjoint ``valid``
   split (from :func:`~langres.core.metrics.classify_pairs`), when a split was
   given.
 
 Import-light on purpose (Pydantic + the two light leaves
-:mod:`langres.core.harvest`/:mod:`langres.core.metrics` only): it must NEVER
+:mod:`langres.curation.harvest`/:mod:`langres.core.metrics` only): it must NEVER
 pull sklearn/torch, so a report built right after a heavy fit stays cheap to
 import, dump, and render (locked by ``tests/test_import_budget.py``). Lineage is
 *referenced*, not duplicated: ``run_ref`` carries the enclosing
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from langres.core.harvest import GoldCoverage
+from langres.curation.harvest import GoldCoverage
 from langres.core.metrics import PairMetrics
 
 

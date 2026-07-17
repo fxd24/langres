@@ -21,7 +21,7 @@ GoldPairSource = Literal["teacher", "ground_truth", "human", "fake"]
 
 ``"teacher"`` (a teacher LLM), ``"ground_truth"`` (benchmark ground truth),
 ``"human"`` (a reviewer), or ``"fake"`` (a deterministic no-spend stand-in for
-the teacher, e.g. :class:`~langres.bootstrap.labelers.FakeLabeler`, used to
+the teacher, e.g. :class:`~langres.curation.labelers.FakeLabeler`, used to
 exercise the bootstrap loop and its calibration report without API spend).
 """
 

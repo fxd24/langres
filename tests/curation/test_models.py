@@ -1,4 +1,4 @@
-"""Tests for the gold-set data contract (``langres.bootstrap``)."""
+"""Tests for the gold-set data contract (``langres.curation``)."""
 
 import subprocess
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from langres.bootstrap import GoldPair, GoldSet
+from langres.curation import GoldPair, GoldSet
 
 
 def test_gold_pair_minimal_defaults() -> None:
@@ -118,7 +118,7 @@ def test_gold_set_fresh_process_reload(tmp_path: Path) -> None:
             sys.executable,
             "-c",
             (
-                "from langres.bootstrap import GoldSet; "
+                "from langres.curation import GoldSet; "
                 f"gs = GoldSet.load({str(path)!r}); "
                 "assert gs.pairs; "
                 "assert gs.pairs[0].source == 'ground_truth'"

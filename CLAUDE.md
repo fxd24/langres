@@ -74,10 +74,14 @@ langres/
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
-│   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
-│   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
 │   │   └── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
+│   ├── curation/       # human-in-the-loop labelling + gold-set cold-start (the dissolved langres.bootstrap). core/{review,harvest,anchor_store,canonicalizer}.py are TEMPORARY W2-sweep back-compat shims re-exporting from here
+│   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
+│   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs, align_pairs
+│   │   ├── anchor_store.py         # AnchorStore / ClusterDelta (hold the anchors; assign incoming records)
+│   │   ├── canonicalizer.py        # Canonicalizer (survivorship: fold a cluster into one golden record)
+│   │   └── base.py, miners.py, models.py, labelers.py, bootstrapper.py, report.py, _pairs.py  # gold-set cold-start: Miner/Labeler, HardNegativeMiner, GoldPair/GoldSet, Bootstrapper, BootstrapReport
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   ├── tracking/       # observability, NOT ER modelling — so it sits beside core (depends on core one-way; the langres.core facade re-exports these names for back-compat)
