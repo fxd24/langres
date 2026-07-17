@@ -632,6 +632,15 @@ Recorded because the corrections are more instructive than the claims.
 13. **"The literature is siloed."** True *until recently*, and documented **by**
     the paper that broke it: Leone et al. (PVLDB 15(8), 2022) *"draw a parallel
     between EA and record linkage"* and benchmark Ditto on EA.
+14. **§6.2 — "Zamani's Eq. 4 *is* the precision formula."** Over-credited. Their
+    Eq. 4 is derived under *"for illustration, let us assume k = 1"*; the general-$k$
+    case is simulation-only (their Fig. 3), and at $k=1$ the objective is pure
+    precision, whose $\arg\min_N \rho$ is **$\varepsilon$-invariant** — the optimum
+    does **not** shift with reranker quality. This is exactly where the transplant
+    is *stronger* than the source, not weaker: ER's $F_1$ trades the recall gain
+    against a $\varphi \cdot n k$ term, so $k^\*$ shifts **continuously** with
+    $\varphi$ (§6.3). State the source result as $k=1$, and claim the continuous
+    dependence as ours.
 
 ---
 

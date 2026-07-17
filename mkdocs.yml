@@ -46,6 +46,14 @@ markdown_extensions:
       base_path: [".", "docs"]
       check_paths: true
   - pymdownx.superfences
+  # Renders the $…$ / $$…$$ math in docs/THEORY.md (generic mode → MathJax,
+  # loaded via extra_javascript below).
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 plugins:
   - search
@@ -81,6 +89,7 @@ not_in_nav: |
   /POC.md
   /RESOURCES.md
   /TESTING_AT_ZERO_COST.md
+  /THEORY.md
   /plans/
   /research/
 
