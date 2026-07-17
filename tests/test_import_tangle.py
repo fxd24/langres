@@ -216,21 +216,38 @@ RUNTIME = TangleBaseline(
     tangled=frozenset(),
 )
 
-# All-edges view: 24 modules across four cycles, the largest being 10. Killing the
-# runtime cycle collapsed this view too (39 -> 10, tangled 44 -> 24): the root,
-# both `_exports` trees, `verbs` and `optimize` were only ever tangled here *via*
-# that same `resolver -> langres` edge, so they left with it. What remains are
-# four genuinely lazy knots, none of them touching the root:
-#   10  the matcher/presets/resolver + methods/benchmark knot (litellm seam)
+# All-edges view: 23 modules across four cycles, the largest being 9. Killing the
+# runtime cycle collapsed this view (39 -> 10, tangled 44 -> 24): the root, both
+# `_exports` trees, `verbs` and `optimize` were only ever tangled here *via* that
+# same `resolver -> langres` edge, so they left with it. What remains are four
+# genuinely lazy knots, none of them touching the root:
+#    9  the matcher/resolver + methods/benchmark knot (litellm seam)
 #    9  the `data.data_profile.*` section graph
 #    3  {core.analysis, core.reports, plotting.blockers}
 #    2  {core.runs, core.trackers}
-# `tangled` covers all four; `largest_scc` pins the 10 so they cannot silently
-# merge into one.
+# `tangled` covers all four; `largest_scc` pins the biggest so they cannot
+# silently merge into one. NOTE the two 9s are different components that happen
+# to be the same size -- `largest_scc` alone cannot tell them apart, which is
+# exactly why `tangled` is pinned alongside it.
+#
+# W4 (the ERModel/architectures wave) ratcheted this DOWN: 10 -> 9, tangled
+# 24 -> 23. `langres.core.presets` left, because W4 deleted it outright. It was
+# the verbs' machinery -- judge="auto" key-sniffing, build_resolver,
+# build_judge -- and once `verbs.py` went, its only remaining importer was
+# `core/benchmark.py` reaching for `_effective_budget`, an alias it now imports
+# from the `core.spend_cap` leaf that always owned it. Nothing was moved to buy
+# this: the module is gone.
+#
+# Measured fact for whoever plans the next wave: the NEW `langres.architectures`
+# package did **not** join the tangle, in either view. Its modules import
+# downward only (`core.resolver`, `core.registry`, the component packages) and
+# keep every heavy dep ([semantic]/[llm]) inside `_topology`'s function body. An
+# architecture that grows a toplevel import of a module which imports it back
+# would show up here as an ENTERED line.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
-    largest_scc=10,
+    largest_scc=9,
     tangled=frozenset(
         {
             "langres.clients.openrouter",
@@ -241,7 +258,6 @@ ALL_EDGES = TangleBaseline(
             "langres.core.matchers.cascade",
             "langres.core.matchers.llm_judge",
             "langres.core.method_registry",
-            "langres.core.presets",
             "langres.core.reports",
             "langres.core.resolver",
             "langres.core.runs",

@@ -63,7 +63,7 @@ from langres._exports._data import *  # noqa: F403
 from langres._exports._flywheel import *  # noqa: F403
 from langres._exports._optimize import *  # noqa: F403
 from langres._exports._training import *  # noqa: F403
-from langres._exports._verbs import *  # noqa: F403
+from langres._exports._models import *  # noqa: F403
 
 #: The composed public surface -- every fragment's slice, deduplicated and
 #: sorted (see :data:`langres._exports.NAMES`).

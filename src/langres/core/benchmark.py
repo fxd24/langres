@@ -56,7 +56,7 @@ from langres.core.matcher import Matcher
 # annotation inside `clients/openrouter.py`) -- verified empirically: importing
 # `langres.core.presets` alone never inserts `langres.core.benchmark` into
 # `sys.modules`.
-from langres.core.presets import _effective_budget
+from langres.core.spend_cap import effective_budget
 from langres.core.resolver import Resolver
 from langres.core.usage import LLMUsage
 
@@ -1467,7 +1467,7 @@ def evaluate(
             stacklevel=2,
         )
 
-    resolved_budget = _effective_budget(budget_usd)
+    resolved_budget = effective_budget(budget_usd)
     runner = BudgetedModuleRunner(
         module,
         budget_usd=resolved_budget,
