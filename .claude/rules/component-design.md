@@ -181,7 +181,7 @@ Extract when you see:
    method registry (`core/method_registry.py` — the v0.3 unification that
    closed issue #55's three-site wiring debt): a `MethodSpec` carries the
    builder plus identity metadata (`score_type`, `default_threshold`,
-   `default_model`, `accepts_model`, `needs_comparator`, `requires_extra`).
+   `default_model`, `accepted_kinds`, `needs_comparator`, `requires_extra`).
    All three dispatch paths — `core/presets.py:build_judge` (the verbs),
    `core/resolver.py:_build_module_for_judge` (`Resolver.from_schema`), and
    `methods.py:_make_module_builder` (the benchmark harness) — resolve names
@@ -200,6 +200,54 @@ Extract when you see:
 3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
    blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
    the user-facing sugar over it.
+
+## Backbones: `ModelRef` is the ONE model-reference concept
+
+**Architecture = topology** (which components, in what order). **Backbone = what
+fills a model slot.** Swapping a backbone must never mint a new architecture, so
+a component never invents its own model-reference shape: it takes a
+`langres.core.model_ref.ModelRef` (via `normalize_model_ref`, which accepts a
+plain string, a dict, or a ref).
+
+`ModelRef` is a stdlib-only leaf (it imports nothing from `langres`), frozen,
+validated in `__post_init__`, and **weightless** — reference strings only, so it
+round-trips as JSON config via `to_config`. Its fields: `base`, `kind`,
+`adapter`, `api_base`, `revision`.
+
+**`kind` is the discriminator, and routing reads nothing else:**
+
+| `kind` | `base` names | runs |
+|---|---|---|
+| `api` | a litellm id (`openai/gpt-4o`, `gpt-5-mini`) | served (litellm) |
+| `endpoint` | a model served at `api_base` | served (litellm) |
+| `hf` | a Hugging Face Hub id (`org/name`) | in-process |
+| `local` | a local directory path | in-process |
+
+Rules that are load-bearing, each for a measured reason:
+
+- **Never route on the filesystem** (B17). `backend_for(kind)` is the whole rule.
+  The predecessor probed `os.path.isdir(base)`, so the same saved config resolved
+  to a *different backend in a different working directory* (reproduced: a
+  `./gpt-5-mini` directory flipped that API id litellm → transformers). A path is
+  recognized by **syntax** (`./`, `../`, `/`, `~`) — so a bare relative dir name is
+  an API id, not a path.
+- **`revision` pins an `hf` ref** (B16). Without it `org/name` drifts as the Hub
+  moves and an "identical versioned config" is not identical across time.
+- **Don't guess a provider typo.** `org/name` cannot be disambiguated from a
+  typo'd provider by syntax: the real org `mistralai` scores 0.875 against the
+  `mistral` provider while the typo `opeani`→`openai` scores 0.833, so no difflib
+  cutoff exists. A caller who means an API model names `kind="api"`.
+- **DSPy-backed slots are litellm-only** (B10). DSPy routes *every* completion
+  through litellm (`lm.py:forward` → `litellm_completion`); `lm_local` shells out
+  to sglang and points litellm back at localhost. So `require_litellm_routable`
+  rejects local dirs and adapters at construction. It deliberately admits `hf`:
+  litellm knows 146 providers and the prefix table 26, so 120 real provider ids
+  infer as `hf` and rejecting them would break working code.
+
+A method declares which backbones it can run via `MethodSpec.accepted_kinds`, and
+`check_backbone` enforces it on every dispatch path — an empty set means "no model
+slot", so `model=` raises rather than being silently dropped. See
+`docs/ADDING_A_METHOD.md`.
 
 Add docstrings to all public methods, and include a usage example in `examples/`
 for any new user-facing component.

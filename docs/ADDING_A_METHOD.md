@@ -133,10 +133,36 @@ register_method(MethodSpec(
     score_type="prob_group_llm",       # the family tag its judgements carry
     default_threshold=0.7,             # E12: per-family threshold scales
     default_model=DEFAULT_OPENROUTER_MODEL,  # what results report as `model`
-    accepts_model=True,                # honors a caller model= override
+    accepted_kinds=LITELLM_ROUTABLE_KINDS,   # WHICH backbones it can actually run
     requires_extra="llm",              # actionable ImportError names the extra
 ))
 ```
+
+### Declaring the backbone slot (`accepted_kinds`)
+
+A **backbone** is what fills a method's model slot — a
+`langres.core.model_ref.ModelRef`: an API id, a served endpoint, an HF Hub id, a
+local directory, or `{base, adapter}` for an unmerged QLoRA. `accepted_kinds`
+names the `kind`s your method can *actually* run, and it is the only thing that
+decides whether a caller's `model=` is honored or refused:
+
+| your method is backed by | `accepted_kinds` | why |
+|---|---|---|
+| nothing (pure string similarity) | `frozenset()` (the default) | no model slot — a caller's `model=` raises `UnsupportedBackboneError` instead of being silently dropped |
+| DSPy (`DSPyMatcher`, `SelectMatcher`) | `LITELLM_ROUTABLE_KINDS` | DSPy routes **every** completion through litellm — it has no in-process route, so a local dir or an adapter is unreachable |
+| `LLMMatcher` | `SERVED_KINDS \| IN_PROCESS_KINDS` | it has litellm **and** a transformers backend |
+| an in-process embedder | `IN_PROCESS_KINDS` | the weights load here |
+
+`MethodSpec.check_backbone(model)` is the one gate every dispatch path calls, so
+all three layers reject the same refs with the same message. **An empty
+`accepted_kinds` is a promise, not an omission**: it says "this method has no
+model", and the registry will enforce it.
+
+> `accepted_kinds` replaced the old `accepts_model: bool` in W3. The bool could
+> only say *whether* a slot took a backbone, never *which kinds* — so the
+> DSPy-backed methods advertised `accepts_model=True` while meaning "a litellm id
+> **string**", and a local path was forwarded into `DSPyMatcher(model=…)` to die
+> deep inside litellm. `accepts_model` is now just `bool(accepted_kinds)`.
 
 Method ids are **bare names**; `/` is reserved for future `author/method`
 namespacing (model ids keep their slashes in the orthogonal `model=` kwarg).
