@@ -390,11 +390,10 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 #
 # !! THIS LIST IS A DENY LIST, SO IT ROTS OPEN !! Every entry asserts a module is
 # ABSENT from ``sys.modules``, which a module that no longer exists satisfies
-# trivially. A stale path here does not fail -- it silently stops guarding, and
-# the test stays green while checking nothing. When a module named here moves,
-# the ONLY signal is this comment. Re-point it; never just delete the entry.
-# (Caught for real: the `report` extraction left `langres.core.eval_report` here,
-# passing vacuously against a module that had ceased to exist.)
+# trivially -- so a stale path stops guarding without failing. Re-point entries
+# when a module moves; never just delete one.
+# ``test_root_lazy_module_paths_all_exist`` below is what makes that rule
+# enforceable rather than aspirational -- it fails when a path here goes stale.
 _ROOT_LAZY_MODULES = [
     "langres.report.eval_report",
     "langres.core.benchmark",
@@ -419,6 +418,33 @@ def test_import_langres_does_not_eagerly_import_lazy_root_export_modules() -> No
     )
     assert result.returncode == 0, (
         f"root-export laziness check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
+def test_root_lazy_module_paths_all_exist() -> None:
+    """Every path in ``_ROOT_LAZY_MODULES`` must name a module that EXISTS.
+
+    This is the executable half of the deny list above, and it is the whole
+    reason that list can be trusted. The laziness check asserts each module is
+    *absent* from ``sys.modules`` -- a condition a module that no longer exists
+    satisfies perfectly. So a path that goes stale does not fail there; it
+    silently stops guarding, and the suite stays green while checking nothing.
+    (That is not hypothetical: the `report` extraction left
+    ``langres.core.eval_report`` in this list, passing vacuously against a module
+    that had ceased to exist.)
+
+    A deny list rots OPEN. This test makes it rot CLOSED: move a module named
+    above without re-pointing it, and this goes red instead of going quiet.
+
+    It must live in its own function, not inside the laziness check:
+    ``find_spec`` imports the *parent* package to resolve a submodule, which
+    would populate ``sys.modules`` and defeat the very absence assertion it
+    guards. That check runs in a subprocess, so this one cannot contaminate it.
+    """
+    missing = [m for m in _ROOT_LAZY_MODULES if importlib.util.find_spec(m) is None]
+    assert not missing, (
+        f"stale paths in _ROOT_LAZY_MODULES -- these guard NOTHING, because a "
+        f"module that does not exist can never appear in sys.modules: {missing}"
     )
 
 
