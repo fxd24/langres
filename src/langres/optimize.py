@@ -36,7 +36,7 @@ instead. Keep the facade a module; don't grow submodules under this name.
 ``import langres`` path (the two symbols are root-exported), so its module top is
 stdlib/typing only — every langres import, **including the engine's own modules**
 (``autoresearch.factory``, ``autoresearch.loop``, ``langres.data``,
-``core.metrics``, ``core.runs``, ``core.trackers``), is **lazy, inside a function
+``core.metrics``, ``tracking.runs``, ``tracking.trackers``), is **lazy, inside a function
 body**. A bare ``import langres`` therefore never pulls faiss /
 sentence-transformers / torch / optuna through here (see
 ``tests/test_import_budget.py``).

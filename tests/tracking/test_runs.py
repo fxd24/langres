@@ -22,7 +22,7 @@ from typing import Any
 import pydantic
 import pytest
 
-from langres.core import runs
+from langres.tracking import runs
 from langres.tracking.runs import (
     RunContext,
     RunRecord,
@@ -327,7 +327,7 @@ class TestRunStore:
 
 
 def test_import_langres_does_not_eagerly_require_fcntl(tmp_path: Path) -> None:
-    """Codex#2: ``import langres`` (which imports ``core.runs``) must not need fcntl.
+    """Codex#2: ``import langres`` (which imports ``tracking.runs``) must not need fcntl.
 
     ``fcntl`` is Unix-only; a hard top-level import would break ``import langres``
     on Windows. Simulate fcntl being unimportable (``sys.modules['fcntl'] = None``
@@ -336,7 +336,7 @@ def test_import_langres_does_not_eagerly_require_fcntl(tmp_path: Path) -> None:
     """
     script = (
         "import sys; sys.modules['fcntl'] = None; "
-        "import langres; from langres.core import runs; "
+        "import langres; from langres.tracking import runs; "
         "assert runs.fcntl is None, runs.fcntl; "
         "from langres.tracking.runs import RunStore, RunContext, RunRecord; "
         "store = RunStore(sys.argv[1]); "
