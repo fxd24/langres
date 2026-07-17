@@ -133,12 +133,12 @@ class _MeteredJudge(Matcher[Any]):
     """Wrap a judge, metering each judgement's real cost through a shared monitor.
 
     Reuses the exact spend-cap pattern of
-    :class:`~langres.core.presets._SpendCappedMatcher` and
+    :class:`~langres.core.spend_cap.SpendCappedMatcher` and
     ``examples/research/w3_paid_smoke.py``'s ``_charge`` -- add each judgement's
     honest ``provenance["cost_usd"]`` to a :class:`SpendMonitor`, ``check()`` it,
     and re-raise :class:`BudgetExceeded` with every already-paid-for judgement on
     ``.partial_judgements``. The one difference (and the reason this is not just
-    ``_SpendCappedMatcher``): the monitor is **injected**, so ONE cumulative
+    ``SpendCappedMatcher``): the monitor is **injected**, so ONE cumulative
     ledger spans the valid-derivation pass, the test pass, and every dataset in
     the run -- a genuinely run-wide hard cap.
 
