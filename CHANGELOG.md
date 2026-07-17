@@ -123,6 +123,34 @@ while making the metric look better).
   *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
   working too), and `tests/test_import_budget.py` now asserts all three forms.
 
+#### Moved to `langres.metrics` — internal, back-compat **shims kept**
+
+The evaluation/diagnostics metrics left `langres.core`: `core/metrics.py`
+(BCubed/pairwise/ranking ER metrics), `core/analysis.py` (blocker-analysis),
+`core/debugging.py` (`PipelineDebugger`) and `core/diagnostics.py` (error-case
+models) now live in the new **`langres.metrics`** package. Metrics *score* a
+resolution; they are not the modelling contract, so they sit beside `langres.core`,
+not in it.
+
+Unlike the `report`/`autoresearch` moves above, this wave **keeps back-compat
+shims** at every old path (`langres.core.metrics`/`.analysis`/`.debugging`/
+`.diagnostics` still import and re-export their full public surface), so no
+supported *or* deep import breaks. The `langres.eval` facade (`reduction_ratio`,
+`classify_pairs`, `roc_auc_score`, …) is unchanged. Shims carry a
+`# TEMPORARY: deleted by the W2 sweep` marker; the sweep repoints the remaining
+in-repo callers and removes them.
+
+Measured (`tools/import_graph.py kinds`): the runtime SCC stays **empty** and the
+all-edges tangle is **unchanged at `[9, 3, 2, 2, 2]` / 18** — the shims did not
+re-knot the graph, because metrics is not in the eager `import langres` path and
+`core/reports.py`'s one lazy edge into `analysis` was repointed at
+`langres.metrics.analysis` (leaving it on the shim would have grown the
+`{analysis, reports, plotting.blockers}` knot from 3 to 4). That knot is
+**relocated, not removed**: it is now `{metrics.analysis, core.reports,
+plotting.blockers}`. The CI core-contract coverage gate's `--include` glob does
+not yet cover `src/langres/metrics/*`; those files measure ~99% and should be
+added to it so the contract tier stays gated.
+
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its

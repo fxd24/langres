@@ -642,7 +642,7 @@ _MOVED_OFF_THE_FACADE: dict[str, str] = {
     "FakeEmbedder": "langres.core.embeddings",
     "FAISSIndex": "langres.core.indexes",
     "VectorIndex": "langres.core.indexes",
-    "PipelineDebugger": "langres.core.debugging",
+    "PipelineDebugger": "langres.metrics.debugging",
 }
 
 

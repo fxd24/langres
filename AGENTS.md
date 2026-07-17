@@ -76,6 +76,7 @@ langres/
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   ├── metrics/        # ER metrics + diagnostics (metrics/analysis/debugging/diagnostics) — they SCORE a resolution, not the modelling contract, so beside core; public via langres.eval, back-compat shims at core.metrics/.analysis/.debugging/.diagnostics
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)

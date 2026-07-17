@@ -567,7 +567,7 @@ class BlockerEvaluationReport(BaseModel):
         recall_curve: Recall@k curve data
 
     Example:
-        >>> from langres.core.analysis import evaluate_blocker_detailed
+        >>> from langres.metrics.analysis import evaluate_blocker_detailed
         >>> report = evaluate_blocker_detailed(candidates, gold_clusters)
         >>> print(f"Candidate recall: {report.candidates.recall:.2%}")
         >>> print(f"MAP: {report.ranking.map:.3f}")
