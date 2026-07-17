@@ -76,6 +76,16 @@ class ArtifactManifest(BaseModel):
         artifact_version: Layout version of the artifact (see
             :data:`ARTIFACT_VERSION`).
         langres_version: The ``langres.__version__`` that wrote the artifact.
+        model_class: Registered name of the Resolver *subclass* that wrote the
+            artifact (see ``langres.core.registry.register_model``), so a named
+            architecture survives a round-trip instead of loading back as a
+            plain ``Resolver``. **Optional by design**: ``None``/absent means a
+            plain ``Resolver``, which is what every pre-0.4 artifact — and any
+            unregistered subclass — is. That is why adding it does **not** bump
+            :data:`ARTIFACT_VERSION`: a compatible read costs one ``if``, while a
+            bump would make ``Resolver._check_versions`` reject existing 0.3.0
+            artifacts in *both* directions (it raises on older *and* newer) for
+            no gain.
         components: Ordered component specs composing the Resolver.
         checksums: Optional sidecar checksum map (filename -> checksum) for
             out-of-band state files written by :class:`SerializableState`
@@ -84,5 +94,6 @@ class ArtifactManifest(BaseModel):
 
     artifact_version: str
     langres_version: str
+    model_class: str | None = None
     components: list[ComponentSpec]
     checksums: dict[str, str] = Field(default_factory=dict)

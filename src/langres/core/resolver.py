@@ -37,7 +37,7 @@ import logging
 import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
@@ -55,7 +55,7 @@ from langres.core.fit import (
 )
 from langres.core.fit_report import CalibrationDelta, FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
-from langres.core.methods_api import Method
+from langres.core.methods_api import Method, UnsupportedMethodKind
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import (
     PairMetrics,
@@ -65,7 +65,7 @@ from langres.core.metrics import (
 )
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
-from langres.core.registry import get_component
+from langres.core.registry import get_component, get_model, model_type_name
 from langres.core.runs import current_run
 from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher, effective_budget
@@ -358,6 +358,37 @@ class Resolver:
         resolver.save("artifacts/company_v0")
         reloaded = Resolver.load("artifacts/company_v0")
     """
+
+    #: The ``Method.kind``s :meth:`fit` accepts; ``None`` (the default) accepts
+    #: every kind.
+    #:
+    #: This exists for the named architectures of W4 (``FuzzyString``,
+    #: ``VectorLLMCascade``, ...), which make the claim *one architecture = one
+    #: class = one identity*. That claim is falsifiable by ``fit`` itself:
+    #: :meth:`_fit_finetune` deliberately **repoints the matcher slot** at the
+    #: fine-tuned model, so ``FuzzyString().fit(method=QLoRA(...))`` would return
+    #: an LLM-backed pipeline still calling itself ``FuzzyString``. A subclass
+    #: declares the kinds it can absorb without ceasing to be itself; anything
+    #: else is refused at the :meth:`fit` boundary with
+    #: :class:`~langres.core.methods_api.UnsupportedMethodKind`.
+    #:
+    #: The base ``Resolver`` stays ``None`` -- **permissive on purpose**. It makes
+    #: no identity claim ("a resolver" is not a topology), so there is nothing for
+    #: a topology change to falsify, and every fit path it accepts today keeps
+    #: working unchanged.
+    #:
+    #: Alternatives considered and rejected (recorded so this is cheap to flip):
+    #:
+    #: - *A topology-changing ``fit()`` returns a NEW architecture instance*
+    #:   (sklearn ``clone``-like). More principled -- identity would follow the
+    #:   topology instead of constraining it -- but ``fit`` mutates in place and
+    #:   returns ``self``/metrics today, and the flywheel loop depends on that;
+    #:   changing the return contract is far more churn than this gate.
+    #: - *Downgrade the invariant to advisory* (document that ``fit`` may change
+    #:   what the class name means). Zero code, but it guts the whole point of
+    #:   naming architectures: a name that may silently describe something else is
+    #:   not an identity.
+    accepted_method_kinds: ClassVar[frozenset[str] | None] = None
 
     def __init__(
         self,
@@ -666,8 +697,15 @@ class Resolver:
             NotImplementedError: If ``method`` is given but its ``kind``'s fit
                 path is not implemented yet (the seam is wired ahead of the
                 concrete methods; the error names the PR that will land it).
+            UnsupportedMethodKind: If this class declares
+                :attr:`accepted_method_kinds` and ``method.kind`` is not among
+                them. The base ``Resolver`` declares none and never raises it.
         """
         if method is not None:
+            # Architectures that claim an identity refuse the kinds that would
+            # change their topology out from under the class name. The base
+            # Resolver declares no kinds and this is a no-op for it.
+            self._check_method_accepted(method)
             # The ``method=`` object seam: a Method names *how* to train and
             # routes to its own per-kind handler below, so the concrete
             # strategies that fill these in later touch DISJOINT methods instead
@@ -741,6 +779,33 @@ class Resolver:
             )
         self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
+
+    @classmethod
+    def _check_method_accepted(cls, method: Method) -> None:
+        """Refuse a ``Method`` whose kind this architecture does not accept.
+
+        The enforcement half of :attr:`accepted_method_kinds` (see there for the
+        why and the rejected alternatives). A no-op when
+        ``accepted_method_kinds`` is ``None`` -- i.e. always, for the base
+        :class:`Resolver`.
+
+        Raises:
+            UnsupportedMethodKind: If this class declares
+                ``accepted_method_kinds`` and ``method.kind`` is not among them.
+                The message names the class, the offending kind, the method's
+                own ``describe()``, and the kinds that *are* accepted.
+        """
+        accepted = cls.accepted_method_kinds
+        if accepted is None or method.kind in accepted:
+            return
+        name = cls.__name__
+        allowed = ", ".join(repr(k) for k in sorted(accepted)) or "(no method kinds)"
+        raise UnsupportedMethodKind(
+            f"{name} does not accept method kind {method.kind!r} ({method.describe()}); "
+            f"it accepts: {allowed}. That fit would change the pipeline's topology, "
+            f"leaving {name} naming a pipeline it no longer is. Use a plain Resolver "
+            f"(which accepts every kind) or an architecture built for it."
+        )
 
     # ------------------------------------------------------------------
     # ``method=`` per-kind fit handlers (the object seam)
@@ -1499,6 +1564,11 @@ class Resolver:
         component into a :class:`ComponentSpec` via :func:`_component_spec`,
         which raises :class:`TypeError` for a component lacking a registry
         ``type_name`` — that error is intentional and not swallowed here.
+
+        Also stamps ``model_class`` with this class's registered model name so a
+        named architecture survives ``save``/``load``. It is ``None`` for the
+        base ``Resolver`` and for any unregistered subclass — see
+        :func:`~langres.core.registry.model_type_name`.
         """
         components = [
             _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
@@ -1506,6 +1576,7 @@ class Resolver:
         return ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
             langres_version=LANGRES_VERSION,
+            model_class=model_type_name(type(self)),
             components=components,
         )
 
@@ -1554,7 +1625,9 @@ class Resolver:
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
-        ``model_name`` only — no model bytes).
+        ``model_name`` only — no model bytes), plus this class's registered
+        ``model_class`` when it has one, so :meth:`load` can rebuild the same
+        architecture rather than a plain ``Resolver``.
 
         Args:
             path: Directory to write the artifact into (created if absent).
@@ -1588,15 +1661,37 @@ class Resolver:
         execution, no pickle). Sidecar state is restored for any
         :class:`~langres.core.serialization.SerializableState` component.
 
+        Reconstructs the **class** the manifest names in ``model_class`` (a
+        registered architecture), not merely the one ``load`` was called on — so
+        ``Resolver.load(<a FuzzyString artifact>)`` hands back a ``FuzzyString``.
+        An artifact with no ``model_class`` (every pre-0.4 one, and any
+        unregistered subclass) builds ``cls``, exactly as before.
+
+        .. note::
+           **Constraint on registered models:** reconstruction calls the class
+           with this ``__init__``'s component keywords (``blocker=``,
+           ``comparator=``, ``matcher=``, ``clusterer=``, ``calibrator=``). A
+           registered architecture that narrows ``__init__`` to its own
+           ergonomic signature (e.g. ``FuzzyString(threshold=0.8)``) raises
+           ``TypeError: ... unexpected keyword argument 'blocker'`` here. Such an
+           architecture must keep accepting the component keywords — or W4 must
+           add an explicit from-components construction hook. Before
+           ``model_class`` existed this could not bite, because ``load`` always
+           built the base ``Resolver``.
+
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 
         Returns:
-            A Resolver equivalent to the one that was saved.
+            A Resolver equivalent to the one that was saved — of the saved
+            architecture's class when the manifest names one.
 
         Raises:
             ValueError: If the artifact's ``artifact_version`` is newer than this
                 library understands.
+            UnknownModelType: If the manifest names a ``model_class`` this
+                process has not registered (usually: its module was never
+                imported).
         """
         in_dir = Path(path)
         manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
@@ -1656,7 +1751,26 @@ class Resolver:
             else None
         )
 
-        return cls(
+        # Reconstruct the class the artifact says it is, so a named architecture
+        # round-trips as itself instead of decaying into a plain Resolver. Absent
+        # ``model_class`` (every pre-0.4 artifact, and any unregistered subclass)
+        # keeps the old behavior exactly: build ``cls``, whatever load was called on.
+        target = cls if manifest.model_class is None else get_model(manifest.model_class)
+        # The model registry cannot type-check its own entries: registry.py sits
+        # beneath this module, so it can neither import Resolver nor annotate
+        # ``get_model`` with it. Verify here, where Resolver IS in scope. Without
+        # this, a ``model_class`` registered to a kwargs-swallowing non-Resolver
+        # loads and is cast to Resolver, handing the caller a silently wrong
+        # object instead of an error.
+        if not issubclass(target, Resolver):
+            raise TypeError(
+                f"Artifact model_class {manifest.model_class!r} is registered to "
+                f"{target.__module__}.{target.__qualname__}, which is not a Resolver "
+                f"subclass; register_model is for Resolver subclasses (architectures)."
+            )
+        # No cast needed: the issubclass guard above narrows ``target`` to
+        # ``type[Resolver]`` for the type checker.
+        return target(
             blocker=blocker,
             comparator=comparator,
             matcher=module,
