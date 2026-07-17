@@ -39,6 +39,8 @@ code. Verify as you go.** Read before writing tests or running the suite.
     heavy test as fast slows every PR, and the coverage floors are verified on
     each merge to main, not per-PR. Run the full suite locally
     (`uv run pytest`) before merging a change to ML/embedding code.
+    (While the core-thinning work is in flight, `test-full` also runs on
+    every merge to the `feat/core-thin` integration branch.)
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
