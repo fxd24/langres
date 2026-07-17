@@ -839,10 +839,23 @@ point:
   **which is a widely adopted strategy**… As a comparison, we propose denoised hard
   negatives by a powerful cross-encoder."* `[verified — LaTeX source]`
 
-  > **That 70% is the whole argument for this item.** A blocker's top-k is, by
-  > construction, where the true matches are — ER's candidate sets are *more* positive-dense
-  > than a web corpus's top-k, not less. Sampling "negatives" from it without labels samples
-  > **unlabeled positives**, and calls them negatives.
+  > **That 70% is the argument — but read it carefully, because it does not transfer
+  > automatically.** RocketQA's 70% is a fact about **MS MARCO's labelling sparsity**: it
+  > labels ~1 positive per query, so the top-k is full of *genuinely relevant but unlabeled*
+  > passages. **Our benchmarks are not like that.** `abt_buy` ships near-complete gold
+  > (1028 positives over 1081×1092), so a candidate pair absent from the gold is *genuinely*
+  > a non-match — not an unlabeled positive. **On a fully-labeled benchmark, RocketQA's
+  > false-negative mechanism largely vanishes, and the result may well NOT reproduce.**
+  >
+  > **This is the trap that decides whether the experiment is worth anything.** The
+  > condition RocketQA describes is *missing labels*, and `HardNegativeMiner` lives in
+  > **`bootstrap/`** — the **cold-start** path, alongside `Bootstrapper`, `GoldSet` and
+  > `TeacherLabeler`, i.e. **exactly where there is no gold**. So the shipped miner runs in
+  > RocketQA's condition *in production*, while the benchmark we would naturally test it on
+  > does not. **A clean null on `abt_buy` would therefore NOT clear the miner** — it would
+  > only show that a fully-labeled benchmark cannot exhibit the failure. `[the mechanism
+  > and the benchmark gold-completeness are verified; that ER's cold-start path reproduces
+  > MS MARCO's sparsity is a hypothesis — it is what the design below tests]`
 - **The safety rails are already on file** in `20260707_data_prep_hard_case_mining_survey.md`:
   **RocketQA** is filed as *"the EM safety rail"*, **NV-Retriever**
   ([2407.15831](https://arxiv.org/abs/2407.15831)) as positive-aware false-negative removal
@@ -861,23 +874,39 @@ point:
   denoiser must win. Whether that holds when the positives are *also* mined for difficulty
   is genuinely open. `[verified — the caveat is in the source]`
 
-**What would settle it.** Train the same small matcher four ways on the same benchmark:
-**(a)** random/in-batch negatives — the null baseline; **(b)** `HardNegativeMiner` output,
-undenoised — *the shipped path*; **(c)** the same, denoised by a cross-encoder (RocketQA's
-actual intervention); **(d)** the same, denoised by `denoise_pairs` (confident learning —
-the intervention we happen to own). Report AUC/separation, not F1@0.5 (D1's trap).
+**What would settle it.** Train the same small matcher four ways: **(a)** random/in-batch
+negatives — the null baseline; **(b)** `HardNegativeMiner` output, undenoised — *the shipped
+path*; **(c)** the same, denoised by a cross-encoder (RocketQA's actual intervention);
+**(d)** the same, denoised by `denoise_pairs` (confident learning — the intervention we
+happen to own). Report AUC/separation, not F1@0.5 (D1's trap).
 
-**The prediction that makes this falsifiable:** if RocketQA transfers, **(b) < (a)** —
-the shipped miner is worse than random. That is a specific, surprising, checkable claim,
-and it is the reason to run this first. **(d) vs. (c)** additionally tells us whether the
-denoiser we already own is a substitute for the one the paper used, which is worth knowing
-regardless of the headline result.
+**But the arms above are not the experiment — the label regime is.** Per the trap: run each
+arm under **two regimes**, and the contrast between them *is* the finding.
+
+1. **Full-gold regime** (the benchmark as shipped). *Prediction: RocketQA does **not**
+   reproduce* — with complete labels there are no false negatives to strip, so (b) ≈ (c).
+   **A null here is the expected result and clears nothing.**
+2. **Label-sparsified regime** (the honest analogue). Hold out a known fraction of the
+   positives *from the miner* while keeping them in the eval gold — synthesizing MS MARCO's
+   sparsity at a **known, dialable rate**. This is the regime the cold-start path actually
+   runs in, and the only one that can exhibit the mechanism.
+
+**The prediction that makes this falsifiable:** in regime 2, if RocketQA transfers,
+**(b) < (a)** — *the shipped miner is worse than using random negatives*. Sweeping the
+sparsification rate turns the item from a yes/no into the useful form: **at what label
+completeness does hard-negative mining start to hurt?** If that threshold sits above the
+completeness a real cold-start run achieves, the miner is fine and we can say so with a
+number. If below, `bootstrap/` needs a denoiser before it is trusted again.
+
+**(d) vs. (c)** additionally tells us whether the denoiser we already own substitutes for
+the one the paper used — worth knowing regardless of the headline.
 
 **Cost & prerequisites.** **GPU**, but small (the AnyMatch-class 124M model is the target;
 the 3070 suffices). **$0** — no paid API; a local cross-encoder does the denoising.
 Prerequisites: **B2** (which benchmark is non-saturated enough to show a difference), and
 the training surface (**shipped**). Shares its entire apparatus with **D1(2)** — one
-harness, two questions. **Run this one.**
+harness, two questions. **Run this one** — but run regime 2, or it will return a
+comfortable null that means nothing.
 
 ---
 
