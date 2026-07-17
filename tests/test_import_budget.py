@@ -156,8 +156,13 @@ _ENGINE_IMPORT_SCRIPT = (
     "from langres.autoresearch.objective import Objective; "
     "assert Objective is langres.autoresearch.objective.Objective, 'from form disagrees'; "
     "assert callable(langres.optimize), 'the facade must STILL be the callable'; "
-    "import langres.optimize as facade_mod; "
-    "assert facade_mod.__name__ == 'langres.optimize', 'plain module import broke'; "
+    "import sys, types; "
+    "import langres.optimize; "
+    "assert isinstance(sys.modules['langres.optimize'], types.ModuleType), "
+    "'plain `import langres.optimize` must still resolve a MODULE'; "
+    "import langres.optimize as facade_alias; "
+    "assert facade_alias is langres.optimize, "
+    "'`import langres.optimize as x` binds getattr(langres, \"optimize\") -- the function'; "
     "print('OK')"
 )
 
@@ -169,7 +174,16 @@ def test_autoresearch_engine_is_importable_every_way() -> None:
     ``langres.autoresearch.*`` precisely because ``langres.optimize`` is a
     callable and cannot carry submodules. This also pins that splitting them did
     not cost the facade anything -- it is still the callable, and plain
-    ``import langres.optimize`` still resolves the module.
+    ``import langres.optimize`` still resolves a module in ``sys.modules``.
+
+    Note the last assertion, which looks backwards and is not: ``import
+    langres.optimize as x`` binds x to the **function**, not the module, because
+    ``import a.b as c`` compiles to ``c = getattr(a, 'b')`` and only falls back to
+    ``sys.modules['a.b']`` on ``AttributeError`` -- and the root export makes that
+    getattr succeed. Measured identical on ``origin/main``, so it is inherent to
+    the callable export, not something this layout introduced. It is pinned here
+    because it is the same shadowing mechanism the engine had to move to escape:
+    the module object is only reachable via ``sys.modules``.
     """
     result = subprocess.run(
         [sys.executable, "-c", _ENGINE_IMPORT_SCRIPT],
