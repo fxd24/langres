@@ -5,12 +5,23 @@ A serialized Resolver references its components and schemas by string name (so
 ``"schema": "CompanySchema"``). This module provides the registration and
 lookup machinery plus the typed errors that lookups raise.
 
-Two namespaces:
+Three namespaces:
 
 - **Components** (``register`` / ``get_component``): blockers, comparators,
   scorer modules, clusterers — anything the Resolver composes.
 - **Schemas** (``register_schema`` / ``get_schema``): Pydantic entity schemas
   referenced by name in a config.
+- **Models** (``register_model`` / ``get_model``): Resolver *subclasses* — the
+  named architectures — so ``save``/``load`` can round-trip which class a
+  pipeline is, not just which parts it has.
+
+Why models are their own namespace and not just more components: a component
+*fills a slot* in a Resolver; a model *owns* the slots. Sharing one dict would
+make ``"type_name": "fuzzy_string"`` resolvable in a blocker slot — a nonsense
+config the registry would happily construct — and would cross-contaminate the
+did-you-mean suggestions of both. The precedent is already here: schemas got
+their own namespace for exactly this reason (a schema is not a component), so a
+third one is the established pattern rather than a parallel registry.
 
 No abstract base classes live here — only registration, lookup, and errors.
 """
@@ -26,6 +37,7 @@ T = TypeVar("T")
 
 _COMPONENT_REGISTRY: dict[str, type] = {}
 _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
+_MODEL_REGISTRY: dict[str, type] = {}
 
 # Lazy-registration map: ``type_name -> module path``. A component listed here is
 # NOT eager-imported by ``langres.core`` — importing it would pull a heavy or
@@ -101,6 +113,15 @@ class SchemaNotRegistered(KeyError):
     """Raised when a schema name referenced by a config is not registered."""
 
 
+class UnknownModelType(KeyError):
+    """Raised when an artifact's ``model_class`` is not a registered model.
+
+    Carries the available model names and a ``difflib`` did-you-mean suggestion,
+    like :class:`UnknownComponentType`. The usual cause is loading an artifact
+    whose architecture lives in a module the process never imported.
+    """
+
+
 def register(type_name: str) -> Callable[[type[T]], type[T]]:
     """Class decorator: register a component under ``type_name``.
 
@@ -144,6 +165,78 @@ def get_component(type_name: str) -> type:
             f"Available types: {', '.join(available) or '(none registered)'}"
         )
     return _COMPONENT_REGISTRY[type_name]
+
+
+def register_model(type_name: str) -> Callable[[type[T]], type[T]]:
+    """Class decorator: register a Resolver subclass (an architecture) under ``type_name``.
+
+    Registering is what makes a model's identity survive ``save``/``load``:
+    :meth:`Resolver.save` records the registered name in the manifest's
+    ``model_class`` and :meth:`Resolver.load` reconstructs *that* class. An
+    unregistered subclass is not an error — it simply saves without a
+    ``model_class`` and reloads as a plain ``Resolver``, exactly as every
+    Resolver did before this field existed.
+
+    Args:
+        type_name: Unique registry key for the model (e.g. ``"fuzzy_string"``).
+
+    Raises:
+        ValueError: If ``type_name`` is already registered.
+    """
+
+    def decorator(cls: type[T]) -> type[T]:
+        if type_name in _MODEL_REGISTRY:
+            raise ValueError(f"Model type '{type_name}' is already registered")
+        _MODEL_REGISTRY[type_name] = cls
+        return cls
+
+    return decorator
+
+
+def get_model(type_name: str) -> type:
+    """Look up a registered model (Resolver subclass) by name.
+
+    Returns a bare ``type`` rather than ``type[Resolver]`` deliberately: this
+    module sits *beneath* ``core.resolver`` (which imports it), so naming
+    ``Resolver`` here — even under ``TYPE_CHECKING`` — would knot the two into an
+    import cycle. ``tests/test_import_tangle.py`` counts that edge; ``get_component``
+    returns a bare ``type`` for the same reason.
+
+    .. note::
+       There is no lazy ``type_name -> module`` map for models yet (contrast
+       :data:`_LAZY_COMPONENT_MODULES`), because no model is registered anywhere
+       yet — W4 lands the architectures. If W4 puts them off the eager-import
+       path, it needs the same saved-artifact safety net, or a fresh process
+       loading such an artifact will raise :class:`UnknownModelType` here.
+
+    Raises:
+        UnknownModelType: If ``type_name`` is not registered. The message lists
+            the available models and a did-you-mean suggestion.
+    """
+    if type_name not in _MODEL_REGISTRY:
+        available = sorted(_MODEL_REGISTRY)
+        suggestions = difflib.get_close_matches(type_name, available, n=3)
+        hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        raise UnknownModelType(
+            f"Unknown model type '{type_name}'.{hint} It may live in a module this "
+            f"process never imported. Available models: "
+            f"{', '.join(available) or '(none registered)'}"
+        )
+    return _MODEL_REGISTRY[type_name]
+
+
+def model_type_name(cls: type) -> str | None:
+    """Return the registered name for a model class, or ``None`` if unregistered.
+
+    The reverse of :func:`register_model`, used by ``save`` to stamp the
+    manifest. Matches ``cls`` **exactly** rather than walking the MRO: an
+    unregistered subclass of a registered architecture is its own thing, and
+    claiming its parent's name would make ``load`` hand back the wrong class.
+    """
+    for name, registered in _MODEL_REGISTRY.items():
+        if registered is cls:
+            return name
+    return None
 
 
 def register_schema(name: str) -> Callable[[type[T]], type[T]]:

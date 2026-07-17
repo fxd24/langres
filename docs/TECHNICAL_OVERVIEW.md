@@ -176,6 +176,34 @@ resolver = Resolver.load("company_resolver.json")
 
 `from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageMatcher` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `matcher="embedding"`), and a `Clusterer`. `matcher=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (with the same `prompt_template` / `system_prompt` / `response_parser` kwargs as the verbs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), `"random_forest"` (a supervised sklearn `RandomForestMatcher` over the comparator's per-feature similarities — needs the `[trained]` extra and is trainable, so `fit(records, pairs=...)` / `labels=...` it with labeled data before it can score), or a `Matcher` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution (that magic lives in the verbs). A paid matcher built here **is** spend-capped: `Resolver(..., budget_usd=)` / `from_schema(..., budget_usd=)` defaults to `DEFAULT_BUDGET_USD` ($1.00) and the cap binds for the Resolver's whole lifetime, so two `resolve()` calls share one budget rather than getting one each. `budget_usd=None` means "the default", **not** "uncapped" — pass `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out deliberately. The bound is honest but not magic: spend is capped at `budget_usd` **plus at most one further call**, since an LLM call's cost is only knowable once it has been made. Scope, precisely: the cap meters **every seam that scores through the matcher** — `resolve`, `predict`, `fit`, and `AnchorStore.assign` — because they all route through one internal capped-scorer accessor. The single exception is `distil()` / `fit(method=MIPRO())`: DSPy's compile calls never reach the matcher, so that ledger cannot see them; it caps them via its own `method.budget_usd` monitor, which records $0 until DSPy-compile spend capture lands (issue #100) — so a paid `MIPROv2` compile is **effectively unbounded** today.
 
+### What `save`/`load` records: components *and* class
+
+`resolver.json` is an `ArtifactManifest`: `artifact_version`, `langres_version`,
+the ordered per-slot `components` (each a registry `type_name` + config), any
+sidecar `checksums` — and an optional `model_class`.
+
+`model_class` is the *architecture's* identity: the name a Resolver subclass
+registered with `langres.core.register_model("fuzzy_string")`. `save` stamps it;
+`load` looks it up and reconstructs **that** class, so `Resolver.load(<a
+FuzzyString artifact>)` hands back a `FuzzyString`, not a plain `Resolver`.
+Without it, a save/load would quietly erase which architecture a pipeline was.
+
+It is **optional on purpose**, and the compatibility rules follow from that:
+
+- **Absent ⇒ plain `Resolver`** — which is exactly what every pre-0.4 artifact
+  is, and what an *unregistered* Resolver subclass still saves as (not an error;
+  it degrades to the old behaviour).
+- **`ARTIFACT_VERSION` stays `"1"`.** A bump buys nothing here: the compatible
+  read costs one `if`, whereas `_check_versions` rejects an artifact whose
+  version is older *or* newer, so a bump would break every existing 0.3.0
+  artifact in both directions.
+- Models are their **own registry namespace** (`register_model` / `get_model` /
+  `model_type_name`), separate from components and schemas. A component fills a
+  slot; a model owns the slots — sharing one namespace would let
+  `"type_name": "fuzzy_string"` resolve into a blocker slot.
+- `config_dict()` still emits only `components`, so `model_class` stays **outside**
+  `recipe_id`'s hash domain and no existing recipe hash forks.
+
 All three name-dispatch paths — the verbs, `from_schema`, and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg).
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.

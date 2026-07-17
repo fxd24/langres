@@ -32,7 +32,14 @@ from pathlib import Path
 import pytest
 
 from langres.core.metrics import calculate_bcubed_metrics
+from langres.core.blockers import AllPairsBlocker
+from langres.core.clusterer import Clusterer
 from langres.core.comparators import StringComparator
+from langres.core.matchers import WeightedAverageMatcher
+from langres.core.models import CompanySchema
+from langres.core.registry import UnknownModelType
+from langres.core.resolver import Resolver
+from tests.fixtures.architectures import FixtureFuzzyString, UnregisteredArchitecture
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
 
 # Name-dominant weights mirroring Approach 1 — required for the name-only
@@ -165,6 +172,120 @@ def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     )
     clusters_subprocess = [set(c) for c in json.loads(proc.stdout)]
     assert _canonical(clusters_before) == _canonical(clusters_subprocess)
+
+
+# --- model_class: save/load carries the architecture's identity (B4) --------
+#
+# Under "one architecture = one class = one identity", a save/load that hands
+# back a plain Resolver has erased the identity. The manifest names the class;
+# an artifact without that name is a plain Resolver, exactly as before.
+
+
+def _architecture_resolver(cls: type) -> object:
+    comparator = StringComparator.from_schema(CompanySchema, weights=NAME_DOMINANT_WEIGHTS)
+    return cls(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=comparator,
+        matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
+        clusterer=Clusterer(threshold=0.7),
+    )
+
+
+def test_save_stamps_the_registered_model_class(tmp_path: Path) -> None:
+    """A registered architecture records its identity in the manifest."""
+    _architecture_resolver(FixtureFuzzyString).save(tmp_path)  # type: ignore[attr-defined]
+
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    assert manifest["model_class"] == "fixture_fuzzy_string"
+
+
+def test_plain_resolver_writes_no_model_class(tmp_path: Path) -> None:
+    """The base Resolver claims no identity, so it stamps none (today's artifact)."""
+    _architecture_resolver(Resolver).save(tmp_path)  # type: ignore[attr-defined]
+
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    assert manifest["model_class"] is None
+
+
+def test_unregistered_subclass_saves_and_loads_as_plain_resolver(tmp_path: Path) -> None:
+    """An unregistered subclass is not an error -- it degrades to today's behavior."""
+    _architecture_resolver(UnregisteredArchitecture).save(tmp_path)  # type: ignore[attr-defined]
+
+    manifest = json.loads((tmp_path / "resolver.json").read_text())
+    assert manifest["model_class"] is None
+    assert type(Resolver.load(tmp_path)) is Resolver
+
+
+def test_load_returns_the_saved_architecture_class(tmp_path: Path) -> None:
+    """``Resolver.load`` on an architecture artifact hands back that architecture."""
+    _architecture_resolver(FixtureFuzzyString).save(tmp_path)  # type: ignore[attr-defined]
+
+    reloaded = Resolver.load(tmp_path)
+
+    assert type(reloaded) is FixtureFuzzyString
+    # The identity is the whole point: its fit contract came back with it.
+    assert reloaded.accepted_method_kinds == frozenset({"calibrate"})
+
+
+def test_manifest_without_model_class_loads_as_plain_resolver(tmp_path: Path) -> None:
+    """A pre-0.4 artifact (no ``model_class`` key at all) still loads, as a Resolver."""
+    _architecture_resolver(Resolver).save(tmp_path)  # type: ignore[attr-defined]
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["model_class"]  # exactly what a 0.3.0 artifact looks like
+    manifest_path.write_text(json.dumps(manifest))
+
+    reloaded = Resolver.load(tmp_path)
+
+    assert type(reloaded) is Resolver
+    assert reloaded.resolve(COMPANY_RECORDS)
+
+
+def test_load_raises_actionably_on_an_unregistered_model_class(tmp_path: Path) -> None:
+    """An artifact naming a model this process never imported fails with a clear error."""
+    _architecture_resolver(Resolver).save(tmp_path)  # type: ignore[attr-defined]
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["model_class"] = "never_registered"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(UnknownModelType, match=r"never imported"):
+        Resolver.load(tmp_path)
+
+
+def test_architecture_roundtrip_fresh_process(tmp_path: Path) -> None:
+    """B4: a saved architecture reloads as ITS OWN CLASS in a brand-new process.
+
+    The in-process test cannot prove this on its own -- the class is already
+    imported and registered there. A fresh interpreter that only imports the
+    fixture module is what shows the registry lookup, not ambient state, is
+    carrying the identity across the boundary.
+    """
+    resolver = _architecture_resolver(FixtureFuzzyString)
+    clusters_before = resolver.resolve(COMPANY_RECORDS)  # type: ignore[attr-defined]
+    resolver.save(tmp_path)  # type: ignore[attr-defined]
+
+    script = (
+        "import json, sys\n"
+        "from langres.core import Resolver\n"
+        "import tests.fixtures.architectures  # noqa: F401  -- fires @register_model\n"
+        "from tests.fixtures.companies import COMPANY_RECORDS\n"
+        f"reloaded = Resolver.load({str(tmp_path)!r})\n"
+        "clusters = reloaded.resolve(COMPANY_RECORDS)\n"
+        "sys.stdout.write(json.dumps({\n"
+        "    'cls': type(reloaded).__name__,\n"
+        "    'kinds': sorted(reloaded.accepted_method_kinds),\n"
+        "    'clusters': sorted(sorted(c) for c in clusters),\n"
+        "}))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+
+    out = json.loads(proc.stdout)
+    assert out["cls"] == "FixtureFuzzyString"  # NOT "Resolver"
+    assert out["kinds"] == ["calibrate"]
+    assert _canonical(clusters_before) == _canonical([set(c) for c in out["clusters"]])
 
 
 def test_resolver_from_schema_one_liner() -> None:

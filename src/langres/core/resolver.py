@@ -65,7 +65,7 @@ from langres.core.metrics import (
 )
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
-from langres.core.registry import get_component
+from langres.core.registry import get_component, get_model, model_type_name
 from langres.core.runs import current_run
 from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher, effective_budget
@@ -1565,6 +1565,11 @@ class Resolver:
         component into a :class:`ComponentSpec` via :func:`_component_spec`,
         which raises :class:`TypeError` for a component lacking a registry
         ``type_name`` — that error is intentional and not swallowed here.
+
+        Also stamps ``model_class`` with this class's registered model name so a
+        named architecture survives ``save``/``load``. It is ``None`` for the
+        base ``Resolver`` and for any unregistered subclass — see
+        :func:`~langres.core.registry.model_type_name`.
         """
         components = [
             _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
@@ -1572,6 +1577,7 @@ class Resolver:
         return ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
             langres_version=LANGRES_VERSION,
+            model_class=model_type_name(type(self)),
             components=components,
         )
 
@@ -1620,7 +1626,9 @@ class Resolver:
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
-        ``model_name`` only — no model bytes).
+        ``model_name`` only — no model bytes), plus this class's registered
+        ``model_class`` when it has one, so :meth:`load` can rebuild the same
+        architecture rather than a plain ``Resolver``.
 
         Args:
             path: Directory to write the artifact into (created if absent).
@@ -1654,15 +1662,25 @@ class Resolver:
         execution, no pickle). Sidecar state is restored for any
         :class:`~langres.core.serialization.SerializableState` component.
 
+        Reconstructs the **class** the manifest names in ``model_class`` (a
+        registered architecture), not merely the one ``load`` was called on — so
+        ``Resolver.load(<a FuzzyString artifact>)`` hands back a ``FuzzyString``.
+        An artifact with no ``model_class`` (every pre-0.4 one, and any
+        unregistered subclass) builds ``cls``, exactly as before.
+
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 
         Returns:
-            A Resolver equivalent to the one that was saved.
+            A Resolver equivalent to the one that was saved — of the saved
+            architecture's class when the manifest names one.
 
         Raises:
             ValueError: If the artifact's ``artifact_version`` is newer than this
                 library understands.
+            UnknownModelType: If the manifest names a ``model_class`` this
+                process has not registered (usually: its module was never
+                imported).
         """
         in_dir = Path(path)
         manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
@@ -1722,12 +1740,20 @@ class Resolver:
             else None
         )
 
-        return cls(
-            blocker=blocker,
-            comparator=comparator,
-            matcher=module,
-            clusterer=clusterer,
-            calibrator=calibrator,
+        # Reconstruct the class the artifact says it is, so a named architecture
+        # round-trips as itself instead of decaying into a plain Resolver. Absent
+        # ``model_class`` (every pre-0.4 artifact, and any unregistered subclass)
+        # keeps the old behavior exactly: build ``cls``, whatever load was called on.
+        target = cls if manifest.model_class is None else get_model(manifest.model_class)
+        return cast(
+            "Resolver",
+            target(
+                blocker=blocker,
+                comparator=comparator,
+                matcher=module,
+                clusterer=clusterer,
+                calibrator=calibrator,
+            ),
         )
 
     @staticmethod
