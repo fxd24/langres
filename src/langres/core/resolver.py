@@ -571,7 +571,7 @@ class ERModel(ModelRun, ModelPersistence):
                     "labels=<Sequence[bool] aligned with the blocked candidates> "
                     "(or pairs=<id-keyed labels>) to fit()."
                 )
-            self.module.fit(self._candidates(data), labels)
+            self.module.fit(iter(self._candidates(data).to_candidates()), labels)
             self.fit_report_ = FitReport.build(
                 trainable=f"{matcher_name} (SupervisedFitMixin)",
                 trained=True,
