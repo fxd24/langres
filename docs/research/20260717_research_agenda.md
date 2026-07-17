@@ -220,6 +220,288 @@ on noise, so this should run **before** any GPU item.
 
 ---
 
+## 4. Thread C — the retrieval/matching model ladder
+
+The unifying question: **ER is a two-stage retrieve-then-rank system, and IR has spent a
+decade studying exactly that.** Thread C asks which of IR's hard-won results transfer to
+ER data, where the "query" is a record and the "corpus" is the other side. C4 and C5 are
+the two with the strongest published evidence and the lowest cost; **C4 is the highest-value
+item on this board.**
+
+**Portfolio note:** all five are measured against `all-MiniLM-L6-v2` (384d), which is the
+single `DEFAULT_EMBEDDING_MODEL` (`src/langres/core/model_ref.py:80`) feeding the method
+registry, the `SearchSpace` default, *and* every loader's pinned `*_BLOCKING_K` constant.
+Everything we know about our own blocking recall was measured on that one model. That is
+rung 0 of the ladder and the incumbent every item here must beat.
+
+### C1 — The embedding size ladder, and the embedder that *is* the matcher
+
+**The question.** Two, nested:
+
+1. How does ER performance scale with embedder size/category? Is there a knee, and where?
+2. The sharp one: **can an embedding model BE the matcher** — making the yes/no decision
+   directly via a threshold in the vector space, with **no separate matching stage at all**?
+
+**Why it matters to langres.** (2) would collapse the pipeline. `THEORY.md` §6.5 says
+*"Blocking and matching are the same formula at different $t$: blocking sets
+$t \approx -\infty$, matching sets $t$ high"* — an embedder-as-matcher is that sentence
+taken literally: **one score, two thresholds, no second model**. If it works even on the
+easy half of the portfolio, the cost story changes completely (no per-pair LLM call), and
+the `architectures` seam gets a genuinely new shape. If it fails, we learn *where* the
+vector space stops carrying enough signal, which is exactly the boundary C2 exists to
+patch.
+
+**What's already known.** The supporting evidence is strong and comes from IR, not ER:
+
+- **ANCE** (Xiong et al., ICLR 2021, [2007.00808](https://arxiv.org/abs/2007.00808)) §6.1
+  reports its *retrieval* "nearly matches the accuracy of the cascade IR with
+  interaction-based BERT Reranker" at roughly **100× lower cost**. That is the
+  embedder-as-matcher thesis, already demonstrated — in IR. `[see §7 reference tier —
+  verify the exact wording and cost figure before quoting]`
+- **The ER counter-signal is on file.** `20260707_data_prep_hard_case_mining_survey.md`
+  §11–12 records **UniBlocker** as a counter-signal, and documents how SOTA ER *divides*
+  blocking recall from matching precision — i.e. the field's current answer to (2) is
+  "no". A result that contradicts the field's division is exactly what makes this worth
+  running, and exactly what should be met with suspicion if it appears.
+- **Our own ladder is unmeasured.** The tried set is small and no sweep was ever run:
+  `all-MiniLM-L6-v2` (default), `all-MiniLM-L12-v2`, `all-mpnet-base-v2`, and
+  `BAAI/bge-base-en-v1.5` (named as an example backbone in
+  `architectures/vector_llm_cascade.py:106`). `[verified — read the source]`
+- **The instrument exists.** `SeparabilitySection.auc` already measures exactly the
+  quantity (2) turns on: how well a single similarity signal separates positives from
+  negatives. `DataProfileReport.from_embedder()` and `EmbeddingComparisonSection`
+  (`models: list[EmbeddingModelSummary]`, shared histogram edges) exist **to compare
+  embedders side by side**. This is close to built. `[verified]`
+
+**What would settle it.** Sweep the size ladder (MiniLM-L6 → L12 → mpnet-base → bge-base →
+a large decoder embedder) and report, per benchmark, **separability AUC** — *not* F1 at a
+threshold (see D1's measurement trap). Then for (2): derive a threshold on cosine with
+`core.calibration.derive_threshold` and score it as a matcher against the LLM matcher on
+the same candidate set. The honest framing: **(2) will not win everywhere**, and "it wins
+on `fodors_zagat` and loses on `abt_buy`" is the *expected* result and a useful one — it
+maps the boundary. Report the AUC-vs-size curve, and where it flattens.
+
+**Cost & prerequisites.** **Cheap → moderate.** CPU-feasible for the small end; **GPU**
+for the large decoder embedders. **$0** (no paid API). Prerequisites: **B2** — a ladder
+measured on a saturated benchmark measures the benchmark, so B2 must annotate the
+portfolio first. Note the macOS gotcha on file: **faiss + torch OpenMP segfault**
+(`KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
+### C2 — Embedder + reranker, measured on ER data
+
+**The question.** The classic two-stage IR setup — bi-encoder retrieves, cross-encoder
+reranks. What does it actually buy on ER data, over (a) the embedder alone and (b) the
+LLM matcher we already run?
+
+**Why it matters to langres.** This is the *control* for the whole thread. langres's
+paid architecture (`VectorLLMCascade`) is already an embedder + an expensive reranker —
+the reranker just happens to be an LLM. A cross-encoder reranker is the cheap classical
+alternative that IR would reach for first, and **we have never measured it**. Without it,
+C1's and C3's numbers have no mid-point to sit against: we know the cheap end
+(cosine) and the expensive end (LLM), and nothing between.
+
+**What's already known.**
+
+- **It is already wired.** `RerankingVectorIndex` exists at
+  `src/langres/core/indexes/reranking_vector_index.py`, alongside `FAISSIndex` and
+  `HybridVectorIndex`. This item is largely *measurement*, not construction. `[verified]`
+- **The IR result is the ANCE comparison in C1** — the cascade is the *baseline* ANCE
+  nearly matches at 100× the cost. So the interesting question is inverted from IR's: not
+  "does the cascade win" (it does, in IR) but **"is the cascade's margin worth its cost on
+  ER data, given ER's candidate sets are tiny compared to a web corpus?"**
+- **Relevant caution:** reranker behavior at large $k$ is exactly what A1 is measuring
+  (see *Drowning in Documents*). C2 and A1 share an apparatus and should share a run.
+
+**What would settle it.** Three-way comparison on the same candidate sets: cosine-only vs.
+cosine+cross-encoder vs. cosine+LLM. Report quality **and** cost per resolved record —
+cost is the axis this item exists to inform, and `SpendMonitor` already captures it.
+The decision it changes: whether `VectorLLMCascade` should have a cheaper sibling
+architecture.
+
+**Cost & prerequisites.** **Cheap.** CPU-feasible; **$0** for the cross-encoder arm, small
+paid spend (**$1–5**) for the LLM arm as the comparison point. Prerequisite: **B2**.
+Shares apparatus with **A1** and **C1** — run together.
+
+---
+
+### C3 — One decoder family, both roles: does prompt tuning transfer to *retrieval*?
+
+**The question.** Take a single decoder-transformer family that ships both a generative
+model and an embedding model (e.g. Qwen3 + Qwen3-Embedding). Instruct/prompt the decoder
+for matching — then the real question: **does the knowledge DSPy prompt-tuning discovers
+on the matching side TRANSFER to the embedding side?** I.e. can prompt optimization
+improve **recall/retrieval**, not just matching?
+
+**Why it matters to langres.** This is the project's stated blocking idea — *shared Qwen3
+weights serving matcher and embedder* — and it is the only item here that would make
+**prompt optimization a blocking technique**. Today `langres.optimize` searches blocking
+configs (k, model, field) as an opaque grid. If an *instruction* is a blocking parameter,
+the search space changes shape entirely. It also directly attacks A2/A1's problem from the
+other side: a blocker that can be *told* what the matcher cares about is a blocker
+coupled to $\varphi$ by construction, rather than by an outer optimization loop.
+
+**What's already known.**
+
+- **The seam already exists, and this is the non-obvious find.** `VectorBlocker.__init__`
+  takes **`query_prompt`**, documented as supporting **instruction-tuned embedders**
+  (`src/langres/core/blockers/vector.py`). So "put an instruction on the retrieval side"
+  is a **parameter we already have and have never optimized**. `[verified — read the
+  signature]`
+- **Instruction-following embedders are established**: E5-mistral
+  ([2401.00368](https://arxiv.org/abs/2401.00368)) and the instruction/prompt treatment in
+  `20260707_data_prep_hard_case_mining_survey.md` §11–12, which also covers **GritLM**
+  (joint generative + embedding training — the exact "one family, both roles" architecture)
+  and **Qwen3-Embedding**. The survey is the literature backbone here; this item is its
+  measurable core.
+- **Our prompt-tuning result is signature-shaped** (D1: 0.409 → 0.757 from the signature,
+  MIPROv2 flat). *Hypothesis:* if the lift lives in **task specification** rather than in
+  demo selection, it is *more* likely to transfer to an instruction-tuned embedder — a
+  signature is a task description, and that is precisely what `query_prompt` accepts.
+  **Untested, and this is the item's central bet.**
+- **Known gotcha:** Qwen3's **thinking mode breaks the yes/no logprob probe** (ours, PR-G).
+  A decoder-as-matcher arm must disable thinking or score differently.
+
+**What would settle it.** Two measurements, and the second is the actual question:
+
+1. **Does an instruction help retrieval at all?** Sweep `query_prompt` over a fixed
+   embedder and measure **candidate recall @ fixed k**. `langres.optimize`'s `SearchSpace`
+   is a frozen Cartesian grid — adding a `query_prompt` axis is a small, honest change.
+   *If a hand-written instruction moves recall, the transfer question is live. If not, C3
+   stops here* — cheaply.
+2. **Does the tuned instruction transfer?** Take the instruction DSPy optimized **for
+   matching**, put it in `query_prompt`, and measure recall against (a) no prompt, (b) a
+   naive hand-written prompt, (c) an instruction tuned **directly** on a recall objective.
+   **(c) is the control that makes this honest** — if tuning directly on recall beats the
+   transferred matching instruction, there is no transfer, just prompt tuning working
+   normally on a second task. That is the null result this item must be able to return.
+
+**Cost & prerequisites.** **GPU** (same-family decoder + embedder; the 3070 is the target,
+which bounds model size hard). **$0–5**. Prerequisites: **D1(1)** — transferring a tuned
+instruction requires knowing the tuning worked and where it plateaus; **B2** for
+interpretation. This is the most speculative item on the board and it is priced
+accordingly: measurement (1) is cheap and gates the rest.
+
+---
+
+### C4 — Does the RocketQA denoising result hold on ER data? ⭐
+
+**The question.** RocketQA showed that hard negatives mined from a retriever's top-k
+**actively hurt** unless a cross-encoder first strips the false negatives. **ER blocking
+output is dense with unlabeled true matches — the exact condition that triggers this.**
+Does the result reproduce on ER data?
+
+**Why it matters to langres.** This is **the highest-value experiment on the board**, for
+one reason: **we already ship the failure mode.** `src/langres/bootstrap/miners.py` has
+**`HardNegativeMiner`**, which mines hard negatives by stratified sampling over the
+blocker's `similarity_score` — **with no denoiser in the loop**. That is RocketQA's
+undenoised condition, implemented, shipped, and feeding our training surface. If RocketQA's
+result transfers, that miner is not merely suboptimal — it is **actively destructive**, and
+every downstream training result that used it is contaminated. This item either
+invalidates a shipped component or clears it. Few experiments have that leverage.
+
+**What's already known.** The published numbers are stark, and the direction is the whole
+point:
+
+- **RocketQA** (Qu et al., NAACL 2021, [2010.08191](https://arxiv.org/abs/2010.08191)),
+  Table 3, MRR@10: in-batch negatives **32.39** → hard negatives **undenoised 26.03**
+  (**worse than in-batch** — the finding) → hard negatives **denoised by a cross-encoder
+  36.38**. Undenoised hard-negative mining is **−6.36 below doing nothing**; denoising
+  turns the same data into **+3.99 above it**. `[see §7 reference tier — the numbers are
+  as transcribed from the brief; confirm against Table 3 before publishing]`
+- **The mechanism is the ER condition exactly.** Top-k from a blocker is, by design,
+  where the true matches are. Sampling "negatives" from it without labels samples
+  **unlabeled positives**. `20260707_data_prep_hard_case_mining_survey.md` already carries
+  the safety rails: **RocketQA** is filed as *"the EM safety rail"*, **NV-Retriever**
+  ([2407.15831](https://arxiv.org/abs/2407.15831)) as positive-aware false-negative removal
+  (TopK-PercPos), and **GISTEmbed** ([2402.16829](https://arxiv.org/abs/2402.16829)) as a
+  guide model masking false in-batch negatives.
+- **A denoiser already exists — but it is not RocketQA's.** `data/mining.py` ships
+  **`denoise_pairs(..., method="confident_learning")`** (Northcutt confident learning, with
+  per-class thresholds for imbalance). That is a *label-noise* denoiser over a trained
+  model's OOF predictions, **not** a cross-encoder screening candidates before they become
+  negatives. So we have a denoiser, and it is a **different intervention at a different
+  point in the pipeline** — which makes "cross-encoder denoising vs. confident learning vs.
+  nothing" a three-arm comparison we can run *today*. `[verified — read the source]`
+- **A documented tension, already noticed.** `denoise_pairs`'s own caveat is that it
+  *"competes with hard-positive mining, since it can strip the very boundary positives"*.
+  Denoising and hard-example mining pull against each other; RocketQA's result is that the
+  denoiser must win. Whether that holds when the positives are *also* mined for difficulty
+  is genuinely open. `[verified — the caveat is in the source]`
+
+**What would settle it.** Train the same small matcher four ways on the same benchmark:
+**(a)** random/in-batch negatives — the null baseline; **(b)** `HardNegativeMiner` output,
+undenoised — *the shipped path*; **(c)** the same, denoised by a cross-encoder (RocketQA's
+actual intervention); **(d)** the same, denoised by `denoise_pairs` (confident learning —
+the intervention we happen to own). Report AUC/separation, not F1@0.5 (D1's trap).
+
+**The prediction that makes this falsifiable:** if RocketQA transfers, **(b) < (a)** —
+the shipped miner is worse than random. That is a specific, surprising, checkable claim,
+and it is the reason to run this first. **(d) vs. (c)** additionally tells us whether the
+denoiser we already own is a substitute for the one the paper used, which is worth knowing
+regardless of the headline result.
+
+**Cost & prerequisites.** **GPU**, but small (the AnyMatch-class 124M model is the target;
+the 3070 suffices). **$0** — no paid API; a local cross-encoder does the denoising.
+Prerequisites: **B2** (which benchmark is non-saturated enough to show a difference), and
+the training surface (**shipped**). Shares its entire apparatus with **D1(2)** — one
+harness, two questions. **Run this one.**
+
+---
+
+### C5 — Query-side-only training: the ADORE analogue
+
+**The question.** ADORE trains **only the query encoder** against a **frozen** document
+index — no index refresh, ever — and beats ANCE. The ER analogue: **retrain only the probe
+side against a frozen record index.** Does it work here?
+
+**Why it matters to langres.** Index refresh is the dominant cost of the ANCE-style
+training loop: every refresh re-embeds the entire corpus. On `dblp_scholar` (**66,879
+records**) that is the difference between a loop we can run on a 3070 and one we cannot.
+If the ER analogue holds, **the cheapest strong option on this board becomes available** —
+blocker improvement with no re-indexing. It also composes cleanly with the existing seam:
+a frozen index is exactly what `optimize()` already caches per
+`(embedding_model, metric, text_field)`.
+
+**What's already known.**
+
+- **ADORE** ([2104.08051](https://arxiv.org/abs/2104.08051)): trains only the query encoder
+  against a frozen document index and reports **MRR@10 0.347 vs. ANCE's 0.338** and
+  **R@100 0.876 vs. 0.862**. `[see §7 reference tier — verify the numbers, the exact
+  split, and the "frozen index / query-encoder-only" characterization before publishing;
+  the paper's title is about hard negatives, not obviously about ADORE]`
+- **ANCE** is the thing it beats, and ANCE's defining cost *is* the index refresh
+  ([2007.00808](https://arxiv.org/abs/2007.00808), filed in
+  `docs/research/README.md` as *"index-refreshed model-mined negatives"*). The contrast is
+  the point: ADORE's win is *also* a cost win.
+- **The asymmetry question is ER-specific and unresolved.** IR has a real query/document
+  asymmetry — a short query, a long document. **ER's two sides are the same kind of
+  object** (a record vs. a record), and for `dedupe()` they are *literally the same set*.
+  So "train the query side only" may be **ill-posed for dedup and well-posed only for
+  two-source linkage**, where A and B are genuinely different corpora. Note every
+  registered benchmark is `task="linkage"` — so the well-posed case is the one we can
+  actually test, and the dedup case is untestable on the current portfolio. *This is a
+  hypothesis about applicability, not a known limitation.*
+- **The measurement is already wired**: `evaluate_blocking_with_ranking` computes
+  **MRR, MAP, NDCG@K, recall@K** (via the `[eval]` extra / ranx) — the exact metrics ADORE
+  reports. `[verified]`
+
+**What would settle it.** On a two-source linkage benchmark, freeze the B-side index,
+train only the A-side encoder against it, and compare **recall@k / MRR** to (a) the frozen
+untrained baseline and (b) a full ANCE-style loop with index refresh — measuring **both
+quality and wall-clock/compute**. The claim to test is not "it wins" but **"it gets most
+of the win for a fraction of the cost"**, which is a different and more useful bar. Then
+the ER-specific question the IR literature cannot answer for us: **does the asymmetry
+survive when both sides are records?** Run it on `dedupe` (single corpus, self-linkage) and
+see whether "query side" still means anything.
+
+**Cost & prerequisites.** **GPU**, moderate — but **cheaper than every alternative in this
+thread by construction** (no re-indexing). **$0**. Prerequisites: **B2**; a two-source
+benchmark (**have** — all 10 are linkage). Independent of C4; can run in parallel.
+
+---
+
 ## 5. Thread D — prompt tuning's ceiling, and the handoff to fine-tuning
 
 ### D1 — Where does DSPy prompt tuning plateau, and what takes over?
