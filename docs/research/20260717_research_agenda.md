@@ -47,7 +47,32 @@ are **wrong**, which is the cheapest possible outcome.
 
 ## 1. The board
 
-*(priority/cost table — filled in below as items are drafted)*
+Ordered by **run order**, not importance. Cost is the *marginal* cost of the experiment,
+assuming the framework is ready.
+
+| # | Item | Cost | Prereq | Verdict |
+|---|---|---|---|---|
+| **B1** | Closure diagnostic — do output clusters contain pairs we scored *no*? | **$0** | none | **Run first.** One script; every part ships today. Can retire a `THEORY.md` section. |
+| **B2** | What *is* the benchmark distribution? Which are saturated/unrepresentative? | **$0** | none | **Run first.** Profiler already computes ~all of it. **Gates the reading of C1–C5.** |
+| **E1** | Reproduction studies — do published ER results hold? | **$0.30–5** | none | Cheapest confidence on the board. Tests *our instrument*, not just the paper. |
+| **A1** | **Measure $\varphi$** on the portfolio; does it decay or grow with rank? | **$5–20** ($0 arm first) | B2 | The number `THEORY.md` §6.5 says it *"exists to motivate"*. **Blocks A2.** |
+| **A3** | What is actually unclaimed in joint blocking+matching? | **$0** | none | **Run before A2** — the cheapest way to kill A2. |
+| **D1**(1) | Where does prompt tuning plateau? | **$1–5** | none | Independent. Settles the MIPROv2-vs-signature reconciliation. |
+| **C4** | ⭐ **Does RocketQA denoising hold on ER data?** | **GPU, $0** | B2 | **Highest value.** We ship the undenoised failure mode (`HardNegativeMiner`). |
+| **C2** | Embedder + reranker, measured | **CPU, $1–5** | B2 | The missing mid-point between cosine and LLM. Shares apparatus with A1. |
+| **C1** | Embedding size ladder; the embedder that *is* the matcher | **CPU/GPU, $0** | B2 | Supplies frozen indexes for C5. |
+| **C5** | Query-side-only training (ADORE analogue) | **GPU, $0** | B2, C1 | Cheapest *strong* option — but see the ADORE correction; it's a cost argument. |
+| **D1**(2) | The prompt→fine-tune handoff | **GPU** | D1(1) | Shares its harness with C4. |
+| **C3** | One decoder family, both roles; does prompt tuning transfer to *recall*? | **GPU, $0–5** | D1(1), B2 | Most speculative. Step (1) is cheap and gates the rest. |
+| **A2** | The Zamani follow-up — is a defensible contribution there? | **$0 compute; costly in thought** | **A1**, A3 | Most likely outcome: **dropped**, because $\varphi$ is tiny. That is a success. |
+| **E2** | Cross-domain ER — who else has this problem? | **$0** | none | Largest $0 item (reading time). Background thread; gates nothing. |
+
+**If only two things get run: B1 and B2.** Both are free, both are one script away, and B2
+determines whether any *other* number on this board means anything.
+
+**The three items most likely to change what langres does:** **C4** (may invalidate a
+shipped component), **B1** (may change a default), **B2** (may invalidate our measurements).
+Note none of these is A2.
 
 ---
 
@@ -774,15 +799,35 @@ invalidates a shipped component or clears it. Few experiments have that leverage
 point:
 
 - **RocketQA** (Qu et al., NAACL 2021, [2010.08191](https://arxiv.org/abs/2010.08191)),
-  Table 3, MRR@10: in-batch negatives **32.39** → hard negatives **undenoised 26.03**
-  (**worse than in-batch** — the finding) → hard negatives **denoised by a cross-encoder
-  36.38**. Undenoised hard-negative mining is **−6.36 below doing nothing**; denoising
-  turns the same data into **+3.99 above it**. `[see §7 reference tier — the numbers are
-  as transcribed from the brief; confirm against Table 3 before publishing]`
-- **The mechanism is the ER condition exactly.** Top-k from a blocker is, by design,
-  where the true matches are. Sampling "negatives" from it without labels samples
-  **unlabeled positives**. `20260707_data_prep_hard_case_mining_survey.md` already carries
-  the safety rails: **RocketQA** is filed as *"the EM safety rail"*, **NV-Retriever**
+  **Table 3** (`tbl-ablation`), MS MARCO passage, MRR@10 — **all three numbers confirmed
+  against the literal table cells, and the table number is right**: `[verified — LaTeX
+  source]`
+
+  | Strategy | MRR@10 |
+  |---|---|
+  | In-batch negatives | **32.39** |
+  | Cross-batch negatives | 33.32 |
+  | **Hard negatives w/o denoising** | **26.03** ← *worse than doing nothing* |
+  | **Hard negatives w/ denoising** | **36.38** |
+  | + data augmentation | 37.02 |
+
+  Undenoised hard-negative mining lands **−6.36 below the in-batch baseline**; the *same
+  data*, denoised, lands **+3.99 above it**. The paper states the direction outright:
+  *"the performance of the retriever **significantly decreases** by introducing hard
+  negatives without denoising."*
+- **The mechanism is the ER condition exactly — and they quantified it.** RocketQA, on the
+  top-retrieved passages they sampled negatives from: *"We find that **about 70% of them
+  are actually positives or highly relevant.** Hence, it is likely to bring noise if we
+  simply sample hard negatives from the top-retrieved passages by the dense retriever,
+  **which is a widely adopted strategy**… As a comparison, we propose denoised hard
+  negatives by a powerful cross-encoder."* `[verified — LaTeX source]`
+
+  > **That 70% is the whole argument for this item.** A blocker's top-k is, by
+  > construction, where the true matches are — ER's candidate sets are *more* positive-dense
+  > than a web corpus's top-k, not less. Sampling "negatives" from it without labels samples
+  > **unlabeled positives**, and calls them negatives.
+- **The safety rails are already on file** in `20260707_data_prep_hard_case_mining_survey.md`:
+  **RocketQA** is filed as *"the EM safety rail"*, **NV-Retriever**
   ([2407.15831](https://arxiv.org/abs/2407.15831)) as positive-aware false-negative removal
   (TopK-PercPos), and **GISTEmbed** ([2402.16829](https://arxiv.org/abs/2402.16829)) as a
   guide model masking false in-batch negatives.
@@ -1122,4 +1167,108 @@ blocks on it, so it is a background thread, not a gate.
 
 ---
 
-*(items follow)*
+## 7. References
+
+Two tiers, following `docs/THEORY.md`'s convention. **Do not move an entry up a tier
+without reading the primary.** Several claims on this board were *wrong until checked* —
+the tiering is the mechanism that caught them.
+
+**Verified against primary sources** — read directly during this doc's preparation
+(LaTeX from arXiv `/e-print`, or the authors' own OA PDF), quoted from literal table cells
+and body text, not from summaries:
+
+- Zamani, Bendersky, Metzler, Zhuang, Wang. *Stochastic Retrieval-Conditioned Reranking.*
+  ICTIR 2022. DOI [10.1145/3539813.3545141](https://doi.org/10.1145/3539813.3545141).
+  **(A2's source. Eq. 4 is k=1-only — stated twice; deeper $k$ is simulated, not derived.
+  ε⁺/ε⁻ explicitly assumed retriever-independent. Gold OA; the ACM DL page 403s but the
+  authors host a copy via research.google. Note: Semantic Scholar's author list for this
+  DOI is wrong — it omits three authors.)**
+- Xiong, Xiong, Li, Tang, Liu, Bennett, Ahmed, Overwijk. *Approximate Nearest Neighbor
+  Negative Contrastive Learning for Dense Text Retrieval.* ICLR 2021,
+  [2007.00808](https://arxiv.org/abs/2007.00808). **(ANCE — C1's supporting evidence. §6.1
+  quote confirmed. The "100×" is *latency*, not cost: 99× vs. BERT Rerank alone, 122× vs.
+  the full sparse pipeline, and it excludes 10h of offline corpus encoding.)**
+- Qu, Ding, Liu, Liu, Lv, Zhao, Zhang, She, Wang, Yu, Wu. *RocketQA: An Optimized Training
+  Approach to Dense Passage Retrieval for Open-Domain Question Answering.* NAACL 2021,
+  [2010.08191](https://arxiv.org/abs/2010.08191). **(C4's source. Table 3 confirmed:
+  32.39 / 26.03 / 36.38. ~70% of top-retrieved "negatives" were actually
+  positives/highly-relevant.)**
+- Zhan, Mao, Liu, Guo, Zhang, Ma. *Optimizing Dense Retrieval Model Training with Hard
+  Negatives.* SIGIR 2021, [2104.08051](https://arxiv.org/abs/2104.08051). **(ADORE +
+  STAR — C5's source. ⚠ The 0.347/0.876 figures are the `ADORE+STAR` row; 3 of 5 bare
+  ADORE variants lose to ANCE. Frozen-index/query-encoder-only characterization confirmed
+  verbatim.)**
+- Jacob, Lindgren, Zaharia, Carbin, Khattab, Drozdov. *Drowning in Documents: Consequences
+  of Scaling Reranker Inference.* ReNeuIR @ SIGIR 2025 workshop,
+  [2411.11767](https://arxiv.org/abs/2411.11767). **(⚠ Does NOT measure a false-positive
+  rate. Shows recall declining past a non-monotone peak; "phantom hits" is qualitative and
+  outcome-selected. Its FP-rate mechanism is cited to Zamani, not measured.)**
+- Meng, Arabzadeh, Askari, Aliannejadi, de Rijke. *Ranked List Truncation for Large
+  Language Model-based Re-Ranking.* SIGIR 2024,
+  [2404.18185](https://arxiv.org/abs/2404.18185). **(A3 — the third objection A2 must
+  answer. Also the source of `THEORY.md` §6.4's truncation quote, checked and accurate.)**
+- Dou, Shen, Zhou, Bai, Kou, Nie, Cui, Yu. *Enhancing Deep Entity Resolution with
+  Integrated Blocker-Matcher Training: Balancing Consensus and Discrepancy.* CIKM 2024,
+  508–518. DOI [10.1145/3627673.3679843](https://doi.org/10.1145/3627673.3679843).
+  **(MutualER — joint blocker–matcher training. Abstract verified via Semantic Scholar;
+  closed access, no arXiv. DBLP title search returns zero: the name is only inside the
+  paper.)**
+- Wu, Wu, Dong, Hua, Zhou. *Blocker and Matcher Can Mutually Benefit: A Co-Learning
+  Framework for Low-Resource Entity Resolution.* PVLDB 17(3):292–304, 2023. DOI
+  [10.14778/3632093.3632096](https://doi.org/10.14778/3632093.3632096). **(CLER — the third
+  joint-training paper; distinct from MutualER, disjoint authors. Code: `wusw14/CLER`.
+  New to our docs.)**
+- Jain, Sarawagi, Sen. *Deep Indexed Active Learning for Matching Heterogeneous Entity
+  Representations.* PVLDB 2022, [2104.03986](https://arxiv.org/abs/2104.03986). **(DIAL —
+  *is* joint training: "jointly learns embeddings to maximize recall for blocking and
+  **accuracy** for matching".)**
+- Ren, Qu, Liu, Zhao, She, Wu, Wang, Wen. *RocketQAv2: A Joint Training Method for Dense
+  Passage Retrieval and Passage Re-ranking.* EMNLP 2021,
+  [2110.07367](https://arxiv.org/abs/2110.07367). **(The IR joint-training analogue.)**
+- Zhang, Gong, Shen, Lv, Duan, Chen. *Adversarial Retriever-Ranker for Dense Text
+  Retrieval.* ICLR 2022, [2110.03611](https://arxiv.org/abs/2110.03611). **(AR2 — the
+  reranker's objective in the retriever's loop.)**
+
+**Cited but NOT verified against the primary — do not quote without reading:**
+
+- Li, Li, Suhara, Doan, Tan. *Deep Entity Matching with Pre-Trained Language Models.*
+  VLDB 2020, [2004.00584](https://arxiv.org/abs/2004.00584). **(Ditto — E1 target.)**
+- Zhang, Rekatsinas et al. *AnyMatch.* 2024, [2409.04073](https://arxiv.org/abs/2409.04073).
+  **(E1 target; the data-recipe bet.)**
+- *Jellyfish.* [2312.01678](https://arxiv.org/abs/2312.01678). **(E1 target. Caveat on
+  file: Amazon-Google was *seen* in training; Abt-Buy is zero-shot.)**
+- Steiner, Peeters, Bizer. *Fine-tuning LLMs for EM.* 2024,
+  [2409.08185](https://arxiv.org/abs/2409.08185). **(D1 — mixed results on
+  LLM-generated EM training data.)**
+- Mudgal, Li, Rekatsinas, Doan, Park, Krishnan, Deep, Arcaute, Raghavendra. *Deep Learning
+  for Entity Matching.* SIGMOD 2018. **(DeepMatcher/Magellan — B2's saturation motivation.)**
+- Moreira et al. *NV-Retriever.* 2024, [2407.15831](https://arxiv.org/abs/2407.15831);
+  Solatorio. *GISTEmbed.* 2024, [2402.16829](https://arxiv.org/abs/2402.16829). **(C4's
+  false-negative safety rails.)**
+- Wang et al. *E5-mistral.* [2401.00368](https://arxiv.org/abs/2401.00368). **(C3 —
+  instruction-following embedders.)**
+- Leone et al. PVLDB 15(8), 2022. **(E2's starting point — the cross-field survey
+  `THEORY.md` erratum 13 credits with documenting the silos.)**
+- Tu et al. *Unicorn.* SIGMOD/PACMMOD 2023 *(no arXiv; OpenReview `388Cge6WPN`)*. **(E2 —
+  the generalist precedent, on a different axis.)**
+- Elkan. *The Foundations of Cost-Sensitive Learning.* IJCAI 2001. **(A2 — "F1 is itself
+  arbitrary". Reached via `THEORY.md` §6.5.)**
+- Hassanzadeh, Chiang, Lee, Miller. *Framework for Evaluating Clustering Algorithms in
+  Duplicate Detection.* PVLDB 2009. **(B1's threshold-fragility numbers — reached via
+  `THEORY.md` §7.1, not read here.)**
+- Bansal, Blum, Chawla. *Correlation Clustering.* **(B1 — "closure is optimal iff the
+  pairwise labels are consistent". Via `THEORY.md` §7.)**
+- Ailon, Charikar, Newman. *Aggregating Inconsistent Information: Ranking and Clustering.*
+  **(B1 — the pivot algorithm `CorrelationClusterer` implements.)**
+- Breunig. *Let the Model Write the Prompt.* [dbreunig.com, 2025-06-10](https://www.dbreunig.com/2025/06/10/let-the-model-write-the-prompt.html).
+  **(D1's counter-evidence. Qwen3-0.6B 60.7%→82% is the author's own figure, but it is
+  binary-match accuracy with *unreported class balance*. Cite the primary, never a recap —
+  a widely circulated recap of this talk contained two claims absent from it.)**
+- Papadakis et al. *Pre-trained Embeddings for Entity Resolution*; Papadakis et al., ACM
+  CSUR 53(2) 2020; Christen, TKDE 2012. **(A1 — the field's "precision significantly
+  raises after matching". Via `THEORY.md` §6.3.)**
+
+---
+
+*End of agenda. Items are added by appending to a thread and updating §1's board — the
+threads are stable, the board is not.*
