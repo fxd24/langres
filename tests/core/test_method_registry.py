@@ -2,7 +2,7 @@
 
 Covers the registry contract itself (lookup, did-you-mean, the reserved ``/``
 id grammar, collision), the identity metadata each built-in spec carries
-(``default_model`` / ``accepts_model`` / ``default_threshold`` /
+(``default_model`` / ``accepted_kinds`` / ``default_threshold`` /
 ``score_type``), and that the three former dispatch sites -- the verbs'
 ``presets.build_judge``, ``Resolver.from_schema``, and the benchmark
 harness's ``methods._make_module_builder`` -- now build the SAME class for
@@ -125,9 +125,41 @@ class TestBuiltinSpecs:
         for name in ("zero_shot_llm", "prompt_llm", "llm_judge", "dspy_judge"):
             spec = get_method(name)
             assert spec.default_model == DEFAULT_OPENROUTER_MODEL, name
-            assert spec.accepts_model is True, name
+            assert spec.accepted_kinds, name  # every LLM method HAS a model slot
             assert spec.default_threshold == 0.7, name
             assert spec.requires_extra == "llm", name
+
+    def test_dspy_backed_methods_declare_no_local_slot(self) -> None:
+        """B10 as data: DSPy routes everything through litellm, so its methods
+        cannot accept a local directory -- and the registry says so, rather than
+        forwarding the path into DSPyMatcher to die inside litellm."""
+        from langres.core.model_ref import LITELLM_ROUTABLE_KINDS
+
+        for name in ("zero_shot_llm", "dspy_judge", "select_judge"):
+            assert get_method(name).accepted_kinds == LITELLM_ROUTABLE_KINDS, name
+            assert "local" not in get_method(name).accepted_kinds, name
+
+    def test_llm_matcher_backed_methods_accept_every_kind(self) -> None:
+        """LLMMatcher has BOTH litellm and a transformers backend, so unlike the
+        DSPy family it really can run local weights."""
+        for name in ("prompt_llm", "llm_judge", "cascade"):
+            assert get_method(name).accepted_kinds == {"api", "endpoint", "hf", "local"}, name
+
+    def test_check_backbone_rejects_what_a_method_cannot_run(self) -> None:
+        from langres.core.model_ref import UnsupportedBackboneError
+
+        with pytest.raises(UnsupportedBackboneError, match="cannot run a 'local' backbone"):
+            get_method("dspy_judge").check_backbone("./my-ft")
+        with pytest.raises(UnsupportedBackboneError, match=r"unmerged base\+adapter"):
+            get_method("dspy_judge").check_backbone({"base": "org/b", "adapter": "org/a"})
+        with pytest.raises(UnsupportedBackboneError, match="has no model slot"):
+            get_method("string").check_backbone("gpt-4o")
+
+    def test_check_backbone_admits_what_a_method_can_run(self) -> None:
+        assert get_method("string").check_backbone(None) is None
+        assert get_method("dspy_judge").check_backbone("gpt-4o").kind == "api"
+        # An LLMMatcher-backed method really can take the local dir DSPy cannot.
+        assert get_method("prompt_llm").check_backbone("./my-ft").kind == "local"
 
     def test_random_forest_declares_the_trained_extra(self) -> None:
         """The supervised forest needs scikit-learn, so its spec names the extra."""
@@ -151,13 +183,13 @@ class TestBuiltinSpecs:
     def test_embedding_reports_the_pinned_embedder_as_its_model(self) -> None:
         spec = get_method("embedding")
         assert spec.default_model == DEFAULT_EMBEDDING_MODEL == "all-MiniLM-L6-v2"
-        # model= is ignored by the builder, so the spec must not honor it either.
-        assert spec.accepts_model is False
+        # Its model slot is the blocker's embedder: in-process kinds, no API.
+        assert spec.accepted_kinds == {"hf", "local"}
 
     def test_string_has_no_model_identity(self) -> None:
         spec = get_method("string")
         assert spec.default_model is None
-        assert spec.accepts_model is False
+        assert spec.accepted_kinds == frozenset()  # no model slot at all
         assert spec.score_type == "heuristic"
         assert spec.default_threshold == 0.5
 

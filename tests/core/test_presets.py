@@ -27,6 +27,7 @@ from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, stamp_group_cost
 from langres.core.matchers.dspy_judge import DSPyMatcher
+from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
 from langres.core.presets import (
     DEFAULT_AUTO_MODEL,
     DEFAULT_BUDGET_USD,
@@ -621,6 +622,48 @@ class TestNoticeAndEstimate:
 
 
 class TestBuildResolver:
+    @pytest.mark.slow  # constructs a SentenceTransformerEmbedder (no download: lazy load)
+    def test_build_resolver_threads_the_embedder_backbone_to_the_blocker(self) -> None:
+        """W3: the caller's ``model=`` reaches the component that actually embeds.
+
+        The behavioral half of the silent-drop fix. ``_build_embedding`` legitimately
+        has no model of its own -- ``EmbeddingScoreMatcher`` just passes the blocker's
+        cosine similarity through -- so the ``embedding`` method's model slot IS the
+        VectorBlocker's embedder. If the backbone did not land here it would land
+        nowhere, and the report would be a claim about a model that never ran.
+        """
+        resolved = build_resolver(
+            PresetCompany,
+            judge="embedding",
+            model="BAAI/bge-small-en-v1.5",
+            entity_noun="entity",
+            threshold=None,
+            n_records=5,
+        )
+        blocker = resolved.resolver.blocker
+        assert isinstance(blocker, VectorBlocker)
+        # The embedder is lazy: `model_name` is the reference, no weights loaded.
+        assert blocker.vector_index.embedder.model_name == "BAAI/bge-small-en-v1.5"
+        # ...and the reported identity is that same model -- not a pinned default.
+        assert resolved.model == "BAAI/bge-small-en-v1.5"
+
+    @pytest.mark.slow  # constructs a SentenceTransformerEmbedder (no download: lazy load)
+    def test_a_non_embedding_judge_leaves_the_blockers_embedder_at_the_default(self) -> None:
+        """``model=`` names the JUDGE's backbone for every other method, so a
+        VectorBlocker built merely for scale must not adopt an LLM id as its
+        embedder."""
+        resolved = build_resolver(
+            PresetCompany,
+            judge="string",
+            model=None,
+            entity_noun="entity",
+            threshold=None,
+            n_records=_ALL_PAIRS_MAX_N + 1,  # forces a VectorBlocker for scale
+        )
+        blocker = resolved.resolver.blocker
+        assert isinstance(blocker, VectorBlocker)
+        assert blocker.vector_index.embedder.model_name == DEFAULT_EMBEDDING_MODEL
+
     def test_string_judge_small_n_uses_all_pairs_blocker(self) -> None:
         resolved = build_resolver(
             PresetCompany,
@@ -829,13 +872,32 @@ class TestResolveJudgeModelIdentity:
         resolved = resolve_judge("embedding", PresetCompany)
         assert resolved.model == DEFAULT_EMBEDDING_MODEL
 
-    def test_embedding_ignored_model_override_is_not_reported(self) -> None:
-        """model= is ignored by the embedding judge, so reporting it back
-        would lie about what ran -- the pinned embedder is the truth."""
+    def test_embedding_honors_a_model_override_instead_of_dropping_it(self) -> None:
+        """W3: model= names the EMBEDDER backbone and is honored, not swallowed.
+
+        Previously ``_build_embedding`` accepted ``model=`` and silently dropped
+        it, and the spec reported the pinned default. The report was honest (the
+        pinned embedder really did run) but the caller's explicit override
+        vanished without a word. Now the ``embedding`` method declares an
+        in-process model slot, ``build_resolver`` threads the backbone to the
+        VectorBlocker that actually embeds, and the report names it -- see
+        ``test_build_resolver_threads_the_embedder_backbone_to_the_blocker``.
+        """
+        resolved = resolve_judge("embedding", PresetCompany, model="BAAI/bge-small-en-v1.5")
+        assert resolved.model == "BAAI/bge-small-en-v1.5"
+
+    def test_embedding_without_an_override_reports_the_pinned_embedder(self) -> None:
         from langres.core.method_registry import DEFAULT_EMBEDDING_MODEL
 
-        resolved = resolve_judge("embedding", PresetCompany, model="some/other-model")
+        resolved = resolve_judge("embedding", PresetCompany)
         assert resolved.model == DEFAULT_EMBEDDING_MODEL
+
+    def test_string_rejects_a_model_it_could_only_ignore(self) -> None:
+        """A method with no model slot must say so, not accept-and-drop."""
+        from langres.core.model_ref import UnsupportedBackboneError
+
+        with pytest.raises(UnsupportedBackboneError, match="has no model slot"):
+            resolve_judge("string", PresetCompany, model="gpt-4o")
 
     def test_zero_shot_llm_defaults_to_the_pinned_auto_model(self) -> None:
         resolved = resolve_judge("zero_shot_llm", PresetCompany)

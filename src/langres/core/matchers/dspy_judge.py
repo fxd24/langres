@@ -37,7 +37,7 @@ from dspy.utils.exceptions import AdapterParseError
 from langres.core.model_ref import (
     ModelRef,
     normalize_model_ref,
-    require_served,
+    require_litellm_routable,
     to_config,
 )
 from langres.core.models import ERCandidate, PairwiseJudgement
@@ -192,11 +192,11 @@ class DSPyMatcher(Matcher[SchemaT]):
                 use — so ``from_config`` / ``load`` never need a key. Inject an LM
                 as an escape hatch (tests inject ``DummyLM`` for zero-spend runs).
             model: The backbone that fills this slot — an API model id, or any
-                :class:`~langres.core.model_ref.ModelRef` surface form. **Served
-                kinds only** (``api``/``endpoint``): this slot is DSPy-backed, so
-                an ``hf``/``local``/base+adapter ref raises
+                :class:`~langres.core.model_ref.ModelRef` surface form. **litellm-routable
+                refs only**: this slot is DSPy-backed, so a ``local`` directory or
+                a base+adapter ref raises
                 :class:`~langres.core.model_ref.UnsupportedBackboneError` here —
-                see :func:`~langres.core.model_ref.require_served`.
+                see :func:`~langres.core.model_ref.require_litellm_routable`.
             temperature: Sampling temperature for the lazily-built LM.
             entity_noun: Domain noun woven into the signature instructions.
             program: Optional pre-built DSPy program (e.g. a compiled one). When
@@ -206,7 +206,7 @@ class DSPyMatcher(Matcher[SchemaT]):
         Raises:
             UnsupportedBackboneError: ``model`` names an in-process backbone.
         """
-        self.model_ref = require_served(normalize_model_ref(model), slot="DSPyMatcher")
+        self.model_ref = require_litellm_routable(normalize_model_ref(model), slot="DSPyMatcher")
         # ``self.model`` stays the base id *string* for litellm/provenance/pricing;
         # the full ref (incl. any endpoint URL) lives on ``self.model_ref``.
         self.model = self.model_ref.base

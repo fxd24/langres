@@ -49,6 +49,7 @@ from langres.core.matcher import Matcher
 from langres.core.model_ref import (
     DEFAULT_EMBEDDING_MODEL,
     IN_PROCESS_KINDS,
+    LITELLM_ROUTABLE_KINDS,
     SERVED_KINDS,
     BackboneKind,
     ModelRef,
@@ -195,6 +196,19 @@ class MethodSpec(BaseModel):
                     if IN_PROCESS_KINDS & {ref.kind}
                     else "Name a backbone of an accepted kind."
                 )
+            )
+        # An unmerged PEFT adapter must be assembled in-process, which only a
+        # method supporting EVERY in-process kind can do. A litellm-only method
+        # nominally accepts `hf` (see LITELLM_ROUTABLE_KINDS) but cannot assemble
+        # anything, so the kind check above would otherwise wave an adapter
+        # through to fail later, deeper, and less legibly.
+        if ref.adapter is not None and not IN_PROCESS_KINDS <= self.accepted_kinds:
+            raise UnsupportedBackboneError(
+                f"method {self.name!r} cannot run an unmerged base+adapter ref "
+                f"(base={ref.base!r}, adapter={ref.adapter!r}): assembling a PEFT adapter "
+                "needs an in-process backend, and this method runs its model over litellm. "
+                "Use a method backed by LLMMatcher (e.g. 'prompt_llm'), or merge the adapter "
+                "into the base weights and reference the merged model."
             )
         return ref
 
@@ -544,8 +558,9 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            # DSPy-backed: no in-process route (B10) -- see require_served.
-            accepted_kinds=SERVED_KINDS,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -596,8 +611,9 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            # DSPy-backed: no in-process route (B10) -- see require_served.
-            accepted_kinds=SERVED_KINDS,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -606,8 +622,9 @@ def _register_builtins() -> None:
             score_type="prob_group_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            # DSPy-backed: no in-process route (B10) -- see require_served.
-            accepted_kinds=SERVED_KINDS,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(

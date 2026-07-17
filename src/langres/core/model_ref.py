@@ -88,6 +88,34 @@ IN_PROCESS_KINDS: frozenset[BackboneKind] = frozenset({"hf", "local"})
 #: Kinds that run **served** (litellm): the weights live behind an API.
 SERVED_KINDS: frozenset[BackboneKind] = frozenset({"api", "endpoint"})
 
+#: Kinds a **litellm-only** slot (i.e. DSPy-backed) may be handed. Note this
+#: includes ``hf``, which reads like a contradiction and is not one — it is the
+#: honest consequence of a *measured* ambiguity.
+#:
+#: :func:`infer_kind` maps a one-slash ``org/name`` to ``hf``, but that same shape
+#: is also how litellm names a provider-routed model. The prefix table below can
+#: only recognize the providers someone remembered to list, and that set is not
+#: closeable: measured against the installed litellm, ``litellm.provider_list``
+#: carries **146** providers while :data:`_API_MODEL_PREFIXES` carries **26** — so
+#: **120** real provider ids (``ai21/...``, ``nvidia_nim/...``, ``voyage/...``)
+#: infer as ``hf``. Rejecting ``hf`` from a litellm-only slot would therefore
+#: reject working code, and the leaf cannot consult ``litellm.provider_list`` to
+#: do better: importing litellm here would put the [llm] extra on every bare
+#: ``import langres`` (``tests/test_import_budget.py`` is the gate).
+#:
+#: So the guard covers only what is **unambiguous**: a ``local`` path and a PEFT
+#: ``adapter`` can never be reached by litellm, whatever the provider list says.
+#: An ``hf``-inferred id is passed through and fails inside litellm exactly as it
+#: did before — no regression, and no false rejection.
+#:
+#: **The stricter alternative, recorded so it is cheap to flip:** drop ``"hf"``
+#: from this set and DSPy-backed slots become API/endpoint-only, forcing every
+#: unlisted-provider id to name ``kind="api"`` explicitly. That is a one-line
+#: change here plus the ``accepted_kinds`` on the three DSPy specs in
+#: ``core/method_registry.py``. It buys stricter typing at the cost of breaking
+#: those 120 provider ids until each caller annotates them.
+LITELLM_ROUTABLE_KINDS: frozenset[BackboneKind] = SERVED_KINDS | frozenset({"hf"})
+
 #: Model-id prefixes that name a litellm provider, used by
 #: :func:`infer_kind` to recognize an ``api`` reference. Not exhaustive and not
 #: meant to be: it disambiguates the *common* provider-prefixed ids from HF Hub
@@ -242,8 +270,8 @@ def backend_for(kind: BackboneKind) -> Literal["litellm", "transformers"]:
     return "litellm" if kind in SERVED_KINDS else "transformers"
 
 
-def require_served(ref: ModelRef, *, slot: str) -> ModelRef:
-    """Assert ``ref`` can run behind an API, or raise :class:`UnsupportedBackboneError`.
+def require_litellm_routable(ref: ModelRef, *, slot: str) -> ModelRef:
+    """Assert litellm could reach ``ref``, or raise :class:`UnsupportedBackboneError`.
 
     The guard for **DSPy-backed slots**, which have no in-process route at all.
     Verified against the installed ``dspy`` (3.2.1), not assumed:
@@ -255,19 +283,23 @@ def require_served(ref: ModelRef, *, slot: str) -> ModelRef:
     litellm at ``http://localhost:{port}/v1`` — i.e. it *serves* the model and
     goes back through litellm.
 
-    So handing such a slot a ``local`` dir or a base+adapter ref cannot work; it
-    dies deep inside litellm with a provider error that names nothing useful.
-    Raising here — at construction — is that failure, hoisted to where the caller
-    can act on it.
+    So handing such a slot a ``local`` directory or a base+adapter ref cannot
+    work: it dies deep inside litellm with a provider error naming nothing
+    useful. Raising here — at construction — is that failure hoisted to where the
+    caller can act on it.
+
+    It deliberately admits the ``hf`` kind: see :data:`LITELLM_ROUTABLE_KINDS`
+    for the measurement (120 of litellm's 146 providers infer as ``hf``), and for
+    the stricter alternative and how to flip to it.
 
     Args:
         ref: The backbone to check.
         slot: The slot's user-facing name, woven into the message.
 
     Raises:
-        UnsupportedBackboneError: ``ref.kind`` is an in-process kind.
+        UnsupportedBackboneError: ``ref`` is a ``local`` dir or carries an adapter.
     """
-    if ref.kind in SERVED_KINDS:
+    if ref.kind in LITELLM_ROUTABLE_KINDS and ref.adapter is None:
         return ref
     detail = (
         f"an unmerged base+adapter ref (base={ref.base!r}, adapter={ref.adapter!r})"
