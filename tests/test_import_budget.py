@@ -242,8 +242,8 @@ def test_import_langres_testing_stays_import_light() -> None:
     )
 
 
-# The EvalReport tearsheet (``langres.core.eval_report``) and its SVG backend
-# (``langres.core._svg``) render entirely from stdlib + numpy (a core dep). They
+# The EvalReport tearsheet (``langres.report.eval_report``) and its SVG backend
+# (``langres.report._svg``) render entirely from stdlib + numpy (a core dep). They
 # must NEVER pull the heavy/optional stack -- that is the permanent guarantee a
 # $0 report can always be built on a bare core-only install (no torch, no
 # matplotlib, no litellm). Same fresh-process subprocess pattern as above.
@@ -261,7 +261,7 @@ _EVAL_REPORT_HEAVY_DEPS = [
 ]
 
 _EVAL_REPORT_IMPORT_LIGHT_SCRIPT = (
-    "import sys; import langres.core.eval_report; import langres.core._svg; "
+    "import sys; import langres.report.eval_report; import langres.report._svg; "
     "leaked = [m for m in {modules!r} if m in sys.modules]; "
     "assert not leaked, f'eval_report/_svg leaked heavy modules: {{leaked}}'; "
     "print('OK')"
@@ -269,7 +269,7 @@ _EVAL_REPORT_IMPORT_LIGHT_SCRIPT = (
 
 
 def test_eval_report_stays_import_light() -> None:
-    """``import langres.core.eval_report`` (+ ``_svg``) must not pull a heavy dep.
+    """``import langres.report.eval_report`` (+ ``_svg``) must not pull a heavy dep.
 
     The tearsheet is dependency-free by construction: inline SVG, no matplotlib,
     no ML stack. This locks it so a future edit can never regress the $0,
@@ -286,7 +286,7 @@ def test_eval_report_stays_import_light() -> None:
 
 
 # The data-profile report (``langres.data.data_profile``) and its shared render
-# scaffold (``langres.core._report_html``) render entirely from stdlib + numpy (a
+# scaffold (``langres.report._report_html``) render entirely from stdlib + numpy (a
 # core dep) + the import-light ``core.metrics``. Like the EvalReport tearsheet
 # they must NEVER pull the heavy/optional stack -- the plan's load-bearing
 # guarantee that a ``$0`` data profile is buildable on a bare core-only install
@@ -294,7 +294,7 @@ def test_eval_report_stays_import_light() -> None:
 # precomputed embeddings; it never generates them, so it carries no [semantic]
 # dep. Same fresh-process subprocess pattern as the eval_report check above.
 _DATA_PROFILE_IMPORT_LIGHT_SCRIPT = (
-    "import sys; import langres.data.data_profile; import langres.core._report_html; "
+    "import sys; import langres.data.data_profile; import langres.report._report_html; "
     "leaked = [m for m in {modules!r} if m in sys.modules]; "
     "assert not leaked, f'data_profile/_report_html leaked heavy modules: {{leaked}}'; "
     "print('OK')"
@@ -383,12 +383,20 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 
 # The flywheel's back half is root-exported, but its three lazy names
 # (``EvalReport``, ``gold_pairs_from_clusters``, ``derive_threshold``) must not
-# drag their owning modules into a bare ``import langres``: ``core.eval_report``
+# drag their owning modules into a bare ``import langres``: ``report.eval_report``
 # pulls ``core.benchmark``/``core.metrics`` (kept out of the eager graph on
 # purpose), and ``core.calibration`` imports scikit-learn ([trained]) at module
 # scope. Same fresh-process subprocess pattern as above.
+#
+# !! THIS LIST IS A DENY LIST, SO IT ROTS OPEN !! Every entry asserts a module is
+# ABSENT from ``sys.modules``, which a module that no longer exists satisfies
+# trivially. A stale path here does not fail -- it silently stops guarding, and
+# the test stays green while checking nothing. When a module named here moves,
+# the ONLY signal is this comment. Re-point it; never just delete the entry.
+# (Caught for real: the `report` extraction left `langres.core.eval_report` here,
+# passing vacuously against a module that had ceased to exist.)
 _ROOT_LAZY_MODULES = [
-    "langres.core.eval_report",
+    "langres.report.eval_report",
     "langres.core.benchmark",
     "langres.core.calibration",
     "langres.data.data_profile",
@@ -667,7 +675,7 @@ class TestRootLazyGetattr:
 
     def test_eval_report_resolves_and_caches(self) -> None:
         import langres
-        from langres.core.eval_report import EvalReport
+        from langres.report.eval_report import EvalReport
 
         assert langres.EvalReport is EvalReport
         # Cached on the module namespace -- a second access must not re-hit

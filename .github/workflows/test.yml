@@ -209,6 +209,13 @@ jobs:
       # still passes while silently covering less of the contract, so this is a
       # real maintenance obligation, not a self-healing gate.
       #
+      # `src/langres/report/*` was added when the HTML/SVG render seam moved out
+      # of core. Those ~1,400 lines measure 98-100%, so they were LIFTING core's
+      # average, not dragging it: dropping them from the glob would have quietly
+      # un-gated 99%-covered public surface (`EvalReport` is root-exported) while
+      # making the remaining number look better. That is the failure this comment
+      # exists to prevent -- the glob must follow the contract, not the average.
+      #
       # Deliberately AFTER the Codecov upload: that upload is advisory, and when
       # this gate fails you still want the data published to diagnose the drop.
       #
@@ -217,7 +224,7 @@ jobs:
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*" --precision=2 --fail-under=98
+        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra
