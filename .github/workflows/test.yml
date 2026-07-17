@@ -241,8 +241,18 @@ jobs:
       # ROUNDED to `precision`, which defaults to 0. Without it, round(97.6) = 98
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
+      #
+      # `src/langres/training/*` was ADDED when the fit family (finetune /
+      # calibration / fit_report / methods_prompt / methods_calibrate) moved out
+      # of `core/` into the `langres.training` package (W2). Those five modules
+      # were ALREADY in this gate via `core/*`; dropping them would silently
+      # un-gate ~1000 lines of public-surface contract (`derive_threshold`,
+      # `Calibrator`, `FitReport`, `QLoRA`/`run_finetune`, `Bootstrap`/`MIPRO`/
+      # `GEPA`, `Platt`/`Isotonic` are all root/core-exported). Re-including them
+      # is coverage-NEUTRAL by construction -- the same files, relocated -- so
+      # the TOTAL is unchanged. The glob follows the contract, not the average.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
+        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/training/*,src/langres/optimize.py" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra
