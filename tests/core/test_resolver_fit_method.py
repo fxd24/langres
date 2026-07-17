@@ -230,7 +230,7 @@ def test_architecture_rejects_kind_outside_its_declaration() -> None:
     assert "_PromptOnlyArchitecture" in message  # names the architecture
     assert "'finetune'" in message  # names the offending kind
     assert "fine-tune (QLoRA, ~GPU-seconds)" in message  # carries describe()
-    assert "accepts: 'prompt'" in message  # names what IS accepted
+    assert "it accepts: 'prompt'" in message  # names what IS accepted
 
 
 def test_unsupported_method_kind_is_a_typeerror() -> None:
@@ -261,7 +261,7 @@ def test_architecture_accepting_no_kinds_reports_that_readably() -> None:
         clusterer=Clusterer(threshold=0.5),
     )
 
-    with pytest.raises(UnsupportedMethodKind, match=r"accepts: \(no method kinds\)"):
+    with pytest.raises(UnsupportedMethodKind, match=r"it accepts: \(no method kinds\)"):
         frozen.fit(RECORDS, method=_PromptMethod())
 
 

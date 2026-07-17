@@ -37,7 +37,7 @@ from langres.core.clusterer import Clusterer
 from langres.core.comparators import StringComparator
 from langres.core.matchers import WeightedAverageMatcher
 from langres.core.models import CompanySchema
-from langres.core.registry import UnknownModelType
+from langres.core.registry import UnknownModelType, register_model
 from langres.core.resolver import Resolver
 from tests.fixtures.architectures import FixtureFuzzyString, UnregisteredArchitecture
 from tests.fixtures.companies import COMPANY_RECORDS, EXPECTED_DUPLICATE_GROUPS
@@ -250,6 +250,28 @@ def test_load_raises_actionably_on_an_unregistered_model_class(tmp_path: Path) -
     manifest_path.write_text(json.dumps(manifest))
 
     with pytest.raises(UnknownModelType, match=r"never imported"):
+        Resolver.load(tmp_path)
+
+
+def test_load_rejects_a_model_class_registered_to_a_non_resolver(tmp_path: Path) -> None:
+    """A registered non-Resolver must fail loudly, not be handed back cast as one.
+
+    ``register_model`` cannot type-check its entries (``registry`` sits beneath
+    ``resolver``), so ``load`` verifies. A kwargs-swallowing class would otherwise
+    construct fine and return a silently wrong object.
+    """
+
+    @register_model("test_roundtrip_not_a_resolver")
+    class _NotAResolver:
+        def __init__(self, **kwargs: object) -> None: ...
+
+    _architecture_resolver(Resolver).save(tmp_path)  # type: ignore[attr-defined]
+    manifest_path = tmp_path / "resolver.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["model_class"] = "test_roundtrip_not_a_resolver"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(TypeError, match=r"is not a Resolver subclass"):
         Resolver.load(tmp_path)
 
 

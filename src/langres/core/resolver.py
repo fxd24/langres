@@ -802,10 +802,9 @@ class Resolver:
         allowed = ", ".join(repr(k) for k in sorted(accepted)) or "(no method kinds)"
         raise UnsupportedMethodKind(
             f"{name} does not accept method kind {method.kind!r} ({method.describe()}); "
-            f"{name} accepts: {allowed}. Fitting with {method.kind!r} would change the "
-            f"pipeline's topology, leaving {name} naming a pipeline it no longer is. "
-            f"Use a plain Resolver (which accepts every kind) or an architecture whose "
-            f"identity includes {method.kind!r}."
+            f"it accepts: {allowed}. That fit would change the pipeline's topology, "
+            f"leaving {name} naming a pipeline it no longer is. Use a plain Resolver "
+            f"(which accepts every kind) or an architecture built for it."
         )
 
     # ------------------------------------------------------------------
@@ -1757,15 +1756,26 @@ class Resolver:
         # ``model_class`` (every pre-0.4 artifact, and any unregistered subclass)
         # keeps the old behavior exactly: build ``cls``, whatever load was called on.
         target = cls if manifest.model_class is None else get_model(manifest.model_class)
-        return cast(
-            "Resolver",
-            target(
-                blocker=blocker,
-                comparator=comparator,
-                matcher=module,
-                clusterer=clusterer,
-                calibrator=calibrator,
-            ),
+        # The model registry cannot type-check its own entries: registry.py sits
+        # beneath this module, so it can neither import Resolver nor annotate
+        # ``get_model`` with it. Verify here, where Resolver IS in scope. Without
+        # this, a ``model_class`` registered to a kwargs-swallowing non-Resolver
+        # loads and is cast to Resolver, handing the caller a silently wrong
+        # object instead of an error.
+        if not issubclass(target, Resolver):
+            raise TypeError(
+                f"Artifact model_class {manifest.model_class!r} is registered to "
+                f"{target.__module__}.{target.__qualname__}, which is not a Resolver "
+                f"subclass; register_model is for Resolver subclasses (architectures)."
+            )
+        # No cast needed: the issubclass guard above narrows ``target`` to
+        # ``type[Resolver]`` for the type checker.
+        return target(
+            blocker=blocker,
+            comparator=comparator,
+            matcher=module,
+            clusterer=clusterer,
+            calibrator=calibrator,
         )
 
     @staticmethod
