@@ -31,6 +31,7 @@ from langres.metrics.metrics import (
     pairs_from_clusters,
     reduction_ratio,
     reliability_bins,
+    roc_auc_score,
 )
 
 __all__ = [
@@ -55,4 +56,5 @@ __all__ = [
     "pairs_from_clusters",
     "reduction_ratio",
     "reliability_bins",
+    "roc_auc_score",
 ]
