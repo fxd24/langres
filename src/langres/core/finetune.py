@@ -259,10 +259,16 @@ def run_finetune(
     active_trainer = trainer if trainer is not None else QLoRATrainer()
     outcome = active_trainer.train(method.base, conversations, method, output_dir)
 
+    # Both branches normalize so the ``kind`` discriminator is inferred from the
+    # ref's actual shape (an HF base id -> "hf", a local base dir -> "local")
+    # rather than hardcoded here. A merged fine-tune is a self-contained
+    # directory; an unmerged one is base+adapter, which is in-process by
+    # construction (``normalize_model_ref`` forces an in-process kind when an
+    # adapter is present -- litellm cannot assemble one).
     model_ref = (
         normalize_model_ref(outcome.adapter_dir)
         if outcome.merged
-        else ModelRef(base=method.base, adapter=outcome.adapter_dir)
+        else normalize_model_ref({"base": method.base, "adapter": outcome.adapter_dir})
     )
     dollars = outcome.train_seconds / 3600.0 * method.gpu_hourly_usd
     return FinetuneOutcome(

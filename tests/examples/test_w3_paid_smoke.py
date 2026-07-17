@@ -65,9 +65,12 @@ def test_full_flow_runs_at_zero_and_reports_both_quality_numbers(tmp_path: Path)
         select_lm=_select_lm(),
     )
 
-    # (1) link + dedupe ran.
-    assert isinstance(results["link"]["match"], bool)
-    assert 0.0 <= results["link"]["score"] <= 1.0
+    # (1) compare + dedupe ran. (Was results["link"]: the verb `link()` scored one
+    # pair and is now ERModel.compare(); `link` is reserved for cross-source.)
+    assert isinstance(results["compare"]["match"], bool)
+    assert 0.0 <= results["compare"]["score"] <= 1.0
+    # The model reports itself: the class that ran, and the backbone under it.
+    assert results["compare"]["architecture"] == "ERModel"
     # DummyLM answers "no match", so no records merge -> 0 clusters; the point is
     # dedupe RAN and returned a well-formed list-of-clusters result.
     assert isinstance(results["dedupe"]["clusters"], list)

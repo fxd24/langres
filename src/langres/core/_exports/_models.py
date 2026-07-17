@@ -28,8 +28,7 @@ __all__ = [
     "predicted_match",
 ]
 
-LAZY_SUBMODULES: tuple[str, ...] = ()
 LAZY_SYMBOLS: dict[str, str] = {}
 EXTRA_BY_SYMBOL: dict[str, str] = {}
 
-NAMES: tuple[str, ...] = (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)
+NAMES: tuple[str, ...] = (*__all__, *LAZY_SYMBOLS)

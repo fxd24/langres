@@ -11,7 +11,12 @@ the slow lane.
 import numpy as np
 import pytest
 
-from langres.core.embeddings import FakeEmbedder, SentenceTransformerEmbedder
+from langres.core.embeddings import (
+    FakeEmbedder,
+    FastEmbedLateInteractionEmbedder,
+    FastEmbedSparseEmbedder,
+    SentenceTransformerEmbedder,
+)
 from langres.core.registry import get_component
 
 
@@ -86,3 +91,56 @@ class TestSentenceTransformerEmbedderRoundtripSlow:
 
         assert rebuilt._model is not None
         assert embeddings.shape == (2, rebuilt.embedding_dim)
+
+
+class TestFastEmbedBackbonesRoundTrip:
+    """W3: the FastEmbed embedders were unregistered and unserializable.
+
+    A backbone that cannot round-trip is a backbone a saved pipeline silently
+    loses. These two carry a ``model_name`` exactly like the dense embedder did,
+    but had no ``@register``, no ``type_name``, and no ``config``/``from_config``
+    -- so a Resolver holding one could not ``save`` at all (``_component_spec``
+    raises on a missing ``type_name``). All fast: FastEmbed models are lazy, so
+    nothing is downloaded here.
+    """
+
+    @pytest.mark.parametrize(
+        ("cls", "type_name", "model_name"),
+        [
+            (FastEmbedSparseEmbedder, "fastembed_sparse_embedder", "Qdrant/bm25"),
+            (
+                FastEmbedLateInteractionEmbedder,
+                "fastembed_late_interaction_embedder",
+                "colbert-ir/colbertv2.0",
+            ),
+        ],
+    )
+    def test_registered_under_its_type_name(
+        self, cls: type, type_name: str, model_name: str
+    ) -> None:
+        assert get_component(type_name) is cls
+        assert cls.type_name == type_name
+
+    @pytest.mark.parametrize(
+        ("cls", "model_name"),
+        [
+            (FastEmbedSparseEmbedder, "prithivida/Splade_PP_en_v1"),
+            (FastEmbedLateInteractionEmbedder, "answerdotai/answerai-colbert-small-v1"),
+        ],
+    )
+    def test_config_roundtrip_preserves_the_backbone(self, cls: type, model_name: str) -> None:
+        original = cls(model_name=model_name)
+        cfg = original.config()
+        # Through JSON, as a saved artifact would go.
+        rebuilt = cls.from_config(type(cfg).model_validate_json(cfg.model_dump_json()))
+        assert rebuilt.model_name == model_name
+        assert rebuilt._model is None  # still lazy: a config carries no weights
+
+    def test_a_fresh_process_can_resolve_the_type_name(self) -> None:
+        """The lazy-registration entry: ``langres.core.embeddings`` is not on the
+        eager-import path, so without a ``_LAZY_COMPONENT_MODULES`` entry a fresh
+        process loading such an artifact would raise UnknownComponentType."""
+        from langres.core.registry import _LAZY_COMPONENT_MODULES
+
+        for type_name in ("fastembed_sparse_embedder", "fastembed_late_interaction_embedder"):
+            assert _LAZY_COMPONENT_MODULES[type_name] == "langres.core.embeddings"

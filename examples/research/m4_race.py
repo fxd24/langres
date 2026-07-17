@@ -74,7 +74,8 @@ from langres.clients.openrouter import (  # noqa: E402
     per_token_worst_price,
     register_runtime_model_price,
 )
-from langres.core import AllPairsBlocker, Clusterer, Resolver  # noqa: E402
+from langres.core import Clusterer, Resolver
+from langres.core.blockers import AllPairsBlocker
 from langres.core.benchmark import (  # noqa: E402
     BudgetedModuleRunner,
     JudgePairEval,

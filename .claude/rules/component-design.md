@@ -8,38 +8,94 @@ paths:
 **The layered API, the design principles, and what "lightweight & composable"
 means in practice.** Read before adding or refactoring a component under `src/`.
 
-## The Layered API (verbs → Resolver → core)
+## The Layered API (architectures → ERModel → core)
 
 langres exposes three layers, each a thin shell over the one below. (Note: there
 is **no** `langres.tasks` or `langres.flows` module — those names were never
-built. The real layering is:)
+built. There is also no `langres.link` / `langres.dedupe` module-level verb and
+no `matcher="auto"` — W4 deleted both outright, along with `core.presets`: naming
+a model is the user's job, not a heuristic's. The real layering is:)
 
-1. **Verbs (`langres.link` / `langres.dedupe`)** — the top DX layer.
-   - Target: most users. Schema-optional, zero-label, `judge="auto"` with a
-     default spend cap. `"auto"` is fail-fast: no API key raises
-     `NoJudgeAvailableError` (root-exported) — offline string matching is an
-     explicit `judge="string"` opt-in, never a silent fallback.
-   - Returns self-describing results (`LinkVerdict`; a `dedupe` result carrying
-     `judge_used` / `score_type`).
-   - Philosophy: the one-liner front door. Thin sugar over `Resolver`.
+1. **Named architectures (`langres.architectures`)** — the top DX layer.
+   - Target: most users. A whole ER pipeline is a class you construct —
+     `FuzzyString()` (all-pairs blocking + string similarity, the **$0, offline,
+     no-key architecture** — it has no paid model slot, so it cannot spend) or
+     `VectorLLMCascade(llm=...)` (vector blocking + a cheap embedding student +
+     an LLM escalated only at the margin — **paid, because you constructed it**,
+     never because a heuristic sniffed an environment variable). `.dedupe(records)`
+     and `.compare(a, b)` are methods on the model, not module-level functions.
+   - Both accept `budget_usd=` (default `DEFAULT_BUDGET_USD`) and cap real spend;
+     `FuzzyString` can never trip the cap since it has no paid slot to spend from.
+     A breach raises `BudgetExceeded` (root-exported) carrying the partial
+     judgements.
+   - Returns self-describing results (`LinkVerdict`; a `DedupeResult` carrying
+     `architecture` — the model class that ran — and `backbone` — the LLM id /
+     embedder name, or `None` when nothing with weights ran — plus `score_type`).
+   - Philosophy: the one-liner front door, made explicit instead of a heuristic
+     string switch. Thin sugar over `ERModel`. `compare` is deliberately not
+     named `link`: that name is reserved for `ERModel.link` (cross-source, two
+     record *sets* — a reserved M5 stub, see below).
 
-2. **`langres.Resolver`** — the declarative mid-layer.
-   - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
-     (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
+2. **`langres.Resolver`** (a plain alias of `ERModel`; `Resolver is ERModel`) — the declarative mid-layer.
+   - `Resolver.from_schema(schema, matcher=...)` builds a default dedup pipeline
+     (blocker + comparator + matcher + clusterer); `.resolve(records)` runs it;
      `.save`/`.load` serialize it via the config-registry (no pickle).
+   - **Spend-capped too** (B1), not just the named architectures above (they
+     share the same `ERModel` machinery): `budget_usd=` on the
+     constructor and `from_schema`, defaulting to `DEFAULT_BUDGET_USD`. The
+     `SpendMonitor` is built ONCE per instance, so N `resolve()` calls share one
+     budget instead of getting a fresh one each. `None` = the default, **not**
+     uncapped (`spend_cap.UNCAPPED_BUDGET_USD` is the deliberate opt-out).
+     The cap wraps at *scoring* time and never sits in the `module` slot, so
+     `fit()`'s isinstance checks and `save()` still see the raw matcher.
+   - **Scoring through the matcher? Go through `Resolver._scorer()`.** Because
+     the slot stays raw, `self.module` is a *public, uncapped* scorer: calling
+     `.module.forward(...)` bills past `budget_usd` and reports to no ledger.
+     That is not theoretical — `AnchorStore._judge` did exactly this and spent
+     uncapped. `_scorer()` is the ONE seam (`resolve` / `predict` / `fit` /
+     `AnchorStore.assign` all use it); `tests/core/test_resolver_spend_cap.py`
+     AST-bans `<any>.module.forward(...)` in `src/`. Note it returns a *fresh*
+     wrapper around the CURRENT `self.module` sharing one long-lived
+     `SpendMonitor` — the monitor is the durable thing; caching the wrapper
+     would pin a stale matcher (`dedupe` re-wraps the slot after construction).
    - `Resolver.link` / `stream_against` are reserved `NotImplementedError` stubs
      (M5 incremental/cross-source work) — do not document them as working.
 
 3. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines.
    - Target: advanced users building bespoke pipelines.
-   - Real components: `Module` (judge), `Blocker` (`AllPairsBlocker`,
+   - Real components: `Matcher` (judge), `Blocker` (`AllPairsBlocker`,
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
-     judges (`LLMJudge`, `EmbeddingScoreJudge`, `WeightedAverageJudge`,
-     `CascadeJudge` — cheap student + escalate-at-the-margin, …) and
+     matchers (`LLMMatcher`, `EmbeddingScoreMatcher`, `WeightedAverageMatcher`,
+     `CascadeMatcher` — cheap student + escalate-at-the-margin, …) and
      `core.calibration.derive_threshold`. The flywheel seam lives here too:
      `core.review.select_for_review` / `ReviewQueue` (pick the uncertain margin)
      and `core.harvest` (`harvest_labeled_pairs`, `Correction`/`CorrectionLog`,
      `derive_threshold_from_pairs`).
+   - **`langres.core` itself re-exports only the *contracts*** — the models, the
+     `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the opt-in
+     capability Protocols (`Inspectable`, the `fit` mixins), the `Resolver` +
+     registry, the method registry, training/tracking. The implementations are
+     imported from the package that owns them:
+
+     ```python
+     from langres.core.blockers    import AllPairsBlocker, VectorBlocker
+     from langres.core.comparators import StringComparator
+     from langres.core.matchers    import CascadeMatcher, LLMMatcher
+     from langres.core.clusterers  import CorrelationClusterer
+     from langres.core.embeddings  import SentenceTransformerEmbedder
+     from langres.core.indexes     import FAISSIndex
+     ```
+
+     The `Comparator` ABC vs `StringComparator` split (W1) is the worked example:
+     a contract that imports its own implementation — even indirectly, via a
+     factory like the old `Comparator.from_schema` — sits *above* the components
+     that depend on it. Build the default via the impl's own factory
+     (`StringComparator.from_schema`) instead.
+
+     Re-exporting an implementation from `langres.core` puts the floor above the
+     components it sits beneath and re-knots the import graph — `langres.core`
+     must stay importable *by* the components, not the reverse. The ratchet in
+     `tests/test_import_tangle.py` measures it.
    - Philosophy: Like PyTorch's primitives.
    - **Not yet built** (roadmap, don't reference as existing): a general
      `Optimizer` (only `optimizers.BlockerOptimizer` exists).
@@ -125,29 +181,94 @@ Extract when you see:
 1. **Blockers**: Must implement candidate generation (`stream`) and schema
    normalization.
 2. **Judges (Modules)**: Must yield `PairwiseJudgement` objects from `forward`.
+   `forward` is the **only** abstract method on `Matcher` — the contract is
+   deliberately thin. Optional capabilities are opt-in, runtime-checkable
+   structural Protocols, never abstract methods that every judge must stub out:
+   score inspection is `core/inspection.py:Inspectable`
+   (`inspect_scores`; the shared body stays in
+   `core/reports.py:_inspect_scores_impl`, so opting in is a 2-line
+   pass-through) and the trainable roles are the mixins in `core/fit.py`.
+   Callers detect either with `isinstance(component, <Protocol>)`. Adding an
+   `@abstractmethod` to `Matcher` is a breaking change to every judge in the
+   repo *and* every user subclass — make the capability a Protocol instead.
    A *public, name-selectable* judge is registered **once**, in the single
    method registry (`core/method_registry.py` — the v0.3 unification that
    closed issue #55's three-site wiring debt): a `MethodSpec` carries the
    builder plus identity metadata (`score_type`, `default_threshold`,
-   `default_model`, `accepts_model`, `needs_comparator`, `requires_extra`).
-   All three dispatch paths — `core/presets.py:build_judge` (the verbs),
-   `core/resolver.py:_build_module_for_judge` (`Resolver.from_schema`), and
+   `default_model`, `accepted_kinds`, `needs_comparator`, `requires_extra`).
+   Both remaining dispatch paths — `core/resolver.py:_build_module_for_judge`
+   (`Resolver.from_schema`, the low-level `matcher=` switch) and
    `methods.py:_make_module_builder` (the benchmark harness) — resolve names
-   through it, so a name means exactly one construction everywhere. Two
-   things stay per-layer *policy*, not registration: the verbs' allowlist
-   (`presets._VERB_JUDGE_NAMES` — extend it only for judges that are safe
-   without an injected client or a fit step) and `from_schema`'s name tuple
-   (no `"auto"`). Method ids are bare names; `/` is reserved for future
-   `author/method` namespacing. Spec builders must lazy-import heavy deps
+   through it, so a name means exactly one construction everywhere. (A third
+   path, the verbs' `core/presets.py:build_judge`, existed pre-W4 and is gone —
+   `matcher="auto"` sniffed an API key and spent on whatever it found; naming a
+   model explicitly replaced it, not a better heuristic.) `from_schema`'s own
+   name tuple stays a per-layer *policy*, not registration (no `"auto"`).
+   Method ids are bare names; `/` is reserved for future `author/method`
+   namespacing. Spec builders must lazy-import heavy deps
    (dspy/litellm/sklearn) inside the build function — the registry is
    eager-imported by `langres.core` (see `tests/test_import_budget.py`).
-   A judge you only ever pass as a `Module` instance —
-   `dedupe(records, judge=MyJudge(...))` — needs none of this wiring. For
-   `save`/`load`, the component config-registry (`core/registry.py:register`)
-   remains a separate, orthogonal namespace.
-3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
-   blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
-   the user-facing sugar over it.
+   A judge you only ever pass as a `Matcher` instance — e.g.
+   `Resolver.from_schema(schema, matcher=MyJudge(...)).dedupe(records)`, or
+   `ERModel(blocker=..., comparator=..., matcher=MyJudge(...), clusterer=...)`
+   directly — needs none of this wiring. For `save`/`load`, the component
+   config-registry (`core/registry.py:register`) remains a separate, orthogonal
+   namespace.
+3. **Composition happens in `ERModel`**, not a `Task` class: a resolve is
+   blocker → (compare) → matcher → clusterer. The named architectures in
+   `langres.architectures` (`FuzzyString`, `VectorLLMCascade`) are the
+   user-facing sugar over it — each fixes its own topology and exposes
+   `.dedupe()`/`.compare()` as methods.
+
+## Backbones: `ModelRef` is the ONE model-reference concept
+
+**Architecture = topology** (which components, in what order). **Backbone = what
+fills a model slot.** Swapping a backbone must never mint a new architecture, so
+a component never invents its own model-reference shape: it takes a
+`langres.core.model_ref.ModelRef` (via `normalize_model_ref`, which accepts a
+plain string, a dict, or a ref).
+
+`ModelRef` is a stdlib-only leaf (it imports nothing from `langres`), frozen,
+validated in `__post_init__`, and **weightless** — reference strings only, so it
+round-trips as JSON config via `to_config`. Its fields: `base`, `kind`,
+`adapter`, `api_base`, `revision`.
+
+**`kind` is the discriminator, and routing reads nothing else:**
+
+| `kind` | `base` names | runs |
+|---|---|---|
+| `api` | a litellm id (`openai/gpt-4o`, `gpt-5-mini`) | served (litellm) |
+| `endpoint` | a model served at `api_base` | served (litellm) |
+| `hf` | a Hugging Face Hub id (`org/name`) | in-process |
+| `local` | a local directory path | in-process |
+
+Rules that are load-bearing, each for a measured reason:
+
+- **Never route on the filesystem** (B17). `backend_for(kind)` is the whole rule.
+  The predecessor probed `os.path.isdir(base)`, so the same saved config resolved
+  to a *different backend in a different working directory* (reproduced: a
+  `./gpt-5-mini` directory flipped that API id litellm → transformers). A path is
+  recognized by **syntax** (`./`, `../`, `/`, `~`) — so a bare relative dir name is
+  an API id, not a path. Inference is total over non-empty strings: a multi-slash
+  id is never a Hub id (those carry one slash), so it goes to `api` and litellm —
+  which owns the real provider list — reports any error.
+- **`revision` pins an `hf` ref** (B16). Without it `org/name` drifts as the Hub
+  moves and an "identical versioned config" is not identical across time.
+- **Don't guess a provider typo.** `org/name` cannot be disambiguated from a
+  typo'd provider by syntax: the real org `mistralai` scores 0.875 against the
+  `mistral` provider while the typo `opeani`→`openai` scores 0.833, so no difflib
+  cutoff exists. A caller who means an API model names `kind="api"`.
+- **DSPy-backed slots are litellm-only** (B10). DSPy routes *every* completion
+  through litellm (`lm.py:forward` → `litellm_completion`); `lm_local` shells out
+  to sglang and points litellm back at localhost. So `require_litellm_routable`
+  rejects local dirs and adapters at construction. It deliberately admits `hf`:
+  litellm knows 146 providers and the prefix table 26, so 120 real provider ids
+  infer as `hf` and rejecting them would break working code.
+
+A method declares which backbones it can run via `MethodSpec.accepted_kinds`, and
+`check_backbone` enforces it on every dispatch path — an empty set means "no model
+slot", so `model=` raises rather than being silently dropped. See
+`docs/ADDING_A_METHOD.md`.
 
 Add docstrings to all public methods, and include a usage example in `examples/`
 for any new user-facing component.
@@ -184,13 +305,13 @@ excluded from the predicted set — never graded a confident "no").
 ### Wiring it into a pipeline
 
 ```python
-# Low-level: build a Resolver from a schema, pick the judge, run it.
-resolver = Resolver.from_schema(MySchema, judge="string")
+# Low-level: build a Resolver from a schema, pick the matcher, run it.
+resolver = Resolver.from_schema(MySchema, matcher="string")
 clusters = resolver.resolve(records)   # -> list[set[str]]
 
-# High-level: the verbs do the same thing with schema inference + spend cap.
-from langres import dedupe
-result = dedupe(records)               # judge="auto" (default) needs an API key --
-                                       # raises NoJudgeAvailableError without one;
-                                       # judge="string" is the offline opt-in
+# High-level: a named architecture does the same thing with schema inference +
+# spend cap -- no "auto" string to opt out of, because there is no key-sniffing
+# default: FuzzyString cannot spend at all (it has no paid model slot).
+from langres.architectures import FuzzyString
+result = FuzzyString().dedupe(records)   # $0, offline, no key
 ```

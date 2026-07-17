@@ -65,7 +65,7 @@ from pydantic import BaseModel
 
 from langres.clients.openrouter import BudgetExceeded, SpendMonitor
 from langres.core.calibration import derive_threshold
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.harvest import (
     Correction,
     CorrectionLog,
@@ -204,16 +204,19 @@ class _OuterSpendCap(Matcher[FZRecord]):
 
     This is the correct place for a cascade's spend cap: on the OUTSIDE of the
     whole (teacher) judge, holding ONE
-    :class:`~langres.clients.openrouter.SpendMonitor` for the wrapper's lifetime
-    so cost accumulates across EVERY ``forward`` call -- the stage-1 bootstrap
-    batch AND the cascade's per-pair escalations (the same teacher instance is
-    reused as the cascade's escalation tier). Core's
-    :class:`~langres.core.presets._SpendCappedMatcher` deliberately opens a FRESH
-    monitor per ``forward`` call (right for a single verb call), which -- passed
-    as a cascade tier -- would reset the budget on every one-pair escalation and
-    so bound nothing (see
-    :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`'s docstring). One
-    shared monitor is what makes the outer cap real.
+    :class:`~langres.core.spend.SpendMonitor` for the wrapper's lifetime so cost
+    accumulates across EVERY ``forward`` call -- the stage-1 bootstrap batch AND
+    the cascade's per-pair escalations (the same teacher instance is reused as
+    the cascade's escalation tier). One shared monitor is what makes the outer
+    cap real (see
+    :class:`~langres.core.matchers.cascade_judge.CascadeMatcher`'s docstring).
+
+    Historical note (B1): this class exists because core's spend cap used to
+    open a FRESH monitor per ``forward`` call, so it bounded nothing when reused
+    across calls. :class:`~langres.core.spend_cap.SpendCappedMatcher` now holds
+    ONE monitor for its own lifetime and does exactly what this class does --
+    so new code should reach for the core cap rather than copy this. It is kept
+    here only to leave this worked example self-contained.
 
     On a breach it raises :class:`~langres.clients.openrouter.BudgetExceeded`
     carrying the judgements already produced (and paid for) on
@@ -514,8 +517,8 @@ def run_closed_loop(
     # scripts) injects a REAL judge instead. An optional spend cap wraps the
     # OUTSIDE of the whole teacher (ONE shared monitor across the bootstrap batch
     # AND the cascade's per-pair escalations, since the same instance is reused as
-    # the escalation tier) -- never a cascade tier, which would reset the budget
-    # per pair (see _OuterSpendCap / CascadeMatcher's docstring).
+    # the escalation tier) -- never a cascade tier, which would bound only that
+    # tier's spend (see _OuterSpendCap / CascadeMatcher's docstring).
     teacher = teacher if teacher is not None else SimulatedFrontierJudge(seed=seed)
     spend_cap = (
         _OuterSpendCap(teacher, budget_usd=spend_cap_usd) if spend_cap_usd is not None else None

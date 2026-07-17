@@ -52,8 +52,27 @@ Skip ``api_base`` and pass a local/HF model; generation runs in-process::
 
 from __future__ import annotations
 
-from langres import dedupe
+from pydantic import BaseModel
+
 from langres.core.matchers.llm_judge import LLMMatcher
+from langres.core.resolver import ERModel
+
+
+class Company(BaseModel):
+    """The entity shape. Naming it explicitly is the production path.
+
+    ``dedupe(records, matcher=my_matcher)`` used to infer this from the records'
+    keys. That convenience is gone with the verbs: ``ERModel.from_schema`` wants
+    a real schema, because an *inferred* one is an ephemeral class a fresh
+    process cannot import back — so it could never round-trip through
+    ``save()``/``load()``, which is precisely what you want for a model you
+    fine-tuned and intend to serve. Six lines, once.
+    """
+
+    id: str
+    name: str | None = None
+    city: str | None = None
+
 
 # A tiny batch to resolve. Every record needs a unique "id".
 RECORDS = [
@@ -106,7 +125,8 @@ def main() -> None:
     # matcher = build_inprocess_matcher("your-org/your-ft-matcher")
 
     # DedupeResult is a list[set[str]] of entity-id clusters.
-    clusters = dedupe(RECORDS, matcher=matcher, threshold=0.6)
+    model = ERModel.from_schema(Company, matcher=matcher, threshold=0.6)
+    clusters = model.dedupe(RECORDS)
     for cluster in clusters:
         print(cluster)
 

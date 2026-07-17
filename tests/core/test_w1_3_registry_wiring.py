@@ -89,17 +89,12 @@ def test_resolver_fresh_process_roundtrip_with_composite_key_vector_blocker(
       ``Resolver._ensure_index_built``'s recursive traversal -- not just at the
       top level.
     """
-    from langres.core import (
-        Clusterer,
-        Comparator,
-        CompositeBlocker,
-        FAISSIndex,
-        FakeEmbedder,
-        KeyBlocker,
-        Resolver,
-        VectorBlocker,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Resolver
+    from langres.core.comparators import StringComparator
+    from langres.core.blockers import CompositeBlocker, KeyBlocker, VectorBlocker
+    from langres.core.embeddings import FakeEmbedder
+    from langres.core.indexes import FAISSIndex
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
 
@@ -111,7 +106,7 @@ def test_resolver_fresh_process_roundtrip_with_composite_key_vector_blocker(
     composite: CompositeBlocker[CompanySchema] = CompositeBlocker(
         children=[key_blocker, vector_blocker], op="union"
     )
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     resolver = Resolver(
         blocker=composite,
         comparator=comparator,
@@ -156,12 +151,15 @@ def test_resolver_fresh_process_roundtrip_with_key_blocker_alone(tmp_path: Path)
     (W0.4 exit check: every ``_LAZY_COMPONENT_MODULES`` entry must survive a
     fresh-process ``Resolver.load``, not just as an incidental nested case).
     """
-    from langres.core import Clusterer, Comparator, KeyBlocker, Resolver, WeightedAverageMatcher
+    from langres.core import Clusterer, Resolver
+    from langres.core.comparators import StringComparator
+    from langres.core.blockers import KeyBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
 
     blocker: KeyBlocker[CompanySchema] = KeyBlocker(schema=CompanySchema, key_field="address")
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     resolver = Resolver(
         blocker=blocker,
         comparator=comparator,
@@ -204,12 +202,15 @@ def test_resolver_fresh_process_roundtrip_with_correlation_clusterer(tmp_path: P
     (``tests/core/clusterers/test_correlation_clusterer.py``). This closes
     that gap for the W0.4 exit check.
     """
-    from langres.core import AllPairsBlocker, Comparator, CorrelationClusterer, Resolver
+    from langres.core import Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.clusterers import CorrelationClusterer
+    from langres.core.comparators import StringComparator
     from langres.core.matchers.weighted_average import WeightedAverageMatcher
     from langres.core.models import CompanySchema
     from tests.fixtures.companies import COMPANY_RECORDS
 
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     resolver = Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,

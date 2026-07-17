@@ -32,7 +32,7 @@ from langres.core.matchers.cascade_judge import (
     CASCADE_STUDENT_STEP,
     CascadeMatcher,
 )
-from langres.core.presets import _SpendCappedMatcher
+from langres.core.spend_cap import SpendCappedMatcher as _SpendCappedMatcher
 from langres.core.registry import get_component
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.testing import ScriptedJudge
@@ -624,8 +624,9 @@ class TestSerialization:
         """Full Resolver round trip: fitted RandomForestMatcher student survives save/load
         via the cascade's SerializableState sidecar (zero Resolver changes)."""
         pytest.importorskip("sklearn")
-        from langres.core import AllPairsBlocker, Resolver
-        from langres.core.comparator import StringComparator
+        from langres.core import Resolver
+        from langres.core.blockers import AllPairsBlocker
+        from langres.core.comparators import StringComparator
         from langres.core.matchers.random_forest_judge import RandomForestMatcher
 
         comparator = StringComparator.from_schema(CompanySchema)

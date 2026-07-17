@@ -2,12 +2,19 @@
 langres: A composable entity resolution framework.
 
 This package provides:
-- ``link`` / ``dedupe``: the two-verb DX layer (schema-optional, matcher="auto"
-  by default, spend-capped) -- see ``langres.verbs``.
-- ``langres.core``: Low-level primitives for custom pipelines (``Resolver``,
-  ``Blocker``, ``Matcher``, ``Clusterer``, ...).
+- ``langres.architectures``: named ER models you construct and call --
+  ``FuzzyString()`` ($0, offline, deterministic, needs no key) and
+  ``VectorLLMCascade(embedder=..., llm=...)`` (paid). An architecture is a
+  *topology*; the model filling each slot is a *backbone* you name. There is no
+  ``matcher="auto"``: W4 deleted the key-sniffing front door, so nothing spends
+  money unless you named a paid architecture yourself.
+- ``ERModel`` (aliased ``Resolver``): the declarative base the architectures
+  subclass -- ``from_schema`` / ``dedupe`` / ``compare`` / ``resolve`` /
+  ``save`` / ``load`` / ``fit``.
+- ``langres.core``: Low-level primitives for custom pipelines (``Blocker``,
+  ``Matcher``, ``Clusterer``, ...).
 - The flywheel loop, end to end at the root: ``JudgementLog`` (the inlet --
-  wire via ``log=`` on ``link``/``dedupe``), ``select_for_review`` /
+  wire via ``log=`` on ``dedupe``/``compare``), ``select_for_review`` /
   ``ReviewQueue`` (pick the uncertain margin), ``Correction`` /
   ``CorrectionLog`` (the human labels the ``langres import-csv`` CLI writes),
   ``harvest_labeled_pairs`` + ``derive_threshold_from_pairs`` (labels -> a
@@ -15,9 +22,8 @@ This package provides:
   it), and ``gold_pairs_from_clusters`` + ``EvalReport`` (grade a run against
   gold at $0). See ``examples/flywheel_min.py`` for the whole loop in one
   script.
-- ``NoMatcherAvailableError`` / ``MatcherAbstainedError`` / ``BudgetExceeded``: the
-  exceptions a front-door user must catch (fail-fast ``matcher="auto"``; a judge
-  that abstained on the pair; the spend cap).
+- ``MatcherAbstainedError`` / ``BudgetExceeded``: the exceptions a front-door
+  user must catch (a matcher that abstained on the pair; the spend cap).
 
 Import weight: most root exports are cheap and eager -- including the
 training-surface pieces that make ``Resolver.fit`` legible: the method objects
@@ -33,7 +39,7 @@ never pulls the eval-report/benchmark modules -- or scikit-learn
 
 **This module is a thin aggregator.** The exports -- eager imports included --
 live in per-domain fragments under :mod:`langres._exports`, one file per
-work-stream (verbs, optimize, core, flywheel, training, data). Both the sorted
+work-stream (models, optimize, core, flywheel, training, data). Both the sorted
 ``__all__`` and the eager import block were merge-conflict hotspots: their lines
 belong to different streams, so any two streams collided on this file.
 
@@ -43,11 +49,16 @@ per-*name*; only a brand new domain touches this module. See
 """
 
 import importlib
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _metadata_version
 from typing import Any
 
 from langres import _exports
+
+# Re-exported (`as` marks it explicit for type checkers -- langres ships
+# py.typed, and `__version__` is not in `__all__` to carry the re-export). The
+# computation lives in a stdlib-only leaf so `core.resolver` can read the
+# version WITHOUT importing this package: that one edge was the whole runtime
+# import cycle. See `langres/_version.py` and `tests/test_import_tangle.py`.
+from langres._version import __version__ as __version__
 
 # Bind each fragment's EAGER names into this namespace. Every star-import is
 # bounded by that fragment's own `__all__`, so this imports exactly the names
@@ -58,19 +69,11 @@ from langres._exports._data import *  # noqa: F403
 from langres._exports._flywheel import *  # noqa: F403
 from langres._exports._optimize import *  # noqa: F403
 from langres._exports._training import *  # noqa: F403
-from langres._exports._verbs import *  # noqa: F403
+from langres._exports._models import *  # noqa: F403
 
 #: The composed public surface -- every fragment's slice, deduplicated and
 #: sorted (see :data:`langres._exports.NAMES`).
 __all__ = list(_exports.NAMES)
-
-# Single source of truth is pyproject.toml; resolved from installed metadata so
-# a version bump can never miss this string again. Falls back for source trees
-# imported without installation.
-try:
-    __version__ = _metadata_version("langres")
-except PackageNotFoundError:  # pragma: no cover - only hit on uninstalled source trees
-    __version__ = "0.0.0.dev0"
 
 #: ``name -> owning module`` for root exports resolved on first access (PEP
 #: 562, mirroring ``langres.core.__getattr__``).

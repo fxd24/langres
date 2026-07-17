@@ -471,14 +471,14 @@ def test_deterministic_method_runs_end_to_end(method: str) -> None:
 
 
 def test_rapidfuzz_and_weighted_average_score_the_same_fields() -> None:
-    """rapidfuzz extractors mirror Comparator.from_schema (same fields raced)."""
-    from langres.core.comparator import Comparator
+    """rapidfuzz extractors mirror StringComparator.from_schema (same fields raced)."""
+    from langres.core.comparators import StringComparator
     from langres.core.method_registry import get_method
 
     module = get_method("rapidfuzz").build(
         CompanySchema, model=None, entity_noun="entity", client=None, comparator=None
     )
-    comparator_fields = {s.name for s in Comparator.from_schema(CompanySchema).feature_specs}
+    comparator_fields = {s.name for s in StringComparator.from_schema(CompanySchema).feature_specs}
     assert set(module.field_extractors) == comparator_fields
     assert "id" not in module.field_extractors  # id is excluded from comparison
 

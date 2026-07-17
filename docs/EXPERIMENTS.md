@@ -219,20 +219,20 @@ persists one JSONL line you can read back and diff across sessions. It is
 **dependency-free** (stdlib + pydantic) and writes nothing unless you pass a `store`.
 
 ```python
-from langres import dedupe
+from langres.architectures import FuzzyString
 from langres.core import RunContext, RunStore, capture_run, compute_recipe_id
 
 context = RunContext(
-    experiment="string-judge-sweep",
-    resolver_config={"judge": "string", "threshold": 0.6},   # config snapshot (hashed)
+    experiment="fuzzy-string-sweep",
+    resolver_config={"architecture": "FuzzyString", "threshold": 0.6},   # config snapshot (hashed)
     dataset_name="toy-companies",
     seeds={"split": 13},                                     # named seeds (hashed)
 )
 
 with capture_run(context, store=RunStore("runs/langres_runs.jsonl")) as run:
-    result = dedupe(records, matcher="string", threshold=0.6)
+    result = FuzzyString(threshold=0.6).dedupe(records)
     run.log_metrics({"f1": 0.75}, metric_definition="pair_f1", headline_metric=0.75)
-    run.record_cost(0.0)               # = SpendMonitor.spent for a paid judge
+    run.record_cost(0.0)               # = SpendMonitor.spent for a paid architecture
 
 runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
 ```
@@ -446,14 +446,15 @@ and reproduction commands:
 
 ## Signal log — the flywheel inlet (`JudgementLog`)
 
-`link()`/`dedupe()` take an opt-in, keyword-only `log=` (a
+Every `ERModel`'s `.compare()`/`.dedupe()` take an opt-in, keyword-only `log=` (a
 `langres.JudgementLog` or a path — `None` by default, zero overhead):
 
 ```python
-from langres import JudgementLog, dedupe
+from langres import JudgementLog
+from langres.architectures import FuzzyString
 
 log = JudgementLog("runs/judgements.jsonl")
-result = dedupe(records, matcher="string", threshold=0.6, log=log)
+result = FuzzyString(threshold=0.6).dedupe(records, log=log)
 
 rows = log.read()  # round-trips every line written
 ```
@@ -470,12 +471,13 @@ similarities, token counts, ...): this may contain PII (the record content a
 judge reasoned over), and JSONL is plaintext on disk.
 
 Implementation note: `JudgementLog` is a plain file sink, not a `Matcher`.
-`log=` wraps the resolved judge in a `LoggingMatcher` — a small boundary
-component (the same pattern `_SpendCappedMatcher` uses) that logs each
+`log=` wraps the resolved matcher in a `LoggingMatcher` — a small boundary
+component (the same pattern `SpendCappedMatcher` uses) that logs each
 `PairwiseJudgement` as it streams past without materializing the whole
-judgement stream. It is intentionally excluded from `Resolver` artifacts —
-`link()`/`dedupe()` never persist their internal resolver, so this isn't a
-durability gap in practice.
+judgement stream. It is a transient, per-call wrapper built inside `_scorer()`
+around the model's current `matcher` slot — it never touches `self.module`, so
+it is intentionally excluded from a saved artifact: `.save()` persists the
+model's components, never a `log=` wrapper from one past call.
 
 This is the flywheel's inlet; the harvest half is below.
 

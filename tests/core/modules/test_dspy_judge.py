@@ -622,7 +622,8 @@ def test_load_state_without_marker_infers_from_demos(tmp_path: Path) -> None:
 
 def test_resolver_with_dspy_judge_saves_and_loads(tmp_path: Path) -> None:
     """A Resolver with a DSPyMatcher in the module slot round-trips in-process."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     judge = _dummy_judge(_answers(50))
     judge.compile(_trainset(), optimizer="bootstrap")
@@ -660,7 +661,8 @@ def test_resolver_load_dspy_judge_in_fresh_process(tmp_path: Path, compiled: boo
     import Resolver`` still resolves the type. Covers both a compiled and an
     uncompiled judge.
     """
-    from langres.core import AllPairsBlocker, Clusterer, Resolver
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
 
     judge = _dummy_judge(_answers(50))
     if compiled:

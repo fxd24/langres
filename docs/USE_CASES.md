@@ -11,12 +11,15 @@
 > (A review queue *did* later ship for real — as `core.review.ReviewQueue`,
 > not the fictional `data.ReviewQueue` — see below.)
 >
-> **What actually ships today** for the use cases below is the verb DX layer
-> (`link` / `dedupe`) + `Resolver` + `langres.core` primitives:
+> **What actually ships today** for the use cases below is the named-architecture
+> DX layer (`langres.architectures.FuzzyString` / `VectorLLMCascade`, each with
+> `.dedupe()` / `.compare()`) + `ERModel` (aliased `Resolver`) + `langres.core`
+> primitives. There is no `langres.link` / `langres.dedupe` module-level verb and
+> no `matcher="auto"` — both were deleted; naming a model is explicit:
 >
-> - **Deduplication (UC1):** ✅ `langres.dedupe(records)` or
->   `Resolver.from_schema(schema).resolve(records)`.
-> - **Pairwise match:** ✅ `langres.link(left, right)` → `LinkVerdict`.
+> - **Deduplication (UC1):** ✅ `FuzzyString().dedupe(records)` (or any other
+>   named architecture) or `Resolver.from_schema(schema).resolve(records)`.
+> - **Pairwise match:** ✅ `FuzzyString().compare(left, right)` → `LinkVerdict`.
 > - **Incremental single-record assignment (UC10):** ✅
 >   `resolver.build_anchor_store(records)` then `resolver.assign(new_record)`
 >   → `ClusterDelta` (`link` to a stable entity id, or `new`); the
@@ -82,8 +85,9 @@ To formally distinguish use cases, we specify five key properties:
 
 This is the primary "hello world" use case for langres.
 
-- **DX layer:** `langres.dedupe(records)` (schema-optional, zero-label,
-  spend-capped).
+- **DX layer:** `FuzzyString().dedupe(records)` (schema-optional, zero-label,
+  $0, offline — or `VectorLLMCascade(llm=...).dedupe(records)` for a paid,
+  explicitly-named architecture; each is spend-capped).
 - **Core path:** `Resolver.from_schema(schema).resolve(records)`, composing an
   `AllPairsBlocker`/`VectorBlocker`, a `StringComparator` + judge (`Matcher`),
   and a `core.Clusterer`.
@@ -106,8 +110,9 @@ right)` and `Resolver.stream_against(records)` exist only as
 ship is **single-record incremental assignment against an anchor store**:
 `resolver.build_anchor_store(target_records)` then `resolver.assign(new_record)`
 → `ClusterDelta` (`link` to a stable entity id in T, or `new`). For a *pairwise*
-match decision today, use `langres.link(left, right)` → `LinkVerdict`; for
-single-source clustering, use `dedupe` / `Resolver.resolve` (UC1).
+match decision today, use `model.compare(left, right)` → `LinkVerdict` (any
+`ERModel`, e.g. `FuzzyString().compare(...)`); for single-source clustering, use
+`.dedupe()` / `Resolver.resolve` (UC1).
 
 ### Use Case 10: Fuzzy Foreign Key Resolution
 
@@ -253,8 +258,8 @@ exists, and the intended (not-yet-built) design otherwise.
 
 | Use Case | langres Component(s) | Status |
 |----------|---------------------|--------|
-| 1. Deduplication | `dedupe(records)` / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
-| Pairwise match verdict | `link(left, right)` → `LinkVerdict` | ✅ **Shipping** |
+| 1. Deduplication | `FuzzyString().dedupe(records)` (or another named architecture) / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
+| Pairwise match verdict | `model.compare(left, right)` → `LinkVerdict` | ✅ **Shipping** |
 | Optimization / calibration | `core.calibration.derive_threshold`, `core.optimizers.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
 | 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap |
 | 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** |

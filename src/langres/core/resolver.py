@@ -37,15 +37,16 @@ import logging
 import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
-import langres
+from langres._version import __version__ as LANGRES_VERSION
 from langres.core.blocker import Blocker
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.fit import (
     BlockerFitMixin,
     CalibratorFitMixin,
@@ -54,7 +55,9 @@ from langres.core.fit import (
 )
 from langres.core.fit_report import CalibrationDelta, FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
-from langres.core.methods_api import Method
+from langres.core.inputs import check_no_duplicate_ids, normalize_records
+from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.methods_api import Method, UnsupportedMethodKind
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import (
     PairMetrics,
@@ -62,10 +65,18 @@ from langres.core.metrics import (
     classify_pairs,
     expected_calibration_error,
 )
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import (
+    ERCandidate,
+    MatcherAbstainedError,
+    PairwiseJudgement,
+    predicted_match,
+)
 from langres.core.matcher import Matcher
-from langres.core.registry import get_component
+from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.registry import get_component, get_model, model_type_name
 from langres.core.runs import current_run
+from langres.core.spend import SpendMonitor
+from langres.core.spend_cap import SpendCappedMatcher, effective_budget
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
@@ -86,11 +97,11 @@ logger = logging.getLogger(__name__)
 # Slot names used as sidecar subdirectory names and for manifest ordering.
 _MANIFEST_FILENAME = "resolver.json"
 
-#: ``Resolver.from_schema``'s low-level judge switch. Deliberately narrower
-#: than ``langres.core.presets.MatcherName`` -- no ``"auto"``, since resolving
-#: that needs ``Settings``/env-var lookups, which is verb-layer magic (see
-#: ``langres.core.presets.choose_auto_judge``); this stays a plain, explicit
-#: constructor argument.
+#: ``ERModel.from_schema``'s low-level matcher switch. There is deliberately no
+#: ``"auto"``: resolving one meant reading ``Settings``/env vars to find an API
+#: key and then *spending* on whatever turned up. W4 deleted that path outright
+#: (with its ``core.presets`` machinery) rather than moving it -- naming a model
+#: is the user's job, not a heuristic's. This stays a plain, explicit argument.
 _FromSchemaJudge = Literal["string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"]
 
 
@@ -117,10 +128,12 @@ def _build_module_for_judge(
         return judge
     if judge not in ("string", "embedding", "zero_shot_llm", "prompt_llm", "random_forest"):
         raise ValueError(
-            f"unsupported judge {judge!r} for Resolver.from_schema; choose one of "
+            f"unsupported matcher {judge!r} for ERModel.from_schema; choose one of "
             "'string', 'embedding', 'zero_shot_llm', 'prompt_llm', 'random_forest', "
-            "or pass a Matcher instance. 'auto' key-based resolution is a verbs-layer "
-            "feature -- use langres.link/langres.dedupe for that."
+            "or pass a Matcher instance. There is no 'auto': it resolved a paid model "
+            "by sniffing env vars for an API key, and W4 deleted it. Name the model you "
+            "want -- e.g. langres.architectures.FuzzyString() for the offline $0 path, "
+            "or VectorLLMCascade(llm=...) for a paid one."
         )
     from langres.core.method_registry import get_method
 
@@ -131,15 +144,15 @@ def _build_module_for_judge(
         if dspy_price_per_1k(resolved_model) == 0.0:
             # An unpinned model self-reports $0/pair -- honest, not reassuring
             # (mirrors core.presets.notice_pre_scoring_cost's identical check).
-            # Resolver.from_schema has no spend cap at all (see its matcher=
-            # docstring), so this is strictly worse than the verbs' blind-cap
-            # case: nothing would ever stop a runaway bill.
+            # The Resolver IS spend-capped now (B1), but a cap fed $0 costs can
+            # never trip: the pipeline is capped on paper and blind in practice.
             warnings.warn(
                 f"model {resolved_model!r} has no pinned price in "
                 "langres.clients.openrouter.PRICES_PER_1M, so it self-reports "
-                "$0/pair cost. Resolver.from_schema builds an UNCAPPED pipeline "
-                "(no spend cap at all) -- pin its price in PRICES_PER_1M, or use "
-                "langres.link/langres.dedupe for the built-in spend cap.",
+                "$0/pair cost -- the Resolver's budget_usd spend cap tallies that "
+                "same $0 and can NEVER trip, so it will not stop a runaway bill. "
+                "Pin its price in PRICES_PER_1M, or use a model that already is, "
+                "to get real spend-cap protection.",
                 stacklevel=3,
             )
     return get_method(judge).build(
@@ -168,7 +181,7 @@ def _build_embedding_blocker(schema: type[BaseModel]) -> "VectorBlocker[Any]":
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes.vector_index import FAISSIndex
 
-    field_names = [spec.name for spec in Comparator.from_schema(schema).feature_specs]
+    field_names = [spec.name for spec in StringComparator.from_schema(schema).feature_specs]
 
     def extract(entity: Any) -> str:
         parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
@@ -314,6 +327,18 @@ def _rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> An
     return component
 
 
+def _coerce_log(log: "JudgementLog | str | Path | None") -> JudgementLog | None:
+    """Normalize a ``log=`` argument to a :class:`JudgementLog`, or ``None``.
+
+    ``None`` stays ``None`` -- zero overhead, no wrap. A path is wrapped in a
+    fresh, default (``features=False``) log; an existing ``JudgementLog`` (e.g.
+    one built with ``features=True``) passes through unchanged.
+    """
+    if log is None or isinstance(log, JudgementLog):
+        return log
+    return JudgementLog(log)
+
+
 def _is_prompt_compilable(module: object) -> bool:
     """Whether ``module`` is a prompt-optimizable (DSPy-style) matcher.
 
@@ -327,8 +352,36 @@ def _is_prompt_compilable(module: object) -> bool:
     return callable(getattr(module, "compile", None)) and hasattr(module, "compiled")
 
 
-class Resolver:
-    """Composable entity-resolution pipeline: blocker -> compare -> score -> cluster.
+class ERModel:
+    """A whole ER pipeline, named: blocker -> compare -> score -> cluster.
+
+    **The thing W4 exists to give a name to.** Before it, nothing in langres
+    named a *whole* pipeline: ``link()``/``dedupe()`` took a ``matcher=`` string
+    x a ``model=`` string, and ``matcher="auto"`` sniffed the environment for an
+    API key and **spent money** on whatever it found. An ``ERModel`` is that
+    pipeline made explicit, constructed, and inspectable::
+
+        FuzzyString().dedupe(records)                       # $0, offline, no key
+        VectorLLMCascade(llm="openrouter/...").dedupe(records)   # paid, because you said so
+
+    Two words, used precisely throughout:
+
+    - **architecture** = the *topology* (which components, in what order). A new
+      topology is a new class -- see :mod:`langres.architectures`.
+    - **backbone** = what fills one model slot, named by a
+      :class:`~langres.core.model_ref.ModelRef`. Swapping a backbone must never
+      mint a new architecture.
+
+    Two ways to get one, and they are not the same door:
+
+    - ``ERModel(blocker=..., comparator=..., matcher=..., clusterer=...)`` -- the
+      base, component-wired. Every slot given, nothing inferred.
+    - ``FuzzyString(threshold=0.8)`` -- a named architecture, which stores
+      *hyperparameters* and builds its own topology from the schema (given, or
+      inferred from the records on first use). See :meth:`_topology`.
+
+    :meth:`from_components` is the third, non-user-facing door -- how
+    :meth:`load` rebuilds a saved model without replaying either ``__init__``.
 
     Args:
         blocker: Candidate generator + schema normalizer.
@@ -344,17 +397,48 @@ class Resolver:
             ``fit(method=Platt()/Isotonic())``.
 
     Example:
-        comparator = Comparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
-        resolver = Resolver(
+        comparator = StringComparator.from_schema(CompanySchema, weights={"name": 0.6, ...})
+        model = ERModel(
             blocker=AllPairsBlocker(schema=CompanySchema),
             comparator=comparator,
             matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
             clusterer=Clusterer(threshold=0.7),
         )
-        clusters = resolver.resolve(COMPANY_RECORDS)
-        resolver.save("artifacts/company_v0")
-        reloaded = Resolver.load("artifacts/company_v0")
+        clusters = model.resolve(COMPANY_RECORDS)
+        model.save("artifacts/company_v0")
+        reloaded = ERModel.load("artifacts/company_v0")
     """
+
+    #: The ``Method.kind``s :meth:`fit` accepts; ``None`` (the default) accepts
+    #: every kind.
+    #:
+    #: This exists for the named architectures of W4 (``FuzzyString``,
+    #: ``VectorLLMCascade``, ...), which make the claim *one architecture = one
+    #: class = one identity*. That claim is falsifiable by ``fit`` itself:
+    #: :meth:`_fit_finetune` deliberately **repoints the matcher slot** at the
+    #: fine-tuned model, so ``FuzzyString().fit(method=QLoRA(...))`` would return
+    #: an LLM-backed pipeline still calling itself ``FuzzyString``. A subclass
+    #: declares the kinds it can absorb without ceasing to be itself; anything
+    #: else is refused at the :meth:`fit` boundary with
+    #: :class:`~langres.core.methods_api.UnsupportedMethodKind`.
+    #:
+    #: The base ``Resolver`` stays ``None`` -- **permissive on purpose**. It makes
+    #: no identity claim ("a resolver" is not a topology), so there is nothing for
+    #: a topology change to falsify, and every fit path it accepts today keeps
+    #: working unchanged.
+    #:
+    #: Alternatives considered and rejected (recorded so this is cheap to flip):
+    #:
+    #: - *A topology-changing ``fit()`` returns a NEW architecture instance*
+    #:   (sklearn ``clone``-like). More principled -- identity would follow the
+    #:   topology instead of constraining it -- but ``fit`` mutates in place and
+    #:   returns ``self``/metrics today, and the flywheel loop depends on that;
+    #:   changing the return contract is far more churn than this gate.
+    #: - *Downgrade the invariant to advisory* (document that ``fit`` may change
+    #:   what the class name means). Zero code, but it guts the whole point of
+    #:   naming architectures: a name that may silently describe something else is
+    #:   not an identity.
+    accepted_method_kinds: ClassVar[frozenset[str] | None] = None
 
     def __init__(
         self,
@@ -363,20 +447,306 @@ class Resolver:
         matcher: Matcher[Any],
         clusterer: Clusterer,
         calibrator: CalibratorFitMixin | None = None,
+        *,
+        budget_usd: float | None = None,
     ) -> None:
-        self.blocker = blocker
-        self.comparator = comparator
-        self.module = matcher
-        self.clusterer = clusterer
+        """Wire four components into one runnable pipeline.
+
+        Args:
+            blocker: Candidate generation + schema normalization.
+            comparator: Optional missing-aware per-feature comparison.
+            matcher: The scorer.
+            clusterer: Connected-components grouping.
+            calibrator: Optional score->probability map (set by ``fit``).
+            budget_usd: **Spend cap for this Resolver's whole lifetime**, in
+                USD. ``None`` (the default) resolves to
+                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD` -- it does
+                NOT mean "uncapped"; pass
+                :data:`~langres.core.spend_cap.UNCAPPED_BUDGET_USD`
+                (``float("inf")``) for that, deliberately and in writing. A
+                free matcher (string/embedding) meters $0 and never trips.
+
+                Scope, precisely: the cap meters **every seam that scores
+                through the matcher** -- :meth:`resolve`, :meth:`predict`,
+                :meth:`fit`, and
+                :meth:`~langres.core.anchor_store.AnchorStore.assign` -- across
+                every call on this instance, because they all route through
+                :meth:`_scorer`. It bounds spend at ``budget_usd`` plus at most
+                one further call (see :mod:`langres.core.spend_cap`).
+
+                The one exception, deliberately: :meth:`distil` /
+                ``fit(method=MIPRO())``. DSPy's compile calls never reach
+                ``self.module.forward``, so this ledger cannot observe them; it
+                caps them via its own ``method.budget_usd`` monitor instead
+                (which records $0 until issue #100 captures compile spend). See
+                :meth:`_fit_prompt`.
+        """
+        self._init_state(budget_usd=budget_usd)
+        self._wire(
+            blocker=blocker,
+            comparator=comparator,
+            matcher=matcher,
+            clusterer=clusterer,
+            calibrator=calibrator,
+        )
+
+    def _init_state(self, *, budget_usd: float | None) -> None:
+        """Set up the non-slot state every construction door needs.
+
+        Split out of ``__init__`` so all three doors -- ``__init__``,
+        :meth:`from_components`, and a named architecture's own ergonomic
+        ``__init__`` -- share ONE definition of "a wired-up model's state",
+        instead of each remembering to build a monitor and null four fields.
+        """
+        # ONE ledger for this model's lifetime, so N resolve() calls share one
+        # budget instead of getting a fresh one each (B1). The monitor -- not the
+        # wrapper -- is the durable thing: `self.module` is reassignable
+        # (fit(method=Finetune()) replaces it), so _scorer() re-wraps the CURRENT
+        # module around this same ledger.
+        self._spend_monitor = SpendMonitor(budget_usd=effective_budget(budget_usd))
         # Optional score->probability map, set by fit(method=Platt()/Isotonic())
         # and applied in _judgements(); None leaves raw scores untouched.
-        self.calibrator = calibrator
+        self.calibrator: CalibratorFitMixin | None = None
         # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
         # None until fit() runs (never serialized -- it is a fit-time artifact).
         self.fit_report_: FitReport | None = None
         # Set by build_anchor_store(); the incremental-assign state assign() uses.
         # Quoted: AnchorStore is a TYPE_CHECKING-only import (avoids an import cycle).
         self._anchor_store: "AnchorStore | None" = None
+        # Slots start empty so a named architecture can defer binding until it
+        # knows the schema (see _topology). The base __init__ fills them at once.
+        #
+        # They are private + property-backed (below) rather than plain nullable
+        # attributes for a measured reason: annotating `self.blocker` as
+        # `Blocker | None` makes every one of the ~20 `self.blocker.stream(...)` /
+        # `self.clusterer.threshold` call sites in this file a mypy error, and
+        # `assert self.blocker is not None` at each is noise that also lies (it
+        # says "impossible" about a state that is reachable). The properties keep
+        # every consumer's type non-Optional and turn the unbound case into ONE
+        # directed message instead of `'NoneType' object has no attribute 'stream'`.
+        self._blocker: Blocker[Any] | None = None
+        self._comparator: Comparator[Any] | None = None
+        self._module: Matcher[Any] | None = None
+        self._clusterer: Clusterer | None = None
+
+    @property
+    def blocker(self) -> Blocker[Any]:
+        """The candidate generator. Raises if this model is not bound yet."""
+        self._require_bound("use the blocker")
+        return cast(Blocker[Any], self._blocker)
+
+    @blocker.setter
+    def blocker(self, value: Blocker[Any]) -> None:
+        self._blocker = value
+
+    @property
+    def comparator(self) -> Comparator[Any] | None:
+        """The optional per-feature comparison stage (genuinely ``None`` when unset)."""
+        return self._comparator
+
+    @comparator.setter
+    def comparator(self, value: Comparator[Any] | None) -> None:
+        self._comparator = value
+
+    @property
+    def module(self) -> Matcher[Any]:
+        """The scorer. Raises if this model is not bound yet.
+
+        Public and reassignable (``fit(method=QLoRA())`` repoints it), which is
+        exactly why :meth:`_scorer` rebuilds its wrapper per call rather than
+        caching one -- see that method.
+        """
+        self._require_bound("use the matcher")
+        return cast(Matcher[Any], self._module)
+
+    @module.setter
+    def module(self, value: Matcher[Any]) -> None:
+        self._module = value
+
+    @property
+    def clusterer(self) -> Clusterer:
+        """The grouping stage. Raises if this model is not bound yet."""
+        self._require_bound("use the clusterer")
+        return cast(Clusterer, self._clusterer)
+
+    @clusterer.setter
+    def clusterer(self, value: Clusterer) -> None:
+        self._clusterer = value
+
+    def _wire(
+        self,
+        *,
+        blocker: Blocker[Any],
+        comparator: Comparator[Any] | None,
+        matcher: Matcher[Any],
+        clusterer: Clusterer,
+        calibrator: CalibratorFitMixin | None = None,
+    ) -> None:
+        """Fill the four slots. The ONE place a model's topology is set."""
+        self.blocker = blocker
+        self.comparator = comparator
+        self.module = matcher
+        self.clusterer = clusterer
+        if calibrator is not None:
+            self.calibrator = calibrator
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        blocker: Blocker[Any],
+        comparator: Comparator[Any] | None,
+        matcher: Matcher[Any],
+        clusterer: Clusterer,
+        calibrator: CalibratorFitMixin | None = None,
+        budget_usd: float | None = None,
+    ) -> Self:
+        """Build an instance from already-built components, **bypassing ``__init__``**.
+
+        The load-bearing decision of W4, and the reason :meth:`load` works at all.
+
+        The problem it solves, verified rather than assumed: :meth:`load` must
+        reconstruct the class the artifact names (PR #179's ``model_class``), and
+        it only has *components* to hand -- it rebuilt each slot from the registry.
+        But a named architecture's whole point is an ergonomic ``__init__``
+        (``FuzzyString(threshold=0.8)``, ``VectorLLMCascade(llm=...)``), which
+        does not accept ``blocker=``/``comparator=``/``matcher=``/``clusterer=``.
+        Calling it with those raises ``TypeError: unexpected keyword argument
+        'blocker'``. So the two headline goals -- "a saved architecture reloads as
+        itself" and "an architecture has an ergonomic constructor" -- collide, and
+        exactly one of them can go through ``__init__``. (``load`` predates the
+        collision: before ``model_class`` it always built the base class, so it
+        could not bite. #179 spotted it and deferred the fix here, in writing.)
+
+        The fix follows what every comparable framework does: **loading builds
+        from config, it does not replay constructor args.** ``from_pretrained``
+        does not re-run your ``__init__``'s argument parsing; ``load_state_dict``
+        restores state into an already-shaped object. So this door skips
+        ``__init__`` entirely (``__new__`` + the shared state/slot setup) and
+        wires the saved components straight in.
+
+        .. important::
+           **The invariant this buys, and its price:** because ``__init__`` never
+           runs, an architecture must keep **all** of its identity *in its slots*
+           -- the threshold in the ``Clusterer``, the weights in the
+           ``Comparator``, the backbone in the ``Matcher``. An architecture that
+           stashed extra state on ``self`` in ``__init__`` would come back from
+           ``load`` without it. That is not a limitation so much as the design:
+           the slots are the single source of truth, which is also exactly what
+           makes ``save`` able to write a *complete* config.
+           ``TestProof4WeightlessRoundTrip`` in
+           ``tests/architectures/test_w4_proofs.py`` pins it by re-saving a
+           freshly loaded model and diffing the config.
+
+        Args:
+            blocker: Candidate generator + schema normalizer.
+            comparator: Optional per-feature comparison stage.
+            matcher: The scorer.
+            clusterer: Connected-components grouping.
+            calibrator: Optional fitted score->probability map.
+            budget_usd: Spend cap for the new instance's lifetime (see
+                :meth:`__init__`). Deliberately NOT read from the artifact: a
+                budget is a *run policy*, not architecture, and is not in the
+                manifest -- a reloaded model gets this call's cap (defaulting to
+                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`), never a
+                stale one baked in months ago by whoever saved it.
+
+        Returns:
+            A wired instance of ``cls``, ready to run.
+        """
+        model = cls.__new__(cls)
+        model._init_state(budget_usd=budget_usd)
+        model._wire(
+            blocker=blocker,
+            comparator=comparator,
+            matcher=matcher,
+            clusterer=clusterer,
+            calibrator=calibrator,
+        )
+        return model
+
+    def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
+        """Build this architecture's components for ``schema``. The subclass hook.
+
+        A named architecture stores *hyperparameters* in its ``__init__`` and
+        implements this to turn them + a schema into the four slots -- which lets
+        ``FuzzyString().dedupe(records)`` work with no schema named anywhere: the
+        schema is inferred from the records, then handed here, on first use.
+
+        Returns:
+            The kwargs for :meth:`_wire` (``blocker``/``comparator``/
+            ``matcher``/``clusterer``).
+
+        Raises:
+            NotImplementedError: On the base ``ERModel``, which is always
+                component-wired at construction and so never needs to build a
+                topology of its own.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no components and defines no _topology(schema) hook, "
+            "so there is nothing to run. Either construct it with explicit components "
+            f"({type(self).__name__}(blocker=..., comparator=..., matcher=..., clusterer=...)), "
+            "or use a named architecture from langres.architectures (e.g. FuzzyString())."
+        )
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether the four slots are filled and this model can run.
+
+        ``False`` only for a named architecture constructed without a ``schema=``
+        and not yet used -- it binds on its first :meth:`dedupe`/:meth:`compare`.
+        """
+        return self._blocker is not None
+
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The schema this model is bound to, or ``None`` while unbound.
+
+        Derived from the blocker slot rather than stored: keeping it as separate
+        state would be a second source of truth that :meth:`from_components`
+        (which never runs ``__init__``) could not restore.
+        """
+        return None if self._blocker is None else getattr(self._blocker, "schema", None)
+
+    @property
+    def backbone(self) -> str | None:
+        """The underlying model that scores here -- an LLM id, an embedder -- or ``None``.
+
+        Honest by default: it reports the matcher's own ``model`` attribute (both
+        LLM matcher families expose one), and ``None`` when there is nothing with
+        weights in the scoring slot (pure string similarity) rather than
+        fabricating an identity. An architecture whose backbone lives elsewhere
+        (e.g. in the blocker's embedder) overrides this to say so.
+        """
+        candidate = getattr(self.module, "model", None)
+        return candidate if isinstance(candidate, str) else None
+
+    def _require_bound(self, action: str) -> None:
+        """Raise a directed error if this model has no components yet."""
+        if not self.is_bound:
+            raise RuntimeError(
+                f"cannot {action}: {type(self).__name__} has not been bound to a schema yet, "
+                "so it has no components. Pass schema=<YourModel> to the constructor, or "
+                "call dedupe()/compare() once (which infers a schema from the records and "
+                "binds). An inferred schema is ephemeral and does not survive save/load in a "
+                "fresh process -- pass schema= explicitly for anything you intend to persist."
+            )
+
+    def _bind(self, schema: type[BaseModel]) -> None:
+        """Build and wire this architecture's topology for ``schema``, if not already bound."""
+        if not self.is_bound:
+            self._wire(**self._topology(schema))
+
+    def _prepare(self, records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Normalize ``records`` and bind this model, returning the ready records.
+
+        The ONE front-door adapter (ported from the deleted verbs): a model bound
+        to an explicit schema normalizes against it; an unbound one infers a
+        schema from the records' own keys and binds to it here, on first use.
+        """
+        schema, normalized = normalize_records(records, self.schema)
+        self._bind(schema)
+        return normalized
 
     # ------------------------------------------------------------------
     # Construction convenience
@@ -396,6 +766,7 @@ class Resolver:
         prompt_template: str | None = None,
         system_prompt: str | None = None,
         response_parser: str | None = None,
+        budget_usd: float | None = None,
     ) -> "Resolver":
         """Build a default dedup Resolver from a Pydantic schema in one line.
 
@@ -427,14 +798,9 @@ class Resolver:
                 per-feature similarities -- needs the ``[trained]`` extra and is
                 TRAINABLE, so ``fit(records, pairs=...)``/``labels=...`` it with
                 labeled data before it can score), or a ``Matcher`` instance. This
-                is the low-level, explicit switch (no ``"auto"`` key-based
-                resolution and no spend cap -- that magic lives in
-                ``langres.link``/``langres.dedupe``). **Caution**:
-                ``matcher="zero_shot_llm"``/``"prompt_llm"`` (or any other paid
-                ``Matcher``) built here runs UNCAPPED -- there is no
-                ``budget_usd`` on this method and nothing stops a runaway
-                bill. Use ``langres.link``/``langres.dedupe`` for the
-                built-in ``SpendMonitor`` cap.
+                is the low-level, explicit switch: no ``"auto"`` key-based
+                resolution (that magic stays in ``langres.link``/``langres.dedupe``)
+                -- but a paid matcher IS spend-capped here, via ``budget_usd``.
             model: Model id override for ``matcher="zero_shot_llm"``/``"prompt_llm"``.
             entity_noun: Domain noun woven into the LLM judge's prompt.
             prompt_template: ``matcher="prompt_llm"`` only: custom prompt with
@@ -444,6 +810,10 @@ class Resolver:
             response_parser: ``matcher="prompt_llm"`` only: a *registered*
                 parser name (``"score"`` / ``"binary_yes_no"`` -- see
                 ``llm_judge.RESPONSE_PARSERS``), serialized in the artifact.
+            budget_usd: Spend cap for the returned Resolver's whole lifetime
+                (see :meth:`__init__`). ``None`` resolves to
+                :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`, NOT
+                "uncapped".
 
         Returns:
             A ready-to-run Resolver.
@@ -469,7 +839,7 @@ class Resolver:
                 f"{', '.join(sorted(judge_params))}: only valid with matcher='prompt_llm' "
                 f"(got matcher={matcher!r})."
             )
-        comparator: Comparator[Any] = Comparator.from_schema(
+        comparator: Comparator[Any] = StringComparator.from_schema(
             schema, exclude=exclude, weights=weights
         )
         module = _build_module_for_judge(
@@ -490,6 +860,7 @@ class Resolver:
             comparator=comparator,
             matcher=module,
             clusterer=Clusterer(threshold=threshold),
+            budget_usd=budget_usd,
         )
 
     # ------------------------------------------------------------------
@@ -623,8 +994,15 @@ class Resolver:
             NotImplementedError: If ``method`` is given but its ``kind``'s fit
                 path is not implemented yet (the seam is wired ahead of the
                 concrete methods; the error names the PR that will land it).
+            UnsupportedMethodKind: If this class declares
+                :attr:`accepted_method_kinds` and ``method.kind`` is not among
+                them. The base ``Resolver`` declares none and never raises it.
         """
         if method is not None:
+            # Architectures that claim an identity refuse the kinds that would
+            # change their topology out from under the class name. The base
+            # Resolver declares no kinds and this is a no-op for it.
+            self._check_method_accepted(method)
             # The ``method=`` object seam: a Method names *how* to train and
             # routes to its own per-kind handler below, so the concrete
             # strategies that fill these in later touch DISJOINT methods instead
@@ -699,6 +1077,33 @@ class Resolver:
         self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
 
+    @classmethod
+    def _check_method_accepted(cls, method: Method) -> None:
+        """Refuse a ``Method`` whose kind this architecture does not accept.
+
+        The enforcement half of :attr:`accepted_method_kinds` (see there for the
+        why and the rejected alternatives). A no-op when
+        ``accepted_method_kinds`` is ``None`` -- i.e. always, for the base
+        :class:`Resolver`.
+
+        Raises:
+            UnsupportedMethodKind: If this class declares
+                ``accepted_method_kinds`` and ``method.kind`` is not among them.
+                The message names the class, the offending kind, the method's
+                own ``describe()``, and the kinds that *are* accepted.
+        """
+        accepted = cls.accepted_method_kinds
+        if accepted is None or method.kind in accepted:
+            return
+        name = cls.__name__
+        allowed = ", ".join(repr(k) for k in sorted(accepted)) or "(no method kinds)"
+        raise UnsupportedMethodKind(
+            f"{name} does not accept method kind {method.kind!r} ({method.describe()}); "
+            f"it accepts: {allowed}. That fit would change the pipeline's topology, "
+            f"leaving {name} naming a pipeline it no longer is. Use a plain Resolver "
+            f"(which accepts every kind) or an architecture built for it."
+        )
+
     # ------------------------------------------------------------------
     # ``method=`` per-kind fit handlers (the object seam)
     #
@@ -734,20 +1139,24 @@ class Resolver:
         :attr:`fit_report_` naming the demos learned + teacher model + declared
         budget, and returns ``self`` so ``resolver.fit(...).resolve(...)`` chains.
 
-        The budget seam: ``method.budget_usd`` caps the compile via the existing
-        :class:`~langres.clients.openrouter.SpendMonitor`. DSPy-compile spend
-        capture is deferred to issue #100 -- today the compile records ``$0`` (the
-        ``DummyLM`` CI path is genuinely free; the paid ``MIPROv2`` path stays
-        uncosted until #100 wires real spend through this same guard).
+        The budget seam: ``method.budget_usd`` caps the compile via its own
+        :class:`~langres.core.spend.SpendMonitor` -- deliberately NOT this
+        Resolver's ``budget_usd`` ledger, because DSPy's compile calls never
+        reach ``self.module.forward`` and so cannot be metered by
+        :meth:`_scorer`. DSPy-compile spend capture is deferred to issue #100 --
+        today the compile records ``$0`` (the ``DummyLM`` CI path is genuinely
+        free; the paid ``MIPROv2`` path stays uncosted until #100 wires real
+        spend through this same guard). This is the one scoring-adjacent path a
+        Resolver's cap does not bound; see the CHANGELOG's known-gap note.
 
         Raises:
             ValueError: If the module is not a ``DSPyMatcher``
                 (prompt-optimization needs a compilable scorer); if both
                 ``labels`` and ``pairs`` are given, or neither.
         """
-        # Lazy imports: keep ``dspy`` (and litellm-adjacent client code) out of a
-        # bare ``import langres`` -- they load only when a prompt-optimize fit runs.
-        from langres.clients.openrouter import SpendMonitor
+        # Lazy import: keep ``dspy`` out of a bare ``import langres`` -- it loads
+        # only when a prompt-optimize fit runs. (``SpendMonitor`` needs no lazy
+        # import: it is a dependency-free core leaf, imported at module scope.)
         from langres.core.matchers.dspy_judge import DSPyMatcher
 
         matcher_name = type(self.module).__name__
@@ -923,7 +1332,7 @@ class Resolver:
 
         metrics: PairMetrics | None = None
         if valid_pairs:
-            judgements = list(self.module.forward(iter([c for c, _ in valid_pairs])))
+            judgements = list(self._scorer().forward(iter([c for c, _ in valid_pairs])))
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)}) for c, label in valid_pairs if label
             }
@@ -1083,7 +1492,7 @@ class Resolver:
         }
         scores: list[float] = []
         aligned_labels: list[bool] = []
-        for judgement in self.module.forward(iter(candidates)):
+        for judgement in self._scorer().forward(iter(candidates)):
             if judgement.score is None:
                 continue
             key = frozenset({judgement.left_id, judgement.right_id})
@@ -1150,7 +1559,7 @@ class Resolver:
 
         metrics: PairMetrics | None = None
         if aligned.valid.candidates:
-            judgements = list(self.module.forward(iter(aligned.valid.candidates)))
+            judgements = list(self._scorer().forward(iter(aligned.valid.candidates)))
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)})
                 for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
@@ -1219,15 +1628,72 @@ class Resolver:
         """
         return list(self._candidates(records))
 
-    def _judgements(self, records: list[Any]) -> Iterator[PairwiseJudgement]:
+    def _scorer(self, *, log: JudgementLog | None = None) -> SpendCappedMatcher:
+        """This model's matcher, metered by its ONE spend ledger.
+
+        **The only supported way to score through ``self.module``.** Reaching for
+        the raw ``self.module.forward(...)`` gets you an *uncapped* scorer that
+        bills straight past ``budget_usd`` and never touches this instance's
+        ledger. That is not hypothetical: ``.module`` is a public attribute, and
+        :class:`~langres.core.anchor_store.AnchorStore` reached through it and
+        scored uncapped -- inside the very change that added the cap. Route every
+        new scoring path here and that hole cannot reopen;
+        ``tests/core/test_resolver_spend_cap.py`` pins it with an AST sweep.
+
+        Two properties this method exists to hold together:
+
+        * **The monitor is per-instance, built once in :meth:`__init__`** -- so
+          ``resolve``, ``predict``, ``fit`` and an ``AnchorStore`` pass all draw
+          down ONE cumulative budget instead of each getting a fresh one.
+        * **The wrapper is rebuilt per call, deliberately.** Caching it in
+          ``__init__`` would pin the matcher as it was *then*, and ``self.module``
+          is reassignable: ``dedupe`` wraps it in a ``LoggingMatcher`` after
+          construction (``verbs.py``) and ``fit(method=Finetune())`` replaces it
+          outright. A cached wrapper would silently meter -- and score through --
+          the stale matcher, emptying the judgement log. Rebuilding costs an
+          object; the ledger it shares is what actually persists.
+
+        The cap deliberately does NOT live in the ``module`` slot: ``save()``'s
+        registry and ``fit()``'s isinstance checks both read ``self.module`` and
+        must see the real component, not a wrapper.
+
+        ``log`` composes INSIDE the cap, deliberately: the cap must meter every
+        judgement the log records, so it stays outermost. This is the same
+        nesting the deleted ``dedupe`` verb produced by reassigning
+        ``resolver.module = LoggingMatcher(...)`` before scoring -- but per call
+        and without permanently mutating the slot, so ``save()`` and ``fit()``'s
+        isinstance checks still see the real matcher.
+
+        Args:
+            log: Optional per-call judgement sink (see :meth:`dedupe`).
+
+        Returns:
+            A :class:`~langres.core.spend_cap.SpendCappedMatcher` around the
+            *current* ``self.module``, sharing this instance's ledger.
+        """
+        module = self.module
+        if log is not None:
+            module = LoggingMatcher(
+                module, log=log, threshold=self.clusterer.threshold, model=self.backbone
+            )
+        return SpendCappedMatcher(module, monitor=self._spend_monitor)
+
+    def _judgements(
+        self, records: list[Any], *, log: JudgementLog | None = None
+    ) -> Iterator[PairwiseJudgement]:
         """Block records into candidates, score them, and calibrate if fitted.
+
+        Scoring runs through :meth:`_scorer`, so this model's spend cap
+        (``budget_usd=``) and its ledger are shared across every
+        :meth:`resolve`/:meth:`predict` call on this instance -- two successive
+        resolves cannot each spend a full budget.
 
         When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
         every ranking judgement's raw ``score`` is mapped to a calibrated
         probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
         clusterer thresholds on a real probability. Pure pass-through otherwise.
         """
-        judgements = self.module.forward(self._candidates(records))
+        judgements = self._scorer(log=log).forward(self._candidates(records))
         if self.calibrator is None:
             return judgements
         return self._apply_calibrator(judgements, self.calibrator)
@@ -1283,6 +1749,185 @@ class Resolver:
             A list of clusters, each a set of entity IDs.
         """
         return self.clusterer.cluster(self._judgements(records))
+
+    # ------------------------------------------------------------------
+    # The front door: dedupe a batch / compare one pair
+    # ------------------------------------------------------------------
+
+    def dedupe(
+        self, records: list[dict[str, Any]], *, log: JudgementLog | str | Path | None = None
+    ) -> DedupeResult:
+        """Group a batch of records into entity clusters. **The front door.**
+
+        The replacement for the deleted ``langres.dedupe`` verb, and the whole
+        point of the wave: identical ergonomics, except *you* named the model, so
+        nothing sniffs your environment for an API key and spends on what it
+        finds. ``FuzzyString().dedupe(records)`` costs $0 and needs no key
+        because ``FuzzyString`` cannot make a paid call, not because a heuristic
+        guessed well.
+
+        Schema-optional: an unbound architecture infers an ephemeral schema from
+        the records' own keys and binds to it here, on first use (see
+        :mod:`langres.core.inputs` for the normalization rules -- NaN, nested
+        values, id resolution).
+
+        Abstentions are left **unmerged** (the conservative reading -- the same
+        as "not a match" for edge-building) rather than aborting the batch: one
+        unparseable judgement among thousands should not sink a whole run. Pass
+        ``log=`` to see which pairs the matcher declined. This differs from
+        :meth:`compare`, which owes its single caller a verdict and so raises.
+
+        Args:
+            records: The records to dedupe (plain dicts). ``[]`` and a single
+                record both return ``[]`` (no pair exists), short-circuiting
+                before the model is ever bound or a matcher built -- so a
+                zero-pair call cannot construct a backbone or spend.
+                Every record needs a unique ``"id"`` (or none at all --
+                positional ids are then assigned); a duplicate raises.
+            log: Opt-in judgement sink -- a
+                :class:`~langres.core.judgement_log.JudgementLog` or a path
+                (wrapped in a default one). ``None`` (default): no logging, zero
+                overhead, no wrap. The flywheel inlet later harvested into
+                training pairs.
+
+        Returns:
+            A :class:`~langres.core.results.DedupeResult` -- a
+            ``list[set[str]]`` of id clusters that also reports the
+            ``architecture``, ``backbone``, ``score_type`` and effective
+            ``threshold`` that produced it.
+
+        Raises:
+            ValueError: Duplicate ids, inconsistent id presence, or a nested
+                value under an inferred schema.
+            BudgetExceeded: If scoring would cross this model's spend cap; the
+                exception carries the judgements already produced on
+                ``.partial_judgements``.
+        """
+        if len(records) < 2:
+            return DedupeResult(
+                [],
+                architecture=type(self).__name__,
+                backbone=None,
+                score_type="none",
+                threshold=None,
+            )
+        normalized = self._prepare(records)
+        check_no_duplicate_ids([record["id"] for record in normalized])
+        judgements = list(self._judgements(normalized, log=_coerce_log(log)))
+        clusters = self.clusterer.cluster(iter(judgements))
+        return DedupeResult(
+            clusters,
+            architecture=type(self).__name__,
+            backbone=self.backbone,
+            # The judgements' OWN score_type, not a per-name lookup table: the
+            # matcher that ran is the only honest authority on what its scores
+            # mean. "unknown" only when the blocker yielded no pair at all.
+            score_type=judgements[0].score_type if judgements else "unknown",
+            threshold=self.clusterer.threshold,
+        )
+
+    def compare(
+        self,
+        left: dict[str, Any],
+        right: dict[str, Any],
+        *,
+        log: JudgementLog | str | Path | None = None,
+    ) -> LinkVerdict:
+        """Decide whether two records refer to the same real-world entity.
+
+        The replacement for the deleted ``langres.link`` verb (which scored ONE
+        pair). It is deliberately **not** named ``link``: that name is reserved
+        for cross-source linkage over two record *sets*, which :meth:`link` still
+        stubs out honestly. Two incompatible things were called ``link`` before
+        this wave; ``compare`` is the pair one, under a name that says so.
+
+        ``compare(a, a)`` (an entity against itself) is well-defined and does not
+        raise -- the batch-uniqueness rule is :meth:`dedupe`'s, not this one's.
+
+        **Blocking cannot veto the pair.** Blocking is a recall optimization for
+        batches; a caller naming exactly two records has already decided this
+        pair is worth judging. So the blocker runs only to *attach* what the
+        matcher needs (e.g. a ``VectorBlocker``'s cosine ``similarity_score``,
+        which an embedding-backed matcher scores off), and if it yields nothing
+        the candidate is built directly instead. Silently answering "no match"
+        because a blocker filtered the pair out would be a lie.
+
+        Args:
+            left: The first record (a plain dict).
+            right: The second record.
+            log: Opt-in judgement sink (see :meth:`dedupe`).
+
+        Returns:
+            A :class:`~langres.core.results.LinkVerdict` (truthy iff it matched).
+
+        Raises:
+            MatcherAbstainedError: If the matcher neither scored nor decided.
+                ``compare`` owes its caller a verdict and will not fabricate one.
+            BudgetExceeded: If scoring this pair would cross the spend cap.
+        """
+        normalized = self._prepare([left, right])
+        candidate = self._pair_candidate(normalized)
+        judgements = list(self._scorer(log=_coerce_log(log)).forward(iter([candidate])))
+        if not judgements:
+            raise RuntimeError(
+                f"the {type(self.module).__name__} matcher produced no judgement for this pair; "
+                "every candidate must yield exactly one PairwiseJudgement. This indicates a bug "
+                "in the matcher."
+            )
+        judgement = judgements[0]
+        if self.calibrator is not None:
+            judgement = next(self._apply_calibrator(iter([judgement]), self.calibrator))
+
+        threshold = self.clusterer.threshold
+        predicted = predicted_match(judgement, threshold)
+        if predicted is None:
+            raise MatcherAbstainedError(
+                f"the {type(self.module).__name__} matcher abstained (no decision and no score) "
+                "on this pair, so compare() cannot return a verdict. An LLMMatcher abstains when "
+                "its response fails to parse (the default on_parse_error='abstain'); pass "
+                "on_parse_error='raise' to surface the parse failure itself, or catch "
+                "MatcherAbstainedError."
+            )
+        return LinkVerdict(
+            match=predicted,
+            score=judgement.score,
+            reasoning=judgement.reasoning,
+            architecture=type(self).__name__,
+            backbone=self.backbone,
+            score_type=judgement.score_type,
+            threshold=threshold,
+            judgement=judgement,
+        )
+
+    def _pair_candidate(self, records: list[dict[str, Any]]) -> ERCandidate[Any]:
+        """The ONE candidate for :meth:`compare` -- blocker-attached, never blocker-vetoed.
+
+        Runs the real pipeline first, so anything the blocker attaches (a
+        ``VectorBlocker``'s ``similarity_score``; the comparator's
+        ``ComparisonVector``) is present exactly as it would be in a batch. Falls
+        back to a directly-built candidate when the blocker yields nothing --
+        see :meth:`compare` on why a veto must not decide the verdict.
+        """
+        for candidate in self._candidates(records):
+            return candidate
+
+        from langres.core.blockers.all_pairs import schema_to_factory
+
+        schema = self.schema
+        if schema is None:
+            raise RuntimeError(
+                f"{type(self.blocker).__name__} yielded no candidate for this pair and exposes "
+                "no `schema`, so compare() cannot build the pair directly. Use a blocker that "
+                "carries its schema (AllPairsBlocker, VectorBlocker), or compare via dedupe()."
+            )
+        factory = schema_to_factory(schema)
+        left_entity, right_entity = (factory(record) for record in records)
+        candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="compare")
+        if self.comparator is not None:
+            candidate = candidate.model_copy(
+                update={"comparison": self.comparator.compare(left_entity, right_entity)}
+            )
+        return candidate
 
     def _ensure_index_built(self, records: list[Any]) -> None:
         """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
@@ -1412,13 +2057,19 @@ class Resolver:
         component into a :class:`ComponentSpec` via :func:`_component_spec`,
         which raises :class:`TypeError` for a component lacking a registry
         ``type_name`` — that error is intentional and not swallowed here.
+
+        Also stamps ``model_class`` with this class's registered model name so a
+        named architecture survives ``save``/``load``. It is ``None`` for the
+        base ``Resolver`` and for any unregistered subclass — see
+        :func:`~langres.core.registry.model_type_name`.
         """
         components = [
             _component_spec(component, slot=slot_name) for slot_name, component in self._slots()
         ]
         return ArtifactManifest(
             artifact_version=ARTIFACT_VERSION,
-            langres_version=langres.__version__,
+            langres_version=LANGRES_VERSION,
+            model_class=model_type_name(type(self)),
             components=components,
         )
 
@@ -1467,7 +2118,9 @@ class Resolver:
         :class:`~langres.core.serialization.SerializableState`, a sidecar state
         directory named after the slot. The manifest records, per slot, the
         component ``type_name`` and config (the embedder persists by
-        ``model_name`` only — no model bytes).
+        ``model_name`` only — no model bytes), plus this class's registered
+        ``model_class`` when it has one, so :meth:`load` can rebuild the same
+        architecture rather than a plain ``Resolver``.
 
         Args:
             path: Directory to write the artifact into (created if absent).
@@ -1501,15 +2154,35 @@ class Resolver:
         execution, no pickle). Sidecar state is restored for any
         :class:`~langres.core.serialization.SerializableState` component.
 
+        Reconstructs the **class** the manifest names in ``model_class`` (a
+        registered architecture), not merely the one ``load`` was called on — so
+        ``Resolver.load(<a FuzzyString artifact>)`` hands back a ``FuzzyString``.
+        An artifact with no ``model_class`` (every pre-0.4 one, and any
+        unregistered subclass) builds ``cls``, exactly as before.
+
+        Reconstruction goes through :meth:`from_components`, **not** the class's
+        ``__init__`` — so a named architecture is free to have an ergonomic
+        constructor (``FuzzyString(threshold=0.8)``) that knows nothing about
+        component keywords. This is W4 paying the debt #179 recorded right here:
+        before ``model_class``, ``load`` always built the base class and the
+        collision could not bite; after it, calling ``FuzzyString(blocker=...)``
+        raised ``TypeError: unexpected keyword argument 'blocker'``. See
+        :meth:`from_components` for why building-from-config beats replaying
+        constructor args, and for the one invariant it asks of an architecture.
+
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 
         Returns:
-            A Resolver equivalent to the one that was saved.
+            A Resolver equivalent to the one that was saved — of the saved
+            architecture's class when the manifest names one.
 
         Raises:
             ValueError: If the artifact's ``artifact_version`` is newer than this
                 library understands.
+            UnknownModelType: If the manifest names a ``model_class`` this
+                process has not registered (usually: its module was never
+                imported).
         """
         in_dir = Path(path)
         manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
@@ -1569,7 +2242,27 @@ class Resolver:
             else None
         )
 
-        return cls(
+        # Reconstruct the class the artifact says it is, so a named architecture
+        # round-trips as itself instead of decaying into a plain Resolver. Absent
+        # ``model_class`` (every pre-0.4 artifact, and any unregistered subclass)
+        # keeps the old behavior exactly: build ``cls``, whatever load was called on.
+        target = cls if manifest.model_class is None else get_model(manifest.model_class)
+        # The model registry cannot type-check its own entries: registry.py sits
+        # beneath this module, so it can neither import Resolver nor annotate
+        # ``get_model`` with it. Verify here, where Resolver IS in scope. Without
+        # this, a ``model_class`` registered to a kwargs-swallowing non-Resolver
+        # loads and is cast to Resolver, handing the caller a silently wrong
+        # object instead of an error.
+        if not issubclass(target, ERModel):
+            raise TypeError(
+                f"Artifact model_class {manifest.model_class!r} is registered to "
+                f"{target.__module__}.{target.__qualname__}, which is not an ERModel "
+                f"subclass; register_model is for ERModel subclasses (architectures)."
+            )
+        # No cast needed: the issubclass guard above narrows ``target`` to
+        # ``type[ERModel]`` for the type checker. from_components (NOT the class's
+        # own __init__) is what lets an architecture keep an ergonomic signature.
+        return target.from_components(
             blocker=blocker,
             comparator=comparator,
             matcher=module,
@@ -1610,11 +2303,28 @@ class Resolver:
                 f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
                 f"schema changed incompatibly); re-save with this langres build."
             )
-        if manifest.langres_version != langres.__version__:
+        if manifest.langres_version != LANGRES_VERSION:
             logger.warning(
                 "Loading artifact written by langres %s into langres %s; "
                 "configs are forward-compatible within artifact version %s.",
                 manifest.langres_version,
-                langres.__version__,
+                LANGRES_VERSION,
                 ARTIFACT_VERSION,
             )
+
+
+#: The pre-W4 name for :class:`ERModel`, kept as a plain alias.
+#:
+#: ``Resolver`` described a *thing that resolves*; ``ERModel`` describes *the
+#: model you chose*, which is the distinction the whole refactor is about. The
+#: class was reshaped in place rather than replaced (it already had
+#: ``from_schema``/``resolve``/``save``/``load``/``fit`` -- what it lacked was
+#: identity, typed slots, and a front door), so this is one class under two
+#: names, not a compatibility shim wrapping another object: ``Resolver is
+#: ERModel`` is True, and ``isinstance``/``issubclass`` behave identically.
+#:
+#: It stays because the name is load-bearing across the repo -- ``CLAUDE.md``
+#: mandates ``langres.core`` carry "the ``Resolver``", ``resolver.json`` is the
+#: artifact filename, and the docs/tests reference it heavily. Renaming those is
+#: W5's documentation sweep, not this wave's.
+Resolver = ERModel

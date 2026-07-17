@@ -2,22 +2,21 @@
 
 Before this module, a *name-selectable* judge had to be wired into three
 hand-rolled dispatch switches -- ``core/presets.py:build_judge`` (the verbs),
-``core/resolver.py:_build_module_for_judge`` (``Resolver.from_schema``), and
+``core/resolver.py:_build_module_for_judge`` (``ERModel.from_schema``), and
 ``methods.py:_make_module_builder`` (the benchmark harness) -- and the same
 string could mean different things per layer (``llm_judge`` the *method* built
 ``LLMMatcher`` while ``zero_shot_llm`` the *judge name* built ``DSPyMatcher``).
-All three sites now resolve through this one registry, so a judge name maps to
-exactly one construction everywhere, together with its identity metadata: the
-score family it emits, its default decision threshold, and the underlying
-model id that :func:`langres.link`/:func:`langres.dedupe` stamp on results
-(see the model-identity design note,
+Every site resolves through this one registry, so a judge name maps to exactly
+one construction everywhere, together with its identity metadata: the score
+family it emits, its default decision threshold, and the underlying model id
+stamped on results (see the model-identity design note,
 ``docs/research/20260713_model_identity_and_hub.md``).
 
-The registry does NOT replace each layer's *policy*: the verbs still expose
-only the judge names that are safe without an injected client or a fit step
-(``presets.build_judge``), and ``Resolver.from_schema`` still refuses
-``"auto"`` (a verbs-layer feature). What is unified is the construction and
-the metadata -- one spec per name, looked up by everyone.
+W4 removed the first of those three sites: ``core/presets.py`` and its
+``matcher="auto"`` allowlist are gone, leaving ``from_schema`` and the
+benchmark harness. The registry does NOT replace each layer's *policy* -- what
+is unified is the construction and the metadata, one spec per name, looked up
+by everyone.
 
 Id grammar (decided once, deliberately): **bare names are built-ins**;
 ``/`` is **reserved** for future HF-style author namespacing of third-party
@@ -44,7 +43,18 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.matcher import Matcher
+from langres.core.model_ref import (
+    DEFAULT_EMBEDDING_MODEL,
+    IN_PROCESS_KINDS,
+    LITELLM_ROUTABLE_KINDS,
+    SERVED_KINDS,
+    BackboneKind,
+    ModelRef,
+    UnsupportedBackboneError,
+    normalize_model_ref,
+)
 
 __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
@@ -55,12 +65,14 @@ __all__ = [
     "register_method",
 ]
 
-#: The sentence-transformers model behind ``matcher="embedding"`` and every
-#: preset-built ``VectorBlocker`` (both the verbs' and ``Resolver.from_schema``'s
-#: pipelines pin it). Defined once here so the two construction sites cannot
-#: drift, and so the ``"embedding"`` spec below can report it as the judge's
-#: model identity on results.
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# ``DEFAULT_EMBEDDING_MODEL`` is re-exported (not defined) here: it now lives in
+# the stdlib-only ``core.model_ref`` leaf beside the rest of the backbone
+# vocabulary, so ``core.embeddings`` can share the ONE literal without importing
+# this registry (which would knot the graph). It stays in ``__all__`` because
+# ``from langres.core.method_registry import DEFAULT_EMBEDDING_MODEL`` is an
+# existing import path. The old comment here claimed it was "defined once so the
+# construction sites cannot drift" -- it was in fact copied twice more into
+# ``core/embeddings.py``, which is exactly the drift it claimed to prevent.
 
 #: Install line for the ``[llm]`` extra, woven into the actionable ImportError
 #: an LLM-family builder raises when its lazy import fails.
@@ -110,9 +122,19 @@ class MethodSpec(BaseModel):
         default_model: The underlying model id when the caller names none --
             the value stamped on results as ``model`` (``None`` for judges
             with no model at all, e.g. pure-string similarity).
-        accepts_model: Whether the builder honors a caller ``model=``
-            override. ``False`` means the caller's ``model`` is ignored and
-            ``default_model`` (if any) names the fixed underlying model.
+        accepted_kinds: The backbone :data:`~langres.core.model_ref.BackboneKind`
+            forms this method can actually run. **Empty means the method has no
+            model slot at all** (pure string similarity), so a caller's
+            ``model=`` is an error rather than a silently-dropped argument.
+
+            This replaces the old ``accepts_model: bool``, which could only say
+            *whether* a slot took a backbone, never *which kinds* — so the
+            DSPy-backed methods advertised ``accepts_model=True`` while
+            meaning "a litellm id **string**", and a local path or
+            ``{base, adapter}`` was forwarded into ``DSPyMatcher(model=...)`` to
+            die deep inside litellm. Declaring the kinds turns that into a typed
+            error at construction, and the bool falls out of it
+            (``accepts_model`` == ``bool(accepted_kinds)``).
         needs_comparator: Whether the pipeline must attach per-feature
             comparison vectors for this judge to score (drives the
             ``Comparator`` slot in the assembled ``Resolver``).
@@ -129,9 +151,65 @@ class MethodSpec(BaseModel):
     score_type: str
     default_threshold: float = 0.5
     default_model: str | None = None
-    accepts_model: bool = False
+    accepted_kinds: frozenset[BackboneKind] = frozenset()
     needs_comparator: bool = False
     requires_extra: str | None = None
+
+    def check_backbone(self, model: str | dict[str, str] | ModelRef | None) -> ModelRef | None:
+        """Validate a caller's ``model=`` against this method's ``accepted_kinds``.
+
+        The ONE place a caller's backbone is checked before construction, so
+        every dispatch path (verbs, ``Resolver.from_schema``, the benchmark
+        harness) rejects the same refs with the same message.
+
+        Returns ``None`` when the caller named no model (the method's
+        ``default_model``, if any, then stands).
+
+        Raises:
+            UnsupportedBackboneError: The method has no model slot, or the ref's
+                kind is not one this method can run.
+            InvalidModelRefError: ``model`` is malformed (from normalization).
+        """
+        if model is None:
+            return None
+        if not self.accepted_kinds:
+            raise UnsupportedBackboneError(
+                f"method {self.name!r} has no model slot, so model={model!r} would be silently "
+                f"ignored. It scores without a model"
+                + (f" (its fixed identity is {self.default_model!r})" if self.default_model else "")
+                + ". Drop the model= argument, or pick a method that takes one: "
+                + ", ".join(sorted(n for n, s in _METHOD_REGISTRY.items() if s.accepted_kinds))
+                + "."
+            )
+        ref = normalize_model_ref(model)
+        if ref.kind not in self.accepted_kinds:
+            raise UnsupportedBackboneError(
+                f"method {self.name!r} cannot run a {ref.kind!r} backbone ({ref.base!r}): it "
+                f"accepts {', '.join(map(repr, sorted(self.accepted_kinds)))}. "
+                + (
+                    "This method is DSPy-backed, and DSPy routes every completion through "
+                    "litellm — it has no in-process route. Serve the model and pass "
+                    '{"base": ..., "kind": "endpoint", "api_base": ...}, or use a method '
+                    "backed by LLMMatcher (e.g. 'prompt_llm'), which runs local weights "
+                    "in-process."
+                    if IN_PROCESS_KINDS & {ref.kind}
+                    else "Name a backbone of an accepted kind."
+                )
+            )
+        # An unmerged PEFT adapter must be assembled in-process, which only a
+        # method supporting EVERY in-process kind can do. A litellm-only method
+        # nominally accepts `hf` (see LITELLM_ROUTABLE_KINDS) but cannot assemble
+        # anything, so the kind check above would otherwise wave an adapter
+        # through to fail later, deeper, and less legibly.
+        if ref.adapter is not None and not IN_PROCESS_KINDS <= self.accepted_kinds:
+            raise UnsupportedBackboneError(
+                f"method {self.name!r} cannot run an unmerged base+adapter ref "
+                f"(base={ref.base!r}, adapter={ref.adapter!r}): assembling a PEFT adapter "
+                "needs an in-process backend, and this method runs its model over litellm. "
+                "Use a method backed by LLMMatcher (e.g. 'prompt_llm'), or merge the adapter "
+                "into the base weights and reference the merged model."
+            )
+        return ref
 
 
 _METHOD_REGISTRY: dict[str, MethodSpec] = {}
@@ -218,7 +296,9 @@ def _trained_extra_error(name: str, missing: str) -> ImportError:
 
 def _feature_specs(schema: type[BaseModel], comparator: Comparator[Any] | None) -> Any:
     """Feature specs from the caller's comparator (custom weights win) or the schema."""
-    return (comparator if comparator is not None else Comparator.from_schema(schema)).feature_specs
+    return (
+        comparator if comparator is not None else StringComparator.from_schema(schema)
+    ).feature_specs
 
 
 def _build_string(
@@ -340,7 +420,7 @@ def _build_rapidfuzz(
 ) -> Matcher[Any]:
     """``rapidfuzz``: classical string baseline over the schema's comparable fields.
 
-    Reuses ``Comparator.from_schema``'s field selection and weights so
+    Reuses ``StringComparator.from_schema``'s field selection and weights so
     ``rapidfuzz`` and ``weighted_average`` score on the *same* fields. The
     ``-> ""`` for a missing value is RapidfuzzMatcher's documented convention;
     it makes a field absent on *both* records a perfect match -- an intrinsic
@@ -413,12 +493,13 @@ def _build_fellegi_sunter(
     comparator: Comparator[Any] | None = None,
 ) -> Matcher[Any]:
     """``fellegi_sunter``: unsupervised EM-fit probabilistic record linkage."""
-    from langres.core.comparator import StringComparator
+    from langres.core.comparators import StringComparator
     from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
 
-    fs_comparator = comparator if comparator is not None else Comparator.from_schema(schema)
+    fs_comparator = comparator if comparator is not None else StringComparator.from_schema(schema)
     # FellegiSunterMatcher is typed against StringComparator, the concrete class
-    # Comparator.from_schema returns (Comparator is its alias-in-spirit here).
+    # StringComparator.from_schema returns; a caller-supplied `comparator` is only
+    # typed as the Comparator ABC, hence the cast.
     return FellegiSunterMatcher(comparator=cast(StringComparator[Any], fs_comparator))
 
 
@@ -443,14 +524,13 @@ def _register_builtins() -> None:
     """Seed the registry with the built-in methods (module import time).
 
     ``default_model`` for the LLM family deliberately references
-    ``clients.openrouter.DEFAULT_OPENROUTER_MODEL`` -- the same constant
-    ``presets.DEFAULT_AUTO_MODEL`` aliases -- so the registry, the auto-judge
-    policy, and every builder agree on one literal.
+    ``clients.openrouter.DEFAULT_OPENROUTER_MODEL`` so the registry and every
+    builder agree on one literal.
     """
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 
     specs = [
-        # -- The verb-facing judge family (presets/from_schema allowlists) ----
+        # -- The name-selectable judge family (from_schema's allowlist) -------
         MethodSpec(
             name="string",
             build=_build_string,
@@ -466,6 +546,9 @@ def _register_builtins() -> None:
             # The judge scores the preset-built VectorBlocker's cosine sims,
             # so the pipeline's model IS the pinned embedder.
             default_model=DEFAULT_EMBEDDING_MODEL,
+            # The embedder backbone is loaded in-process by the VectorBlocker this
+            # method's pipeline pins; build_resolver threads the caller's model= to it.
+            accepted_kinds=IN_PROCESS_KINDS,
         ),
         MethodSpec(
             name="zero_shot_llm",
@@ -473,7 +556,9 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -482,7 +567,8 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # LLMMatcher-backed: litellm AND a transformers backend.
+            accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,
             requires_extra="llm",
         ),
         # -- The benchmark-harness method names (methods.py race) ------------
@@ -513,7 +599,8 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # LLMMatcher-backed: litellm AND a transformers backend.
+            accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -522,7 +609,9 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -531,7 +620,9 @@ def _register_builtins() -> None:
             score_type="prob_group_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
+            # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
+            accepted_kinds=LITELLM_ROUTABLE_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(
@@ -542,7 +633,8 @@ def _register_builtins() -> None:
             score_type="prob_llm",
             default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
-            accepts_model=True,
+            # LLMMatcher-backed: litellm AND a transformers backend.
+            accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,
             requires_extra="llm",
         ),
         MethodSpec(

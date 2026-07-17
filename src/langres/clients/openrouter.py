@@ -30,6 +30,11 @@ if TYPE_CHECKING:
     from langres.core.benchmark import CostTrack
     from langres.core.models import PairwiseJudgement
 
+    # Type-checker view of the back-compat re-exports; the runtime path is the
+    # PEP 562 module __getattr__ at the bottom of this file.
+    from langres.core.spend import BudgetExceeded as BudgetExceeded
+    from langres.core.spend import SpendMonitor as SpendMonitor
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,16 +64,16 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     # corrected from an earlier wrong 89.33; arXiv v4 Table 2 + results.xlsx).
     "openrouter/openai/gpt-4o-mini-2024-07-18": (0.15, 0.60),
     "openrouter/openai/gpt-4o-2024-08-06": (2.50, 10.00),
-    # OpenRouter path for matcher="auto" (OPENROUTER_API_KEY set) — see
-    # langres.core.presets.choose_auto_judge. OpenRouter's own listing for this
-    # route isn't in LiteLLM's pricing table; conservative-high over OpenAI's
-    # published $0.15/$0.60 per-1M list price (litellm model_prices_and_context_
-    # window.json, "gpt-4o-mini", checked 2026-07) to absorb any provider markup.
+    # DEFAULT_OPENROUTER_MODEL, the zero_shot_llm default route. OpenRouter's own
+    # listing for it isn't in LiteLLM's pricing table; conservative-high over
+    # OpenAI's published $0.15/$0.60 per-1M list price (litellm model_prices_and_
+    # context_window.json, "gpt-4o-mini", checked 2026-07) to absorb any markup.
     "openrouter/openai/gpt-4o-mini": (0.20, 0.80),
-    # Direct-OpenAI path for matcher="auto" (OPENAI_API_KEY set, no OPENROUTER_API_KEY)
-    # — see choose_auto_judge. Matches OpenAI's published gpt-5-mini list price
-    # exactly (litellm model_prices_and_context_window.json, "gpt-5-mini" and
+    # Matches OpenAI's published gpt-5-mini list price exactly (litellm
+    # model_prices_and_context_window.json, "gpt-5-mini" and
     # "openrouter/openai/gpt-5-mini" agree: $0.25/$2.00 per 1M, checked 2026-07).
+    # Priced because a user can name it as a backbone; W4 deleted the
+    # matcher="auto" path that used to reach for it when OPENAI_API_KEY was set.
     "openai/gpt-5-mini": (0.25, 2.00),
     "openrouter/anthropic/claude-3.7-sonnet": (3.00, 15.00),
     "openrouter/anthropic/claude-3.5-sonnet": (3.00, 15.00),
@@ -80,11 +85,12 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: sequential run; a bounded timeout makes a stalled call fail fast and recover.
 DEFAULT_TIMEOUT_S = 60.0
 
-#: The OpenRouter route ``matcher="auto"``/``matcher="zero_shot_llm"`` default to
-#: when no model id is given -- ``core.presets.choose_auto_judge`` and
-#: ``Resolver.from_schema`` both need this literal. Defined once here (the
-#: dspy-free, cycle-safe layer both of those sit above) so the two call sites
-#: can't drift on the string.
+#: The OpenRouter route ``matcher="zero_shot_llm"`` defaults to when no model id
+#: is given -- ``ERModel.from_schema`` needs this literal. Defined once here (the
+#: dspy-free, cycle-safe layer it sits above) so call sites can't drift on the
+#: string. (W4 deleted the other consumer, ``core.presets.choose_auto_judge``:
+#: picking a model from whichever API key happened to be set is exactly the
+#: implicit-backbone behaviour the architectures replaced.)
 DEFAULT_OPENROUTER_MODEL = "openrouter/openai/gpt-4o-mini"
 
 
@@ -223,8 +229,8 @@ def dspy_price_per_1k(
     for unknown ids -- rather than guessing a price.
 
     This function lives here (not in ``langres.methods``, where it started) so
-    both ``langres.methods`` and ``langres.core.presets`` can import it without
-    creating a ``core -> methods -> core`` cycle -- this module is dspy-free and
+    every caller in ``core`` can import it without creating a
+    ``core -> methods -> core`` cycle -- this module is dspy-free and
     layer-neutral, sitting below both.
 
     Args:
@@ -425,79 +431,35 @@ def no_keepalive_http_client(timeout_s: float = DEFAULT_TIMEOUT_S) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Spend monitor
+# Spend monitor -- MOVED to langres.core.spend (B1), re-exported here
 # ---------------------------------------------------------------------------
 
+#: Back-compat aliases: the ledger's real home is :mod:`langres.core.spend`.
+#: It moved because it is pure USD arithmetic with nothing OpenRouter-specific
+#: about it, and because :class:`~langres.core.resolver.Resolver` has to enforce
+#: a budget -- which it cannot do by importing a ``clients`` module that imports
+#: ``core`` back.
+_MOVED_TO_CORE_SPEND = ("BudgetExceeded", "SpendMonitor")
 
-class BudgetExceeded(RuntimeError):
-    """Raised by :meth:`SpendMonitor.check` when cumulative spend passes the budget.
 
-    ``partial_judgements`` carries every judgement already produced (and paid
-    for) before the cap tripped (E9) -- populated by the catcher, not here
-    (see :class:`~langres.core.presets._SpendCappedMatcher`). Declared with a
-    default empty list so any future raiser is safe even if it never sets it,
-    and callers/mypy see the attribute without an ad hoc
-    ``# type: ignore[attr-defined]`` at the one call site that populates it.
+def __getattr__(name: str) -> Any:
+    """Resolve the moved spend-ledger names lazily (PEP 562).
+
+    ``from langres.clients.openrouter import SpendMonitor, BudgetExceeded`` is
+    load-bearing -- the benchmark harness, the examples and the root
+    ``langres.BudgetExceeded`` export all use it -- so the names stay reachable
+    from here forever.
+
+    Lazily, though, and deliberately: an eager ``from langres.core.spend import
+    ...`` at this module's top would be the first *toplevel* ``clients -> core``
+    import in the package. Measured with ``tools/import_graph.py
+    counterfactual``, that one edge drags ``clients`` into the refactor's
+    runtime cross-package cycle (9 packages -> 10). This module does not *use*
+    these names any more -- it only forwards them -- so a lazy alias is the
+    honest shape as well as the cheap one.
     """
+    if name in _MOVED_TO_CORE_SPEND:
+        from langres.core import spend
 
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
-        self.partial_judgements: list[PairwiseJudgement] = []
-
-
-class SpendMonitor:
-    """A KISS cumulative-cost ledger for budget-aware paid runs.
-
-    Accumulate the honest cost of each paid call with :meth:`add`, then call
-    :meth:`check` to log a warning once spend passes ``warn_frac * budget_usd``
-    and raise :class:`BudgetExceeded` once it passes ``budget_usd``. This is a
-    monitoring guard, not a hard cap: it never wraps or throttles the LM, it only
-    observes and warns/raises. Pure — no I/O beyond ``logging``.
-    """
-
-    def __init__(self, *, budget_usd: float = 5.0, warn_frac: float = 0.8) -> None:
-        """Initialize the ledger.
-
-        Args:
-            budget_usd: Total spend budget in USD. :meth:`check` raises past it.
-            warn_frac: Fraction of ``budget_usd`` at which :meth:`check` warns.
-        """
-        self._budget_usd = budget_usd
-        self._warn_frac = warn_frac
-        self._spent = 0.0
-
-    def add(self, cost_usd: float) -> None:
-        """Accumulate ``cost_usd`` into the running total."""
-        self._spent += cost_usd
-
-    @property
-    def budget_usd(self) -> float:
-        """The configured total spend budget (USD)."""
-        return self._budget_usd
-
-    @property
-    def spent(self) -> float:
-        """Cumulative spend recorded so far (USD)."""
-        return self._spent
-
-    @property
-    def remaining(self) -> float:
-        """Budget left before the cap (USD); negative once over budget."""
-        return self._budget_usd - self._spent
-
-    def check(self) -> None:
-        """Warn past the warn threshold; raise :class:`BudgetExceeded` past the budget.
-
-        Raises:
-            BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
-        """
-        if self._spent > self._budget_usd:
-            raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
-        if self._spent >= self._warn_frac * self._budget_usd:
-            logger.warning(
-                "spend $%.4f has passed %.0f%% of the $%.2f budget (remaining $%.4f)",
-                self._spent,
-                self._warn_frac * 100.0,
-                self._budget_usd,
-                self.remaining,
-            )
+        return getattr(spend, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

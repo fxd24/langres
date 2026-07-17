@@ -9,13 +9,7 @@ name: Test
 on:
   pull_request:
   push:
-    # TEMPORARY (architecture refactor): `feat/arch-refactor` is the integration
-    # branch the refactor's sub-PRs merge into. Without it here, `test-full` --
-    # the ONLY job that runs the slow tests and enforces the coverage gates --
-    # would not run for the entire refactor, and a regression would surface only
-    # at the final merge to main. REVERT THIS LIST TO `[main]` once the refactor
-    # has landed and the integration branch is deleted.
-    branches: [main, feat/arch-refactor]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -33,8 +27,7 @@ concurrency:
   # from "cancelled while running" to "cancelled while pending". Keying the
   # group on the SHA gives every merge commit its own group, so each one is
   # gated on its own merits. This has already bitten `main` (6 of the last 30
-  # push runs were cancelled), and matters more once sub-PRs land on the
-  # integration branch above.
+  # push runs were cancelled).
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: true
 
@@ -109,15 +102,15 @@ jobs:
       - name: Run import-budget tests against the real core-only install
         run: uv run pytest tests/test_import_budget.py -o addopts="-v -m 'not integration'"
 
-      - name: Verify the core-only string-judge dedupe() path still works
-        run: uv run python examples/quickstart_verbs.py
+      - name: Verify the core-only FuzzyString().dedupe() path still works
+        run: uv run python examples/quickstart_models.py
 
       - name: Verify the core-only eval tearsheet ($0 EvalReport -> to_html) works
         run: uv run python examples/quickstart_eval.py
 
-      # The paved-road flywheel loop (dedupe -> review -> CLI CSV round-trip ->
-      # harvest -> tuned threshold -> tearsheet) must work on a bare `uv sync`
-      # from a clean checkout -- string judge only, $0, no extras.
+      # The paved-road flywheel loop (FuzzyString().dedupe -> review -> CLI CSV
+      # round-trip -> harvest -> tuned threshold -> tearsheet) must work on a bare
+      # `uv sync` from a clean checkout -- the $0 offline architecture, no extras.
       - name: Verify the core-only flywheel loop (examples/flywheel_min.py) works
         run: uv run python examples/flywheel_min.py
 

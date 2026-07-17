@@ -82,11 +82,15 @@ class TestFromSchemaJudgeOptions:
         assert resolver.module.model == "openai/gpt-5-mini"
 
     def test_zero_shot_llm_unpinned_model_warns_blind_cap(self) -> None:
-        """M1 regression: Resolver.from_schema builds an UNCAPPED pipeline
-        (see the matcher= docstring caution) -- an unpinned model must not
-        silently self-report $0/pair without any warning, since nothing here
-        would ever stop a runaway bill. Construction only (zero-spend)."""
-        with pytest.warns(UserWarning, match="UNCAPPED pipeline"):
+        """M1 regression: an unpinned model must not silently self-report
+        $0/pair without any warning.
+
+        Since B1 the from_schema pipeline IS spend-capped (``budget_usd=``), so
+        the warning is no longer "nothing stops a runaway bill" -- it is that
+        the cap is BLIND: a $0-metered model can never move the tally, so the
+        cap is real on paper and inert in practice. Construction only
+        (zero-spend)."""
+        with pytest.warns(UserWarning, match="can NEVER trip"):
             resolver = Resolver.from_schema(
                 ResolverJudgeCo, matcher="zero_shot_llm", model="unknown/model-not-in-table"
             )
@@ -98,12 +102,20 @@ class TestFromSchemaJudgeOptions:
         resolver = Resolver.from_schema(ResolverJudgeCo, matcher=injected)
         assert resolver.module is injected
 
-    def test_auto_is_rejected_with_guidance_to_verbs(self) -> None:
-        with pytest.raises(ValueError, match="verbs-layer feature"):
+    def test_auto_is_rejected_and_points_at_a_named_architecture(self) -> None:
+        """``"auto"`` is gone, not relocated: W4 deleted the key-sniffing path.
+
+        The guidance must name a *model class* now. Pointing at the old verbs
+        would be worse than useless -- they were deleted in the same wave.
+        """
+        with pytest.raises(ValueError, match="There is no 'auto'") as exc_info:
             Resolver.from_schema(ResolverJudgeCo, matcher="auto")  # type: ignore[arg-type]
+        message = str(exc_info.value)
+        assert "FuzzyString" in message
+        assert "langres.link" not in message and "langres.dedupe" not in message
 
     def test_unknown_judge_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="unsupported judge") as exc_info:
+        with pytest.raises(ValueError, match="unsupported matcher") as exc_info:
             Resolver.from_schema(ResolverJudgeCo, matcher="not-a-real-judge")  # type: ignore[arg-type]
         # All five allowed shorthands are named in the guidance (random_forest joined
         # the original four).
@@ -168,9 +180,9 @@ class TestFromSchemaRandomForestJudge:
 
 class TestBuildModuleForJudgeDirect:
     def test_returns_module_instance_verbatim(self) -> None:
-        from langres.core.comparator import Comparator
+        from langres.core.comparators import StringComparator
 
-        comparator = Comparator.from_schema(ResolverJudgeCo)
+        comparator = StringComparator.from_schema(ResolverJudgeCo)
         injected: DSPyMatcher[ResolverJudgeCo] = DSPyMatcher(lm=DummyLM([]))
         assert (
             _build_module_for_judge(

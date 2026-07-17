@@ -49,7 +49,7 @@ class _FakeModel:
 
 
 def _backend_with(model: _FakeModel) -> TransformersBackend:
-    backend = TransformersBackend(ModelRef(base="fake/model"))
+    backend = TransformersBackend(ModelRef(base="fake/model", kind="hf"))
     # Pre-seed so _ensure_loaded() early-returns (no transformers download).
     backend._tokenizer = _FakeTokenizer()
     backend._model = model
@@ -130,7 +130,7 @@ def test_response_feeds_the_matchers_shared_pyes_step() -> None:
     sequences = torch.tensor([[7, 8, 1]])
     # P(Yes) logit high, P(No) lower; other ids negligible.
     scores = (torch.tensor([[-10.0, 2.0, 0.5, -10.0]]),)
-    backend = TransformersBackend(ModelRef(base="fake/model"))
+    backend = TransformersBackend(ModelRef(base="fake/model", kind="hf"))
     backend._tokenizer = _YesNoTokenizer()
     backend._model = _FakeModel(sequences, scores)
 

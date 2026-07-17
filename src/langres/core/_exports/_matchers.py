@@ -1,45 +1,33 @@
-"""The ``Matcher`` (judge) ABC and the concrete matcher family.
+"""The ``Matcher`` (judge) **contract**: the ABCs, the opt-in capability
+Protocol, and the group-cost helper.
 
-See ``langres.core._exports`` for the fragment contract.
+Only the contract lives here. The concrete matcher family
+(``CascadeMatcher``, ``EmbeddingScoreMatcher``, ``FellegiSunterMatcher``,
+``WeightedAverageMatcher``, ``LLMMatcher``, ``RandomForestMatcher``,
+``SelectMatcher``) are **implementations**, and ``langres.core`` no longer
+re-exports them -- import them from the package that owns them::
+
+    from langres.core.matchers import CascadeMatcher, LLMMatcher
+    from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
+
+``langres.core.matchers`` keeps its own lazy ``__getattr__`` for the names
+needing an extra, so those imports stay as import-light as they were here.
+
+See ``langres.core._exports`` for the fragment contract, and
+``langres.core.__init__`` for why the facade carries contracts only.
 """
 
-from typing import TYPE_CHECKING
-
+from langres.core.inspection import Inspectable
 from langres.core.matcher import GroupwiseMatcher, Matcher, stamp_group_cost
-from langres.core.matchers.cascade_judge import CascadeMatcher
-from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
-from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
-from langres.core.matchers.weighted_average import WeightedAverageMatcher
-
-if TYPE_CHECKING:
-    # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
-    # without pulling litellm/dspy/scikit-learn into a bare `import langres`.
-    from langres.core.matchers.llm_judge import LLMMatcher
-    from langres.core.matchers.random_forest_judge import RandomForestMatcher
-    from langres.core.matchers.select_judge import SelectMatcher
 
 __all__ = [
-    "CascadeMatcher",
-    "EmbeddingScoreMatcher",
-    "FellegiSunterMatcher",
     "GroupwiseMatcher",
+    "Inspectable",
     "Matcher",
     "stamp_group_cost",
-    "WeightedAverageMatcher",
 ]
 
-LAZY_SUBMODULES: tuple[str, ...] = ()
+LAZY_SYMBOLS: dict[str, str] = {}
+EXTRA_BY_SYMBOL: dict[str, str] = {}
 
-LAZY_SYMBOLS: dict[str, str] = {
-    "LLMMatcher": "langres.core.matchers.llm_judge",
-    "RandomForestMatcher": "langres.core.matchers.random_forest_judge",
-    "SelectMatcher": "langres.core.matchers.select_judge",
-}
-
-EXTRA_BY_SYMBOL: dict[str, str] = {
-    "LLMMatcher": "llm",
-    "RandomForestMatcher": "trained",
-    "SelectMatcher": "llm",
-}
-
-NAMES: tuple[str, ...] = (*__all__, *LAZY_SUBMODULES, *LAZY_SYMBOLS)
+NAMES: tuple[str, ...] = (*__all__, *LAZY_SYMBOLS)

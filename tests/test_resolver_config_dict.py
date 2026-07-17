@@ -26,16 +26,13 @@ import pytest
 
 def _company_resolver() -> "object":
     """A 4-slot Resolver over built-in, registered components."""
-    from langres.core import (
-        AllPairsBlocker,
-        Clusterer,
-        Comparator,
-        Resolver,
-        WeightedAverageMatcher,
-    )
+    from langres.core import Clusterer, Resolver
+    from langres.core.comparators import StringComparator
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
 
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     return Resolver(
         blocker=AllPairsBlocker(schema=CompanySchema),
         comparator=comparator,
@@ -108,7 +105,9 @@ def test_config_dict_writes_nothing_to_disk(tmp_path: Path) -> None:
 
 def test_config_dict_omits_absent_comparator() -> None:
     """``comparator=None`` yields a 3-slot snapshot, mirroring ``save()``'s ``_slots``."""
-    from langres.core import AllPairsBlocker, Clusterer, Resolver, WeightedAverageMatcher
+    from langres.core import Clusterer, Resolver
+    from langres.core.blockers import AllPairsBlocker
+    from langres.core.matchers import WeightedAverageMatcher
     from langres.core.feature import FeatureSpec
     from langres.core.models import CompanySchema
 
@@ -156,7 +155,6 @@ def test_config_dict_recipe_id_stable_across_version_bump(
     artifact-schema bump would silently fork ``recipe_id`` and break idempotent
     replay. Version/provenance live on the RunContext, unhashed.
     """
-    import langres
     from langres.core import resolver as resolver_mod
     from langres.core.runs import RunContext, compute_recipe_id
 
@@ -172,8 +170,13 @@ def test_config_dict_recipe_id_stable_across_version_bump(
 
     baseline = _recipe_id()
 
-    # Simulate a package release + artifact-schema bump.
-    monkeypatch.setattr(langres, "__version__", "999.999.999")
+    # Simulate a package release + artifact-schema bump. Both constants are
+    # patched on `resolver_mod` -- where they are *looked up* -- because that is
+    # where `_build_manifest` reads them from. Patching `langres.__version__`
+    # instead would no-op silently (resolver binds the version from the
+    # `langres._version` leaf, not through the root) and this test would pass
+    # while simulating nothing.
+    monkeypatch.setattr(resolver_mod, "LANGRES_VERSION", "999.999.999")
     monkeypatch.setattr(resolver_mod, "ARTIFACT_VERSION", "999")
 
     assert _recipe_id() == baseline

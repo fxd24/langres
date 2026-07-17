@@ -29,6 +29,7 @@ from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
@@ -283,7 +284,7 @@ def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCK
     ``Resolver.from_schema``'s comparator+judge+clusterer wiring but swaps the
     default all-pairs blocker for the vector blocker.
 
-    ``Comparator.from_schema`` derives one feature per ``str | None`` field and
+    ``StringComparator.from_schema`` derives one feature per ``str | None`` field and
     already excludes ``id``, the computed ``embed_text``, and ``source`` (a
     ``Literal``, not a string). Excluding ``source`` is essential: Fodors-Zagat's
     true matches are all cross-source, so comparing ``source`` would penalise
@@ -297,7 +298,7 @@ def build_restaurant_resolver(threshold: float, k_neighbors: int = DEFAULT_BLOCK
     Returns:
         A ready-to-run, serializable :class:`Resolver`.
     """
-    comparator: Comparator[RestaurantSchema] = Comparator.from_schema(RestaurantSchema)
+    comparator: Comparator[RestaurantSchema] = StringComparator.from_schema(RestaurantSchema)
     return Resolver(
         blocker=build_restaurant_blocker(k_neighbors),
         comparator=comparator,

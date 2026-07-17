@@ -14,9 +14,10 @@ usable, swappable, and tunable by everyone through one seam. This guide walks th
 > contributor editing the repo does now.
 >
 > **You may not need any of this.** A judge you only ever pass as a `Matcher`
-> instance — `dedupe(records, matcher=MySelectMatcher(...))` — needs **zero**
+> instance — `Resolver.from_schema(schema, matcher=MySelectMatcher(...)).dedupe(records)`,
+> or wired directly into an `ERModel`'s `matcher=` slot — needs **zero**
 > registry wiring. The steps below are only for making a method selectable *by
-> name* (`"select_judge"`) across the benchmark harness and the two build paths.
+> name* (`"select_judge"`) across the benchmark harness and `Resolver.from_schema`.
 
 ---
 
@@ -33,8 +34,9 @@ scoring logic has, the output contract is pairwise**.
 `ERCandidateGroup`s from the pairwise stream and dispatches to your
 `forward_groups`, then flattens the result back to pairwise. **Set-wise in,
 pairwise out** — the group structure never leaks past the class boundary, so the
-Resolver spine needs no changes. You implement only `forward_groups` and
-`inspect_scores`.
+Resolver spine needs no changes. You implement only `forward_groups` — plus, if
+you want the label-free inspection path, `inspect_scores` (opt-in via the
+`Inspectable` Protocol; see `core.Matcher` in `docs/TECHNICAL_OVERVIEW.md`).
 
 ### Riding the `ComparisonVector` seam
 
@@ -86,9 +88,9 @@ convention (`stamp_group_cost` in `src/langres/core/matcher.py`) avoids that:
 - **`provenance["group_id"]`** is set on **all** of them (traceable back to the
   one call);
 - **`provenance["group_end"] = True`** marks the **last** judgement — a boundary
-  marker so a consumer draining a lazy group stream (the verbs' spend cap,
-  `_SpendCappedMatcher`) knows where to stop without peeking past it and
-  triggering the next paid call.
+  marker so a consumer draining a lazy group stream (every `ERModel`'s spend
+  cap, `SpendCappedMatcher` in `langres.core.spend_cap`) knows where to stop
+  without peeking past it and triggering the next paid call.
 
 `SelectMatcher.forward_groups` prices the call from token usage
 (`tokens / 1000 * price_per_1k_tokens`) and calls `stamp_group_cost(...)`. The
@@ -106,12 +108,14 @@ applies.)
 
 Since the v0.3 model-identity slice there is **one registration seam**:
 `langres.core.method_registry`. A `MethodSpec` carries the builder plus the
-name's identity metadata, and all three dispatch paths — the verbs
-(`presets.build_judge`), `Resolver.from_schema`
-(`resolver._build_module_for_judge`), and the benchmark harness
+name's identity metadata, and both remaining dispatch paths — `Resolver.from_schema`
+(`resolver._build_module_for_judge`) and the benchmark harness
 (`methods._make_module_builder`) — resolve names through it, so registering
-once makes the name mean the same thing everywhere. Adding a method is **one
-builder function + one spec**:
+once makes the name mean the same thing everywhere. (A third path, the verbs'
+`presets.build_judge`, existed before named architectures replaced the verbs
+and was deleted along with the two module-level verbs and `matcher="auto"` —
+naming a model is now the caller's job.) Adding a method is **one builder
+function + one spec**:
 
 ```python
 # src/langres/core/method_registry.py
@@ -132,18 +136,42 @@ register_method(MethodSpec(
     score_type="prob_group_llm",       # the family tag its judgements carry
     default_threshold=0.7,             # E12: per-family threshold scales
     default_model=DEFAULT_OPENROUTER_MODEL,  # what results report as `model`
-    accepts_model=True,                # honors a caller model= override
+    accepted_kinds=LITELLM_ROUTABLE_KINDS,   # WHICH backbones it can actually run
     requires_extra="llm",              # actionable ImportError names the extra
 ))
 ```
 
+### Declaring the backbone slot (`accepted_kinds`)
+
+A **backbone** is what fills a method's model slot — a
+`langres.core.model_ref.ModelRef`: an API id, a served endpoint, an HF Hub id, a
+local directory, or `{base, adapter}` for an unmerged QLoRA. `accepted_kinds`
+names the `kind`s your method can *actually* run, and it is the only thing that
+decides whether a caller's `model=` is honored or refused:
+
+| your method is backed by | `accepted_kinds` | why |
+|---|---|---|
+| nothing (pure string similarity) | `frozenset()` (the default) | no model slot — a caller's `model=` raises `UnsupportedBackboneError` instead of being silently dropped |
+| DSPy (`DSPyMatcher`, `SelectMatcher`) | `LITELLM_ROUTABLE_KINDS` | DSPy routes **every** completion through litellm — it has no in-process route, so a local dir or an adapter is unreachable |
+| `LLMMatcher` | `SERVED_KINDS \| IN_PROCESS_KINDS` | it has litellm **and** a transformers backend |
+| an in-process embedder | `IN_PROCESS_KINDS` | the weights load here |
+
+`MethodSpec.check_backbone(model)` is the one gate every dispatch path calls, so
+both layers reject the same refs with the same message. **An empty
+`accepted_kinds` is a promise, not an omission**: it says "this method has no
+model", and the registry will enforce it.
+
+> `accepted_kinds` replaced the old `accepts_model: bool` in W3. The bool could
+> only say *whether* a slot took a backbone, never *which kinds* — so the
+> DSPy-backed methods advertised `accepts_model=True` while meaning "a litellm id
+> **string**", and a local path was forwarded into `DSPyMatcher(model=…)` to die
+> deep inside litellm. `accepts_model` is now just `bool(accepted_kinds)`.
+
 Method ids are **bare names**; `/` is reserved for future `author/method`
 namespacing (model ids keep their slashes in the orthogonal `model=` kwarg).
-Two per-layer *policies* remain separate from registration: the verbs'
-allowlist (`presets._VERB_JUDGE_NAMES` — join it only if the judge is safe
-with no injected client and no fit step) and `from_schema`'s name tuple.
-`SelectMatcher` joins neither (it's a benchmark/experiment method that needs an
-injected DSPy LM).
+One per-layer *policy* remains separate from registration: `from_schema`'s own
+name tuple (no `"auto"`). `SelectMatcher` isn't in it — it's a
+benchmark/experiment method that needs an injected DSPy LM.
 
 Then declare its **membership** in the method tuples at the top of `methods.py`
 so the harness races it:
@@ -274,9 +302,8 @@ companion tests — mirror both for your judge:
 - [ ] Set-wise judges apply the group-call cost convention (`stamp_group_cost`).
 - [ ] Honest-cost seam wired (`price_per_1k_tokens` pinned for paid runs).
 - [ ] Selectable by name? One `MethodSpec` in `core/method_registry.py` **+**
-      the right method tuple — and, if it's also a `from_schema`/verb judge,
-      the per-layer allowlists (`presets._VERB_JUDGE_NAMES`, `from_schema`'s
-      tuple).
+      the right method tuple — and, if it's also a `from_schema` judge,
+      `from_schema`'s own name tuple.
 - [ ] `@register` + `type_name` + pure `config` + `from_config` (no pickle).
 - [ ] Fresh-process (subprocess) reload proven in a test.
 - [ ] 100% coverage; all LLM paths on DummyLM at $0.

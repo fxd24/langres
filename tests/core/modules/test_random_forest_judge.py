@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
@@ -351,7 +351,8 @@ class TestSerialization:
             fresh.load_state(tmp_path)
 
     def test_resolver_with_random_forest_saves_and_loads(self, tmp_path: Path) -> None:
-        from langres.core import AllPairsBlocker, Clusterer, Resolver
+        from langres.core import Clusterer, Resolver
+        from langres.core.blockers import AllPairsBlocker
 
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=10, n_nonmatches=10)
@@ -378,7 +379,8 @@ class TestSerialization:
     @pytest.mark.slow
     def test_resolver_load_random_forest_in_fresh_process(self, tmp_path: Path) -> None:
         """Fresh-process save/load round trip (the M2 lesson — E12)."""
-        from langres.core import AllPairsBlocker, Clusterer, Resolver
+        from langres.core import Clusterer, Resolver
+        from langres.core.blockers import AllPairsBlocker
 
         comparator = _company_comparator()
         candidates, labels = _labeled_dataset(comparator, n_matches=10, n_nonmatches=10)

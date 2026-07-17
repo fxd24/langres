@@ -1,16 +1,17 @@
 """Opt-in JSONL judgement log: the flywheel inlet (harvested by W2.4).
 
 ``JudgementLog`` is a small file-backed sink -- it is NOT a ``Matcher``.
-Wire it via ``log=`` on :func:`langres.link`/:func:`langres.dedupe`; those
-verbs wrap the resolved judge in :class:`LoggingMatcher` below, which appends
-one JSON line per :class:`~langres.core.models.PairwiseJudgement` **as it
-streams past**. It never buffers or materializes the full judgement stream,
-so laziness and memory behavior are unaffected (Eng finding E10: an explicit
-boundary component wrapping a ``Matcher``, composed the same way
-:class:`~langres.core.presets._SpendCappedMatcher` wraps one -- never a
+Wire it via ``log=`` on :meth:`~langres.core.resolver.ERModel.dedupe` /
+:meth:`~langres.core.resolver.ERModel.compare`; the model wraps its scorer in
+:class:`LoggingMatcher` below, which appends one JSON line per
+:class:`~langres.core.models.PairwiseJudgement` **as it streams past**. It never
+buffers or materializes the full judgement stream, so laziness and memory
+behavior are unaffected (Eng finding E10: an explicit boundary component
+wrapping a ``Matcher``, composed the same way
+:class:`~langres.core.spend_cap.SpendCappedMatcher` wraps one -- never a
 monkey-patch of ``Matcher.forward``).
 
-Zero overhead when omitted: ``log=None`` (the default on both verbs) skips
+Zero overhead when omitted: ``log=None`` (the default) skips
 the wrap entirely -- no file, no extra generator layer, byte-identical to
 pre-W0.2 behavior.
 
@@ -45,11 +46,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from langres.clients.openrouter import BudgetExceeded
+from langres.core.inspection import _ensure_inspectable
 from langres.core.models import ERCandidate, PairwiseJudgement, predicted_match
 from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
 from langres.core.runs import current_run
+from langres.core.spend import BudgetExceeded
 
 __all__ = ["JudgementLog", "LoggingMatcher"]
 
@@ -207,19 +209,19 @@ class LoggingMatcher(Matcher[Any]):
 
     Deliberately NOT a monkey-patch of ``module.forward`` (E10) -- a small
     wrapper ``Matcher`` in the same family as
-    :class:`~langres.core.presets._SpendCappedMatcher`, composing
+    :class:`~langres.core.spend_cap.SpendCappedMatcher`, composing
     transparently with any ``Matcher`` -- including a future
     ``GroupwiseMatcher`` (W1.0): both yield ``PairwiseJudgement`` one at a
     time, so wrapping and logging is identical either way.
 
     ``verdict`` is computed per judgement from ``threshold`` -- the same
-    match cutoff the calling verb (``link``/``dedupe``) already resolved for
-    its own ``score >= threshold`` decision, so the logged verdict always
-    agrees with what the caller acted on.
+    match cutoff the calling model already resolved for its own
+    ``score >= threshold`` decision, so the logged verdict always agrees with
+    what the caller acted on.
 
     Wrapping a spend-capped module (e.g.
-    :class:`~langres.core.presets._SpendCappedMatcher`, as ``link``/``dedupe``
-    do): the judgement that trips the cap is recorded on the raised
+    :class:`~langres.core.spend_cap.SpendCappedMatcher`, as ``ERModel._scorer``
+    does): the judgement that trips the cap is recorded on the raised
     ``BudgetExceeded.partial_judgements`` but never yielded (the cap raises
     *before* yielding it -- E9's "set by the catcher, not at raise time"
     pattern). A ``LoggingMatcher`` sitting outside that cap would otherwise
@@ -273,4 +275,5 @@ class LoggingMatcher(Matcher[Any]):
     def inspect_scores(
         self, judgements: list[PairwiseJudgement], sample_size: int = 10
     ) -> ScoreInspectionReport:
-        return self._module.inspect_scores(judgements, sample_size)
+        """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""
+        return _ensure_inspectable(self._module).inspect_scores(judgements, sample_size)

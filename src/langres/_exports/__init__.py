@@ -47,7 +47,7 @@ domain** (rare): add the fragment here (import + the three merges below) and one
 star-import line in ``langres/__init__.py``.
 """
 
-from langres._exports import _core, _data, _flywheel, _optimize, _training, _verbs
+from langres._exports import _core, _data, _flywheel, _models, _optimize, _training
 
 #: The composed public surface: every fragment's slice, deduplicated and sorted
 #: case-insensitively (the dominant convention of the hand-maintained list this
@@ -60,7 +60,7 @@ NAMES: tuple[str, ...] = tuple(
             *_flywheel.NAMES,
             *_optimize.NAMES,
             *_training.NAMES,
-            *_verbs.NAMES,
+            *_models.NAMES,
         },
         key=str.lower,
     )
@@ -73,7 +73,7 @@ LAZY_SYMBOLS: dict[str, str] = {
     **_flywheel.LAZY_SYMBOLS,
     **_optimize.LAZY_SYMBOLS,
     **_training.LAZY_SYMBOLS,
-    **_verbs.LAZY_SYMBOLS,
+    **_models.LAZY_SYMBOLS,
 }
 
 #: ``name -> extra`` for the lazy symbols where a missing dependency has a
@@ -85,5 +85,5 @@ EXTRA_BY_SYMBOL: dict[str, str] = {
     **_flywheel.EXTRA_BY_SYMBOL,
     **_optimize.EXTRA_BY_SYMBOL,
     **_training.EXTRA_BY_SYMBOL,
-    **_verbs.EXTRA_BY_SYMBOL,
+    **_models.EXTRA_BY_SYMBOL,
 }

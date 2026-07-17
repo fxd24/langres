@@ -15,7 +15,7 @@ is held constant per dataset so the race compares judges, not blockers:
 
 - ``rapidfuzz`` — VectorBlocker -> ``RapidfuzzMatcher`` (string similarity over the
   schema's comparable string fields) -> Clusterer.
-- ``weighted_average`` — VectorBlocker -> ``Comparator.from_schema`` ->
+- ``weighted_average`` — VectorBlocker -> ``StringComparator.from_schema`` ->
   ``WeightedAverageMatcher`` -> Clusterer (generalizes ``build_restaurant_resolver``
   to an arbitrary schema).
 - ``embedding_cosine`` — VectorBlocker -> ``EmbeddingScoreMatcher`` (passes the
@@ -41,11 +41,11 @@ provide (they rebuild the module fresh, unfit, per grid threshold). Build
 + fit + evaluate them via ``Resolver.fit(...)`` and
 ``evaluate_judge_on_candidates`` instead — see ``docs/EXPERIMENTS.md``.
 
-- ``fellegi_sunter`` — VectorBlocker -> ``Comparator.from_schema`` ->
+- ``fellegi_sunter`` — VectorBlocker -> ``StringComparator.from_schema`` ->
   ``FellegiSunterMatcher`` -> Clusterer. Learns m/u/prior via EM with **no
   labels** (``UnsupervisedFitMixin.fit_unlabeled``, i.e.
   ``resolver.fit(records)``).
-- ``random_forest`` — VectorBlocker -> ``Comparator.from_schema`` ->
+- ``random_forest`` — VectorBlocker -> ``StringComparator.from_schema`` ->
   ``RandomForestMatcher`` -> Clusterer. sklearn RandomForest over comparator similarities,
   supervised (``SupervisedFitMixin.fit``, i.e.
   ``resolver.fit(records, labels=...)``).
@@ -65,6 +65,7 @@ from langres.core.benchmark import CostTrack, _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.comparators import StringComparator
 from langres.core.method_registry import get_method
 from langres.core.models import PairwiseJudgement
 from langres.core.matcher import Matcher
@@ -78,10 +79,9 @@ from langres.core.resolver import Resolver
 from langres._method_names import ALL_METHODS, LLM_METHODS, ZERO_SPEND_METHODS
 
 #: Default LLM model id for the LLM/cascade methods -- an alias of the one
-#: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``, the same
-#: literal behind ``presets.DEFAULT_AUTO_MODEL``) so the benchmark harness
-#: cannot drift from the verbs on the default. Tests inject a mock client and
-#: ignore the model.
+#: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``) so the
+#: benchmark harness cannot drift from ``ERModel.from_schema`` on the default.
+#: Tests inject a mock client and ignore the model.
 DEFAULT_LLM_MODEL = DEFAULT_OPENROUTER_MODEL
 
 
@@ -133,7 +133,7 @@ def _make_module_builder(
     """
     spec = get_method(method)
     comparator: Comparator[Any] | None = (
-        Comparator.from_schema(schema) if spec.needs_comparator else None
+        StringComparator.from_schema(schema) if spec.needs_comparator else None
     )
     params: dict[str, Any] = (
         {"cascade_low": cascade_low, "cascade_high": cascade_high} if method == "cascade" else {}

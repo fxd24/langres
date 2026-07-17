@@ -2,6 +2,198 @@
 
 ## [Unreleased]
 
+### The model is explicit: `ERModel` + named architectures — **breaking**
+
+Nothing in langres named a *whole* ER pipeline. `link()`/`dedupe()` took a
+`matcher=` string × a `model=` string, and the default `matcher="auto"` sniffed
+`OPENROUTER_API_KEY`/`OPENAI_API_KEY` out of your environment (or a `.env` file
+you had forgotten about) and **spent real money** on whatever it found. You could
+not tell what model was underneath without reading the source.
+
+Now you name the model, and it is a class you can read:
+
+```python
+from langres.architectures import FuzzyString, VectorLLMCascade
+
+FuzzyString().dedupe(records)                                  # $0, offline, no key
+VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini").dedupe(records)   # paid, because you said so
+```
+
+`FuzzyString` costs nothing because it has no paid model slot — not because a
+heuristic guessed well or a cap held.
+
+#### Added
+
+- **`langres.architectures`** — named ER architectures. `FuzzyString` (all-pairs
+  + string similarity; $0, offline, deterministic, no network) and
+  `VectorLLMCascade` (vector blocking + a free embedding student + an LLM
+  escalated only at the uncertain margin). One self-contained file each.
+- **`ERModel`** — the reshaped `Resolver` (`Resolver` remains as a plain alias;
+  `Resolver is ERModel`). New: `.dedupe(records)`, `.compare(a, b)`,
+  `.from_components(...)`, `.backbone`, `.schema`, `.is_bound`.
+- **`ERModel.compare(a, b) -> LinkVerdict`** — replaces the verb `link(a, b)`
+  (one pair). Deliberately not named `link`: `ERModel.link(left, right)` remains
+  a reserved cross-source stub, and two incompatible things were called `link`
+  before this.
+- `langres.core.inputs` (schema inference / record normalization) and
+  `langres.core.results` (`LinkVerdict`, `DedupeResult`) — lifted out of the
+  verbs as reusable contracts. **`DedupeResult` is now root-exported**; it never
+  was, despite being what `dedupe()` returned.
+- `log=` on `.dedupe()`/`.compare()` — the flywheel inlet, now per call and
+  composed *inside* the spend cap rather than by mutating the matcher slot.
+
+#### Removed — **breaking, no shim**
+
+- **`langres.link` / `langres.dedupe`** (the module-level verbs) and
+  `langres.verbs`. Use a model's `.dedupe()`/`.compare()`.
+- **`matcher="auto"` / `judge="auto"`**, `choose_auto_judge`,
+  `DEFAULT_AUTO_MODEL`, `NoMatcherAvailableError`, and all of
+  **`langres.core.presets`** (`build_judge`, `resolve_judge`, `build_resolver`,
+  `default_threshold_for`, `PAID_JUDGE_NAMES`, `MatcherName`). Deleted, not
+  relocated. `Resolver.from_schema(matcher="auto")` now raises and names a
+  concrete architecture instead.
+- **`LANGRES_OFFLINE` / `Settings.langres_offline`** — deleted outright, not just
+  disconnected. It only ever gated the `auto` path, so once that went it was a
+  *documented spend guard that did nothing* — the worst failure mode a safety
+  switch has. There is no auto-decision left to disarm: naming a paid
+  architecture is now the only way to spend. `Settings` uses `extra="ignore"`,
+  so a leftover `LANGRES_OFFLINE=1` in an existing `.env` is ignored rather than
+  a `ValidationError`.
+- `default_threshold_for` has no replacement, deliberately: a bound model carries
+  its own cut in its `Clusterer`, so `compare()` reads `self.clusterer.threshold`.
+  The name→threshold table existed only because the verbs had no model to ask.
+
+#### Changed
+
+- **`LinkVerdict`/`DedupeResult` fields**: `judge_used` → **`architecture`** (the
+  model class that ran) and `model` → **`backbone`** (the LLM id / embedder name,
+  or `None` when nothing with weights ran). The two were conflated before; the
+  whole point of an architecture is that swapping a backbone does not change it.
+- **Schema inference with an *injected* matcher is gone.**
+  `dedupe(records, matcher=MyMatcher())` inferred a schema; the equivalent,
+  `ERModel.from_schema(MySchema, matcher=MyMatcher())`, requires a real one. A
+  named architecture (`FuzzyString()`) is still schema-optional. This is the
+  production path regardless: an inferred schema is an ephemeral class a fresh
+  process cannot import, so it could never round-trip through `save()`/`load()`.
+- `examples/quickstart_verbs.py` → `examples/quickstart_models.py`.
+
+#### Known limitation — `VectorLLMCascade` cannot `save()`
+
+`VectorLLMCascade(...).save(path)` raises `NotImplementedError`, by design,
+naming the real gap. `FuzzyString` saves and loads today.
+
+Its `VectorBlocker` is built with a `text_field_extractor` **closure** (blocking
+text = every comparable field concatenated), and a callable cannot round-trip
+through a JSON config. This is **inherited, not new**: the deleted `presets`
+path built the same closure — it simply never called `save()`, so nothing ever
+raised. Naming the architecture is what made the gap *visible*, because a class
+that looks persistable is expected to persist.
+
+To persist an embedding pipeline today, build the `ERModel` directly with a
+serializable single named field instead of the closure:
+
+```python
+ERModel.from_components(
+    blocker=VectorBlocker(
+        vector_index=FAISSIndex(embedder=SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")),
+        schema=MySchema,
+        text_field="name",   # a named field serializes; a closure does not
+    ),
+    comparator=StringComparator(feature_specs=[FeatureSpec(name="name", kind="string")]),
+    matcher=EmbeddingScoreMatcher(threshold=0.7),
+    clusterer=Clusterer(threshold=0.7),
+)
+```
+
+**Open design decision (not made here):** the fix is a named-extractor seam
+mirroring `LLMMatcher(response_parser=...)` — a registry of named extractors so
+the *name* serializes instead of the closure. That changes what `VectorBlocker`
+accepts on the paid path, so it is an architecture call, deliberately left to
+its owner rather than settled at the end of a wave.
+
+**Scope note for the HF-readiness gate:** the weightless-round-trip proof is
+green only for architectures **without a closure-bearing blocker**. It
+round-trips `FuzzyString`. It does not — and currently cannot — cover
+`VectorLLMCascade`.
+
+### `Resolver` is spend-capped (B1) — **behavior change**
+
+`Resolver` — the whole low-level public API — had **no budget guard at all**. The
+spend cap lived in `langres.core.presets`, which `Resolver` is architecturally
+forbidden to import, so only `langres.link` / `langres.dedupe` were ever capped;
+`from_schema`'s own docstring advertised the hole ("runs **UNCAPPED** … nothing
+stops a runaway bill"). A paid `Matcher` on a `Resolver` could bill without limit.
+
+#### Added
+
+- **`budget_usd=` on `Resolver(...)` and `Resolver.from_schema(...)`.** Defaults to
+  `DEFAULT_BUDGET_USD` ($1.00) — the same default the verbs have always had.
+- **`langres.core.spend_cap`** — `SpendCappedMatcher` (the one enforcer),
+  `DEFAULT_BUDGET_USD`, `UNCAPPED_BUDGET_USD`, `effective_budget`.
+- **`langres.core.spend`** — `SpendMonitor` / `BudgetExceeded`, moved out of
+  `langres.clients.openrouter` (a pure USD ledger with nothing OpenRouter-specific
+  about it, which `core` must be able to reach). **Both names remain importable
+  from `langres.clients.openrouter`**, and `langres.BudgetExceeded` is unchanged.
+
+#### Fixed
+
+- **The cap's `SpendMonitor` is now built once per instance, not per `forward()`
+  call.** It was rebuilt on every call, so `r.resolve(a); r.resolve(b)` spent **2x**
+  the budget and N resolves spent N x. Harmless for a one-shot verb call; wrong for
+  a long-lived object. Two `resolve()` calls on one `Resolver` now share one budget.
+- **A cap that has already tripped now costs $0 on the next call** instead of paying
+  for one more judgement before refusing.
+
+- **Every seam that scores through the matcher now shares ONE ledger.**
+  `AnchorStore._judge` reached through the Resolver's public `.module` attribute and
+  scored with the **raw** matcher — no cap, no ledger — so a paid `LLMMatcher` billed
+  without limit on every `assign()`, and a long-lived store is exactly the
+  many-`assign()` object that turns that into a real bill. The cause was structural:
+  the capped scorer was built inline at one call site, so every *other* caller
+  silently got the raw matcher. There is now a single internal accessor
+  (`Resolver._scorer()`); `resolve` / `predict` / `fit` / `AnchorStore.assign` all
+  route through it, and an AST sweep in the test suite bans
+  `<anything>.module.forward(...)` in `src/` so the next caller cannot reopen it.
+
+#### Changed / migration
+
+- **A paid `Matcher` scoring through `resolve()` / `predict()` on a `Resolver` that
+  previously ran unbounded now raises `BudgetExceeded` past $1.00.** Free matchers
+  (`"string"`, `"embedding"`) meter $0 and never trip. Pass `budget_usd=` to raise
+  it, or `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out
+  deliberately. `budget_usd=None` means "the default", **never** "uncapped" — you
+  cannot disable the cap by forgetting to pass it. `BudgetExceeded.partial_judgements`
+  still carries everything already paid for.
+- **`AnchorStore.assign()` now bills against its Resolver's budget** and raises
+  `BudgetExceeded` once that budget is gone (it previously spent unbounded). Build the
+  store from a `Resolver` with a `budget_usd=` sized for the store's whole lifetime,
+  not for one batch — `AnchorStore.build()`'s own `resolve()` pass draws down the same
+  ledger every later `assign()` draws from.
+- **`fit(method=Platt()/Isotonic())` is now capped too** — previously disclosed as a
+  known gap, now closed. Its scoring pass **is** its entire bill (the sklearn
+  calibrator itself is $0), so metering it is complete protection, not the partial
+  kind rejected for `distil()` below. `fit(..., pairs=...)` and
+  `fit(method=Finetune())` validation passes route through the same accessor; both
+  are $0 paths in practice (sklearn / a local fine-tuned LM), so the cap is a no-op
+  there — they go through it for uniformity, because "every `.forward()` on the
+  matcher is metered" is a rule that can be enforced, and "some are" is what caused
+  the `AnchorStore` hole.
+
+#### Known gap (scoped deliberately, not fixed here)
+
+- **`distil()` / `fit(method=MIPRO())` is not bound by the Resolver's `budget_usd`.**
+  DSPy's compile calls never reach `self.module.forward`, so the scoring accessor
+  cannot see them — a cap there would read as protection while covering nothing. It
+  keeps its own separate `method.budget_usd` monitor, which today observes **$0**
+  because DSPy-compile spend capture is itself deferred (issue #100). So a paid
+  `MIPROv2` compile is **effectively unbounded** until #100 lands. Left visibly open
+  rather than half-closed.
+
+**The guarantee, stated honestly:** spend is bounded by `budget_usd` **plus the cost
+of at most one further call**. An LLM call's cost is not knowable until it has been
+made, so "check before" can only mean "am I already at/over budget? then refuse the
+next call". No doc here claims more.
+
 ### Autoresearch: the self-tuning loop over blocking (epic #145, M1)
 
 A `propose → run → evaluate → keep-if-better` hill-climber that tunes a pipeline

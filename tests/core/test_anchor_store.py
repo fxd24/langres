@@ -21,26 +21,23 @@ import numpy as np
 import pytest
 
 from langres.core import (
-    AllPairsBlocker,
-    AnchorStore,
     Clusterer,
-    ClusterDelta,
     CompanySchema,
     Comparator,
-    CompositeBlocker,
-    EmbeddingScoreMatcher,
     ERCandidate,
-    KeyBlocker,
     Matcher,
     PairwiseJudgement,
     Resolver,
-    WeightedAverageMatcher,
 )
+from langres.core.anchor_store import AnchorStore, ClusterDelta
+from langres.core.blockers import AllPairsBlocker, CompositeBlocker, KeyBlocker
+from langres.core.matchers import EmbeddingScoreMatcher, WeightedAverageMatcher
 from langres.core.anchor_store import _schema_factory
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FakeEmbedder
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.reports import ScoreInspectionReport
+from langres.core.comparators import StringComparator
 
 # --- Test fixtures: a duplicate pair (1, 2) plus two uniques (3, 4). ---------
 
@@ -93,7 +90,7 @@ def _string_resolver(threshold: float = 0.6) -> Resolver:
 
 def _vector_resolver(threshold: float = 0.6, k_neighbors: int = 10) -> Resolver:
     """VectorBlocker + FAISS + FakeEmbedder pipeline (fast, deterministic, serializable)."""
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     index = FAISSIndex(embedder=FakeEmbedder(), metric="cosine")
     blocker: VectorBlocker[CompanySchema] = VectorBlocker(
         vector_index=index, schema=CompanySchema, text_field="name", k_neighbors=k_neighbors
@@ -411,7 +408,7 @@ def test_composite_blocker_reaches_child_schema_factory() -> None:
         ],
         op="union",
     )
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     resolver = Resolver(
         blocker=composite,
         comparator=comparator,
@@ -444,7 +441,7 @@ def test_nested_composite_blocker_supports_build_and_vector_assign() -> None:
     outer: CompositeBlocker[CompanySchema] = CompositeBlocker(
         [inner, KeyBlocker(schema=CompanySchema, key_field="address")], op="union"
     )
-    comparator = Comparator.from_schema(CompanySchema)
+    comparator = StringComparator.from_schema(CompanySchema)
     resolver = Resolver(
         blocker=outer,
         comparator=comparator,

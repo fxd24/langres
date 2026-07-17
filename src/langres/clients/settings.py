@@ -1,6 +1,6 @@
 """Central configuration for external services."""
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,14 +10,19 @@ class Settings(BaseSettings):
     This class loads configuration from environment variables.
     All fields are optional - validation happens when services are actually used.
 
+    Nothing here decides whether langres spends money. W4 deleted the
+    key-sniffing front door (``matcher="auto"``, ``core.presets``): a key
+    present in the environment no longer causes a paid call, because the paid
+    path only runs when the caller *names* a paid architecture
+    (``VectorLLMCascade(llm=...)``). These settings supply credentials to a
+    model the user already chose; they never choose one.
+
     Discovery order (per field, highest priority first):
         1. Constructor kwargs -- ``Settings(openrouter_api_key="sk-...")``.
         2. Process environment (``os.environ``). A variable set to the EMPTY
-           string counts as *set* and wins over the ``.env`` file -- and an
-           empty key is treated as absent by ``matcher="auto"``, so
-           ``OPENROUTER_API_KEY="" OPENAI_API_KEY=""`` is the per-key way to
-           force a keyless run. (Merely *unsetting* the variable does NOT: the
-           ``.env`` file below refills it.)
+           string counts as *set* and wins over the ``.env`` file. (Merely
+           *unsetting* the variable does NOT: the ``.env`` file below refills
+           it.)
         3. ``.env`` in the CURRENT WORKING DIRECTORY (``env_file=".env"`` is
            CWD-relative; pydantic-settings does not walk up parent
            directories). This is the conventional project-``.env`` pickup.
@@ -25,19 +30,13 @@ class Settings(BaseSettings):
     Note: litellm separately runs ``load_dotenv()`` at import time, which DOES
     walk up the directory tree from its install location and loads the nearest
     ``.env`` into ``os.environ`` (without overriding already-set variables).
-    That side effect never influences ``matcher="auto"``'s key discovery -- the
-    auto decision is made from this class BEFORE litellm is ever imported.
+    This is why environment scrubbing was never a spend guard: the cure is
+    structural (construct ``FuzzyString`` and there is nothing that could bill
+    you), not a variable you unset.
 
     Environment variables:
-        LANGRES_OFFLINE: When truthy ("1"/"true"), ``matcher="auto"`` treats
-            every API key as absent and raises ``NoMatcherAvailableError``
-            deterministically -- the process-wide switch to force keyless
-            behavior (empty string / "0" / "false" / unset mean off).
-            Scoped to auto-discovery only: an explicit ``matcher=`` choice in
-            code is unaffected. See langres.core.presets.choose_auto_judge.
         OPENAI_API_KEY: OpenAI API key
-        OPENROUTER_API_KEY: OpenRouter API key (drives matcher="auto" model
-            selection; see langres.core.presets.choose_auto_judge)
+        OPENROUTER_API_KEY: OpenRouter API key
         WANDB_API_KEY: Weights & Biases API key
         WANDB_PROJECT: W&B project name (default: "langres")
         WANDB_ENTITY: W&B entity/team name (optional)
@@ -99,13 +98,6 @@ class Settings(BaseSettings):
         settings = Settings()
     """
 
-    # Offline switch: matcher="auto" treats every API key as absent when true.
-    # Deterministic because the process env beats the .env file (see the
-    # discovery order in the class docstring) -- setting LANGRES_OFFLINE=1
-    # forces the keyless fail-fast path even when a .env in the CWD carries a
-    # real key. Scoped to auto-discovery; explicit matcher= choices bypass it.
-    langres_offline: bool = False
-
     # OpenAI / LLM
     openai_api_key: str | None = None
     openrouter_api_key: str | None = None
@@ -140,26 +132,16 @@ class Settings(BaseSettings):
     trackio_space_id: str | None = None
     trackio_dataset_id: str | None = None
 
-    @field_validator("langres_offline", mode="before")
-    @classmethod
-    def _empty_offline_is_off(cls, value: object) -> object:
-        """Map ``LANGRES_OFFLINE=""`` to off instead of a bool ValidationError.
-
-        Consistent with the empty-string-means-absent key contract (class
-        docstring, discovery order step 2): an explicitly empty variable means
-        "not set", never a crash.
-        """
-        return False if value == "" else value
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         # Case sensitive to match env vars exactly
         case_sensitive=False,
-        # NOTE: env_ignore_empty deliberately stays at its default (False).
-        # The keyless-run contract depends on it: an env var set to "" must
-        # WIN over the .env file (and then read as absent), or no environment
-        # manipulation could ever force a keyless run inside a repo whose
-        # .env carries a real key. See the class docstring, discovery step 2.
+        # NOTE: env_ignore_empty deliberately stays at its default (False), so
+        # an env var set to "" WINS over the .env file rather than falling
+        # through to it. This used to be load-bearing for the keyless-run
+        # contract (forcing matcher="auto" to find no key); W4 deleted that
+        # path, so it is now just the least surprising precedence rule --
+        # explicitly empty means empty, not "consult the file".
     )

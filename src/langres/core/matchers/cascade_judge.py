@@ -27,12 +27,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
 
-from langres.clients.openrouter import BudgetExceeded
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import GroupwiseMatcher, Matcher, SchemaT
 from langres.core.registry import get_component, register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.core.serialization import SerializableState
+from langres.core.spend import BudgetExceeded
 
 #: ``decision_step`` stamped on pairs the student answered (score outside the
 #: band). The tier is rewritten into ``decision_step`` -- not only provenance --
@@ -81,13 +81,21 @@ class CascadeMatcher(Matcher[SchemaT]):
     judgement with a non-probability ``score_type`` triggers a one-time
     ``UserWarning`` per CascadeMatcher instance.
 
-    Spend caps belong on the OUTSIDE of a cascade, not on a tier. ``forward``
-    runs the escalation judge once per band pair, so a per-call spend cap
-    wrapping the *escalation child* would reset its budget every pair and only
-    ever bound a single pair's cost -- never the tier's cumulative spend. The
-    verbs (``link`` / ``dedupe``) already apply their ``budget_usd`` cap around
-    the whole resolved judge, which correctly sees the escalated cost via
+    Spend caps belong on the OUTSIDE of a cascade, not on a tier. A cap around
+    the whole cascade meters BOTH tiers -- the cheap student's cost and the
+    escalation's -- against one budget, which is what a caller means by "spend
+    at most $X on this matcher"; a cap on the escalation child alone bounds only
+    that tier and silently ignores the rest. ``langres.link``/``dedupe`` and
+    :class:`~langres.core.resolver.Resolver` all apply their ``budget_usd`` cap
+    around the whole resolved judge, which sees the escalated cost via
     ``provenance["cost_usd"]``; keep it there. Pass bare judges as the tiers.
+
+    (Before B1 there was a sharper reason: the cap rebuilt its ledger on every
+    ``forward()`` call, and ``forward`` runs the escalation judge once per band
+    pair, so a tier-level cap reset its budget every pair and bounded nothing.
+    :class:`~langres.core.spend_cap.SpendCappedMatcher`'s ledger is per instance
+    now, so a tier-level cap does at least accumulate -- it is merely the wrong
+    scope, no longer inert.)
 
     Serialization mirrors :class:`~langres.core.blockers.composite.CompositeBlocker`:
     children serialize as ``{"type_name", "config"}`` registry specs, and

@@ -361,7 +361,7 @@ def main() -> None:
 
             if DEBUG_ARTIFACTS:
                 try:
-                    from langres.core import PipelineDebugger
+                    from langres.core.debugging import PipelineDebugger
                     import wandb
 
                     logger.info(f"Generating debug artifacts for trial {trial.number}...")
@@ -514,7 +514,7 @@ def main() -> None:
     # =====================================================================
     logger.info("Generating test evaluation debug report...")
 
-    from langres.core import PipelineDebugger
+    from langres.core.debugging import PipelineDebugger
     import wandb
 
     test_debugger: PipelineDebugger[CompanySchema] = PipelineDebugger(

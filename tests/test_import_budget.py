@@ -514,125 +514,108 @@ def test_import_langres_does_not_leak_env_from_dotenv(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+#: Implementations ``langres.core`` deliberately no longer re-exports, and the
+#: package that owns each one now. Data for
+#: ``TestCoreLazyGetattr::test_implementations_are_not_re_exported``.
+_MOVED_OFF_THE_FACADE: dict[str, str] = {
+    "AllPairsBlocker": "langres.core.blockers",
+    "CompositeBlocker": "langres.core.blockers",
+    "KeyBlocker": "langres.core.blockers",
+    "VectorBlocker": "langres.core.blockers",
+    "StringComparator": "langres.core.comparators",
+    "AnchorStore": "langres.core.anchor_store",
+    "Canonicalizer": "langres.core.canonicalizer",
+    "CorrelationClusterer": "langres.core.clusterers",
+    "CascadeMatcher": "langres.core.matchers",
+    "EmbeddingScoreMatcher": "langres.core.matchers",
+    "WeightedAverageMatcher": "langres.core.matchers",
+    "LLMMatcher": "langres.core.matchers",
+    "RandomForestMatcher": "langres.core.matchers.random_forest_judge",
+    "SelectMatcher": "langres.core.matchers.select_judge",
+    "SentenceTransformerEmbedder": "langres.core.embeddings",
+    "FakeEmbedder": "langres.core.embeddings",
+    "FAISSIndex": "langres.core.indexes",
+    "VectorIndex": "langres.core.indexes",
+    "PipelineDebugger": "langres.core.debugging",
+}
+
+
 class TestCoreLazyGetattr:
-    """``langres.core.__getattr__`` for the [semantic]/[llm] symbols + submodules."""
+    """``langres.core.__getattr__`` for the optional-extra symbols left on the facade.
 
-    def test_vector_blocker_resolves_and_caches(self) -> None:
-        pytest.importorskip("faiss", reason="requires the [semantic] extra")
-        import langres.core as core
+    ``langres.core`` carries **contracts** only, so the lazy names here are the
+    contract-adjacent handful that still need an extra: ``Calibrator``
+    (scikit-learn, ``[trained]``) and the ``MlflowTracker``/``WandbTracker``
+    adapters. The *implementations* keep their own lazy seams in the packages
+    that own them -- covered by ``TestBlockersPackageLazyGetattr`` and
+    ``TestModulesPackageLazyGetattr`` below, which assert exactly the
+    resolve/cache/actionable-ImportError behaviour this class used to assert
+    for the same classes via the facade.
+    """
 
-        vb = core.VectorBlocker
-        from langres.core.blockers.vector import VectorBlocker
-
-        assert vb is VectorBlocker
-        # Cached on the module namespace -- a second access must not re-hit
-        # __getattr__ (it's now a plain module attribute).
-        assert core.__dict__["VectorBlocker"] is VectorBlocker
-
-    def test_llm_judge_resolves(self) -> None:
-        pytest.importorskip("litellm", reason="requires the [llm] extra")
-        import langres.core as core
-
-        from langres.core.matchers.llm_judge import LLMMatcher
-
-        assert core.LLMMatcher is LLMMatcher
-
-    def test_random_forest_judge_resolves(self) -> None:
+    def test_calibrator_resolves_and_caches(self) -> None:
         pytest.importorskip("sklearn", reason="requires the [trained] extra")
         import langres.core as core
 
-        from langres.core.matchers.random_forest_judge import RandomForestMatcher
+        cal = core.Calibrator
+        from langres.core.calibration import Calibrator
 
-        assert core.RandomForestMatcher is RandomForestMatcher
+        assert cal is Calibrator
+        # Cached on the module namespace -- a second access must not re-hit
+        # __getattr__ (it's now a plain module attribute).
+        assert core.__dict__["Calibrator"] is Calibrator
 
-    def test_select_judge_resolves(self) -> None:
-        pytest.importorskip("dspy", reason="requires the [llm] extra")
+    def test_implementations_are_not_re_exported(self) -> None:
+        """The facade is contracts-only: an implementation must NOT resolve here.
+
+        This is the regression guard for the facade-emptying wave -- re-adding
+        any of these to a ``core/_exports`` fragment puts ``langres.core`` back
+        above the components it sits beneath and re-knots the import graph
+        (``tests/test_import_tangle.py`` is the ratchet that measures the cost).
+        """
         import langres.core as core
 
-        from langres.core.matchers.select_judge import SelectMatcher
+        for name, owner in _MOVED_OFF_THE_FACADE.items():
+            assert name not in core.__all__, (
+                f"{name} is back in langres.core.__all__ -- it is an implementation "
+                f"and belongs to {owner}"
+            )
+            with pytest.raises(AttributeError, match=name):
+                getattr(core, name)
 
-        assert core.SelectMatcher is SelectMatcher
-
-    def test_embeddings_and_indexes_symbols_resolve(self) -> None:
-        pytest.importorskip("sentence_transformers", reason="requires the [semantic] extra")
-        pytest.importorskip("faiss", reason="requires the [semantic] extra")
+    def test_contracts_are_still_re_exported(self) -> None:
+        """The other half of the split: the contracts stay on the facade."""
         import langres.core as core
 
-        from langres.core.embeddings import SentenceTransformerEmbedder
-        from langres.core.indexes.vector_index import FAISSIndex
+        for name in (
+            "Blocker",
+            "Comparator",
+            "Matcher",
+            "GroupwiseMatcher",
+            "Clusterer",
+            "Resolver",
+            "ERCandidate",
+            "PairwiseJudgement",
+            "register",
+        ):
+            assert name in core.__all__, f"{name} is a contract and must stay on langres.core"
+            assert getattr(core, name) is not None
 
-        assert core.SentenceTransformerEmbedder is SentenceTransformerEmbedder
-        assert core.FAISSIndex is FAISSIndex
-
-    def test_vector_blocker_raises_actionable_import_error_when_semantic_absent(self) -> None:
-        """Core-only install (no [semantic]): a real, un-simulated ImportError.
+    def test_calibrator_raises_actionable_import_error_when_trained_absent(self) -> None:
+        """Core-only install (no [trained]): a real, un-simulated ImportError.
 
         Unlike ``test_missing_dependency_raises_actionable_import_error``
         below (which *simulates* absence via monkeypatching so it also runs
         when the extra IS installed), this exercises the genuine failure path
         -- meaningful only in a core-only environment, so it skips itself when
-        faiss is actually importable.
+        scikit-learn is actually importable.
         """
-        if _import_ok("faiss"):
-            pytest.skip("faiss is installed ([semantic] extra present) -- nothing to observe")
-        import langres.core as core
-
-        with pytest.raises(ImportError, match=r"langres\.core\.VectorBlocker.*langres\[semantic\]"):
-            core.VectorBlocker  # noqa: B018
-
-    def test_llm_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
-        """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""
-        if _import_ok("litellm"):
-            pytest.skip("litellm is installed ([llm] extra present) -- nothing to observe")
-        import langres.core as core
-
-        with pytest.raises(ImportError, match=r"langres\.core\.LLMMatcher.*langres\[llm\]"):
-            core.LLMMatcher  # noqa: B018
-
-    def test_random_forest_judge_raises_actionable_import_error_when_trained_absent(self) -> None:
-        """Core-only install (no [trained]): a real, un-simulated ImportError (see above)."""
         if _import_ok("sklearn"):
             pytest.skip("scikit-learn is installed ([trained] extra present) -- nothing to observe")
         import langres.core as core
 
-        with pytest.raises(
-            ImportError, match=r"langres\.core\.RandomForestMatcher.*langres\[trained\]"
-        ):
-            core.RandomForestMatcher  # noqa: B018
-
-    def test_select_judge_raises_actionable_import_error_when_llm_absent(self) -> None:
-        """Core-only install (no [llm]): a real, un-simulated ImportError (see above)."""
-        if _import_ok("dspy"):
-            pytest.skip("dspy is installed ([llm] extra present) -- nothing to observe")
-        import langres.core as core
-
-        with pytest.raises(ImportError, match=r"langres\.core\.SelectMatcher.*langres\[llm\]"):
-            core.SelectMatcher  # noqa: B018
-
-    def test_submodules_resolve_to_the_module_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Attribute access resolves each submodule via ``__getattr__``.
-
-        Python's import machinery binds ``core.benchmark`` as a plain
-        attribute the moment *anything* does ``import langres.core.benchmark``
-        directly, bypassing ``__getattr__`` entirely -- and the wider test
-        suite legitimately does exactly that elsewhere (its own tests import
-        these submodules directly). Clearing the cached attribute first (same
-        pattern as the missing-dependency tests below) forces this access to
-        actually go through ``__getattr__``'s ``_LAZY_SUBMODULES`` branch
-        regardless of what already ran earlier in the suite.
-        """
-        import langres.core as core
-        import langres.core.benchmark as benchmark_mod
-        import langres.core.metrics as metrics_mod
-        import langres.core.optimizers as optimizers_mod
-
-        monkeypatch.delitem(vars(core), "benchmark", raising=False)
-        monkeypatch.delitem(vars(core), "metrics", raising=False)
-        monkeypatch.delitem(vars(core), "optimizers", raising=False)
-
-        assert core.benchmark is benchmark_mod
-        assert core.metrics is metrics_mod
-        assert core.optimizers is optimizers_mod
+        with pytest.raises(ImportError, match=r"langres\.core\.Calibrator.*langres\[trained\]"):
+            core.Calibrator  # noqa: B018
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
         import langres.core as core
@@ -641,27 +624,27 @@ class TestCoreLazyGetattr:
             core.not_a_real_attribute  # noqa: B018
 
     def test_missing_dependency_raises_actionable_import_error(self, monkeypatch) -> None:
-        """A missing [semantic]/[llm] package surfaces a 'pip install' hint, not a raw traceback."""
+        """A missing [trained] package surfaces a 'pip install' hint, not a raw traceback."""
         import importlib
 
         import langres.core as core
 
         # __getattr__ caches a successful resolution onto the module namespace
         # (see its docstring) -- an earlier test in this file may have already
-        # resolved and cached FAISSIndex, which would make this access skip
+        # resolved and cached Calibrator, which would make this access skip
         # __getattr__ entirely. Clear it so the patched import is actually hit.
-        monkeypatch.delitem(vars(core), "FAISSIndex", raising=False)
+        monkeypatch.delitem(vars(core), "Calibrator", raising=False)
 
         real_import_module = importlib.import_module
 
-        def _fail_for_faiss(name: str, *args: object, **kwargs: object) -> object:
-            if name == "langres.core.indexes":
-                raise ModuleNotFoundError("No module named 'faiss'")
+        def _fail_for_sklearn(name: str, *args: object, **kwargs: object) -> object:
+            if name == "langres.core.calibration":
+                raise ModuleNotFoundError("No module named 'sklearn'")
             return real_import_module(name, *args, **kwargs)
 
-        monkeypatch.setattr(core.importlib, "import_module", _fail_for_faiss)
-        with pytest.raises(ImportError, match=r"langres\.core\.FAISSIndex.*langres\[semantic\]"):
-            core.FAISSIndex  # noqa: B018
+        monkeypatch.setattr(core.importlib, "import_module", _fail_for_sklearn)
+        with pytest.raises(ImportError, match=r"langres\.core\.Calibrator.*langres\[trained\]"):
+            core.Calibrator  # noqa: B018
 
 
 class TestRootLazyGetattr:

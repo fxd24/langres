@@ -11,7 +11,7 @@
 
 ## Project Overview
 
-**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: user-facing **verbs** (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over low-level **`langres.core`** primitives. (Note: there is no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
+**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: named **architectures** (`langres.architectures.FuzzyString` / `VectorLLMCascade` — whole ER pipelines you construct, then call `.dedupe()`/`.compare()` on) over a declarative **`ERModel`** (aliased as `Resolver`) over low-level **`langres.core`** primitives. There is no `matcher="auto"` key-sniffing front door — W4 deleted the two module-level verbs (`langres.link`/`langres.dedupe`) and `core.presets` outright; naming a model is the user's job, not a heuristic's. (Note: there is also no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
 
 **Current Stage**: The initial POC — validating classical rapidfuzz, semantic
 vectors, and hybrid blocking + LLM matching — is **complete**;
@@ -36,7 +36,7 @@ path-scoped rule before editing files in its scope.
 
 **Path-scoped:**
 - `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
-- `component-design.md` *(`src/**`)* — the layered API (verbs → Resolver → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the three judge-dispatch sites).
+- `component-design.md` *(`src/**`)* — the layered API (architectures → ERModel → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the three judge-dispatch sites).
 - `testing.md` *(`tests/**`)* — tiered coverage (high on `core`, behavior-focused on harness), markers, human-like dev-iteration loop.
 - `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
@@ -49,11 +49,12 @@ path-scoped rule before editing files in its scope.
 ```
 langres/
 ├── src/langres/
-│   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
-│   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
-│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm), NoJudgeAvailableError, spend cap
+│   │   ├── resolver.py     # ERModel (aliased Resolver): from_schema / dedupe / compare / resolve / save / load; no matcher="auto"
+│   │   ├── inputs.py       # normalize_records: raw dicts -> (schema, normalized records); schema inference for a schema-less dedupe()/compare()
+│   │   ├── results.py      # LinkVerdict / DedupeResult — architecture + backbone + score_type + threshold
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
@@ -69,7 +70,7 @@ langres/
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 ├── tests/              # Test suite
-├── examples/           # Usage examples (quickstart_verbs.py is the offline quickstart)
+├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)
 └── docs/               # Documentation
 ```
 
@@ -85,7 +86,7 @@ modules, a general `Optimizer`, a synthetic data generator.
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
 
-These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
+These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `dedupe()`/`compare()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 

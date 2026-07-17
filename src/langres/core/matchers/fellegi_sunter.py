@@ -43,7 +43,7 @@ import random
 from collections.abc import Iterator, Sequence
 from typing import ClassVar, cast
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonVector
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT

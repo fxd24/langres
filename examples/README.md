@@ -21,12 +21,12 @@ docstring and are gated behind an explicit flag or a hard budget cap.
 
 ## Start here
 
-Run in this order for the intended newcomer progression — verbs quickstart →
+Run in this order for the intended newcomer progression — models quickstart →
 dedupe → resolver → incremental assign → golden record → signal log →
 flywheel harvest → closed-loop flywheel → person:
 
-- **`quickstart_verbs.py`** — dedupe records with zero labels in a handful of
-  lines, offline and $0 by default (`langres.dedupe`'s zero-spend string judge).
+- **`quickstart_models.py`** — dedupe records with zero labels in a handful of
+  lines by naming a model: `FuzzyString`, the $0, offline, no-key architecture.
 - **`basic_usage.py`** — the foundational data contracts (`CompanySchema`,
   `ERCandidate`, `PairwiseJudgement`).
 - **`deduplication_example.py`** — end-to-end entity resolution on a
@@ -38,7 +38,7 @@ flywheel harvest → closed-loop flywheel → person:
 - **`canonicalizer_enrichment.py`** — the enrichment loop: a sparse mention
   links to an entity and enriches its golden record ($0, deterministic).
 - **`judgement_log_demo.py`** — the flywheel inlet: log every judge call
-  (`log=` on `dedupe()`/`link()`), then read the log back.
+  (`log=` on a model's `.dedupe()`/`.compare()`), then read the log back.
 - **`flywheel_threshold_harvest.py`** — the flywheel outlet: logged verdicts +
   human corrections feed `derive_threshold` to re-calibrate a decision threshold.
 - **`flywheel_closed_loop.py`** — the whole loop closed end to end at **$0**:

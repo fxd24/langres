@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import StringComparator
+from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, ComparisonVector, FeatureSpec
 from langres.core.matchers.fellegi_sunter import _GUARD_EPS, _PROB_EPS, FellegiSunterMatcher
 from langres.core.models import CompanySchema, ERCandidate
@@ -699,7 +699,8 @@ class TestSerialization:
         assert rebuilt_scores == pytest.approx(original_scores)
 
     def test_resolver_with_fs_judge_saves_and_loads(self, tmp_path: Path) -> None:
-        from langres.core import AllPairsBlocker, Clusterer, Resolver
+        from langres.core import Clusterer, Resolver
+        from langres.core.blockers import AllPairsBlocker
 
         comparator = _company_comparator()
         judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(
@@ -732,7 +733,8 @@ class TestSerialization:
         actually fires on plain ``import langres.core``, not just because this
         test file happened to import the class first.
         """
-        from langres.core import AllPairsBlocker, Clusterer, Resolver
+        from langres.core import Clusterer, Resolver
+        from langres.core.blockers import AllPairsBlocker
 
         comparator = _company_comparator()
         judge: FellegiSunterMatcher[CompanySchema] = FellegiSunterMatcher(

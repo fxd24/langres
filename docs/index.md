@@ -3,16 +3,17 @@
 **Composable, optimizable entity resolution for Python.**
 
 langres resolves records that refer to the same real-world entity — deduplicating
-one dataset or linking two — through a layered API: two user-facing **verbs**
-(`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over
-low-level **`langres.core`** primitives — blockers (pick candidate pairs),
-judges (score whether a pair matches), clusterers (group the matches) — that
-you can swap, tune, and evaluate independently.
+one dataset or linking two — through a layered API: named **architectures**
+(`FuzzyString`, `VectorLLMCascade`) — whole ER pipelines you construct — over
+the declarative **`ERModel`** (aliased as `Resolver`) over low-level
+**`langres.core`** primitives — blockers (pick candidate pairs), matchers
+(score whether a pair matches), clusterers (group the matches) — that you can
+swap, tune, and evaluate independently.
 
 ```python
-import langres
+from langres.architectures import FuzzyString
 
-clusters = langres.dedupe(records)  # matcher="auto" picks the best available judge
+clusters = FuzzyString().dedupe(records)  # $0, offline, no key — you named the model
 ```
 
 Install from PyPI:
@@ -39,6 +40,6 @@ pip install langres
 ## Project status
 
 langres is a 0.x beta, [released on PyPI](https://pypi.org/project/langres/)
-under Apache-2.0. The verbs / `Resolver` / `core` contracts are stable enough
-to build on, but expect breaking changes between 0.x releases — see the
-[Roadmap](ROADMAP.md) and [Changelog](CHANGELOG.md).
+under Apache-2.0. The named architectures / `ERModel` (`Resolver`) / `core`
+contracts are stable enough to build on, but expect breaking changes between
+0.x releases — see the [Roadmap](ROADMAP.md) and [Changelog](CHANGELOG.md).

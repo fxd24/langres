@@ -1,13 +1,14 @@
 # Testing an ER pipeline at $0 (DummyLM)
 
 An LLM judge costs money and needs a network. Neither belongs in a unit test or
-CI run. langres' verbs (`link` / `dedupe`) and its `Resolver` all accept a
-**`Matcher` instance** in the `matcher=` slot — the escape hatch that lets you swap
-the real LLM for a **`DummyLM`**-backed judge that replays canned answers
+CI run. Every `ERModel` — the base class `Resolver.from_schema` builds, and the
+named architectures in `langres.architectures` construct internally — takes a
+**`Matcher` instance** in its `matcher=` slot: the escape hatch that lets you
+swap the real LLM for a **`DummyLM`**-backed judge that replays canned answers
 offline, deterministically, and for **$0**.
 
 This is the same seam the project's own test suite runs on (see
-[`tests/test_verbs.py`](https://github.com/fxd24/langres/blob/main/tests/test_verbs.py) and
+[`tests/architectures/`](https://github.com/fxd24/langres/blob/main/tests/architectures/) and
 [`tests/core/modules/test_dspy_judge.py`](https://github.com/fxd24/langres/blob/main/tests/core/modules/test_dspy_judge.py)).
 
 > **Why this matters — the spend footgun.** `import langres` eagerly imports
@@ -25,13 +26,14 @@ This is the same seam the project's own test suite runs on (see
 `DummyLM` (from `dspy.utils.dummies`) is a DSPy language model that returns
 **canned answers** instead of calling a provider. You build a real judge
 (`DSPyMatcher` for pairwise, `SelectMatcher` for set-wise) around it and pass the
-judge as `matcher=`:
+judge as `matcher=` to `Resolver.from_schema` (or wire it directly into an
+`ERModel`'s `matcher=` slot):
 
 ```python
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
-from langres import dedupe
+from langres import Resolver
 from langres.core.matchers.dspy_judge import DSPyMatcher
 
 
@@ -51,10 +53,12 @@ def test_dedupe_merges_matching_records() -> None:
         {"id": "a", "name": "Acme Corp"},
         {"id": "b", "name": "Acme Corporation"},
     ]
-    result = dedupe(records, schema=Company, matcher=judge, threshold=0.5)
+    resolver = Resolver.from_schema(Company, matcher=judge, threshold=0.5)
+    result = resolver.dedupe(records)
 
-    assert result == [{"a", "b"}]        # the pair merged into one cluster
-    assert result.judge_used == "custom"  # an injected Matcher reports as "custom"
+    assert result == [{"a", "b"}]           # the pair merged into one cluster
+    assert result.architecture == "ERModel"  # from_schema returns the base class
+    assert result.backbone == "openrouter/openai/gpt-4o-mini"  # DSPyMatcher's default model id
 ```
 
 No key, no network, no spend — and the assertion is exact because DummyLM's
@@ -62,18 +66,20 @@ answer is fixed. The judge still runs the *real* `DSPyMatcher.forward` code
 (rendering, parsing, scoring, provenance); only the model call is faked, so you
 are testing your pipeline wiring, not a mock of it.
 
-The same injection works for `link` and for a `Resolver` (both blocks below reuse
-the `answer` dict and `Company` schema from the test above):
+The same injection works for `.compare()` and for a component-wired `ERModel`
+directly (both blocks below reuse the `answer` dict and `Company` schema from
+the test above):
 
 ```python
-from langres import link
+from langres import Resolver
 
-verdict = link(
-    {"id": "a", "name": "Acme"},
-    {"id": "b", "name": "Acme Inc"},
-    schema=Company,
+verdict = Resolver.from_schema(
+    Company,
     matcher=DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company"),
     threshold=0.5,
+).compare(
+    {"id": "a", "name": "Acme"},
+    {"id": "b", "name": "Acme Inc"},
 )
 assert verdict.match is True
 assert verdict.score == 0.95          # the parsed match_probability
@@ -81,15 +87,16 @@ assert verdict.score_type == "prob_llm"
 ```
 
 ```python
-from langres.core import AllPairsBlocker, Clusterer, Resolver
+from langres.core import Clusterer, ERModel
+from langres.core.blockers import AllPairsBlocker
 
-resolver = Resolver(
+model = ERModel(
     blocker=AllPairsBlocker(schema=Company),
     comparator=None,
     matcher=DSPyMatcher(lm=DummyLM([answer] * 20), entity_noun="company"),
     clusterer=Clusterer(threshold=0.5),
 )
-assert resolver.resolve(records) == [{"a", "b"}]
+assert model.resolve(records) == [{"a", "b"}]
 ```
 
 ---
@@ -126,17 +133,19 @@ assert judgements[0].provenance["cost_usd"] == 0.0    # DummyLM = $0
 
 ## Key facts
 
-- **`matcher=<Matcher>` is the seam.** Any `Matcher` instance passed to `link` /
-  `dedupe` is used verbatim and reported as `judge_used="custom"`; passed to a
-  `Resolver`, it just fills the `module` slot.
+- **`matcher=<Matcher>` is the seam.** Any `Matcher` instance passed to
+  `Resolver.from_schema(matcher=...)` or wired directly into an `ERModel`'s
+  `matcher=` slot is used verbatim; the model's own class name is what
+  `result.architecture` reports (`"ERModel"` for the base class, or the named
+  architecture's own name if you subclass one) — there is no `"custom"` sentinel.
 - **DummyLM is deterministic.** It replays its canned answers, so assertions are
   exact — no flakiness, no seeds.
 - **Cost is honest and zero.** Under DummyLM, token counts are 0, so the
-  `provenance["cost_usd"]` a judge stamps is `$0`; the built-in spend cap on the
-  verbs never trips.
+  `provenance["cost_usd"]` a judge stamps is `$0`; the built-in spend cap on
+  every `ERModel` never trips.
 - **DSPy is an extra.** `DSPyMatcher` / `SelectMatcher` / `DummyLM` live behind the
-  `[llm]` extra: `uv sync --extra llm` (or `--all-extras`). The string /
-  embedding judges need no LLM at all — for those, `matcher="string"` is already a
+  `[llm]` extra: `uv sync --extra llm` (or `--all-extras`). `FuzzyString` (or
+  `Resolver.from_schema(matcher="string")`) needs no LLM at all — it is already a
   $0 offline path with nothing to inject.
 - **Guard the suite.** Run `uv run pytest -m "not integration"` to keep live,
   paid integration tests out. A bare `pytest` can spend.

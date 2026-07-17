@@ -97,9 +97,10 @@ nav:
   - Changelog: CHANGELOG.md
   - API Reference:
       - reference/index.md
-      - langres (verbs & root exports): reference/langres.md
+      - langres (root exports): reference/langres.md
       - langres.eval: reference/eval.md
-      - Resolver: reference/resolver.md
+      - Architectures (FuzzyString, VectorLLMCascade): reference/architectures.md
+      - ERModel: reference/resolver.md
       - Blockers: reference/blockers.md
       - Comparators: reference/comparators.md
       - Judges: reference/judges.md

@@ -9,7 +9,7 @@ graded side by side on Amazon-Google.**
 It runs four things, all under ONE hard :class:`~langres.clients.openrouter.SpendMonitor`
 cap so the run structurally cannot cross ``--budget`` (default $9, ceiling $10):
 
-1. ``langres.link()`` on one pair and ``langres.dedupe()`` on a small record set
+1. ``ERModel.compare()`` on one pair and ``.dedupe()`` on a small record set
    -- the user-facing verbs, on a real model, with honest per-call cost read back
    from the signal log.
 2. A single **SelectMatcher GROUP call** -- one LLM call judging a whole anchor
@@ -81,8 +81,9 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 from dotenv import load_dotenv  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
-from langres import dedupe, link  # noqa: E402
+from langres.core.resolver import ERModel  # noqa: E402
 from langres.clients.openrouter import (  # noqa: E402
     PRICES_PER_1M,
     BudgetExceeded,
@@ -154,8 +155,23 @@ _EST_OUT_TOK_PER_GROUP = 150.0
 _DEFAULT_LOG_PATH = Path("data/benchmarks/w3/w3_smoke_judgements.jsonl")
 _DEFAULT_RESULTS_PATH = Path("data/benchmarks/w3/w3_smoke_results.json")
 
-#: Tiny, self-contained product records for the link()/dedupe() demo (#1). The
+
+#: Tiny, self-contained product records for the compare()/dedupe() demo (#1). The
 #: dedupe set has one obvious duplicate ("apple ipod nano 8gb" twice).
+class _Product(BaseModel):
+    """The product entity shape.
+
+    Named explicitly because ``ERModel.from_schema`` asks for a real schema. The
+    verbs used to infer one from the records' keys; that inference is gone with
+    them, and this is what it was inferring — four ``str | None`` fields.
+    """
+
+    id: str
+    title: str | None = None
+    manufacturer: str | None = None
+    price: str | None = None
+
+
 _LINK_LEFT: dict[str, Any] = {
     "id": "demo-a1",
     "title": "Canon PowerShot SD1100IS 8MP Digital Camera (Blue)",
@@ -347,35 +363,34 @@ def run_smoke(
 
     # --- (1) + (3) link + dedupe with a JudgementLog signal log ------------
     log = JudgementLog(cfg.log_path)
-    verdict = link(
-        _LINK_LEFT,
-        _LINK_RIGHT,
-        matcher=_build_dspy_judge(cfg.model, dspy_lm, prices),
-        entity_noun=ENTITY_NOUN,
-        budget_usd=max(0.01, monitor.remaining),
-        log=log,
-    )
-    clusters = dedupe(
-        _DEDUPE_RECORDS,
+    verdict = ERModel.from_schema(
+        _Product,
         matcher=_build_dspy_judge(cfg.model, dspy_lm, prices),
         entity_noun=ENTITY_NOUN,
         threshold=0.5,
         budget_usd=max(0.01, monitor.remaining),
-        log=log,
-    )
+    ).compare(_LINK_LEFT, _LINK_RIGHT, log=log)
+    clusters = ERModel.from_schema(
+        _Product,
+        matcher=_build_dspy_judge(cfg.model, dspy_lm, prices),
+        entity_noun=ENTITY_NOUN,
+        threshold=0.5,
+        budget_usd=max(0.01, monitor.remaining),
+    ).dedupe(_DEDUPE_RECORDS, log=log)
     rows = log.read()
     verb_cost = sum(float(row.get("cost_usd") or 0.0) for row in rows)
     _charge(monitor, verb_cost, [])
-    results["link"] = {
+    results["compare"] = {
         "match": verdict.match,
         "score": verdict.score,
-        "judge_used": verdict.judge_used,
+        "architecture": verdict.architecture,
+        "backbone": verdict.backbone,
     }
     results["dedupe"] = {"clusters": [sorted(c) for c in clusters], "n_clusters": len(clusters)}
     results["signal_log_rows"] = len(rows)
     results["verb_cost_usd"] = verb_cost
     logger.info(
-        "[1+3] link -> %r | dedupe -> %d clusters | signal log: %d rows | verb cost $%.4f",
+        "[1+3] compare -> %r | dedupe -> %d clusters | signal log: %d rows | cost $%.4f",
         verdict,
         len(clusters),
         len(rows),
