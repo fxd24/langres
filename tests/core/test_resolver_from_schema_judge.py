@@ -102,12 +102,20 @@ class TestFromSchemaJudgeOptions:
         resolver = Resolver.from_schema(ResolverJudgeCo, matcher=injected)
         assert resolver.module is injected
 
-    def test_auto_is_rejected_with_guidance_to_verbs(self) -> None:
-        with pytest.raises(ValueError, match="verbs-layer feature"):
+    def test_auto_is_rejected_and_points_at_a_named_architecture(self) -> None:
+        """``"auto"`` is gone, not relocated: W4 deleted the key-sniffing path.
+
+        The guidance must name a *model class* now. Pointing at the old verbs
+        would be worse than useless -- they were deleted in the same wave.
+        """
+        with pytest.raises(ValueError, match="There is no 'auto'") as exc_info:
             Resolver.from_schema(ResolverJudgeCo, matcher="auto")  # type: ignore[arg-type]
+        message = str(exc_info.value)
+        assert "FuzzyString" in message
+        assert "langres.link" not in message and "langres.dedupe" not in message
 
     def test_unknown_judge_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="unsupported judge") as exc_info:
+        with pytest.raises(ValueError, match="unsupported matcher") as exc_info:
             Resolver.from_schema(ResolverJudgeCo, matcher="not-a-real-judge")  # type: ignore[arg-type]
         # All five allowed shorthands are named in the guidance (random_forest joined
         # the original four).
