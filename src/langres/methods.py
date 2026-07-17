@@ -79,10 +79,9 @@ from langres.core.resolver import Resolver
 from langres._method_names import ALL_METHODS, LLM_METHODS, ZERO_SPEND_METHODS
 
 #: Default LLM model id for the LLM/cascade methods -- an alias of the one
-#: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``, the same
-#: literal behind ``presets.DEFAULT_AUTO_MODEL``) so the benchmark harness
-#: cannot drift from the verbs on the default. Tests inject a mock client and
-#: ignore the model.
+#: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``) so the
+#: benchmark harness cannot drift from ``ERModel.from_schema`` on the default.
+#: Tests inject a mock client and ignore the model.
 DEFAULT_LLM_MODEL = DEFAULT_OPENROUTER_MODEL
 
 
