@@ -188,6 +188,14 @@ def test_an_adapter_on_a_served_kind_is_rejected() -> None:
         ModelRef(base="org/b", kind="api", adapter="org/a")
 
 
+@pytest.mark.parametrize("adapter", ["", 123])
+def test_a_malformed_adapter_is_rejected_on_direct_construction(adapter: Any) -> None:
+    # `normalize_model_ref` screens dicts, but the dataclass is public: an empty
+    # or non-string adapter must not survive construction either.
+    with pytest.raises(InvalidModelRefError, match="adapter must be a non-empty string"):
+        ModelRef(base="org/b", kind="hf", adapter=adapter)
+
+
 def test_endpoint_requires_api_base_and_others_forbid_it() -> None:
     with pytest.raises(InvalidModelRefError, match="requires api_base"):
         ModelRef(base="m", kind="endpoint")
