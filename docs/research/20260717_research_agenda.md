@@ -186,12 +186,14 @@ directions and one of them contradicts our own theory doc**:
   effects are **separately measurable with components we already have**. `[verified]`
 
 **What would settle it.** $\varphi$ is measurable today, but **not with an off-the-shelf
-call, and the obvious way to compute it is wrong**. The inventory is explicit that langres
-has **no false-positive-*rate* metric**: `core/metrics.py` computes FP *counts*
-(`PairMetrics.fp`, `classify_pairs`) and never counts true negatives. That omission is
-*correct* for ER in general — the negative class is $O(n^2)$, so a global FPR is
-meaningless — but $\varphi$ needs no global denominator. **Within a candidate set $E_B$ the
-false pairs are finite and countable**, and that count is exactly §6.2's $F_B$.
+call, and the obvious way to compute it is wrong**. langres has **no false-positive-*rate*
+metric**: the pair-classification path — `PairMetrics` / `classify_pairs` — computes FP
+*counts* and **carries no `tn`** (`core/metrics.py`). (`matthews_corrcoef` *does* tally a
+`tn`, but over a pre-labeled binary vector, not the ER negative class — so it yields a
+correlation coefficient, not an FPR.) That absence is *correct* for ER in general — the
+negative class is $O(n^2)$, so a global FPR is meaningless — but $\varphi$ needs no global
+denominator. **Within a candidate set $E_B$ the false pairs are finite and countable**, and
+that count is exactly §6.2's $F_B$.
 
 > **The trap, found by reading the source.** The natural formula —
 > `fp / (total_candidates - (tp + fn))` — is **wrong**. `classify_pairs`'s docstring is
@@ -365,8 +367,9 @@ already supports it (`langres/autoresearch/objective.py` — metric-agnostic ove
 architecture**. `[verified — read the source on current main]`
 
 Note this is *precisely* the code-level shape of §6.5's complaint: the loop that tunes the
-blocker **cannot currently see the matcher at all**. **Hard prerequisite: A1.** Do not
-start A2 before A1 reports.
+blocker **cannot currently see the matcher at all**. **Hard prerequisites: A1** (A2 has no
+teeth without a measured $\varphi$) **and A3** (the literature due-diligence that is the
+cheapest way to kill A2 — run it first). Do not start A2 before both report.
 
 ---
 
@@ -582,17 +585,24 @@ mostly *running* it, which is why it is cheap. Checked against the source:
   (**external-only, CC-BY-NC-4.0 — never vendored**, incompatible with Apache-2.0).
   **Every registered entry is `task="linkage"`; `"dedup"` is reserved and unused.** That
   is itself a portfolio finding: we have no registered dedup benchmark.
-- **Sizes are already pinned in the loaders**, and two are already known to be odd:
-  `[verified]`
+- **The sizes are already recorded** — in loader constants, dataset `ATTRIBUTION.md`/`SOURCE.md`
+  files, and pinned-count tests (not all in the `.py` loaders; the values were spot-checked
+  and are correct, but the provenance is spread across those three places). Two are already
+  known to be odd: `[verified — values confirmed; note the two split-sum totals are derived,
+  see below]`
 
   | Benchmark | Corpus | Positives → gold pairs | Note |
   |---|---|---|---|
   | `fodors_zagat` | 533 + 331 | **112 gold pairs** | Tiny. Saturation suspect #1. |
   | `febrl_person` | 500/side | 500, **1:1** | Synthetic; 1:1 by construction. |
-  | `abt_buy` | 1081 + 1092 | 1028 of 9575 pairs | |
-  | `amazon_google` | 1363 + 3226 | 1167 of 11460 pairs | |
+  | `abt_buy` | 1081 + 1092 | 1028 of 9575 pairs† | |
+  | `amazon_google` | 1363 + 3226 | 1167 of 11460 pairs† | |
   | `walmart_amazon` | 24628 | 962 → **846 components → 1092 pairs** | Closure *adds* pairs. |
   | `dblp_scholar` | **66879** | 5347 → **2351 clusters, 13763 pairs**; largest component **37** | |
+
+  † The pair *totals* 9575 and 11460 are **derived sums** of the fixed literature splits
+  (abt_buy 5743+1916+1916; amazon_google 6874+2293+2293, per each dataset's `ATTRIBUTION.md`),
+  **not** a single pinned number anywhere — so they are computed, not read off a constant.
 
   The `walmart_amazon` and `dblp_scholar` rows are the tell: **962 positives collapse to
   846 components but expand to 1092 gold pairs**, and DBLP-Scholar's largest component is
@@ -712,34 +722,47 @@ portfolio first. Note the macOS gotcha on file: **faiss + torch OpenMP segfault*
 
 ### C2 — Embedder + reranker, measured on ER data
 
-**The question.** The classic two-stage IR setup — bi-encoder retrieves, cross-encoder
-reranks. What does it actually buy on ER data, over (a) the embedder alone and (b) the
-LLM matcher we already run?
+**The question.** The classic two-stage IR setup — bi-encoder retrieves, a **cheap
+reranker** re-scores. What does a reranker actually buy on ER data, over (a) the embedder
+alone and (b) the LLM matcher we already run?
 
-**Why it matters to langres.** This is the *control* for the whole thread. langres's
-paid architecture (`VectorLLMCascade`) is already an embedder + an expensive reranker —
-the reranker just happens to be an LLM. A cross-encoder reranker is the cheap classical
-alternative that IR would reach for first, and **we have never measured it**. Without it,
-C1's and C3's numbers have no mid-point to sit against: we know the cheap end
-(cosine) and the expensive end (LLM), and nothing between.
+**Why it matters to langres.** This is the *control* for the whole thread. langres's paid
+architecture (`VectorLLMCascade`) is already an embedder + an expensive reranker — the
+reranker just happens to be an LLM. A **cheap** reranker is the classical alternative IR
+would reach for first, and **we have never measured one**. Without it, C1's and C3's
+numbers have no mid-point to sit against: we know the cheap end (cosine) and the expensive
+end (LLM), and nothing between.
 
-**What's already known.**
+**What's already known.** ⚠ **The "it's already wired" claim needed correcting — the wired
+reranker is not the one IR would reach for.**
 
-- **It is already wired.** `RerankingVectorIndex` exists at
-  `src/langres/core/indexes/reranking_vector_index.py`, alongside `FAISSIndex` and
-  `HybridVectorIndex`. This item is largely *measurement*, not construction. `[verified]`
+- **A reranking index is wired, but it is *late-interaction*, not a cross-encoder.**
+  `QdrantHybridRerankingIndex` (`src/langres/core/indexes/reranking_vector_index.py:45`,
+  test double `FakeHybridRerankingVectorIndex`) runs a **3-stage Qdrant pipeline: dense +
+  sparse prefetch → RRF/DBSF fusion → late-interaction (ColBERT/ColPali MaxSim) rerank**
+  (docstring, lines 1–11). Its sibling is `QdrantHybridIndex` (`hybrid_vector_index.py:39`),
+  not the "`HybridVectorIndex`" an earlier draft named — **neither `RerankingVectorIndex`
+  nor `HybridVectorIndex` exists**; that was a naming error, now fixed. A grep for
+  `cross-encoder` across `src/langres/core/` returns **nothing**. `[verified — read the
+  `__init__` `__all__` and the class docstrings]`
+- **So "measurement, not construction" was overstated.** The *late-interaction* arm is
+  wired and can be measured today; a **cross-encoder** arm (a monomer BERT-style
+  pair-scorer, the RocketQA/C4 denoiser reused as a reranker) is **not wired and needs
+  building**. The honest framing: one reranker family is free to measure, the other is a
+  small build.
 - **The IR result is the ANCE comparison in C1** — the cascade is the *baseline* ANCE
-  nearly matches at 100× the cost. So the interesting question is inverted from IR's: not
-  "does the cascade win" (it does, in IR) but **"is the cascade's margin worth its cost on
-  ER data, given ER's candidate sets are tiny compared to a web corpus?"**
+  nearly matches at ~100× lower *latency*. So the interesting question is inverted from
+  IR's: not "does the cascade win" (it does, in IR) but **"is the cascade's margin worth
+  its cost on ER data, given ER's candidate sets are tiny compared to a web corpus?"**
 - **Relevant caution:** reranker behavior at large $k$ is exactly what A1 is measuring
   (see *Drowning in Documents*). C2 and A1 share an apparatus and should share a run.
 
-**What would settle it.** Three-way comparison on the same candidate sets: cosine-only vs.
-cosine+cross-encoder vs. cosine+LLM. Report quality **and** cost per resolved record —
-cost is the axis this item exists to inform, and `SpendMonitor` already captures it.
-The decision it changes: whether `VectorLLMCascade` should have a cheaper sibling
-architecture.
+**What would settle it.** A four-way comparison on the same candidate sets: cosine-only vs.
+cosine + **late-interaction** rerank (wired) vs. cosine + **cross-encoder** rerank (needs
+building — reuse C4's cross-encoder) vs. cosine + LLM. Report quality **and** cost per
+resolved record — cost is the axis this item exists to inform, and `SpendMonitor` already
+captures it. The decision it changes: whether `VectorLLMCascade` should have a cheaper
+sibling architecture, and *which* reranker family that sibling should use.
 
 **Cost & prerequisites.** **Cheap.** CPU-feasible; **$0** for the cross-encoder arm, small
 paid spend (**$1–5**) for the LLM arm as the comparison point. Prerequisite: **B2**.
@@ -809,8 +832,9 @@ accordingly: measurement (1) is cheap and gates the rest.
 ### C4 — Does the RocketQA denoising result hold on ER data? ⭐
 
 **The question.** RocketQA showed that hard negatives mined from a retriever's top-k
-**actively hurt** unless a cross-encoder first strips the false negatives. **ER blocking
-output is dense with unlabeled true matches — the exact condition that triggers this.**
+**actively hurt** unless a cross-encoder first strips the false negatives. The trigger is
+*missing labels* — and langres's cold-start mining path (`bootstrap/`) runs without gold,
+so it *may* sit in that condition (though our fully-labeled benchmarks do not; see below).
 Does the result reproduce on ER data?
 
 **Why it matters to langres.** This is **the highest-value experiment on the board**, for
@@ -842,8 +866,9 @@ point:
   data*, denoised, lands **+3.99 above it**. The paper states the direction outright:
   *"the performance of the retriever **significantly decreases** by introducing hard
   negatives without denoising."*
-- **The mechanism is the ER condition exactly — and they quantified it.** RocketQA, on the
-  top-retrieved passages they sampled negatives from: *"We find that **about 70% of them
+- **The mechanism, and the number behind it — but whether it is "the ER condition"
+  depends entirely on labelling (see the trap below).** RocketQA, on the top-retrieved
+  passages they sampled negatives from: *"We find that **about 70% of them
   are actually positives or highly relevant.** Hence, it is likely to bring noise if we
   simply sample hard negatives from the top-retrieved passages by the dense retriever,
   **which is a widely adopted strategy**… As a comparison, we propose denoised hard
