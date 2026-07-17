@@ -6,11 +6,11 @@ Welcome to the langres documentation. This document provides a deep dive into th
 
 langres exposes a **three-layer API** — each layer a thin shell over the one below — so common tasks are one-liners while bespoke pipelines stay fully composable:
 
-- **Verbs — `langres.link` / `langres.dedupe`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. `matcher="auto"` picks an LLM judge from your API key under a default $1 spend cap; results are self-describing (`LinkVerdict`; a `dedupe` result carrying `judge_used` / `model` / `score_type` / `threshold` — every result names the judge *and* the underlying model that ran).
-- **`langres.Resolver`** (Mid-Level): the declarative pipeline. `Resolver.from_schema(schema, matcher=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
+- **Named architectures — `langres.architectures.FuzzyString` / `VectorLLMCascade`** (High-Level): the schema-optional, zero-label front door and the recommended entry point. A whole ER pipeline is a class you construct — `FuzzyString()` ($0, offline, no key: it has no paid model slot) or `VectorLLMCascade(llm=...)` (paid, spend-capped at $1 by default, because you constructed it — never because a heuristic sniffed an API key) — and call `.dedupe(records)` / `.compare(a, b)` on. Results are self-describing (`LinkVerdict`; a `DedupeResult` carrying `architecture` / `backbone` / `score_type` / `threshold` — every result names the model class *and* the underlying backbone that ran).
+- **`langres.Resolver`** (Mid-Level, a plain alias of the `ERModel` base class every named architecture subclasses): the declarative pipeline. `Resolver.from_schema(schema, matcher=...)` wires a default blocker + comparator + judge + clusterer from a Pydantic schema; `.resolve(records)` runs it and `.save`/`.load` serialize it (config registry, no pickle).
 - **`langres.core`** (Low-Level): the "power-user" API — the base classes (`Matcher`, `Blocker`, `Comparator`, `Clusterer`, judges) you compose into entirely new logic from scratch.
 
-> There is **no** `langres.tasks` / `langres.flows` module — those names were never built. The real layering is verbs → `Resolver` → `langres.core`.
+> There is **no** `langres.tasks` / `langres.flows` module — those names were never built. There is also no `langres.link` / `langres.dedupe` module-level verb and no `matcher="auto"` key-sniffing — naming a model is the caller's job, not a heuristic's. The real layering is named architectures → `Resolver` (`ERModel`) → `langres.core`.
 
 ## 2. The Abstraction Layer: langres as a "Glue" Framework
 
@@ -39,7 +39,8 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   (plus onnxruntime/optimum, fastembed): the embedding + ANN stack behind
   `VectorBlocker`, `EmbeddingScoreMatcher`, and `matcher="embedding"`.
 - **`[llm]`** — litellm / dspy-ai / openai: `LLMMatcher`, the DSPy-compiled
-  `DSPyMatcher`, and `matcher="zero_shot_llm"` / `matcher="auto"`. DSPy prompt
+  `DSPyMatcher`, `Resolver.from_schema(matcher="zero_shot_llm")`, and the
+  `VectorLLMCascade` architecture's escalation backbone. DSPy prompt
   optimization is real, but it lives *inside* `DSPyMatcher` — it is not an
   automatic compile pass over a whole pipeline.
 - **`[trained]`** — scikit-learn: `RandomForestMatcher` and
@@ -94,20 +95,20 @@ Three shipped layers, all built on `PairwiseJudgement.provenance`:
   `core.trackers.ExperimentTracker` seam with lazy `MlflowTracker` /
   `WandbTracker` adapters.
 
-## 3. High-Level API: the verbs (`dedupe` / `link`)
+## 3. High-Level API: named architectures (`ERModel.dedupe` / `.compare`)
 
-The two verbs are the one-liner front door. They infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>`), resolve a judge, and run the full blocking → scoring → clustering pipeline under a spend cap. The runnable, offline version lives in [`examples/quickstart_verbs.py`](https://github.com/fxd24/langres/blob/main/examples/quickstart_verbs.py).
+`langres.architectures.FuzzyString` / `VectorLLMCascade` are the one-liner front door: a whole ER pipeline is a class you construct, and `.dedupe()` / `.compare()` are methods on it. There is no `matcher="auto"` that sniffs your environment for an API key — the free path (`FuzzyString`, no paid model slot, cannot spend) and the paid path (`VectorLLMCascade(llm=...)`, spend-capped) both need you to name which one you want. Both infer an ephemeral schema from your records' keys (or take an explicit `schema=<YourModel>` at construction) and run the full blocking → scoring → clustering pipeline. The runnable, offline version lives in [`examples/quickstart_models.py`](https://github.com/fxd24/langres/blob/main/examples/quickstart_models.py).
 
-### dedupe
+### ERModel.dedupe
 
 **Definition:** Group a batch of records into entity clusters (single-source deduplication).
 
-`dedupe(records, *, matcher="auto", schema=None, threshold=None, budget_usd=None, log=None, ...)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `judge_used`, `model`, `score_type`, and the effective `threshold`. `model` is the underlying model that actually scored the batch: the resolved LLM id (e.g. `"openrouter/openai/gpt-4o-mini"`) for the LLM judges, the sentence-transformers embedder name for `matcher="embedding"`, an injected `Matcher`'s own `model` attribute for `judge_used="custom"`, and `None` for pure-string similarity. The same value backfills the `model` column of `JudgementLog` rows (`log=`) whenever the judge doesn't stamp its own, so result and log always agree.
+`model.dedupe(records, *, log=None)` returns a `DedupeResult` — a `list[set[str]]` of the multi-record clusters (singletons are dropped) that additionally carries `architecture`, `backbone`, `score_type`, and the effective `threshold`. `architecture` is the model class that ran (e.g. `"FuzzyString"`) — the topology, named by the caller at construction. `backbone` is the underlying model that actually scored the batch: the resolved LLM id (e.g. `"openrouter/openai/gpt-4o-mini"`) for `VectorLLMCascade`, the sentence-transformers embedder name for `Resolver.from_schema(matcher="embedding")`, an injected `Matcher`'s own `model` attribute, and `None` for pure-string similarity (`FuzzyString`). The same value backfills the `model` column of `JudgementLog` rows (`log=`) whenever the matcher doesn't stamp its own, so result and log always agree.
 
-**Example** (offline — `matcher="string"` pins the zero-spend judge, no API key or network needed):
+**Example** (offline — `FuzzyString` has no paid model slot, so no API key or network is ever needed):
 
 ```python
-from langres import dedupe
+from langres.architectures import FuzzyString
 
 records = [
     {"id": "1", "name": "Acme Corporation", "city": "New York"},
@@ -115,48 +116,35 @@ records = [
     {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
 ]
 
-result = dedupe(records, matcher="string", threshold=0.6)
+result = FuzzyString(threshold=0.6).dedupe(records)
 # result -> [{'1', '2'}]   (singleton "3" is dropped)
-print(result.judge_used, result.score_type)   # "string" "heuristic"
+print(result.architecture, result.backbone, result.score_type)   # "FuzzyString" None "heuristic"
 ```
 
-`matcher="auto"` (the default) instead picks a real LLM judge from `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (needs the `[llm]` extra) and raises `NoMatcherAvailableError` if no key is set — langres never silently falls back to fuzzy matching. The default model it resolves to is the **pinned, documented constant `langres.DEFAULT_AUTO_MODEL`** (`"openrouter/openai/gpt-4o-mini"` on the OpenRouter route; a direct-OpenAI fallback applies when only `OPENAI_API_KEY` is set) — changing it is a behavior change that requires a CHANGELOG entry, and the resolved id is always reported back on `result.model`. Keys resolve as process env > `.env` in the CWD (an env var set to the empty string wins and counts as absent); `LANGRES_OFFLINE=1` deterministically forces the keyless fail-fast path — see `langres.core.presets.choose_auto_judge` for the full discovery order. Every judge runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` carrying the partial judgements.
+`VectorLLMCascade(llm=...)` instead runs vector blocking, a free embedding student on every pair, and escalates only the uncertain band to a real LLM judge from the `llm=` backbone you named (needs the `[llm]` + `[semantic]` extras) — no key-sniffing, no silent fallback: without a valid key the first paid call fails with the provider's own error. Every model — `FuzzyString` included, for symmetry — runs under a default $1 spend cap (`budget_usd=`); a breach raises `BudgetExceeded` (root-exported) carrying the partial judgements.
 
-`matcher="prompt_llm"` is the bring-your-own-prompt LLM judge (`LLMMatcher`) — run a published paper's prompt, or your own, straight from the verbs:
-
-```python
-verdict = link(a, b, matcher="prompt_llm",
-               prompt_template="Do these match? Answer Yes or No.\nA: {left}\nB: {right}",
-               response_parser="binary_yes_no")   # a registered, serializable parser name
-verdict.judge_used   # "prompt_llm"
-verdict.model        # "openrouter/openai/gpt-4o-mini" (override with model=)
-```
-
-`prompt_template` / `system_prompt` / `response_parser` apply only to `matcher="prompt_llm"` (passing them with another judge raises — never silently ignored). `response_parser` takes a *registered name* (`"score"`, the default `Score:`-line parser, or `"binary_yes_no"` for the published yes/no ER-prompt family — see `langres.core.matchers.llm_judge.RESPONSE_PARSERS`); named parsers serialize with the judge's config, so a `Resolver` built with one round-trips through `save`/`load`. For a custom parser callable, construct an `LLMMatcher` yourself and pass it as `matcher=<Matcher>`.
-
-### link
+### ERModel.compare
 
 **Definition:** Decide whether **two records** are the same entity — a single pairwise verdict.
 
-`link(left, right, *, matcher="auto", schema=None, threshold=None, ...)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (now `float | None`: a *decider* judge, e.g. a binary Yes/No `LLMMatcher`, has no score), `.judge_used`, `.model` (the resolved underlying model id — same contract as `DedupeResult.model` above), `.score_type`, the effective `.threshold`, and `.reasoning`. If the judge **abstains** — neither decides nor scores, e.g. an `LLMMatcher` whose response fails to parse under the default `on_parse_error="abstain"` — `link()` raises `MatcherAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no.
+`model.compare(left, right, *, log=None)` returns a `LinkVerdict` — truthy iff it's a match — carrying `.score` (`float | None`: a *decider* judge, e.g. a binary Yes/No `LLMMatcher`, has no score), `.architecture`, `.backbone` (the resolved underlying model — same contract as `DedupeResult.backbone` above), `.score_type`, the effective `.threshold`, and `.reasoning`. If the matcher **abstains** — neither decides nor scores, e.g. an `LLMMatcher` whose response fails to parse under the default `on_parse_error="abstain"` — `.compare()` raises `MatcherAbstainedError` (root-exported) instead of fabricating a match/no-match verdict; a caller writing `if verdict.match:` would otherwise read "I don't know" as a confident no. (`.dedupe()` instead leaves an abstained pair unmerged, so one bad judgement can't sink a whole batch — see `resolver.py`'s `dedupe`/`compare` docstrings for why the two differ.)
 
 ```python
-from langres import link
+from langres.architectures import FuzzyString
 
-verdict = link(
+verdict = FuzzyString(threshold=0.6).compare(
     {"id": "a", "name": "Acme Corp", "city": "New York"},
     {"id": "b", "name": "Acme Corporation", "city": "New York"},
-    matcher="string",
 )
 if verdict:                       # LinkVerdict is truthy iff it's a match
-    print(verdict.score, verdict.judge_used)
+    print(verdict.score, verdict.architecture)   # 0.86 "FuzzyString"
 ```
 
-> **Cross-source / incremental linking is not built yet.** `link()` above compares a single pair, not two datasets. The dataset-to-dataset methods `Resolver.link` / `Resolver.stream_against` are reserved `NotImplementedError` stubs (roadmap M5) — do not treat them as working.
+> **Cross-source / incremental linking is not built yet.** `.compare()` above compares a single pair, not two datasets. The dataset-to-dataset methods `Resolver.link` / `Resolver.stream_against` are reserved `NotImplementedError` stubs (roadmap M5) — do not treat them as working. `.compare()` is deliberately not named `link`: that name is reserved for `Resolver.link`.
 
 ## 4. Mid-Level API: the `Resolver`
 
-The verbs are thin sugar over `Resolver`. Drop to it directly when you want an explicit, serializable pipeline built from a Pydantic schema.
+The named architectures are thin sugar over `Resolver` (a plain alias of the `ERModel` base class — `FuzzyString` and `VectorLLMCascade` both subclass it). Drop to it directly when you want an explicit, serializable pipeline built from a Pydantic schema with a hand-picked matcher.
 
 ```python
 from pydantic import BaseModel
@@ -174,7 +162,23 @@ resolver.save("company_resolver.json")    # config-registry serialization (no pi
 resolver = Resolver.load("company_resolver.json")
 ```
 
-`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageMatcher` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `matcher="embedding"`), and a `Clusterer`. `matcher=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (with the same `prompt_template` / `system_prompt` / `response_parser` kwargs as the verbs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), `"random_forest"` (a supervised sklearn `RandomForestMatcher` over the comparator's per-feature similarities — needs the `[trained]` extra and is trainable, so `fit(records, pairs=...)` / `labels=...` it with labeled data before it can score), or a `Matcher` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution (that magic lives in the verbs). A paid matcher built here **is** spend-capped: `Resolver(..., budget_usd=)` / `from_schema(..., budget_usd=)` defaults to `DEFAULT_BUDGET_USD` ($1.00) and the cap binds for the Resolver's whole lifetime, so two `resolve()` calls share one budget rather than getting one each. `budget_usd=None` means "the default", **not** "uncapped" — pass `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out deliberately. The bound is honest but not magic: spend is capped at `budget_usd` **plus at most one further call**, since an LLM call's cost is only knowable once it has been made. Scope, precisely: the cap meters **every seam that scores through the matcher** — `resolve`, `predict`, `fit`, and `AnchorStore.assign` — because they all route through one internal capped-scorer accessor. The single exception is `distil()` / `fit(method=MIPRO())`: DSPy's compile calls never reach the matcher, so that ledger cannot see them; it caps them via its own `method.budget_usd` monitor, which records $0 until DSPy-compile spend capture lands (issue #100) — so a paid `MIPROv2` compile is **effectively unbounded** today.
+`from_schema` auto-derives a missing-aware `StringComparator` from the schema's string fields, a `WeightedAverageMatcher` scorer, an `AllPairsBlocker` (or a `VectorBlocker` when `matcher="embedding"`), and a `Clusterer`. `matcher=` accepts `"string"` (default), `"embedding"`, `"zero_shot_llm"`, `"prompt_llm"` (bring-your-own-prompt, with `prompt_template` / `system_prompt` / `response_parser` kwargs — a named parser makes the whole prompt-judge artifact `save`/`load` round-trippable), `"random_forest"` (a supervised sklearn `RandomForestMatcher` over the comparator's per-feature similarities — needs the `[trained]` extra and is trainable, so `fit(records, pairs=...)` / `labels=...` it with labeled data before it can score), or a `Matcher` instance. This is the low-level, explicit switch: **no** `"auto"` key-resolution exists anywhere in langres — a named architecture doesn't sniff a key either, it just fixes its own topology instead of taking a `matcher=` string. A paid matcher built here **is** spend-capped: `Resolver(..., budget_usd=)` / `from_schema(..., budget_usd=)` defaults to `DEFAULT_BUDGET_USD` ($1.00) and the cap binds for the Resolver's whole lifetime, so two `resolve()` calls share one budget rather than getting one each. `budget_usd=None` means "the default", **not** "uncapped" — pass `langres.core.spend_cap.UNCAPPED_BUDGET_USD` (`float("inf")`) to opt out deliberately. The bound is honest but not magic: spend is capped at `budget_usd` **plus at most one further call**, since an LLM call's cost is only knowable once it has been made. Scope, precisely: the cap meters **every seam that scores through the matcher** — `resolve`, `predict`, `fit`, and `AnchorStore.assign` — because they all route through one internal capped-scorer accessor. The single exception is `distil()` / `fit(method=MIPRO())`: DSPy's compile calls never reach the matcher, so that ledger cannot see them; it caps them via its own `method.budget_usd` monitor, which records $0 until DSPy-compile spend capture lands (issue #100) — so a paid `MIPROv2` compile is **effectively unbounded** today.
+
+**`"prompt_llm"` example** — run a published paper's prompt, or your own, through the low-level switch:
+
+```python
+from langres import Resolver
+
+resolver = Resolver.from_schema(
+    Company,
+    matcher="prompt_llm",
+    prompt_template="Do these match? Answer Yes or No.\nA: {left}\nB: {right}",
+    response_parser="binary_yes_no",   # a registered, serializable parser name
+)
+verdict = resolver.compare(a, b)
+verdict.architecture   # "ERModel" (from_schema returns the base class, not a named architecture)
+verdict.backbone       # "openrouter/openai/gpt-4o-mini" (override with model=)
+```
 
 ### What `save`/`load` records: components *and* class
 
@@ -204,16 +208,18 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 - `config_dict()` still emits only `components`, so `model_class` stays **outside**
   `recipe_id`'s hash domain and no existing recipe hash forks.
 
-> **Constraint on a registered model:** `load` reconstructs by calling the class
-> with `Resolver.__init__`'s component keywords (`blocker=`, `comparator=`,
-> `matcher=`, `clusterer=`, `calibrator=`). An architecture that narrows
-> `__init__` to its own signature (e.g. `FuzzyString(threshold=0.8)`) raises
-> `TypeError: ... unexpected keyword argument 'blocker'` on load. It must keep
-> accepting the component keywords, or grow an explicit from-components hook.
-> This could not bite before `model_class`, since `load` always built the base
-> `Resolver`.
+> **A registered model's `__init__` stays ergonomic.** `load` reconstructs
+> through `from_components` (a classmethod that builds directly from the four
+> slots), **not** by calling the class's own `__init__` with component
+> keywords. So a named architecture is free to narrow its constructor to its
+> own signature (`FuzzyString(threshold=0.8)`, no `blocker=`/`comparator=`/…)
+> without breaking `load` — `Resolver.load(<a FuzzyString artifact>)` hands
+> back a `FuzzyString` either way. This was a real constraint before the
+> `from_components` split landed (a registered architecture's `__init__` had
+> to keep accepting the raw component keywords or `load` raised `TypeError`);
+> it no longer applies.
 
-All three name-dispatch paths — the verbs, `from_schema`, and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg).
+Both name-dispatch paths — `from_schema` and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg). (A third path, the deleted verbs' `core.presets.build_judge`, existed before named architectures replaced the verbs and resolved names the same way; naming a model explicitly replaced it, not a better heuristic.)
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 
@@ -400,7 +406,7 @@ best_params = optimizer.optimize()   # -> {"embedding_model": ..., "k_neighbors"
 ```
 
 (Optuna lives in the dev dependency group, not a runtime extra — `BlockerOptimizer`
-is an eval-time tool, not part of the `link()`/`dedupe()` path.)
+is an eval-time tool, not part of the `.dedupe()`/`.compare()` path.)
 
 > For a higher-level, self-tuning blocking search — a declarative `SearchSpace`
 > driven by an `Objective` through the `propose → run → evaluate → keep` loop, with
@@ -494,12 +500,12 @@ seam, and the bring-your-own-data `evaluate()` walkthrough.
 **Example:**
 
 ```python
-from langres import dedupe
+from langres.architectures import FuzzyString
 from langres.core.judgement_log import JudgementLog
 from langres.core.review import ReviewQueue, select_for_review
 
 # 1. Log every judge call while resolving (the flywheel inlet).
-dedupe(records, matcher="string", threshold=0.6, log="judgements.jsonl")
+FuzzyString(threshold=0.6).dedupe(records, log="judgements.jsonl")
 
 # 2. Select the pairs worth a human's attention, near the decision margin.
 rows = JudgementLog("judgements.jsonl").read()
@@ -778,8 +784,8 @@ selection of more than one candidate (`select_error`, CEO #12) all map to
 whole-group "no match" judgements carrying `provenance["select_error"]` —
 never a raised exception. Selectable by name as `"select_judge"` in
 `langres.methods` (the benchmark/method-registry dispatch site only — not
-wired into `Resolver.from_schema(matcher=...)` or the verbs' `matcher="auto"`
-dispatch, since it is not yet part of the zero-label default path). See
+wired into `Resolver.from_schema(matcher=...)` or any named architecture's
+topology, since it is not yet part of the zero-label default path). See
 `data/benchmarks/w1/W1_RESULTS.md` for the measured call-count/cost reduction
 (35.56x on Amazon-Google) and group-size distribution.
 
@@ -797,8 +803,8 @@ with no changes on their end.
 
 `stamp_group_cost` also sets `provenance["group_end"] = True` on (only) the
 **last** judgement of the group — a boundary marker that lets a consumer
-draining a whole group from a lazy stream (`_SpendCappedMatcher.forward` in
-`langres.core.presets`, the hard spend cap the verb layer wraps every judge
+draining a whole group from a lazy stream (`SpendCappedMatcher.forward` in
+`langres.core.spend_cap`, the hard spend cap every `ERModel` wraps its matcher
 in) know exactly when to stop pulling, without peeking at the next
 judgement's `group_id` — which for a real `GroupwiseMatcher` would resume the
 generator into (and pay for) the next group before there's anything to

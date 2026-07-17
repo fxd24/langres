@@ -45,24 +45,25 @@ uv run python examples/flywheel_min.py
 The **full** seven steps — including the trained student and the cascade —
 run at $0 in [`examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py),
 a deeper fixture-driven harness that drives the `langres.core` primitives
-directly, bypassing the verbs (`dedupe` / `link`, the one-call entry points)
-and the CLI.
+directly, bypassing the named architectures' one-call `.dedupe()`/`.compare()`
+methods and the CLI.
 
 ---
 
-## Two lanes: keyed (default) vs keyless
+## Two architectures: offline (`FuzzyString`) vs an LLM (`VectorLLMCascade`)
 
-langres has **one** front door with two honest lanes. Pick yours before you
-start.
+There is no key-sniffing front door — no `matcher="auto"` that picks a model
+for you. You construct the architecture you want, and each one is honest about
+what it costs before you ever call `.dedupe()`.
 
-### Keyless lane — `matcher="string"` ($0, offline)
+### `FuzzyString` — $0, offline
 
 No API key, no network, no model download. rapidfuzz string similarity does the
 matching. Good for a first taste and for CI; weaker on messy real data. **This
 snippet runs verbatim:**
 
 ```python
-from langres import dedupe
+from langres.architectures import FuzzyString
 
 records = [
     {"id": "1", "name": "Acme Corporation", "city": "New York"},
@@ -70,59 +71,57 @@ records = [
     {"id": "3", "name": "Totally Different Co", "city": "Chicago"},
 ]
 
-result = dedupe(records, matcher="string", threshold=0.6)
+result = FuzzyString(threshold=0.6).dedupe(records)
 # result       -> [{'1', '2'}]      (singletons like '3' are dropped)
-# result.judge_used == "string", result.score_type == "heuristic"
+# result.architecture == "FuzzyString", result.score_type == "heuristic"
 ```
 
-### Keyed lane — `matcher="auto"` (the default; bring an LLM)
+### `VectorLLMCascade` — paid, because you constructed it
 
-`dedupe(records)` defaults to `matcher="auto"`, which picks a real LLM judge from
-`OPENROUTER_API_KEY` / `OPENAI_API_KEY` and names the model — and that money is
-involved — *before* any paid call, under a **default $1 spend cap**:
+`VectorLLMCascade(llm=...)` blocks with a vector index, scores every pair for
+free with an embedding student, and escalates only the uncertain band to a
+real LLM judge — under a **default $1 spend cap**:
 
 ```python
-from langres import dedupe, NoMatcherAvailableError
+from langres.architectures import VectorLLMCascade
 
-try:
-    result = dedupe(records)                 # matcher="auto"; needs a key + [llm]
-except NoMatcherAvailableError as exc:
-    print(exc)  # no key -> a clean, actionable error, NOT a wrong answer
+model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini")  # needs [llm] + [semantic]
+result = model.dedupe(records)          # makes real, spend-capped API calls
+# result.architecture == "VectorLLMCascade", result.backbone == "openrouter/openai/gpt-4o-mini"
 ```
 
-**Fail, don't fall back.** With no key, `"auto"` **raises
-`NoMatcherAvailableError`** (root-exported from `langres`) instead of quietly
-degrading to fuzzy matching: unsupervised string matching over-merges on
-unlabeled data — one silent bad answer is worse than one loud error. Offline
-matching is always available, but only as the *explicit* `matcher="string"`
-opt-in. A spend-cap breach likewise raises `BudgetExceeded` (also root-exported)
-carrying the partial judgements — never a silent bill.
+**No key, no silent fallback.** Without `OPENROUTER_API_KEY`/`OPENAI_API_KEY`
+set, `VectorLLMCascade(...).dedupe(...)` fails with the provider's own error the
+first time it makes a call — there is no heuristic standing by to quietly
+degrade to fuzzy matching. A spend-cap breach instead raises `BudgetExceeded`
+(root-exported from `langres`) carrying the partial judgements, never a silent
+bill:
 
-**Forcing the keyless path (tests, CI, offline runs).** Merely *unsetting* the
-key variables does not make a run keyless inside a project whose `.env` carries
-a key — langres reads the `.env` in the current working directory (env vars win
-over it; there is no parent-directory walk-up). Two deterministic switches:
-set `LANGRES_OFFLINE=1` and `matcher="auto"` treats every key as absent (an
-explicit `matcher=` choice in code is unaffected), or set the key variables to
-the **empty string** (`OPENROUTER_API_KEY="" OPENAI_API_KEY=""`) — an empty
-env var wins over `.env` and counts as absent. Full discovery order:
-`langres.core.presets.choose_auto_judge`.
+```python
+from langres import BudgetExceeded
+from langres.architectures import VectorLLMCascade
+
+try:
+    result = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", budget_usd=0.01).dedupe(records)
+except BudgetExceeded as exc:
+    print(exc)  # the cap tripped; exc carries the partial judgements
+```
 
 > **You cannot bootstrap ER from nothing.** With zero labels and no LLM, there
-> is no honest signal to separate true duplicates from look-alikes. The keyed
-> lane is the real starting point for a new entity type; the keyless lane is the
-> deterministic, free fallback you opt into on purpose.
+> is no honest signal to separate true duplicates from look-alikes.
+> `VectorLLMCascade` is the real starting point for a new entity type;
+> `FuzzyString` is the deterministic, free path you opt into on purpose.
 
 ### Setup — the extras each step needs
 
-The core install is enough for the keyless lane. The flywheel adds two opt-in
-extras, one per capability:
+`FuzzyString` needs nothing beyond the core install. `VectorLLMCascade` needs
+both of its backbones' extras — it blocks with a vector index and judges with a
+real LLM:
 
 ```bash
-uv sync                     # core: the keyless "string" lane, $0
-uv sync --extra llm         # [llm]: the LLM teacher for the keyed lane / bootstrap
-uv sync --extra trained     # [trained]: scikit-learn behind RandomForestMatcher + derive_threshold
-# (need both? `uv sync --extra llm --extra trained`)
+uv sync                               # core: FuzzyString, $0
+uv sync --extra llm --extra semantic  # VectorLLMCascade's two backbones
+uv sync --extra trained               # [trained]: scikit-learn behind RandomForestMatcher + derive_threshold
 ```
 
 ---
@@ -138,26 +137,33 @@ covers all seven.
 
 ### 1. Day 1 — dedupe with the LLM, under a cap
 
-Start with the teacher. `dedupe(records)` (default `matcher="auto"`) blocks
-(pre-selects the record pairs worth comparing), scores every candidate pair
-with the LLM, and clusters — spend-capped:
+Start with the teacher. `VectorLLMCascade(llm=...).dedupe(records)` blocks
+(pre-selects the record pairs worth comparing), scores every candidate pair —
+free with the embedding student, escalating only the uncertain band to the
+LLM — and clusters, spend-capped:
 
 ```python
-result = dedupe(records)                    # matcher="auto", $1 cap by default
-# result.judge_used names the model that ran; override the cap with budget_usd=
+from langres.architectures import VectorLLMCascade
+
+model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini")
+result = model.dedupe(records)              # $1 cap by default
+# result.architecture names the class, result.backbone the LLM id;
+# override the cap with budget_usd=
 ```
 
-Depth: the verb layer and its contract live in
-[`../README.md`](https://github.com/fxd24/langres/blob/main/README.md#quickstart-dedupe-and-link).
+Depth: the architectures layer and its contract live in
+[`../README.md`](https://github.com/fxd24/langres/blob/main/README.md#quickstart-named-architectures-dedupe-and-compare).
 
 ### 2. Log every judgement from day 1
 
 The loop is only as good as its signal. Opt into `log=` on the very first run —
 it records every judge call (ids, score, verdict, model, cost) to a JSONL file
-with **zero overhead when omitted**. This is the flywheel *inlet*:
+with **zero overhead when omitted**. Every architecture's `.dedupe()`/`.compare()`
+takes it. This is the flywheel *inlet*:
 
 ```python
-result = dedupe(records, log="judgements.jsonl")   # or matcher="string" to stay $0
+result = model.dedupe(records, log="judgements.jsonl")
+# FuzzyString(threshold=0.6).dedupe(records, log="judgements.jsonl") is the $0 version
 ```
 
 Depth: [`EXPERIMENTS.md` § Signal log](EXPERIMENTS.md) for the record shape and
@@ -259,13 +265,18 @@ Depth: [`EXPERIMENTS.md` § The fit seam](EXPERIMENTS.md) and
 `CascadeMatcher` runs the student on every pair and escalates **only** pairs whose
 student score lands in an uncertainty `band` back to the frontier judge. One
 threshold cuts the mixed student/teacher stream (both emit `[0, 1]`
-probabilities):
+probabilities). A hand-built matcher like this is exactly what the mid-level
+`Resolver` is for — the named architectures each fix their own topology, so a
+custom composition (this cascade wraps the `RandomForestMatcher` step 5
+trained, not `VectorLLMCascade`'s own embedding student) goes here instead:
 
 ```python
+from langres import Resolver
 from langres.core.matchers.cascade_judge import CascadeMatcher
 
 cascade = CascadeMatcher(student=student, escalation=teacher, band=(0.35, 0.65))
-result = dedupe(records, matcher=cascade, threshold=student_threshold)
+resolver = Resolver.from_schema(Contact, matcher=cascade, threshold=student_threshold)
+result = resolver.dedupe(records)
 ```
 
 > **Derive the band from data, don't hard-code it.** A `±0.15` constant is the
@@ -278,14 +289,11 @@ result = dedupe(records, matcher=cascade, threshold=student_threshold)
 
 ### 7. Save and load the whole pipeline
 
-Freeze the configured pipeline — schema, blocker, judge (including a fitted
-CascadeMatcher student), threshold — into a reusable artifact. Drop to the
-`Resolver` the verbs sit on:
+Freeze the configured pipeline — schema, blocker, matcher (including a fitted
+CascadeMatcher student), threshold — into a reusable artifact. Every `ERModel`
+(a named architecture or the `resolver` from step 6) has `.save`/`.load`:
 
 ```python
-from langres import Resolver
-
-resolver = Resolver.from_schema(Contact, matcher=cascade, threshold=student_threshold)
 resolver.save("artifacts/contacts_v1")            # resolver.json + per-child sidecars
 reloaded = Resolver.load("artifacts/contacts_v1") # fitted student round-trips, no pickle
 ```
@@ -340,8 +348,8 @@ pass `records=`. For PII datasets, omit `records=`: the reviewer works from ids
 
 Two things the flywheel depends on that are easy to miss:
 
-1. **The loop needs explicit, stable ids.** A schema-less `dedupe(records)` with
-   no `"id"` key assigns **positional** ids (`0`, `1`, `2`, …). Positional ids
+1. **The loop needs explicit, stable ids.** A schema-less `.dedupe(records)` call
+   with no `"id"` key assigns **positional** ids (`0`, `1`, `2`, …). Positional ids
    are per-run: a re-run's id `3` may be a *different* record, so the judgement
    log, review queue, and corrections from different runs **won't join back to
    the same records**. Give every record a stable `"id"` (or pass
@@ -357,7 +365,7 @@ Two things the flywheel depends on that are easy to miss:
 
 ## Next
 
-- [`../README.md`](https://github.com/fxd24/langres/blob/main/README.md) — the verbs, install, and API-stability table.
+- [`../README.md`](https://github.com/fxd24/langres/blob/main/README.md) — the named architectures, install, and API-stability table.
 - [`TUTORIAL_YOUR_OWN_CSV.md`](TUTORIAL_YOUR_OWN_CSV.md) — a messy CSV → clusters
   in 15 minutes, with threshold calibration and save/load.
 - [`EXPERIMENTS.md`](EXPERIMENTS.md) — the experimentation DX: racing judges,
@@ -367,4 +375,4 @@ Two things the flywheel depends on that are easy to miss:
   runnable at $0.
 - [`../examples/flywheel_closed_loop.py`](https://github.com/fxd24/langres/blob/main/examples/flywheel_closed_loop.py) —
   this whole page — all seven steps including student + cascade — at $0
-  (core primitives directly; bypasses the verbs and the CLI).
+  (core primitives directly; bypasses the named architectures and the CLI).

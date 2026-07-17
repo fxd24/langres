@@ -12,7 +12,7 @@
 
 ## Project Overview
 
-**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: user-facing **verbs** (`langres.link` / `langres.dedupe`) over a declarative **`Resolver`** over low-level **`langres.core`** primitives. (Note: there is no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
+**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: named **architectures** (`langres.architectures.FuzzyString` / `VectorLLMCascade` — whole ER pipelines you construct, then call `.dedupe()`/`.compare()` on) over a declarative **`ERModel`** (aliased as `Resolver`) over low-level **`langres.core`** primitives. There is no `matcher="auto"` key-sniffing front door — W4 deleted the two module-level verbs (`langres.link`/`langres.dedupe`) and `core.presets` outright; naming a model is the user's job, not a heuristic's. (Note: there is also no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
 
 **Current Stage**: The initial POC — validating the architecture through three progressively sophisticated approaches (classical rapidfuzz, semantic vectors, hybrid blocking + LLM judge) — is **complete**; `docs/POC.md` is kept as an archived record. langres is now a shipped 0.x beta (on PyPI, Apache-2.0).
 
@@ -32,7 +32,7 @@ load only when you read/edit a file matching their `paths:`.
 
 **Path-scoped:**
 - `python-style.md` *(`**/*.py`, `pyproject.toml`)* — type hints, Pydantic-first, `uv`, no `print()`, naming.
-- `component-design.md` *(`src/**`)* — the layered API (verbs → Resolver → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the single judge/method registry, `core/method_registry.py`).
+- `component-design.md` *(`src/**`)* — the layered API (architectures → ERModel → core), design principles, lightweight & composable / SRP, common patterns, adding components (incl. the single judge/method registry, `core/method_registry.py`).
 - `testing.md` *(`tests/**`)* — tiered coverage (high on `core`, behavior-focused on harness), markers, human-like dev-iteration loop.
 - `token-efficiency.md` *(`.claude/agents|skills|commands/**`)* — agent cost discipline (Edit-over-Write, Grep-before-Read, JSON-between-agents, reasoning-tier).
 
@@ -45,16 +45,17 @@ load only when you read/edit a file matching their `paths:`.
 ```
 langres/
 ├── src/langres/
-│   ├── verbs.py        # User-facing verbs: link(), dedupe(), LinkVerdict
+│   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
 │   ├── optimize.py     # langres.optimize / score_blocking: import-light autoresearch facade over blocking search
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
-│   │   ├── resolver.py     # Resolver.from_schema / resolve / save / load
-│   │   ├── presets.py      # judge presets ("auto" fail-fast/string/embedding/zero_shot_llm/prompt_llm), DEFAULT_AUTO_MODEL, NoJudgeAvailableError
-│   │   ├── spend.py, spend_cap.py  # SpendMonitor/BudgetExceeded ledger + SpendCappedMatcher (the ONE enforcer) + DEFAULT_BUDGET_USD; core leaves, so BOTH presets and Resolver can cap
+│   │   ├── resolver.py     # ERModel (aliased Resolver): from_schema / dedupe / compare / resolve / save / load; no matcher="auto"
+│   │   ├── inputs.py       # normalize_records: raw dicts -> (schema, normalized records); schema inference for a schema-less dedupe()/compare()
+│   │   ├── results.py      # LinkVerdict / DedupeResult — architecture + backbone + score_type + threshold
+│   │   ├── spend.py, spend_cap.py  # SpendMonitor/BudgetExceeded ledger + SpendCappedMatcher (the ONE enforcer) + DEFAULT_BUDGET_USD; core leaf, so ERModel/every architecture can cap
 │   │   ├── method_registry.py  # ONE MethodSpec registry: judge/method name -> builder + identity (all three dispatch paths resolve here)
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
@@ -73,7 +74,7 @@ langres/
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 │       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
-├── examples/           # Usage examples (quickstart_verbs.py is the offline quickstart)
+├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)
 └── docs/               # Documentation
 ```
 
@@ -94,7 +95,7 @@ These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/c
 
 **`langres.core` re-exports contracts, not implementations.** It carries the data models, the `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the opt-in capability Protocols (`Inspectable` for `inspect_scores`, the `fit` mixins), the `Resolver` + registry, the method registry and the training/tracking primitives — the things a pipeline is *written against*. A concrete blocker/matcher/clusterer/embedder/index is imported from the package that owns it (`from langres.core.blockers import AllPairsBlocker`, `from langres.core.matchers import LLMMatcher`, `import langres.core.metrics`, …). Re-exporting an implementation puts `langres.core` *above* the components it sits beneath and re-knots the import graph; `tests/test_import_tangle.py` is the ratchet that measures the cost, and `test_import_budget.py::TestCoreLazyGetattr::test_implementations_are_not_re_exported` fails if one comes back.
 
-**Adding a public symbol?** The two package `__init__.py` files are thin aggregators holding no per-name content: add the export (eager import, or the lazy `name -> module` + `[extra]` entry) to the per-domain fragment that owns its domain under `langres/_exports/` or `langres/core/_exports/` — never to the sorted `__all__` itself — and, for `core`, only if it is a *contract*. A heavy dep must go in `LAZY_SYMBOLS`, never a fragment's module scope: fragments are eagerly imported, so an import there lands in every bare `import langres`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `link()`/`dedupe()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
+**Adding a public symbol?** The two package `__init__.py` files are thin aggregators holding no per-name content: add the export (eager import, or the lazy `name -> module` + `[extra]` entry) to the per-domain fragment that owns its domain under `langres/_exports/` or `langres/core/_exports/` — never to the sorted `__all__` itself — and, for `core`, only if it is a *contract*. A heavy dep must go in `LAZY_SYMBOLS`, never a fragment's module scope: fragments are eagerly imported, so an import there lands in every bare `import langres`. Optuna/wandb/langfuse are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `dedupe()`/`compare()` path. ranx backs the `[eval]` extra but is duplicated in the dev group too (like scikit-learn / `[trained]`), so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`.
 
 **Dev tools**: ruff (format + lint), pytest + pytest-cov (tests), mypy (strict-mode type checking).
 

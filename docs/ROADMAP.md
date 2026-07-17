@@ -126,7 +126,7 @@ the consumer** (the consumer owns the stateful "body"; langres owns the "brain")
 
 | Use case (`USE_CASES.md`) | Where it lands | Status |
 |---|---|---|
-| **UC1 Deduplication** (batch → clusters) | M2 | **shipped** (M2 + `dedupe()` verb) |
+| **UC1 Deduplication** (batch → clusters) | M2 | **shipped** (M2 + `dedupe()`, now `ERModel.dedupe` / a named architecture's `.dedupe()`) |
 | **UC2 Entity Linking** (link to a target store) | M5 (incremental `assign`) | **shipped** — incremental `assign`; cross-source `stream_against` reserved |
 | **UC10 Fuzzy FK** (special case of UC2) | via M5 | **shipped** via `assign` |
 | **UC4 Master Data Creation** (golden records / survivorship) | M5 — **promoted** (the consumer needs golden labels *now*, not V1.1) | **shipped** (`Canonicalizer` + enrichment) |
@@ -372,7 +372,7 @@ into the golden record** (§2.4 flagship loop).
   cheap: `import langres` **~0.2 s** (heavy stacks stay out of `sys.modules` via the
   W0.4 lazy imports), TTHW (fresh venv → first `dedupe`) **~2.5 s**, cold install
   **2.3 s** core-only / **6.8 s** with the `[semantic]` extra — all well inside their
-  target budgets, at **$0** through the default string judge.
+  target budgets, at **$0** through the offline `FuzzyString` architecture.
 
 ### M6 — Hardening (post-proof)
 Blocking-funnel optimisation (recall-first Optuna objective), score calibration,

@@ -14,9 +14,10 @@ usable, swappable, and tunable by everyone through one seam. This guide walks th
 > contributor editing the repo does now.
 >
 > **You may not need any of this.** A judge you only ever pass as a `Matcher`
-> instance — `dedupe(records, matcher=MySelectMatcher(...))` — needs **zero**
+> instance — `Resolver.from_schema(schema, matcher=MySelectMatcher(...)).dedupe(records)`,
+> or wired directly into an `ERModel`'s `matcher=` slot — needs **zero**
 > registry wiring. The steps below are only for making a method selectable *by
-> name* (`"select_judge"`) across the benchmark harness and the two build paths.
+> name* (`"select_judge"`) across the benchmark harness and `Resolver.from_schema`.
 
 ---
 
@@ -87,9 +88,9 @@ convention (`stamp_group_cost` in `src/langres/core/matcher.py`) avoids that:
 - **`provenance["group_id"]`** is set on **all** of them (traceable back to the
   one call);
 - **`provenance["group_end"] = True`** marks the **last** judgement — a boundary
-  marker so a consumer draining a lazy group stream (the verbs' spend cap,
-  `_SpendCappedMatcher`) knows where to stop without peeking past it and
-  triggering the next paid call.
+  marker so a consumer draining a lazy group stream (every `ERModel`'s spend
+  cap, `SpendCappedMatcher` in `langres.core.spend_cap`) knows where to stop
+  without peeking past it and triggering the next paid call.
 
 `SelectMatcher.forward_groups` prices the call from token usage
 (`tokens / 1000 * price_per_1k_tokens`) and calls `stamp_group_cost(...)`. The
@@ -107,12 +108,14 @@ applies.)
 
 Since the v0.3 model-identity slice there is **one registration seam**:
 `langres.core.method_registry`. A `MethodSpec` carries the builder plus the
-name's identity metadata, and all three dispatch paths — the verbs
-(`presets.build_judge`), `Resolver.from_schema`
-(`resolver._build_module_for_judge`), and the benchmark harness
+name's identity metadata, and both remaining dispatch paths — `Resolver.from_schema`
+(`resolver._build_module_for_judge`) and the benchmark harness
 (`methods._make_module_builder`) — resolve names through it, so registering
-once makes the name mean the same thing everywhere. Adding a method is **one
-builder function + one spec**:
+once makes the name mean the same thing everywhere. (A third path, the verbs'
+`presets.build_judge`, existed before named architectures replaced the verbs
+and was deleted along with the two module-level verbs and `matcher="auto"` —
+naming a model is now the caller's job.) Adding a method is **one builder
+function + one spec**:
 
 ```python
 # src/langres/core/method_registry.py
@@ -154,7 +157,7 @@ decides whether a caller's `model=` is honored or refused:
 | an in-process embedder | `IN_PROCESS_KINDS` | the weights load here |
 
 `MethodSpec.check_backbone(model)` is the one gate every dispatch path calls, so
-all three layers reject the same refs with the same message. **An empty
+both layers reject the same refs with the same message. **An empty
 `accepted_kinds` is a promise, not an omission**: it says "this method has no
 model", and the registry will enforce it.
 
@@ -166,11 +169,9 @@ model", and the registry will enforce it.
 
 Method ids are **bare names**; `/` is reserved for future `author/method`
 namespacing (model ids keep their slashes in the orthogonal `model=` kwarg).
-Two per-layer *policies* remain separate from registration: the verbs'
-allowlist (`presets._VERB_JUDGE_NAMES` — join it only if the judge is safe
-with no injected client and no fit step) and `from_schema`'s name tuple.
-`SelectMatcher` joins neither (it's a benchmark/experiment method that needs an
-injected DSPy LM).
+One per-layer *policy* remains separate from registration: `from_schema`'s own
+name tuple (no `"auto"`). `SelectMatcher` isn't in it — it's a
+benchmark/experiment method that needs an injected DSPy LM.
 
 Then declare its **membership** in the method tuples at the top of `methods.py`
 so the harness races it:
@@ -301,9 +302,8 @@ companion tests — mirror both for your judge:
 - [ ] Set-wise judges apply the group-call cost convention (`stamp_group_cost`).
 - [ ] Honest-cost seam wired (`price_per_1k_tokens` pinned for paid runs).
 - [ ] Selectable by name? One `MethodSpec` in `core/method_registry.py` **+**
-      the right method tuple — and, if it's also a `from_schema`/verb judge,
-      the per-layer allowlists (`presets._VERB_JUDGE_NAMES`, `from_schema`'s
-      tuple).
+      the right method tuple — and, if it's also a `from_schema` judge,
+      `from_schema`'s own name tuple.
 - [ ] `@register` + `type_name` + pure `config` + `from_config` (no pickle).
 - [ ] Fresh-process (subprocess) reload proven in a test.
 - [ ] 100% coverage; all LLM paths on DummyLM at $0.

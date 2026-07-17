@@ -8,26 +8,40 @@ paths:
 **The layered API, the design principles, and what "lightweight & composable"
 means in practice.** Read before adding or refactoring a component under `src/`.
 
-## The Layered API (verbs → Resolver → core)
+## The Layered API (architectures → ERModel → core)
 
 langres exposes three layers, each a thin shell over the one below. (Note: there
 is **no** `langres.tasks` or `langres.flows` module — those names were never
-built. The real layering is:)
+built. There is also no `langres.link` / `langres.dedupe` module-level verb and
+no `matcher="auto"` — W4 deleted both outright, along with `core.presets`: naming
+a model is the user's job, not a heuristic's. The real layering is:)
 
-1. **Verbs (`langres.link` / `langres.dedupe`)** — the top DX layer.
-   - Target: most users. Schema-optional, zero-label, `judge="auto"` with a
-     default spend cap. `"auto"` is fail-fast: no API key raises
-     `NoJudgeAvailableError` (root-exported) — offline string matching is an
-     explicit `judge="string"` opt-in, never a silent fallback.
-   - Returns self-describing results (`LinkVerdict`; a `dedupe` result carrying
-     `judge_used` / `score_type`).
-   - Philosophy: the one-liner front door. Thin sugar over `Resolver`.
+1. **Named architectures (`langres.architectures`)** — the top DX layer.
+   - Target: most users. A whole ER pipeline is a class you construct —
+     `FuzzyString()` (all-pairs blocking + string similarity, the **$0, offline,
+     no-key architecture** — it has no paid model slot, so it cannot spend) or
+     `VectorLLMCascade(llm=...)` (vector blocking + a cheap embedding student +
+     an LLM escalated only at the margin — **paid, because you constructed it**,
+     never because a heuristic sniffed an environment variable). `.dedupe(records)`
+     and `.compare(a, b)` are methods on the model, not module-level functions.
+   - Both accept `budget_usd=` (default `DEFAULT_BUDGET_USD`) and cap real spend;
+     `FuzzyString` can never trip the cap since it has no paid slot to spend from.
+     A breach raises `BudgetExceeded` (root-exported) carrying the partial
+     judgements.
+   - Returns self-describing results (`LinkVerdict`; a `DedupeResult` carrying
+     `architecture` — the model class that ran — and `backbone` — the LLM id /
+     embedder name, or `None` when nothing with weights ran — plus `score_type`).
+   - Philosophy: the one-liner front door, made explicit instead of a heuristic
+     string switch. Thin sugar over `ERModel`. `compare` is deliberately not
+     named `link`: that name is reserved for `ERModel.link` (cross-source, two
+     record *sets* — a reserved M5 stub, see below).
 
-2. **`langres.Resolver`** — the declarative mid-layer.
+2. **`langres.Resolver`** (a plain alias of `ERModel`; `Resolver is ERModel`) — the declarative mid-layer.
    - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
      (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
      `.save`/`.load` serialize it via the config-registry (no pickle).
-   - **Spend-capped too** (B1), not just the verbs: `budget_usd=` on the
+   - **Spend-capped too** (B1), not just the named architectures above (they
+     share the same `ERModel` machinery): `budget_usd=` on the
      constructor and `from_schema`, defaulting to `DEFAULT_BUDGET_USD`. The
      `SpendMonitor` is built ONCE per instance, so N `resolve()` calls share one
      budget instead of getting a fresh one each. `None` = the default, **not**
@@ -182,24 +196,29 @@ Extract when you see:
    closed issue #55's three-site wiring debt): a `MethodSpec` carries the
    builder plus identity metadata (`score_type`, `default_threshold`,
    `default_model`, `accepted_kinds`, `needs_comparator`, `requires_extra`).
-   All three dispatch paths — `core/presets.py:build_judge` (the verbs),
-   `core/resolver.py:_build_module_for_judge` (`Resolver.from_schema`), and
+   Both remaining dispatch paths — `core/resolver.py:_build_module_for_judge`
+   (`Resolver.from_schema`, the low-level `matcher=` switch) and
    `methods.py:_make_module_builder` (the benchmark harness) — resolve names
-   through it, so a name means exactly one construction everywhere. Two
-   things stay per-layer *policy*, not registration: the verbs' allowlist
-   (`presets._VERB_JUDGE_NAMES` — extend it only for judges that are safe
-   without an injected client or a fit step) and `from_schema`'s name tuple
-   (no `"auto"`). Method ids are bare names; `/` is reserved for future
-   `author/method` namespacing. Spec builders must lazy-import heavy deps
+   through it, so a name means exactly one construction everywhere. (A third
+   path, the verbs' `core/presets.py:build_judge`, existed pre-W4 and is gone —
+   `matcher="auto"` sniffed an API key and spent on whatever it found; naming a
+   model explicitly replaced it, not a better heuristic.) `from_schema`'s own
+   name tuple stays a per-layer *policy*, not registration (no `"auto"`).
+   Method ids are bare names; `/` is reserved for future `author/method`
+   namespacing. Spec builders must lazy-import heavy deps
    (dspy/litellm/sklearn) inside the build function — the registry is
    eager-imported by `langres.core` (see `tests/test_import_budget.py`).
-   A judge you only ever pass as a `Module` instance —
-   `dedupe(records, judge=MyJudge(...))` — needs none of this wiring. For
-   `save`/`load`, the component config-registry (`core/registry.py:register`)
-   remains a separate, orthogonal namespace.
-3. **Composition happens in `Resolver`**, not a `Task` class: a resolve is
-   blocker → (compare) → judge → clusterer. The verbs (`link` / `dedupe`) are
-   the user-facing sugar over it.
+   A judge you only ever pass as a `Matcher` instance — e.g.
+   `Resolver.from_schema(schema, matcher=MyJudge(...)).dedupe(records)`, or
+   `ERModel(blocker=..., comparator=..., matcher=MyJudge(...), clusterer=...)`
+   directly — needs none of this wiring. For `save`/`load`, the component
+   config-registry (`core/registry.py:register`) remains a separate, orthogonal
+   namespace.
+3. **Composition happens in `ERModel`**, not a `Task` class: a resolve is
+   blocker → (compare) → matcher → clusterer. The named architectures in
+   `langres.architectures` (`FuzzyString`, `VectorLLMCascade`) are the
+   user-facing sugar over it — each fixes its own topology and exposes
+   `.dedupe()`/`.compare()` as methods.
 
 ## Backbones: `ModelRef` is the ONE model-reference concept
 
@@ -286,13 +305,13 @@ excluded from the predicted set — never graded a confident "no").
 ### Wiring it into a pipeline
 
 ```python
-# Low-level: build a Resolver from a schema, pick the judge, run it.
-resolver = Resolver.from_schema(MySchema, judge="string")
+# Low-level: build a Resolver from a schema, pick the matcher, run it.
+resolver = Resolver.from_schema(MySchema, matcher="string")
 clusters = resolver.resolve(records)   # -> list[set[str]]
 
-# High-level: the verbs do the same thing with schema inference + spend cap.
-from langres import dedupe
-result = dedupe(records)               # judge="auto" (default) needs an API key --
-                                       # raises NoJudgeAvailableError without one;
-                                       # judge="string" is the offline opt-in
+# High-level: a named architecture does the same thing with schema inference +
+# spend cap -- no "auto" string to opt out of, because there is no key-sniffing
+# default: FuzzyString cannot spend at all (it has no paid model slot).
+from langres.architectures import FuzzyString
+result = FuzzyString().dedupe(records)   # $0, offline, no key
 ```
