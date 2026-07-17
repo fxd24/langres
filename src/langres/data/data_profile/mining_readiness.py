@@ -23,7 +23,7 @@ import math
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from langres.core import _report_html, _svg
+from langres.report import _report_html, _svg
 from langres.data.data_profile.base import ProfileSection
 
 #: Single-series bar color for the margin histogram (explicit, not

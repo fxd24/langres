@@ -25,7 +25,7 @@ from pathlib import Path
 from langres import Resolver
 from langres.core.benchmark import gold_pairs_from_clusters
 from langres.core.clusterer import Clusterer
-from langres.core.eval_report import EvalReport
+from langres.report.eval_report import EvalReport
 from langres.core.models import CompanySchema
 from langres.testing import ScriptedJudge
 

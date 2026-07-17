@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import pytest
 
-from langres.core import _report_html, _svg
+from langres.report import _report_html, _svg
 from langres.data.data_profile import DataProfileReport, ProfileSection
 
 

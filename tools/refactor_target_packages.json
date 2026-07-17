@@ -64,7 +64,8 @@
     "langres.data": "datasets",
     "langres.data.data_profile": "profile",
     "langres.optimize": "optimize",
-    "langres.plotting": "plotting"
+    "langres.plotting": "plotting",
+    "langres.report": "report"
   },
   "exact": {
     "langres": "root",
@@ -77,8 +78,6 @@
     "langres.core._model_persist": "architectures",
     "langres.core._model_run": "architectures",
     "langres.core._model_state": "architectures",
-    "langres.core._report_html": "report",
-    "langres.core._svg": "report",
     "langres.core.analysis": "metrics",
     "langres.core.anchor_store": "curation",
     "langres.core.benchmark": "benchmarks",
@@ -90,7 +89,6 @@
     "langres.core.debugging": "metrics",
     "langres.core.diagnostics": "metrics",
     "langres.core.embeddings": "components",
-    "langres.core.eval_report": "report",
     "langres.core.feature": "core",
     "langres.core.finetune": "training",
     "langres.core.fit": "core",

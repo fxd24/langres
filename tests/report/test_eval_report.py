@@ -1,4 +1,4 @@
-"""Tests for langres.core.eval_report (the $0 EvalReport tearsheet).
+"""Tests for langres.report.eval_report (the $0 EvalReport tearsheet).
 
 Everything here is zero-spend and dependency-light: hand-built judgements or
 plain log-row dicts, no judge, no model, no network. The rendering tests assert
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from langres.core.eval_report import EvalError, EvalReport, _histogram, _roc_curve
+from langres.report.eval_report import EvalError, EvalReport, _histogram, _roc_curve
 from langres.core.models import PairwiseJudgement
 
 

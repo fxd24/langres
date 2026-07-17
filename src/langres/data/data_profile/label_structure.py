@@ -24,7 +24,7 @@ from collections import Counter
 from collections.abc import Collection, Hashable, Sequence
 from typing import Any, Literal
 
-from langres.core import _report_html, _svg
+from langres.report import _report_html, _svg
 from langres.data.data_profile.base import ProfileSection
 
 #: Cap on the number of bars in the cluster-size histogram. Sizes at or above the

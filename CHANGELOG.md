@@ -77,6 +77,29 @@ heuristic guessed well or a cap held.
   process cannot import, so it could never round-trip through `save()`/`load()`.
 - `examples/quickstart_verbs.py` → `examples/quickstart_models.py`.
 
+#### Moved out of `langres.core` — **breaking for deep imports, no shim**
+
+`langres.core` had grown to 67% of the source tree by carrying code that is not
+entity-resolution modelling. These moves are **relocations, not deletions**: every
+symbol still exists, and every *supported* import path still works. Only the deep
+`langres.core.*` paths break. No compatibility shims: a re-export relay would
+re-create the exact import edges these moves exist to remove (measured — see
+`tests/test_import_tangle.py`, which documents why a relay makes the graph worse
+while making the metric look better).
+
+- **The HTML/SVG render seam** → **`langres.report`**. `langres.core.eval_report`
+  → `langres.report.eval_report`; `langres.core._svg`/`langres.core._report_html`
+  (both private) → `langres.report.*`. **`langres.EvalReport` and
+  `langres.eval.EvalReport` are unchanged** — those are the supported paths, and
+  `EvalReport` was never in `langres.core.__all__`. Only the deep path advertised
+  in the old README breaks.
+- **The autoresearch/optimizer engine** → **`langres.optimize`**.
+  `langres.core.optimizers` → `langres.optimize.blocker_optimizer`;
+  `langres.core.autoresearch.*` → `langres.optimize.*`. **`langres.optimize()` and
+  `score_blocking()` are unchanged** — the facade is the supported surface, and
+  `BlockerOptimizer` was never in any `__all__`. Only the deep path documented in
+  `docs/TECHNICAL_OVERVIEW.md` breaks.
+
 #### Known limitation — `VectorLLMCascade` cannot `save()`
 
 `VectorLLMCascade(...).save(path)` raises `NotImplementedError`, by design,

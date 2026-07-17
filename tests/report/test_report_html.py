@@ -1,4 +1,4 @@
-"""Tests for the shared render scaffold ``langres.core._report_html``.
+"""Tests for the shared render scaffold ``langres.report._report_html``.
 
 Structure-based asserts (doctype prefix, escaping, ``"n/a"`` sentinel, absence
 of literal ``NaN``/``Infinity``), never byte-for-byte equality, so cosmetic
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from langres.core import _report_html
+from langres.report import _report_html
 from langres.core.metrics import average_precision_score, roc_auc_score
 
 

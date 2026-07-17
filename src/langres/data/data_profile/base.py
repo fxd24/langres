@@ -15,8 +15,8 @@ two convenience constructors (:meth:`DataProfileReport.from_benchmark` /
 ``builders`` module that lands in Wave 2 -- imported locally so this module stays
 valid now and those methods light up later without a signature change.
 
-**Layering.** A leaf, like :mod:`langres.core.eval_report`: it renders through the
-shared :mod:`langres.core._report_html` scaffold and pulls no heavy dependency
+**Layering.** A leaf, like :mod:`langres.report.eval_report`: it renders through the
+shared :mod:`langres.report._report_html` scaffold and pulls no heavy dependency
 (an import-budget test locks it). Text-first is primary -- ``print``/markdown/dict
 are the default surfaces; ``to_html`` is the optional ``$0`` tearsheet.
 """
@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, SerializeAsAny
 
-from langres.core import _report_html
+from langres.report import _report_html
 
 
 class ProfileSection(BaseModel, abc.ABC):
@@ -173,7 +173,7 @@ class DataProfileReport(BaseModel):
 
         Only the sections you gave it contribute -- each section's
         :meth:`~ProfileSection.panels` are emitted in order through the shared
-        :mod:`langres.core._report_html` scaffold. An empty report renders a
+        :mod:`langres.report._report_html` scaffold. An empty report renders a
         valid, section-less page (never an error), matching the plan's
         graceful-degradation contract.
 

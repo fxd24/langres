@@ -37,7 +37,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
 
-from langres.core import _report_html, _svg
+from langres.report import _report_html, _svg
 from langres.data.data_profile.accumulators import OnlineHistogram, RunningStats
 from langres.data.data_profile.base import ProfileSection
 from langres.data.data_profile.embedding_source import EmbeddingSource, _ensure_source
