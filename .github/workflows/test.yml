@@ -209,12 +209,23 @@ jobs:
       # still passes while silently covering less of the contract, so this is a
       # real maintenance obligation, not a self-healing gate.
       #
-      # `src/langres/report/*` was added when the HTML/SVG render seam moved out
-      # of core. Those ~1,400 lines measure 98-100%, so they were LIFTING core's
-      # average, not dragging it: dropping them from the glob would have quietly
-      # un-gated 99%-covered public surface (`EvalReport` is root-exported) while
-      # making the remaining number look better. That is the failure this comment
-      # exists to prevent -- the glob must follow the contract, not the average.
+      # `src/langres/report/*` and `src/langres/optimize/*` were added when the
+      # render seam and the autoresearch engine moved out of core. Both measure
+      # ~98-100% (report ~1,400 lines; optimize 295 stmts / 3 missed, engine
+      # files all 100%), so they were LIFTING core's average, not dragging it.
+      # Dropping them would have quietly un-gated 99%-covered public surface
+      # (`EvalReport` is root-exported; `optimize()`/`score_blocking` are the
+      # public facade) while making the remaining number look BETTER. That is the
+      # failure this comment exists to prevent: the glob follows the contract,
+      # not the average.
+      #
+      # HEADROOM WARNING, measured 2026-07-17: `core/*` is at **98.43%** against
+      # this 98 floor -- and the 98 was set from a measured **98.84%** (see
+      # above). Core has drifted ~0.4pp DOWN since, so the ratchet now has ~0.4pp
+      # of slack, not the ~0.84pp it was designed with. The next person to add a
+      # handful of uncovered lines to `core/` will trip this gate and reasonably
+      # conclude they broke it. They did not: it has been tightening around them
+      # for a while. Diagnose the drift before lowering the floor.
       #
       # Deliberately AFTER the Codecov upload: that upload is advisory, and when
       # this gate fails you still want the data published to diagnose the drop.
@@ -224,7 +235,7 @@ jobs:
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*" --precision=2 --fail-under=98
+        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/optimize/*" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra
