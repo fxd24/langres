@@ -155,8 +155,14 @@ class Benchmark(Protocol[RecordT]):
 
 #: Default score-threshold grid for :func:`evaluate` — the fine ``0.05..0.95``
 #: sweep (19 points) a pair-level argmax wants when no fixed ``threshold=`` is
-#: given (the default). ``core.benchmark`` is deliberately free of any
-#: ``langres.data`` import (the harness is dataset-agnostic), so this mirrors
-#: ``langres.data.fixed_split_pair_benchmark.DEFAULT_ARGMAX_GRID`` by value rather
-#: than importing it.
+#: given (the default). Mirrored by value from
+#: ``langres.data.fixed_split_pair_benchmark.DEFAULT_ARGMAX_GRID`` (an identical
+#: grid) rather than imported from it: this module is deliberately import-light
+#: (pydantic + typing + leaf metrics), while ``fixed_split_pair_benchmark`` pulls
+#: the heavy ``[trained]`` chain (``langres.training.calibration`` -> scikit-learn)
+#: plus ``langres.core`` matchers/comparators at module scope. Importing it here
+#: would drag all of that into every ``import langres.data.benchmark`` (hence into
+#: ``langres.eval`` / ``langres.benchmarks``), defeating the import-lightness this
+#: benchmark-spec split exists to preserve. Not a cycle —
+#: ``fixed_split_pair_benchmark`` does not import this module.
 DEFAULT_PAIR_GRID: tuple[float, ...] = tuple(round(i * 0.05, 2) for i in range(1, 20))

@@ -22,7 +22,8 @@ code. Verify as you go.** Read before writing tests or running the suite.
     ABCs, the registry, the data-profile/mining diagnostics). Cover behavior
     *and* edge cases: empty inputs, `None`/MISSING, boundaries, error paths.
   - **Benchmark / experiment / harness code → behavior + smoke tests.** e.g.
-    `methods.py`, the `core/benchmark.py` evaluation harness, research
+    `methods.py`, the `langres/benchmarks/` evaluation harness
+    (`runner.py` / `judge_eval.py`), research
     `examples/` — assert they *work* (happy path + the key edges), not that
     every line is executed.
   - `# pragma: no cover` is fine for genuinely trivial or unreachable lines.

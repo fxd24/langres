@@ -1,11 +1,14 @@
-"""Tests for the dataset-agnostic benchmark harness (``langres.core.benchmark``).
+"""Tests for the dataset-agnostic benchmark harness (``langres.benchmarks``) and
+its spec (``langres.data.benchmark``).
 
 Covers the budgeted module runner (preflight cap, budget stop, blind-cost guard,
 per-call isolation, both cost-key paths), the generic ``run_method`` orchestration
 on a fully-deterministic fake benchmark (no embeddings, no LLM), ``BenchmarkTable``
 rendering, the ``run_methods`` experiment facade + ``BenchmarkTable.best``/``rank``
-structured accessors, and the import-cycle guard (core must not import
-``langres.data``).
+structured accessors, and the import-cycle guard
+(``test_benchmark_spec_does_not_import_the_harness``: the spec
+``langres.data.benchmark`` must not import the harness ``langres.benchmarks`` --
+the one-way ``benchmarks -> data.benchmark`` edge the split exists to keep).
 """
 
 import logging

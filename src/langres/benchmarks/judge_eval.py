@@ -726,7 +726,7 @@ class BudgetedModuleRunner:
     a group is NEVER split mid-call (there is never more than one pair per
     call to split), but a real multi-pair group is also never batched into
     one priced call: no cost amortization happens yet. See
-    ``tests/core/test_benchmark.py::test_runner_never_splits_a_group_mid_call_but_also_never_batches_one``
+    ``tests/benchmarks/test_benchmark.py::test_runner_never_splits_a_group_mid_call_but_also_never_batches_one``
     for the pinned-down behavior. Extending this runner (or adding a
     group-aware variant) to pre-flight and price whole groups atomically is
     deferred to W1.1, the branch that lands the first concrete

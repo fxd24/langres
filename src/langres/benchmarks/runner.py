@@ -9,7 +9,11 @@ collect them in a :class:`BenchmarkTable`. The benchmark *spec* (the
 :mod:`langres.data.benchmark`; this module depends on it one-way. The method
 registry (``langres.methods.make_resolver_factory``) is imported function-locally
 in :func:`run_methods` to keep ``import langres.benchmarks.runner`` free of the
-registry (and of ``langres.data``), exactly as the pre-split harness did.
+method registry -- ``langres.methods`` imports ``_cost_track`` from *this* module,
+so a module-scope import would close a
+``langres.benchmarks.runner -> methods -> langres.benchmarks.runner`` cycle (and
+pull the registry's heavy ``[semantic]`` matcher stack). The import-light
+``langres.data.benchmark`` spec, by contrast, IS a module-scope dependency here.
 """
 
 import logging
@@ -210,7 +214,7 @@ if TYPE_CHECKING:
     # contract (``BlockingBenchmark``: ``schema`` + ``blocking_k`` +
     # ``build_blocker``) on top of the harness ``Benchmark`` contract. The two
     # cannot be a single runtime import here without closing the
-    # ``core.benchmark -> methods -> core.benchmark`` cycle, so the combined
+    # ``langres.benchmarks.runner -> methods -> langres.benchmarks.runner`` cycle, so the combined
     # contract is expressed for the type checker only — the annotation is a
     # forward reference (quoted) and never evaluated at runtime.
     from langres.methods import BlockingBenchmark
@@ -619,11 +623,12 @@ def run_methods(
 
     ``make_resolver_factory`` lives in :mod:`langres.methods`, which imports
     ``CostTrack`` / ``_cost_track`` from *this* module. Importing it at module
-    scope would close a ``core.benchmark -> methods -> core.benchmark`` cycle, so
-    it is imported lazily inside the call. ``import langres.core.benchmark`` thus
-    stays free of the method registry (and of ``langres.data``), preserving the
-    harness's dataset-agnostic import graph; the method registry is pulled in only
-    when an experiment is actually run.
+    scope would close a
+    ``langres.benchmarks.runner -> methods -> langres.benchmarks.runner`` cycle, so
+    it is imported lazily inside the call. ``import langres.benchmarks.runner`` thus
+    stays free of the method registry, preserving the harness's dataset-agnostic
+    import graph; the method registry is pulled in only when an experiment is
+    actually run.
 
     Args:
         benchmark: A conformer of BOTH the harness :class:`Benchmark` contract and
