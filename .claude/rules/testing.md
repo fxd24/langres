@@ -45,7 +45,7 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - **Two gates run on `test-full`, and they are not the same number as this
   policy.** The repo-wide floor is 90% (`--cov-fail-under` in `pyproject.toml`).
   The contract additionally has its own path-scoped gate
-  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py"
+  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/training/*,src/langres/optimize.py"
   --precision=2 --fail-under=98` in `.github/workflows/test.yml`). That 98 is a
   **regression ratchet** pinned just under the measured value (98.84% at
   `ba4b1b7`), not the policy — the *target* remains 95–100%. It exists because
@@ -54,11 +54,13 @@ code. Verify as you go.** Read before writing tests or running the suite.
   number climbs; if it blocks legitimate work, lower it deliberately rather than
   deleting it.
   **When the contract moves to a new package, extend that `--include` glob** or
-  the gate silently stops covering it. (`report/`, `autoresearch/` and the
-  `optimize.py` facade are in the glob for exactly that reason — they carry
-  public surface (`EvalReport`, `optimize()`/`score_blocking`), so letting them
-  fall out would un-gate contract code while making the remaining number look
-  *better*.)
+  the gate silently stops covering it. (`report/`, `autoresearch/`, `training/`
+  and the `optimize.py` facade are in the glob for exactly that reason — they
+  carry public surface (`EvalReport`, `optimize()`/`score_blocking`,
+  `derive_threshold`/`Calibrator`/`FitReport`/`QLoRA`), so letting them fall out
+  would un-gate contract code while making the remaining number look *better*.
+  `training/*` was added when the fit family moved there out of `core/` — a
+  coverage-neutral relocation of already-gated code.)
   **`src/langres/optimize.py` is listed as a file, not folded into a `*` glob**:
   the facade is a module and the engine beside it is the `autoresearch/` package,
   and coverage compiles a trailing `/*` to `optimize[/\\].*` — which matches a

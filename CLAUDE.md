@@ -74,7 +74,7 @@ langres/
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
-│   │   ├── calibration.py          # derive_threshold
+│   │   ├── calibration.py, finetune.py, fit_report.py, methods_prompt.py, methods_calibrate.py  # W2 back-compat shims → langres.training.* (real modules moved; marked `# TEMPORARY: deleted by the W2 sweep`)
 │   │   └── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   ├── curation/       # human-in-the-loop labelling + gold-set cold-start (the dissolved langres.bootstrap). core/{review,harvest,anchor_store,canonicalizer}.py are TEMPORARY W2-sweep back-compat shims re-exporting from here
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
@@ -98,6 +98,12 @@ langres/
 │   │   ├── _svg.py         # pure-stdlib inline-SVG chart primitives (line_chart/bar_chart); imports nothing from langres
 │   │   ├── _report_html.py # shared HTML scaffold: document()/section()/_num/_histogram/safe_auc
 │   │   └── eval_report.py  # EvalReport, the $0 tearsheet (public home: langres.eval / root langres, both lazy)
+│   ├── training/       # fitting/calibrating a matcher (what PRODUCES a tuned model, NOT ER modelling — so it sits beside core, like report/). Imports core one-way; core → training is non-zero by design (resolver.fit + the _exports/_training surface), see tests/test_import_tangle.py
+│   │   ├── finetune.py         # QLoRA/LoRA training (run_finetune, QLoRA, LabeledCandidate); peft/trl/bitsandbytes/torch stay lazy inside QLoRATrainer.train ([finetune])
+│   │   ├── calibration.py      # derive_threshold + the Platt/isotonic Calibrator (sklearn at module scope, [trained])
+│   │   ├── fit_report.py       # the FitReport fit digest (held on ERModel.fit_report_)
+│   │   ├── methods_prompt.py   # Bootstrap / MIPRO / GEPA — the prompt-optimize Method objects (dspy lazy)
+│   │   └── methods_calibrate.py # Platt / Isotonic — the score-calibrate Method objects
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 │       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
@@ -115,7 +121,7 @@ modules, a general `Optimizer`, a synthetic data generator.
 **Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained,eval]`):
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
-- `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
+- `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `langres.training.calibration.derive_threshold`).
 - `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `langres.metrics.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `langres.metrics.metrics`/`core.benchmark` (BCubed/pairwise metrics, `evaluate()`) stays importable without it. (The old `core.metrics` path still works via a back-compat shim.)
 
 These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py`, the implementation packages such as `langres/core/matchers/__init__.py`, and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`.

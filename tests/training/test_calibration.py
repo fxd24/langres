@@ -13,7 +13,7 @@ import json
 import numpy as np
 import pytest
 
-from langres.core.calibration import Calibrator, derive_threshold
+from langres.training.calibration import Calibrator, derive_threshold
 from langres.core.fit import CalibratorFitMixin
 from langres.core.metrics import brier_score, expected_calibration_error
 

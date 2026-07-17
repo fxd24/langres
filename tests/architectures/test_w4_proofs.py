@@ -489,7 +489,7 @@ class TestArchitecturesDefendIdentityAtFit:
         assert ERModel.accepted_method_kinds is None
 
         pytest.importorskip("sklearn")
-        from langres.core.methods_prompt import MIPRO
+        from langres.training.methods_prompt import MIPRO
 
         with pytest.raises(UnsupportedMethodKind):
             FuzzyString(schema=Company).fit(RECORDS, method=MIPRO())
@@ -497,7 +497,7 @@ class TestArchitecturesDefendIdentityAtFit:
     def test_fuzzystring_accepts_the_calibrate_fit_it_declares(self) -> None:
         """The gate must not be a blanket "no" -- that would prove nothing."""
         pytest.importorskip("sklearn")
-        from langres.core.methods_calibrate import Platt
+        from langres.training.methods_calibrate import Platt
 
         records: list[dict[str, Any]] = []
         pairs = []

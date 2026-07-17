@@ -43,7 +43,7 @@ import tempfile
 from pathlib import Path
 
 from langres.core.comparators import StringComparator
-from langres.core.finetune import LabeledCandidate
+from langres.training.finetune import LabeledCandidate
 from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.models import ERCandidate

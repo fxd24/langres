@@ -12,14 +12,16 @@ from typing import TYPE_CHECKING
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
 from langres.core.fit_report import FitReport
 from langres.curation.harvest import align_pairs
+from langres.training.fit_report import FitReport
+from langres.core.harvest import align_pairs
 from langres.core.methods_api import Method, UnsupportedMethodKind
-from langres.core.methods_calibrate import Isotonic, Platt
-from langres.core.methods_prompt import Bootstrap, GEPA, MIPRO
+from langres.training.methods_calibrate import Isotonic, Platt
+from langres.training.methods_prompt import Bootstrap, GEPA, MIPRO
 
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy name visible to `mypy --strict`
     # without pulling scikit-learn into a bare `import langres`.
-    from langres.core.calibration import Calibrator
+    from langres.training.calibration import Calibrator
 
 __all__ = [
     "align_pairs",
@@ -36,7 +38,7 @@ __all__ = [
 ]
 
 LAZY_SYMBOLS: dict[str, str] = {
-    "Calibrator": "langres.core.calibration",
+    "Calibrator": "langres.training.calibration",
 }
 
 EXTRA_BY_SYMBOL: dict[str, str] = {

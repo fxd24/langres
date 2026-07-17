@@ -4,7 +4,7 @@ langres logs every judge call (:class:`~langres.tracking.judgement_log.Judgement
 the flywheel *inlet*). This demo runs the *harvest* half (W2.4): it turns a
 ``judgements.jsonl`` log plus a ``corrections.jsonl`` review-queue export into
 labeled pairs, and feeds them to
-:func:`~langres.core.calibration.derive_threshold` to RE-CALIBRATE a decision
+:func:`~langres.training.calibration.derive_threshold` to RE-CALIBRATE a decision
 threshold -- ``derive_threshold``'s first production caller.
 
 The scenario (committed fixtures under ``examples/data/flywheel/``, built from

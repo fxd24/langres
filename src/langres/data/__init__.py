@@ -4,7 +4,7 @@ This module provides utilities for loading, splitting, and managing
 entity resolution datasets.
 """
 
-from langres.core.finetune import LabeledCandidate
+from langres.training.finetune import LabeledCandidate
 from langres.data._benchmark_utils import BenchmarkDataNotFoundError
 from langres.data.loaders import load_labeled_dedup_data
 from langres.data.mining import (

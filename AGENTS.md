@@ -63,7 +63,7 @@ langres/
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
-│   │   ├── calibration.py          # derive_threshold
+│   │   ├── calibration.py, finetune.py, fit_report.py, methods_prompt.py, methods_calibrate.py  # W2 back-compat shims → langres.training.* (real modules moved; marked `# TEMPORARY: deleted by the W2 sweep`)
 │   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   │   └── usage.py                # LLMUsage + CostTrack — the token/cost leaf (imports nothing from langres)
 │   ├── optimize.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every engine import is lazy). A MODULE, not a package — `langres.optimize` is a CALLABLE, so a submodule under that name is unreachable by attribute traversal (`import langres.optimize.loop as l` → ImportError). The engine lives next door:
@@ -79,6 +79,7 @@ langres/
 │   │   ├── anchor_store.py         # AnchorStore / ClusterDelta (hold the anchors; assign incoming records)
 │   │   ├── canonicalizer.py        # Canonicalizer (survivorship: fold a cluster into one golden record)
 │   │   └── base.py, miners.py, models.py, labelers.py, bootstrapper.py, report.py, _pairs.py  # gold-set cold-start: Miner/Labeler, HardNegativeMiner, GoldPair/GoldSet, Bootstrapper, BootstrapReport
+│   ├── training/       # fitting/calibrating a matcher (what PRODUCES a tuned model, NOT ER modelling — beside core, like report/): finetune (QLoRA, [finetune] lazy), calibration (derive_threshold/Calibrator, [trained]), fit_report (FitReport), methods_prompt (Bootstrap/MIPRO/GEPA), methods_calibrate (Platt/Isotonic). core → training is non-zero by design (resolver.fit + _exports/_training) — see tests/test_import_tangle.py
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   ├── metrics/        # ER metrics + diagnostics (metrics/analysis/debugging/diagnostics) — they SCORE a resolution, not the modelling contract, so beside core; public via langres.eval, back-compat shims at core.metrics/.analysis/.debugging/.diagnostics
@@ -98,7 +99,7 @@ modules, a general `Optimizer`, a synthetic data generator.
 **Extras** (opt-in, `uv sync --all-extras` or `pip install langres[semantic,llm,trained]`):
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
-- `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `core.calibration.derive_threshold`).
+- `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `langres.training.calibration.derive_threshold`).
 
 These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `dedupe()`/`compare()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
 

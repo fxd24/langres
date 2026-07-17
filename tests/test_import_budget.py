@@ -60,7 +60,7 @@ _HEAVY_MODULES = [
     "trackio",
     "huggingface_hub",
     # Fine-tune stack ([finetune], PR-F): peft/trl/bitsandbytes import lazily
-    # inside core.finetune's QLoRATrainer.train, never on a bare `import langres`.
+    # inside training.finetune's QLoRATrainer.train, never on a bare `import langres`.
     "peft",
     "trl",
     "bitsandbytes",
@@ -204,7 +204,7 @@ def test_autoresearch_engine_is_importable_every_way() -> None:
 # check is not masked by another test having already imported dspy.
 _METHODS_PROMPT_IMPORT_LIGHT_SCRIPT = (
     "import sys; "
-    "from langres.core.methods_prompt import GEPA, MIPRO, Bootstrap; "
+    "from langres.training.methods_prompt import GEPA, MIPRO, Bootstrap; "
     "Bootstrap(); MIPRO(auto='heavy'); GEPA(reflection_model='x', max_metric_calls=10); "
     "assert 'dspy' not in sys.modules, 'methods_prompt pulled dspy on construct'; "
     "print('OK')"
@@ -457,7 +457,7 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 # (``EvalReport``, ``gold_pairs_from_clusters``, ``derive_threshold``) must not
 # drag their owning modules into a bare ``import langres``: ``report.eval_report``
 # pulls ``core.benchmark``/``core.metrics`` (kept out of the eager graph on
-# purpose), and ``core.calibration`` imports scikit-learn ([trained]) at module
+# purpose), and ``training.calibration`` imports scikit-learn ([trained]) at module
 # scope. Same fresh-process subprocess pattern as above.
 #
 # !! THIS LIST IS A DENY LIST, SO IT ROTS OPEN !! Every entry asserts a module is
@@ -469,7 +469,7 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 _ROOT_LAZY_MODULES = [
     "langres.report.eval_report",
     "langres.core.benchmark",
-    "langres.core.calibration",
+    "langres.training.calibration",
     "langres.data.data_profile",
 ]
 
@@ -521,7 +521,7 @@ def test_root_lazy_module_paths_all_exist() -> None:
 
 
 # The finetune surface ([finetune], PR-F) must be import-light: resolving the
-# ``langres.finetune``/``QLoRA`` symbols and importing ``langres.core.finetune``
+# ``langres.finetune``/``QLoRA`` symbols and importing ``langres.training.finetune``
 # must NOT pull the training stack (peft/trl/bitsandbytes) or torch/transformers --
 # they load lazily only inside ``QLoRATrainer.train``. So a core+[llm] user can
 # reference the symbols, build a ``QLoRA(...)`` spec, and inject a custom trainer
@@ -532,7 +532,7 @@ _FINETUNE_MODULES = ["peft", "trl", "bitsandbytes", "torch", "transformers"]
 _FINETUNE_IMPORT_LIGHT_SCRIPT = (
     "import sys; import langres; "
     "langres.finetune; langres.QLoRA; langres.run_finetune; "
-    "import langres.core.finetune; "
+    "import langres.training.finetune; "
     "leaked = [m for m in {modules!r} if m in sys.modules]; "
     "assert not leaked, f'finetune surface leaked the training stack: {{leaked}}'; "
     "print('OK')"
@@ -540,7 +540,7 @@ _FINETUNE_IMPORT_LIGHT_SCRIPT = (
 
 
 def test_finetune_surface_stays_import_light() -> None:
-    """``langres.finetune``/``QLoRA`` + ``core.finetune`` must not pull peft/trl/torch."""
+    """``langres.finetune``/``QLoRA`` + ``training.finetune`` must not pull peft/trl/torch."""
     result = subprocess.run(
         [sys.executable, "-c", _FINETUNE_IMPORT_LIGHT_SCRIPT],
         capture_output=True,
@@ -664,7 +664,7 @@ class TestCoreLazyGetattr:
         import langres.core as core
 
         cal = core.Calibrator
-        from langres.core.calibration import Calibrator
+        from langres.training.calibration import Calibrator
 
         assert cal is Calibrator
         # Cached on the module namespace -- a second access must not re-hit
@@ -744,7 +744,7 @@ class TestCoreLazyGetattr:
         real_import_module = importlib.import_module
 
         def _fail_for_sklearn(name: str, *args: object, **kwargs: object) -> object:
-            if name == "langres.core.calibration":
+            if name == "langres.training.calibration":
                 raise ModuleNotFoundError("No module named 'sklearn'")
             return real_import_module(name, *args, **kwargs)
 
@@ -790,7 +790,7 @@ class TestRootLazyGetattr:
         pytest.importorskip("sklearn", reason="requires the [trained] extra")
         import langres
 
-        from langres.core.calibration import derive_threshold
+        from langres.training.calibration import derive_threshold
 
         assert langres.derive_threshold is derive_threshold
 

@@ -18,4 +18,4 @@ from labels.
 
 ## Threshold calibration
 
-::: langres.core.calibration
+::: langres.training.calibration

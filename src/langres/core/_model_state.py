@@ -24,7 +24,7 @@ from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.fit import CalibratorFitMixin
-from langres.core.fit_report import FitReport
+from langres.training.fit_report import FitReport
 from langres.core.inputs import normalize_records
 from langres.core.matcher import Matcher
 from langres.core.spend import SpendMonitor

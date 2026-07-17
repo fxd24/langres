@@ -182,7 +182,7 @@ result, judgements = evaluate_judge_on_candidates(judge, test_candidates, test_g
 Don't hand-set `0.5`. Derive the operating point from the score distribution:
 
 ```python
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 
 scores = [j.score for j in judgements]
 labels = [frozenset({j.left_id, j.right_id}) in gold_pairs for j in judgements]

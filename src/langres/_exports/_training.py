@@ -25,7 +25,7 @@ from langres.core import (
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling scikit-learn into a bare `import langres`.
-    from langres.core.calibration import derive_threshold
+    from langres.training.calibration import derive_threshold
 
 __all__ = [
     "align_pairs",
@@ -44,10 +44,10 @@ __all__ = [
 #: -- an ImportError from importing them is a genuine bug, and the actionable
 #: "pip install langres[finetune]" hint is raised at train time.
 LAZY_SYMBOLS: dict[str, str] = {
-    "derive_threshold": "langres.core.calibration",
-    "QLoRA": "langres.core.finetune",
-    "finetune": "langres.core.finetune",
-    "run_finetune": "langres.core.finetune",
+    "derive_threshold": "langres.training.calibration",
+    "QLoRA": "langres.training.finetune",
+    "finetune": "langres.training.finetune",
+    "run_finetune": "langres.training.finetune",
 }
 
 EXTRA_BY_SYMBOL: dict[str, str] = {

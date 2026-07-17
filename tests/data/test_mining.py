@@ -19,7 +19,7 @@ import pytest
 
 from langres.core.comparators import StringComparator
 from langres.core.feature import FeatureSpec
-from langres.core.finetune import LabeledCandidate
+from langres.training.finetune import LabeledCandidate
 from langres.core.models import CompanySchema, ERCandidate
 from langres.data.mining import (
     _feature_matrix,

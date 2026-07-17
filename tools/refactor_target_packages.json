@@ -77,6 +77,13 @@
     "functions are re-exported from langres.data) while it imports no data/ internals,",
     "so the physical move was deferred; the plan target is unchanged.",
     "",
+    "W2 (the training extraction) actually moved the fit family the 'exact' block",
+    "below already assigned to 'training' (core.finetune/calibration/fit_report/",
+    "methods_prompt/methods_calibrate). The real modules now live in the langres.training",
+    "PACKAGE, so a 'langres.training' -> 'training' PREFIX maps them; the old core.* paths",
+    "keep their exact 'training' entries because a back-compat shim still sits at each --",
+    "the same both-homes-one-target reading model_ref uses above. No new target package.",
+    "",
     "'exact' wins over 'prefix'; among prefixes the longest match wins."
   ],
   "prefix": {
@@ -98,7 +105,8 @@
     "langres.data.data_profile": "data",
     "langres.metrics": "metrics",
     "langres.plotting": "plotting",
-    "langres.report": "report"
+    "langres.report": "report",
+    "langres.training": "training"
   },
   "exact": {
     "langres": "root",

@@ -63,5 +63,5 @@ print(
 # A closing note on quality, since this example is free and therefore tempting:
 # unsupervised fuzzy matching over-merges on unlabeled data. That is exactly why
 # it was never a silent fallback for a missing API key. Calibrate the threshold
-# against real labels (langres.core.calibration.derive_threshold, or
+# against real labels (langres.training.calibration.derive_threshold, or
 # fit(method=Platt())) before trusting FuzzyString on anything that matters.

@@ -28,7 +28,7 @@ place where a *concrete backend* is named, built, or swapped in. ``from_schema``
 and its two builders construct one; ``fit`` (with ``_fit_finetune``) trains one
 and repoints the matcher slot at it; ``build_anchor_store``/``assign`` hold the
 incremental state. Those are also, measurably, the only parts that cannot move:
-each reaches ``core.method_registry`` / ``core.finetune`` /
+each reaches ``core.method_registry`` / ``training.finetune`` /
 ``core.matchers.llm_judge`` / ``core.anchor_store``, every one of which reaches
 back here via ``openrouter -> benchmark -> resolver``. Hosting them in a new
 module would spread that existing knot across more modules -- the exact
@@ -64,7 +64,7 @@ from langres.core.fit import (
     SupervisedFitMixin,
     UnsupervisedFitMixin,
 )
-from langres.core.fit_report import CalibrationDelta, FitReport
+from langres.training.fit_report import CalibrationDelta, FitReport
 from langres.curation.harvest import Correction, LabeledPair, align_pairs
 from langres.core.matcher import Matcher
 from langres.core.methods_api import Method, UnsupportedMethodKind
@@ -505,8 +505,8 @@ class ERModel(ModelRun, ModelPersistence):
                 (``_fit_prompt`` / ``_fit_finetune`` / ``_fit_calibrate``) instead
                 of the isinstance-on-the-module default above; when ``None`` (the
                 default), behavior is exactly the module-hook path described here.
-                Prompt-optimization is implemented (:class:`~langres.core.methods_prompt.Bootstrap`
-                / :class:`~langres.core.methods_prompt.MIPRO` compile a
+                Prompt-optimization is implemented (:class:`~langres.training.methods_prompt.Bootstrap`
+                / :class:`~langres.training.methods_prompt.MIPRO` compile a
                 ``DSPyMatcher``'s prompt -- see :meth:`_fit_prompt`); the
                 fine-tune (PR-F) and calibrate (PR-D) handlers are still stubs
                 that raise a clear NotImplementedError naming their PR.
@@ -658,8 +658,8 @@ class ERModel(ModelRun, ModelPersistence):
         Tunes a compilable :class:`~langres.core.matchers.dspy_judge.DSPyMatcher`'s
         prompt from labeled pairs by compiling its DSPy program against a gold set
         -- the optimizer named by ``method.optimizer`` (``BootstrapFewShot`` for
-        :class:`~langres.core.methods_prompt.Bootstrap`, ``MIPROv2`` for
-        :class:`~langres.core.methods_prompt.MIPRO`). Supervision comes from either
+        :class:`~langres.training.methods_prompt.Bootstrap`, ``MIPROv2`` for
+        :class:`~langres.training.methods_prompt.MIPRO`). Supervision comes from either
         id-keyed ``pairs`` (joined via :func:`~langres.curation.harvest.align_pairs`,
         whose optional entity-disjoint ``split`` yields the ``valid`` fold
         ``MIPROv2`` uses as its valset) or pre-aligned ``labels``. Sets
@@ -787,23 +787,23 @@ class ERModel(ModelRun, ModelPersistence):
         """Fit via fine-tuning (``method.kind == "finetune"``): QLoRA train → serve.
 
         Aligns the labeled ``pairs`` to candidates, fine-tunes ``method.base`` on
-        them (:func:`~langres.core.finetune.run_finetune`), repoints this
+        them (:func:`~langres.training.finetune.run_finetune`), repoints this
         Resolver's matcher at the resulting ``model_ref`` as an in-process,
         logprob-scoring :class:`~langres.core.matchers.llm_judge.LLMMatcher`, and
         evaluates held-out pair P/R/F1 on the entity-disjoint ``valid`` split.
         Records the GPU-seconds / derived-$ cost and the served ``model_ref`` in
         :attr:`fit_report_`.
 
-        Heavy imports (``core.finetune`` → peft/trl on the training call;
+        Heavy imports (``training.finetune`` → peft/trl on the training call;
         ``LLMMatcher`` → litellm) are deferred to here so the ``method=None`` and
         non-finetune fit paths never pay for them.
 
         Raises:
-            TypeError: If ``method`` is not a :class:`~langres.core.finetune.QLoRA`.
+            TypeError: If ``method`` is not a :class:`~langres.training.finetune.QLoRA`.
             ValueError: If neither ``pairs`` nor ``labels`` is given (fine-tuning
                 needs supervision), or both are.
         """
-        from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
+        from langres.training.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
         from langres.core.matchers.llm_judge import LLMMatcher
         from langres.core.model_ref import to_config
 
@@ -889,7 +889,7 @@ class ERModel(ModelRun, ModelPersistence):
         this carries its ``record_serializer`` (by registered name) so a fine-tune
         renders records the way they will be served. Only the serializer -- NOT the
         ``prompt_template``: ``_fit_finetune`` pins both training and serving to
-        :data:`~langres.core.finetune.FINETUNE_YES_NO_PROMPT` (the outgoing matcher's
+        :data:`~langres.training.finetune.FINETUNE_YES_NO_PROMPT` (the outgoing matcher's
         prompt may be the ``Score:`` scoring template, which the yes/no fine-tune
         does not use). Empty for a non-LLM matcher (the finetune defaults apply).
         """
@@ -912,7 +912,7 @@ class ERModel(ModelRun, ModelPersistence):
         """Fit via score calibration (``method.kind == "calibrate"``): learn a score→prob map.
 
         Scores the labeled train candidates with the current matcher, fits a fresh
-        :class:`~langres.core.calibration.Calibrator` (strategy from
+        :class:`~langres.training.calibration.Calibrator` (strategy from
         ``method.strategy``) on those ``(score, label)`` pairs, and attaches it as
         :attr:`calibrator` so :meth:`predict`/:meth:`resolve` map every raw score
         to a calibrated probability. Supervision comes from id-keyed ``pairs``
@@ -929,12 +929,12 @@ class ERModel(ModelRun, ModelPersistence):
         Raises:
             ImportError: If scikit-learn (the ``[trained]`` extra) is not installed.
             ValueError: If ``method`` exposes no ``.strategy`` (not a
-                :class:`~langres.core.methods_calibrate.CalibrateMethod`); if both
+                :class:`~langres.training.methods_calibrate.CalibrateMethod`); if both
                 ``labels`` and ``pairs`` are given, or neither; or if the matcher
                 emits no scores to calibrate (a pure decider).
         """
         try:
-            from langres.core.calibration import Calibrator
+            from langres.training.calibration import Calibrator
         except ImportError as exc:  # pragma: no cover - core-only env
             raise ImportError(
                 "score calibration (method='calibrate') needs scikit-learn (the "

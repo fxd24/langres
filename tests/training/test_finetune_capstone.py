@@ -63,7 +63,7 @@ def _rank_signal(model_cfg: Any, pairs: list[tuple[Any, bool]]) -> tuple[float, 
     artifact that makes F1 reward the trivial always-"Yes" base (see module docstring).
     """
     from langres.core.matchers import LLMMatcher
-    from langres.core.finetune import FINETUNE_YES_NO_PROMPT
+    from langres.training.finetune import FINETUNE_YES_NO_PROMPT
     from langres.eval import roc_auc_score
 
     matcher: LLMMatcher[Any] = LLMMatcher(
@@ -97,7 +97,7 @@ def test_capstone_train_serve_evaluate_public_flow() -> None:
     pytest.importorskip("sentence_transformers")
 
     from langres.core.matchers import LLMMatcher
-    from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
+    from langres.training.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
     from langres.core.matchers.model_ref import normalize_model_ref, to_config
     from langres.eval import candidates_for, evaluate, get_benchmark
 
