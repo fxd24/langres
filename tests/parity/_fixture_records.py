@@ -22,8 +22,15 @@ from pydantic import BaseModel
 from langres.core.registry import register_schema
 
 
+# The registry key MUST equal the class ``__name__``: an ``AllPairsBlocker``
+# built with ``schema=`` registers itself (idempotently) under ``schema.__name__``
+# and persists THAT name as ``schema_type_name``. If the decorator key and the
+# class name diverged, the committed artifact would store one name while a fresh
+# process registered the other, and ``Resolver.load`` would raise
+# ``SchemaNotRegistered``. Keeping them identical is what makes the legacy artifact
+# loadable simply by importing this module.
 @register_schema("ParityBusinessW0")
-class ParityBusiness(BaseModel):
+class ParityBusinessW0(BaseModel):
     """A business entity: id + name + city + phone. Deliberately tiny and typed."""
 
     id: str
