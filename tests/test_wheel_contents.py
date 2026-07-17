@@ -221,6 +221,17 @@ def test_sdist_ships_exactly_the_declared_data_files(
     with tarfile.open(sdist) as tf:
         names = [m.name for m in tf.getmembers() if m.isfile()]
 
+    # Locating the package by a path marker already fails closed -- if the sdist
+    # layout moved, nothing matches and every manifest entry reports as missing.
+    # But "23 files missing" would misdiagnose a layout change as a deletion, and
+    # a gate whose message points at the wrong cause wastes the incident. Say so.
+    assert any(marker in name for name in names), (
+        f"{sdist.name} contains no member under '{marker}', so this test cannot see "
+        "the package at all. The sdist layout changed (a src-layout move, or a "
+        "different build backend) -- update the marker; do NOT assume the data is "
+        "simply gone."
+    )
+
     shipped = {
         name.split(marker, 1)[1] for name in names if marker in name and not name.endswith(".py")
     }
@@ -228,6 +239,17 @@ def test_sdist_ships_exactly_the_declared_data_files(
 
 
 def _assert_manifest(shipped: set[str], *, artifact: str) -> None:
+    # Both callers filter `.py` out of `shipped`, so a `.py` entry in the manifest
+    # could never match and would surface as a bogus "missing file" -- a real
+    # licence decision is not being made about langres's own source. Name the
+    # actual mistake instead.
+    stray_py = {p for p in SHIPPED_NON_PY_FILES if p.endswith(".py")}
+    assert not stray_py, (
+        f"SHIPPED_NON_PY_FILES lists {len(stray_py)} `.py` path(s): {sorted(stray_py)}. "
+        "The manifest declares the non-`.py` data payload only; `.py` files are "
+        "langres's own source and are not part of this gate."
+    )
+
     unexpected = shipped - SHIPPED_NON_PY_FILES
     missing = SHIPPED_NON_PY_FILES - shipped
     assert not unexpected, (
