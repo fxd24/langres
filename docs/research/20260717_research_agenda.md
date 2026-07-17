@@ -32,16 +32,33 @@ Every item has the same five fields:
 |---|---|
 | **The question** | Stated so it can come out *no*. If it cannot fail, it is not here. |
 | **Why it matters to langres** | The decision it changes. An item that changes no decision is deleted. |
-| **What's already known** | Cited. Primary sources only. Confidence flagged. |
+| **What's already known** | Cited, with confidence flagged. Often more than expected — several items shrank on contact. |
 | **What would settle it** | The concrete measurement — not "investigate". |
 | **Cost & prerequisites** | $0 / CPU / GPU / paid-API, and what must land first. |
 
-**Method discipline** (this project has been burned — see `.claude/rules/expert-knowledge.md`):
-every number below is transcribed from a primary source **read directly**, or is marked
-`[unverified]`. A hypothesis is labelled a hypothesis. Novelty is not a goal — the
-owner's standard is *"We don't care how much we are contributing with novelty. We care
-that what we have is good and correct."* Several items below exist to find out that we
-are **wrong**, which is the cheapest possible outcome.
+**Method discipline** (this project has been burned — see `.claude/rules/expert-knowledge.md`).
+Two conventions, and they are load-bearing rather than decorative:
+
+- **`[verified — how]`** marks a claim checked against the thing itself during this doc's
+  preparation — the LaTeX source of a paper, an OA PDF, or the langres source at a named
+  `file:line`. Anything not so marked is reached via a secondary (usually `THEORY.md` or a
+  project note) and is **not** independently confirmed here.
+- **§7 splits references into two tiers** — *verified against the primary* vs. *do not
+  quote without reading* — following `THEORY.md`'s convention. **An entry does not move up
+  a tier without someone reading the primary.**
+
+This is not ceremony. **Four claims taken as given at the start of this doc turned out to
+be wrong on contact with the primaries** — ADORE's headline number is a different row
+(C5), `min(1, n/k)` is not Eq. 4's prescription (A2), *Drowning in Documents* measures no
+false-positive rate (A1), and ANCE's "100×" is latency rather than cost (C1). A fifth —
+"is there *any* joint blocking+matching training in ER?" — was posed as an open question
+and is a populated field with three papers (A3). The tiering is what caught them.
+
+A hypothesis is labelled a hypothesis. Novelty is **not** a goal — the owner's standard is
+*"We don't care how much we are contributing with novelty. We care that what we have is
+good and correct."* Several items exist specifically to find out that we are **wrong**,
+which is the cheapest possible outcome; **A2 is written to be killed by A1**, and that is
+the expected result, not a failure of the item.
 
 ---
 
