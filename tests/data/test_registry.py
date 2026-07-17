@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from langres.core.benchmark import Benchmark
+from langres.data.benchmark import Benchmark
 from langres.data import registry
 from langres.data.registry import (
     BenchmarkEntry,

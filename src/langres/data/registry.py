@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from langres.core.benchmark import Benchmark
+    from langres.data.benchmark import Benchmark
 
 #: The evaluation task shape. All current entries are cross-source *linkage*
 #: benchmarks; ``dedup`` is reserved for single-source dedup datasets.

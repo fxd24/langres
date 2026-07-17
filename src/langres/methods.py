@@ -61,7 +61,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
-from langres.core.benchmark import _cost_track
+from langres.benchmarks.runner import _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator

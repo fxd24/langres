@@ -4,8 +4,11 @@ langres.eval: Curated evaluation surface.
 Score a judge (:func:`evaluate`), discover benchmarks
 (:func:`list_benchmarks` / :func:`get_benchmark`), and reach the entity-resolution
 metrics -- all from one import. Most names below are re-exported unchanged from
-where they already live (``core.benchmark`` / ``core.metrics`` / ``data.registry``),
-so e.g. ``langres.eval.evaluate is langres.core.benchmark.evaluate``. The one
+where they already live (:mod:`langres.benchmarks.judge_eval` for :func:`evaluate`,
+:mod:`langres.data.benchmark` for ``DEFAULT_PAIR_GRID`` / ``gold_pairs_from_clusters``,
+:mod:`langres.metrics.metrics` for the ER metrics, :mod:`langres.data.registry` for
+benchmark discovery), so e.g. ``langres.eval.evaluate is
+langres.benchmarks.judge_eval.evaluate``. The one
 exception is :func:`candidates_for`, implemented here: it blocks one registered
 benchmark's split into the ``(candidates, gold_pairs)`` pair :func:`evaluate`
 needs, so scoring a judge on a benchmark never requires reaching into
@@ -13,9 +16,10 @@ needs, so scoring a judge on a benchmark never requires reaching into
 
 Names resolve lazily (PEP 562 ``__getattr__``, the same idiom as
 ``langres.core`` / ``langres.clients``): ``from langres.eval import evaluate``
-imports only ``core.benchmark`` on first access, and none of these names pulls
-the ranking-metric dependency ``ranx`` -- that ``[eval]`` extra is imported only
-when :func:`~langres.core.metrics.evaluate_blocking_with_ranking` (MRR/NDCG/MAP)
+imports only ``langres.benchmarks.judge_eval`` on first access, and none of these
+names pulls the ranking-metric dependency ``ranx`` -- that ``[eval]`` extra is
+imported only when :func:`~langres.metrics.metrics.evaluate_blocking_with_ranking`
+(MRR/NDCG/MAP)
 is actually called. :func:`candidates_for` keeps the same discipline: its
 imports (``Resolver``, ``gold_pairs_from_clusters``) are local to the function
 body, so ``import langres.eval`` stays import-light.
@@ -27,10 +31,10 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     # Only reached by mypy -- keeps every lazy name visible to `mypy --strict`
     # without importing the owning modules at runtime.
-    from langres.core.benchmark import (
+    from langres.benchmarks.judge_eval import evaluate
+    from langres.data.benchmark import (
         DEFAULT_PAIR_GRID,
         Benchmark,
-        evaluate,
         gold_pairs_from_clusters,
     )
     from langres.data.data_profile import DataProfileReport, from_embedder
@@ -78,12 +82,12 @@ __all__ = [
 #: (the same object), never a copy. ``candidates_for`` is NOT here -- it is a
 #: real function defined below, not a re-export.
 _LAZY: dict[str, str] = {
-    "evaluate": "langres.core.benchmark",
+    "evaluate": "langres.benchmarks.judge_eval",
     "EvalReport": "langres.report.eval_report",
     "DataProfileReport": "langres.data.data_profile",
     "from_embedder": "langres.data.data_profile",
-    "DEFAULT_PAIR_GRID": "langres.core.benchmark",
-    "gold_pairs_from_clusters": "langres.core.benchmark",
+    "DEFAULT_PAIR_GRID": "langres.data.benchmark",
+    "gold_pairs_from_clusters": "langres.data.benchmark",
     "list_benchmarks": "langres.data.registry",
     "get_benchmark": "langres.data.registry",
     "ExternalBenchmarkError": "langres.data.registry",
@@ -125,12 +129,12 @@ def candidates_for(
     :meth:`Resolver.candidates() <langres.core.resolver.Resolver.candidates>`,
     so comparison vectors are attached exactly like that method does. Gold
     pairs are derived from the chosen split's OWN gold clusters via
-    :func:`~langres.core.benchmark.gold_pairs_from_clusters` (leakage-free:
+    :func:`~langres.data.benchmark.gold_pairs_from_clusters` (leakage-free:
     only that split's clusters contribute, never the full dataset's).
 
     ``bench`` must additionally satisfy ``langres.methods.BlockingBenchmark``
-    (``schema`` + ``blocking_k`` + ``build_blocker``) on top of the core
-    :class:`~langres.core.benchmark.Benchmark` contract this signature
+    (``schema`` + ``blocking_k`` + ``build_blocker``) on top of the
+    :class:`~langres.data.benchmark.Benchmark` contract this signature
     declares -- every dataset returned by :func:`get_benchmark` does. Building
     the blocker may require whatever extra ``bench.build_blocker`` itself
     needs (typically ``[semantic]`` for the vendored datasets, which all block
@@ -149,8 +153,8 @@ def candidates_for(
     Raises:
         ValueError: If ``split`` is neither ``"train"`` nor ``"test"``.
     """
-    from langres.core.benchmark import gold_pairs_from_clusters
     from langres.core.resolver import Resolver
+    from langres.data.benchmark import gold_pairs_from_clusters
 
     if split not in ("train", "test"):
         # Without this, any typo ("valid", "validation", "Test") falls through the

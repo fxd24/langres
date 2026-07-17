@@ -230,6 +230,34 @@ function-local imports, plus one toplevel `fit_report` for the `fit_report_`
 attribute type, and the `core/_exports/_training` public surface) — see
 `tests/test_import_tangle.py`.
 
+#### Benchmark subsystem split out of `langres.core` — internal, back-compat shim kept
+
+`langres.core.benchmark` was two concerns in one 1.7k-line file, so it split into
+their proper homes:
+
+- The benchmark **spec** — the "a dataset *is* a benchmark" contract (the
+  `Benchmark` protocol, `PairTrack`, `gold_pairs_from_clusters`,
+  `complete_partition`, `BlindCostError`, `DEFAULT_PAIR_GRID`) → the import-light
+  **`langres.data.benchmark`**, so a dataset can carry its benchmark capability
+  without pulling the runner.
+- The generic **harness** — race a method into a table
+  (`run_method`/`run_methods` → `BenchmarkTable`) or score a judge on a fixed
+  candidate set (`evaluate`/`evaluate_judge_on_candidates`, `BudgetedModuleRunner`)
+  → the new **`langres.benchmarks`** package (`benchmarks.runner`,
+  `benchmarks.judge_eval`; its `__init__` exports nothing, import-light like
+  `autoresearch`).
+
+`langres.eval` (the `evaluate` / `list_benchmarks` / `get_benchmark` facade) is
+unchanged, repointed at the new homes. The old `from langres.core.benchmark
+import …` path **still works** through a back-compat shim marked
+`# TEMPORARY: deleted by the W2 sweep`. `data/*` datasets import the spec from
+`langres.data.benchmark` **directly** (never via the `core.benchmark` shim), so no
+`core ↔ data` cycle is reintroduced; the harness depends on the spec one-way
+(`benchmarks → data`, never back). The tangle is unchanged in shape
+(`[9, 3, 2, 2, 2]` all-edges, `[]` runtime; measured) — the `{core.benchmark,
+methods}` knot is now `{benchmarks.runner, methods}`, one module renamed —
+and `langres.__all__` = 36 / `langres.core.__all__` = 76, both unchanged.
+
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its

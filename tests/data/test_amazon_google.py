@@ -2,7 +2,7 @@
 
 import pytest
 
-from langres.core.benchmark import gold_pairs_from_clusters
+from langres.data.benchmark import gold_pairs_from_clusters
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate

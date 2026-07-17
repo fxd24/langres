@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling the eval-report/benchmark modules into a bare
     # `import langres`.
-    from langres.core.benchmark import gold_pairs_from_clusters
+    from langres.data.benchmark import gold_pairs_from_clusters
     from langres.report.eval_report import EvalReport
 
 __all__ = [
@@ -49,7 +49,7 @@ __all__ = [
 
 LAZY_SYMBOLS: dict[str, str] = {
     "EvalReport": "langres.report.eval_report",
-    "gold_pairs_from_clusters": "langres.core.benchmark",
+    "gold_pairs_from_clusters": "langres.data.benchmark",
 }
 
 #: Neither needs an extra -- see the module docstring.

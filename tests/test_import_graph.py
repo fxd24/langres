@@ -437,7 +437,7 @@ def test_a_valid_mapping_with_extra_top_level_keys_loads():
         ["fan", "--top", "3"],
         ["fan", "--top", "3", "--toplevel-only"],
         ["kinds"],
-        ["importers", "langres.core.benchmark"],
+        ["importers", "langres.benchmarks.runner"],
         ["importers", "langres.not_a_module"],
         ["cycles"],
         ["cycles", "--toplevel-only"],

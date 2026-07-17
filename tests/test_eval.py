@@ -16,8 +16,9 @@ from typing import Any, cast
 
 import pytest
 
-import langres.core.benchmark as benchmark
+import langres.benchmarks.judge_eval as benchmark_harness
 import langres.core.metrics as metrics
+import langres.data.benchmark as benchmark_spec
 import langres.data.registry as registry
 import langres.eval as ev
 from langres.core.blockers.all_pairs import AllPairsBlocker
@@ -28,8 +29,8 @@ from langres.core.reports import ScoreInspectionReport
 
 def test_facade_reexports_are_the_source_objects() -> None:
     """Each name resolves to the exact object it re-exports (a facade, not a copy)."""
-    assert ev.evaluate is benchmark.evaluate
-    assert ev.DEFAULT_PAIR_GRID is benchmark.DEFAULT_PAIR_GRID
+    assert ev.evaluate is benchmark_harness.evaluate
+    assert ev.DEFAULT_PAIR_GRID is benchmark_spec.DEFAULT_PAIR_GRID
     assert ev.list_benchmarks is registry.list_benchmarks
     assert ev.get_benchmark is registry.get_benchmark
     assert ev.ExternalBenchmarkError is registry.ExternalBenchmarkError
@@ -41,7 +42,7 @@ def test_facade_reexports_are_the_source_objects() -> None:
     assert ev.calculate_pairwise_metrics is metrics.calculate_pairwise_metrics
     assert ev.roc_auc_score is metrics.roc_auc_score
     assert ev.average_precision_score is metrics.average_precision_score
-    assert ev.gold_pairs_from_clusters is benchmark.gold_pairs_from_clusters
+    assert ev.gold_pairs_from_clusters is benchmark_spec.gold_pairs_from_clusters
 
 
 def test_dir_and_all_list_the_curated_surface() -> None:
@@ -86,7 +87,7 @@ def test_new_facade_names_import_and_reexport_correctly() -> None:
 
     assert average_precision_score is metrics.average_precision_score
     assert roc_auc_score is metrics.roc_auc_score
-    assert gold_pairs_from_clusters is benchmark.gold_pairs_from_clusters
+    assert gold_pairs_from_clusters is benchmark_spec.gold_pairs_from_clusters
     assert candidates_for is ev.candidates_for
 
 
@@ -140,7 +141,7 @@ def test_evaluate_one_liner_scores_byo_pairs() -> None:
 
     result = ev.evaluate(_ExactNameJudge(), candidates, gold_pairs, grid=(0.5,))
 
-    assert isinstance(result, benchmark.JudgePairEval)
+    assert isinstance(result, benchmark_harness.JudgePairEval)
     assert result.n_candidates == 3
     assert result.pair.precision == pytest.approx(1.0)
     assert result.pair.recall == pytest.approx(1.0)
@@ -204,7 +205,7 @@ def test_eval_facade_path_is_ranx_free() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _FakeSplitBenchmark(benchmark.Benchmark[CompanySchema]):
+class _FakeSplitBenchmark(benchmark_spec.Benchmark[CompanySchema]):
     """Tiny in-test double satisfying Benchmark + ``langres.methods.BlockingBenchmark``."""
 
     name = "fake_split"
@@ -227,7 +228,7 @@ class _FakeSplitBenchmark(benchmark.Benchmark[CompanySchema]):
 
     def load(self) -> tuple[list[CompanySchema], list[set[str]], set[frozenset[str]]]:
         gold = [set(c) for c in self._GOLD]
-        return list(self._CORPUS), gold, benchmark.gold_pairs_from_clusters(gold)
+        return list(self._CORPUS), gold, benchmark_spec.gold_pairs_from_clusters(gold)
 
     def split(
         self,

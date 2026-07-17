@@ -12,7 +12,7 @@ This is the no-behavior-change guard for the M2 -> M3 extraction. Marked
 
 import pytest
 
-from langres.core.benchmark import run_method
+from langres.benchmarks.runner import run_method
 from langres.data.er_benchmarks import (
     FodorsZagatBenchmark,
     build_restaurant_resolver,

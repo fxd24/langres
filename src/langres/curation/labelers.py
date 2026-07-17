@@ -20,7 +20,7 @@ from typing import Any
 from langres.curation._pairs import canonical_pair_key
 from langres.curation.base import Labeler
 from langres.curation.models import GoldPair
-from langres.core.benchmark import BlindCostError
+from langres.data.benchmark import BlindCostError
 from langres.core.models import ERCandidate, predicted_match
 from langres.core.matchers.llm_judge import LLMMatcher
 

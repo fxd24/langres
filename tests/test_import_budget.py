@@ -224,16 +224,17 @@ def test_methods_prompt_stays_import_light() -> None:
     )
 
 
-# The eval harness (``core.metrics`` / ``core.benchmark``) must be importable
-# without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP) is now
-# imported lazily inside ``evaluate_blocking_with_ranking`` only, so importing
-# the modules must never pull ``ranx`` into ``sys.modules``. Subprocess-based for
-# a fresh import state (this pytest process loads ranx via the ranking-metric
-# test). The curated ``langres.eval`` facade gets the same assertion in
-# ``tests/test_eval.py``.
+# The eval harness (``core.metrics`` / the ``langres.benchmarks`` harness) must be
+# importable without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP)
+# is now imported lazily inside ``evaluate_blocking_with_ranking`` only, so
+# importing the modules must never pull ``ranx`` into ``sys.modules``.
+# Subprocess-based for a fresh import state (this pytest process loads ranx via the
+# ranking-metric test). The curated ``langres.eval`` facade gets the same assertion
+# in ``tests/test_eval.py``.
 _RANX_DECOUPLE_SCRIPT = (
     "import sys; "
-    "import langres.core.metrics; import langres.core.benchmark; "
+    "import langres.core.metrics; "
+    "import langres.benchmarks.runner; import langres.benchmarks.judge_eval; "
     "assert 'ranx' not in sys.modules, "
     "'ranx leaked into sys.modules without calling the ranking metrics'; "
     "print('OK')"
@@ -241,7 +242,7 @@ _RANX_DECOUPLE_SCRIPT = (
 
 
 def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
-    """core.metrics/core.benchmark must import without the [eval] extra.
+    """core.metrics/the benchmark harness must import without the [eval] extra.
 
     Locks in the ranx decoupling: ``ranx`` is imported lazily only when
     ``evaluate_blocking_with_ranking`` (MRR/NDCG/MAP) actually runs, so the
@@ -456,7 +457,7 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 # The flywheel's back half is root-exported, but its three lazy names
 # (``EvalReport``, ``gold_pairs_from_clusters``, ``derive_threshold``) must not
 # drag their owning modules into a bare ``import langres``: ``report.eval_report``
-# pulls ``core.benchmark``/``core.metrics`` (kept out of the eager graph on
+# pulls ``data.benchmark``/``core.metrics`` (kept out of the eager graph on
 # purpose), and ``training.calibration`` imports scikit-learn ([trained]) at module
 # scope. Same fresh-process subprocess pattern as above.
 #
@@ -468,7 +469,7 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 # enforceable rather than aspirational -- it fails when a path here goes stale.
 _ROOT_LAZY_MODULES = [
     "langres.report.eval_report",
-    "langres.core.benchmark",
+    "langres.data.benchmark",
     "langres.training.calibration",
     "langres.data.data_profile",
 ]
@@ -782,7 +783,7 @@ class TestRootLazyGetattr:
 
     def test_gold_pairs_from_clusters_resolves(self) -> None:
         import langres
-        from langres.core.benchmark import gold_pairs_from_clusters
+        from langres.data.benchmark import gold_pairs_from_clusters
 
         assert langres.gold_pairs_from_clusters is gold_pairs_from_clusters
 

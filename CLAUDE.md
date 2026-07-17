@@ -55,6 +55,9 @@ langres/
 │   │   ├── loop.py         # propose → run → evaluate → keep, over tracking.runs persistence
 │   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
+│   ├── benchmarks/     # ER benchmark HARNESS — race methods into a table / score a judge on a fixed candidate set. Internal plumbing: users reach it ONLY via a dataset from `langres.data.get_benchmark(...)` + `langres.eval.evaluate(...)` / `candidates_for(...)`; __init__ exports nothing (import-light, like autoresearch/)
+│   │   ├── runner.py       # run_method / run_methods -> BenchmarkTable; tracks, resolver-bcubed, tune_threshold, cost helpers
+│   │   └── judge_eval.py   # JudgePairEval, evaluate / evaluate_judge_on_candidates (scorer-isolating, spend-capped), BudgetedModuleRunner
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
@@ -105,6 +108,7 @@ langres/
 │   │   ├── methods_prompt.py   # Bootstrap / MIPRO / GEPA — the prompt-optimize Method objects (dspy lazy)
 │   │   └── methods_calibrate.py # Platt / Isotonic — the score-calibrate Method objects
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
+│       ├── benchmark.py # the benchmark SPEC (a dataset IS a benchmark): the Benchmark protocol + PairTrack / gold_pairs_from_clusters / DEFAULT_PAIR_GRID a dataset carries. Import-light; the langres.benchmarks harness depends on it ONE-WAY (never data -> benchmarks)
 │       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)
@@ -122,7 +126,7 @@ modules, a general `Optimizer`, a synthetic data generator.
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `langres.training.calibration.derive_threshold`).
-- `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `langres.metrics.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `langres.metrics.metrics`/`core.benchmark` (BCubed/pairwise metrics, `evaluate()`) stays importable without it. (The old `core.metrics` path still works via a back-compat shim.)
+- `[eval]` — ranx (ranking metrics MRR/NDCG/MAP in `langres.metrics.metrics.evaluate_blocking_with_ranking`). Imported lazily, so the rest of `langres.metrics.metrics`/the `langres.benchmarks` harness (BCubed/pairwise metrics, `evaluate()`) stays importable without it. (The old `core.metrics`/`core.benchmark` paths still work via back-compat shims.)
 
 These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py`, the implementation packages such as `langres/core/matchers/__init__.py`, and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`.
 

@@ -40,7 +40,7 @@ from typing import Literal
 
 from pydantic import BaseModel, computed_field
 
-from langres.core.benchmark import Benchmark, gold_pairs_from_clusters
+from langres.data.benchmark import Benchmark, gold_pairs_from_clusters
 from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder

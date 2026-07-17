@@ -83,7 +83,8 @@ langres/
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   ├── metrics/        # ER metrics + diagnostics (metrics/analysis/debugging/diagnostics) — they SCORE a resolution, not the modelling contract, so beside core; public via langres.eval, back-compat shims at core.metrics/.analysis/.debugging/.diagnostics
-│   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
+│   ├── benchmarks/     # ER benchmark HARNESS (internal plumbing) — runner.py (run_method(s)→BenchmarkTable) + judge_eval.py (evaluate/evaluate_judge_on_candidates, BudgetedModuleRunner). __init__ exports NOTHING (import-light). Reached ONLY via langres.data.get_benchmark(...) + langres.eval.evaluate(...); depends ONE-WAY on the benchmark SPEC in data/benchmark.py. Old core.benchmark path = TEMPORARY W2-sweep shim
+│   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...); benchmark.py = the benchmark SPEC (Benchmark protocol + PairTrack/gold_pairs_from_clusters a dataset carries; import-light, the langres.benchmarks harness depends on it one-way)
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)
 └── docs/               # Documentation
