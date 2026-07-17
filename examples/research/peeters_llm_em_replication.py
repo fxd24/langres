@@ -376,7 +376,7 @@ COMMITTED_RESULTS_DIR = Path("examples/research/results/peeters")
 # ---------------------------------------------------------------------------
 # Crash-safe, resumable per-pair results store (mirrors m3_race's durability).
 #
-# Why not reuse ``langres.core.judgement_log.JudgementLog``? It is the closest
+# Why not reuse ``langres.tracking.judgement_log.JudgementLog``? It is the closest
 # in-repo sink and we DO borrow its shape (a ``v``-versioned JSONL, one row per
 # judgement, a ``read()`` round-trip). But it is structurally a judge-CALL log:
 # it has no notion of the GOLD label (it never sees ground truth), and it keeps

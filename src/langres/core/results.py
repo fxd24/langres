@@ -83,7 +83,7 @@ class DedupeResult(list[set[str]]):
     carries what ran (:attr:`architecture`, :attr:`backbone`), what its scores mean
     (:attr:`score_type`), and the cut they were thresholded at (:attr:`threshold`),
     so a caller can feed ``threshold`` straight to
-    :func:`~langres.core.review.select_for_review` without a remembered constant.
+    :func:`~langres.curation.review.select_for_review` without a remembered constant.
 
     :attr:`threshold` is ``None`` only for the ``len(records) < 2`` short-circuit,
     where no pair exists and nothing was ever scored.

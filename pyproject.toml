@@ -72,7 +72,7 @@ llm = [
     "openai>=2.6.1",
 ]
 # The trained-judge stack -- RandomForestJudge (W1.2's sklearn RandomForest judge) and
-# core.calibration.derive_threshold (sklearn.metrics.roc_curve). Also present
+# training.calibration.derive_threshold (sklearn.metrics.roc_curve). Also present
 # in the dev group below (unrelated eval tooling depends on it too, and the
 # repo's own test suite needs it without requiring --all-extras locally).
 trained = [
@@ -87,10 +87,10 @@ trained = [
 eval = [
     "ranx>=0.3.21",
 ]
-# The fine-tune stack -- QLoRA training in core.finetune (peft LoRA adapters +
+# The fine-tune stack -- QLoRA training in training.finetune (peft LoRA adapters +
 # trl SFT). Kept OUT of every normal CI job (they run
 # `uv sync --all-extras --no-extra finetune`); one dedicated `test-finetune` job
-# installs it. peft/trl/bitsandbytes import lazily inside core.finetune (never at
+# installs it. peft/trl/bitsandbytes import lazily inside training.finetune (never at
 # module load -- locked by tests/test_import_budget.py). This extra adds only the
 # training-specific deps; it complements `[semantic]` (torch/transformers, used to
 # load + serve the model) and `[llm]` (LLMMatcher serving) -- the full train+serve
@@ -99,7 +99,7 @@ finetune = [
     "peft>=0.13",
     "trl>=0.12",
     # QLoRA 4-bit quantization is CUDA-only, so scope bitsandbytes to Linux (CI's
-    # runner + the GPU box). On macOS/other platforms core.finetune falls back to
+    # runner + the GPU box). On macOS/other platforms training.finetune falls back to
     # a non-quantized LoRA fine-tune (no 4-bit) so the path still runs locally.
     "bitsandbytes>=0.44; platform_system == 'Linux'",
     # NOTE: unsloth is deliberately NOT required here -- it is fragile to install

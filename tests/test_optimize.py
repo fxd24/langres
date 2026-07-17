@@ -19,7 +19,7 @@ from langres import optimize, score_blocking
 from langres.autoresearch.loop import LoopResult
 from langres.autoresearch.objective import Objective
 from langres.autoresearch.search_space import SearchSpace
-from langres.core.runs import RunStore
+from langres.tracking.runs import RunStore
 
 
 class _ProductRec(BaseModel):
@@ -233,7 +233,7 @@ def test_optimize_tracker_string_resolves_to_the_named_backend_and_is_driven(
 ) -> None:
     """``tracker="trackio"`` end-to-end through ``optimize`` -- mocked like
     ``tests/test_trackio_tracker.py``'s ``fake_trackio`` fixture (no network)."""
-    import langres.core.trackers.trackio_tracker as trackio_mod
+    import langres.tracking.trackers.trackio_tracker as trackio_mod
 
     class _FakeRun:
         def __init__(self) -> None:

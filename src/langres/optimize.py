@@ -9,7 +9,7 @@ one-way, with nothing in ``core`` importing back into it:
 - :mod:`~langres.autoresearch.factory` — P-B, config → runnable blocker. **Heavy**
   (faiss/sentence-transformers at module top); import it lazily only.
 - :mod:`~langres.autoresearch.loop` — P-C, the ``propose → run → evaluate → keep``
-  driver over ``core.runs`` persistence.
+  driver over ``tracking.runs`` persistence.
 - :mod:`~langres.autoresearch.blocker_optimizer` — the separate Optuna study
   (``BlockerOptimizer``); optuna is a dev-only dep, so it too is lazy-only.
 
@@ -36,7 +36,7 @@ instead. Keep the facade a module; don't grow submodules under this name.
 ``import langres`` path (the two symbols are root-exported), so its module top is
 stdlib/typing only — every langres import, **including the engine's own modules**
 (``autoresearch.factory``, ``autoresearch.loop``, ``langres.data``,
-``core.metrics``, ``core.runs``, ``core.trackers``), is **lazy, inside a function
+``core.metrics``, ``tracking.runs``, ``tracking.trackers``), is **lazy, inside a function
 body**. A bare ``import langres`` therefore never pulls faiss /
 sentence-transformers / torch / optuna through here (see
 ``tests/test_import_budget.py``).
@@ -53,11 +53,11 @@ if TYPE_CHECKING:
     from langres.autoresearch.loop import LoopResult
     from langres.autoresearch.objective import Objective
     from langres.autoresearch.search_space import SearchSpace
-    from langres.core.benchmark import Benchmark
+    from langres.data.benchmark import Benchmark
     from langres.core.embeddings import EmbeddingProvider
     from langres.core.indexes.vector_index import VectorIndex
-    from langres.core.runs import RunStore
-    from langres.core.trackers import TrackerSpec
+    from langres.tracking.runs import RunStore
+    from langres.tracking.trackers import TrackerSpec
 
 
 def _resolve_benchmark(benchmark: str | Benchmark[Any]) -> Benchmark[Any]:
@@ -251,14 +251,14 @@ def optimize(
             sequence of either (fan-out), or ``None`` (default; no-op).
             Forwarded to :func:`~langres.autoresearch.loop.run_loop`,
             which resolves it via
-            :func:`~langres.core.trackers.resolve_tracker`.
+            :func:`~langres.tracking.trackers.resolve_tracker`.
 
     Returns:
         The :class:`~langres.autoresearch.loop.LoopResult` (best incumbent +
         full trial trail).
     """
     from langres.autoresearch.loop import run_loop
-    from langres.core.runs import dataset_fingerprint
+    from langres.tracking.runs import dataset_fingerprint
 
     bench = _resolve_benchmark(benchmark)
     dataset_name = benchmark if isinstance(benchmark, str) else bench.name

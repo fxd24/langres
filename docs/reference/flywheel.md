@@ -6,7 +6,7 @@ from labels.
 
 ## Judgement log
 
-::: langres.core.judgement_log
+::: langres.tracking.judgement_log
 
 ## Review selection
 
@@ -18,4 +18,4 @@ from labels.
 
 ## Threshold calibration
 
-::: langres.core.calibration
+::: langres.training.calibration

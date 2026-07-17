@@ -16,13 +16,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
-from langres.core.benchmark import (
+from langres.data.benchmark import (
     Benchmark,
     complete_partition,
     gold_pairs_from_clusters,
-)
-from langres.core.benchmark import (
-    evaluate_resolver_bcubed as _generic_evaluate_resolver_bcubed,
 )
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import register_schema_idempotent
@@ -200,7 +197,7 @@ def load_fodors_zagat() -> tuple[list[RestaurantSchema], list[set[str]]]:
     labeled -- any cross-source pair absent from the mapping is a *known*
     non-match, not an unknown. Consumers that score teacher pairs only when both
     ids appear in some cluster (e.g.
-    :meth:`~langres.bootstrap.report.BootstrapReport.build`) would otherwise drop
+    :meth:`~langres.curation.report.BootstrapReport.build`) would otherwise drop
     every pair touching an unmatched record, hiding the teacher's false positives
     and silently shrinking the evaluation set. Singletons add no positive pairs,
     so blocking pair-completeness is unaffected.
@@ -462,10 +459,18 @@ def evaluate_resolver_bcubed(
         A :class:`BCubedEvalResult` with precision/recall/F1, Pair-Completeness,
         and the sanity floor.
     """
-    # Delegate the dataset-agnostic BCubed + sanity-floor scoring to the core
+    # Delegate the dataset-agnostic BCubed + sanity-floor scoring to the generic
     # harness (which runs ``resolver.resolve`` and builds the index), then add the
     # restaurant-specific cross-source Pair-Completeness by reusing the now-built
     # ``resolver.blocker`` — keeping the measured blocking identical to resolution.
+    # Imported function-locally: the generic runner lives in the ``langres.benchmarks``
+    # harness, which imports the benchmark spec from ``langres.data`` — a module-top
+    # import here would make ``data`` depend on the harness (a ``data -> benchmarks``
+    # edge), the layering this split exists to keep one-way (``benchmarks -> data``).
+    from langres.benchmarks.runner import (
+        evaluate_resolver_bcubed as _generic_evaluate_resolver_bcubed,
+    )
+
     track = _generic_evaluate_resolver_bcubed(resolver, test_records, test_truth_clusters)
     record_dicts = [r.model_dump() for r in test_records]
     pair_completeness = _cross_source_pair_completeness(

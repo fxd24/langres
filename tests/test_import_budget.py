@@ -60,7 +60,7 @@ _HEAVY_MODULES = [
     "trackio",
     "huggingface_hub",
     # Fine-tune stack ([finetune], PR-F): peft/trl/bitsandbytes import lazily
-    # inside core.finetune's QLoRATrainer.train, never on a bare `import langres`.
+    # inside training.finetune's QLoRATrainer.train, never on a bare `import langres`.
     "peft",
     "trl",
     "bitsandbytes",
@@ -204,7 +204,7 @@ def test_autoresearch_engine_is_importable_every_way() -> None:
 # check is not masked by another test having already imported dspy.
 _METHODS_PROMPT_IMPORT_LIGHT_SCRIPT = (
     "import sys; "
-    "from langres.core.methods_prompt import GEPA, MIPRO, Bootstrap; "
+    "from langres.training.methods_prompt import GEPA, MIPRO, Bootstrap; "
     "Bootstrap(); MIPRO(auto='heavy'); GEPA(reflection_model='x', max_metric_calls=10); "
     "assert 'dspy' not in sys.modules, 'methods_prompt pulled dspy on construct'; "
     "print('OK')"
@@ -224,16 +224,17 @@ def test_methods_prompt_stays_import_light() -> None:
     )
 
 
-# The eval harness (``core.metrics`` / ``core.benchmark``) must be importable
-# without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP) is now
-# imported lazily inside ``evaluate_blocking_with_ranking`` only, so importing
-# the modules must never pull ``ranx`` into ``sys.modules``. Subprocess-based for
-# a fresh import state (this pytest process loads ranx via the ranking-metric
-# test). The curated ``langres.eval`` facade gets the same assertion in
-# ``tests/test_eval.py``.
+# The eval harness (``core.metrics`` / the ``langres.benchmarks`` harness) must be
+# importable without the ``[eval]`` extra: ``ranx`` (ranking metrics MRR/NDCG/MAP)
+# is now imported lazily inside ``evaluate_blocking_with_ranking`` only, so
+# importing the modules must never pull ``ranx`` into ``sys.modules``.
+# Subprocess-based for a fresh import state (this pytest process loads ranx via the
+# ranking-metric test). The curated ``langres.eval`` facade gets the same assertion
+# in ``tests/test_eval.py``.
 _RANX_DECOUPLE_SCRIPT = (
     "import sys; "
-    "import langres.core.metrics; import langres.core.benchmark; "
+    "import langres.core.metrics; "
+    "import langres.benchmarks.runner; import langres.benchmarks.judge_eval; "
     "assert 'ranx' not in sys.modules, "
     "'ranx leaked into sys.modules without calling the ranking metrics'; "
     "print('OK')"
@@ -241,7 +242,7 @@ _RANX_DECOUPLE_SCRIPT = (
 
 
 def test_core_metrics_and_benchmark_do_not_import_ranx() -> None:
-    """core.metrics/core.benchmark must import without the [eval] extra.
+    """core.metrics/the benchmark harness must import without the [eval] extra.
 
     Locks in the ranx decoupling: ``ranx`` is imported lazily only when
     ``evaluate_blocking_with_ranking`` (MRR/NDCG/MAP) actually runs, so the
@@ -439,7 +440,7 @@ _TRACKING_CHECK_SCRIPT = (
 def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
     """The S1 tracking layer must not pull ranx/mlflow/wandb on a bare import.
 
-    ``core/runs.py`` refs the result models (which need ``ranx``) only under
+    ``tracking/runs.py`` refs the result models (which need ``ranx``) only under
     ``TYPE_CHECKING``, and the ``ExperimentTracker`` adapters import
     ``mlflow``/``wandb`` lazily -- so eager ``import langres`` stays clean.
     """
@@ -456,8 +457,8 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 # The flywheel's back half is root-exported, but its three lazy names
 # (``EvalReport``, ``gold_pairs_from_clusters``, ``derive_threshold``) must not
 # drag their owning modules into a bare ``import langres``: ``report.eval_report``
-# pulls ``core.benchmark``/``core.metrics`` (kept out of the eager graph on
-# purpose), and ``core.calibration`` imports scikit-learn ([trained]) at module
+# pulls ``data.benchmark``/``core.metrics`` (kept out of the eager graph on
+# purpose), and ``training.calibration`` imports scikit-learn ([trained]) at module
 # scope. Same fresh-process subprocess pattern as above.
 #
 # !! THIS LIST IS A DENY LIST, SO IT ROTS OPEN !! Every entry asserts a module is
@@ -468,8 +469,8 @@ def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
 # enforceable rather than aspirational -- it fails when a path here goes stale.
 _ROOT_LAZY_MODULES = [
     "langres.report.eval_report",
-    "langres.core.benchmark",
-    "langres.core.calibration",
+    "langres.data.benchmark",
+    "langres.training.calibration",
     "langres.data.data_profile",
 ]
 
@@ -521,7 +522,7 @@ def test_root_lazy_module_paths_all_exist() -> None:
 
 
 # The finetune surface ([finetune], PR-F) must be import-light: resolving the
-# ``langres.finetune``/``QLoRA`` symbols and importing ``langres.core.finetune``
+# ``langres.finetune``/``QLoRA`` symbols and importing ``langres.training.finetune``
 # must NOT pull the training stack (peft/trl/bitsandbytes) or torch/transformers --
 # they load lazily only inside ``QLoRATrainer.train``. So a core+[llm] user can
 # reference the symbols, build a ``QLoRA(...)`` spec, and inject a custom trainer
@@ -532,7 +533,7 @@ _FINETUNE_MODULES = ["peft", "trl", "bitsandbytes", "torch", "transformers"]
 _FINETUNE_IMPORT_LIGHT_SCRIPT = (
     "import sys; import langres; "
     "langres.finetune; langres.QLoRA; langres.run_finetune; "
-    "import langres.core.finetune; "
+    "import langres.training.finetune; "
     "leaked = [m for m in {modules!r} if m in sys.modules]; "
     "assert not leaked, f'finetune surface leaked the training stack: {{leaked}}'; "
     "print('OK')"
@@ -540,7 +541,7 @@ _FINETUNE_IMPORT_LIGHT_SCRIPT = (
 
 
 def test_finetune_surface_stays_import_light() -> None:
-    """``langres.finetune``/``QLoRA`` + ``core.finetune`` must not pull peft/trl/torch."""
+    """``langres.finetune``/``QLoRA`` + ``training.finetune`` must not pull peft/trl/torch."""
     result = subprocess.run(
         [sys.executable, "-c", _FINETUNE_IMPORT_LIGHT_SCRIPT],
         capture_output=True,
@@ -629,8 +630,8 @@ _MOVED_OFF_THE_FACADE: dict[str, str] = {
     "KeyBlocker": "langres.core.blockers",
     "VectorBlocker": "langres.core.blockers",
     "StringComparator": "langres.core.comparators",
-    "AnchorStore": "langres.core.anchor_store",
-    "Canonicalizer": "langres.core.canonicalizer",
+    "AnchorStore": "langres.curation.anchor_store",
+    "Canonicalizer": "langres.curation.canonicalizer",
     "CorrelationClusterer": "langres.core.clusterers",
     "CascadeMatcher": "langres.core.matchers",
     "EmbeddingScoreMatcher": "langres.core.matchers",
@@ -642,7 +643,7 @@ _MOVED_OFF_THE_FACADE: dict[str, str] = {
     "FakeEmbedder": "langres.core.embeddings",
     "FAISSIndex": "langres.core.indexes",
     "VectorIndex": "langres.core.indexes",
-    "PipelineDebugger": "langres.core.debugging",
+    "PipelineDebugger": "langres.metrics.debugging",
 }
 
 
@@ -664,7 +665,7 @@ class TestCoreLazyGetattr:
         import langres.core as core
 
         cal = core.Calibrator
-        from langres.core.calibration import Calibrator
+        from langres.training.calibration import Calibrator
 
         assert cal is Calibrator
         # Cached on the module namespace -- a second access must not re-hit
@@ -744,7 +745,7 @@ class TestCoreLazyGetattr:
         real_import_module = importlib.import_module
 
         def _fail_for_sklearn(name: str, *args: object, **kwargs: object) -> object:
-            if name == "langres.core.calibration":
+            if name == "langres.training.calibration":
                 raise ModuleNotFoundError("No module named 'sklearn'")
             return real_import_module(name, *args, **kwargs)
 
@@ -764,7 +765,7 @@ class TestRootLazyGetattr:
 
     def test_harvest_surface_is_eagerly_root_exported(self) -> None:
         import langres
-        from langres.core import harvest
+        from langres.curation import harvest
 
         assert langres.Correction is harvest.Correction
         assert langres.CorrectionLog is harvest.CorrectionLog
@@ -782,7 +783,7 @@ class TestRootLazyGetattr:
 
     def test_gold_pairs_from_clusters_resolves(self) -> None:
         import langres
-        from langres.core.benchmark import gold_pairs_from_clusters
+        from langres.data.benchmark import gold_pairs_from_clusters
 
         assert langres.gold_pairs_from_clusters is gold_pairs_from_clusters
 
@@ -790,7 +791,7 @@ class TestRootLazyGetattr:
         pytest.importorskip("sklearn", reason="requires the [trained] extra")
         import langres
 
-        from langres.core.calibration import derive_threshold
+        from langres.training.calibration import derive_threshold
 
         assert langres.derive_threshold is derive_threshold
 
@@ -847,7 +848,7 @@ class TestClientsLazyGetattr:
     def test_create_wandb_tracker_resolves(self) -> None:
         import langres.clients as clients
 
-        from langres.clients.tracking import create_wandb_tracker
+        from langres.tracking.factories import create_wandb_tracker
 
         assert clients.create_wandb_tracker is create_wandb_tracker
 

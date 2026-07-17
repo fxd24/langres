@@ -19,11 +19,11 @@ from collections.abc import Iterator
 import pytest
 from dspy.utils.dummies import DummyLM
 
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 from langres.core.matcher import Matcher
 from langres.core.matchers.dspy_judge import DSPyMatcher
 from langres.core.methods_api import Method
-from langres.core.methods_prompt import GEPA, MIPRO, Bootstrap, PromptMethod
+from langres.training.methods_prompt import GEPA, MIPRO, Bootstrap, PromptMethod
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver

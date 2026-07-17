@@ -36,7 +36,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from langres.bootstrap import Bootstrapper, GoldSet, HardNegativeMiner, TeacherLabeler
+from langres.curation import Bootstrapper, GoldSet, HardNegativeMiner, TeacherLabeler
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.indexes.vector_index import FAISSIndex

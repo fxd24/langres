@@ -260,7 +260,7 @@ exists, and the intended (not-yet-built) design otherwise.
 |----------|---------------------|--------|
 | 1. Deduplication | `FuzzyString().dedupe(records)` (or another named architecture) / `Resolver.from_schema(...).resolve(...)`, `core.Clusterer` | ✅ **Shipping** |
 | Pairwise match verdict | `model.compare(left, right)` → `LinkVerdict` | ✅ **Shipping** |
-| Optimization / calibration | `core.calibration.derive_threshold`, `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
+| Optimization / calibration | `training.calibration.derive_threshold`, `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (Optuna) | ✅ **Partial** (threshold calibration + blocker tuning; no full `Optimizer`) |
 | 2. Entity Linking (cross-source) | `Resolver.link` / `stream_against` (stubs today) | 🚧 Roadmap |
 | 10. Incremental single-record assign | `Resolver.build_anchor_store(...)` → `Resolver.assign(record)` → `ClusterDelta`; `core.AnchorStore` | ✅ **Shipping** |
 | 4. Master Data Creation | `core.Canonicalizer` (survivorship + `enrich` loop) | ✅ **Shipping** |

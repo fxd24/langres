@@ -9,7 +9,7 @@ name: Test
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feat/core-packages]
   workflow_dispatch:
 
 concurrency:
@@ -213,6 +213,16 @@ jobs:
       # remaining number look BETTER. That is the failure this comment exists to
       # prevent: the glob follows the contract, not the average.
       #
+      # The four `src/langres/curation/{anchor_store,canonicalizer,harvest,review}.py`
+      # files are the CONTRACT half of the curation package -- they moved out of
+      # `core/` when bootstrap dissolved in (W2). They are listed as FILES, not a
+      # `curation/*` glob, on purpose: the rest of curation (bootstrapper, labelers,
+      # miners, models, report, base, _pairs -- the former `langres.bootstrap`) is
+      # behavior/smoke-tier harness code, so a `curation/*` glob would drag it under
+      # this 98 floor. The temporary `core/{...}.py` re-export shims left behind carry
+      # `# pragma: no cover` (throwaway back-compat, deleted by the W2 sweep), so they
+      # do not declassify the number they no longer own.
+      #
       # !! `src/langres/optimize.py` IS LISTED SEPARATELY ON PURPOSE -- DO NOT
       # !! FOLD IT INTO AN `optimize/*` GLOB. The facade is a MODULE (a file), not
       # a package; the engine beside it is the `autoresearch/` package. Coverage
@@ -241,8 +251,41 @@ jobs:
       # ROUNDED to `precision`, which defaults to 0. Without it, round(97.6) = 98
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
+      #
+      # `src/langres/training/*` was ADDED when the fit family (finetune /
+      # calibration / fit_report / methods_prompt / methods_calibrate) moved out
+      # of `core/` into the `langres.training` package (W2). Those five modules
+      # were ALREADY in this gate via `core/*`; dropping them would silently
+      # un-gate ~1000 lines of public-surface contract (`derive_threshold`,
+      # `Calibrator`, `FitReport`, `QLoRA`/`run_finetune`, `Bootstrap`/`MIPRO`/
+      # `GEPA`, `Platt`/`Isotonic` are all root/core-exported). Re-including them
+      # is coverage-NEUTRAL by construction -- the same files, relocated -- so
+      # the TOTAL is unchanged. The glob follows the contract, not the average.
+      #
+      # `src/langres/metrics/*` was ADDED when the ER-metrics/diagnostics family
+      # (metrics / analysis / debugging / diagnostics) moved out of `core/` into
+      # the `langres.metrics` package (W2). Those modules were ALREADY in this
+      # gate via `core/*` (they measure ~99%); re-including them at the new path
+      # is coverage-NEUTRAL by construction and keeps the public metrics surface
+      # (root / `langres.eval`-exported) gated. The metrics branch did not touch
+      # this workflow; the term is added here, at integration, on purpose.
+      #
+      # `src/langres/tracking/{judgement_log.py,runs.py,trackers/*}` are the
+      # CONTRACT half of the tracking package -- observability that left `core/`
+      # (W2). They were in this gate via `core/*`, and `test-full` runs
+      # `--all-extras` so mlflow/wandb/trackio actually exercise the adapters, so
+      # they are re-listed at the new path to stay gated (coverage-NEUTRAL, same
+      # files relocated). `tracking/factories.py` is deliberately NOT listed: it
+      # was `clients/tracking.py`, never under `core/*`, so it was never in this
+      # contract tier. The tracking branch did not touch this workflow either;
+      # these terms are added here, at integration, on purpose.
+      #
+      # STALE-NUMBER NOTE: the HEADROOM WARNING's 98.39% figure above was measured
+      # before the `metrics/*` and `tracking/*` terms were added at integration.
+      # The `--fail-under=98` floor is deliberately left unchanged here; the
+      # test-full TOTAL (and any floor re-derivation) is recomputed once this lands.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
+        run: uv run coverage report --include="src/langres/core/*,src/langres/metrics/*,src/langres/curation/anchor_store.py,src/langres/curation/canonicalizer.py,src/langres/curation/harvest.py,src/langres/curation/review.py,src/langres/tracking/judgement_log.py,src/langres/tracking/runs.py,src/langres/tracking/trackers/*,src/langres/training/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra

@@ -1,7 +1,7 @@
 """Training-pair miners: the data-preparation substrate for the training wave.
 
 A leaf module of small, composable functions over the pair currency
-:data:`~langres.core.finetune.LabeledCandidate` (``(ERCandidate, is_match)``) --
+:data:`~langres.training.finetune.LabeledCandidate` (``(ERCandidate, is_match)``) --
 the working shape both the ``fit`` surface and ``finetune`` consume. Each miner
 takes labeled candidates in and returns labeled candidates out, so they compose
 freely and a Wave-B harness can chain them (mine hard positives, balance the
@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from langres.core.feature import FeatureSpec
-from langres.core.finetune import LabeledCandidate
+from langres.training.finetune import LabeledCandidate
 
 if TYPE_CHECKING:
     import numpy.typing as npt

@@ -238,7 +238,7 @@ cheaper model — on the harvested labels, then calibrates *its own* threshold o
 
 ```python
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 
 student = RandomForestMatcher(feature_specs=comparator.feature_specs)
 student.fit(iter(train_candidates), train_labels)          # labels from step 4

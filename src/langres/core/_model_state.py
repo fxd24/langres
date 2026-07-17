@@ -24,7 +24,7 @@ from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.fit import CalibratorFitMixin
-from langres.core.fit_report import FitReport
+from langres.training.fit_report import FitReport
 from langres.core.inputs import normalize_records
 from langres.core.matcher import Matcher
 from langres.core.spend import SpendMonitor
@@ -100,7 +100,7 @@ class ModelState:
 
                 Scope, precisely: the cap meters **every seam that scores
                 through the matcher** -- ``resolve``, ``predict``, ``fit``, and
-                :meth:`~langres.core.anchor_store.AnchorStore.assign` -- across
+                :meth:`~langres.curation.anchor_store.AnchorStore.assign` -- across
                 every call on this instance, because they all route through
                 ``_scorer``. It bounds spend at ``budget_usd`` plus at most
                 one further call (see :mod:`langres.core.spend_cap`).

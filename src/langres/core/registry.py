@@ -64,7 +64,7 @@ _MODEL_REGISTRY: dict[str, type] = {}
 # to the first actual access, exactly like ``dspy_judge``.
 #
 # ``calibrator`` (the Platt/isotonic ``Calibrator``) lives in
-# ``langres.core.calibration``, which imports scikit-learn at module scope (the
+# ``langres.training.calibration``, which imports scikit-learn at module scope (the
 # ``[trained]`` extra) -- so a saved Resolver carrying a fitted calibrator resolves
 # its ``type_name`` here without ``calibration`` being on the eager-import path.
 #
@@ -83,7 +83,7 @@ _MODEL_REGISTRY: dict[str, type] = {}
 # future eager-import trim (like W0.4's) drops it from ``core/__init__.py``. It
 # is here for parity with those peers, not because it needs dep deferral.
 _LAZY_COMPONENT_MODULES: dict[str, str] = {
-    "calibrator": "langres.core.calibration",
+    "calibrator": "langres.training.calibration",
     "cascade_judge": "langres.core.matchers.cascade_judge",
     "comparator": "langres.core.comparators.string",
     "composite_blocker": "langres.core.blockers.composite",

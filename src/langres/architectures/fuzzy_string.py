@@ -48,7 +48,7 @@ class FuzzyString(ERModel):
     unlabeled data. That is *why* it was never the silent fallback for a missing
     API key -- a wrong answer for free is still a wrong answer. Calibrate the
     threshold against labels with
-    :func:`~langres.core.calibration.derive_threshold`, or
+    :func:`~langres.training.calibration.derive_threshold`, or
     ``fit(method=Platt())``, before trusting it on anything that matters.
 
     Scaling: ``AllPairsBlocker`` is O(N^2) pairs by construction. That is fine

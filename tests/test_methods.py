@@ -23,16 +23,10 @@ from typing import Any
 
 import pytest
 
-from langres.core.benchmark import (
-    Benchmark,
-    BlindCostError,
-    BudgetedModuleRunner,
-    MethodResult,
-    _cost_track,
-    gold_pairs_from_clusters,
-    run_method,
-)
+from langres.benchmarks.judge_eval import BudgetedModuleRunner
+from langres.benchmarks.runner import MethodResult, _cost_track, run_method
 from langres.core.indexes.vector_index import FakeVectorIndex
+from langres.data.benchmark import Benchmark, BlindCostError, gold_pairs_from_clusters
 from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
 from langres.core.matchers.fellegi_sunter import FellegiSunterMatcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher

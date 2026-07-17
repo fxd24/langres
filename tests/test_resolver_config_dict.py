@@ -156,7 +156,7 @@ def test_config_dict_recipe_id_stable_across_version_bump(
     replay. Version/provenance live on the RunContext, unhashed.
     """
     from langres.core import _model_persist as persist_mod
-    from langres.core.runs import RunContext, compute_recipe_id
+    from langres.tracking.runs import RunContext, compute_recipe_id
 
     resolver = _company_resolver()
 

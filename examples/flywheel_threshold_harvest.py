@@ -1,10 +1,10 @@
 """The data flywheel, end to end: logged verdicts + human corrections -> a better threshold.
 
-langres logs every judge call (:class:`~langres.core.judgement_log.JudgementLog`,
+langres logs every judge call (:class:`~langres.tracking.judgement_log.JudgementLog`,
 the flywheel *inlet*). This demo runs the *harvest* half (W2.4): it turns a
 ``judgements.jsonl`` log plus a ``corrections.jsonl`` review-queue export into
 labeled pairs, and feeds them to
-:func:`~langres.core.calibration.derive_threshold` to RE-CALIBRATE a decision
+:func:`~langres.training.calibration.derive_threshold` to RE-CALIBRATE a decision
 threshold -- ``derive_threshold``'s first production caller.
 
 The scenario (committed fixtures under ``examples/data/flywheel/``, built from
@@ -35,7 +35,7 @@ The two flywheel JSONL schemas
      "cost_usd": 0.0, "decision_step": "string_judge", "timestamp": "..."}
 
 ``corrections.jsonl`` -- one line per human override, written by a review queue
-(the :class:`~langres.core.harvest.Correction` contract)::
+(the :class:`~langres.curation.harvest.Correction` contract)::
 
     {"v": 1, "left_id": "f601", "right_id": "z124", "label": false,
      "original_score": 0.55, "original_verdict": true,
@@ -55,12 +55,12 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from langres.core.harvest import (
+from langres.curation.harvest import (
     CorrectionLog,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog
+from langres.tracking.judgement_log import JudgementLog
 
 #: Where the committed fixtures live (regenerate with ``generate_fixtures.py``).
 DATA_DIR = Path(__file__).resolve().parent / "data" / "flywheel"

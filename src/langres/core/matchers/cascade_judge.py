@@ -36,7 +36,7 @@ from langres.core.spend import BudgetExceeded
 
 #: ``decision_step`` stamped on pairs the student answered (score outside the
 #: band). The tier is rewritten into ``decision_step`` -- not only provenance --
-#: because default :class:`~langres.core.judgement_log.JudgementLog` lines carry
+#: because default :class:`~langres.tracking.judgement_log.JudgementLog` lines carry
 #: ``decision_step`` but not ``provenance``, and disagreement selection (T2)
 #: must be able to tell the tiers apart from the log alone.
 CASCADE_STUDENT_STEP = "cascade_student"

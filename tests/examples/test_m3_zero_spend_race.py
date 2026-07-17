@@ -21,7 +21,7 @@ from examples.research.m3_zero_spend_race import (
     format_detailed_report,
     run_zero_spend_race,
 )
-from langres.core.benchmark import BenchmarkTable
+from langres.benchmarks.runner import BenchmarkTable
 from langres.methods import ZERO_SPEND_METHODS
 
 pytestmark = pytest.mark.slow

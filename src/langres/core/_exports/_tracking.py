@@ -5,7 +5,7 @@ See ``langres.core._exports`` for the fragment contract.
 
 from typing import TYPE_CHECKING
 
-from langres.core.runs import (
+from langres.tracking.runs import (
     RunContext,
     RunRecord,
     RunStore,
@@ -13,7 +13,7 @@ from langres.core.runs import (
     compute_recipe_id,
     resolve_store,
 )
-from langres.core.trackers import (
+from langres.tracking.trackers import (
     ExperimentTracker,
     MultiTracker,
     NoOpTracker,
@@ -23,7 +23,7 @@ from langres.core.trackers import (
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling mlflow/wandb into a bare `import langres`.
-    from langres.core.trackers import MlflowTracker, WandbTracker
+    from langres.tracking.trackers import MlflowTracker, WandbTracker
 
 __all__ = [
     "capture_run",
@@ -43,8 +43,8 @@ __all__ = [
 #: ``__getattr__`` pulls the concrete adapter -- and its mlflow/wandb
 #: dependency -- only on access.
 LAZY_SYMBOLS: dict[str, str] = {
-    "MlflowTracker": "langres.core.trackers",
-    "WandbTracker": "langres.core.trackers",
+    "MlflowTracker": "langres.tracking.trackers",
+    "WandbTracker": "langres.tracking.trackers",
 }
 
 EXTRA_BY_SYMBOL: dict[str, str] = {

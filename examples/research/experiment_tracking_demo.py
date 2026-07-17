@@ -27,7 +27,7 @@ from pathlib import Path
 
 from langres.architectures import FuzzyString
 from langres.core import RunContext, RunStore, capture_run, compute_recipe_id
-from langres.core.runs import dataset_fingerprint, git_sha
+from langres.tracking.runs import dataset_fingerprint, git_sha
 
 STORE_PATH = "tmp/tracking_demo/runs.jsonl"
 EXPERIMENT = "string-judge-threshold-sweep"

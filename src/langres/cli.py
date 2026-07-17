@@ -1,9 +1,9 @@
 """The ``langres`` command line: human review surfaces for the flywheel.
 
-:func:`langres.core.review.select_for_review` writes a ``review_queue.jsonl``
+:func:`langres.curation.review.select_for_review` writes a ``review_queue.jsonl``
 snapshot of the judged pairs worth a human's attention; this module is where a
 human answers them. Two review surfaces, one contract
-(:class:`~langres.core.harvest.Correction`):
+(:class:`~langres.curation.harvest.Correction`):
 
 - **The primary path is the CSV round-trip.** ``export-csv`` turns a queue into
   a labelable spreadsheet (``left_*``/``right_*`` display columns + an empty
@@ -46,8 +46,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from langres._version import __version__
-from langres.core.harvest import Correction, CorrectionLog
-from langres.core.review import ReviewItem, ReviewQueue
+from langres.curation.harvest import Correction, CorrectionLog
+from langres.curation.review import ReviewItem, ReviewQueue
 
 _DEFAULT_CORRECTIONS = "corrections.jsonl"
 

@@ -182,7 +182,7 @@ result, judgements = evaluate_judge_on_candidates(judge, test_candidates, test_g
 Don't hand-set `0.5`. Derive the operating point from the score distribution:
 
 ```python
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 
 scores = [j.score for j in judgements]
 labels = [frozenset({j.left_id, j.right_id}) in gold_pairs for j in judgements]
@@ -261,7 +261,7 @@ on exit. `store` accepts a path or a `RunStore`; **`store=None` writes nothing**
 **last-wins-by-`attempt_id`** and takes an `fcntl.flock` per append, so several
 agents can write one file safely. Pass `tracker=` (an `ExperimentTracker`) to *also*
 mirror params/metrics into MLflow or W&B; omit it for the JSONL-only path.
-(`git_sha()` and `dataset_fingerprint()` live in `langres.core.runs`.)
+(`git_sha()` and `dataset_fingerprint()` live in `langres.tracking.runs`.)
 
 **How the tracking `Settings` take effect (today).** `Settings` reads
 `RUN_STORE_PATH`, `MLFLOW_TRACKING_URI`, and `MLFLOW_EXPERIMENT`, but they are
@@ -361,13 +361,13 @@ Objective.pareto([("candidate_recall", "maximize"), ("reduction_ratio", "maximiz
 
 **Where results are stored — local JSONL only, today.** `optimize(store=...)`
 appends **every** trial — accepted, over-budget rejects, and scorer failures — as
-one line to a local `RunStore` JSONL (the same `core.runs` spine as
+one line to a local `RunStore` JSONL (the same `tracking.runs` spine as
 `capture_run` above), so the full audit trail is durable off-git. `store=None`
 persists **nothing** (the offline path); the same `LoopResult` is returned either
 way. Read the trail back with `RunStore(path).read()`:
 
 ```python
-from langres.core.runs import RunStore
+from langres.tracking.runs import RunStore
 
 records = RunStore("tmp/autoresearch/ag_blocking.jsonl").read()   # last-wins per attempt
 accepted = [r for r in records if (r.metrics or {}).get("accepted") == 1.0]
@@ -385,7 +385,7 @@ result = optimize(space, objective, "amazon_google", tracker="trackio")
 
 # An instance configures the backend (e.g. HF-Space sync); a sequence fans out
 # to several backends at once.
-from langres.core.trackers import TrackioTracker
+from langres.tracking.trackers import TrackioTracker
 result = optimize(space, objective, "amazon_google",
                    tracker=[TrackioTracker(space_id="user/space"), "mlflow"])
 ```

@@ -64,22 +64,22 @@ from typing import Any
 from pydantic import BaseModel
 
 from langres.clients.openrouter import BudgetExceeded, SpendMonitor
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 from langres.core.comparators import StringComparator
-from langres.core.harvest import (
+from langres.curation.harvest import (
     Correction,
     CorrectionLog,
     LabeledPair,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.matchers.cascade_judge import CASCADE_ESCALATED_STEP, CascadeMatcher
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
-from langres.core.review import ReviewQueue, select_for_review
+from langres.curation.review import ReviewQueue, select_for_review
 
 #: Committed fixtures (regenerate with ``data/flywheel_loop/generate_fixtures.py``).
 DATA_DIR = Path(__file__).resolve().parent / "data" / "flywheel_loop"

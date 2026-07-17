@@ -222,12 +222,24 @@ RUNTIME = TangleBaseline(
 # same `resolver -> langres` edge, so they left with it. What remains are five
 # genuinely lazy knots, none of them touching the root:
 #    9  the `data.data_profile.*` section graph
-#    3  {core.analysis, core.reports, plotting.blockers}
-#    2  {core.anchor_store, core.resolver}
-#    2  {core.benchmark, langres.methods}
-#    2  {core.runs, core.trackers}
+#    3  {core.reports, metrics.analysis, plotting.blockers}
+#    2  {curation.anchor_store, core.resolver}
+#    2  {benchmarks.runner, langres.methods}
+#    2  {tracking.runs, tracking.trackers}
 # `tangled` covers all five; `largest_scc` pins the biggest so they cannot
 # silently merge into one.
+#
+# The benchmark-split wave (this PR) RELOCATED one knot member without changing
+# the shape: `core/benchmark.py` split into the import-light spec
+# (`langres.data.benchmark`) and the harness package (`langres.benchmarks.*`),
+# leaving a re-export shim at the old path. The `{core.benchmark, methods}` 2-cycle
+# is now `{benchmarks.runner, methods}` -- `methods.py` imports `_cost_track` from
+# `benchmarks.runner` (toplevel) and `run_methods` in `benchmarks.runner` imports
+# `make_resolver_factory` from `methods` (function-local), the same litellm-seam
+# lazy cycle as before, one module renamed. The shim `core.benchmark` left the
+# tangle: no module imports it at toplevel anymore, so it has only outgoing edges.
+# Predicted by recomputing Tarjan before the move, measured identical after:
+# [9, 3, 2, 2, 2] / 18, `largest_scc` still 9.
 #
 # W4 (the ERModel/architectures wave) ratcheted this DOWN: 10 -> 9, tangled
 # 24 -> 23. `langres.core.presets` left, because W4 deleted it outright. It was
@@ -273,19 +285,31 @@ RUNTIME = TangleBaseline(
 # keep every heavy dep ([semantic]/[llm]) inside `_topology`'s function body. An
 # architecture that grows a toplevel import of a module which imports it back
 # would show up here as an ENTERED line.
+#
+# The metrics-package wave (`core/{metrics,analysis,debugging,diagnostics}.py` ->
+# the `langres.metrics` package, back-compat shims left at the old paths) did NOT
+# change the shape -- it RELOCATED one knot member. The `{core.analysis,
+# core.reports, plotting.blockers}` 3-cycle is now `{metrics.analysis,
+# core.reports, plotting.blockers}`: `analysis` moved out of core, and the ONE
+# edge that would otherwise have GROWN this cycle to 4 (`core.reports:960`
+# reaching `analysis`) was repointed at `metrics.analysis` so `core.analysis` --
+# now a pure re-export shim -- stays a leaf outside every cycle. Predicted by
+# recomputing Tarjan before the move, measured identical after: [9, 3, 2, 2, 2] /
+# 18, `largest_scc` still 9. `metrics.analysis` is the ONLY member below that
+# swapped names.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
     largest_scc=9,
     tangled=frozenset(
         {
-            "langres.core.analysis",
-            "langres.core.anchor_store",
-            "langres.core.benchmark",
+            "langres.curation.anchor_store",
+            "langres.benchmarks.runner",
             "langres.core.reports",
             "langres.core.resolver",
-            "langres.core.runs",
-            "langres.core.trackers",
+            "langres.tracking.runs",
+            "langres.tracking.trackers",
+            "langres.metrics.analysis",
             "langres.data.data_profile.base",
             "langres.data.data_profile.builders",
             "langres.data.data_profile.corpus_field",

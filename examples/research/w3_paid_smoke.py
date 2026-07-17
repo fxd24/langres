@@ -14,7 +14,7 @@ cap so the run structurally cannot cross ``--budget`` (default $9, ceiling $10):
    from the signal log.
 2. A single **SelectMatcher GROUP call** -- one LLM call judging a whole anchor
    group -- proving the set-wise cost lever on a real model (1 call for K members).
-3. A :class:`~langres.core.judgement_log.JudgementLog` signal log emitted by the
+3. A :class:`~langres.tracking.judgement_log.JudgementLog` signal log emitted by the
    verb calls in (1) (the flywheel inlet), read back to report row count + cost.
 4. **SelectMatcher-vs-pairwise QUALITY on Amazon-Google.** The SAME real model is
    run (a) as a pairwise :class:`~langres.core.matchers.dspy_judge.DSPyMatcher` over
@@ -99,7 +99,7 @@ from langres.core.benchmark import (  # noqa: E402
 )
 from langres.core.usage import CostTrack  # noqa: E402
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs  # noqa: E402
-from langres.core.judgement_log import JudgementLog  # noqa: E402
+from langres.tracking.judgement_log import JudgementLog  # noqa: E402
 from langres.core.metrics import pair_pr_curve  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
 from langres.core.matchers.dspy_judge import DSPyMatcher  # noqa: E402

@@ -39,8 +39,8 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from langres.core.harvest import Correction, CorrectionLog
-from langres.core.judgement_log import JudgementLog
+from langres.curation.harvest import Correction, CorrectionLog
+from langres.tracking.judgement_log import JudgementLog
 
 #: Scenario parameters (chosen so the demo is decisive and non-flaky; see module
 #: docstring). ``T_BAD`` is the cheap judge's deliberately-miscalibrated verdict

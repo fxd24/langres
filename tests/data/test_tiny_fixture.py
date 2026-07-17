@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 from langres.core import metrics as _metrics
-from langres.core.benchmark import complete_partition
+from langres.data.benchmark import complete_partition
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.metrics import calculate_bcubed_metrics, classify_pairs, evaluate_blocking

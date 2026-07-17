@@ -123,16 +123,159 @@ while making the metric look better).
   *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
   working too), and `tests/test_import_budget.py` now asserts all three forms.
 
+- **The human-in-the-loop labelling + cold-start seam** → **`langres.curation`**.
+  `review`, `harvest`, `anchor_store` and `canonicalizer` left `langres.core`, and
+  **all of `langres.bootstrap` dissolved in** (`langres.bootstrap` no longer
+  exists). *Supported surfaces are unchanged*: `langres.core.Correction`,
+  `CorrectionLog`, `harvest_labeled_pairs`, `derive_threshold_from_pairs`,
+  `select_for_review`, `ReviewQueue`, `align_pairs`, `LabeledPair` are still on the
+  `langres.core` facade (re-exported from `langres.curation.*`), so
+  `len(langres.core.__all__)` is unchanged. `AnchorStore`/`Canonicalizer` were
+  already deep-import-only (never on the facade) — import them from
+  `langres.curation.anchor_store` / `langres.curation.canonicalizer`.
+
+  Unlike the two relocations above (no shim — a `core` relay recreates the very
+  edges the move removes), the four deep module paths `langres.core.{review,
+  harvest,anchor_store,canonicalizer}` keep **temporary re-export shims** marked
+  `# TEMPORARY: deleted by the W2 sweep`. They are acyclic leaf modules nothing on
+  the eager path imports, so they add no cycle — `tests/test_import_tangle.py` is
+  unchanged at `[9, 3, 2, 2, 2]` / 18. **`langres.bootstrap` gets no shim**
+  (breaking for deep `langres.bootstrap` imports): import its contents from
+  `langres.curation` (`Bootstrapper`, `HardNegativeMiner`, `GoldPair`, `GoldSet`,
+  `GroundTruthLabeler`, `TeacherLabeler`, …), all still lazy where they were.
+  `data/mining.py` deliberately **stays** in `langres.data`: moving it would add a
+  new eager `langres.data → langres.curation` edge (its functions are re-exported
+  from `langres.data`) while it imports no `data/` internals to relocate.
+
+#### Observability moved to `langres.tracking` — non-breaking (shims kept)
+
+Run identity/persistence and experiment tracking are **observability, not ER
+modelling**, so they now live in a sibling `langres.tracking` package instead of
+inside `langres.core`:
+
+- `langres.core.runs` → `langres.tracking.runs` (`RunContext`/`RunRecord`/`RunStore`,
+  `capture_run`, `compute_recipe_id`, `git_sha`, `dataset_fingerprint`)
+- `langres.core.judgement_log` → `langres.tracking.judgement_log`
+  (`JudgementLog`, `LoggingMatcher`)
+- `langres.core.trackers` → `langres.tracking.trackers` (the `ExperimentTracker`
+  Protocol, `NoOpTracker`/`MultiTracker`, `resolve_tracker`, and the lazy
+  `MlflowTracker`/`WandbTracker`/`TrackioTracker` adapters)
+- `langres.clients.tracking` → `langres.tracking.factories`
+  (`create_wandb_tracker`, `create_trackio_tracker`)
+
+Unlike the `langres.core` moves above, **this one keeps back-compat**: every old
+path is a re-export shim (marked `# TEMPORARY: deleted by the W2 sweep`), the
+`langres.core` facade still re-exports the primitives (`from langres.core import
+RunStore, JudgementLog, resolve_tracker` unchanged), and
+`langres.clients.create_wandb_tracker`/`create_trackio_tracker` are unchanged.
+Prefer the new `langres.tracking.*` paths; the shims exist only until the W2
+sweep. The backends stay lazy — a bare `import langres` still pulls no
+`mlflow`/`wandb`/`trackio`/`huggingface_hub` — and `optimize(tracker="trackio")`
+still resolves the backend by string internally.
+
+Measured: the package import graph is unchanged from before the move — 7
+`core → tracking` edges (6 toplevel), all pre-existing (the `langres.core` facade
+re-exporting the primitives, plus the `dspy`/`llm` matchers that capture runs),
+and the module-level SCCs are identical (`tests/test_import_tangle.py`).
+
+#### Moved to `langres.metrics` — internal, back-compat **shims kept**
+
+The evaluation/diagnostics metrics left `langres.core`: `core/metrics.py`
+(BCubed/pairwise/ranking ER metrics), `core/analysis.py` (blocker-analysis),
+`core/debugging.py` (`PipelineDebugger`) and `core/diagnostics.py` (error-case
+models) now live in the new **`langres.metrics`** package. Metrics *score* a
+resolution; they are not the modelling contract, so they sit beside `langres.core`,
+not in it.
+
+Unlike the `report`/`autoresearch` moves above, this wave **keeps back-compat
+shims** at every old path (`langres.core.metrics`/`.analysis`/`.debugging`/
+`.diagnostics` still import and re-export their full public surface), so no
+supported *or* deep import breaks. The `langres.eval` facade (`reduction_ratio`,
+`classify_pairs`, `roc_auc_score`, …) is unchanged. Shims carry a
+`# TEMPORARY: deleted by the W2 sweep` marker; the sweep repoints the remaining
+in-repo callers and removes them.
+
+Measured (`tools/import_graph.py kinds`): the runtime SCC stays **empty** and the
+all-edges tangle is **unchanged at `[9, 3, 2, 2, 2]` / 18** — the shims did not
+re-knot the graph, because metrics is not in the eager `import langres` path and
+`core/reports.py`'s one lazy edge into `analysis` was repointed at
+`langres.metrics.analysis` (leaving it on the shim would have grown the
+`{analysis, reports, plotting.blockers}` knot from 3 to 4). That knot is
+**relocated, not removed**: it is now `{metrics.analysis, core.reports,
+plotting.blockers}`. The CI core-contract coverage gate's `--include` glob does
+not yet cover `src/langres/metrics/*`; those files measure ~99% and should be
+added to it so the contract tier stays gated.
+
+#### Moved to `langres.training` — deep-import shims kept (temporarily)
+
+Fitting/calibrating a matcher is what *produces* a tuned model, not
+entity-resolution modelling itself, so the fit family moved out of
+`langres.core` into a new **`langres.training`** package beside it (the same cut
+that moved `langres.report` out): `core.finetune` → `training.finetune`,
+`core.calibration` → `training.calibration`, `core.fit_report` →
+`training.fit_report`, `core.methods_prompt` → `training.methods_prompt`,
+`core.methods_calibrate` → `training.methods_calibrate`.
+
+**Every supported path is unchanged** — `langres.QLoRA` / `run_finetune` /
+`finetune` / `derive_threshold`, and `langres.core.FitReport` / `Bootstrap` /
+`MIPRO` / `GEPA` / `Platt` / `Isotonic` / `Calibrator` all still resolve
+(`langres.__all__` = 36, `langres.core.__all__` = 76, both unchanged). Unlike the
+`report`/`autoresearch` moves above, the deep `langres.core.*` paths here **also
+keep working**, through back-compat shims at each old path marked
+`# TEMPORARY: deleted by the W2 sweep`. The shims are fan-in-0 leaves (nothing
+in-repo imports them), so they do **not** re-knot the import graph — the tangle
+is unchanged (`[9, 3, 2, 2, 2]` all-edges, `[]` runtime; measured). `core →
+training` is non-zero by design (`ERModel.fit` dispatches into `training` via
+function-local imports, plus one toplevel `fit_report` for the `fit_report_`
+attribute type, and the `core/_exports/_training` public surface) — see
+`tests/test_import_tangle.py`.
+
+#### Benchmark subsystem split out of `langres.core` — internal, back-compat shim kept
+
+`langres.core.benchmark` was two concerns in one 1.7k-line file, so it split into
+their proper homes:
+
+- The benchmark **spec** — the "a dataset *is* a benchmark" contract (the
+  `Benchmark` protocol, `PairTrack`, `gold_pairs_from_clusters`,
+  `complete_partition`, `BlindCostError`, `DEFAULT_PAIR_GRID`) → the import-light
+  **`langres.data.benchmark`**, so a dataset can carry its benchmark capability
+  without pulling the runner.
+- The generic **harness** — race a method into a table
+  (`run_method`/`run_methods` → `BenchmarkTable`) or score a judge on a fixed
+  candidate set (`evaluate`/`evaluate_judge_on_candidates`, `BudgetedModuleRunner`)
+  → the new **`langres.benchmarks`** package (`benchmarks.runner`,
+  `benchmarks.judge_eval`; its `__init__` exports nothing, import-light like
+  `autoresearch`).
+
+`langres.eval` (the `evaluate` / `list_benchmarks` / `get_benchmark` facade) is
+unchanged, repointed at the new homes. The old `from langres.core.benchmark
+import …` path **still works** through a back-compat shim marked
+`# TEMPORARY: deleted by the W2 sweep`. `data/*` datasets import the spec from
+`langres.data.benchmark` **directly** (never via the `core.benchmark` shim), so no
+`core ↔ data` cycle is reintroduced; the harness depends on the spec one-way
+(`benchmarks → data`, never back). The tangle is unchanged in shape
+(`[9, 3, 2, 2, 2]` all-edges, `[]` runtime; measured) — the `{core.benchmark,
+methods}` knot is now `{benchmarks.runner, methods}`, one module renamed —
+and `langres.__all__` = 36 / `langres.core.__all__` = 76, both unchanged.
+
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its
-logger name with it. Two moves in this release rename an emitting logger:
+logger name with it. Several moves in this release rename an emitting logger —
+including the whole `langres.curation` extraction above (`review`, `harvest`,
+`anchor_store`, `canonicalizer`, `bootstrapper`, `labelers` now emit under
+`langres.curation.*` instead of `langres.core.*` / `langres.bootstrap.*`). The
+table below lists the `ERModel`/engine moves; the same guidance applies to all of
+them:
 
 | records | was (0.3.0) | now |
 |---|---|---|
 | "Saved Resolver artifact to %s", the `langres_version` mismatch warning | `langres.core.resolver` | `langres.core._model_persist` |
 | "Embedding %d records…" | `langres.core.resolver` | `langres.core._model_run` |
 | "Optimization complete. Best parameters: %s", "Best value: %.4f", the wandb notice | `langres.core.optimizers.blocker_optimizer` | `langres.autoresearch.blocker_optimizer` |
+| git-unavailable / malformed-run-record warnings | `langres.core.runs` | `langres.tracking.runs` |
+| the created-tracker notice | `langres.clients.tracking` | `langres.tracking.factories` |
+| the tracker-error `logger.exception` | `langres.core.trackers` | `langres.tracking.trackers` |
 
 Nothing in the codebase filters on a logger name, and anyone configuring at
 `langres` — or at `langres.core` for the first two — is unaffected via the
@@ -283,7 +426,7 @@ Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs straight into
 - **DX: `tracker=` on `optimize`/`run_loop` takes a spec, not a resolved
   instance** — a backend name (`tracker="trackio"`), an already-built
   `ExperimentTracker`, a sequence of either (fan-out), or `None` (default,
-  no-op). Both resolve it internally via `core.trackers.resolve_tracker`
+  no-op). Both resolve it internally via `tracking.trackers.resolve_tracker`
   (mirrors the `matcher="..."` preset convention), so the boilerplate
   `tracker=resolve_tracker("trackio")` is no longer needed on the happy path;
   `resolve_tracker` stays public for advanced/explicit use.

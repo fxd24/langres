@@ -9,7 +9,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch]
+    branches: [main, feat/core-packages]
 
 concurrency:
   # Mirrors `test.yml`: grouping on the ref alone means merging one PR CANCELS

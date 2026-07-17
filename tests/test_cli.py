@@ -3,7 +3,7 @@
 Every path is driven through :func:`langres.cli.main` with injected
 ``StringIO`` streams -- no TTY, no subprocess, zero spend. The suite covers the
 interactive loop (label / skip / quit / EOF-quit / resume / re-prompt), the CSV
-round-trip that feeds :func:`langres.core.harvest.harvest_labeled_pairs`,
+round-trip that feeds :func:`langres.curation.harvest.harvest_labeled_pairs`,
 command dispatch and exit codes, ``--version``, the unknown-pair and
 invalid-label aborts, spreadsheet formula-escaping, the adversarial-id
 round-trip (ids are never escaped), unicode round-tripping, and the terminal
@@ -21,8 +21,8 @@ import pytest
 
 from langres import __version__
 from langres.cli import main
-from langres.core.harvest import Correction, CorrectionLog, harvest_labeled_pairs
-from langres.core.review import ReviewItem, ReviewQueue
+from langres.curation.harvest import Correction, CorrectionLog, harvest_labeled_pairs
+from langres.curation.review import ReviewItem, ReviewQueue
 
 
 def _run(argv: list[str], *, stdin: str = "") -> tuple[int, str]:

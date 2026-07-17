@@ -60,7 +60,7 @@ from langres.data.data_profile.separability import (
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from langres.core.benchmark import Benchmark
+    from langres.data.benchmark import Benchmark
 
 logger = logging.getLogger(__name__)
 

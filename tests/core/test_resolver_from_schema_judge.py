@@ -8,7 +8,7 @@ import pytest
 from dspy.utils.dummies import DummyLM
 from pydantic import BaseModel
 
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher

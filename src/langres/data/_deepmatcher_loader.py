@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from langres.core.benchmark import gold_pairs_from_clusters
+from langres.data.benchmark import gold_pairs_from_clusters
 from langres.core.blockers.all_pairs import register_schema_idempotent
 from langres.data import _benchmark_utils as _bu
 

@@ -573,7 +573,7 @@ basis can't drift across three files.
 
 ## Appendix — key file:line index (verified against `main` @ `33dd0db`)
 
-- `spend_usd` scalar + `budget_exceeded`: `src/langres/core/runs.py:188-189`
+- `spend_usd` scalar + `budget_exceeded`: `src/langres/tracking/runs.py:188-189`
 - `record_cost` (only setter; no tracker-forward): `runs.py:515-518` — cf.
   `log_metrics` forwards at `:504`, `log_artifact` at `:509`
 - `record_cost` callers repo-wide: `tests/test_runs.py:599`,

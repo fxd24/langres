@@ -9,7 +9,7 @@ the reported lift is not tuned on the pairs it is measured on:
 1. Build embedding-cosine scores over the LABELLED Amazon-Google ``train`` and
    ``test`` pairs using the free local MiniLM embedder (no API call, $0).
 2. Derive a threshold from the ``train`` ``(score, gold_label)`` pairs with
-   :func:`langres.core.calibration.derive_threshold` (Youden's J) — the ``test``
+   :func:`langres.training.calibration.derive_threshold` (Youden's J) — the ``test``
    labels are never seen during derivation.
 3. Compare pair-level F1 at the derived threshold vs a hand-set ``0.5`` on the
    held-out ``test`` split, and assert the derived threshold is at least as good.
@@ -29,7 +29,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np  # noqa: E402
 
-from langres.core.calibration import derive_threshold  # noqa: E402
+from langres.training.calibration import derive_threshold  # noqa: E402
 from langres.core.embeddings import SentenceTransformerEmbedder  # noqa: E402
 from langres.core.metrics import brier_score, expected_calibration_error  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402
