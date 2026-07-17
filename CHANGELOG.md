@@ -100,6 +100,22 @@ while making the metric look better).
   `BlockerOptimizer` was never in any `__all__`. Only the deep path documented in
   `docs/TECHNICAL_OVERVIEW.md` breaks.
 
+#### Logger names follow the code that moved
+
+Splitting `ERModel` out of `core/resolver.py` moves three log records onto the
+logger of their new module: the "Saved Resolver artifact to %s" and
+`langres_version`-mismatch records now emit under `langres.core._model_persist`,
+and "Embedding %d records…" under `langres.core._model_run`. All three previously
+emitted under `langres.core.resolver`.
+
+Nothing in the codebase filters on a logger name, and anyone configuring at
+`langres` or `langres.core` is unaffected via the hierarchy. But a caller who
+pinned the exact module — `logging.getLogger("langres.core.resolver").setLevel(INFO)`
+to watch saves — silently stops seeing those records. Configure at `langres.core`
+instead. This is inherent to moving code between modules, not a change of intent;
+it is called out because it is the one *observable* behaviour change in a refactor
+that is otherwise a pure move.
+
 #### Known limitation — `VectorLLMCascade` cannot `save()`
 
 `VectorLLMCascade(...).save(path)` raises `NotImplementedError`, by design,
