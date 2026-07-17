@@ -271,7 +271,7 @@ def test_load_rejects_a_model_class_registered_to_a_non_resolver(tmp_path: Path)
     manifest["model_class"] = "test_roundtrip_not_a_resolver"
     manifest_path.write_text(json.dumps(manifest))
 
-    with pytest.raises(TypeError, match=r"is not a Resolver subclass"):
+    with pytest.raises(TypeError, match=r"is not an ERModel subclass"):
         Resolver.load(tmp_path)
 
 
