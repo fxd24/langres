@@ -38,7 +38,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from langres.core import _report_html, _svg
+from langres.report import _report_html, _svg
 from langres.data.data_profile.base import ProfileSection
 
 logger = logging.getLogger(__name__)

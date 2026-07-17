@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     # without pulling the eval-report/benchmark modules into a bare
     # `import langres`.
     from langres.core.benchmark import gold_pairs_from_clusters
-    from langres.core.eval_report import EvalReport
+    from langres.report.eval_report import EvalReport
 
 __all__ = [
     "Correction",
@@ -48,7 +48,7 @@ __all__ = [
 ]
 
 LAZY_SYMBOLS: dict[str, str] = {
-    "EvalReport": "langres.core.eval_report",
+    "EvalReport": "langres.report.eval_report",
     "gold_pairs_from_clusters": "langres.core.benchmark",
 }
 

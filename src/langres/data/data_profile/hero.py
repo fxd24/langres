@@ -22,7 +22,7 @@ import math
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from langres.core import _report_html
+from langres.report import _report_html
 from langres.data.data_profile.base import ProfileSection
 from langres.data.data_profile.label_structure import LabelStructureSection
 from langres.data.data_profile.separability import SeparabilitySection

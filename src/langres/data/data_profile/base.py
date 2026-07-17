@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, SerializeAsAny
 
-from langres.core import _report_html
+from langres.report import _report_html
 
 
 class ProfileSection(BaseModel, abc.ABC):
