@@ -263,7 +263,9 @@ class ClustererStage(ClusterStage[SchemaT], Generic[SchemaT]):
             clusterer: The legacy clusterer to adapt (owns its ``threshold``).
         """
         algorithm = (
-            "pivot" if getattr(clusterer, "type_name", None) == "correlation_clusterer" else "transitive_closure"
+            "pivot"
+            if getattr(clusterer, "type_name", None) == "correlation_clusterer"
+            else "transitive_closure"
         )
         super().__init__(algorithm=algorithm)
         self.clusterer = clusterer
