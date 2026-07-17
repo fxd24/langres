@@ -317,7 +317,7 @@ Space/Dataset sync is a `space_id`/`HF_TOKEN` opt-in) plugs straight into
 - **DX: `tracker=` on `optimize`/`run_loop` takes a spec, not a resolved
   instance** — a backend name (`tracker="trackio"`), an already-built
   `ExperimentTracker`, a sequence of either (fan-out), or `None` (default,
-  no-op). Both resolve it internally via `core.trackers.resolve_tracker`
+  no-op). Both resolve it internally via `tracking.trackers.resolve_tracker`
   (mirrors the `matcher="..."` preset convention), so the boilerplate
   `tracker=resolve_tracker("trackio")` is no longer needed on the happy path;
   `resolve_tracker` stays public for advanced/explicit use.
