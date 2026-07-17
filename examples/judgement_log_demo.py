@@ -1,6 +1,6 @@
 """The flywheel inlet: log every judge call, then read the log back.
 
-``log=`` is opt-in on both ``dedupe()`` and ``link()`` (omit it -- the
+``log=`` is opt-in on both ``.dedupe()`` and ``.compare()`` (omit it -- the
 default -- for zero overhead). Pass a path (or a ``JudgementLog`` instance
 for more control, e.g. ``features=True``) and every judge call is appended
 as one JSON line: pair ids, score, verdict, model, cost, decision_step,
@@ -18,7 +18,8 @@ Run it:
 
 import json
 
-from langres import JudgementLog, dedupe
+from langres import JudgementLog
+from langres.architectures import FuzzyString
 
 records = [
     {"id": "1", "name": "Acme Corporation", "city": "New York"},
@@ -27,7 +28,7 @@ records = [
 ]
 
 log = JudgementLog("tmp/judgement_log_demo.jsonl")
-result = dedupe(records, matcher="string", threshold=0.6, log=log)
+result = FuzzyString(threshold=0.6).dedupe(records, log=log)
 
 print(f"{len(result)} cluster(s): {list(result)}")
 

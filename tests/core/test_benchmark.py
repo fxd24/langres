@@ -43,7 +43,7 @@ from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.matcher import GroupwiseMatcher, Matcher
-from langres.core.presets import DEFAULT_BUDGET_USD
+from langres.core.spend_cap import DEFAULT_BUDGET_USD
 from langres.core.reports import ScoreInspectionReport
 from langres.core.resolver import Resolver
 from langres.testing import ScriptedJudge

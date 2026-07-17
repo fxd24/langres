@@ -41,6 +41,65 @@ from langres import (
 )
 
 
+def test_every_exported_exception_is_actually_raised_somewhere() -> None:
+    """No name in ``__all__`` may advertise an exception nothing can produce.
+
+    **The gate W4 added, and the hole it closes.** Every other assertion in this
+    file is a *subset* check (``root_names <= __all__``): it proves the names we
+    care about are present, and is structurally incapable of noticing a name that
+    should have LEFT. So when W4 deleted ``choose_auto_judge`` -- the only code
+    that raised ``NoMatcherAvailableError`` -- the whole suite stayed green while
+    ``langres.__all__`` still advertised a documented, root-exported exception
+    that no code path could ever throw. A user could import it and write
+    ``except NoMatcherAvailableError:`` forever, and never catch anything.
+
+    Exceptions are gated rather than all exports because the check is only honest
+    for them. "Referenced somewhere in ``src/``" is the wrong proxy for a general
+    export: ``MIPRO``, ``Platt``, ``CompanySchema`` are *meant* to be constructed
+    by users and may legitimately appear nowhere else in the library. But an
+    exception the library never raises is dead by definition -- there is no
+    caller-side story that redeems it. Zero false positives, and it catches
+    exactly the failure that shipped.
+
+    AST-based, deliberately: it reads ``raise X`` / ``raise X(...)`` from the
+    parse tree rather than grepping, because a docstring mentioning the name --
+    and there are several -- is not a producer. (Grep-as-import-graph has already
+    produced multiple verified errors in this repo.)
+    """
+    import ast
+    import pathlib
+
+    import langres
+
+    exported_exceptions = {
+        name
+        for name in langres.__all__
+        if isinstance(getattr(langres, name, None), type)
+        and issubclass(getattr(langres, name), BaseException)
+    }
+    assert exported_exceptions, "expected the root to export at least one exception"
+
+    raised: set[str] = set()
+    for path in pathlib.Path(langres.__file__).parent.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Raise) or node.exc is None:
+                continue
+            exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+            if isinstance(exc, ast.Name):
+                raised.add(exc.id)
+            elif isinstance(exc, ast.Attribute):
+                raised.add(exc.attr)
+
+    orphans = sorted(exported_exceptions - raised)
+    assert not orphans, (
+        f"langres.__all__ exports {len(orphans)} exception(s) that NO code in src/ raises: "
+        f"{orphans}.\nAn exception nobody throws is a promise to the user that cannot be kept: "
+        "they can import it and `except` it forever and never catch a thing.\nEither delete the "
+        "export (its producer is gone -- this is what happened to NoMatcherAvailableError when "
+        "W4 deleted choose_auto_judge), or restore the code that raises it."
+    )
+
+
 def test_surfaced_symbols_are_in_public_all() -> None:
     """Every newly surfaced name is exported (in ``__all__``) from where it should be."""
     import langres

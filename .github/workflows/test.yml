@@ -109,15 +109,15 @@ jobs:
       - name: Run import-budget tests against the real core-only install
         run: uv run pytest tests/test_import_budget.py -o addopts="-v -m 'not integration'"
 
-      - name: Verify the core-only string-judge dedupe() path still works
-        run: uv run python examples/quickstart_verbs.py
+      - name: Verify the core-only FuzzyString().dedupe() path still works
+        run: uv run python examples/quickstart_models.py
 
       - name: Verify the core-only eval tearsheet ($0 EvalReport -> to_html) works
         run: uv run python examples/quickstart_eval.py
 
-      # The paved-road flywheel loop (dedupe -> review -> CLI CSV round-trip ->
-      # harvest -> tuned threshold -> tearsheet) must work on a bare `uv sync`
-      # from a clean checkout -- string judge only, $0, no extras.
+      # The paved-road flywheel loop (FuzzyString().dedupe -> review -> CLI CSV
+      # round-trip -> harvest -> tuned threshold -> tearsheet) must work on a bare
+      # `uv sync` from a clean checkout -- the $0 offline architecture, no extras.
       - name: Verify the core-only flywheel loop (examples/flywheel_min.py) works
         run: uv run python examples/flywheel_min.py
 
