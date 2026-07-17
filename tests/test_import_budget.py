@@ -847,7 +847,7 @@ class TestClientsLazyGetattr:
     def test_create_wandb_tracker_resolves(self) -> None:
         import langres.clients as clients
 
-        from langres.clients.tracking import create_wandb_tracker
+        from langres.tracking.factories import create_wandb_tracker
 
         assert clients.create_wandb_tracker is create_wandb_tracker
 

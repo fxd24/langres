@@ -84,10 +84,10 @@ class ModelPersistence(ModelState):
 
         This is by design: the tracking layer feeds this dict to
         ``RunContext.resolver_config``, which is inside
-        :func:`~langres.core.runs.compute_recipe_id`'s hash domain. Emitting the
+        :func:`~langres.tracking.runs.compute_recipe_id`'s hash domain. Emitting the
         version fields would fork ``recipe_id`` on every package or
         artifact-schema bump, silently defeating idempotent replay. Version and
-        provenance live on :class:`~langres.core.runs.RunContext` as separate,
+        provenance live on :class:`~langres.tracking.runs.RunContext` as separate,
         **unhashed** fields (e.g. ``RunContext.langres_version``); :meth:`save`
         still records them on disk for artifact reconstruction.
 

@@ -1,4 +1,4 @@
-"""Tests for langres.clients.tracking module."""
+"""Tests for langres.tracking.factories module."""
 
 import os
 import sys
@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from langres.clients.settings import Settings
-from langres.clients.tracking import create_trackio_tracker, create_wandb_tracker
-from langres.core.trackers.trackio_tracker import TrackioTracker
+from langres.tracking.factories import create_trackio_tracker, create_wandb_tracker
+from langres.tracking.trackers.trackio_tracker import TrackioTracker
 
 
 class TestCreateWandbTracker:

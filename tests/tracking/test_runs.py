@@ -23,7 +23,7 @@ import pydantic
 import pytest
 
 from langres.core import runs
-from langres.core.runs import (
+from langres.tracking.runs import (
     RunContext,
     RunRecord,
     RunStore,
@@ -338,7 +338,7 @@ def test_import_langres_does_not_eagerly_require_fcntl(tmp_path: Path) -> None:
         "import sys; sys.modules['fcntl'] = None; "
         "import langres; from langres.core import runs; "
         "assert runs.fcntl is None, runs.fcntl; "
-        "from langres.core.runs import RunStore, RunContext, RunRecord; "
+        "from langres.tracking.runs import RunStore, RunContext, RunRecord; "
         "store = RunStore(sys.argv[1]); "
         "ctx = RunContext(experiment='e', dataset_name='d'); "
         "rec = RunRecord(attempt_id='a-t', recipe_id='a', context=ctx, "

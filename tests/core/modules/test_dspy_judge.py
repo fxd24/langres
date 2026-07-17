@@ -27,7 +27,7 @@ from langres.core.matchers.dspy_judge import (
     _salvage_usage,
 )
 from langres.core.registry import get_component
-from langres.core.runs import RunStore
+from langres.tracking.runs import RunStore
 
 
 def _answers(n: int, *, match: str = "True", prob: str = "0.9") -> list[dict[str, str]]:

@@ -27,7 +27,7 @@ from langres.core._model_state import ModelState
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.fit import CalibratorFitMixin
 from langres.core.inputs import check_no_duplicate_ids
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import (
     ERCandidate,
     MatcherAbstainedError,
@@ -293,7 +293,7 @@ class ModelRun(ModelState):
                 Every record needs a unique ``"id"`` (or none at all --
                 positional ids are then assigned); a duplicate raises.
             log: Opt-in judgement sink -- a
-                :class:`~langres.core.judgement_log.JudgementLog` or a path
+                :class:`~langres.tracking.judgement_log.JudgementLog` or a path
                 (wrapped in a default one). ``None`` (default): no logging, zero
                 overhead, no wrap. The flywheel inlet later harvested into
                 training pairs.

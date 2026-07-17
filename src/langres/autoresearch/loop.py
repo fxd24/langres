@@ -14,7 +14,7 @@ embeddings, faiss, or benchmark load required. The concrete blocking scorer
 knows nothing about blockers.
 
 **Import-light by design.** Only stdlib + :mod:`~langres.autoresearch.objective`
-+ :mod:`~langres.core.runs` (+ its ``trackers``) — all already on the bare
++ :mod:`~langres.tracking.runs` (+ its ``trackers``) — all already on the bare
 ``import langres`` path. It imports no factory / data / metrics module, so it
 adds no weight and could sit on the public surface if ever needed.
 """
@@ -27,8 +27,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from langres.autoresearch.objective import Objective
-from langres.core.runs import RunContext, capture_run, compute_recipe_id
-from langres.core.trackers import TrackerSpec, resolve_tracker
+from langres.tracking.runs import RunContext, capture_run, compute_recipe_id
+from langres.tracking.trackers import TrackerSpec, resolve_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +100,14 @@ def run_loop(
 
     For each config, in order:
 
-    1. Build a :class:`~langres.core.runs.RunContext` (``resolver_config`` = the
+    1. Build a :class:`~langres.tracking.runs.RunContext` (``resolver_config`` = the
        config, ``method`` = ``config["blocker"]``, ``blocking_k`` =
        ``config["k_neighbors"]``, ``parent_run_id`` = the *current incumbent's*
        ``attempt_id`` so the store records lineage) and compute its ``recipe_id``.
     2. **Dedup** (``dedup=True``): skip a config whose ``recipe_id`` was already
        seen this run — this collapses P-B's redundant degenerate configs (e.g.
        several ``all_pairs`` configs the caller normalized to one recipe).
-    3. Score it *inside* :func:`~langres.core.runs.capture_run`, so timing and
+    3. Score it *inside* :func:`~langres.tracking.runs.capture_run`, so timing and
        failures are captured. Compute ``better = objective.is_better(metrics,
        incumbent_metrics)`` and log **every** trial's metrics plus an ``accepted``
        flag (``1.0``/``0.0``), with the first goal's metric as the headline and
@@ -143,10 +143,10 @@ def run_loop(
         tracker: Experiment tracker spec forwarded to ``capture_run`` --
             a backend name (``"trackio"``/``"mlflow"``/``"wandb"``), an
             ``ExperimentTracker`` instance, a sequence of either (fan-out via
-            :class:`~langres.core.trackers.MultiTracker`), or ``None``
+            :class:`~langres.tracking.trackers.MultiTracker`), or ``None``
             (default; resolves to a fresh
-            :class:`~langres.core.trackers.NoOpTracker`). Resolved once via
-            :func:`~langres.core.trackers.resolve_tracker`.
+            :class:`~langres.tracking.trackers.NoOpTracker`). Resolved once via
+            :func:`~langres.tracking.trackers.resolve_tracker`.
         dedup: When ``True`` (default), skip a config whose ``recipe_id`` was
             already scored this run.
 

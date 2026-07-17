@@ -1,6 +1,6 @@
 """The flywheel's review half: pick which judged pairs a human should look at.
 
-:mod:`langres.core.judgement_log` writes the signal (one JSONL line per judge
+:mod:`langres.tracking.judgement_log` writes the signal (one JSONL line per judge
 call, ids only); :mod:`langres.core.harvest` turns answered reviews back into
 labeled pairs. This module is the piece between them: :func:`select_for_review`
 reads logged judgement rows and selects the pairs *worth* a human's attention,

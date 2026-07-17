@@ -11,7 +11,7 @@ one dataset: recompute the full table from committed JSONL at $0.
 Two constructors, both free:
 
 - :meth:`EvalReport.from_log` -- the default mental model. Consumes
-  :meth:`~langres.core.judgement_log.JudgementLog.read` output (plain dicts) and
+  :meth:`~langres.tracking.judgement_log.JudgementLog.read` output (plain dicts) and
   the gold pairs (gold is never in the log). No judge, no candidates, no API.
 - :meth:`EvalReport.from_judgements` -- the in-process path: you already hold the
   :class:`~langres.core.models.PairwiseJudgement` list, so pass it straight in.
@@ -449,7 +449,7 @@ class EvalReport(BaseModel):
 
         Args:
             rows: Rows as produced by
-                :meth:`~langres.core.judgement_log.JudgementLog.read`.
+                :meth:`~langres.tracking.judgement_log.JudgementLog.read`.
             gold_pairs: True match pairs (never present in the log), shaped
                 ``set[frozenset[str]]`` -- each element a two-id ``frozenset``
                 so pair identity is order-independent. Build it from labeled

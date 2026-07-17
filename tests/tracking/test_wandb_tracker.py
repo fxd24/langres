@@ -1,8 +1,8 @@
 """Tests for the W&B ``ExperimentTracker`` adapter (Stream S4).
 
 Behavior/smoke tier: ``wandb`` is fully mocked (a fake module patched over both
-``langres.clients.tracking.wandb`` -- used by the reused ``create_wandb_tracker``
-init -- and ``langres.core.trackers.wandb_tracker.wandb``), so no test touches the
+``langres.tracking.factories.wandb`` -- used by the reused ``create_wandb_tracker``
+init -- and ``langres.tracking.trackers.wandb_tracker.wandb``), so no test touches the
 network or a real W&B login. We assert that start_run -> log -> finish call the
 right W&B APIs with the flattened context, that ``run_url``/``native`` derive from
 the underlying run, that status maps to an exit code, and that
@@ -17,9 +17,9 @@ from typing import Any
 import pytest
 
 from langres.clients.settings import Settings
-from langres.core.runs import RunContext
-from langres.core.trackers import ExperimentTracker, resolve_tracker
-from langres.core.trackers.wandb_tracker import WandbTracker, _flatten
+from langres.tracking.runs import RunContext
+from langres.tracking.trackers import ExperimentTracker, resolve_tracker
+from langres.tracking.trackers.wandb_tracker import WandbTracker, _flatten
 
 
 class _FakeConfig:
@@ -81,7 +81,7 @@ def fake_wandb(monkeypatch: pytest.MonkeyPatch) -> _FakeWandb:
     """Patch the fake over the ``wandb`` the reused ``create_wandb_tracker`` init uses.
 
     ``create_wandb_tracker`` now imports ``wandb`` lazily inside its own body (so
-    ``langres.clients.tracking`` -- and therefore ``create_trackio_tracker`` -- is
+    ``langres.tracking.factories`` -- and therefore ``create_trackio_tracker`` -- is
     importable without the ``wandb`` extra), so the ``wandb.init`` seam is patched
     at ``sys.modules["wandb"]``: an in-body ``import wandb`` binds to whatever is
     there. The adapter itself never references a module-global ``wandb`` (log/finish

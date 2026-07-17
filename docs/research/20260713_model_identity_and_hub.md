@@ -591,7 +591,7 @@ registry already enforces (`registry.py:61-75`).
 | `evaluate` signature; best-F1-threshold default | `src/langres/core/benchmark.py:1341-1361` |
 | `candidates_for` pins blocker/split/seed | `src/langres/eval.py:102-170` |
 | Benchmark manifest (9 loadable + external) | `src/langres/data/registry.py:206-320` |
-| `config_dict` / `compute_recipe_id` | `src/langres/core/resolver.py:687-720`; `src/langres/core/runs.py:223` |
+| `config_dict` / `compute_recipe_id` | `src/langres/core/resolver.py:687-720`; `src/langres/tracking/runs.py:223` |
 | Three-dispatch-site rule; #55 deferral | `.claude/rules/component-design.md` ("When Adding New Components") |
 | Hand-edited packaging precedent | `pyproject.toml:49-52` |
 | Artifact cost/metric provenance open question | `docs/research/20260709_cost_accounting_design.md` §8 |

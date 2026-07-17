@@ -14,7 +14,7 @@ effect of importing ANY submodule of this package, e.g.
 ``langres.clients.settings``) meant plain ``import langres`` triggered that
 side effect unconditionally. ``create_wandb_tracker`` (``wandb``, dev-only) and
 ``create_trackio_tracker`` (``trackio``) get the same treatment for consistency
-and import weight -- both resolve through ``langres.clients.tracking``, but
+and import weight -- both resolve through ``langres.tracking.factories``, but
 ``create_trackio_tracker`` only imports ``trackio`` inside its own function
 body (see that module's docstring), so accessing either name here never
 requires the other backend's dependency. ``Settings`` stays eager -- it's
@@ -28,7 +28,7 @@ from langres.clients.settings import Settings
 
 if TYPE_CHECKING:
     from langres.clients.llm import create_llm_client
-    from langres.clients.tracking import create_trackio_tracker, create_wandb_tracker
+    from langres.tracking.factories import create_trackio_tracker, create_wandb_tracker
 
 __all__ = [
     "Settings",
@@ -39,8 +39,8 @@ __all__ = [
 
 _LAZY: dict[str, str] = {
     "create_llm_client": "langres.clients.llm",
-    "create_wandb_tracker": "langres.clients.tracking",
-    "create_trackio_tracker": "langres.clients.tracking",
+    "create_wandb_tracker": "langres.tracking.factories",
+    "create_trackio_tracker": "langres.tracking.factories",
 }
 
 

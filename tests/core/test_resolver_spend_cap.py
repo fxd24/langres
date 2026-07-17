@@ -19,7 +19,7 @@ import langres
 from langres.core.anchor_store import AnchorStore
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matcher import Matcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement

@@ -28,9 +28,9 @@ from typing import Any
 import pytest
 
 from langres.clients.settings import Settings
-from langres.core.runs import RunContext
+from langres.tracking.runs import RunContext
 
-_TRACKER_MODULE = "langres.core.trackers.mlflow_tracker"
+_TRACKER_MODULE = "langres.tracking.trackers.mlflow_tracker"
 
 
 class _FakeRun:
@@ -442,7 +442,7 @@ def test_resolve_tracker_returns_real_mlflow_tracker(
 ) -> None:
     """With the (mocked) module importable, resolve_tracker('mlflow') returns it."""
     module, _ = mlflow_env
-    from langres.core.trackers import resolve_tracker
+    from langres.tracking.trackers import resolve_tracker
 
     tracker = resolve_tracker("mlflow")
 
@@ -453,9 +453,9 @@ def test_resolve_tracker_returns_real_mlflow_tracker(
 def test_getattr_exposes_mlflow_tracker_class(
     mlflow_env: tuple[ModuleType, _FakeMlflow],
 ) -> None:
-    """`from langres.core.trackers import MlflowTracker` resolves via lazy __getattr__."""
+    """`from langres.tracking.trackers import MlflowTracker` resolves via lazy __getattr__."""
     module, _ = mlflow_env
-    import langres.core.trackers as trackers
+    import langres.tracking.trackers as trackers
 
     assert trackers.MlflowTracker is module.MlflowTracker
 
@@ -509,7 +509,7 @@ def test_real_mlflow_nested_start_run_does_not_raise(tmp_path: Any) -> None:
     Uses the REAL mlflow adapter against a local file store -- reproduces a nested
     ``capture_run`` (a DSPy ``compile()`` run inside an outer benchmark run).
     """
-    from langres.core.trackers.mlflow_tracker import MlflowTracker
+    from langres.tracking.trackers.mlflow_tracker import MlflowTracker
 
     uri = f"file://{tmp_path}/mlruns"
     outer = MlflowTracker(_settings(mlflow_tracking_uri=uri, mlflow_experiment="nested-check"))
@@ -535,7 +535,7 @@ def test_real_mlflow_sequence_field_yields_safe_param_keys(tmp_path: Any) -> Non
     """
     from mlflow import MlflowClient
 
-    from langres.core.trackers.mlflow_tracker import MlflowTracker
+    from langres.tracking.trackers.mlflow_tracker import MlflowTracker
 
     uri = f"file://{tmp_path}/mlruns"
     tracker = MlflowTracker(_settings(mlflow_tracking_uri=uri, mlflow_experiment="seq-keys"))

@@ -30,7 +30,7 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
-from langres.core.runs import current_run
+from langres.tracking.runs import current_run
 from langres.core.usage import LLMUsage
 
 if TYPE_CHECKING:

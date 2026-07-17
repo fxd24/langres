@@ -3,7 +3,7 @@
 The post-hoc, error-analysis companion to mining readiness. Where mining
 readiness profiles a labeled set *before* training, this section profiles a
 matcher's *judgements after* it ran: it joins a precomputed
-:class:`~langres.core.judgement_log.JudgementLog` against gold, splits the
+:class:`~langres.tracking.judgement_log.JudgementLog` against gold, splits the
 confident verdicts into correct / false-positive / false-negative, and then asks
 the question that drives the next curation round -- **which slice of the data do
 the errors concentrate in?**
@@ -310,7 +310,7 @@ def profile_failure_mode(
     Args:
         judgements: Logged judge calls as mappings with at least ``left_id``,
             ``right_id``, ``score`` and ``verdict`` keys -- e.g.
-            :meth:`JudgementLog.read() <langres.core.judgement_log.JudgementLog.read>`.
+            :meth:`JudgementLog.read() <langres.tracking.judgement_log.JudgementLog.read>`.
             ``verdict`` is the caller's predicted-match decision (``None`` for an
             abstention); ``score`` may be ``None`` for a decision-only judge.
         gold_pairs: The gold positive pairs -- a collection of 2-id collections

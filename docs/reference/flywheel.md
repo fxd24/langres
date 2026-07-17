@@ -6,7 +6,7 @@ from labels.
 
 ## Judgement log
 
-::: langres.core.judgement_log
+::: langres.tracking.judgement_log
 
 ## Review selection
 

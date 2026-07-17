@@ -501,7 +501,7 @@ seam, and the bring-your-own-data `evaluate()` walkthrough.
 
 ```python
 from langres.architectures import FuzzyString
-from langres.core.judgement_log import JudgementLog
+from langres.tracking.judgement_log import JudgementLog
 from langres.core.review import ReviewQueue, select_for_review
 
 # 1. Log every judge call while resolving (the flywheel inlet).

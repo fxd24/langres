@@ -56,8 +56,8 @@ if TYPE_CHECKING:
     from langres.core.benchmark import Benchmark
     from langres.core.embeddings import EmbeddingProvider
     from langres.core.indexes.vector_index import VectorIndex
-    from langres.core.runs import RunStore
-    from langres.core.trackers import TrackerSpec
+    from langres.tracking.runs import RunStore
+    from langres.tracking.trackers import TrackerSpec
 
 
 def _resolve_benchmark(benchmark: str | Benchmark[Any]) -> Benchmark[Any]:
@@ -251,14 +251,14 @@ def optimize(
             sequence of either (fan-out), or ``None`` (default; no-op).
             Forwarded to :func:`~langres.autoresearch.loop.run_loop`,
             which resolves it via
-            :func:`~langres.core.trackers.resolve_tracker`.
+            :func:`~langres.tracking.trackers.resolve_tracker`.
 
     Returns:
         The :class:`~langres.autoresearch.loop.LoopResult` (best incumbent +
         full trial trail).
     """
     from langres.autoresearch.loop import run_loop
-    from langres.core.runs import dataset_fingerprint
+    from langres.tracking.runs import dataset_fingerprint
 
     bench = _resolve_benchmark(benchmark)
     dataset_name = benchmark if isinstance(benchmark, str) else bench.name
