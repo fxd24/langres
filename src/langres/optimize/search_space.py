@@ -4,7 +4,7 @@ The autoresearch loop is ``propose → run → evaluate → keep-if-better`` (ep
 #145). A :class:`SearchSpace` is the *proposal substrate*: it names the candidate
 values per pipeline parameter and enumerates their Cartesian product as plain
 config dicts (``dict[str, Any]``) that the loop turns into runnable blockers via
-``core.autoresearch.factory``.
+``langres.optimize.factory``.
 
 **Import-light by design.** This module is pure stdlib + typing (``itertools`` /
 ``dataclasses``) — it constructs no blocker and imports no
