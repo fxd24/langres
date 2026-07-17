@@ -14,7 +14,7 @@ Three concrete sources, one contract:
 - :class:`NpySource` -- memmaps a ``.npy`` (``mmap_mode="r"``) and fancy-indexes
   the requested rows, so only those pages fault in. The 30 GB-safe default.
 - :meth:`NpySource.from_anchor_store` -- reuses the pipeline's own
-  ``corpus_embeddings.npy`` + the :class:`~langres.core.anchor_store.AnchorStoreManifest`
+  ``corpus_embeddings.npy`` + the :class:`~langres.curation.anchor_store.AnchorStoreManifest`
   id order, reading the metric from ``corpus.json`` (a cosine index is
   pre-normalized, so its norms are all ~1.0 -- a caveat the sections surface).
 
@@ -350,7 +350,7 @@ class NpySource(_RowGatherSource):
         """Build a source from a persisted ``AnchorStore`` / vector-index artifact.
 
         Reuses the pipeline's own ``corpus_embeddings.npy`` (row order == corpus
-        order) and the :class:`~langres.core.anchor_store.AnchorStoreManifest`
+        order) and the :class:`~langres.curation.anchor_store.AnchorStoreManifest`
         ``anchor_ids`` (the record-id <-> row order), reading ``metric`` from
         ``corpus.json``. A cosine index L2-normalizes its vectors in place, so the
         source is marked :attr:`~_RowGatherSource.pre_normalized` and the sections
@@ -376,7 +376,7 @@ class NpySource(_RowGatherSource):
         """
         # Deferred import keeps this module core-only at import time; the manifest
         # schema itself is import-light (pydantic + core.models, no faiss).
-        from langres.core.anchor_store import AnchorStoreManifest
+        from langres.curation.anchor_store import AnchorStoreManifest
 
         root = Path(state_dir)
         vectors_path = _locate(root, _CORPUS_VECTORS)

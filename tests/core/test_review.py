@@ -1,4 +1,4 @@
-"""Tests for langres.core.review (the flywheel's review selector).
+"""Tests for langres.curation.review (the flywheel's review selector).
 
 Covers the ``review_queue.jsonl`` contract (:class:`ReviewItem` /
 :class:`ReviewQueue` snapshot semantics) and the three selection strategies of
@@ -18,13 +18,13 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from langres.core.harvest import Correction
+from langres.curation.harvest import Correction
 from langres.core.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.review import ReviewItem, ReviewQueue, _is_well_formed, select_for_review
+from langres.curation.review import ReviewItem, ReviewQueue, _is_well_formed, select_for_review
 from langres.testing import ScriptedJudge
 
-_LOGGER_NAME = "langres.core.review"
+_LOGGER_NAME = "langres.curation.review"
 
 
 def _row(

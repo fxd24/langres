@@ -35,7 +35,7 @@ The two flywheel JSONL schemas
      "cost_usd": 0.0, "decision_step": "string_judge", "timestamp": "..."}
 
 ``corrections.jsonl`` -- one line per human override, written by a review queue
-(the :class:`~langres.core.harvest.Correction` contract)::
+(the :class:`~langres.curation.harvest.Correction` contract)::
 
     {"v": 1, "left_id": "f601", "right_id": "z124", "label": false,
      "original_score": 0.55, "original_verdict": true,
@@ -55,7 +55,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from langres.core.harvest import (
+from langres.curation.harvest import (
     CorrectionLog,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,

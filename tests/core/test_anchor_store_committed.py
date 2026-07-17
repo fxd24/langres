@@ -1,6 +1,6 @@
 """AnchorStore on committed data + a fresh-process round-trip (W2.2 exit).
 
-Grounds :class:`~langres.core.anchor_store.AnchorStore` in the committed
+Grounds :class:`~langres.curation.anchor_store.AnchorStore` in the committed
 Fodors-Zagat benchmark (no embeddings — the offline string pipeline) and proves
 the M2 lesson: an artifact saved in one process reloads and assigns identically
 in a **clean** subprocess (catching any registry/import side-effect a single
@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from langres.core import Resolver
-from langres.core.anchor_store import AnchorStore
+from langres.curation.anchor_store import AnchorStore
 from langres.data.er_benchmarks import RestaurantSchema, load_fodors_zagat
 
 # A Fodors-Zagat gold match pair: Fodor's f534 <-> Zagat z219.
@@ -80,7 +80,7 @@ def test_fresh_process_round_trip(tmp_path: Path) -> None:
     # Reload + assign in a brand-new interpreter (no shared imports/registry).
     script = (
         "import json, sys\n"
-        "from langres.core.anchor_store import AnchorStore\n"
+        "from langres.curation.anchor_store import AnchorStore\n"
         "from langres.data.er_benchmarks import load_fodors_zagat\n"
         "corpus, _ = load_fodors_zagat()\n"
         "held = next(r for r in corpus if r.id == 'z219').model_dump()\n"

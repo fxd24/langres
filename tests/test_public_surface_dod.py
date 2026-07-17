@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from langres.core.harvest import LabeledPair
+from langres.curation.harvest import LabeledPair
 
 # Clean top-level imports -- the whole point of this PR. If any fails to resolve,
 # collection fails loudly (that IS the regression guard for the wiring).

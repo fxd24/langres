@@ -200,7 +200,7 @@ def load_fodors_zagat() -> tuple[list[RestaurantSchema], list[set[str]]]:
     labeled -- any cross-source pair absent from the mapping is a *known*
     non-match, not an unknown. Consumers that score teacher pairs only when both
     ids appear in some cluster (e.g.
-    :meth:`~langres.bootstrap.report.BootstrapReport.build`) would otherwise drop
+    :meth:`~langres.curation.report.BootstrapReport.build`) would otherwise drop
     every pair touching an unmatched record, hiding the teacher's false positives
     and silently shrinking the evaluation set. Singletons add no positive pairs,
     so blocking pair-completeness is unaffected.

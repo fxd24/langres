@@ -11,8 +11,8 @@ The alternatives and the surrounding machinery are **implementations**, and
 owns them::
 
     from langres.core.clusterers import CorrelationClusterer
-    from langres.core.anchor_store import AnchorStore, ClusterDelta
-    from langres.core.canonicalizer import Canonicalizer
+    from langres.curation.anchor_store import AnchorStore, ClusterDelta
+    from langres.curation.canonicalizer import Canonicalizer
     from langres.core.adapters.glinker import GLinkerAdapter
 
 See ``langres.core._exports`` for the fragment contract, and

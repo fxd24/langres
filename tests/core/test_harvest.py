@@ -1,4 +1,4 @@
-"""Tests for langres.core.harvest (the flywheel's harvest half).
+"""Tests for langres.curation.harvest (the flywheel's harvest half).
 
 Covers the ``corrections.jsonl`` contract (:class:`Correction` /
 :class:`CorrectionLog`), the verdicts+corrections -> labeled-pairs merge
@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from langres.core.harvest import (
+from langres.curation.harvest import (
     Correction,
     CorrectionLog,
     LabeledPair,

@@ -11,8 +11,8 @@ import math
 import random
 from typing import Any, cast
 
-from langres.bootstrap._pairs import canonical_pair_key
-from langres.bootstrap.base import Miner
+from langres.curation._pairs import canonical_pair_key
+from langres.curation.base import Miner
 from langres.core.models import ERCandidate
 
 logger = logging.getLogger(__name__)

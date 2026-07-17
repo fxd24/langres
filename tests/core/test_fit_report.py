@@ -21,7 +21,7 @@ import pytest
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.fit_report import FitReport
-from langres.core.harvest import GoldCoverage, LabeledPair
+from langres.curation.harvest import GoldCoverage, LabeledPair
 from langres.core.matcher import Matcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.reports import ScoreInspectionReport

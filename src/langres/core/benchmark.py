@@ -81,13 +81,13 @@ class BlindCostError(RuntimeError):
 
     - The resolved per-pair worst-case price is ``$0`` (e.g. a price of zero was
       passed), so the pre-flight cap ``floor(budget / 0)`` is unbounded.
-    - (For :class:`~langres.bootstrap.labelers.TeacherLabeler`) a judgement
+    - (For :class:`~langres.curation.labelers.TeacherLabeler`) a judgement
       reports neither token counts nor a cost, so the running tally is untrusted.
 
     :attr:`partial` carries any results already produced (and paid for) before a
     *mid-loop* abort, so a caller can recover them rather than discard paid work.
     It is set by the catcher immediately before re-raising (e.g.
-    :meth:`~langres.bootstrap.labelers.TeacherLabeler.label`), not at the raise
+    :meth:`~langres.curation.labelers.TeacherLabeler.label`), not at the raise
     site; for a *pre-flight* raise (``BudgetedModuleRunner`` rejecting a ``$0``
     price before any work) it stays empty. Typed ``list[Any]`` so the same error
     serves both the bootstrap teacher (``GoldPair`` results) and the core runner
@@ -1499,7 +1499,7 @@ class BudgetedModuleRunner:
     worst-case *projected* spend under ``budget_usd`` between calls, and
     stopping immediately once a call's *real*, measured cost pushes the running
     total past it. The same three-layer guarantee proven by
-    :class:`~langres.bootstrap.labelers.TeacherLabeler`, but as a clean,
+    :class:`~langres.curation.labelers.TeacherLabeler`, but as a clean,
     ``Matcher``-typed component returning :class:`PairwiseJudgement` (the teacher
     is welded to ``LLMMatcher`` and returns ``GoldPair``, so it cannot be reused
     directly):

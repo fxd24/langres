@@ -3,7 +3,7 @@
 The builder is pure and deterministic, so every assertion uses synthetic
 :class:`GoldPair` data with a known ground truth -- no LLM, no embeddings, no
 network. Expected values are hand-computed. Targets 100% coverage of
-``langres.bootstrap.report``.
+``langres.curation.report``.
 """
 
 from typing import Any
@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from langres.bootstrap.models import GoldPair, GoldSet
-from langres.bootstrap.report import BootstrapReport
+from langres.curation.models import GoldPair, GoldSet
+from langres.curation.report import BootstrapReport
 from langres.core.models import ERCandidate
 
 

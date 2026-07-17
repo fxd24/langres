@@ -280,7 +280,7 @@ ALL_EDGES = TangleBaseline(
     tangled=frozenset(
         {
             "langres.core.analysis",
-            "langres.core.anchor_store",
+            "langres.curation.anchor_store",
             "langres.core.benchmark",
             "langres.core.reports",
             "langres.core.resolver",

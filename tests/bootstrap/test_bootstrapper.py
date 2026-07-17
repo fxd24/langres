@@ -11,10 +11,10 @@ with honest counts and metadata -- with no embeddings and no LLM.
 from collections.abc import Iterator
 from typing import Any
 
-from langres.bootstrap.base import Labeler
-from langres.bootstrap.bootstrapper import Bootstrapper
-from langres.bootstrap.models import GoldPair, GoldSet
-from langres.bootstrap.report import BootstrapReport
+from langres.curation.base import Labeler
+from langres.curation.bootstrapper import Bootstrapper
+from langres.curation.models import GoldPair, GoldSet
+from langres.curation.report import BootstrapReport
 from langres.core.models import CompanySchema, ERCandidate
 
 

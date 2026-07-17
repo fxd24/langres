@@ -1,4 +1,4 @@
-"""Survivorship correctness for :class:`~langres.core.canonicalizer.Canonicalizer`.
+"""Survivorship correctness for :class:`~langres.curation.canonicalizer.Canonicalizer`.
 
 Per-strategy "known winner" cases, the enrichment loop, edge cases (all-null,
 single-record identity, tie-break determinism), config validation, and a
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from langres.core.canonicalizer import Canonicalizer
-from langres.core.canonicalizer import (
+from langres.curation.canonicalizer import Canonicalizer
+from langres.curation.canonicalizer import (
     CANONICALIZER_VERSION,
     DEFAULT_STRATEGY,
     FieldContext,
@@ -315,7 +315,7 @@ def test_fresh_process_config_round_trip(tmp_path: Path) -> None:
 
     script = (
         "import json, sys\n"
-        "from langres.core.canonicalizer import Canonicalizer\n"
+        "from langres.curation.canonicalizer import Canonicalizer\n"
         f"canon = Canonicalizer.load({str(path)!r})\n"
         f"records = {records!r}\n"
         "golden = canon.canonicalize(records, entity_id='e0')\n"

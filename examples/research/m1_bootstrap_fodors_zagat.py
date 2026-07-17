@@ -3,18 +3,18 @@
 This is the runnable proof that the M1 Wave 1-4 pieces compose into one pass:
 real semantic blocking (sentence-transformer embeddings + FAISS) -> cross-source
 filter -> stratified hard-negative mining -> labeling -> a labeled
-:class:`~langres.bootstrap.models.GoldSet` plus a
-:class:`~langres.bootstrap.report.BootstrapReport` (blocking pair-completeness,
+:class:`~langres.curation.models.GoldSet` plus a
+:class:`~langres.curation.report.BootstrapReport` (blocking pair-completeness,
 teacher-vs-truth agreement, calibration), saved to disk and round-tripped.
 
 The default run is **deterministic and costs $0**: it labels with
-:class:`~langres.bootstrap.labelers.FakeLabeler`, a similarity-threshold stand-in
+:class:`~langres.curation.labelers.FakeLabeler`, a similarity-threshold stand-in
 for the real teacher whose over-confident confidence keeps the calibration report
 non-trivial. Embeddings are real (so blocking pair-completeness is honest) but
 involve no network and no API key.
 
 A gated real-GLM branch (``maybe_real_teacher``) shows how Wave 5 swaps in a
-budget-capped :class:`~langres.bootstrap.labelers.TeacherLabeler`; it only runs
+budget-capped :class:`~langres.curation.labelers.TeacherLabeler`; it only runs
 when ``OPENROUTER_API_KEY`` is set and never costs anything otherwise.
 
 Run it::
@@ -30,7 +30,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from langres.bootstrap import (
+from langres.curation import (
     BootstrapReport,
     Bootstrapper,
     FakeLabeler,
@@ -138,7 +138,7 @@ def maybe_real_teacher() -> None:
         print("\n[real teacher] OPENROUTER_API_KEY not set — skipping (default run is free).")
         return
 
-    from langres.bootstrap import TeacherLabeler
+    from langres.curation import TeacherLabeler
 
     # The real paid run lives in examples/research/run_m1_gold_set.py (which pins prices
     # from a smoke test). This branch just shows the swap-in; prices here are
