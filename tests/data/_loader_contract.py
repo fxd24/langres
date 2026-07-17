@@ -14,7 +14,7 @@ tiny fixture (``tests/data/test_tiny_fixture.py``).
 import re
 from typing import Any
 
-from langres.core.benchmark import Benchmark, gold_pairs_from_clusters
+from langres.data.benchmark import Benchmark, gold_pairs_from_clusters
 
 #: A split-safe corpus id: a single alpha char + integer (the split parses int(id[1:])).
 _SPLIT_SAFE_ID = re.compile(r"^[A-Za-z]\d+$")

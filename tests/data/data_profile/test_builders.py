@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 import langres.data.registry as registry
-from langres.core.benchmark import gold_pairs_from_clusters
+from langres.data.benchmark import gold_pairs_from_clusters
 from langres.data.data_profile import ArraySource, NpySource
 from langres.data.data_profile.builders import (
     _build_separability,

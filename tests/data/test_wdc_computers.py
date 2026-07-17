@@ -14,7 +14,7 @@ import logging
 
 import pytest
 
-from langres.core.benchmark import evaluate_judge_on_candidates
+from langres.benchmarks.judge_eval import evaluate_judge_on_candidates
 from langres.core.metrics import classify_pairs
 from langres.core.models import ERCandidate
 from langres.core.matchers.rapidfuzz import RapidfuzzMatcher

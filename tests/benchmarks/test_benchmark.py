@@ -17,24 +17,27 @@ from typing import Any
 
 import pytest
 
-import langres.core.benchmark as benchmark_module
-from langres.core.benchmark import (
-    Benchmark,
+import langres.benchmarks.judge_eval as benchmark_module
+import langres.benchmarks.runner as runner_module
+from langres.benchmarks.judge_eval import BudgetedModuleRunner
+from langres.benchmarks.runner import (
     BenchmarkTable,
-    BlindCostError,
-    BudgetedModuleRunner,
     LatencyTrack,
     MethodResult,
-    PairTrack,
     PipelineTrack,
     _cost_track,
-    complete_partition,
-    gold_pairs_from_clusters,
     run_method,
     run_methods,
     tune_threshold_on_train,
 )
 from langres.core.usage import CostTrack
+from langres.data.benchmark import (
+    Benchmark,
+    BlindCostError,
+    PairTrack,
+    complete_partition,
+    gold_pairs_from_clusters,
+)
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
@@ -470,7 +473,7 @@ def test_generic_tune_picks_argmax_train_f1(monkeypatch: pytest.MonkeyPatch) -> 
             sanity_floor_f1=0.0,
         )
 
-    monkeypatch.setattr(benchmark_module, "evaluate_resolver_bcubed", fake_eval)
+    monkeypatch.setattr(runner_module, "evaluate_resolver_bcubed", fake_eval)
     best = tune_threshold_on_train(_resolver_factory, [], [], thresholds=tuple(f1_by_threshold))
     assert best == 0.5
 
@@ -486,7 +489,7 @@ def test_generic_tune_breaks_ties_to_first(monkeypatch: pytest.MonkeyPatch) -> N
             sanity_floor_f1=0.0,
         )
 
-    monkeypatch.setattr(benchmark_module, "evaluate_resolver_bcubed", fake_eval)
+    monkeypatch.setattr(runner_module, "evaluate_resolver_bcubed", fake_eval)
     best = tune_threshold_on_train(_resolver_factory, [], [], thresholds=(0.4, 0.5, 0.6))
     assert best == 0.4
 
@@ -863,7 +866,7 @@ def test_evaluate_surfaces_parse_error_count_and_warns(
 ) -> None:
     scores = {"p0": 0.9, "p1": 0.0}
     cands, gold = _labeled_candidates(scores)
-    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+    with caplog.at_level(logging.WARNING, logger="langres.benchmarks.judge_eval"):
         result, _ = benchmark_module.evaluate_judge_on_candidates(
             _AbstainingModule(scores, abstain=frozenset({"p1"})), cands, gold, grid=(0.5,)
         )
@@ -886,7 +889,7 @@ def test_evaluate_no_parse_errors_is_zero_and_quiet(
 ) -> None:
     scores = {"p0": 0.9}
     cands, gold = _labeled_candidates(scores)
-    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+    with caplog.at_level(logging.WARNING, logger="langres.benchmarks.judge_eval"):
         result = benchmark_module.evaluate(
             _ScoreModule(scores), cands, gold, grid=(0.5,), threshold=0.5
         )
@@ -916,7 +919,7 @@ def test_evaluate_counts_is_abstain_abstention_without_parse_error_flag(
     judge: ScriptedJudge[CompanySchema] = ScriptedJudge(
         lambda c: 0.9, abstain=lambda c: c.left.id == "p1"
     )
-    with caplog.at_level(logging.WARNING, logger="langres.core.benchmark"):
+    with caplog.at_level(logging.WARNING, logger="langres.benchmarks.judge_eval"):
         result, judgements = benchmark_module.evaluate_judge_on_candidates(
             judge, cands, gold, grid=(0.5,)
         )
@@ -1501,16 +1504,21 @@ def test_complete_partition_adds_singletons_for_uncovered_ids() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Import-cycle guard: core.benchmark must not import langres.data
+# Import-cycle guard: the benchmark SPEC must not import the harness
 # ---------------------------------------------------------------------------
 
 
-def test_core_benchmark_does_not_import_langres_data() -> None:
-    # A fresh interpreter importing only the harness must not pull in langres.data
-    # (the cycle that would break ``import langres`` at import time).
+def test_benchmark_spec_does_not_import_the_harness() -> None:
+    # The dependency runs ONE way: the harness (``langres.benchmarks``) imports the
+    # benchmark spec (``langres.data.benchmark``), never the reverse. So importing
+    # the spec must not pull ``langres.benchmarks`` into ``sys.modules`` -- that is
+    # the ``data -> benchmarks`` edge the split exists to keep from ever forming (it
+    # would reintroduce a data <-> benchmarks import cycle). Replaces the pre-split
+    # "core.benchmark must not import langres.data" guard: the spec now LIVES in
+    # ``langres.data``, so the harness importing it is the intended one-way edge.
     code = (
-        "import langres.core.benchmark, sys; "
-        "bad = [m for m in sys.modules if m.startswith('langres.data')]; "
+        "import langres.data.benchmark, sys; "
+        "bad = [m for m in sys.modules if m.startswith('langres.benchmarks')]; "
         "assert not bad, bad; print('ok')"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)

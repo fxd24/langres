@@ -24,7 +24,7 @@ import random
 import pytest
 from pydantic import BaseModel
 
-from langres.core.benchmark import evaluate_judge_on_candidates
+from langres.benchmarks.judge_eval import evaluate_judge_on_candidates
 from langres.core.comparators import StringComparator
 from langres.training.finetune import LabeledCandidate
 from langres.core.matchers.random_forest_judge import RandomForestMatcher

@@ -22,7 +22,7 @@ from examples.research.portfolio_race import (
     race_offline,
     select_benchmarks,
 )
-from langres.core.benchmark import PairTrack
+from langres.data.benchmark import PairTrack
 
 
 def test_select_benchmarks_full_skips_external_only_with_a_note(
