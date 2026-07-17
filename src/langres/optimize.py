@@ -9,7 +9,7 @@ one-way, with nothing in ``core`` importing back into it:
 - :mod:`~langres.autoresearch.factory` — P-B, config → runnable blocker. **Heavy**
   (faiss/sentence-transformers at module top); import it lazily only.
 - :mod:`~langres.autoresearch.loop` — P-C, the ``propose → run → evaluate → keep``
-  driver over ``core.runs`` persistence.
+  driver over ``tracking.runs`` persistence.
 - :mod:`~langres.autoresearch.blocker_optimizer` — the separate Optuna study
   (``BlockerOptimizer``); optuna is a dev-only dep, so it too is lazy-only.
 

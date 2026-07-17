@@ -4,7 +4,7 @@ This is the integration seam of the autoresearch loop (epic #145): it walks a
 stream of proposed configs, scores each one, and keeps the incumbent that the
 :class:`~langres.autoresearch.objective.Objective` says is best — logging
 *every* trial (accepted and rejected) through the existing run-tracking spine
-(``core.runs``) so a run is durable, deduplicated, and lineage-linked.
+(``tracking.runs``) so a run is durable, deduplicated, and lineage-linked.
 
 **Injected-scorer testability seam.** :func:`run_loop` takes the scorer as a
 plain ``Callable[[Mapping], Mapping[str, float]]`` (config → metrics), so its
@@ -49,7 +49,7 @@ class Trial:
             returned ``True``). Also written to the run record's logged metrics as
             ``accepted`` so a reader can reconstruct the incumbent timeline from
             the store alone.
-        recipe_id: The content-addressed dedup key (``core.runs.compute_recipe_id``)
+        recipe_id: The content-addressed dedup key (``tracking.runs.compute_recipe_id``)
             for this config's run recipe.
         attempt_id: The run record PK for this trial (``recipe_id``-``started_at``);
             the *next* trial's ``parent_run_id`` when this one is the incumbent,

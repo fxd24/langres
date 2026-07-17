@@ -52,7 +52,7 @@ langres/
 │   │   ├── objective.py    # the immutable keep-if-better scorer (Pareto + log_loss)
 │   │   ├── search_space.py # the declarative config grid the loop enumerates
 │   │   ├── factory.py      # config -> runnable blocker. HEAVY ([semantic] at module top) — lazy-import only
-│   │   ├── loop.py         # propose → run → evaluate → keep, over core.runs persistence
+│   │   ├── loop.py         # propose → run → evaluate → keep, over tracking.runs persistence
 │   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
@@ -73,13 +73,18 @@ langres/
 │   │   ├── comparator.py, comparators/  # Comparator ABC (contract) + StringComparator (impl)
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
-│   │   ├── judgement_log.py        # JudgementLog + LoggingModule (logs every judge call: ids, score, verdict, model, cost)
+│   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
 │   │   └── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   ├── tracking/       # observability, NOT ER modelling — so it sits beside core (depends on core one-way; the langres.core facade re-exports these names for back-compat)
+│   │   ├── runs.py         # RunContext/RunRecord/RunStore (JSONL, content-addressed recipe_id) + capture_run/git_sha/dataset_fingerprint
+│   │   ├── judgement_log.py    # JudgementLog + LoggingMatcher (logs every judge call: ids, score, verdict, model, cost)
+│   │   ├── factories.py    # create_wandb_tracker / create_trackio_tracker (also lazily resolved via langres.clients)
+│   │   └── trackers/       # ExperimentTracker Protocol + NoOpTracker/MultiTracker + resolve_tracker; lazy MlflowTracker/WandbTracker/TrackioTracker (each pulls its heavy backend only when wired)
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   │   ├── _svg.py         # pure-stdlib inline-SVG chart primitives (line_chart/bar_chart); imports nothing from langres
 │   │   ├── _report_html.py # shared HTML scaffold: document()/section()/_num/_histogram/safe_auc

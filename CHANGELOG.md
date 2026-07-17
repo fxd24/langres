@@ -123,16 +123,50 @@ while making the metric look better).
   *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
   working too), and `tests/test_import_budget.py` now asserts all three forms.
 
+#### Observability moved to `langres.tracking` — non-breaking (shims kept)
+
+Run identity/persistence and experiment tracking are **observability, not ER
+modelling**, so they now live in a sibling `langres.tracking` package instead of
+inside `langres.core`:
+
+- `langres.core.runs` → `langres.tracking.runs` (`RunContext`/`RunRecord`/`RunStore`,
+  `capture_run`, `compute_recipe_id`, `git_sha`, `dataset_fingerprint`)
+- `langres.core.judgement_log` → `langres.tracking.judgement_log`
+  (`JudgementLog`, `LoggingMatcher`)
+- `langres.core.trackers` → `langres.tracking.trackers` (the `ExperimentTracker`
+  Protocol, `NoOpTracker`/`MultiTracker`, `resolve_tracker`, and the lazy
+  `MlflowTracker`/`WandbTracker`/`TrackioTracker` adapters)
+- `langres.clients.tracking` → `langres.tracking.factories`
+  (`create_wandb_tracker`, `create_trackio_tracker`)
+
+Unlike the `langres.core` moves above, **this one keeps back-compat**: every old
+path is a re-export shim (marked `# TEMPORARY: deleted by the W2 sweep`), the
+`langres.core` facade still re-exports the primitives (`from langres.core import
+RunStore, JudgementLog, resolve_tracker` unchanged), and
+`langres.clients.create_wandb_tracker`/`create_trackio_tracker` are unchanged.
+Prefer the new `langres.tracking.*` paths; the shims exist only until the W2
+sweep. The backends stay lazy — a bare `import langres` still pulls no
+`mlflow`/`wandb`/`trackio`/`huggingface_hub` — and `optimize(tracker="trackio")`
+still resolves the backend by string internally.
+
+Measured: the package import graph is unchanged from before the move — 7
+`core → tracking` edges (6 toplevel), all pre-existing (the `langres.core` facade
+re-exporting the primitives, plus the `dspy`/`llm` matchers that capture runs),
+and the module-level SCCs are identical (`tests/test_import_tangle.py`).
+
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its
-logger name with it. Two moves in this release rename an emitting logger:
+logger name with it. Several moves in this release rename an emitting logger:
 
 | records | was (0.3.0) | now |
 |---|---|---|
 | "Saved Resolver artifact to %s", the `langres_version` mismatch warning | `langres.core.resolver` | `langres.core._model_persist` |
 | "Embedding %d records…" | `langres.core.resolver` | `langres.core._model_run` |
 | "Optimization complete. Best parameters: %s", "Best value: %.4f", the wandb notice | `langres.core.optimizers.blocker_optimizer` | `langres.autoresearch.blocker_optimizer` |
+| git-unavailable / malformed-run-record warnings | `langres.core.runs` | `langres.tracking.runs` |
+| the created-tracker notice | `langres.clients.tracking` | `langres.tracking.factories` |
+| the tracker-error `logger.exception` | `langres.core.trackers` | `langres.tracking.trackers` |
 
 Nothing in the codebase filters on a logger name, and anyone configuring at
 `langres` — or at `langres.core` for the first two — is unaffected via the

@@ -87,13 +87,14 @@ Three shipped layers, all built on `PairwiseJudgement.provenance`:
 - **Per-call provenance:** every LLM judge writes `model`, `cost_usd`,
   `provider`, and a typed `LLMUsage` token vector following the OpenTelemetry
   GenAI vocabulary into provenance (see §7, "LLM-judge provenance keys").
-- **The judgement log:** `core.judgement_log.JudgementLog` / `LoggingMatcher`
+- **The judgement log:** `tracking.judgement_log.JudgementLog` / `LoggingMatcher`
   persist every judge call (ids, score, verdict, model, cost) to JSONL — the
   flywheel's signal inlet.
-- **Experiment tracking:** `core.runs` (`RunContext`/`RunRecord`, content-
+- **Experiment tracking:** `tracking.runs` (`RunContext`/`RunRecord`, content-
   addressed `recipe_id`, JSONL `RunStore`) plus the pluggable
-  `core.trackers.ExperimentTracker` seam with lazy `MlflowTracker` /
-  `WandbTracker` adapters.
+  `tracking.trackers.ExperimentTracker` seam with lazy `MlflowTracker` /
+  `WandbTracker` adapters. (Observability lives in the sibling `langres.tracking`
+  package, not in `core`; the `langres.core` facade still re-exports these names.)
 
 ## 3. High-Level API: named architectures (`ERModel.dedupe` / `.compare`)
 
@@ -1172,7 +1173,7 @@ never aborting the sweep).
 ### Persistence — local JSONL only, today
 
 Every trial (including over-budget rejects and scorer failures) is appended to the
-`store` path's `RunStore` JSONL (the `core.runs` spine, §2). `store=None` writes
+`store` path's `RunStore` JSONL (the `tracking.runs` spine, §2). `store=None` writes
 nothing; read a trail back with `RunStore(path).read()` (each `RunRecord`'s
 `metrics["accepted"]` is `1.0`/`0.0`, so the incumbent timeline is reconstructable
 from the store alone). `RunStore` is local-only by design; a durable off-laptop

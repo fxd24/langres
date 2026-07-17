@@ -361,7 +361,7 @@ Objective.pareto([("candidate_recall", "maximize"), ("reduction_ratio", "maximiz
 
 **Where results are stored — local JSONL only, today.** `optimize(store=...)`
 appends **every** trial — accepted, over-budget rejects, and scorer failures — as
-one line to a local `RunStore` JSONL (the same `core.runs` spine as
+one line to a local `RunStore` JSONL (the same `tracking.runs` spine as
 `capture_run` above), so the full audit trail is durable off-git. `store=None`
 persists **nothing** (the offline path); the same `LoopResult` is returned either
 way. Read the trail back with `RunStore(path).read()`:

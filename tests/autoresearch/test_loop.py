@@ -226,7 +226,7 @@ def test_trial_is_a_frozen_dataclass() -> None:
 
 # ---------------------------------------------------------------------------
 # Tracker spec (DX: ``tracker="trackio"`` resolved internally via
-# ``core.trackers.resolve_tracker`` -- mirrors ``judge="..."`` presets).
+# ``tracking.trackers.resolve_tracker`` -- mirrors ``judge="..."`` presets).
 # ---------------------------------------------------------------------------
 
 
