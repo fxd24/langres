@@ -122,8 +122,17 @@ lived in `tmp/`. The entire run had to be reconstructed and re-run.
   crash or teardown can't erase what you just wrote.
 - **Never leave a worktree's only copy uncommitted.** Before an agent reports
   done — and before an orchestrator stops, replaces, or moves past a worktree
-  agent — `git -C <worktree> status --porcelain` must be empty of anything you
-  can't afford to lose. Push if the work must outlive the worktree's branch.
+  agent — `git -C <worktree> status --porcelain --untracked-files=all` must be
+  empty of anything you can't afford to lose. Push if the work must outlive the
+  worktree's branch.
+  **`-uall` is mandatory here, not a refinement.** This machine sets
+  `status.showUntrackedFiles = no` globally (`~/.config/git/config`), so a bare
+  `--porcelain` prints *nothing* for a never-`git add`ed file and reports a
+  clean tree. That is exactly the state that lost the run above — a brand-new
+  harness script is untracked — so the check this rule used to mandate was
+  blind to the very accident it was written for. Without `-uall` the check is
+  not weaker, it is **wrong**. (`-uall` over `-unormal` because it names the
+  file at risk instead of collapsing a new directory to `dir/`.)
 - **Treat `tmp/` and other gitignored output as ephemeral.** It dies with the
   worktree and is unrecoverable from git. If a result must survive (a report,
   a dataset, a decision record), commit it to a tracked path or copy it out of
@@ -134,6 +143,16 @@ lived in `tmp/`. The entire run had to be reconstructed and re-run.
 
 The cost of one early `git commit` is nothing. The cost of losing a paid run is
 the run, the time to notice, and the time to redo it.
+
+**The shape of that bug generalizes: a green light decoupled from the thing it
+claims to check.** This repo has hit it four times — a CI step *named* "95%
+coverage gate" while enforcing 90 (`ba90aef`; see the comment on that step in
+`.github/workflows/test.yml`); a cancelled workflow run read as a green run
+(the `concurrency` comment in the same file); a review bot reporting `pass` in
+~5s without ever fetching the diff; and this rule's own `--porcelain` reporting
+a clean tree over unsaved work. When a check says "all clear", confirm it can
+actually observe the failure it exists to catch — a check you have never seen
+fail is a hypothesis, not a safety net.
 
 ## Don't Be Too Assertive Without Context
 
