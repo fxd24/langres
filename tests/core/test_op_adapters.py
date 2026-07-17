@@ -21,7 +21,6 @@ from langres.core.comparators import StringComparator
 from langres.core.groups import ERCandidateGroup
 from langres.core.matcher import GroupwiseMatcher, Matcher
 from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
-from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.op import ClusterStage, Finalize, Score, Source
 from langres.core.op_adapters import (
