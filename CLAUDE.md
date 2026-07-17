@@ -134,6 +134,7 @@ The `.agent/` folder contains external expert analyses of the langres project:
 ## Reference Documentation (`docs/`)
 
 - **`docs/ROADMAP.md`** ⭐ **START HERE / DIRECTION** — the vision: langres as the composable ER seam; the feature-bag architecture; the use-case compass; verifiable milestones. Read before planning new work.
+- **`docs/THEORY.md`** — the mathematical foundation: blocking/matching/top-k/assignment/clustering are **one operation** (a constrained selection `π` over a scored relation) at different feasible classes `𝓕`; `decomposable` decides what can be retrieved; the staging theorem (blocking recall is a *ceiling*, **not** a thing to maximize — "≥95% recall" is the φ=0 limit); what transitive closure assumes about unscored pairs. **Descriptive of where core is heading, not of what ships** — §10 lists what it contradicts in current code. Read before changing a core contract.
 - **`docs/POC.md`** — **archived** original POC validation plan (historical record; outcomes in the root `CHANGELOG.md` and git history).
 - **`docs/TECHNICAL_OVERVIEW.md`** — API reference and data contracts (`PairwiseJudgement`, `Candidate`, method signatures, expected inputs/outputs).
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
