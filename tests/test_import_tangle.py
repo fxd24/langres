@@ -216,19 +216,18 @@ RUNTIME = TangleBaseline(
     tangled=frozenset(),
 )
 
-# All-edges view: 23 modules across four cycles, the largest being 9. Killing the
+# All-edges view: 18 modules across five cycles, the largest being 9. Killing the
 # runtime cycle collapsed this view (39 -> 10, tangled 44 -> 24): the root, both
 # `_exports` trees, `verbs` and `optimize` were only ever tangled here *via* that
-# same `resolver -> langres` edge, so they left with it. What remains are four
+# same `resolver -> langres` edge, so they left with it. What remains are five
 # genuinely lazy knots, none of them touching the root:
-#    9  the matcher/resolver + methods/benchmark knot (litellm seam)
 #    9  the `data.data_profile.*` section graph
 #    3  {core.analysis, core.reports, plotting.blockers}
+#    2  {core.anchor_store, core.resolver}
+#    2  {core.benchmark, langres.methods}
 #    2  {core.runs, core.trackers}
-# `tangled` covers all four; `largest_scc` pins the biggest so they cannot
-# silently merge into one. NOTE the two 9s are different components that happen
-# to be the same size -- `largest_scc` alone cannot tell them apart, which is
-# exactly why `tangled` is pinned alongside it.
+# `tangled` covers all five; `largest_scc` pins the biggest so they cannot
+# silently merge into one.
 #
 # W4 (the ERModel/architectures wave) ratcheted this DOWN: 10 -> 9, tangled
 # 24 -> 23. `langres.core.presets` left, because W4 deleted it outright. It was
@@ -237,6 +236,36 @@ RUNTIME = TangleBaseline(
 # `core/benchmark.py` reaching for `_effective_budget`, an alias it now imports
 # from the `core.spend_cap` leaf that always owned it. Nothing was moved to buy
 # this: the module is gone.
+#
+# The `CostTrack` wave ratcheted it down again: tangled 23 -> 18, and the OTHER
+# 9 -- "the matcher/resolver + methods/benchmark knot (litellm seam)" this
+# comment used to list first -- did not shrink, it **disintegrated**, into
+# {anchor_store, resolver} and {benchmark, methods}. Five modules left in one
+# move: `clients.openrouter`, `core.finetune`, `core.matchers.cascade`,
+# `core.matchers.llm_judge`, `core.method_registry`.
+#
+# ONE edge held all nine together: `clients/openrouter.py` -- an HTTP client --
+# imported `CostTrack` from `core/benchmark.py`, a 1.7k-line benchmark harness,
+# to build one in `make_token_cost_track`. The floor importing the ceiling, and
+# the same shape as PR #176's `resolver -> langres.__version__`. Both statements
+# were lazy (one TYPE_CHECKING, one function-local), which is exactly why the
+# runtime view was already 0 while this view carried a 9: the edge was invisible
+# to `import langres` and fully visible to grimp. `CostTrack` (and its
+# `CostBasis` alias) now live in the `core.usage` leaf beside the `LLMUsage`
+# that `CostTrack.usage` holds -- tokens are the fact, dollars are derived, so
+# the two models belong together and `core.usage` still imports nothing from
+# langres. The aggregator `benchmark._cost_track` deliberately did NOT move: it
+# reads the harness's `PairwiseJudgement.provenance` conventions, so it would
+# have dragged `core.models` in and cost `core.usage` the leaf property that
+# made it a safe home. Verified by dropping the edge and recomputing Tarjan
+# BEFORE writing the move: predicted [9, 3, 2, 2, 2] / 18, measured the same.
+#
+# `largest_scc` stays 9 and that is a measurement, not an oversight: the two 9s
+# were always different components that happened to be the same size (the note
+# this comment used to carry about `largest_scc` being unable to tell them
+# apart). The litellm-seam 9 is gone; the `data.data_profile.*` 9 -- a
+# self-contained knot in a package this wave never touched -- is what the number
+# now pins. Whoever unpicks that one gets to lower it.
 #
 # Measured fact for whoever plans the next wave: the NEW `langres.architectures`
 # package did **not** join the tangle, in either view. Its modules import
@@ -250,14 +279,9 @@ ALL_EDGES = TangleBaseline(
     largest_scc=9,
     tangled=frozenset(
         {
-            "langres.clients.openrouter",
             "langres.core.analysis",
             "langres.core.anchor_store",
             "langres.core.benchmark",
-            "langres.core.finetune",
-            "langres.core.matchers.cascade",
-            "langres.core.matchers.llm_judge",
-            "langres.core.method_registry",
             "langres.core.reports",
             "langres.core.resolver",
             "langres.core.runs",

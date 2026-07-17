@@ -65,7 +65,6 @@ from dotenv import load_dotenv  # noqa: E402
 
 from langres.core.benchmark import (  # noqa: E402
     BudgetedModuleRunner,
-    CostTrack,
     JudgePairEval,
     _cost_track,
     _pipeline_track,
@@ -75,6 +74,7 @@ from langres.core.benchmark import (  # noqa: E402
 )
 from langres.core.embeddings import SentenceTransformerEmbedder  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
+from langres.core.usage import CostTrack  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402
     AmazonGoogleBenchmark,
     ProductSchema,

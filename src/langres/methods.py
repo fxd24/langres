@@ -61,13 +61,14 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
-from langres.core.benchmark import CostTrack, _cost_track
+from langres.core.benchmark import _cost_track
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
 from langres.core.method_registry import get_method
 from langres.core.models import PairwiseJudgement
+from langres.core.usage import CostTrack
 from langres.core.matcher import Matcher
 from langres.core.matchers.cascade import CASCADE_LLM_DECISION_STEP
 from langres.core.resolver import Resolver
@@ -227,7 +228,7 @@ def cascade_cost_track(judgements: list[PairwiseJudgement]) -> CostTrack:
         judgements: The cascade module's per-pair judgements.
 
     Returns:
-        A :class:`~langres.core.benchmark.CostTrack` with spend totals plus the
+        A :class:`~langres.core.usage.CostTrack` with spend totals plus the
         escalation rate and mean LLM-calls-per-candidate populated.
     """
     base = _cost_track(judgements)

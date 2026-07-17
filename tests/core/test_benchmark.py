@@ -23,7 +23,6 @@ from langres.core.benchmark import (
     BenchmarkTable,
     BlindCostError,
     BudgetedModuleRunner,
-    CostTrack,
     LatencyTrack,
     MethodResult,
     PairTrack,
@@ -35,6 +34,7 @@ from langres.core.benchmark import (
     run_methods,
     tune_threshold_on_train,
 )
+from langres.core.usage import CostTrack
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer

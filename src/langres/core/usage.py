@@ -1,4 +1,28 @@
-"""``LLMUsage``: the typed token-usage vector for one LLM call (the fact layer).
+"""The cost fact layer: ``LLMUsage`` (one call's tokens) and ``CostTrack`` (a run's spend).
+
+Tokens are the fact; dollars are derived from them. Both models on that sentence
+live here, in a module that imports **nothing from langres** -- which is the
+whole point (see "Import-safety" below).
+
+``CostTrack`` moved here from ``core/benchmark.py``, the 1.7k-line benchmark
+harness, and the reason is an import cycle rather than tidiness.
+``clients/openrouter.py`` -- a low-level HTTP client -- builds a ``CostTrack`` in
+``make_token_cost_track``, so it had to import the harness: the floor importing
+the ceiling. Both statements were lazy (one ``TYPE_CHECKING``, one
+function-local), so the *runtime* graph never saw it, but grimp/import-linter
+did, and that single edge held a **9-module** all-edges SCC together
+(``openrouter`` <-> ``benchmark`` <-> ``methods`` <-> the matchers). Deleting it
+dropped the tangle 23 -> 18 modules; see ``tests/test_import_tangle.py``.
+
+The destination is not arbitrary. ``CostTrack.usage`` is an :class:`LLMUsage`,
+so the model now sits next to its own field's type, and the pair depends only on
+pydantic. **What did NOT move: ``benchmark._cost_track``**, the aggregator that
+builds a ``CostTrack`` from a judgement list. It reads
+``PairwiseJudgement.provenance`` (``_COST_KEYS``, ``cost_is_real``,
+``cost_untracked``), so bringing it here would force a
+``usage -> core.models`` import and cost this module the leaf property that
+makes it a safe home in the first place. The data model is the contract; the
+aggregation over the harness's provenance conventions is the harness's.
 
 Judges (``LLMMatcher``, ``DSPyMatcher``, ``SelectMatcher``) previously recorded only
 ``prompt_tokens`` / ``completion_tokens`` into ``PairwiseJudgement.provenance``
@@ -31,9 +55,9 @@ to price a call without pulling any of core's heavy optional dependencies.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _read(obj: Any, key: str) -> Any:
@@ -151,3 +175,56 @@ class LLMUsage(BaseModel):
             provider=provider,
             model=model,
         )
+
+
+#: How a run's cost was determined. A single ``cost_is_real: bool`` cannot express
+#: a run that mixes real OpenRouter-billed cost, a litellm/pinned-price estimate,
+#: a zero-cost local judge (no cost concept at all), and DSPy's billed-but-
+#: unparseable calls (``cost_untracked``) -- so
+#: :func:`~langres.core.benchmark._judgement_cost_basis` classifies each judgement
+#: into one of the four leaves, and
+#: :func:`~langres.core.benchmark._combined_cost_basis` collapses a run to
+#: ``"mixed"`` the moment two judgements disagree. (Both classifiers read the
+#: harness's provenance conventions, so they stay in ``core/benchmark.py`` and
+#: import this alias back -- see the module docstring.)
+CostBasis = Literal["real", "estimated", "mixed", "untracked", "none"]
+
+
+class CostTrack(BaseModel):
+    """Spend accounting for a method run. Zero-spend methods leave the optionals empty.
+
+    Attributes:
+        usd_total: Total measured spend across all judged test pairs.
+        usd_per_1k_pairs: Spend normalized per 1k candidate pairs.
+        est_usd_per_100k: Linear extrapolation to 100k pairs.
+        escalation_rate: Fraction of pairs escalated to the expensive stage
+            (cascade methods only); ``None`` for single-stage methods.
+        llm_calls_per_candidate: Mean LLM calls per candidate (cascade methods
+            only); ``None`` for zero-LLM methods.
+        usage: Token-usage vector summed across every judgement (tokens are the
+            fact; ``usd_total`` is derived from them where a real price is
+            known). All-zero for judges that report no usage (string/embedding,
+            or a judge that never populated ``provenance["usage"]``).
+        cost_basis: How ``usd_total`` was determined -- see :data:`CostBasis`.
+            ``"none"`` for an empty judgement list.
+    """
+
+    usd_total: float = 0.0
+    usd_per_1k_pairs: float = 0.0
+    est_usd_per_100k: float = 0.0
+    escalation_rate: float | None = None
+    llm_calls_per_candidate: float | None = None
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+    cost_basis: CostBasis = "none"
+
+    @property
+    def cost_is_real(self) -> bool:
+        """Whether ``usd_total`` is entirely real, billed spend (``cost_basis == "real"``).
+
+        Kept for continuity with the pre-Task-3 boolean signal; prefer
+        :attr:`cost_basis` for the full picture (a run can be ``"estimated"``,
+        ``"mixed"``, ``"untracked"``, or ``"none"`` — all of which this reports
+        as ``False``, exactly as the old bool-only signal would have wanted for
+        anything short of "fully real").
+        """
+        return self.cost_basis == "real"
