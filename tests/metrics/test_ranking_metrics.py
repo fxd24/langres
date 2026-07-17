@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from langres.core.metrics import evaluate_blocking_with_ranking
+from langres.metrics.metrics import evaluate_blocking_with_ranking
 from langres.core.models import CompanySchema, ERCandidate
 
 logger = logging.getLogger(__name__)

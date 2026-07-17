@@ -2,7 +2,7 @@
 
 import pytest
 
-from langres.core.diagnostics import (
+from langres.metrics.diagnostics import (
     DiagnosticExamples,
     FalsePositiveExample,
     MissedMatchExample,

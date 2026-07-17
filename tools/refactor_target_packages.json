@@ -96,6 +96,7 @@
     "langres.tracking.trackers": "tracking",
     "langres.data": "data",
     "langres.data.data_profile": "data",
+    "langres.metrics": "metrics",
     "langres.plotting": "plotting",
     "langres.report": "report"
   },

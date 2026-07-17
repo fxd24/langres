@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from pydantic import BaseModel
 
-from langres.core.debugging import (
+from langres.metrics.debugging import (
     CandidateStats,
     ClusterStats,
     ErrorExample,

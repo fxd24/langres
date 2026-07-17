@@ -222,8 +222,8 @@ RUNTIME = TangleBaseline(
 # same `resolver -> langres` edge, so they left with it. What remains are five
 # genuinely lazy knots, none of them touching the root:
 #    9  the `data.data_profile.*` section graph
-#    3  {core.analysis, core.reports, plotting.blockers}
-#    2  {core.anchor_store, core.resolver}
+#    3  {core.reports, metrics.analysis, plotting.blockers}
+#    2  {curation.anchor_store, core.resolver}
 #    2  {core.benchmark, langres.methods}
 #    2  {tracking.runs, tracking.trackers}
 # `tangled` covers all five; `largest_scc` pins the biggest so they cannot
@@ -273,19 +273,31 @@ RUNTIME = TangleBaseline(
 # keep every heavy dep ([semantic]/[llm]) inside `_topology`'s function body. An
 # architecture that grows a toplevel import of a module which imports it back
 # would show up here as an ENTERED line.
+#
+# The metrics-package wave (`core/{metrics,analysis,debugging,diagnostics}.py` ->
+# the `langres.metrics` package, back-compat shims left at the old paths) did NOT
+# change the shape -- it RELOCATED one knot member. The `{core.analysis,
+# core.reports, plotting.blockers}` 3-cycle is now `{metrics.analysis,
+# core.reports, plotting.blockers}`: `analysis` moved out of core, and the ONE
+# edge that would otherwise have GROWN this cycle to 4 (`core.reports:960`
+# reaching `analysis`) was repointed at `metrics.analysis` so `core.analysis` --
+# now a pure re-export shim -- stays a leaf outside every cycle. Predicted by
+# recomputing Tarjan before the move, measured identical after: [9, 3, 2, 2, 2] /
+# 18, `largest_scc` still 9. `metrics.analysis` is the ONLY member below that
+# swapped names.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
     largest_scc=9,
     tangled=frozenset(
         {
-            "langres.core.analysis",
             "langres.curation.anchor_store",
             "langres.core.benchmark",
             "langres.core.reports",
             "langres.core.resolver",
             "langres.tracking.runs",
             "langres.tracking.trackers",
+            "langres.metrics.analysis",
             "langres.data.data_profile.base",
             "langres.data.data_profile.builders",
             "langres.data.data_profile.corpus_field",

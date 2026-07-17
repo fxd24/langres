@@ -10,12 +10,12 @@ import pytest
 
 def test_bcubed_metrics_module_exists():
     """Test that the metrics module can be imported."""
-    from langres.core import metrics  # noqa: F401
+    from langres.metrics import metrics  # noqa: F401
 
 
 def test_bcubed_perfect_clustering():
     """Test BCubed metrics with perfect clustering (P=R=F1=1.0)."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     predicted = [{"e1", "e2"}, {"e3", "e4"}]
     gold = [{"e1", "e2"}, {"e3", "e4"}]
@@ -29,7 +29,7 @@ def test_bcubed_perfect_clustering():
 
 def test_bcubed_all_separate():
     """Test BCubed metrics when all entities are in separate clusters."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     # Predicted: all separate
     predicted = [{"e1"}, {"e2"}, {"e3"}, {"e4"}]
@@ -48,7 +48,7 @@ def test_bcubed_all_separate():
 
 def test_bcubed_all_together():
     """Test BCubed metrics when all entities are in one cluster."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     # Predicted: all together
     predicted = [{"e1", "e2", "e3", "e4"}]
@@ -67,7 +67,7 @@ def test_bcubed_all_together():
 
 def test_bcubed_empty_clusters():
     """Test BCubed metrics with empty cluster lists."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     predicted = []
     gold = []
@@ -82,7 +82,7 @@ def test_bcubed_empty_clusters():
 
 def test_bcubed_single_entity_clusters():
     """Test BCubed metrics with single-entity clusters."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     predicted = [{"e1"}]
     gold = [{"e1"}]
@@ -96,7 +96,7 @@ def test_bcubed_single_entity_clusters():
 
 def test_bcubed_precision_calculation():
     """Test BCubed precision calculation directly."""
-    from langres.core.metrics import calculate_bcubed_precision
+    from langres.metrics.metrics import calculate_bcubed_precision
 
     predicted = [{"e1", "e2", "e3"}]  # One cluster with mixed entities
     gold = [{"e1", "e2"}, {"e3"}]  # Two separate gold clusters
@@ -112,7 +112,7 @@ def test_bcubed_precision_calculation():
 
 def test_bcubed_recall_calculation():
     """Test BCubed recall calculation directly."""
-    from langres.core.metrics import calculate_bcubed_recall
+    from langres.metrics.metrics import calculate_bcubed_recall
 
     predicted = [{"e1"}, {"e2"}, {"e3"}]  # All separate
     gold = [{"e1", "e2"}, {"e3"}]  # Two gold clusters
@@ -128,7 +128,7 @@ def test_bcubed_recall_calculation():
 
 def test_bcubed_f1_calculation():
     """Test that F1 is harmonic mean of precision and recall."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     predicted = [{"e1", "e2"}]
     gold = [{"e1", "e2", "e3"}]
@@ -145,7 +145,7 @@ def test_bcubed_f1_calculation():
 
 def test_bcubed_metrics_with_company_dataset():
     """Test BCubed metrics with realistic company deduplication data."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     # Simulated company deduplication result
     predicted = [
@@ -173,7 +173,7 @@ def test_bcubed_metrics_with_company_dataset():
 
 def test_bcubed_metrics_return_type():
     """Test that calculate_bcubed_metrics returns correct structure."""
-    from langres.core.metrics import calculate_bcubed_metrics
+    from langres.metrics.metrics import calculate_bcubed_metrics
 
     predicted = [{"e1", "e2"}]
     gold = [{"e1", "e2"}]
@@ -212,7 +212,7 @@ def test_bcubed_recall_unmerged_pair_not_scored_as_recalled():
     The latent bug mapped every absent id to a single ``None`` cluster, so a and b
     compared equal and scored 1.0 each -> overall recall 1.0 (wrong).
     """
-    from langres.core.metrics import calculate_bcubed_recall
+    from langres.metrics.metrics import calculate_bcubed_recall
 
     recall = calculate_bcubed_recall([], [{"a", "b"}, {"c"}])
     assert recall == pytest.approx(2 / 3)
@@ -221,7 +221,7 @@ def test_bcubed_recall_unmerged_pair_not_scored_as_recalled():
 
 def test_bcubed_recall_complete_partition_still_perfect():
     """The fix is a no-op when nothing is unclustered: a correct prediction is 1.0."""
-    from langres.core.metrics import calculate_bcubed_recall
+    from langres.metrics.metrics import calculate_bcubed_recall
 
     recall = calculate_bcubed_recall([{"a", "b"}, {"c"}], [{"a", "b"}, {"c"}])
     assert recall == 1.0
@@ -239,7 +239,7 @@ def test_bcubed_precision_absent_from_gold_not_scored_as_pure():
 
     The latent bug mapped both to a single ``None`` gold cluster -> precision 1.0.
     """
-    from langres.core.metrics import calculate_bcubed_precision
+    from langres.metrics.metrics import calculate_bcubed_precision
 
     precision = calculate_bcubed_precision([{"x", "y"}], [{"z"}])
     assert precision == pytest.approx(0.5)
@@ -248,7 +248,7 @@ def test_bcubed_precision_absent_from_gold_not_scored_as_pure():
 
 def test_pairwise_metrics_perfect_clustering():
     """Test pairwise metrics with perfect clustering."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     predicted = [{"e1", "e2"}, {"e3", "e4"}]
     gold = [{"e1", "e2"}, {"e3", "e4"}]
@@ -267,7 +267,7 @@ def test_pairwise_metrics_perfect_clustering():
 
 def test_pairwise_metrics_all_separate():
     """Test pairwise metrics when all entities are in separate clusters."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     # Predicted: all separate (no pairs)
     predicted = [{"e1"}, {"e2"}, {"e3"}, {"e4"}]
@@ -287,7 +287,7 @@ def test_pairwise_metrics_all_separate():
 
 def test_pairwise_metrics_all_together():
     """Test pairwise metrics when all entities are in one cluster."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     # Predicted: all together
     predicted = [{"e1", "e2", "e3", "e4"}]
@@ -311,7 +311,7 @@ def test_pairwise_metrics_all_together():
 
 def test_pairwise_metrics_partial_match():
     """Test pairwise metrics with partial matching."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     # Predicted: correctly merged e1, e2 but incorrectly merged e3, e4
     predicted = [{"e1", "e2"}, {"e3", "e4"}]
@@ -335,7 +335,7 @@ def test_pairwise_metrics_partial_match():
 
 def test_pairwise_metrics_empty_clusters():
     """Test pairwise metrics with empty cluster lists."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     predicted = []
     gold = []
@@ -353,7 +353,7 @@ def test_pairwise_metrics_empty_clusters():
 
 def test_pairwise_metrics_single_entity_clusters():
     """Test pairwise metrics with single-entity clusters."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     predicted = [{"e1"}]
     gold = [{"e1"}]
@@ -371,7 +371,7 @@ def test_pairwise_metrics_single_entity_clusters():
 
 def test_pairwise_metrics_return_type():
     """Test that calculate_pairwise_metrics returns correct structure."""
-    from langres.core.metrics import calculate_pairwise_metrics
+    from langres.metrics.metrics import calculate_pairwise_metrics
 
     predicted = [{"e1", "e2"}]
     gold = [{"e1", "e2"}]
@@ -388,7 +388,7 @@ def test_pairwise_metrics_return_type():
 
 def test_clusters_to_pairs_single_cluster():
     """Test _clusters_to_pairs with a single cluster."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     clusters = [{"e1", "e2", "e3"}]
     pairs = _clusters_to_pairs(clusters)
@@ -402,7 +402,7 @@ def test_clusters_to_pairs_single_cluster():
 
 def test_clusters_to_pairs_multiple_clusters():
     """Test _clusters_to_pairs with multiple clusters."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     clusters = [{"e1", "e2"}, {"e3", "e4"}]
     pairs = _clusters_to_pairs(clusters)
@@ -415,7 +415,7 @@ def test_clusters_to_pairs_multiple_clusters():
 
 def test_clusters_to_pairs_empty_cluster():
     """Test _clusters_to_pairs with empty clusters."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     clusters = []
     pairs = _clusters_to_pairs(clusters)
@@ -426,7 +426,7 @@ def test_clusters_to_pairs_empty_cluster():
 
 def test_clusters_to_pairs_singleton_clusters():
     """Test _clusters_to_pairs with singleton clusters."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     clusters = [{"e1"}, {"e2"}, {"e3"}]
     pairs = _clusters_to_pairs(clusters)
@@ -437,7 +437,7 @@ def test_clusters_to_pairs_singleton_clusters():
 
 def test_clusters_to_pairs_lexicographic_ordering():
     """Test that _clusters_to_pairs produces lexicographically ordered pairs."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     # Test with strings that would sort differently
     clusters = [{"z1", "a1"}]
@@ -449,7 +449,7 @@ def test_clusters_to_pairs_lexicographic_ordering():
 
 def test_clusters_to_pairs_large_cluster():
     """Test _clusters_to_pairs with a larger cluster."""
-    from langres.core.metrics import _clusters_to_pairs
+    from langres.metrics.metrics import _clusters_to_pairs
 
     clusters = [{"e1", "e2", "e3", "e4"}]
     pairs = _clusters_to_pairs(clusters)

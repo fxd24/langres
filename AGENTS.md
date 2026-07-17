@@ -81,6 +81,7 @@ langres/
 │   │   └── base.py, miners.py, models.py, labelers.py, bootstrapper.py, report.py, _pairs.py  # gold-set cold-start: Miner/Labeler, HardNegativeMiner, GoldPair/GoldSet, Bootstrapper, BootstrapReport
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   ├── metrics/        # ER metrics + diagnostics (metrics/analysis/debugging/diagnostics) — they SCORE a resolution, not the modelling contract, so beside core; public via langres.eval, back-compat shims at core.metrics/.analysis/.debugging/.diagnostics
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 ├── tests/              # Test suite
 ├── examples/           # Usage examples (quickstart_models.py is the offline quickstart)

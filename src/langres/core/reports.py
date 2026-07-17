@@ -27,8 +27,8 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
-    from langres.core.diagnostics import DiagnosticExamples
     from langres.core.models import ERCandidate, PairwiseJudgement
+    from langres.metrics.diagnostics import DiagnosticExamples
 
 
 class CandidateInspectionReport(BaseModel):
@@ -567,7 +567,7 @@ class BlockerEvaluationReport(BaseModel):
         recall_curve: Recall@k curve data
 
     Example:
-        >>> from langres.core.analysis import evaluate_blocker_detailed
+        >>> from langres.metrics.analysis import evaluate_blocker_detailed
         >>> report = evaluate_blocker_detailed(candidates, gold_clusters)
         >>> print(f"Candidate recall: {report.candidates.recall:.2%}")
         >>> print(f"MAP: {report.ranking.map:.3f}")
@@ -957,8 +957,8 @@ class BlockerEvaluationReport(BaseModel):
             For multi-model comparison, store candidates separately and pass
             them when diagnosing the best model.
         """
-        from langres.core.analysis import extract_false_positives, extract_missed_matches
-        from langres.core.diagnostics import DiagnosticExamples
+        from langres.metrics.analysis import extract_false_positives, extract_missed_matches
+        from langres.metrics.diagnostics import DiagnosticExamples
 
         # Check if gold_clusters were stored during evaluation
         if not hasattr(self, "_gold_clusters"):

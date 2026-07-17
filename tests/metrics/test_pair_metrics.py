@@ -8,7 +8,7 @@ amplification (the M3 methodology fix).
 
 import pytest
 
-from langres.core.metrics import PairMetrics, classify_pairs, pair_pr_curve
+from langres.metrics.metrics import PairMetrics, classify_pairs, pair_pr_curve
 from langres.core.models import PairwiseJudgement
 
 
