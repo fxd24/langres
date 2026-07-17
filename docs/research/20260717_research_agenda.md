@@ -493,8 +493,10 @@ count decides a default.
   to a task.**
 - **The failure is threshold-fragile, with a measured collapse.** Hassanzadeh et al.
   (via §7.1): Partitioning at **F1 0.850** (θ=0.4, beating MinCut) collapses to
-  **0.177** at θ=0.2, merging **500 true clusters into 51**. That is a 4.8× cluster-count
-  collapse from a threshold move of 0.2 — evidence the failure is a *cliff*, not a slope.
+  **0.177** at θ=0.2, merging **500 true clusters into 51**. So a threshold move of 0.2
+  costs **4.8× in F1** (0.850/0.177) while the output cluster count under-counts the truth
+  by **~9.8×** (500→51) — evidence the failure is a *cliff*, not a slope. `[reached via
+  THEORY.md §7.1 — the primary was not read here; see §7 tier 2]`
 - **We have already been bitten, and already built the fix.** `CorrelationClusterer`
   (`src/langres/core/clusterers/correlation.py`) — the **Ailon–Charikar–Newman pivot
   algorithm** — is implemented, registered, and a **drop-in** (same ctor/config, inherits
