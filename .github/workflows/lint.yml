@@ -2,16 +2,14 @@ name: Lint
 
 on:
   # NOTE: `pull_request.branches` filters by TARGET branch -- a PR into a branch
-  # not listed here runs NO lint at all (no ruff, no mypy). Each integration
-  # branch has had to be added below; `feat/arch-refactor` is the architecture
-  # refactor's. mypy is the gate that catches exactly what a package split
-  # breaks (moved symbols, stale re-exports, circular imports), so a sub-PR
-  # landing there unlinted is the failure this list exists to prevent.
-  # TEMPORARY: drop `feat/arch-refactor` from both lists once the refactor lands.
+  # not listed here runs NO lint at all (no ruff, no mypy). Every integration
+  # branch that sub-PRs land on has to be added below, or those sub-PRs merge
+  # unlinted: mypy is the gate that catches exactly what a package split breaks
+  # (moved symbols, stale re-exports, circular imports).
   push:
-    branches: [main, feat/arch-refactor]
+    branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch, feat/arch-refactor]
+    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
