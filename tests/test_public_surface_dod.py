@@ -240,7 +240,7 @@ def test_dod3_capstone_public_imports_resolve() -> None:
     """DoD #3: the QLoRA capstone example's public imports all resolve (run lives elsewhere)."""
     pytest.importorskip("litellm")  # LLMMatcher access pulls litellm ([llm])
     from langres import LLMMatcher, QLoRA, run_finetune
-    from langres.core.finetune import FINETUNE_YES_NO_PROMPT
+    from langres.training.finetune import FINETUNE_YES_NO_PROMPT
     from langres.core.matchers.model_ref import to_config
     from langres.eval import candidates_for, evaluate, get_benchmark
 

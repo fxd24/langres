@@ -43,7 +43,7 @@ from langres.core.benchmark import (  # noqa: E402
     evaluate_judge_on_candidates,
     run_methods,
 )
-from langres.core.calibration import derive_threshold  # noqa: E402
+from langres.training.calibration import derive_threshold  # noqa: E402
 from langres.core.models import ERCandidate, PairwiseJudgement  # noqa: E402
 from langres.core.matchers.dspy_judge import DSPyMatcher  # noqa: E402
 from langres.data.amazon_google import (  # noqa: E402

@@ -10,7 +10,7 @@ method=QLoRA(...))`` wraps this (see ``Resolver._fit_finetune``).
 **Import-light by construction.** The heavy training stack (``peft`` / ``trl`` /
 ``bitsandbytes`` / ``torch`` / ``transformers``) is imported **lazily inside the
 trainer's ``train()``**, never at module load — so ``import langres`` and even
-``import langres.core.finetune`` never pull it (locked by
+``import langres.training.finetune`` never pull it (locked by
 ``tests/test_import_budget.py``). The :class:`QLoRA` method object is plain
 config; the training mechanics live behind the injectable :class:`FinetuneTrainer`
 seam, so the orchestration (rendering, ref/report assembly, cost) is fully

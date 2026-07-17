@@ -37,7 +37,7 @@ class CalibrationDelta(BaseModel):
 
     Measured on the held-out ``valid`` split (the honest test): the matcher's raw
     scores vs the scores mapped through the fitted
-    :class:`~langres.core.calibration.Calibrator`. Lower is better for both -- a
+    :class:`~langres.training.calibration.Calibrator`. Lower is better for both -- a
     real calibrator drives ``brier``/``ece`` down.
 
     Attributes:

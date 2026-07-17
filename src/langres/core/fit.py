@@ -22,7 +22,7 @@ Three pipeline roles can be trained, each with its own fit signature:
 - **Calibrator** -- ``CalibratorFitMixin`` (``fit_calibrator(scores, labels)``
   learns a score->probability map; ``transform(scores)`` applies it). The
   concrete Platt/isotonic
-  :class:`~langres.core.calibration.Calibrator` implements it, consumed by
+  :class:`~langres.training.calibration.Calibrator` implements it, consumed by
   ``Resolver.fit(method=Platt()/Isotonic())``.
 
 See ``Resolver.fit()`` for how the matcher mixins are consumed, and
@@ -58,7 +58,7 @@ class SupervisedFitMixin(Protocol[SchemaT]):
                 comparison-attached) candidate stream to learn from.
             labels: Gold match/non-match labels, positionally aligned with
                 ``candidates`` (same convention as
-                :func:`~langres.core.calibration.derive_threshold`).
+                :func:`~langres.training.calibration.derive_threshold`).
         """
         ...  # pragma: no cover — Protocol method body, never executed
 
@@ -113,7 +113,7 @@ class CalibratorFitMixin(Protocol):
     ``isinstance()``). The role is two-sided: a fitted calibrator is only useful
     if the predict path can push scores through it, so the apply half is part of
     the contract. The concrete Platt/isotonic
-    :class:`~langres.core.calibration.Calibrator` implements both;
+    :class:`~langres.training.calibration.Calibrator` implements both;
     :meth:`~langres.core.resolver.Resolver._fit_calibrate` fits it and
     :meth:`~langres.core.resolver.Resolver.predict` applies it.
     """

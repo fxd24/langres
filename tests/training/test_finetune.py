@@ -1,4 +1,4 @@
-"""Unit tests for ``langres.core.finetune`` -- the standalone QLoRA primitive.
+"""Unit tests for ``langres.training.finetune`` -- the standalone QLoRA primitive.
 
 These lock the ORCHESTRATION (prompt/target rendering, ``model_ref`` + cost
 assembly, the :class:`QLoRA` method object) with an *injected fake trainer*, so
@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
-from langres.core.finetune import (
+from langres.training.finetune import (
     FINETUNE_YES_NO_PROMPT,
     Conversation,
     FinetuneOutcome,
@@ -51,7 +51,7 @@ def _labeled_pairs() -> list[tuple[Any, bool]]:
 
 
 class _FakeTrainer:
-    """A :class:`~langres.core.finetune.FinetuneTrainer` that records its call.
+    """A :class:`~langres.training.finetune.FinetuneTrainer` that records its call.
 
     Writes a stub adapter dir (so the produced ref points at a real directory) and
     returns a canned :class:`TrainOutcome` -- no GPU, no peft/trl. Captures the

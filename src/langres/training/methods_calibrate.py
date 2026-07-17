@@ -3,7 +3,7 @@
 The concrete strategies :meth:`Resolver.fit(method=...) <langres.core.resolver.Resolver.fit>`
 dispatches to when you want to turn a matcher's raw scores into real, comparable
 probabilities: learn a score→probability map from labeled pairs. Each strategy
-names one :class:`~langres.core.calibration.Calibrator` map:
+names one :class:`~langres.training.calibration.Calibrator` map:
 
 - :class:`Platt` -> logistic (Platt) scaling -- ``sigmoid(a·score + b)``, a
   two-parameter smooth map for monotone over/under-confidence;
@@ -14,7 +14,7 @@ Import-light by construction (Pydantic only -- no scikit-learn): a ``Method`` is
 *value* the caller constructs at the fit call site, so constructing ``Platt()``
 must never pull scikit-learn into ``sys.modules`` (locked by
 ``tests/test_import_budget.py``). The heavy scikit-learn import stays in
-:mod:`langres.core.calibration`, reached only when
+:mod:`langres.training.calibration`, reached only when
 :meth:`~langres.core.resolver.Resolver.fit` actually fits the calibrator -- the
 same split ``methods_prompt`` uses to keep ``dspy`` out of a bare import.
 """
@@ -31,15 +31,15 @@ class CalibrateMethod(Method):
 
     Fixes the contract :meth:`~langres.core.resolver.Resolver._fit_calibrate`
     reads: a :attr:`strategy` naming the
-    :class:`~langres.core.calibration.Calibrator` map to fit. Like
+    :class:`~langres.training.calibration.Calibrator` map to fit. Like
     :attr:`~langres.core.methods_api.Method.kind`, :attr:`strategy` is a
     ``ClassVar`` -- strategy-type identity, not serialized config -- so the base
     declares it and each concrete subclass sets it. Mirrors
-    :class:`~langres.core.methods_prompt.PromptMethod`'s ``optimizer``.
+    :class:`~langres.training.methods_prompt.PromptMethod`'s ``optimizer``.
     """
 
     kind: ClassVar[str] = "calibrate"
-    #: The :class:`~langres.core.calibration.Calibrator` map this strategy fits
+    #: The :class:`~langres.training.calibration.Calibrator` map this strategy fits
     #: (``"platt"`` / ``"isotonic"``). Set by concrete subclasses; unset on the
     #: base (never instantiated).
     strategy: ClassVar[str]

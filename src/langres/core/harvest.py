@@ -5,7 +5,7 @@
 model, cost, ``"v": 3``). This module is the *outlet*: it turns those logged
 judgements,
 plus a review tool's human corrections, into **labeled pairs** that feed
-:func:`langres.core.calibration.derive_threshold` (its first production caller)
+:func:`langres.training.calibration.derive_threshold` (its first production caller)
 and, where applicable, a judge's ``fit()``.
 
 The division of labor is deliberate: langres owns the **contract**, the
@@ -22,7 +22,7 @@ Weak-label provenance survives onto every :class:`LabeledPair` via ``source``
 (``"verdict"`` vs ``"correction"``), so a caller can weight, filter, or audit the
 human-reviewed subset instead of trusting all labels equally.
 
-Positioning: like :mod:`langres.core.calibration`, this is eval/calibration-tier
+Positioning: like :mod:`langres.training.calibration`, this is eval/calibration-tier
 code, not part of the ``link()``/``dedupe()`` runtime. Importing the module is
 cheap (Pydantic only); the one function that needs scikit-learn,
 :func:`derive_threshold_from_pairs`, imports it lazily so the *contract* models
@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from langres.core.calibration import ThresholdMethod
+    from langres.training.calibration import ThresholdMethod
     from langres.core.models import ERCandidate
 
 __all__ = [
@@ -285,7 +285,7 @@ def derive_threshold_from_pairs(
 ) -> float:
     """Derive a decision threshold from harvested labeled pairs.
 
-    The flywheel's payoff and :func:`~langres.core.calibration.derive_threshold`'s
+    The flywheel's payoff and :func:`~langres.training.calibration.derive_threshold`'s
     first production caller: it reads the score distribution and labels straight
     off :func:`harvest_labeled_pairs`' output and returns a data-driven cut,
     replacing a hand-set constant.
@@ -300,7 +300,7 @@ def derive_threshold_from_pairs(
     Args:
         pairs: Harvested labeled pairs (from :func:`harvest_labeled_pairs`).
         method: Passed through to
-            :func:`~langres.core.calibration.derive_threshold`.
+            :func:`~langres.training.calibration.derive_threshold`.
         percentile: Passed through (required only for ``method="percentile"``).
 
     Returns:
@@ -311,7 +311,7 @@ def derive_threshold_from_pairs(
             no scores to derive a *score* threshold from) -- raised here, naming
             the offending pair, rather than dropping the score-less pairs into a
             biased scored-only subset. Also propagated from
-            :func:`~langres.core.calibration.derive_threshold` (empty input,
+            :func:`~langres.training.calibration.derive_threshold` (empty input,
             single-class labels under ``"youden"``, bad ``percentile``, ...).
 
     Warns:
@@ -344,7 +344,7 @@ def derive_threshold_from_pairs(
             stacklevel=2,
         )
 
-    from langres.core.calibration import derive_threshold
+    from langres.training.calibration import derive_threshold
 
     return derive_threshold(
         scores,

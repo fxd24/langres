@@ -2,7 +2,7 @@
 
 ``fit`` dispatches ``kind="finetune"`` to ``_fit_finetune``, which aligns the
 labeled supervision, delegates training to
-:func:`~langres.core.finetune.run_finetune` (here a *monkeypatched fake trainer*,
+:func:`~langres.training.finetune.run_finetune` (here a *monkeypatched fake trainer*,
 so no GPU / no peft/trl), repoints the Resolver's matcher at the produced
 ``model_ref`` as an in-process logprob :class:`LLMMatcher`, and records the
 ``model_ref`` + GPU-seconds + held-out pair metrics in ``fit_report_``.
@@ -20,7 +20,7 @@ import pytest
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.finetune import TrainOutcome
+from langres.training.finetune import TrainOutcome
 from langres.core.harvest import LabeledPair
 from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.methods_api import Method
@@ -73,7 +73,7 @@ def fake_train_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 device="cpu",
             )
 
-    monkeypatch.setattr("langres.core.finetune.QLoRATrainer", _FakeTrainer)
+    monkeypatch.setattr("langres.training.finetune.QLoRATrainer", _FakeTrainer)
     return calls
 
 
@@ -106,7 +106,7 @@ def test_labels_path_trains_repoints_and_reports(
     fake_train_calls: list[dict[str, Any]],
 ) -> None:
     """``fit(labels=...)`` fine-tunes, repoints the matcher at the ref, fills the report."""
-    from langres.core.finetune import QLoRA
+    from langres.training.finetune import QLoRA
 
     resolver = _resolver()
 
@@ -146,7 +146,7 @@ def test_pairs_path_holds_out_valid_and_scores_it(
     fake_train_calls: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``fit(pairs=, split=)`` reports coverage, a held-out split, and valid metrics."""
-    from langres.core.finetune import QLoRA
+    from langres.training.finetune import QLoRA
 
     monkeypatch.setattr(LLMMatcher, "forward", _predict_all_match)
     resolver = _resolver()
@@ -180,7 +180,7 @@ def test_non_qlora_finetune_method_raises_typeerror() -> None:
 
 def test_both_labels_and_pairs_raises() -> None:
     """Fine-tuning takes labels= XOR pairs=, never both."""
-    from langres.core.finetune import QLoRA
+    from langres.training.finetune import QLoRA
 
     with pytest.raises(ValueError, match="not both"):
         _resolver().fit(
@@ -195,7 +195,7 @@ def test_both_labels_and_pairs_raises() -> None:
 
 def test_neither_labels_nor_pairs_raises() -> None:
     """Fine-tuning needs supervision -- no labels and no pairs is a clear error."""
-    from langres.core.finetune import QLoRA
+    from langres.training.finetune import QLoRA
 
     with pytest.raises(ValueError, match="needs labeled supervision"):
         _resolver().fit([{"id": "a", "name": "A"}], method=QLoRA(base="tiny/model"))

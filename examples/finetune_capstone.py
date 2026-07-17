@@ -46,7 +46,7 @@ import random
 from typing import Any
 
 from langres.core.matchers import LLMMatcher
-from langres.core.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
+from langres.training.finetune import FINETUNE_YES_NO_PROMPT, QLoRA, run_finetune
 from langres.core.matchers.model_ref import to_config
 from langres.eval import candidates_for, evaluate, get_benchmark
 

@@ -21,7 +21,7 @@ This module is that missing, reusable bridge:
 
 - :func:`evaluate_fixed_split_honest` — the *honest* pair-level grader. It
   derives the decision threshold from the judge's scores on the TRAIN (or VALID)
-  split via :func:`~langres.core.calibration.derive_threshold`, then grades the
+  split via :func:`~langres.training.calibration.derive_threshold`, then grades the
   judge on the FULL TEST split at that FIXED cut with
   :func:`~langres.core.metrics.classify_pairs`. It also reports the *leaky*
   "argmax-F1-on-test" number (what an evaluator that tunes the threshold on the
@@ -42,7 +42,7 @@ from typing import Generic, TypeVar, cast
 
 from pydantic import BaseModel
 
-from langres.core.calibration import ThresholdMethod, derive_threshold
+from langres.training.calibration import ThresholdMethod, derive_threshold
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
 from langres.core.feature import FeatureSpec
@@ -96,7 +96,7 @@ class HonestPairEval(BaseModel):
         derive_on: The split the honest threshold was derived from (``"train"``
             or ``"valid"``).
         derived_threshold: The data-driven cut derived from the judge's scores on
-            ``derive_on`` via :func:`~langres.core.calibration.derive_threshold`.
+            ``derive_on`` via :func:`~langres.training.calibration.derive_threshold`.
         threshold_method: How the threshold was derived (``"youden"`` /
             ``"percentile"``).
         honest: Pair-level metrics on the FULL test split at
@@ -271,7 +271,7 @@ def evaluate_fixed_split_honest(
 
     1. Run ``judge`` over the ``derive_on`` split; derive a decision threshold
        from those scores + labels via
-       :func:`~langres.core.calibration.derive_threshold` (no test labels seen).
+       :func:`~langres.training.calibration.derive_threshold` (no test labels seen).
     2. Run ``judge`` over the FULL test split and grade it at that FIXED
        threshold with :func:`~langres.core.metrics.classify_pairs`.
     3. Separately, sweep ``argmax_grid`` on the test judgements and take the

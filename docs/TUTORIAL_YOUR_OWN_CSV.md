@@ -146,7 +146,7 @@ Score those pairs with `.compare()`, then hand the scores and labels to
 the ROC curve by default):
 
 ```python
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 
 labeled = [
     (records[0], records[1], True),    # Acme Corporation / Acme Corp  -> match

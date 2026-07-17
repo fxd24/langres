@@ -3,7 +3,7 @@
 Two seams land here on top of the PR-M ``method=`` dispatch:
 
 - **``fit(method=Platt()/Isotonic())``** learns a score→probability
-  :class:`~langres.core.calibration.Calibrator` from labeled pairs (the
+  :class:`~langres.training.calibration.Calibrator` from labeled pairs (the
   ``method.kind == "calibrate"`` branch, now real), attaches it to the Resolver,
   and applies it in ``predict()``/``resolve()``. Every test is deterministic and
   ``$0`` (a ``WeightedAverageMatcher`` over company names -- no LM calls).
@@ -24,7 +24,7 @@ import pytest
 
 from langres.core.harvest import LabeledPair
 from langres.core.methods_api import Method
-from langres.core.methods_calibrate import CalibrateMethod, Isotonic, Platt
+from langres.training.methods_calibrate import CalibrateMethod, Isotonic, Platt
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.resolver import Resolver
 

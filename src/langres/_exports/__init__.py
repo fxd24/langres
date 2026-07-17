@@ -32,7 +32,7 @@ trees (``_training``, ``_flywheel``) -- this is re-export, not duplication, and
 the two have distinct jobs:
 
 * ``langres/core/_exports/*`` **owns** the export: it imports from the
-  implementation module (``langres.core.harvest``, ``langres.core.fit_report``,
+  implementation module (``langres.core.harvest``, ``langres.training.fit_report``,
   ...) and decides eager-vs-lazy for ``langres.core``.
 * ``langres/_exports/*`` **re-surfaces** a curated subset at the root, mostly
   importing from ``langres.core`` itself (already-eager names come for free).

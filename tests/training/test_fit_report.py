@@ -20,7 +20,7 @@ import pytest
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
-from langres.core.fit_report import FitReport
+from langres.training.fit_report import FitReport
 from langres.core.harvest import GoldCoverage, LabeledPair
 from langres.core.matcher import Matcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
@@ -236,9 +236,9 @@ def test_supervised_without_labels_or_pairs_still_raises() -> None:
 
 
 def test_fit_report_module_stays_import_light() -> None:
-    """importing langres.core.fit_report must not pull sklearn/torch/litellm."""
+    """importing langres.training.fit_report must not pull sklearn/torch/litellm."""
     script = (
-        "import sys; import langres.core.fit_report; "
+        "import sys; import langres.training.fit_report; "
         "leaked = [m for m in ['sklearn', 'torch', 'litellm', 'faiss'] if m in sys.modules]; "
         "assert not leaked, f'fit_report leaked heavy modules: {leaked}'; "
         "print('OK')"

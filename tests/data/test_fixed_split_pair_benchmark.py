@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import pytest
 from pydantic import BaseModel
 
-from langres.core.calibration import derive_threshold
+from langres.training.calibration import derive_threshold
 from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel
 from langres.core.metrics import classify_pairs

@@ -44,7 +44,7 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   optimization is real, but it lives *inside* `DSPyMatcher` — it is not an
   automatic compile pass over a whole pipeline.
 - **`[trained]`** — scikit-learn: `RandomForestMatcher` and
-  `core.calibration.derive_threshold`. Note the BCubed / pairwise metrics in
+  `training.calibration.derive_threshold`. Note the BCubed / pairwise metrics in
   `core.metrics` are a **vetted internal implementation** (Amigó et al. 2009),
   *not* sklearn — sklearn is pulled in only by these trained-judge / calibration
   paths.
@@ -78,7 +78,7 @@ guaranteed conflicts.
 The HITL system splits a storage backend from a labeling surface:
 
 - **`core.review.ReviewQueue`:** the storage backend — it writes the selected pairs to a plain `review_queue.jsonl` snapshot (one JSON line per pair; ids-only unless you pass `records=` to join content back on). `core.review.select_for_review` picks *which* pairs are worth a human's attention (uncertainty / disagreement / audit strategies).
-- **The `langres` CLI:** the labeling surface. `langres export-csv` turns a queue into a spreadsheet, a reviewer fills the `label` column, and `langres import-csv` reads it back into a `corrections.jsonl` log; `langres review` is the equivalent quick terminal loop. The harvested corrections feed `core.harvest` and `core.calibration.derive_threshold` back into the pipeline.
+- **The `langres` CLI:** the labeling surface. `langres export-csv` turns a queue into a spreadsheet, a reviewer fills the `label` column, and `langres import-csv` reads it back into a `corrections.jsonl` log; `langres review` is the equivalent quick terminal loop. The harvested corrections feed `core.harvest` and `training.calibration.derive_threshold` back into the pipeline.
 
 ### Observability & Tracing
 
@@ -495,7 +495,7 @@ seam, and the bring-your-own-data `evaluate()` walkthrough.
 
 - `select_for_review(rows, strategy=...)` selects pairs by `"uncertainty"` (near the decision margin), `"disagreement"` (student vs. teacher verdicts differ), or `"audit"` (a seeded governance sample), returning `list[ReviewItem]`. `"uncertainty"` ranks by the logged **`confidence`** when present (`|confidence − 0.5|`, most-uncertain first), else falls back to `|score − threshold|`; a decision-only/binary log with neither a usable `confidence` nor a non-degenerate `score` now **raises** `ValueError` (naming `strategy="disagreement"` or `LLMMatcher(confidence="logprob")` as the fix) rather than silently returning `[]`. `ReviewItem` also carries `reasoning` / `confidence` / `confidence_source`.
 - `ReviewQueue(path).write(items)` snapshots that selection to `review_queue.jsonl`; items are ids-only unless you pass `records=` to `select_for_review`.
-- The `langres` CLI labels the queue (`export-csv` → spreadsheet → `import-csv` → `corrections.jsonl`, or the `langres review` terminal loop). `core.harvest` folds those corrections back into `core.calibration.derive_threshold` / `fit()` — the active-learning loop.
+- The `langres` CLI labels the queue (`export-csv` → spreadsheet → `import-csv` → `corrections.jsonl`, or the `langres review` terminal loop). `core.harvest` folds those corrections back into `training.calibration.derive_threshold` / `fit()` — the active-learning loop.
 
 **Example:**
 
@@ -838,7 +838,7 @@ signature:
 - **Calibrator** — `CalibratorFitMixin.fit_calibrator(scores: Sequence[float], labels: Sequence[bool]) -> None`
   (learn a score→probability map) + `transform(scores) -> list[float]` (apply
   it). The concrete `Calibrator` (Platt logistic / isotonic, `[trained]`) in
-  `langres.core.calibration` implements it, consumed by
+  `langres.training.calibration` implements it, consumed by
   `Resolver.fit(method=Platt()/Isotonic())` — see the `method=` seam below.
 
 `Resolver.fit(data, labels=None, *, pairs=None, split=None, seed=0)` consumes the
@@ -857,7 +857,7 @@ signature:
   which raises rather than silently discarding them.
 
 Every non-raising path sets `resolver.fit_report_` (an sklearn
-trailing-underscore digest, `langres.core.fit_report.FitReport`) and returns
+trailing-underscore digest, `langres.training.fit_report.FitReport`) and returns
 `self`, so `resolver.fit(...).resolve(...)` still chains.
 
 ### `align_pairs` + coverage + `FitReport`
@@ -894,7 +894,7 @@ unchanged):
 
 - **prompt-optimize** (`kind="prompt"`, implemented) — `Bootstrap()` /
   `MIPRO(auto=..., budget_usd=...)` / `GEPA(auto=..., reflection_model=...,
-  max_metric_calls=..., budget_usd=...)` from `langres.core.methods_prompt`
+  max_metric_calls=..., budget_usd=...)` from `langres.training.methods_prompt`
   compile a `DSPyMatcher`'s prompt from labeled pairs (the optimizer's
   `BootstrapFewShot` / `MIPROv2` / `dspy.GEPA`). `GEPA` is the *reflective*
   strategy: it reflects on execution traces — via a separate reflection LM
@@ -912,13 +912,13 @@ unchanged):
   `SpendMonitor` seam (DSPy-compile spend capture is deferred to #100, so it
   observes `$0` today).
 - **fine-tune** (`kind="finetune"`, implemented) — `QLoRA(base=..., ...)` from
-  `langres.core.finetune` fine-tunes a small LM on the labeled pairs, repoints
+  `langres.training.finetune` fine-tunes a small LM on the labeled pairs, repoints
   the Resolver's matcher at an in-process logprob-scoring `LLMMatcher` over the
   produced `model_ref`, and records GPU-seconds / derived-$ + held-out P/R/F1 in
   the `FitReport`. The training stack (peft/trl) stays lazy-imported.
 - **calibrate** (`kind="calibrate"`, implemented) — `Platt()` / `Isotonic()`
-  from `langres.core.methods_calibrate` fit a score→probability `Calibrator`
-  (`langres.core.calibration`, `[trained]`) from labeled pairs, attach it to the
+  from `langres.training.methods_calibrate` fit a score→probability `Calibrator`
+  (`langres.training.calibration`, `[trained]`) from labeled pairs, attach it to the
   Resolver, and map every raw judgement score to a calibrated probability in
   `predict()`/`resolve()` (the clusterer then thresholds a real probability; the
   matcher and clusterer are untouched). Supervision comes from `pairs=` (reusing
