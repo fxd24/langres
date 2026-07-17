@@ -226,6 +226,34 @@ def test_matcher_score_over_a_decider_keeps_score_type_and_does_not_fabricate_a_
         assert row.to_judgement().decision == row.decision
 
 
+def test_matcher_score_passes_unjudged_rows_through_unchanged() -> None:
+    """A matcher that yields no judgement for a row leaves that row untouched (defensive)."""
+
+    class _SkipFirstMatcher(Matcher[CompanySchema]):
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            for index, candidate in enumerate(candidates):
+                if index == 0:
+                    continue  # emit nothing for the first candidate
+                yield PairwiseJudgement(
+                    left_id=candidate.left.id,  # type: ignore[attr-defined]
+                    right_id=candidate.right.id,  # type: ignore[attr-defined]
+                    score=0.8,
+                    score_type="heuristic",
+                    decision_step="skip_first",
+                    provenance={},
+                )
+
+    blocker = AllPairsBlocker(schema=CompanySchema)
+    pairs = BlockerSource(blocker).forward(_RECORDS)
+    out = MatcherScore(_SkipFirstMatcher(), out_space="heuristic").forward(pairs)
+
+    assert out.rows[0].score is None  # unjudged row untouched -> stays unscored
+    assert out.rows[0].score_type is None
+    assert all(row.score == 0.8 for row in out.rows[1:])  # the rest were scored
+
+
 # --------------------------------------------------------------------------------------
 # GroupwiseMatcherScore
 # --------------------------------------------------------------------------------------
