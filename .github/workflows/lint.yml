@@ -6,12 +6,10 @@ on:
   # branch that sub-PRs land on has to be added below, or those sub-PRs merge
   # unlinted: mypy is the gate that catches exactly what a package split breaks
   # (moved symbols, stale re-exports, circular imports).
-  # TEMPORARY: drop `feat/core-thin` from both lists once the core-thinning
-  # work has landed and the integration branch is deleted.
   push:
-    branches: [main, feat/core-thin]
+    branches: [main]
   pull_request:
-    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch, feat/core-thin]
+    branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch]
 
 concurrency:
   # Mirrors `test.yml`: grouping on the ref alone means merging one PR CANCELS

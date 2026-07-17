@@ -39,23 +39,31 @@ code. Verify as you go.** Read before writing tests or running the suite.
     heavy test as fast slows every PR, and the coverage floors are verified on
     each merge to main, not per-PR. Run the full suite locally
     (`uv run pytest`) before merging a change to ML/embedding code.
-    (While the core-thinning work is in flight, `test-full` also runs on
-    every merge to the `feat/core-thin` integration branch.)
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
 - **Two gates run on `test-full`, and they are not the same number as this
   policy.** The repo-wide floor is 90% (`--cov-fail-under` in `pyproject.toml`).
-  The `core` contract additionally has its own path-scoped gate
-  (`coverage report --include="src/langres/core/*" --precision=2
-  --fail-under=98` in `.github/workflows/test.yml`). That 98 is a **regression
-  ratchet** pinned just under the measured value (98.84% at `ba4b1b7`), not the
-  policy — the *target* remains 95–100%. It exists because the repo-wide 90%
-  floor sits ~9 points below actual coverage, so the contract could be quietly
-  declassified with CI green throughout. Raise it as the real number climbs; if
-  it blocks legitimate work, lower it deliberately rather than deleting it.
+  The contract additionally has its own path-scoped gate
+  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/optimize/*"
+  --precision=2 --fail-under=98` in `.github/workflows/test.yml`). That 98 is a
+  **regression ratchet** pinned just under the measured value (98.84% at
+  `ba4b1b7`), not the policy — the *target* remains 95–100%. It exists because
+  the repo-wide 90% floor sits ~8 points below actual coverage, so the contract
+  could be quietly declassified with CI green throughout. Raise it as the real
+  number climbs; if it blocks legitimate work, lower it deliberately rather than
+  deleting it.
   **When the contract moves to a new package, extend that `--include` glob** or
-  the gate silently stops covering it.
+  the gate silently stops covering it. (`report/` and `optimize/` are in the glob
+  for exactly that reason — both measure ~98–100% and carry public surface
+  (`EvalReport`, `optimize()`/`score_blocking`), so letting them fall out would
+  have un-gated well-covered contract code while making the remaining number look
+  *better*.)
+- **Headroom, measured 2026-07-17: `core/*` is at 98.43% against the 98 floor.**
+  The floor was set from a measured 98.84%, so core has drifted ~0.4pp down and
+  the ratchet has ~0.4pp of slack left. If this gate fires on you after a small
+  change, you probably did not break it — it has been tightening for a while.
+  Diagnose the drift before lowering the floor.
 - Type-check as you go: `uv run mypy src/`
 
 ## Development Workflow (Human-Like Iteration)

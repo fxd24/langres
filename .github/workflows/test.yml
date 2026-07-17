@@ -9,13 +9,7 @@ name: Test
 on:
   pull_request:
   push:
-    # TEMPORARY (core-thinning work): `feat/core-thin` is the integration branch
-    # its sub-PRs merge into. Without it here, `test-full` -- the ONLY job that
-    # runs the slow tests and enforces the coverage gates -- would not run for
-    # the whole effort, and a regression would surface only at the final merge to
-    # main. REVERT THIS LIST TO `[main]` once the work has landed and the
-    # integration branch is deleted.
-    branches: [main, feat/core-thin]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
