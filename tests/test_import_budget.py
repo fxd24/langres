@@ -764,7 +764,7 @@ class TestRootLazyGetattr:
 
     def test_harvest_surface_is_eagerly_root_exported(self) -> None:
         import langres
-        from langres.core import harvest
+        from langres.curation import harvest
 
         assert langres.Correction is harvest.Correction
         assert langres.CorrectionLog is harvest.CorrectionLog
