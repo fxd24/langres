@@ -125,19 +125,22 @@ while making the metric look better).
 
 #### Logger names follow the code that moved
 
-Splitting `ERModel` out of `core/resolver.py` moves three log records onto the
-logger of their new module: the "Saved Resolver artifact to %s" and
-`langres_version`-mismatch records now emit under `langres.core._model_persist`,
-and "Embedding %d records…" under `langres.core._model_run`. All three previously
-emitted under `langres.core.resolver`.
+Every logger here is `getLogger(__name__)`, so a module that moves takes its
+logger name with it. Two moves in this release rename an emitting logger:
+
+| records | was (0.3.0) | now |
+|---|---|---|
+| "Saved Resolver artifact to %s", the `langres_version` mismatch warning | `langres.core.resolver` | `langres.core._model_persist` |
+| "Embedding %d records…" | `langres.core.resolver` | `langres.core._model_run` |
+| "Optimization complete. Best parameters: %s", "Best value: %.4f", the wandb notice | `langres.core.optimizers.blocker_optimizer` | `langres.autoresearch.blocker_optimizer` |
 
 Nothing in the codebase filters on a logger name, and anyone configuring at
-`langres` or `langres.core` is unaffected via the hierarchy. But a caller who
-pinned the exact module — `logging.getLogger("langres.core.resolver").setLevel(INFO)`
-to watch saves — silently stops seeing those records. Configure at `langres.core`
-instead. This is inherent to moving code between modules, not a change of intent;
-it is called out because it is the one *observable* behaviour change in a refactor
-that is otherwise a pure move.
+`langres` — or at `langres.core` for the first two — is unaffected via the
+hierarchy. But a caller who pinned the exact module —
+`logging.getLogger("langres.core.resolver").setLevel(INFO)` to watch saves, or
+`…("langres.core.optimizers.blocker_optimizer")` to watch a study finish —
+silently stops seeing those records. Configure at `langres` instead. This is
+inherent to moving code between modules, not a change of intent.
 
 #### Known limitation — `VectorLLMCascade` cannot `save()`
 
