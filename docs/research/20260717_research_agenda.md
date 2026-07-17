@@ -354,13 +354,19 @@ optimum free of reranker quality); ER's F1 objective at general $k$ **does not**
   distinction is real but subtle, and it is the whole contribution.
 
 **Cost & prerequisites.** **$0 in compute; expensive in the only currency that matters
-here — careful thought.** Piece (3) needs the $k$-sweep, and note the gap the inventory
-found: **`optimize()` has only a *blocking* scorer wired** (`candidate_recall`,
-`candidate_precision`, `reduction_ratio`, `total_candidates`) — **no end-to-end
-match/cluster-quality scorer**. Sweeping $k$ against downstream F1 therefore needs that
-scorer written first. The `Objective` machinery already supports it (metric-agnostic,
-Pareto + constraints), so this is a scorer, not an architecture. **Hard prerequisite: A1.**
-Do not start A2 before A1 reports.
+here — careful thought.** Piece (3) needs the $k$-sweep, and there is a real gap in the
+way: **`score_blocking` returns only *blocking* metrics** — `candidate_recall`,
+`candidate_precision`, `reduction_ratio`, `total_candidates`
+(`src/langres/optimize.py:146-149`) — and **no end-to-end match/cluster-quality scorer is
+wired**. `gold_clusters` is loaded but reaches only `evaluate_blocking`. Sweeping $k$
+against downstream F1 therefore needs that scorer written first. The `Objective` machinery
+already supports it (`langres/autoresearch/objective.py` — metric-agnostic over a
+`Mapping[str, float]`, with Pareto + constraints), so this is **a scorer, not an
+architecture**. `[verified — read the source on current main]`
+
+Note this is *precisely* the code-level shape of §6.5's complaint: the loop that tunes the
+blocker **cannot currently see the matcher at all**. **Hard prerequisite: A1.** Do not
+start A2 before A1 reports.
 
 ---
 
@@ -633,9 +639,11 @@ item on this board.**
 
 **Portfolio note:** all five are measured against `all-MiniLM-L6-v2` (384d), which is the
 single `DEFAULT_EMBEDDING_MODEL` (`src/langres/core/model_ref.py:80`) feeding the method
-registry, the `SearchSpace` default, *and* every loader's pinned `*_BLOCKING_K` constant.
-Everything we know about our own blocking recall was measured on that one model. That is
-rung 0 of the ladder and the incumbent every item here must beat.
+registry, the `SearchSpace.embedding_model` default
+(`langres/autoresearch/search_space.py:47`), *and* every loader's pinned `*_BLOCKING_K`
+constant. **Everything we know about our own blocking recall was measured on that one
+model.** That is rung 0 of the ladder and the incumbent every item here must beat.
+`[verified — read the source]`
 
 ### C1 — The embedding size ladder, and the embedder that *is* the matcher
 
@@ -777,10 +785,10 @@ coupled to $\varphi$ by construction, rather than by an outer optimization loop.
 **What would settle it.** Two measurements, and the second is the actual question:
 
 1. **Does an instruction help retrieval at all?** Sweep `query_prompt` over a fixed
-   embedder and measure **candidate recall @ fixed k**. `langres.optimize`'s `SearchSpace`
-   is a frozen Cartesian grid — adding a `query_prompt` axis is a small, honest change.
-   *If a hand-written instruction moves recall, the transfer question is live. If not, C3
-   stops here* — cheaply.
+   embedder and measure **candidate recall @ fixed k**. `SearchSpace`
+   (`langres/autoresearch/search_space.py:27`) is a frozen Cartesian grid — adding a
+   `query_prompt` axis is a small, honest change. *If a hand-written instruction moves
+   recall, the transfer question is live. If not, C3 stops here* — cheaply.
 2. **Does the tuned instruction transfer?** Take the instruction DSPy optimized **for
    matching**, put it in `query_prompt`, and measure recall against (a) no prompt, (b) a
    naive hand-written prompt, (c) an instruction tuned **directly** on a recall objective.
