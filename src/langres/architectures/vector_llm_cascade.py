@@ -7,6 +7,7 @@ other code also knows how to build.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
@@ -60,12 +61,29 @@ class VectorLLMCascade(ERModel):
     topology above is the architecture. ``embedder=`` and ``llm=`` are
     *backbones* -- what fills the two model slots. Swapping either gives you a
     different-performing, different-priced model that is still a
-    ``VectorLLMCascade``: same class, same ``model_class`` in the artifact, same
-    identity. That is the invariant, and
-    ``tests/architectures/test_backbone_swap.py`` proves it rather than asserting
-    it. Both are :class:`~langres.core.model_ref.ModelRef`\\ s, so both are
-    **weightless** -- they round-trip as reference strings in ``resolver.json``,
-    never as weight bytes.
+    ``VectorLLMCascade``: same class, same identity. That is the invariant, and
+    ``TestProof3BackboneSwapKeepsArchitectureIdentity`` in
+    ``tests/architectures/test_w4_proofs.py`` proves it rather than asserting it.
+    Both are :class:`~langres.core.model_ref.ModelRef`\\ s, so both are
+    **weightless**: neither carries weight bytes, only a reference string.
+
+    .. warning::
+       **This architecture cannot** ``save()`` **yet** -- it raises
+       :class:`NotImplementedError` with the reason. Its ``VectorBlocker`` is
+       built with a ``text_field_extractor`` closure (blocking text = every
+       comparable field concatenated), and a callable cannot round-trip through
+       JSON config. This is a **pre-existing limitation inherited from the
+       deleted ``presets``/``_build_embedding_blocker`` path, not a W4
+       regression** -- that path never called ``save()``, so it never surfaced.
+       What W4 changed is that this is now a named class that *looks* like it
+       persists, so the gap is stated rather than discovered at runtime.
+
+       The fix is a named-extractor seam mirroring the one
+       :class:`~langres.core.matchers.llm_judge.LLMMatcher` already has for
+       ``response_parser`` (accept ``Callable | str``, resolve a registered name,
+       serialize the name). Deliberately deferred: it changes what
+       ``VectorBlocker`` accepts, in the paid path. ``FuzzyString`` round-trips
+       today and proves the mechanism.
 
     **Where the money goes.** The student scores every blocked pair for free; only
     pairs in ``escalation_band`` reach the LLM. Cost therefore tracks the *band
@@ -152,8 +170,53 @@ class VectorLLMCascade(ERModel):
         this model plainly runs a model. Of the two backbones it carries, the LLM
         is the one that costs money and decides the hard pairs, so it is the one
         a result stamps. The embedder is reachable at ``self.embedder``.
+
+        **The slot wins; the constructor argument is only a fallback.** The two
+        agree for a constructed-and-bound model, but they come apart at both ends:
+
+        * :meth:`~langres.core.resolver.ERModel.from_components` (which ``load``
+          uses) never runs ``__init__``, so ``self.llm`` does not exist on a
+          reloaded model -- reading it would raise ``AttributeError``. Identity
+          lives in the slots; that is the invariant ``from_components``
+          documents.
+        * An *unbound* model has no slots yet (topology is built lazily, on first
+          use) but the caller did name an ``llm=``. Reporting ``None`` there
+          would be hiding an answer we have.
+
+        Hence: read the slot when there is one, else fall back to the argument,
+        else ``None``. ``getattr(self, "llm", None)`` rather than ``self.llm``
+        precisely because the reloaded model has no such attribute.
         """
-        return self.llm.base
+        escalation = getattr(self._module, "escalation", None)
+        model = getattr(escalation, "model", None)
+        if isinstance(model, str):
+            return model
+        llm: ModelRef | None = getattr(self, "llm", None)
+        return None if llm is None else llm.base
+
+    def save(self, path: str | Path) -> None:
+        """Not supported yet -- fails with the reason instead of a confusing one.
+
+        Without this override the user gets ``VectorBlocker``'s own error, which
+        tells them to "construct with schema= and text_field= to persist" -- an
+        instruction they cannot act on, because they never constructed the
+        ``VectorBlocker``; :meth:`_topology` did. Raising here names the real
+        situation at the layer the user is actually holding.
+
+        Raises:
+            NotImplementedError: Always. See the class docstring's warning for
+                why, and for the named-extractor seam that would fix it.
+        """
+        raise NotImplementedError(
+            "VectorLLMCascade cannot be saved yet: its VectorBlocker uses a "
+            "text_field_extractor closure (blocking text = every comparable field "
+            "concatenated) and a callable cannot round-trip through JSON config. "
+            "This is a known gap inherited from the pre-W4 embedding path, not a "
+            "property of your model. FuzzyString saves and loads today. To persist "
+            "an embedding pipeline now, build a Resolver/ERModel directly with a "
+            "VectorBlocker constructed as VectorBlocker(schema=..., text_field=...) "
+            "-- a single named field, which is serializable."
+        )
 
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
         """Build the four slots for ``schema``. Called once, on binding.

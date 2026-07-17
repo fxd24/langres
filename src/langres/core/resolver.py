@@ -634,7 +634,8 @@ class ERModel:
            ``load`` without it. That is not a limitation so much as the design:
            the slots are the single source of truth, which is also exactly what
            makes ``save`` able to write a *complete* config.
-           ``tests/architectures/test_roundtrip.py`` pins it by re-saving a
+           ``TestProof4WeightlessRoundTrip`` in
+           ``tests/architectures/test_w4_proofs.py`` pins it by re-saving a
            freshly loaded model and diffing the config.
 
         Args:

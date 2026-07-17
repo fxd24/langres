@@ -15,8 +15,9 @@ Both are **self-describing**, and the vocabulary is the refactor's (W4):
 - ``backbone`` -- what filled the model slot (an LLM id, an embedder name), or
   ``None`` when nothing with weights ran (pure string similarity). Swapping a
   backbone must never change ``architecture`` -- that is the invariant the two
-  fields exist to make *visible*, and ``tests/architectures/test_backbone_swap.py``
-  pins it.
+  fields exist to make *visible*, and
+  ``TestProof3BackboneSwapKeepsArchitectureIdentity`` in
+  ``tests/architectures/test_w4_proofs.py`` pins it.
 
 This module is import-light by construction (pydantic + ``core.models`` only, no
 heavy extras) and imports nothing that imports it back.

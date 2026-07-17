@@ -51,11 +51,21 @@ class TestCoerceScalar:
         assert _coerce_scalar(float("nan")) is None
         assert _coerce_scalar(math.nan) is None
 
-    @pytest.mark.parametrize("value", [["a", "b"], {"a": 1}])
+    @pytest.mark.parametrize("value", [["a", "b"], {"a": 1}, ("a", "b"), {"a", "b"}])
     def test_nested_value_raises_instead_of_being_stringified(self, value: object) -> None:
-        """A nested value cannot be a flat inferred field, so it must not be guessed."""
+        """A nested value cannot be a flat inferred field, so it must not be guessed.
+
+        ``tuple``/``set`` are here deliberately: they stringify to ``"('a', 'b')"``
+        and ``"{'a', 'b'}"``, the same silent corruption as ``list``/``dict`` in a
+        shape that merely looks rarer. A check that named only list/dict would let
+        them through.
+        """
         with pytest.raises(ValueError, match="nested"):
             _coerce_scalar(value)
+
+    def test_bytes_are_not_treated_as_a_nested_container(self) -> None:
+        """``bytes`` is a Collection but is scalar-ish -- it must not raise."""
+        assert _coerce_scalar(b"ab") == "b'ab'"
 
     def test_nested_error_names_the_escape_hatch(self) -> None:
         """The error must tell the user what to do, not just what went wrong."""

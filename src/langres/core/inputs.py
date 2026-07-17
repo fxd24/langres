@@ -32,7 +32,7 @@ explicitly for anything you intend to persist.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from hashlib import sha256
 from typing import Any
 
@@ -69,14 +69,20 @@ def _coerce_scalar(value: Any) -> str | None:
 
     ``None`` and ``float('nan')`` both become ``None`` -- never the string
     ``"nan"``, which would silently poison string-similarity scoring. A nested
-    ``list``/``dict`` cannot be represented by a flat inferred field, so it
-    raises with guidance rather than being silently stringified.
+    container cannot be represented by a flat inferred field, so it raises with
+    guidance rather than being silently stringified.
+
+    The container check covers ``set`` and ``tuple``, not just ``list``/``dict``:
+    a tuple stringifies to ``"('a', 'b')"`` and a set to ``"{'a'}"``, which is
+    the same silent corruption in a shape that merely looks less common. Checked
+    against ``Collection`` minus ``str``/``bytes`` so a type nobody thought of
+    fails loudly instead of scoring its ``repr``.
     """
     if value is None:
         return None
     if isinstance(value, float) and math.isnan(value):
         return None
-    if isinstance(value, (list, dict)):
+    if isinstance(value, Collection) and not isinstance(value, (str, bytes)):
         raise ValueError(
             f"cannot infer a schema field from a nested {type(value).__name__} "
             f"value ({value!r}). Pass schema=<YourModel> explicitly to control "

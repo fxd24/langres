@@ -188,23 +188,37 @@ class TestProof2aHonestSpendGate:
         assert exc.value.partial_judgements, "paid-for judgements were dropped on the floor"
 
     def test_one_budget_spans_the_whole_model_lifetime_not_per_call(self) -> None:
-        """Two dedupes cannot each spend a full budget (B1).
+        """Repeated dedupes cannot each spend a full budget (B1).
 
         The ledger is per-instance and built once; only the cap WRAPPER is rebuilt
         per call. Get that backwards and a long-lived model multiplies its budget
-        by its call count.
+        by its call count -- an unbounded spend with a cap that reports success.
+
+        Sized so the bug it names MUST fail it: 10 calls x $0.30 = $3.00 against a
+        $1.00 budget, so a per-instance ledger is *obliged* to raise partway
+        through. A per-call ledger restarts at $0.00 every time and would sail
+        through all ten, so the ``pytest.fail`` below is reachable -- an earlier
+        version of this test spent only $0.90 against $1.00, never tripped the cap
+        at all, and passed just as happily under the bug as without it.
         """
         fake = _PricedFakeMatcher(cost_per_pair=0.30)
         model = ERModel.from_schema(Company, matcher=fake, threshold=0.5, budget_usd=1.00)
         pair = RECORDS[:2]
 
-        for _ in range(3):
+        for _ in range(10):
             try:
                 model.dedupe(pair)
             except BudgetExceeded:
                 break
-        assert model._spend_monitor.spent <= 1.30, (
-            "spend exceeded one budget across calls -- the monitor is being rebuilt per call"
+        else:
+            pytest.fail(
+                f"10 calls x $0.30 = $3.00 against a $1.00 budget never raised: the "
+                f"ledger is being rebuilt per call, so each call gets a fresh budget "
+                f"(spent reads ${model._spend_monitor.spent:.2f})"
+            )
+        assert model._spend_monitor.spent <= 1.30 + 1e-9, (
+            "spend exceeded one budget plus at most one further call across the "
+            "model's lifetime -- the monitor is not accumulating"
         )
 
     def test_fuzzystring_at_zero_is_a_smoke_test_not_a_proof(self) -> None:
@@ -504,3 +518,103 @@ class TestArchitecturesDefendIdentityAtFit:
         model = FuzzyString(schema=Company)
         model.fit(records, pairs=pairs, method=Platt())
         assert model.calibrator is not None
+
+
+class TestReviewFoundRegressions:
+    """Three defects a code review caught that every proof above sailed past.
+
+    Recorded as tests rather than quiet fixes, because each one marks a blind
+    spot in the proofs themselves:
+
+    * The proofs round-trip only ``FuzzyString`` -- the one architecture with no
+      backbones -- so ``VectorLLMCascade``'s ``save`` and its reconstruction path
+      were never executed at all. That gap is exactly where two of the three
+      lived.
+    * ``ERModel.schema`` was asserted nowhere, so a property that returned
+      ``None`` for every model in the library looked fine.
+    """
+
+    def test_an_explicit_schema_is_actually_used(self) -> None:
+        """``FuzzyString(schema=S).schema`` must be ``S`` (it was ``None``).
+
+        ``ERModel.schema`` reads the blocker slot -- correct by design, since the
+        blocker is what survives save/load -- but NO blocker exposed ``.schema``,
+        so it silently returned ``None`` for every architecture. ``_prepare`` then
+        passed ``None`` to ``normalize_records`` and took the *inferred* path even
+        when the caller had handed over a schema.
+        """
+        assert FuzzyString(schema=Company).schema is Company
+        assert FuzzyString().schema is None, "an unbound model is bound to nothing"
+
+    def test_an_explicit_schema_defeats_the_nested_value_guard(self) -> None:
+        """The sharpest face of the bug: the error told you to do what you did.
+
+        Inference rejects a nested value and says "Pass schema=<YourModel>
+        explicitly". Passing one changed nothing, so the advice was unfollowable.
+        """
+
+        class Nested(BaseModel):
+            id: str
+            name: str
+            meta: dict[str, Any] | None = None
+
+        model = FuzzyString(schema=Nested)
+        clusters = model.dedupe(
+            [
+                {"id": "1", "name": "Acme Corporation", "meta": {"src": "a"}},
+                {"id": "2", "name": "Acme Corp", "meta": {"src": "b"}},
+            ]
+        )
+        assert clusters == [{"1", "2"}]
+
+    def test_schemaless_inference_still_works(self) -> None:
+        """The fix must not cost the schema-optional path that makes the DX."""
+        model = FuzzyString()
+        assert model.dedupe([{"name": "Acme Corporation"}, {"name": "Acme Corp"}]) == [{"0", "1"}]
+
+    def test_from_components_does_not_need_the_constructor_arguments(self) -> None:
+        """``VectorLLMCascade.backbone`` read ``self.llm`` -- absent after ``load``.
+
+        ``from_components`` builds via ``cls.__new__``, so ``__init__`` never runs
+        and no constructor argument exists on the instance. Reading one raised
+        ``AttributeError`` on ``.backbone`` and on any ``dedupe``. Identity must
+        come from the slots; this is that invariant, executed.
+        """
+        from langres.core.blockers import AllPairsBlocker
+        from langres.core.clusterer import Clusterer
+        from langres.core.comparators import StringComparator
+        from langres.core.matchers import WeightedAverageMatcher
+
+        comparator: StringComparator[Any] = StringComparator.from_schema(Company)
+        rebuilt = VectorLLMCascade.from_components(
+            blocker=AllPairsBlocker(schema=Company),
+            comparator=comparator,
+            matcher=WeightedAverageMatcher(feature_specs=comparator.feature_specs),
+            clusterer=Clusterer(threshold=0.5),
+        )
+        # No AttributeError, and honest: nothing with an LLM is in the slot.
+        assert rebuilt.backbone is None
+        assert rebuilt.dedupe(RECORDS[:2]) == [{"1", "2"}]
+
+    def test_a_constructed_cascade_still_reports_the_llm_it_was_given(self) -> None:
+        """Sourcing from the slot must not cost the answer we already have.
+
+        An unbound model has no slots yet (topology builds lazily) but was handed
+        an ``llm=``; reporting ``None`` there would hide a known answer.
+        """
+        assert VectorLLMCascade(llm="openrouter/deepseek/deepseek-chat").backbone == (
+            "openrouter/deepseek/deepseek-chat"
+        )
+
+    def test_vector_llm_cascade_save_fails_with_a_followable_reason(self) -> None:
+        """The gap is real; the message must be about the user's model, not ours.
+
+        `VectorLLMCascade` cannot persist: its `VectorBlocker` holds a
+        `text_field_extractor` closure. Unfixed, the user got VectorBlocker's own
+        error telling them to "construct with schema= and text_field=" -- but they
+        never constructed the VectorBlocker, `_topology` did. This pins the honest
+        failure until the named-extractor seam lands.
+        """
+        model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", schema=Company)
+        with pytest.raises(NotImplementedError, match="cannot be saved yet"):
+            model.save("unreachable")

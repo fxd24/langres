@@ -103,6 +103,37 @@ class Blocker(ABC, Generic[SchemaT]):
                             )
     """
 
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The Pydantic schema class this blocker normalizes into, if it has one.
+
+        ``None`` for a blocker built from an opaque ``schema_factory`` callable
+        (there is no class to name) and for one that never took a schema at all.
+
+        Read from ``_schema_type_name``, the registry key the schema-carrying
+        blockers already store to serialize themselves. That is deliberate: it is
+        the one form of the schema that survives ``save``/``load``, so a model
+        reloaded in a fresh process reports the same schema as the one that was
+        saved. Storing the class directly would not round-trip.
+
+        Why the base class and not each blocker: the alternative is the same four
+        lines in ``AllPairsBlocker``, ``VectorBlocker`` and ``KeyBlocker``, and a
+        caller cannot ask "does this blocker carry a schema?" without knowing
+        which concrete class it holds. ``ERModel.schema`` asks exactly that.
+        """
+        name = getattr(self, "_schema_type_name", None)
+        if name is None:
+            return None
+        from langres.core.registry import SchemaNotRegistered, get_schema
+
+        try:
+            return get_schema(name)
+        except SchemaNotRegistered:
+            # The blocker outlived its schema's registration (an ephemeral
+            # inferred class in a fresh process). "I don't know" beats raising
+            # from a property that callers treat as cheap.
+            return None
+
     @abstractmethod
     def stream(self, data: list[Any]) -> Iterator[ERCandidate[SchemaT]]:
         """Generate candidate pairs from input data.
