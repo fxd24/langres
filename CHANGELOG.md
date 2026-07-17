@@ -52,8 +52,13 @@ heuristic guessed well or a cap held.
   `default_threshold_for`, `PAID_JUDGE_NAMES`, `MatcherName`). Deleted, not
   relocated. `Resolver.from_schema(matcher="auto")` now raises and names a
   concrete architecture instead.
-- `LANGRES_OFFLINE` no longer affects the front door — it only ever gated the
-  deleted `auto` path. (`Settings` still reads it; nothing acts on it.)
+- **`LANGRES_OFFLINE` / `Settings.langres_offline`** — deleted outright, not just
+  disconnected. It only ever gated the `auto` path, so once that went it was a
+  *documented spend guard that did nothing* — the worst failure mode a safety
+  switch has. There is no auto-decision left to disarm: naming a paid
+  architecture is now the only way to spend. `Settings` uses `extra="ignore"`,
+  so a leftover `LANGRES_OFFLINE=1` in an existing `.env` is ignored rather than
+  a `ValidationError`.
 - `default_threshold_for` has no replacement, deliberately: a bound model carries
   its own cut in its `Clusterer`, so `compare()` reads `self.clusterer.threshold`.
   The name→threshold table existed only because the verbs had no model to ask.
@@ -71,6 +76,45 @@ heuristic guessed well or a cap held.
   production path regardless: an inferred schema is an ephemeral class a fresh
   process cannot import, so it could never round-trip through `save()`/`load()`.
 - `examples/quickstart_verbs.py` → `examples/quickstart_models.py`.
+
+#### Known limitation — `VectorLLMCascade` cannot `save()`
+
+`VectorLLMCascade(...).save(path)` raises `NotImplementedError`, by design,
+naming the real gap. `FuzzyString` saves and loads today.
+
+Its `VectorBlocker` is built with a `text_field_extractor` **closure** (blocking
+text = every comparable field concatenated), and a callable cannot round-trip
+through a JSON config. This is **inherited, not new**: the deleted `presets`
+path built the same closure — it simply never called `save()`, so nothing ever
+raised. Naming the architecture is what made the gap *visible*, because a class
+that looks persistable is expected to persist.
+
+To persist an embedding pipeline today, build the `ERModel` directly with a
+serializable single named field instead of the closure:
+
+```python
+ERModel.from_components(
+    blocker=VectorBlocker(
+        vector_index=FAISSIndex(embedder=SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")),
+        schema=MySchema,
+        text_field="name",   # a named field serializes; a closure does not
+    ),
+    comparator=StringComparator(feature_specs=[FeatureSpec(name="name", kind="string")]),
+    matcher=EmbeddingScoreMatcher(threshold=0.7),
+    clusterer=Clusterer(threshold=0.7),
+)
+```
+
+**Open design decision (not made here):** the fix is a named-extractor seam
+mirroring `LLMMatcher(response_parser=...)` — a registry of named extractors so
+the *name* serializes instead of the closure. That changes what `VectorBlocker`
+accepts on the paid path, so it is an architecture call, deliberately left to
+its owner rather than settled at the end of a wave.
+
+**Scope note for the HF-readiness gate:** the weightless-round-trip proof is
+green only for architectures **without a closure-bearing blocker**. It
+round-trips `FuzzyString`. It does not — and currently cannot — cover
+`VectorLLMCascade`.
 
 ### `Resolver` is spend-capped (B1) — **behavior change**
 

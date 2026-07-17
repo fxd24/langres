@@ -618,3 +618,39 @@ class TestReviewFoundRegressions:
         model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", schema=Company)
         with pytest.raises(NotImplementedError, match="cannot be saved yet"):
             model.save("unreachable")
+
+    def test_save_error_names_every_required_arg_of_the_escape_hatch(self) -> None:
+        """The advice must RUN. It told users to do something that TypeErrors.
+
+        The message's escape hatch is a hand-built `VectorBlocker` with a named
+        `text_field=` instead of the closure. As shipped it read
+        ``VectorBlocker(schema=..., text_field=...)`` -- which raises
+        ``TypeError: missing 1 required positional argument: 'vector_index'``.
+        Advice a user cannot copy is worse than none: it costs them the round-trip
+        to discover our error message is wrong.
+
+        This asserts the message names every REQUIRED parameter, derived from the
+        live signature rather than hard-coded, so adding a required arg to
+        `VectorBlocker` fails here instead of silently rotting the message again.
+        """
+        import inspect
+
+        from langres.core.blockers.vector import VectorBlocker
+
+        model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", schema=Company)
+        try:
+            model.save("unreachable")
+        except NotImplementedError as exc:
+            message = str(exc)
+
+        required = [
+            name
+            for name, p in inspect.signature(VectorBlocker.__init__).parameters.items()
+            if name != "self" and p.default is inspect.Parameter.empty
+        ]
+        assert required, "VectorBlocker grew no required args -- rewrite this proof"
+        for name in required:
+            assert f"{name}=" in message, (
+                f"save()'s advice omits required VectorBlocker arg {name!r}; a user "
+                f"copying it hits a TypeError. Message: {message}"
+            )

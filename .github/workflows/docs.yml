@@ -16,6 +16,7 @@ on:
       - "src/**" # API reference is generated from docstrings
       - "mkdocs.yml"
       - "pyproject.toml"
+      - "CHANGELOG.md" # docs/CHANGELOG.md inlines it via pymdownx.snippets
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - "src/**"
       - "mkdocs.yml"
       - "pyproject.toml"
+      - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 

@@ -213,9 +213,11 @@ class VectorLLMCascade(ERModel):
             "concatenated) and a callable cannot round-trip through JSON config. "
             "This is a known gap inherited from the pre-W4 embedding path, not a "
             "property of your model. FuzzyString saves and loads today. To persist "
-            "an embedding pipeline now, build a Resolver/ERModel directly with a "
-            "VectorBlocker constructed as VectorBlocker(schema=..., text_field=...) "
-            "-- a single named field, which is serializable."
+            "an embedding pipeline now, build a Resolver/ERModel directly via "
+            "ERModel.from_components(...) with a VectorBlocker constructed as "
+            "VectorBlocker(vector_index=..., schema=..., text_field='your_text_field') "
+            "-- text_field takes the NAME of one text field on your schema (e.g. "
+            "'name'), and a named field is serializable, unlike a closure."
         )
 
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:

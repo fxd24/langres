@@ -37,8 +37,8 @@ a model is the user's job, not a heuristic's. The real layering is:)
      record *sets* — a reserved M5 stub, see below).
 
 2. **`langres.Resolver`** (a plain alias of `ERModel`; `Resolver is ERModel`) — the declarative mid-layer.
-   - `Resolver.from_schema(schema, judge=...)` builds a default dedup pipeline
-     (blocker + comparator + judge + clusterer); `.resolve(records)` runs it;
+   - `Resolver.from_schema(schema, matcher=...)` builds a default dedup pipeline
+     (blocker + comparator + matcher + clusterer); `.resolve(records)` runs it;
      `.save`/`.load` serialize it via the config-registry (no pickle).
    - **Spend-capped too** (B1), not just the named architectures above (they
      share the same `ERModel` machinery): `budget_usd=` on the
