@@ -10,9 +10,12 @@
 > mapping produces **one strongly-connected component containing 13 of the 15
 > packages** — an `import-linter` `layers` contract would fail on essentially the
 > whole architecture. Meanwhile the *largest single knot* (`architectures ↔ core`,
-> 30 + 2 edges) is **not a code problem at all**: it is an artifact of a
-> transcription decision the mapping file itself flags as "not the plan's", and it
-> disappears with a **zero-code mapping change**.
+> 30 + 2 edges) is **not a code problem at all**: both its back-edges are
+> `langres.core`'s public facade re-exporting `Resolver` and the method registry —
+> which this repo's `CLAUDE.md` **mandates**. The plan conflates `langres.core`
+> (a public facade namespace, by documented and test-enforced policy) with `core`
+> (a proposed bottom contracts layer). Those cannot be the same package, and no
+> amount of file-moving reconciles them.
 >
 > Underneath that sits a structural fact the plan never states: **a file move cannot
 > delete a module-level import edge.** Every current module cycle survives the split
@@ -118,7 +121,7 @@ homeless files. **It was not, and there are none.** The file has been actively
 maintained: it documents the W1 comparator symbol-split, the W-1 `_exports`
 fragments (#169/#170), `_version` → `core` (#176), and B1's `spend`/`spend_cap`.
 
-Measured (`tmp/check_mapping_staleness.py`), **both** directions:
+Measured (Appendix A.1), **both** directions:
 
 | check | result |
 |---|---|
@@ -153,7 +156,7 @@ packages).
 Plan's streams: **A** = metrics+report+profile+benchmarks · **B** =
 datasets+training+curation · **C** = tracking+optimize.
 
-Measured by condensing modules straight onto streams (`tmp/streams.py`), with all
+Measured by condensing modules straight onto streams (Appendix A.4), with all
 other packages collapsed to `rest`:
 
 | edge | all-edges | toplevel |
@@ -216,7 +219,7 @@ survives the split byte-for-byte. The only thing the mapping decides is whether 
 SCC lands **inside one package** (invisible to a layers contract) or **spans
 several** (a contract failure).
 
-Measured (`tmp/scc_spread.py`):
+Measured (Appendix A.2):
 
 | current SCC | fate under the mapping |
 |---|---|
@@ -345,20 +348,61 @@ Nothing in `core`'s *contracts* depends on `architectures`. The dependency is th
 
 `langres.core` is simultaneously:
 
-1. a **public facade** that re-exports `Resolver`, `harvest`, `runs`, … (the
-   `_exports` fragment system CLAUDE.md mandates), and
+1. a **public facade** that re-exports `Resolver`, the method registry, `harvest`,
+   `review`, `runs`, `trackers`, `calibration`, …, and
 2. the proposed **contracts-only bottom layer**.
 
-**These are incompatible.** A facade that re-exports `Resolver` must import from
-`architectures`; a bottom layer must not. The mapping file resolves this by
-transcription ("a facade fragment follows its parent `__init__`") and explicitly
-flags it as *"transcription decisions, not the plan's"*. That single unowned
-decision generates **5 of the 14 knots** and **the largest knot in the report**.
+**These are incompatible**, and — importantly — **(1) is not an accident anyone can
+quietly revoke.** It is documented policy in this branch's `CLAUDE.md`:
+
+> *"**`langres.core` re-exports contracts, not implementations.** It carries the
+> data models, the `Blocker`/`Comparator`/`Matcher`/`Clusterer` base types, the
+> opt-in capability Protocols …, **the `Resolver` + registry, the method registry
+> and the training/tracking primitives** — the things a pipeline is *written
+> against*."*
+
+Verified in the source: `core/_exports/_resolver.py` eagerly imports `Resolver`
+(plus the registry + serialization seam) and `core/_exports/_methods.py` eagerly
+imports the six `method_registry` symbols. Those two files **are** the 2 back-edges
+of the 30 + 2 knot. Nothing in `core`'s *contracts* depends on `architectures` — the
+**facade** does, exactly as instructed.
+
+**This is already a half-solved problem, which is the useful part.** A
+"facade-emptying wave" has run: `tests/test_import_budget.py::TestCoreLazyGetattr::
+test_implementations_are_not_re_exported` pins 17 symbols that must **not** resolve
+on `langres.core` (`AllPairsBlocker`, `LLMMatcher`, `StringComparator`,
+`AnchorStore`, `FAISSIndex`, …), with the stated rationale that re-exporting an
+implementation *"puts `langres.core` back above the components it sits beneath and
+re-knots the import graph."* That is precisely this report's argument — already
+accepted, already ratcheted.
+
+But the wave stopped at *implementations*. `Resolver`, the method registry, and the
+training/tracking primitives stayed on the facade **by design**, because CLAUDE.md
+classifies them as things pipelines are written against. So the residual knots are
+not a bug in the mapping — **the mapping is faithfully encoding shipped policy.**
+
+**The plan's error is a naming conflation, not a layout problem:** "`langres.core`
+the public namespace" and "`core` the bottom layer" are two different objects that
+the plan treats as one. No file move can reconcile them. The decision the owner
+actually faces is:
+
+- **(i)** `langres.core` stays a public facade (CLAUDE.md unchanged) and the
+  *contracts* become the bottom layer under a different package identity — then the
+  facade is a **top** layer and the knots vanish; or
+- **(ii)** `langres.core` becomes contracts-only — which means **dropping `Resolver`
+  and the method registry from `langres.core`**, a public API break and a CLAUDE.md
+  rewrite that the plan never scoped.
+
+That decision — not a 148-file move — is what unblocks the layering. It currently
+has no owner and is being answered by a comment in a JSON file.
 
 ### 3.2 Measured: the facade decision, not the code, is the dominant term
 
-I re-ran the counterfactual with the facade re-homed to a top layer — **a mapping
-change only, zero code** (`tmp/variants.py`):
+I re-ran the counterfactual with the facade re-homed to a top layer — i.e. option
+**(i)** above, modelled as a mapping change (Appendix A.3). Note this is *not* a
+free lunch: it is a decision about what `langres.core` **is**, and it implies the
+contracts layer gets a different package identity. It costs no source edits; it
+costs an architecture ruling.
 
 | variant | ALL: SCCs / largest / knots | TOPLEVEL: SCCs / largest / knots |
 |---|---|---|
@@ -504,11 +548,18 @@ sequence. Four live options, with real trade-offs from this graph.
 
 The reasoning is one measured sentence: **the split cannot fix a single code-level
 cycle** (a move cannot delete an edge), **8 of 14 knots are code-level**, **5 more
-are a mapping decision nobody owns**, and the one component that matters — `[10]` —
-is W4's footprint and is invariant under every partition I tested. Do W4, take the
-`[10]` SCC down in code, then re-run this exact counterfactual. The partition
-question gets *easier* after W4, and it may well dissolve: with `[10]` gone and the
-facade re-homed, the residual toplevel tangle measured here is a **single** knot.
+are the unresolved "is `langres.core` a facade or a layer?" question wearing a
+disguise**, and the one component that matters — `[10]` — is W4's footprint and is
+invariant under every partition I tested. Do W4, take the `[10]` SCC down in code,
+then re-run this exact counterfactual. The partition question gets *easier* after
+W4, and it may well dissolve: with `[10]` gone and the facade question settled, the
+residual toplevel tangle measured here is a **single** knot.
+
+Note that Option B is also the option the repo is *already* executing. The
+facade-emptying wave (§3.1) and `_version.py` (#176) were both code-first,
+symbol-level fixes, and both worked — #176 took a 12-module runtime cycle to zero.
+W2 is the one wave that proposes to buy layering with moves instead. On this graph,
+moves do not buy layering.
 
 The two decisions that are **not** contingent on any of this, and should land on
 their own merits:
@@ -516,9 +567,11 @@ their own merits:
 1. **The wheel licence gate** (§5) — a live, silent, 13.9 MB compliance regression
    sitting behind 14 hand-edited path literals.
 2. **Ownership of the facade question** (§3.1) — "is `langres.core` a public facade
-   or a contracts-only layer?" is an architecture decision, not a transcription
-   detail, and it is currently being answered by a comment in a JSON file. It
-   drives the largest knot in the entire report.
+   or a contracts-only layer?" is an architecture decision with a public-API blast
+   radius, not a transcription detail. Today CLAUDE.md says *facade* and the plan
+   assumes *layer*; the contradiction is currently being resolved by a comment in a
+   JSON file. It drives the largest knot in the entire report, and it is answerable
+   in an afternoon — **before** anyone moves 148 test files.
 
 ---
 
