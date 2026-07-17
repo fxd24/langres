@@ -96,9 +96,28 @@ while making the metric look better).
 - **The autoresearch/optimizer engine** → **`langres.optimize`**.
   `langres.core.optimizers` → `langres.optimize.blocker_optimizer`;
   `langres.core.autoresearch.*` → `langres.optimize.*`. **`langres.optimize()` and
-  `score_blocking()` are unchanged** — the facade is the supported surface, and
-  `BlockerOptimizer` was never in any `__all__`. Only the deep path documented in
-  `docs/TECHNICAL_OVERVIEW.md` breaks.
+  `score_blocking()` are unchanged** — the facade is the supported surface.
+  `BlockerOptimizer` was in `langres.core.optimizers.__all__`, but never in
+  `langres.__all__` or `langres.core.__all__`, so it was reachable only by deep
+  import — the path documented in `docs/TECHNICAL_OVERVIEW.md`, which breaks.
+
+  **Migrate with the `from` form**, not the dotted form:
+
+  ```python
+  from langres.optimize.blocker_optimizer import BlockerOptimizer   # works
+
+  import langres.optimize.blocker_optimizer as bo                   # ImportError
+  import langres.optimize.blocker_optimizer
+  langres.optimize.blocker_optimizer.BlockerOptimizer               # AttributeError
+  ```
+
+  `langres.optimize` is a **callable** — that is the front door, and the root
+  package binds the name to the function. The engine's submodules now live under
+  that same shadowed name, so attribute traversal finds the function and stops.
+  The old `langres.core.optimizers.blocker_optimizer` supported both forms; its
+  replacement supports only `from ... import ...`. No test catches this because
+  every in-repo call site already uses the `from` form. Tracked as a follow-up:
+  the fix is to rename the *package* (the callable name is public API and stays).
 
 #### Logger names follow the code that moved
 
