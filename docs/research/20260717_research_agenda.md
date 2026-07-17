@@ -51,6 +51,117 @@ are **wrong**, which is the cheapest possible outcome.
 
 ---
 
+## 2. Thread A — the staging result
+
+This thread is the experimental half of `docs/THEORY.md`@`7a106ce` §6. That section
+derives that the first-stage objective's *form* depends on the second stage's quality,
+and then says so plainly about its own status:
+
+> **The honest caveat.** […] If $\varphi$ is tiny, the interior optimum sits at
+> $r_B \approx 0.999$ and this section is *true but operationally uninteresting*. **The
+> claim has teeth only with a measured $\varphi$.** Measuring $\varphi$ for LLM judges on
+> our benchmark portfolio is therefore the experiment this document exists to motivate —
+> not a follow-up.
+
+**A1 is that experiment. It is the prerequisite for A2, and A2 is not worth starting
+without it.** The order matters: A1 can retire A2 entirely, and that is the most likely
+outcome.
+
+### A1 — Measure $\varphi$ on the benchmark portfolio
+
+**The question.** Two, and the second is the one with a surprise in it:
+
+1. **What is $\varphi$** — the matcher's fall-out, $P(\text{yes} \mid \text{false})$
+   (`THEORY.md` §1) — for our actual matchers on our actual benchmarks?
+2. **Does $\varphi$ decay or GROW with candidate rank?**
+
+**Why it matters to langres.** §6.5's consequence is concrete: *"The blocker's optimum is
+a function of $\varphi$, a property of the **matcher**. **The blocker cannot be tuned in
+isolation.**"* langres currently violates this in code, and §11 lists where —
+`core/blocker.py:38` (*"Blocking should have ≥95% recall"*), `core/blockers/vector.py:202`,
+and `RecallCurve.optimal_k(target_recall=…)`, which *"names a recall-hitting $k$ 'optimal'"*
+while optimizing a quantity **containing no $\varphi$**. A measured $\varphi$ either
+justifies that guidance or condemns it. Either way it is a number we do not have and
+should.
+
+Question (2) is the sharper one, because **the two candidate answers point in opposite
+directions and one of them contradicts our own theory doc**:
+
+- If $\varphi$ **decays** with rank, that **confirms** §6.4's stated self-critique — the
+  doc already says *"the marginal candidates admitted at large $k$ are the low-similarity
+  ones the matcher rejects most easily, i.e. $\varphi$ decays with rank"*, and flags it as
+  *"the first objection any reviewer will raise."*
+- If $\varphi$ **grows** with rank, §6.4's stated weakness is **wrong in our favour**, and
+  the staging result gets *stronger*: precision collapses faster than the constant-$\varphi$
+  model predicts, and the interior optimum sits at a **smaller $k$** than §6.2 says.
+
+**What's already known.**
+
+- **§6.4 currently claims decay**, as a conceded weakness of the model: *"Constant
+  $\varphi$ is wrong and load-bearing. Blocker and matcher errors are **correlated** —
+  both keyed on similarity […] $P \to 0$ survives iff $\inf \varphi > 0$, but
+  constant-$\varphi$ **mis-locates the optimum**."* `[verified — quoted from 7a106ce]`
+- **The counter-evidence: *Drowning in Documents*** ([2411.11767](https://arxiv.org/abs/2411.11767))
+  is evidence that rerankers score far-out irrelevant documents highly, i.e. that
+  $\varphi$ **grows** with $k$ rather than decaying. `[see §7 reference tier — confirm the
+  paper's central finding and whether it supports "FP rate grows with rank" specifically,
+  before citing it as such]`
+- **A corroborating signal is already in `THEORY.md` §6.4**: Meng et al., *Ranked List
+  Truncation* — *"a deeper re-ranking cut-off does not consistently result in improvement
+  and can even be detrimental."* `[verified — quoted from 7a106ce]`
+- **The field's own measurement says $\varphi$ is small**, which is the reason §6.5 hedges:
+  Papadakis et al. — *"precision […] **significantly raises after matching**."* If that is
+  right, A1 returns "$\varphi \approx 0$", §6 is operationally uninteresting, and **A2
+  should be dropped**. This is the single most likely outcome and the thread is ordered to
+  find it out first and cheaply.
+- **The composition/degradation split is already stated** (§6.4): the *composition* effect
+  needs no degradation at all (true pairs are $O(n)$, all pairs $O(n^2)$), while the
+  *degradation* effect — $\varphi$ growing with group size — *"does not apply to a pairwise
+  matcher; **does** apply to set-wise matchers."* We ship one: **`SelectMatcher`**
+  (`core/matchers/select_judge.py`, ComEM-style, one call per anchor *group*). So the two
+  effects are **separately measurable with components we already have**. `[verified]`
+
+**What would settle it.** $\varphi$ is measurable today, but **not with an off-the-shelf
+call** — the inventory is explicit that langres has **no false-positive-*rate* metric**:
+`core/metrics.py` computes FP *counts* (`PairMetrics.fp`, `classify_pairs`) and never
+counts true negatives. That omission is *correct* for ER in general — the negative class is
+$O(n^2)$, so a global FPR is meaningless — but $\varphi$ does not need a global denominator.
+**Within a candidate set $E_B$ the false pairs are finite and countable**, which is exactly
+the quantity §6.2's $F_B$ names. So, from functions that ship today:
+
+$$\varphi \;=\; \frac{\texttt{fp}}{|E_B| - (\texttt{tp} + \texttt{fn})}$$
+
+where `tp`/`fp`/`fn` come from `classify_pairs(judgements, gold_pairs, threshold)` and
+$|E_B|$ = `total_candidates` from `evaluate_blocking`. The denominator is "candidate pairs
+that are not true pairs" — $F_B$ exactly. **Three caveats that decide whether the number is
+honest:**
+
+- `PairMetrics` **excludes abstentions** from the predicted set. An abstain is not a
+  "yes", so excluding them is right for $\varphi$ — but it must be *reported*, because a
+  matcher that abstains often has a flattering $\varphi$ that means something different.
+- $\varphi$ must be measured **pre-clustering**. `PairMetrics` exists precisely for this —
+  its docstring: *"transitive closure can chain one false-positive edge into many
+  false-positive pairs."* Measuring $\varphi$ post-closure measures the clusterer (that is
+  B1's job).
+- $\varphi$ is a function of the **threshold**, which is the precision/recall dial (§6.5).
+  Report $\varphi(t)$ as a curve, not a scalar; a single number silently smuggles in a
+  threshold choice.
+
+For (2): bin candidates **by blocker rank** and report $\varphi$ per bin — that curve *is*
+the answer, and its **slope sign** is the finding. Run it for a pairwise matcher
+(composition effect only) and for `SelectMatcher` at varying group size (degradation effect
+too); §6.4 predicts the slopes differ, which is itself a check on the model.
+
+**Cost & prerequisites.** **Moderate, paid.** $\varphi$ for *LLM* matchers is the number
+§6.5 asks for, and that means real API spend across the portfolio — estimate **$5–20**
+under `SpendMonitor`/`SpendCappedMatcher` (the cap is enforced in one place, `core/spend_cap.py`).
+The **$0 arm runs first**: `rapidfuzz` and `embedding_cosine` cost nothing and will show
+whether the *shape* of $\varphi(\text{rank})$ is even interesting before any paid call.
+Prerequisites: **B2** (to know which benchmarks can show a difference). Shares apparatus
+with **C2**. **Blocks A2.**
+
+---
+
 ## 3. Thread B — $0 diagnostics on data we already have
 
 Both items here are **free**. Neither needs a GPU, a paid API, or a new component. Both
