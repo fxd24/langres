@@ -80,23 +80,28 @@ _VALID_SCOPES: frozenset[str] = frozenset(get_args(Scope))
 _SCORE_FAMILIES: frozenset[str] = frozenset(get_args(ScoreType))
 _VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector"}
 
-#: The heuristics a raw ``Select(CLUSTERING)`` (or a :class:`ClusterStage`) may
+#: The heuristics a raw ``Select(CLUSTERING)`` or a :class:`ClusterStage` may
 #: name. Correlation clustering with real weights is not approximable, so there
 #: is no exact algorithm to default to — the caller names one.
 _CLUSTERING_ALGORITHMS: frozenset[str] = frozenset({"transitive_closure", "pivot"})
 
-#: The score family that means "reconciled": a :class:`Score` whose ``out_space``
-#: is this has mapped divergent upstream families onto ONE calibrated scale (it is
-#: the calibrator's output family; see ``langres.training.calibration``). A
-#: :class:`Select` positioned after such a Score is no longer selecting across
-#: families — it is the "intervening reconciling Score" of
-#: :meth:`Sequential.check` rule 3. **This designation is a deliberate wiring
-#: convention, not a law of the carrier** (flagged for review): the ``Pairs``
-#: carrier holds one score column, so a plain re-score overwrites; this contract
-#: instead treats each distinct-family Score in a Select's span as an unreconciled
-#: input and clears the union only when a calibrating Score is the last before the
-#: Select.
-RECONCILED_FAMILY: str = "calibrated_prob"
+
+def _validate_clustering_algorithm(algorithm: str) -> None:
+    """Raise if ``algorithm`` is not a known clustering heuristic.
+
+    Shared by the two stages that name a clustering heuristic — a raw
+    ``Select(Feasible.CLUSTERING)`` and a :class:`ClusterStage` — so both reject
+    the same unknown values with the same problem + fix message.
+
+    Raises:
+        ValueError: If ``algorithm`` is not one of :data:`_CLUSTERING_ALGORITHMS`.
+    """
+    if algorithm not in _CLUSTERING_ALGORITHMS:
+        raise ValueError(
+            f"algorithm={algorithm!r} is not a known clustering heuristic. Cause: weighted "
+            f"correlation clustering is not approximable, so only named heuristics are allowed. "
+            f"Fix: pass one of {sorted(_CLUSTERING_ALGORITHMS)}."
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -314,11 +319,7 @@ class Select(Op[SchemaT]):
                     f"heuristic. Fix: pass algorithm='transitive_closure' (or 'pivot'), or use a "
                     f"ClusterStage (which defaults algorithm='transitive_closure')."
                 )
-            if algorithm not in _CLUSTERING_ALGORITHMS:
-                raise ValueError(
-                    f"Select at feasible={feasible.name} got algorithm={algorithm!r}, which is not "
-                    f"a known clustering heuristic. Fix: pass one of {sorted(_CLUSTERING_ALGORITHMS)}."
-                )
+            _validate_clustering_algorithm(algorithm)
         self.feasible: Feasible = feasible
         self.algorithm: str | None = algorithm
 
@@ -382,9 +383,13 @@ class ClusterStage(ABC, Generic[SchemaT]):
 
     Args:
         algorithm: The named clustering heuristic (default ``"transitive_closure"``).
+
+    Raises:
+        ValueError: If ``algorithm`` is not a known clustering heuristic.
     """
 
     def __init__(self, algorithm: str = "transitive_closure") -> None:
+        _validate_clustering_algorithm(algorithm)
         self.algorithm: str = algorithm
 
     @property
@@ -461,101 +466,51 @@ class Sequential(Generic[SchemaT]):
 
     def __init__(self, stages: Sequence[Stage]) -> None:
         self.stages: list[Stage] = list(stages)
-        # Parsed roles, populated by check() as it validates (used by forward()).
-        self._source: Source[Any] | None = None
-        self._ops: list[Op[Any]] = []
-        self._cluster_stage: ClusterStage[Any] | None = None
-        self._finalize: Finalize | None = None
         self.check()
 
     def check(self) -> None:
         """Validate the pipeline's wiring; raise a clear error on the first fault.
 
-        Three faults are caught (plus the terminal shape):
+        Two faults are caught:
 
         1. **Carrier mismatch.** Adjacent stages whose output/input carriers do
            not line up — e.g. a Finalize before the ClusterStage, or an Op after
-           it. Also: the pipeline must start with a Source and end by clustering
-           (a ClusterStage is the phase-1 exit).
+           it. The pipeline must also start with a Source (the only stage that
+           consumes the initial ``records`` carrier).
         2. **Select on a vector space.** A Select positioned to consume rows a
            Score produced with ``out_space == "vector"``. A ``ComparisonVector``
            (``S = R^d``) is not orderable, so selecting on it is a type error; the
            fix is a scalarizer Score (vector -> scalar) in between.
-        3. **Score-space union across families.** A Select fed rows carrying two+
-           different score families with no reconciling Score between them (e.g.
-           ``sim_cos`` and ``prob_llm`` under one threshold). A single selection
-           is one order over one score space; the fix is one reconciling Score
-           (a scalarizer/calibrator onto a single family) before the Select.
 
         Raises:
             ValueError: On any wiring fault, with a problem + cause + fix message.
             TypeError: If a stage is of an unrecognized type.
         """
-        self._source = None
-        self._ops = []
-        self._cluster_stage = None
-        self._finalize = None
-
         carrier = "records"
         # The score family currently on the rows: the most recent Score's
-        # out_space, or None while unscored. Drives the vector check (rule 2).
+        # out_space, or None while unscored. Drives the vector check.
         current_space: str | None = None
-        # Distinct scalar families produced by Scores since the last Select — the
-        # inputs a Select would union under one order (rule 3).
-        span_families: set[str] = set()
-        # Whether the most recent Score reconciled onto the calibrated family.
-        reconciled = False
+
+        # A score-space union ACROSS score families under one selection (THEORY
+        # §5/§9 — one selection is one order over one score space) is a real
+        # hazard, but it is structurally impossible on this carrier: a ``Pairs``
+        # row holds a single ``score``/``score_type``, so a later Score overwrites
+        # the column and a Select always sees one coherent family. It returns as a
+        # wiring-time error once a multi-column / combine (union/intersection)
+        # carrier exists (§2/§10) — there is deliberately no check for it here.
 
         for index, stage in enumerate(self.stages):
             expected_in, produced_out = _stage_carriers(stage, index)
             if expected_in != carrier:
                 raise ValueError(_carrier_mismatch_message(index, stage, carrier, expected_in))
 
-            if isinstance(stage, Source):
-                self._source = stage
-            elif isinstance(stage, ClusterStage):
-                self._cluster_stage = stage
-            elif isinstance(stage, Finalize):
-                self._finalize = stage
-            elif isinstance(stage, Score):
-                self._ops.append(stage)
+            if isinstance(stage, Score):
                 current_space = stage.out_space
-                reconciled = stage.out_space == RECONCILED_FAMILY
-                if stage.out_space != "vector":
-                    span_families.add(stage.out_space)
             elif isinstance(stage, Select):
-                self._ops.append(stage)
                 if current_space == "vector":
                     raise ValueError(_select_on_vector_message(index))
-                if not reconciled and len(span_families) >= 2:
-                    raise ValueError(_family_union_message(index, span_families))
-                # This Select consumes the span; a later Select starts fresh.
-                span_families = set()
 
             carrier = produced_out
-
-        if carrier not in ("clusters", "final"):
-            raise ValueError(_no_cluster_exit_message(carrier))
-
-    def forward(self, records: Records) -> Clusters | GoldenRecord:
-        """Run the validated pipeline: records -> pairs -> ... -> clusters (-> golden record).
-
-        Args:
-            records: The normalized record input.
-
-        Returns:
-            The id :data:`Clusters`, or a :data:`GoldenRecord` when a
-            :class:`Finalize` canonicalizes.
-        """
-        # check() ran at construction and guarantees a Source and a ClusterStage.
-        assert self._source is not None and self._cluster_stage is not None
-        pairs = self._source.forward(records)
-        for op in self._ops:
-            pairs = op.forward(pairs)
-        clusters = self._cluster_stage.forward(pairs)
-        if self._finalize is not None:
-            return self._finalize.forward(clusters)
-        return clusters
 
 
 # --------------------------------------------------------------------------------------
@@ -606,23 +561,4 @@ def _select_on_vector_message(index: int) -> str:
         f"'keep the top / keep above a threshold' is undefined on it — selecting on it is a type "
         f"error. Fix: insert a scalarizer Score that maps the vector to a scalar score (e.g. a "
         f"weighted average over the ComparisonVector) before this Select."
-    )
-
-
-def _family_union_message(index: int, families: set[str]) -> str:
-    return (
-        f"Sequential wiring error: stage {index} (Select) is fed rows carrying more than one "
-        f"score family ({sorted(families)}) with no reconciling Score between them. Cause: a "
-        f"single selection is one order over one score space, so thresholding e.g. sim_cos "
-        f"against prob_llm together compares incomparable scales. Fix: insert one reconciling "
-        f"Score — a scalarizer/calibrator that maps the mixed families onto a single "
-        f"'{RECONCILED_FAMILY}' scale — before this Select."
-    )
-
-
-def _no_cluster_exit_message(carrier: str) -> str:
-    return (
-        f"Sequential wiring error: the pipeline ends on a '{carrier}' carrier, but a Sequential "
-        f"must exit phase 1 by clustering. Cause: there is no ClusterStage (pairs -> clusters) to "
-        f"close the pipeline. Fix: append a ClusterStage (and optionally a Finalize after it)."
     )

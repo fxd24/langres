@@ -7,18 +7,17 @@ Covers the keystone contract at the core tier (behavior + edges + errors):
   their validation, and that both stay abstract;
 - the ``Select(CLUSTERING)`` guard (refuse without an explicit algorithm, stamp
   ``is_heuristic``) and the exact-feasible path (no algorithm needed);
-- :class:`ClusterStage` defaulting its algorithm and marking heuristic;
+- :class:`ClusterStage` defaulting its algorithm, marking heuristic, and
+  rejecting an unknown one (the same validator ``Select(CLUSTERING)`` uses);
 - :meth:`Sequential.check` running at construction — a valid pipeline builds; a
-  Select-after-vector-Score, a mixed-score-family union, a carrier mismatch, a
-  missing Source and a missing ClusterStage all raise a problem + fix message;
-- :meth:`Sequential.forward` running the validated pipeline end to end.
+  Select-after-vector-Score, a carrier mismatch and a missing Source all raise a
+  problem + fix message.
 
-The stages are trivial test doubles: their ``forward``\\ s are the minimum that
-lets a pipeline run, since this wave ships the CONTRACT, not the concrete impls.
+The stages are trivial test doubles (identity ``forward``\\ s), since this wave
+ships the wiring CONTRACT, not the concrete impls or an executor.
 """
 
 import pytest
-from pydantic import BaseModel
 
 from langres.core.models import CompanySchema
 from langres.core.op import (
@@ -34,7 +33,7 @@ from langres.core.op import (
     Sequential,
     Source,
 )
-from langres.core.pairs import PairRow, Pairs
+from langres.core.pairs import Pairs
 
 # --------------------------------------------------------------------------------------
 # Test doubles — trivial forwards, one per role/boundary.
@@ -55,23 +54,11 @@ class _Select(Select[CompanySchema]):
         return pairs
 
 
-class _PassThroughOp(Op[CompanySchema]):
-    """A bare Op (neither Score nor Select) — the extensible base, a pass-through."""
-
-    def forward(self, pairs: Pairs[CompanySchema]) -> Pairs[CompanySchema]:
-        return pairs
-
-
 class _Source(Source[CompanySchema]):
-    """A Source that blocks a fixed 2-record store into one pair row."""
+    """A Source stage (its forward is never run — check() validates, not executes)."""
 
     def forward(self, records: Records) -> Pairs[CompanySchema]:
-        store = {r["id"]: CompanySchema(id=r["id"], name=r["name"]) for r in records}
-        ids = list(store)
-        rows = (
-            [PairRow(left_id=ids[0], right_id=ids[1], blocker_name="dbl")] if len(ids) >= 2 else []
-        )
-        return Pairs(store=store, rows=rows)
+        return Pairs(store={}, rows=[])
 
 
 class _ClusterStage(ClusterStage[CompanySchema]):
@@ -86,16 +73,6 @@ class _VerifyFinalize(Finalize):
 
     def forward(self, clusters: Clusters) -> Clusters | GoldenRecord:
         return clusters
-
-
-class _CanonicalizeFinalize(Finalize):
-    """A canonicalize Finalize: fuses everything into one golden record."""
-
-    def forward(self, clusters: Clusters) -> Clusters | GoldenRecord:
-        return CompanySchema(id="golden", name="Golden Co")
-
-
-_RECORDS: Records = [{"id": "a", "name": "Acme"}, {"id": "b", "name": "Acme Inc"}]
 
 
 def _has_problem_and_fix(message: str) -> bool:
@@ -243,6 +220,15 @@ def test_cluster_stage_takes_a_named_algorithm():
     assert stage.is_heuristic is True
 
 
+def test_cluster_stage_rejects_an_unknown_algorithm():
+    # Same validator (and message) a raw Select(CLUSTERING) uses.
+    with pytest.raises(ValueError) as excinfo:
+        _ClusterStage(algorithm="kmeans")
+    message = str(excinfo.value)
+    assert "not a known clustering heuristic" in message
+    assert "Fix:" in message
+
+
 # --------------------------------------------------------------------------------------
 # Sequential.check() — auto at construction.
 # --------------------------------------------------------------------------------------
@@ -281,39 +267,6 @@ def test_select_after_a_vector_score_raises_and_names_the_scalarizer_fix():
     assert _has_problem_and_fix(message)
 
 
-def test_mixing_two_score_families_under_one_select_raises():
-    with pytest.raises(ValueError) as excinfo:
-        Sequential(
-            [
-                _Source(),
-                _Score(scope="pair", out_space="sim_cos"),
-                _Score(scope="pair", out_space="prob_llm"),
-                _Select(feasible=Feasible.THRESHOLD),
-                _ClusterStage(),
-            ]
-        )
-    message = str(excinfo.value)
-    assert "more than one" in message
-    assert "reconciling" in message
-    assert _has_problem_and_fix(message)
-
-
-def test_a_reconciling_score_clears_the_family_union():
-    # sim_cos + prob_llm, then a calibrating Score onto the reconciled family,
-    # then the Select -> no union error.
-    pipeline = Sequential(
-        [
-            _Source(),
-            _Score(scope="pair", out_space="sim_cos"),
-            _Score(scope="pair", out_space="prob_llm"),
-            _Score(scope="pair", out_space="calibrated_prob"),
-            _Select(feasible=Feasible.THRESHOLD),
-            _ClusterStage(),
-        ]
-    )
-    assert pipeline.stages
-
-
 def test_a_scalarizer_score_clears_the_vector_select():
     # vector, then a scalarizer Score (vector -> scalar), then the Select -> ok.
     pipeline = Sequential(
@@ -326,13 +279,6 @@ def test_a_scalarizer_score_clears_the_vector_select():
         ]
     )
     assert pipeline.stages
-
-
-def test_a_bare_op_flows_through_as_a_pass_through():
-    # Op is the extensible base; a custom Op that is neither Score nor Select
-    # carries no declared score family and flows pairs -> pairs.
-    pipeline = Sequential([_Source(), _PassThroughOp(), _ClusterStage()])
-    assert pipeline.forward(_RECORDS) == [{"a", "b"}]
 
 
 def test_op_after_the_cluster_stage_is_a_carrier_mismatch():
@@ -364,57 +310,9 @@ def test_pipeline_must_start_with_a_source():
     assert _has_problem_and_fix(message)
 
 
-def test_pipeline_must_exit_via_a_cluster_stage():
-    with pytest.raises(ValueError) as excinfo:
-        Sequential([_Source(), _Score(scope="pair", out_space="prob_llm")])
-    message = str(excinfo.value)
-    assert "must exit phase 1 by clustering" in message
-    assert _has_problem_and_fix(message)
-
-
 def test_an_unknown_stage_type_raises_typeerror():
     class _NotAStage:
         pass
 
     with pytest.raises(TypeError, match="not a Source, Op"):
         Sequential([_NotAStage()])  # type: ignore[list-item]
-
-
-# --------------------------------------------------------------------------------------
-# Sequential.forward() — running the validated pipeline.
-# --------------------------------------------------------------------------------------
-
-
-def test_forward_runs_the_pipeline_to_clusters():
-    pipeline = Sequential([_Source(), _Score(scope="pair", out_space="prob_llm"), _ClusterStage()])
-    result = pipeline.forward(_RECORDS)
-    assert result == [{"a", "b"}]
-
-
-def test_forward_with_a_canonicalizing_finalize_returns_a_golden_record():
-    pipeline = Sequential(
-        [
-            _Source(),
-            _Score(scope="pair", out_space="prob_llm"),
-            _ClusterStage(),
-            _CanonicalizeFinalize(),
-        ]
-    )
-    result = pipeline.forward(_RECORDS)
-    assert isinstance(result, BaseModel)
-    assert isinstance(result, CompanySchema)
-    assert result.id == "golden"
-
-
-def test_forward_with_a_select_and_verify_finalize_runs():
-    pipeline = Sequential(
-        [
-            _Source(),
-            _Score(scope="pair", out_space="prob_llm"),
-            _Select(feasible=Feasible.THRESHOLD),
-            _ClusterStage(),
-            _VerifyFinalize(),
-        ]
-    )
-    result = pipeline.forward(_RECORDS)
-    assert result == [{"a", "b"}]
