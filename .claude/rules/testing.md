@@ -45,7 +45,7 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - **Two gates run on `test-full`, and they are not the same number as this
   policy.** The repo-wide floor is 90% (`--cov-fail-under` in `pyproject.toml`).
   The contract additionally has its own path-scoped gate
-  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/optimize/*"
+  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py"
   --precision=2 --fail-under=98` in `.github/workflows/test.yml`). That 98 is a
   **regression ratchet** pinned just under the measured value (98.84% at
   `ba4b1b7`), not the policy — the *target* remains 95–100%. It exists because
@@ -54,16 +54,28 @@ code. Verify as you go.** Read before writing tests or running the suite.
   number climbs; if it blocks legitimate work, lower it deliberately rather than
   deleting it.
   **When the contract moves to a new package, extend that `--include` glob** or
-  the gate silently stops covering it. (`report/` and `optimize/` are in the glob
-  for exactly that reason — both measure ~98–100% and carry public surface
-  (`EvalReport`, `optimize()`/`score_blocking`), so letting them fall out would
-  have un-gated well-covered contract code while making the remaining number look
+  the gate silently stops covering it. (`report/`, `autoresearch/` and the
+  `optimize.py` facade are in the glob for exactly that reason — they carry
+  public surface (`EvalReport`, `optimize()`/`score_blocking`), so letting them
+  fall out would un-gate contract code while making the remaining number look
   *better*.)
-- **Headroom, measured 2026-07-17: `core/*` is at 98.43% against the 98 floor.**
-  The floor was set from a measured 98.84%, so core has drifted ~0.4pp down and
-  the ratchet has ~0.4pp of slack left. If this gate fires on you after a small
-  change, you probably did not break it — it has been tightening for a while.
-  Diagnose the drift before lowering the floor.
+  **`src/langres/optimize.py` is listed as a file, not folded into a `*` glob**:
+  the facade is a module and the engine beside it is the `autoresearch/` package,
+  and coverage compiles a trailing `/*` to `optimize[/\\].*` — which matches a
+  directory's contents and can never match `optimize.py`. An `optimize/*` entry
+  here matches **nothing** and drops the facade silently. (Trailing `/*` *is*
+  recursive, so `autoresearch/*` covers the whole engine and `core/*` reaches
+  `core/blockers/vector.py`.)
+- **Headroom: the glob TOTAL is 98.39% against the 98 floor** (measured
+  2026-07-17 on `test-full`, at `0a38e46`, before the optimize/autoresearch
+  rename — which moves files without changing a line, so the number carries).
+  Note the floor gates the **whole include list**, not `core/*` alone: `core/*`
+  by itself measures 98.43%, which is close enough to mislead but is not the
+  number the gate compares. The floor was set from a measured 98.84%, so the
+  glob has drifted ~0.45pp down and the ratchet has ~0.39pp of slack left. If
+  this gate fires on you after a small change, you probably did not break it —
+  it has been tightening for a while. Diagnose the drift before lowering the
+  floor.
 - Type-check as you go: `uv run mypy src/`
 
 ## Development Workflow (Human-Like Iteration)

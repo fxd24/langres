@@ -10,7 +10,7 @@ fail-loud.
 
 import pytest
 
-from langres.optimize.factory import build_blocker_from_config, build_index
+from langres.autoresearch.factory import build_blocker_from_config, build_index
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.embeddings import FakeEmbedder

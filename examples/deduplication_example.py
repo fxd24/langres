@@ -48,7 +48,7 @@ from langres.core.metrics import (
     evaluate_blocking,
 )
 from langres.core.matchers.llm_judge import LLMMatcher
-from langres.optimize.blocker_optimizer import BlockerOptimizer
+from langres.autoresearch.blocker_optimizer import BlockerOptimizer
 from langres.core.indexes.vector_index import FAISSIndex
 from langres.data import load_labeled_dedup_data, stratified_dedup_split
 

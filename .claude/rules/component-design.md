@@ -97,14 +97,20 @@ a model is the user's job, not a heuristic's. The real layering is:)
      must stay importable *by* the components, not the reverse. The ratchet in
      `tests/test_import_tangle.py` measures it.
    - Philosophy: Like PyTorch's primitives.
-   - **Search is not core.** The autoresearch engine lives in `langres.optimize`
-     (facade + `objective`/`search_space`/`factory`/`loop` +
-     `blocker_optimizer.BlockerOptimizer`), *outside* `core`: `core` is ER
-     modelling, search is a consumer of it. The dependency is one-way and
-     measured — `core → optimize` is **0** edges in every kind; adding one would
-     put search beneath the primitives it drives.
+   - **Search is not core.** The autoresearch engine lives in
+     `langres.autoresearch` (`objective`/`search_space`/`factory`/`loop` +
+     `blocker_optimizer.BlockerOptimizer`) behind the `langres.optimize` facade,
+     *outside* `core`: `core` is ER modelling, search is a consumer of it. The
+     dependency is one-way and measured — `core → autoresearch` and
+     `core → optimize` are both **0** edges in every kind; adding one would put
+     search beneath the primitives it drives.
+     The engine is a package and the facade is a *module* (`optimize.py`) on
+     purpose: `langres.optimize` is a **callable** (`_exports/_optimize.py` binds
+     the attribute to the function), so any submodule under that name is
+     unreachable by attribute traversal — `import langres.optimize.loop as l`
+     raises `ImportError`. Don't put the engine back under it.
    - **Not yet built** (roadmap, don't reference as existing): a general
-     `Optimizer` (only `langres.optimize.blocker_optimizer.BlockerOptimizer`
+     `Optimizer` (only `langres.autoresearch.blocker_optimizer.BlockerOptimizer`
      exists).
 
 ## Key Design Principles

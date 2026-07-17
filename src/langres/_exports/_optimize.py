@@ -1,13 +1,20 @@
 """The autoresearch facade (``langres.optimize`` / ``score_blocking``).
 
-Eager on purpose, and import-light by construction: ``langres/optimize/__init__.py``'s
+Eager on purpose, and import-light by construction: ``langres/optimize.py``'s
 module top is stdlib/typing only (every factory / loop / data / metrics / faiss
 import is lazy inside a function body), so pulling it into the eager graph must
 not drag torch / faiss / sentence-transformers / litellm / scikit-learn / optuna
 into ``sys.modules``. ``tests/test_import_budget.py`` locks both halves.
 
-Note this imports the *package* ``langres.optimize`` — only its ``__init__``
-executes, never the heavy siblings (``factory``, ``blocker_optimizer``) beside it.
+Note this imports the *module* ``langres/optimize.py`` — the facade only. The
+engine it drives lives in the ``langres.autoresearch`` package, whose heavy
+members (``factory``, ``blocker_optimizer``) this never executes.
+
+**The binding below is why the facade must stay a module.** It rebinds the
+attribute ``langres.optimize`` from the module to the *function*, so any
+``langres.optimize.<submodule>`` is unreachable by attribute traversal
+(``import langres.optimize.loop as l`` → ``ImportError``). The engine is under
+its own un-shadowed package name for exactly that reason.
 
 See ``langres._exports`` for the fragment contract.
 """
