@@ -34,6 +34,7 @@ from langres.core.models import (
     PairwiseJudgement,
     predicted_match,
 )
+from langres.core.pairs import Pairs
 from langres.core.results import DedupeResult, LinkVerdict
 from langres.core.spend_cap import SpendCappedMatcher
 
@@ -88,13 +89,25 @@ def _coerce_log(log: "JudgementLog | str | Path | None") -> JudgementLog | None:
 class ModelRun(ModelState):
     """The run path of an ``ERModel``: candidates, scoring, clustering, front door."""
 
-    def _candidates(self, records: list[Any]) -> Iterator[ERCandidate[Any]]:
-        """Block records into candidates, attaching comparisons if configured.
+    def _candidates(self, records: list[Any]) -> Pairs[Any]:
+        """Block records into a :class:`~langres.core.pairs.Pairs`, comparing if configured.
 
         Builds an index-backed blocker's index transparently before streaming,
         so callers never call ``create_index`` themselves. Records are fed in
         the caller's stable list order. Shared by ``_judgements`` (scoring)
-        and ``fit`` (training) -- both need the same candidate stream.
+        and ``fit`` (training) -- both bridge back to ``ERCandidate`` at the
+        matcher boundary via :meth:`~langres.core.pairs.Pairs.to_candidates`
+        (matchers still consume the legacy stream; migrating them is W2).
+
+        The blocker's per-pair ``similarity_score`` lands on each row as an
+        *unscored* ``score`` (``score_type is None`` -- a blocker similarity,
+        never a judge score, ``F-W1a``); the comparator's ``ComparisonVector``,
+        when configured, is attached to each row's ``comparison`` before the
+        carrier is built, so ``.left``/``.right`` stay bound to the shared
+        store. Materializing the post-blocking set here (rather than streaming
+        it lazily as this method used to) is the W1 carrier trade-off: rows are
+        lightweight id-refs over one shared entity store, and behavior --
+        clusters, scores -- is byte-identical.
         """
         self._ensure_index_built(records)
         candidates = self.blocker.stream(records)
@@ -104,15 +117,18 @@ class ModelRun(ModelState):
                 c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
                 for c in candidates
             )
-        return candidates
+        return Pairs.from_candidates(list(candidates))
 
     def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
         """Block records into a materialized list of judge-ready candidates.
 
         The public counterpart to :meth:`_candidates`: same blocking (building
         any index-backed blocker's index transparently) and the same
-        comparison-attachment behavior, but returns a **list** rather than a
-        generator. Comparison vectors ARE attached whenever this Resolver has a
+        comparison-attachment behavior, but returns the legacy
+        **``list[ERCandidate]``** (bridged off the ``Pairs`` carrier
+        ``_candidates`` now returns) rather than the carrier itself -- external
+        callers depend on this exact shape. Comparison vectors ARE attached
+        whenever this Resolver has a
         comparator configured (the default for ``Resolver.from_schema``) --
         a caller that instead reaches into e.g. ``bench.build_blocker().stream(records)``
         directly gets candidates WITHOUT comparison vectors, which silently
@@ -134,7 +150,7 @@ class ModelRun(ModelState):
         Returns:
             The blocked candidates, materialized as a list (never a generator).
         """
-        return list(self._candidates(records))
+        return self._candidates(records).to_candidates()
 
     def _scorer(self, *, log: JudgementLog | None = None) -> SpendCappedMatcher:
         """This model's matcher, metered by its ONE spend ledger.
@@ -200,8 +216,13 @@ class ModelRun(ModelState):
         every ranking judgement's raw ``score`` is mapped to a calibrated
         probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
         clusterer thresholds on a real probability. Pure pass-through otherwise.
+
+        The :meth:`_candidates` :class:`~langres.core.pairs.Pairs` is bridged
+        back to the legacy ``ERCandidate`` stream at the matcher boundary (W1):
+        the matcher, its spend cap and its logging wrapper still consume
+        ``Iterator[ERCandidate]`` unchanged -- migrating them is W2.
         """
-        judgements = self._scorer(log=log).forward(self._candidates(records))
+        judgements = self._scorer(log=log).forward(iter(self._candidates(records).to_candidates()))
         if self.calibrator is None:
             return judgements
         return self._apply_calibrator(judgements, self.calibrator)
@@ -375,8 +396,8 @@ class ModelRun(ModelState):
             BudgetExceeded: If scoring this pair would cross the spend cap.
         """
         normalized = self._prepare([left, right])
-        candidate = self._pair_candidate(normalized)
-        judgements = list(self._scorer(log=_coerce_log(log)).forward(iter([candidate])))
+        pair = self._pair_candidate(normalized)
+        judgements = list(self._scorer(log=_coerce_log(log)).forward(iter(pair.to_candidates())))
         if not judgements:
             raise RuntimeError(
                 f"the {type(self.module).__name__} matcher produced no judgement for this pair; "
@@ -408,17 +429,24 @@ class ModelRun(ModelState):
             judgement=judgement,
         )
 
-    def _pair_candidate(self, records: list[dict[str, Any]]) -> ERCandidate[Any]:
-        """The ONE candidate for :meth:`compare` -- blocker-attached, never blocker-vetoed.
+    def _pair_candidate(self, records: list[dict[str, Any]]) -> Pairs[Any]:
+        """The ONE pair for :meth:`compare` -- blocker-attached, never blocker-vetoed.
 
         Runs the real pipeline first, so anything the blocker attaches (a
         ``VectorBlocker``'s ``similarity_score``; the comparator's
-        ``ComparisonVector``) is present exactly as it would be in a batch. Falls
-        back to a directly-built candidate when the blocker yields nothing --
-        see :meth:`compare` on why a veto must not decide the verdict.
+        ``ComparisonVector``) is present exactly as it would be in a batch, and
+        keeps only the *first* blocked pair (mirroring the pre-carrier
+        "return the first candidate" behavior). Falls back to a directly-built
+        pair when the blocker yields nothing -- see :meth:`compare` on why a
+        veto must not decide the verdict.
+
+        Returns a single-row :class:`~langres.core.pairs.Pairs`;
+        :meth:`compare` bridges it back to an ``ERCandidate`` at the matcher
+        boundary via :meth:`~langres.core.pairs.Pairs.to_candidates`.
         """
-        for candidate in self._candidates(records):
-            return candidate
+        pairs = self._candidates(records)
+        if pairs.rows:
+            return Pairs(store=pairs.store, rows=pairs.rows[:1])
 
         from langres.core.blockers.all_pairs import schema_to_factory
 
@@ -436,7 +464,7 @@ class ModelRun(ModelState):
             candidate = candidate.model_copy(
                 update={"comparison": self.comparator.compare(left_entity, right_entity)}
             )
-        return candidate
+        return Pairs.from_candidates([candidate])
 
     def _ensure_index_built(self, records: list[Any]) -> None:
         """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
