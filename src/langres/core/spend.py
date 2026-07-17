@@ -10,7 +10,8 @@ cycle::
     spend_cap -> clients.openrouter -> core.benchmark -> core.presets -> spend_cap
 
 Measured with ``tools/import_graph.py cycles``, that edge grew the all-edges SCC
-from 10 to 11. Here -- importing nothing but :mod:`langres.core.models`, and
+from 10 to 11. (That chain is history, not something you can re-run today: W4
+deleted ``core.presets`` outright.) Here -- importing nothing but :mod:`langres.core.models`, and
 that only under ``TYPE_CHECKING`` -- it is in no cycle at all, and a *transport*
 module (``clients.openrouter``) no longer owns a *policy* primitive that core
 depends on.

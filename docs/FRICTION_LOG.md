@@ -28,26 +28,26 @@ number is interpretable, not just a wall-clock figure from one machine).
 | Cold install — `[semantic]` extra (torch/faiss/sentence-transformers) | **6.8 s** (921 MB) | < 120 s | ✅ PASS |
 | `python -c "import langres"` (cold interpreter) | **~0.2 s** pure / **~0.55 s** via `uv run` | < 2 s | ✅ PASS |
 | TTHW (fresh venv → first successful dedupe) | **~2.5 s** (2.3 s core install + 0.2 s run) | < 60 s | ✅ PASS |
-| LOC-to-first-cluster (`examples/quickstart_verbs.py`) | **3 statements / ~10 lines** (import + records literal + `dedupe(...)` + print loop) | ≤ 10 lines | ✅ PASS |
+| LOC-to-first-cluster (`examples/quickstart_models.py`) | **3 statements / ~10 lines** (import + records literal + `dedupe(...)` + print loop) | ≤ 10 lines | ✅ PASS |
 
 **Import time — the W0.4 lazy-import win holds.** `import langres` is ~0.2 s
 pure-interpreter (well under the 2 s budget), and a direct check confirms the
 heavy stacks stay out of `sys.modules` on a bare import:
 `torch`, `litellm`, and `sentence_transformers` are all `False` after
 `import langres`. The PEP 562 `__getattr__` lazy resolution (see
-`tests/test_import_budget.py`) means a newcomer who only wants the string-judge
-`dedupe()` path never pays torch's import cost.
+`tests/test_import_budget.py`) means a newcomer who only names the offline
+`FuzzyString` architecture never pays torch's import cost.
 
 **TTHW is dominated by the (tiny) core install, not by langres itself.**
-`quickstart_verbs.py` runs offline at $0 through the explicitly pinned
-zero-spend `"string"` judge — no API key, no network, no embedding-model
-download. (The default `matcher="auto"` requires an API key and raises
-`NoMatcherAvailableError` without one — offline fuzzy matching is an explicit
-opt-in, not a fallback.) It prints `2 cluster(s) found` in ~0.2 s. From a cold `uv venv` to that first
-cluster is ~2.5 s end-to-end. The heavier `[semantic]` / `[llm]` paths are only
-needed once a newcomer graduates past the toy dataset (N > ~100 records) or
-wants a real LLM judge; the quickstart deliberately pins `matcher="string"` so the
-first-run experience needs neither.
+`quickstart_models.py` runs offline at $0 through `FuzzyString` — the
+architecture with no paid model slot, so it cannot spend, needs no API key, no
+network, no embedding-model download. It prints `2 cluster(s) found` in ~0.2 s.
+From a cold `uv venv` to that first cluster is ~2.5 s end-to-end. The heavier
+`[semantic]` / `[llm]` paths are only needed once a newcomer names a model that
+needs them — `Resolver.from_schema(matcher="embedding")` or
+`VectorLLMCascade(llm=...)`; there is no automatic row-count-based switch, and
+the quickstart deliberately names `FuzzyString` so the first-run experience
+needs neither.
 
 **No new friction found** in this pass — the packaging/import DX cleaned up in
 W0.4 (lazy heavy imports, core/extras split) is holding. The one caveat worth

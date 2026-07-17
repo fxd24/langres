@@ -46,17 +46,13 @@ from langres.core.metrics import (
 from langres.core.models import PairwiseJudgement
 from langres.core.matcher import Matcher
 
-# ``_effective_budget`` resolves budget_usd=None -> presets.DEFAULT_BUDGET_USD, the
-# same default the verbs' spend cap uses (DRY). No import-cycle risk despite
-# presets.py sitting "above" benchmark.py in the module's own layering note:
-# `langres/__init__.py` already imports `langres.core.presets` eagerly (and this
-# module already imports `langres.core.resolver`, which does `import langres`,
-# pulling presets in first regardless), and presets.py's own transitive imports
-# never import `core.benchmark` at runtime (only a `TYPE_CHECKING`-guarded
-# annotation inside `clients/openrouter.py`) -- verified empirically: importing
-# `langres.core.presets` alone never inserts `langres.core.benchmark` into
-# `sys.modules`.
-from langres.core.presets import _effective_budget
+# ``effective_budget`` resolves budget_usd=None -> DEFAULT_BUDGET_USD, the same
+# default every ERModel's spend cap uses (DRY). It comes from the `core.spend_cap`
+# leaf, so there is no layering question to answer here: W4 deleted `core.presets`
+# (which used to own this and sat "above" benchmark.py, needing a paragraph of
+# justification for the import); the leaf that always owned the logic is simply
+# below everything.
+from langres.core.spend_cap import effective_budget
 from langres.core.resolver import Resolver
 from langres.core.usage import LLMUsage
 
@@ -1244,7 +1240,7 @@ _NEGLIGIBLE_WORST_CASE_PRICE = 1e-9
 
 
 def _budget_truncation_message(result: JudgePairEval, budget_usd: float) -> str:
-    """Actionable message for a spend-caused truncation (modelled on NoMatcherAvailableError)."""
+    """Actionable message for a spend-caused truncation: name the fix, not just the fault."""
     return (
         f"evaluate() stopped early ({result.truncation_reason}): judged "
         f"{result.n_judged}/{result.n_candidates} pairs before the ${budget_usd:.2f} "
@@ -1370,8 +1366,8 @@ def evaluate(
     - **Spend-capped by default, honestly.** Every call runs the judge through
       an internal :class:`BudgetedModuleRunner`, capped at ``budget_usd``
       (``None`` resolves to
-      :data:`~langres.core.presets.DEFAULT_BUDGET_USD`, the same default the
-      verbs use). **This is not a hard ceiling**: the cap is enforced BETWEEN
+      :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`, the same default every
+      ERModel uses). **This is not a hard ceiling**: the cap is enforced BETWEEN
       calls, so a single in-flight call can still push total spend past it by
       that call's own cost (a free judge — string/embedding, which never sets
       ``provenance["cost_usd"]`` — never approaches the cap regardless). When
@@ -1420,7 +1416,7 @@ def evaluate(
         budget_usd: Spend ceiling for the internal runner, enforced BETWEEN
             calls (see above — NOT a hard ceiling on a single call's own cost);
             ``None`` (default) resolves to
-            :data:`~langres.core.presets.DEFAULT_BUDGET_USD`.
+            :data:`~langres.core.spend_cap.DEFAULT_BUDGET_USD`.
         on_truncation: What to do when the run is truncated — see above.
         slice_fn: Optional pair-key tagger forwarded to
             :func:`evaluate_judge_on_candidates`; when given, ``slices`` are
@@ -1467,7 +1463,7 @@ def evaluate(
             stacklevel=2,
         )
 
-    resolved_budget = _effective_budget(budget_usd)
+    resolved_budget = effective_budget(budget_usd)
     runner = BudgetedModuleRunner(
         module,
         budget_usd=resolved_budget,

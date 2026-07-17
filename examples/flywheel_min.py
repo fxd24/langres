@@ -1,6 +1,6 @@
 """The langres flywheel in one script -- offline, $0, zero labels to start.
 
-dedupe -> log every judge call -> review the uncertain margin -> label it via
+FuzzyString().dedupe -> log every call -> review the uncertain margin -> label it via
 the CLI's CSV round-trip -> harvest -> data-driven threshold -> re-run -> grade
 both passes against a small gold sample. Run: uv run python examples/flywheel_min.py
 """
@@ -15,12 +15,12 @@ from langres import (
     EvalReport,
     JudgementLog,
     ReviewQueue,
-    dedupe,
     derive_threshold_from_pairs,
     gold_pairs_from_clusters,
     harvest_labeled_pairs,
     select_for_review,
 )
+from langres.architectures import FuzzyString
 
 WORK = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tmp/flywheel_min")
 WORK.mkdir(parents=True, exist_ok=True)
@@ -43,9 +43,9 @@ records = [
 # tearsheet only -- the tuned threshold comes from the review loop below.
 gold = gold_pairs_from_clusters([{"a1", "a2"}, {"g1", "g2"}, {"i1", "i2"}])
 
-# [1] First pass: offline string judge, every call logged (the flywheel inlet).
+# [1] First pass: the $0 offline architecture, every call logged (the flywheel inlet).
 log = JudgementLog(WORK / "judgements.jsonl")
-first = dedupe(records, matcher="string", log=log)  # threshold=None -> 0.5 default
+first = FuzzyString().dedupe(records, log=log)  # FuzzyString's default cut is 0.5
 rows = log.read()
 print(f"[1] clusters @ {first.threshold}: {sorted(sorted(c) for c in first)}")
 
@@ -83,7 +83,7 @@ tuned = derive_threshold_from_pairs(pairs)
 print(f"[4] harvested {len(pairs)} labeled pairs -> tuned threshold {tuned:.3f}")
 
 # [5] Re-run at the tuned cut: the over-merged clusters split.
-second = dedupe(records, matcher="string", threshold=tuned, log=JudgementLog(WORK / "v2.jsonl"))
+second = FuzzyString(threshold=tuned).dedupe(records, log=JudgementLog(WORK / "v2.jsonl"))
 print(f"[5] clusters @ {second.threshold:.3f}: {sorted(sorted(c) for c in second)}")
 
 # [6] Grade both passes against gold at $0 and write the HTML tearsheet.

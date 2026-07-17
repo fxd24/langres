@@ -217,23 +217,29 @@ class TestKeyDiscoveryContract:
         assert Settings().openrouter_api_key is None
 
 
-class TestLangresOfflineFlag:
-    """LANGRES_OFFLINE parsing: truthy bool strings turn it on; empty string,
-    "0"/"false", and unset mean off (an explicitly empty variable must never
-    crash Settings -- consistent with empty-means-absent for keys)."""
+class TestLangresOfflineIsGone:
+    """W4 deleted LANGRES_OFFLINE along with the path it existed to disarm.
 
-    @pytest.mark.parametrize("raw", ["1", "true", "True", "yes"])
-    def test_truthy_values_enable_offline(self, raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LANGRES_OFFLINE", raw)
-        assert Settings().langres_offline is True
+    The flag made ``matcher="auto"`` treat every API key as absent so it would
+    fail fast instead of picking a paid judge. W4 deleted ``matcher="auto"``,
+    which left the flag read by nothing -- a *documented spend guard that did
+    nothing*, the worst possible failure mode for a safety switch. Naming a
+    paid architecture is now the only way to spend, so there is no
+    auto-decision left to disarm.
 
-    @pytest.mark.parametrize("raw", ["", "0", "false", "no"])
-    def test_falsy_values_disable_offline(self, raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LANGRES_OFFLINE", raw)
-        assert Settings().langres_offline is False
+    ``extra="ignore"`` means a leftover ``LANGRES_OFFLINE=1`` in someone's
+    ``.env`` is silently ignored rather than a ValidationError, so removing the
+    field cannot break an existing environment.
+    """
 
-    def test_unset_defaults_to_off(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # chdir to an empty tmp dir so the repo .env can't feed the field.
+    def test_the_field_no_longer_exists(self) -> None:
+        assert "langres_offline" not in Settings.model_fields
+
+    def test_a_leftover_env_var_does_not_break_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A user whose .env still sets it must not get a crash on upgrade."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.delenv("LANGRES_OFFLINE", raising=False)
-        assert Settings().langres_offline is False
+        monkeypatch.setenv("LANGRES_OFFLINE", "1")
+        settings = Settings()
+        assert not hasattr(settings, "langres_offline")

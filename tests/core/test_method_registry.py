@@ -3,11 +3,16 @@
 Covers the registry contract itself (lookup, did-you-mean, the reserved ``/``
 id grammar, collision), the identity metadata each built-in spec carries
 (``default_model`` / ``accepted_kinds`` / ``default_threshold`` /
-``score_type``), and that the three former dispatch sites -- the verbs'
-``presets.build_judge``, ``Resolver.from_schema``, and the benchmark
-harness's ``methods._make_module_builder`` -- now build the SAME class for
-the same name (docs/research/20260713_model_identity_and_hub.md, closing
-issue #55's three-site wiring debt).
+``score_type``), and that the former dispatch sites -- ``Resolver.from_schema``
+and the benchmark harness's ``methods._make_module_builder`` -- build the SAME
+class for the same name (docs/research/20260713_model_identity_and_hub.md,
+closing issue #55's three-site wiring debt).
+
+There were THREE such sites until W4: the verbs' ``presets.build_judge`` was the
+first. It went with ``presets.py`` when the verbs were deleted, so the shared
+registry now has two name-dispatch callers, not three. The named architectures
+(``langres.architectures``) are deliberately NOT a third: they carry no
+name->builder indirection to keep in sync, because the class IS the identity.
 """
 
 from typing import Any
@@ -28,7 +33,6 @@ from langres.core.method_registry import (
     register_method,
 )
 from langres.core.matcher import Matcher
-from langres.core.presets import DEFAULT_AUTO_MODEL
 
 
 class RegistryCompany(BaseModel):
@@ -193,12 +197,17 @@ class TestBuiltinSpecs:
         assert spec.score_type == "heuristic"
         assert spec.default_threshold == 0.5
 
-    def test_registry_and_auto_policy_share_one_default_model(self) -> None:
-        """The pinned auto default and the registry's LLM specs cannot drift:
-        all alias clients.openrouter.DEFAULT_OPENROUTER_MODEL."""
-        assert DEFAULT_AUTO_MODEL == DEFAULT_OPENROUTER_MODEL
-        assert get_method("zero_shot_llm").default_model == DEFAULT_AUTO_MODEL
-        assert get_method("prompt_llm").default_model == DEFAULT_AUTO_MODEL
+    def test_llm_specs_share_one_default_model(self) -> None:
+        """The registry's LLM specs cannot drift on the default model literal.
+
+        This used to also pin ``presets.DEFAULT_AUTO_MODEL``, the model
+        ``matcher="auto"`` resolved to. W4 deleted both the constant and the auto
+        path that gave it meaning -- a "default model" only means something when
+        something picks a model FOR you, and nothing does any more. The specs'
+        own shared default is the part of the invariant that survives.
+        """
+        assert get_method("zero_shot_llm").default_model == DEFAULT_OPENROUTER_MODEL
+        assert get_method("prompt_llm").default_model == DEFAULT_OPENROUTER_MODEL
 
     def test_custom_comparator_weights_flow_into_string_builder(self) -> None:
         """from_schema's weights=/exclude= customization must reach the judge."""
@@ -217,16 +226,26 @@ class TestBuiltinSpecs:
             _build("prompt_llm", not_a_real_knob=1)
 
 
-class TestThreeSitesResolveIdentically:
-    """The verbs, from_schema, and the benchmark harness share the registry."""
+class TestDispatchSitesResolveIdentically:
+    """from_schema and the benchmark harness share the one registry.
 
-    def test_verbs_and_from_schema_build_the_same_string_judge(self) -> None:
-        from langres.core.presets import build_judge
+    Was ``TestThreeSitesResolveIdentically``; the verbs' ``presets.build_judge``
+    was the third site and W4 deleted it with the rest of ``presets.py``.
+    """
+
+    def test_registry_and_from_schema_build_the_same_string_judge(self) -> None:
+        from langres.core.method_registry import get_method as _get
         from langres.core.resolver import Resolver
 
-        via_presets = build_judge("string", RegistryCompany)
+        via_registry = _get("string").build(
+            RegistryCompany,
+            model=None,
+            entity_noun="entity",
+            client=None,
+            comparator=StringComparator.from_schema(RegistryCompany),
+        )
         via_from_schema = Resolver.from_schema(RegistryCompany, matcher="string").module
-        assert type(via_presets) is type(via_from_schema)
+        assert type(via_registry) is type(via_from_schema)
 
     def test_benchmark_path_builds_llm_judge_via_the_registry(self) -> None:
         from langres.methods import _make_module_builder

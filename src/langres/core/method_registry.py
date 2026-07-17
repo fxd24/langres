@@ -2,22 +2,21 @@
 
 Before this module, a *name-selectable* judge had to be wired into three
 hand-rolled dispatch switches -- ``core/presets.py:build_judge`` (the verbs),
-``core/resolver.py:_build_module_for_judge`` (``Resolver.from_schema``), and
+``core/resolver.py:_build_module_for_judge`` (``ERModel.from_schema``), and
 ``methods.py:_make_module_builder`` (the benchmark harness) -- and the same
 string could mean different things per layer (``llm_judge`` the *method* built
 ``LLMMatcher`` while ``zero_shot_llm`` the *judge name* built ``DSPyMatcher``).
-All three sites now resolve through this one registry, so a judge name maps to
-exactly one construction everywhere, together with its identity metadata: the
-score family it emits, its default decision threshold, and the underlying
-model id that :func:`langres.link`/:func:`langres.dedupe` stamp on results
-(see the model-identity design note,
+Every site resolves through this one registry, so a judge name maps to exactly
+one construction everywhere, together with its identity metadata: the score
+family it emits, its default decision threshold, and the underlying model id
+stamped on results (see the model-identity design note,
 ``docs/research/20260713_model_identity_and_hub.md``).
 
-The registry does NOT replace each layer's *policy*: the verbs still expose
-only the judge names that are safe without an injected client or a fit step
-(``presets.build_judge``), and ``Resolver.from_schema`` still refuses
-``"auto"`` (a verbs-layer feature). What is unified is the construction and
-the metadata -- one spec per name, looked up by everyone.
+W4 removed the first of those three sites: ``core/presets.py`` and its
+``matcher="auto"`` allowlist are gone, leaving ``from_schema`` and the
+benchmark harness. The registry does NOT replace each layer's *policy* -- what
+is unified is the construction and the metadata, one spec per name, looked up
+by everyone.
 
 Id grammar (decided once, deliberately): **bare names are built-ins**;
 ``/`` is **reserved** for future HF-style author namespacing of third-party
@@ -525,14 +524,13 @@ def _register_builtins() -> None:
     """Seed the registry with the built-in methods (module import time).
 
     ``default_model`` for the LLM family deliberately references
-    ``clients.openrouter.DEFAULT_OPENROUTER_MODEL`` -- the same constant
-    ``presets.DEFAULT_AUTO_MODEL`` aliases -- so the registry, the auto-judge
-    policy, and every builder agree on one literal.
+    ``clients.openrouter.DEFAULT_OPENROUTER_MODEL`` so the registry and every
+    builder agree on one literal.
     """
     from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
 
     specs = [
-        # -- The verb-facing judge family (presets/from_schema allowlists) ----
+        # -- The name-selectable judge family (from_schema's allowlist) -------
         MethodSpec(
             name="string",
             build=_build_string,

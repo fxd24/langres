@@ -2,12 +2,19 @@
 langres: A composable entity resolution framework.
 
 This package provides:
-- ``link`` / ``dedupe``: the two-verb DX layer (schema-optional, matcher="auto"
-  by default, spend-capped) -- see ``langres.verbs``.
-- ``langres.core``: Low-level primitives for custom pipelines (``Resolver``,
-  ``Blocker``, ``Matcher``, ``Clusterer``, ...).
+- ``langres.architectures``: named ER models you construct and call --
+  ``FuzzyString()`` ($0, offline, deterministic, needs no key) and
+  ``VectorLLMCascade(embedder=..., llm=...)`` (paid). An architecture is a
+  *topology*; the model filling each slot is a *backbone* you name. There is no
+  ``matcher="auto"``: W4 deleted the key-sniffing front door, so nothing spends
+  money unless you named a paid architecture yourself.
+- ``ERModel`` (aliased ``Resolver``): the declarative base the architectures
+  subclass -- ``from_schema`` / ``dedupe`` / ``compare`` / ``resolve`` /
+  ``save`` / ``load`` / ``fit``.
+- ``langres.core``: Low-level primitives for custom pipelines (``Blocker``,
+  ``Matcher``, ``Clusterer``, ...).
 - The flywheel loop, end to end at the root: ``JudgementLog`` (the inlet --
-  wire via ``log=`` on ``link``/``dedupe``), ``select_for_review`` /
+  wire via ``log=`` on ``dedupe``/``compare``), ``select_for_review`` /
   ``ReviewQueue`` (pick the uncertain margin), ``Correction`` /
   ``CorrectionLog`` (the human labels the ``langres import-csv`` CLI writes),
   ``harvest_labeled_pairs`` + ``derive_threshold_from_pairs`` (labels -> a
@@ -15,9 +22,8 @@ This package provides:
   it), and ``gold_pairs_from_clusters`` + ``EvalReport`` (grade a run against
   gold at $0). See ``examples/flywheel_min.py`` for the whole loop in one
   script.
-- ``NoMatcherAvailableError`` / ``MatcherAbstainedError`` / ``BudgetExceeded``: the
-  exceptions a front-door user must catch (fail-fast ``matcher="auto"``; a judge
-  that abstained on the pair; the spend cap).
+- ``MatcherAbstainedError`` / ``BudgetExceeded``: the exceptions a front-door
+  user must catch (a matcher that abstained on the pair; the spend cap).
 
 Import weight: most root exports are cheap and eager -- including the
 training-surface pieces that make ``Resolver.fit`` legible: the method objects
@@ -33,7 +39,7 @@ never pulls the eval-report/benchmark modules -- or scikit-learn
 
 **This module is a thin aggregator.** The exports -- eager imports included --
 live in per-domain fragments under :mod:`langres._exports`, one file per
-work-stream (verbs, optimize, core, flywheel, training, data). Both the sorted
+work-stream (models, optimize, core, flywheel, training, data). Both the sorted
 ``__all__`` and the eager import block were merge-conflict hotspots: their lines
 belong to different streams, so any two streams collided on this file.
 
@@ -63,7 +69,7 @@ from langres._exports._data import *  # noqa: F403
 from langres._exports._flywheel import *  # noqa: F403
 from langres._exports._optimize import *  # noqa: F403
 from langres._exports._training import *  # noqa: F403
-from langres._exports._verbs import *  # noqa: F403
+from langres._exports._models import *  # noqa: F403
 
 #: The composed public surface -- every fragment's slice, deduplicated and
 #: sorted (see :data:`langres._exports.NAMES`).

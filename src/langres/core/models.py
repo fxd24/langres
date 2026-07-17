@@ -166,17 +166,17 @@ class PairwiseJudgement(BaseModel):
 class MatcherAbstainedError(RuntimeError):
     """A judge abstained where the caller needs a verdict.
 
-    Raised by :func:`~langres.link` when the judge neither decided nor scored
-    (``PairwiseJudgement.is_abstain``) — e.g. an ``LLMMatcher`` whose response
-    failed to parse under the default ``on_parse_error="abstain"``.
+    Raised by :meth:`~langres.core.resolver.ERModel.compare` when the matcher
+    neither decided nor scored (``PairwiseJudgement.is_abstain``) — e.g. an
+    ``LLMMatcher`` whose response failed to parse under the default
+    ``on_parse_error="abstain"``.
 
     This is deliberately an exception rather than a ``match=None`` verdict: a
     caller writing the obvious ``if verdict.match:`` would read ``None`` as "not
     a match", silently turning "I don't know" back into a confident no — the very
     conflation the decision/score split exists to remove. An exception cannot be
-    ignored by accident. It subclasses ``RuntimeError`` (like
-    ``NoMatcherAvailableError``) so existing ``except RuntimeError`` handlers still
-    catch it.
+    ignored by accident. It subclasses ``RuntimeError`` so existing
+    ``except RuntimeError`` handlers still catch it.
     """
 
 

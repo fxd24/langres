@@ -25,7 +25,7 @@ Run it:
 
 from pathlib import Path
 
-from langres import dedupe
+from langres.architectures import FuzzyString
 from langres.core import RunContext, RunStore, capture_run, compute_recipe_id
 from langres.core.runs import dataset_fingerprint, git_sha
 
@@ -127,7 +127,7 @@ def main() -> None:
                 config_context(threshold, parent_run_id=sweep.attempt_id),
                 store=store,
             ) as run:
-                clusters = list(dedupe(records, matcher="string", threshold=threshold))
+                clusters = list(FuzzyString(threshold=threshold).dedupe(records))
                 metrics = pair_prf(clusters, gold_pairs)
                 run.log_metrics(
                     metrics,

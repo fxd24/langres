@@ -6,8 +6,10 @@ the caller wired, symmetrically -- there is no privileged default backend. This
 module carries only the seam: the :class:`ExperimentTracker` Protocol, the
 :class:`NoOpTracker` null object (zero overhead when unconfigured), the
 :class:`MultiTracker` fan-out (run MLflow *and* W&B together), and
-:func:`resolve_tracker` (``None|"mlflow"|"wandb"|instance|sequence`` dispatch,
-mirroring :func:`langres.core.presets.resolve_judge`).
+:func:`resolve_tracker` (``None|"mlflow"|"wandb"|instance|sequence`` dispatch --
+the repo's string-spec convention: a public parameter takes a name and resolves
+the backend internally, so the happy path never makes the caller import a
+resolver helper).
 
 The concrete backend adapters (``MlflowTracker`` in ``mlflow_tracker.py``,
 ``WandbTracker`` in ``wandb_tracker.py``, ``TrackioTracker`` in
@@ -223,7 +225,7 @@ def _load_adapter_class(backend: str) -> type[Any]:
 def resolve_tracker(spec: TrackerSpec) -> ExperimentTracker:
     """Resolve a tracker spec to a concrete :class:`ExperimentTracker`.
 
-    Mirrors :func:`langres.core.presets.resolve_judge`:
+    The repo's string-spec dispatch, same shape as ``matcher=`` on an ERModel:
 
     * ``None`` -> :class:`NoOpTracker` (no persistence, zero overhead).
     * ``"mlflow"`` / ``"wandb"`` / ``"trackio"`` -> the lazily-loaded backend

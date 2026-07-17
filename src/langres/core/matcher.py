@@ -256,8 +256,8 @@ def stamp_group_cost(
 
     ``provenance["group_end"]`` is set ``True`` on (only) the LAST judgement
     of the group -- a boundary marker so a consumer draining a whole group
-    from a lazy stream (:class:`~langres.core.presets._SpendCappedMatcher`,
-    E9) knows exactly when to stop pulling without needing to peek at (and
+    from a lazy stream (:class:`~langres.core.spend_cap.SpendCappedMatcher`)
+    knows exactly when to stop pulling without needing to peek at (and
     thereby trigger the computation of) the next group.
 
     Args:

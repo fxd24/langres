@@ -6,17 +6,18 @@ a default number. Nothing is enforced unless a matcher is wrapped in
 
 Why this is a core leaf
 -----------------------
-This class used to live in :mod:`langres.core.presets`, which sits strictly
-*above* :class:`~langres.core.resolver.Resolver` and imports it -- so the
-Resolver, the entire low-level public API, could not reach the cap and ran
-**uncapped**. Both layers need it, so it lives beneath both, importing only
-:mod:`langres.core.spend`, :mod:`langres.core.matcher`,
-:mod:`langres.core.inspection` and :mod:`langres.core.models` -- all leaves, so
-this module is in no import cycle (``tools/import_graph.py cycles``; the
-all-edges SCC stays at 10). ``presets`` re-exports it as ``_SpendCappedMatcher``
-for its long-standing callers::
+This class used to live in ``langres.core.presets``, which sat strictly *above*
+:class:`~langres.core.resolver.ERModel` and imported it -- so the ERModel, the
+entire low-level public API, could not reach the cap and ran **uncapped**. It
+lives here instead, importing only :mod:`langres.core.spend`,
+:mod:`langres.core.matcher`, :mod:`langres.core.inspection` and
+:mod:`langres.core.models` -- all leaves, so this module is in no import cycle
+(``tools/import_graph.py cycles``).
 
-    verbs -> presets -> Resolver -> spend_cap -> spend
+That placement is what let W4 delete ``presets`` outright: once the cap lived
+below the ERModel rather than above it, every architecture inherited enforcement
+for free, and the only thing ``presets`` still owned was the key-sniffing
+``matcher="auto"`` policy the wave was deleting anyway.
 
 What the cap actually guarantees
 --------------------------------

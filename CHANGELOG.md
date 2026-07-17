@@ -2,6 +2,76 @@
 
 ## [Unreleased]
 
+### The model is explicit: `ERModel` + named architectures — **breaking**
+
+Nothing in langres named a *whole* ER pipeline. `link()`/`dedupe()` took a
+`matcher=` string × a `model=` string, and the default `matcher="auto"` sniffed
+`OPENROUTER_API_KEY`/`OPENAI_API_KEY` out of your environment (or a `.env` file
+you had forgotten about) and **spent real money** on whatever it found. You could
+not tell what model was underneath without reading the source.
+
+Now you name the model, and it is a class you can read:
+
+```python
+from langres.architectures import FuzzyString, VectorLLMCascade
+
+FuzzyString().dedupe(records)                                  # $0, offline, no key
+VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini").dedupe(records)   # paid, because you said so
+```
+
+`FuzzyString` costs nothing because it has no paid model slot — not because a
+heuristic guessed well or a cap held.
+
+#### Added
+
+- **`langres.architectures`** — named ER architectures. `FuzzyString` (all-pairs
+  + string similarity; $0, offline, deterministic, no network) and
+  `VectorLLMCascade` (vector blocking + a free embedding student + an LLM
+  escalated only at the uncertain margin). One self-contained file each.
+- **`ERModel`** — the reshaped `Resolver` (`Resolver` remains as a plain alias;
+  `Resolver is ERModel`). New: `.dedupe(records)`, `.compare(a, b)`,
+  `.from_components(...)`, `.backbone`, `.schema`, `.is_bound`.
+- **`ERModel.compare(a, b) -> LinkVerdict`** — replaces the verb `link(a, b)`
+  (one pair). Deliberately not named `link`: `ERModel.link(left, right)` remains
+  a reserved cross-source stub, and two incompatible things were called `link`
+  before this.
+- `langres.core.inputs` (schema inference / record normalization) and
+  `langres.core.results` (`LinkVerdict`, `DedupeResult`) — lifted out of the
+  verbs as reusable contracts. **`DedupeResult` is now root-exported**; it never
+  was, despite being what `dedupe()` returned.
+- `log=` on `.dedupe()`/`.compare()` — the flywheel inlet, now per call and
+  composed *inside* the spend cap rather than by mutating the matcher slot.
+
+#### Removed — **breaking, no shim**
+
+- **`langres.link` / `langres.dedupe`** (the module-level verbs) and
+  `langres.verbs`. Use a model's `.dedupe()`/`.compare()`.
+- **`matcher="auto"` / `judge="auto"`**, `choose_auto_judge`,
+  `DEFAULT_AUTO_MODEL`, `NoMatcherAvailableError`, and all of
+  **`langres.core.presets`** (`build_judge`, `resolve_judge`, `build_resolver`,
+  `default_threshold_for`, `PAID_JUDGE_NAMES`, `MatcherName`). Deleted, not
+  relocated. `Resolver.from_schema(matcher="auto")` now raises and names a
+  concrete architecture instead.
+- `LANGRES_OFFLINE` no longer affects the front door — it only ever gated the
+  deleted `auto` path. (`Settings` still reads it; nothing acts on it.)
+- `default_threshold_for` has no replacement, deliberately: a bound model carries
+  its own cut in its `Clusterer`, so `compare()` reads `self.clusterer.threshold`.
+  The name→threshold table existed only because the verbs had no model to ask.
+
+#### Changed
+
+- **`LinkVerdict`/`DedupeResult` fields**: `judge_used` → **`architecture`** (the
+  model class that ran) and `model` → **`backbone`** (the LLM id / embedder name,
+  or `None` when nothing with weights ran). The two were conflated before; the
+  whole point of an architecture is that swapping a backbone does not change it.
+- **Schema inference with an *injected* matcher is gone.**
+  `dedupe(records, matcher=MyMatcher())` inferred a schema; the equivalent,
+  `ERModel.from_schema(MySchema, matcher=MyMatcher())`, requires a real one. A
+  named architecture (`FuzzyString()`) is still schema-optional. This is the
+  production path regardless: an inferred schema is an ephemeral class a fresh
+  process cannot import, so it could never round-trip through `save()`/`load()`.
+- `examples/quickstart_verbs.py` → `examples/quickstart_models.py`.
+
 ### `Resolver` is spend-capped (B1) — **behavior change**
 
 `Resolver` — the whole low-level public API — had **no budget guard at all**. The

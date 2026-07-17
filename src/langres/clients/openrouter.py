@@ -64,16 +64,16 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
     # corrected from an earlier wrong 89.33; arXiv v4 Table 2 + results.xlsx).
     "openrouter/openai/gpt-4o-mini-2024-07-18": (0.15, 0.60),
     "openrouter/openai/gpt-4o-2024-08-06": (2.50, 10.00),
-    # OpenRouter path for matcher="auto" (OPENROUTER_API_KEY set) — see
-    # langres.core.presets.choose_auto_judge. OpenRouter's own listing for this
-    # route isn't in LiteLLM's pricing table; conservative-high over OpenAI's
-    # published $0.15/$0.60 per-1M list price (litellm model_prices_and_context_
-    # window.json, "gpt-4o-mini", checked 2026-07) to absorb any provider markup.
+    # DEFAULT_OPENROUTER_MODEL, the zero_shot_llm default route. OpenRouter's own
+    # listing for it isn't in LiteLLM's pricing table; conservative-high over
+    # OpenAI's published $0.15/$0.60 per-1M list price (litellm model_prices_and_
+    # context_window.json, "gpt-4o-mini", checked 2026-07) to absorb any markup.
     "openrouter/openai/gpt-4o-mini": (0.20, 0.80),
-    # Direct-OpenAI path for matcher="auto" (OPENAI_API_KEY set, no OPENROUTER_API_KEY)
-    # — see choose_auto_judge. Matches OpenAI's published gpt-5-mini list price
-    # exactly (litellm model_prices_and_context_window.json, "gpt-5-mini" and
+    # Matches OpenAI's published gpt-5-mini list price exactly (litellm
+    # model_prices_and_context_window.json, "gpt-5-mini" and
     # "openrouter/openai/gpt-5-mini" agree: $0.25/$2.00 per 1M, checked 2026-07).
+    # Priced because a user can name it as a backbone; W4 deleted the
+    # matcher="auto" path that used to reach for it when OPENAI_API_KEY was set.
     "openai/gpt-5-mini": (0.25, 2.00),
     "openrouter/anthropic/claude-3.7-sonnet": (3.00, 15.00),
     "openrouter/anthropic/claude-3.5-sonnet": (3.00, 15.00),
@@ -85,11 +85,12 @@ PRICES_PER_1M: dict[str, tuple[float, float]] = {
 #: sequential run; a bounded timeout makes a stalled call fail fast and recover.
 DEFAULT_TIMEOUT_S = 60.0
 
-#: The OpenRouter route ``matcher="auto"``/``matcher="zero_shot_llm"`` default to
-#: when no model id is given -- ``core.presets.choose_auto_judge`` and
-#: ``Resolver.from_schema`` both need this literal. Defined once here (the
-#: dspy-free, cycle-safe layer both of those sit above) so the two call sites
-#: can't drift on the string.
+#: The OpenRouter route ``matcher="zero_shot_llm"`` defaults to when no model id
+#: is given -- ``ERModel.from_schema`` needs this literal. Defined once here (the
+#: dspy-free, cycle-safe layer it sits above) so call sites can't drift on the
+#: string. (W4 deleted the other consumer, ``core.presets.choose_auto_judge``:
+#: picking a model from whichever API key happened to be set is exactly the
+#: implicit-backbone behaviour the architectures replaced.)
 DEFAULT_OPENROUTER_MODEL = "openrouter/openai/gpt-4o-mini"
 
 
@@ -228,8 +229,8 @@ def dspy_price_per_1k(
     for unknown ids -- rather than guessing a price.
 
     This function lives here (not in ``langres.methods``, where it started) so
-    both ``langres.methods`` and ``langres.core.presets`` can import it without
-    creating a ``core -> methods -> core`` cycle -- this module is dspy-free and
+    every caller in ``core`` can import it without creating a
+    ``core -> methods -> core`` cycle -- this module is dspy-free and
     layer-neutral, sitting below both.
 
     Args:
