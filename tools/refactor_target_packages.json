@@ -50,9 +50,10 @@
   ],
   "prefix": {
     "langres._exports": "root",
-    "langres.core._exports": "core",
+    "langres.architectures": "architectures",
     "langres.bootstrap": "curation",
     "langres.clients": "clients",
+    "langres.core._exports": "core",
     "langres.core.adapters": "components",
     "langres.core.autoresearch": "optimize",
     "langres.core.blockers": "components",
@@ -64,8 +65,8 @@
     "langres.core.trackers": "tracking",
     "langres.data": "datasets",
     "langres.data.data_profile": "profile",
-    "langres.plotting": "plotting",
-    "langres.architectures": "architectures"
+    "langres.optimize": "optimize",
+    "langres.plotting": "plotting"
   },
   "exact": {
     "langres": "root",
@@ -118,7 +119,6 @@
     "langres.core.methods_prompt": "training",
     "langres.core.judgement_log": "tracking",
     "langres.core.runs": "tracking",
-    "langres.optimize": "optimize",
     "langres.core.inputs": "core",
     "langres.core.results": "core"
   }
