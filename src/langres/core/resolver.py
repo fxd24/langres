@@ -1668,6 +1668,18 @@ class Resolver:
         An artifact with no ``model_class`` (every pre-0.4 one, and any
         unregistered subclass) builds ``cls``, exactly as before.
 
+        .. note::
+           **Constraint on registered models:** reconstruction calls the class
+           with this ``__init__``'s component keywords (``blocker=``,
+           ``comparator=``, ``matcher=``, ``clusterer=``, ``calibrator=``). A
+           registered architecture that narrows ``__init__`` to its own
+           ergonomic signature (e.g. ``FuzzyString(threshold=0.8)``) raises
+           ``TypeError: ... unexpected keyword argument 'blocker'`` here. Such an
+           architecture must keep accepting the component keywords — or W4 must
+           add an explicit from-components construction hook. Before
+           ``model_class`` existed this could not bite, because ``load`` always
+           built the base ``Resolver``.
+
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 

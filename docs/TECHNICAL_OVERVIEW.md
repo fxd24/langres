@@ -204,6 +204,15 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 - `config_dict()` still emits only `components`, so `model_class` stays **outside**
   `recipe_id`'s hash domain and no existing recipe hash forks.
 
+> **Constraint on a registered model:** `load` reconstructs by calling the class
+> with `Resolver.__init__`'s component keywords (`blocker=`, `comparator=`,
+> `matcher=`, `clusterer=`, `calibrator=`). An architecture that narrows
+> `__init__` to its own signature (e.g. `FuzzyString(threshold=0.8)`) raises
+> `TypeError: ... unexpected keyword argument 'blocker'` on load. It must keep
+> accepting the component keywords, or grow an explicit from-components hook.
+> This could not bite before `model_class`, since `load` always built the base
+> `Resolver`.
+
 All three name-dispatch paths — the verbs, `from_schema`, and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg).
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
