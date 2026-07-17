@@ -228,7 +228,7 @@ def cascade_cost_track(judgements: list[PairwiseJudgement]) -> CostTrack:
         judgements: The cascade module's per-pair judgements.
 
     Returns:
-        A :class:`~langres.core.benchmark.CostTrack` with spend totals plus the
+        A :class:`~langres.core.usage.CostTrack` with spend totals plus the
         escalation rate and mean LLM-calls-per-candidate populated.
     """
     base = _cost_track(judgements)
