@@ -53,7 +53,7 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   `core.metrics` / `core.benchmark` stays importable without it. (There is no
   `pytrec_eval` anywhere in the tree.)
 
-Hyperparameter search is opt-in too: `langres.optimize.blocker_optimizer.BlockerOptimizer` (Optuna)
+Hyperparameter search is opt-in too: `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (Optuna)
 tunes *blocker* parameters — see §5. A general `Optimizer` over full pipelines is
 roadmap (`docs/ROADMAP.md`), not implemented.
 
@@ -356,7 +356,7 @@ clusterer = Clusterer(threshold=0.75)
 clusters = clusterer.cluster(judgements_stream)   # -> list[set[str]]
 ```
 
-### langres.optimize.blocker_optimizer.BlockerOptimizer (Optuna)
+### langres.autoresearch.blocker_optimizer.BlockerOptimizer (Optuna)
 
 **Definition:** The one optimizer that ships today. It runs an Optuna study over
 a **blocker's** hyperparameters (e.g. embedding model, `k_neighbors`) to maximize
@@ -383,7 +383,7 @@ a metric you compute in an objective function.
 **Example:**
 
 ```python
-from langres.optimize.blocker_optimizer import BlockerOptimizer
+from langres.autoresearch.blocker_optimizer import BlockerOptimizer
 
 search_space = {
     "embedding_model": ["all-MiniLM-L6-v2", "all-mpnet-base-v2"],
@@ -1044,13 +1044,13 @@ saturates near 99%, it steers on a **loss-like** signal (`candidate_recall@budge
 
 `optimize` / `score_blocking` are **root exports** (`from langres import optimize`)
 and **import-light**: every heavy import (faiss, the benchmark loader,
-`langres.optimize.factory`) is lazy inside the call, so a bare `import langres`
+`langres.autoresearch.factory`) is lazy inside the call, so a bare `import langres`
 never pulls the `[semantic]` stack (`tests/test_import_budget.py` guards this). The
 proposal/objective types (`SearchSpace`, `Objective`) are pure-stdlib and safe to
 import anywhere; only the concrete blocking scorer touches faiss.
 
 > This is a **blocking-search** facade, distinct from its package sibling
-> `langres.optimize.blocker_optimizer.BlockerOptimizer` (§5): `BlockerOptimizer`
+> `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (§5): `BlockerOptimizer`
 > runs an Optuna study returning best params, while `optimize` runs the
 > deterministic keep-if-better loop over a declarative `SearchSpace`, gated by an
 > `Objective`, persisting every trial. Two search strategies, one package — both
@@ -1108,7 +1108,7 @@ metrics dict (all values `float`):
 For a two-source (linkage) corpus the candidates are filtered to cross-source
 pairs and `reduction_ratio` uses `|A|·|B|`; otherwise it uses `num_records`.
 
-### SearchSpace (`langres.optimize.search_space`)
+### SearchSpace (`langres.autoresearch.search_space`)
 
 A frozen, declarative Cartesian grid of blocker configs. Each field is a
 non-empty tuple of candidate values for one axis (an empty axis raises).
@@ -1129,7 +1129,7 @@ text_field)` fixed while `k` sweeps its full range — letting `optimize` build 
 index per group and reuse it across every `k`. `len(space)` is the product of the
 axis sizes.
 
-### Objective (`langres.optimize.objective`)
+### Objective (`langres.autoresearch.objective`)
 
 The immutable keep-if-better scorer, metric-source-agnostic (it operates on a
 plain `Mapping[str, float]` and never computes a metric itself). It bundles one or
@@ -1153,7 +1153,7 @@ every goal, `>` on at least one; for a single goal, a strict scalar improvement)
 A tie or an incomparable trade-off keeps the incumbent, so the decision is
 deterministic and monotone.
 
-### LoopResult / Trial (`langres.optimize.loop`)
+### LoopResult / Trial (`langres.autoresearch.loop`)
 
 `run_loop` (the driver `optimize` calls) returns a frozen `LoopResult`:
 

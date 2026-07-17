@@ -24,9 +24,9 @@ empty of imports.
 **Why the engine does not live under ``langres.optimize``.** ``langres.optimize``
 is a *callable* — ``langres/_exports/_optimize.py`` binds the attribute to the
 ``optimize`` **function**, which is the public API. Making ``optimize`` a package
-therefore put these submodules under a name attribute traversal can never reach:
-``from langres.optimize.loop import ...`` resolved, but ``import
-langres.optimize.loop as l`` raised ``ImportError`` and
+therefore put these submodules under a name attribute traversal can never reach.
+Against the old ``langres.optimize.loop`` path, ``from ... import`` resolved, but
+``import langres.optimize.loop as l`` raised ``ImportError`` and
 ``langres.optimize.loop.run_loop`` raised ``AttributeError`` ('function' object
 has no attribute 'loop'). The engine keeps its own un-shadowed name here; the
 facade stays a module at ``langres/optimize.py``.

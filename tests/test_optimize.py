@@ -16,9 +16,9 @@ import pytest
 from pydantic import BaseModel
 
 from langres import optimize, score_blocking
-from langres.optimize.loop import LoopResult
-from langres.optimize.objective import Objective
-from langres.optimize.search_space import SearchSpace
+from langres.autoresearch.loop import LoopResult
+from langres.autoresearch.objective import Objective
+from langres.autoresearch.search_space import SearchSpace
 from langres.core.runs import RunStore
 
 
@@ -92,7 +92,7 @@ def test_score_blocking_vector_with_fake_embedder() -> None:
 
 def test_score_blocking_accepts_a_prebuilt_index() -> None:
     embedder = _fake_embedder()
-    from langres.optimize.factory import build_index
+    from langres.autoresearch.factory import build_index
 
     corpus, _gc, _gp = _MemoryBenchmark().load()
     index = build_index("x", "cosine", [r.name for r in corpus], embedder=embedder)

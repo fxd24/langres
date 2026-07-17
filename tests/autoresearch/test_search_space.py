@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from langres.optimize.search_space import SearchSpace
+from langres.autoresearch.search_space import SearchSpace
 
 
 def test_defaults_are_a_vector_k_sweep() -> None:
@@ -148,7 +148,7 @@ def test_import_is_light() -> None:
     """
     code = (
         "import sys\n"
-        "import langres.optimize.search_space  # noqa: F401\n"
+        "import langres.autoresearch.search_space  # noqa: F401\n"
         "heavy = sorted(m for m in ('faiss', 'torch', 'sentence_transformers') "
         "if m in sys.modules)\n"
         "assert not heavy, f'unexpectedly imported: {heavy}'\n"

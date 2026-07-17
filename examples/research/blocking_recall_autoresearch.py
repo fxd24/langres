@@ -52,12 +52,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langres import optimize
-from langres.optimize.objective import Objective
-from langres.optimize.search_space import SearchSpace
+from langres.autoresearch.objective import Objective
+from langres.autoresearch.search_space import SearchSpace
 from langres.core.runs import RunStore
 
 if TYPE_CHECKING:
-    from langres.optimize.loop import LoopResult
+    from langres.autoresearch.loop import LoopResult
 
 #: Registered, vendored, offline benchmark (two-source Amazon<->Google linkage).
 BENCHMARK = "amazon_google"

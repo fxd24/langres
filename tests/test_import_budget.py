@@ -89,12 +89,18 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
 # The autoresearch facade (``langres.optimize`` / ``langres.score_blocking``,
 # PR P-C) is eager-exported from ``langres/__init__.py`` -- so a bare
 # ``import langres`` must expose both as callables WHILE staying import-light:
-# ``langres/optimize/__init__.py``'s module top is stdlib/typing only (every
-# factory / loop / data / metrics / faiss import is lazy inside a function body),
-# so pulling the package into the eager graph must not drag torch / faiss /
+# ``langres/optimize.py``'s module top is stdlib/typing only (every factory /
+# loop / data / metrics / faiss import is lazy inside a function body), so
+# pulling the module into the eager graph must not drag torch / faiss /
 # sentence-transformers
 # / litellm / scikit-learn into ``sys.modules``. Fresh-process for an unpolluted
 # import state (same pattern as the checks above).
+#
+# The facade is a *module*; the engine it drives is the ``langres.autoresearch``
+# package. The ``callable(langres.optimize)`` assertion below is also what makes
+# the two un-mergeable: it is the export binding the attribute to the function,
+# which is what shadows any ``langres.optimize.<submodule>`` out of reach of
+# attribute traversal. See ``test_autoresearch_engine_is_importable_every_way``.
 _OPTIMIZE_FACADE_HEAVY_DEPS = [
     "torch",
     "faiss",

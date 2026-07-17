@@ -56,7 +56,7 @@ from langres.core.clusterer import Clusterer
 from langres.core.embeddings import SentenceTransformerEmbedder
 from langres.core.metrics import calculate_bcubed_metrics, calculate_pairwise_metrics
 from langres.core.matchers.llm_judge import LLMMatcher
-from langres.optimize.blocker_optimizer import BlockerOptimizer
+from langres.autoresearch.blocker_optimizer import BlockerOptimizer
 from langres.core.indexes.vector_index import FAISSIndex
 
 # Configure logging

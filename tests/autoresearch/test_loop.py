@@ -1,4 +1,4 @@
-"""Tests for the autoresearch keep-if-better :mod:`~langres.optimize.loop`.
+"""Tests for the autoresearch keep-if-better :mod:`~langres.autoresearch.loop`.
 
 Core contract code -> high coverage tier. Every test injects a **fake dict
 scorer** (config -> canned metrics), so the loop's incumbent tracking, dedup,
@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from langres.optimize.loop import LoopResult, Trial, run_loop
-from langres.optimize.objective import Objective
+from langres.autoresearch.loop import LoopResult, Trial, run_loop
+from langres.autoresearch.objective import Objective
 from langres.core.runs import RunStore
 
 
