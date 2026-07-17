@@ -10,12 +10,13 @@ interfaces between all components:
 - PairwiseJudgement: Rich decision output with full provenance
 """
 
-from typing import Any, Generic, Literal, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
 from langres.core.feature import ComparisonVector
 from langres.core.registry import register_schema
+from langres.core.score_type import ConfidenceSource, ScoreType
 
 
 class EntityProtocol(Protocol):
@@ -138,17 +139,9 @@ class PairwiseJudgement(BaseModel):
     right_id: str
     decision: bool | None = None
     score: float | None = Field(default=None, ge=0.0, le=1.0)
-    score_type: Literal[
-        "sim_cos",
-        "prob_llm",
-        "heuristic",
-        "calibrated_prob",
-        "prob_fs",
-        "prob_rf",
-        "prob_group_llm",
-    ]
+    score_type: ScoreType
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    confidence_source: Literal["none", "unrequested", "logprob", "calibrated", "heuristic"] = "none"
+    confidence_source: ConfidenceSource = "none"
     decision_step: str
     reasoning: str | None = None
     provenance: dict[str, Any]
