@@ -153,6 +153,7 @@
     "langres.core.metrics": "metrics",
     "langres.core.model_ref": "core",
     "langres.core.models": "core",
+    "langres.core.op": "core",
     "langres.core.pairs": "core",
     "langres.core.registry": "core",
     "langres.core.reports": "core",
