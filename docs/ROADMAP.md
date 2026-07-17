@@ -419,6 +419,11 @@ persisted to a local `RunStore` JSONL.
 
 ## 8. Open questions / things to learn
 
+> **The full backlog lives in [`docs/research/20260717_research_agenda.md`](research/20260717_research_agenda.md)** —
+> the experiments this framework *unlocks*, each with what would settle it and what it
+> costs. The questions below are the ones tied directly to milestones; the agenda is the
+> wider board (including the two **$0** diagnostics that can run today).
+
 - **Comparator design for heterogeneous features** — how rich to make the
   comparison-level taxonomy; learned vs. LLM-reasoned combiner; how anchors
   short-circuit. (We have the conceptual model; validate empirically in M2–M3.)
