@@ -9,7 +9,7 @@ name: Test
 on:
   pull_request:
   push:
-    branches: [main, feat/core-packages]
+    branches: [main, feat/core-packages, epic/193-core-algebra]
   workflow_dispatch:
 
 concurrency:

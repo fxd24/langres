@@ -7,9 +7,9 @@ on:
   # unlinted: mypy is the gate that catches exactly what a package split breaks
   # (moved symbols, stale re-exports, circular imports).
   push:
-    branches: [main]
+    branches: [main, epic/193-core-algebra]
   pull_request:
-    branches: [main, feat/core-packages]
+    branches: [main, feat/core-packages, epic/193-core-algebra]
 
 concurrency:
   # Mirrors `test.yml`: grouping on the ref alone means merging one PR CANCELS
