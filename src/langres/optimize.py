@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from langres.autoresearch.loop import LoopResult
     from langres.autoresearch.objective import Objective
     from langres.autoresearch.search_space import SearchSpace
-    from langres.core.benchmark import Benchmark
+    from langres.data.benchmark import Benchmark
     from langres.core.embeddings import EmbeddingProvider
     from langres.core.indexes.vector_index import VectorIndex
     from langres.tracking.runs import RunStore

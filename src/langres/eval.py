@@ -27,10 +27,10 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     # Only reached by mypy -- keeps every lazy name visible to `mypy --strict`
     # without importing the owning modules at runtime.
-    from langres.core.benchmark import (
+    from langres.benchmarks.judge_eval import evaluate
+    from langres.data.benchmark import (
         DEFAULT_PAIR_GRID,
         Benchmark,
-        evaluate,
         gold_pairs_from_clusters,
     )
     from langres.data.data_profile import DataProfileReport, from_embedder
@@ -78,12 +78,12 @@ __all__ = [
 #: (the same object), never a copy. ``candidates_for`` is NOT here -- it is a
 #: real function defined below, not a re-export.
 _LAZY: dict[str, str] = {
-    "evaluate": "langres.core.benchmark",
+    "evaluate": "langres.benchmarks.judge_eval",
     "EvalReport": "langres.report.eval_report",
     "DataProfileReport": "langres.data.data_profile",
     "from_embedder": "langres.data.data_profile",
-    "DEFAULT_PAIR_GRID": "langres.core.benchmark",
-    "gold_pairs_from_clusters": "langres.core.benchmark",
+    "DEFAULT_PAIR_GRID": "langres.data.benchmark",
+    "gold_pairs_from_clusters": "langres.data.benchmark",
     "list_benchmarks": "langres.data.registry",
     "get_benchmark": "langres.data.registry",
     "ExternalBenchmarkError": "langres.data.registry",
@@ -149,8 +149,8 @@ def candidates_for(
     Raises:
         ValueError: If ``split`` is neither ``"train"`` nor ``"test"``.
     """
-    from langres.core.benchmark import gold_pairs_from_clusters
     from langres.core.resolver import Resolver
+    from langres.data.benchmark import gold_pairs_from_clusters
 
     if split not in ("train", "test"):
         # Without this, any typo ("valid", "validation", "Test") falls through the

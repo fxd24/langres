@@ -224,10 +224,22 @@ RUNTIME = TangleBaseline(
 #    9  the `data.data_profile.*` section graph
 #    3  {core.reports, metrics.analysis, plotting.blockers}
 #    2  {curation.anchor_store, core.resolver}
-#    2  {core.benchmark, langres.methods}
+#    2  {benchmarks.runner, langres.methods}
 #    2  {tracking.runs, tracking.trackers}
 # `tangled` covers all five; `largest_scc` pins the biggest so they cannot
 # silently merge into one.
+#
+# The benchmark-split wave (this PR) RELOCATED one knot member without changing
+# the shape: `core/benchmark.py` split into the import-light spec
+# (`langres.data.benchmark`) and the harness package (`langres.benchmarks.*`),
+# leaving a re-export shim at the old path. The `{core.benchmark, methods}` 2-cycle
+# is now `{benchmarks.runner, methods}` -- `methods.py` imports `_cost_track` from
+# `benchmarks.runner` (toplevel) and `run_methods` in `benchmarks.runner` imports
+# `make_resolver_factory` from `methods` (function-local), the same litellm-seam
+# lazy cycle as before, one module renamed. The shim `core.benchmark` left the
+# tangle: no module imports it at toplevel anymore, so it has only outgoing edges.
+# Predicted by recomputing Tarjan before the move, measured identical after:
+# [9, 3, 2, 2, 2] / 18, `largest_scc` still 9.
 #
 # W4 (the ERModel/architectures wave) ratcheted this DOWN: 10 -> 9, tangled
 # 24 -> 23. `langres.core.presets` left, because W4 deleted it outright. It was
@@ -292,7 +304,7 @@ ALL_EDGES = TangleBaseline(
     tangled=frozenset(
         {
             "langres.curation.anchor_store",
-            "langres.core.benchmark",
+            "langres.benchmarks.runner",
             "langres.core.reports",
             "langres.core.resolver",
             "langres.tracking.runs",

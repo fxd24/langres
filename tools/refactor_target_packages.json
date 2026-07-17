@@ -90,6 +90,7 @@
     "langres._exports": "root",
     "langres.architectures": "architectures",
     "langres.autoresearch": "optimize",
+    "langres.benchmarks": "benchmarks",
     "langres.clients": "clients",
     "langres.core._exports": "core",
     "langres.core.adapters": "core",

@@ -35,7 +35,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from langres.report import _svg
-from langres.core.benchmark import DEFAULT_PAIR_GRID, PairTrack
+from langres.data.benchmark import DEFAULT_PAIR_GRID, PairTrack
 from langres.core.metrics import (
     PairMetrics,
     ReliabilityBin,
