@@ -79,6 +79,20 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     A row with no matching judgement is passed through unchanged (a matcher's
     contract is one judgement per candidate, so this is a defensive no-op).
 
+    Uniqueness assumption: the back-map keys judgements by ``(left_id, right_id)``
+    and assumes each such pair appears **at most once** per ``Pairs`` — the
+    invariant every shipping blocker already satisfies (``AllPairsBlocker`` emits
+    strictly ``i < j``, ``VectorBlocker`` canonicalizes pair order by id, and
+    ``CompositeBlocker`` dedups via frozenset pair-keys). ``Pairs`` does not
+    *enforce* uniqueness, so were a future carrier to hold duplicate
+    ``(left_id, right_id)`` rows, the ``by_pair`` dict would collapse them
+    last-wins and every duplicate row would take the same judgement. A
+    ``Pairs``-level uniqueness invariant is a possible future hardening (noted,
+    not added here — no shipping blocker produces duplicates, so a runtime guard
+    would defend a state that cannot occur). A judgement whose key matches no row
+    is simply dropped (consistent with the one-judgement-per-received-candidate
+    matcher contract).
+
     Args:
         pairs: The incoming scored relation (rows carry the identities to map to).
         judgements: The matcher's output, consumed once.
@@ -189,6 +203,10 @@ class MatcherScore(Score[SchemaT], Generic[SchemaT]):
     ``out_space`` is the Score's advertised metadata; each row still carries its
     judgement's OWN ``score_type``, so a mixed matcher never silently mislabels a
     row.
+
+    The back-map assumes each ``(left_id, right_id)`` appears at most once per
+    ``Pairs`` (the invariant every shipping blocker satisfies) — see
+    :func:`_rescore` for the assumption and its future-hardening note.
     """
 
     def __init__(self, matcher: Matcher[SchemaT], *, out_space: OutSpace) -> None:
@@ -328,7 +346,11 @@ class CanonicalizeFinalize(Finalize):
         (cluster,) = clusters
         if not cluster:
             raise ValueError("CanonicalizeFinalize cannot fuse an empty cluster.")
-        entities = [self.store[entity_id] for entity_id in cluster]
+        # ``cluster`` is a set, so iterating it is hash-randomized across processes.
+        # Record order drives the golden id (defaults to records[0]["id"]) and every
+        # first-seen survivorship tiebreak, so canonicalize over ids in a DETERMINISTIC
+        # (sorted) order — otherwise the fused record's id/tiebroken fields vary run-to-run.
+        entities = [self.store[entity_id] for entity_id in sorted(cluster)]
         records = [entity.model_dump() for entity in entities]
         golden = self.canonicalizer.canonicalize(records)
         return type(entities[0]).model_validate(golden)

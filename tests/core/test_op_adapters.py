@@ -351,6 +351,19 @@ def test_canonicalize_finalize_is_a_finalize() -> None:
     assert isinstance(fin, Finalize)
 
 
+class _ReverseSortedSet(set[str]):
+    """A ``set`` that iterates in REVERSE-sorted order.
+
+    Stands in for a real cluster set whose hash-seeded iteration order happens to
+    be non-sorted, so the determinism test below exercises — deterministically,
+    without depending on ``PYTHONHASHSEED`` — the worst-case order that
+    :meth:`CanonicalizeFinalize.forward`'s ``sorted()`` must normalize away.
+    """
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(sorted(super().__iter__(), reverse=True))
+
+
 def test_canonicalize_finalize_fuses_a_cluster() -> None:
     """A cluster of complementary records fuses into one golden record (survivorship)."""
     store = {
@@ -363,6 +376,30 @@ def test_canonicalize_finalize_fuses_a_cluster() -> None:
     # most_complete default: each field filled from whichever record carried it.
     assert golden.address == "1 Main St"
     assert golden.phone == "555-1234"
+
+
+def test_canonicalize_finalize_is_deterministic_regardless_of_cluster_iteration_order() -> None:
+    """The golden id + first-seen tiebreaks must not depend on set iteration order.
+
+    The cluster is fed in reverse-sorted iteration order. Without ``forward``'s
+    ``sorted()`` normalization the first record would be ``"b"`` — so the golden id
+    (defaults to ``records[0]["id"]``) and the ``most_complete`` first-seen tiebreak
+    on an equally-complete field would both follow ``"b"``. This test pins the
+    ``"a"`` (sorted-first) outcome, so it FAILS without the ``sorted()`` fix.
+    """
+    store = {
+        # Both records equally complete (name + address present), differing only in
+        # name -> most_complete breaks the tie by group order, so which name wins is
+        # purely a function of record order (hence of the sorted() normalization).
+        "a": CompanySchema(id="a", name="Acme A", address="1 Main St"),
+        "b": CompanySchema(id="b", name="Acme B", address="1 Main St"),
+    }
+    golden = CanonicalizeFinalize(Canonicalizer(), store=store).forward(
+        [_ReverseSortedSet({"a", "b"})]
+    )
+
+    assert golden.id == "a"  # sorted-first id, NOT iteration-first ("b")
+    assert golden.name == "Acme A"  # first-seen tiebreak follows the sorted-first record
 
 
 def test_canonicalize_finalize_requires_exactly_one_cluster() -> None:
