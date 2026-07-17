@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 from langres.core.models import ERCandidate, CompanySchema
-from langres.core.analysis import (
+from langres.metrics.analysis import (
     _compute_score_metrics,
     _compute_rank_metrics,
     _compute_recall_curve,
@@ -705,7 +705,7 @@ def test_evaluate_blocker_detailed_realistic_data():
 
 def test_default_histogram_bins_constant_exists():
     """Test that constant is defined and has expected value."""
-    from langres.core.analysis import _DEFAULT_HISTOGRAM_BINS
+    from langres.metrics.analysis import _DEFAULT_HISTOGRAM_BINS
 
     assert isinstance(_DEFAULT_HISTOGRAM_BINS, int)
     assert _DEFAULT_HISTOGRAM_BINS == 50
@@ -714,7 +714,7 @@ def test_default_histogram_bins_constant_exists():
 
 def test_compute_score_metrics_uses_default_bins():
     """Test that histogram uses expected default bins."""
-    from langres.core.analysis import _DEFAULT_HISTOGRAM_BINS, _compute_score_metrics
+    from langres.metrics.analysis import _DEFAULT_HISTOGRAM_BINS, _compute_score_metrics
 
     # Create mock data with known scores
     entities = [CompanySchema(id=str(i), name=f"Company {i}") for i in range(10)]
@@ -803,7 +803,7 @@ def test_rank_computation_tie_breaking_uses_entity_ids():
 
 def test_extract_missed_matches():
     """Test extracting missed match examples."""
-    from langres.core.analysis import extract_missed_matches
+    from langres.metrics.analysis import extract_missed_matches
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
@@ -846,7 +846,7 @@ def test_extract_missed_matches():
 
 def test_extract_missed_matches_respects_limit():
     """Test that extract_missed_matches respects n parameter."""
-    from langres.core.analysis import extract_missed_matches
+    from langres.metrics.analysis import extract_missed_matches
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
@@ -870,7 +870,7 @@ def test_extract_missed_matches_respects_limit():
 
 def test_extract_false_positives():
     """Test extracting false positive examples."""
-    from langres.core.analysis import extract_false_positives
+    from langres.metrics.analysis import extract_false_positives
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
@@ -911,7 +911,7 @@ def test_extract_false_positives():
 
 def test_extract_false_positives_respects_min_score():
     """Test that extract_false_positives respects min_score threshold."""
-    from langres.core.analysis import extract_false_positives
+    from langres.metrics.analysis import extract_false_positives
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
@@ -940,7 +940,7 @@ def test_extract_false_positives_respects_min_score():
 
 def test_extract_false_positives_sorts_by_score():
     """Test that false positives are sorted by score descending."""
-    from langres.core.analysis import extract_false_positives
+    from langres.metrics.analysis import extract_false_positives
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
@@ -977,7 +977,7 @@ def test_extract_false_positives_sorts_by_score():
 
 def test_extract_false_positives_skips_none_scores():
     """Test that extract_false_positives skips candidates with None scores."""
-    from langres.core.analysis import extract_false_positives
+    from langres.metrics.analysis import extract_false_positives
     from langres.core.models import ERCandidate
     from pydantic import BaseModel
 

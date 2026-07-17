@@ -10,7 +10,7 @@ the paper's slice algorithm.
 
 import pytest
 
-from langres.core.metrics import (
+from langres.metrics.metrics import (
     _all_possible_pairs,
     evaluate_blocking,
     generalized_merge_distance,
@@ -132,7 +132,7 @@ def _candidate(left_id: str, right_id: str) -> ERCandidate[CompanySchema]:
 
 def test_candidate_stats_reduction_ratio_field_default() -> None:
     """CandidateStats stays constructible without the new field (defaults to 0.0)."""
-    from langres.core.debugging import CandidateStats
+    from langres.metrics.debugging import CandidateStats
 
     stats = CandidateStats(
         total_candidates=1,

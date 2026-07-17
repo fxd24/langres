@@ -1,14 +1,14 @@
 """Tests for agreement (kappa, MCC) and calibration (Brier, ECE, reliability) metrics.
 
 All expected values are hand-computed. Coverage targets 100% of the new pure
-functions in ``langres.core.metrics`` including every validation and edge branch.
+functions in ``langres.metrics.metrics`` including every validation and edge branch.
 """
 
 import math
 
 import pytest
 
-from langres.core.metrics import (
+from langres.metrics.metrics import (
     _bin_indices,
     _LOG_LOSS_EPS,
     brier_score,

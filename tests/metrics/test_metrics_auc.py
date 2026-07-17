@@ -17,7 +17,7 @@ import random
 
 import pytest
 
-from langres.core.metrics import (
+from langres.metrics.metrics import (
     _midranks,
     _validate_binary_scores,
     average_precision_score,
