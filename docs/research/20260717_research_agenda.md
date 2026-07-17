@@ -1064,11 +1064,22 @@ harness?*
 **What's already known.** This is tractable here, and it has already paid off — twice,
 in opposite directions:
 
-- **It works.** The Peeters/MatchGPT replication (`docs/research/`, and the merged
-  work behind it) hit **99.25% per-pair agreement** on **all 1206 Abt-Buy pairs**, on
-  both `gpt-4o-mini` and `gpt-4o`, for **$0.28** — and the authors' archived answers
-  reproduce their published F1 exactly. A full replication of a paid-LLM ER result costs
-  less than a coffee.
+- **It works, and we have done it.** The **Peeters, Steiner & Bizer** replication —
+  *Entity Matching using Large Language Models*, [2310.11244](https://arxiv.org/abs/2310.11244)
+  v4, **EDBT 2025**; repo `wbsg-uni-mannheim/MatchGPT` — hit **99.25% per-pair agreement**
+  on **all 1206 Abt-Buy pairs**, on both `gpt-4o-mini` and `gpt-4o`, for **$0.28**, and
+  their archived answers reproduce their published F1 exactly. A full replication of a
+  paid-LLM ER result costs **less than a coffee**. Ours lives at
+  `src/langres/data/peeters.py` (the **$0, offline** half — it replays their archived
+  answers, no API calls), walked through in `docs/BENCHMARKS.md`; the figures are in
+  `docs/CHANGELOG.md`. `[verified — the numbers are recorded in-repo; the module docstring
+  and BENCHMARKS.md corroborate the 1206-pair slice]`
+- **…and it shows what makes a target tractable.** Their eval set is a *deterministic
+  subset* of a `test.csv` we already ship (a fixed `sample(random_state=42)`), so the pair
+  set is reconstructible exactly rather than approximately. **That property — not the
+  paper's fame — is what made the replication cheap and its 99.25% meaningful.** Prefer
+  targets with it. (Caveat on file: MatchGPT ships **no LICENSE**, so do not vendor it —
+  regenerate from our own CSVs, which is what `peeters.py` does.)
 - **It catches things.** `THEORY.md` §12 (erratum 7) records a citation this project
   itself got wrong: a claimed "face clustering collapses to 0.37" was read off a
   **0–100** scale (so: 0.37 **percent** — ≈100× the natural misreading), from a run that
