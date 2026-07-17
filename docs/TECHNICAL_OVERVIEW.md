@@ -565,7 +565,13 @@ Two rules that surprise people, both deliberate:
   the same saved config resolved to a *different backend* elsewhere.
 - **`org/name` is never second-guessed.** It cannot be distinguished from a
   typo'd provider by syntax, so a caller who means an API model says
-  `{"base": "...", "kind": "api"}`.
+  `{"base": "...", "kind": "api"}`. Conversely a **multi-slash** id
+  (`nvidia_nim/meta/llama3-8b`) is *never* a Hub id — those carry exactly one
+  slash — so it infers as `api` and litellm, which has the full provider list,
+  produces the error if the provider is wrong.
+
+Inference is **total over non-empty strings**: every one names a kind, so the
+only `InvalidModelRefError` from a bare string is the empty one.
 
 **`revision` is in the v1 schema on purpose.** Without it an `org/name` ref
 drifts as the Hub moves, so two runs of an "identical versioned config" are not
@@ -580,10 +586,9 @@ widens to `{"base", "kind", ...}` otherwise. The pinned invariant:
 
 **Typed errors** (both `ValueError` subclasses):
 
-- `InvalidModelRefError` — the ref is malformed or its form is unrecognizable
-  (an empty base, an unknown `kind`, an adapter on a served kind, `api_base` on a
-  non-endpoint, a `revision` on a non-`hf` ref, a multi-slash id with no known
-  provider).
+- `InvalidModelRefError` — the ref is malformed (an empty base, an unknown
+  `kind`, an adapter on a served kind, `api_base` on a non-endpoint, a `revision`
+  on a non-`hf` ref, a conflicting `api_base`, a non-string `adapter`/`revision`).
 - `UnsupportedBackboneError` — the ref is *fine*, but the slot cannot run it:
   a DSPy-backed matcher handed a local dir/adapter (`require_litellm_routable`),
   or a method with no model slot handed any `model=` at all

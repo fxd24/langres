@@ -59,22 +59,25 @@ def test_api_base_makes_it_an_endpoint() -> None:
     assert backend_for(ref.kind) == "litellm"
 
 
-def test_unknown_multi_slash_form_raises() -> None:
-    """The one 'unknown form' that is unambiguous — so it is the one that raises.
+def test_a_multi_slash_id_is_an_api_id_even_from_an_unlisted_provider() -> None:
+    """A Hub id has EXACTLY one slash, so a multi-slash string is not one.
 
-    ``foo/bar/baz`` is neither a Hub id (exactly one slash) nor a known provider
-    id, so guessing would only defer the failure to a 404.
+    The prefix table is 26 of litellm's 146 providers, so "unknown provider" here
+    means unknown *to that table*, not to litellm. These are real ids litellm
+    routes today; raising on them would break working code (an earlier revision
+    of this module did, and Sourcery caught it).
     """
-    with pytest.raises(InvalidModelRefError, match="cannot infer a backbone kind"):
-        infer_kind("foo/bar/baz")
-    with pytest.raises(InvalidModelRefError, match="Name the kind explicitly"):
-        normalize_model_ref("foo/bar/baz")
+    for base in ("nvidia_nim/meta/llama3-8b-instruct", "foo/bar/baz"):
+        assert infer_kind(base) == "api"
+        assert backend_for(normalize_model_ref(base).kind) == "litellm"
 
 
-def test_an_unknown_multi_slash_id_is_reachable_by_naming_its_kind() -> None:
-    ref = normalize_model_ref({"base": "foo/bar/baz", "kind": "api"})
-    assert ref.kind == "api"
-    assert backend_for(ref.kind) == "litellm"
+def test_inference_is_total_over_non_empty_strings() -> None:
+    """Only an empty string has no kind -- every other string names one."""
+    with pytest.raises(InvalidModelRefError, match="non-empty"):
+        infer_kind("")
+    for base in ("x", "a/b", "a/b/c", "a/b/c/d", "./x", "/x", "~/x"):
+        assert infer_kind(base) in {"api", "hf", "local", "endpoint"}
 
 
 def test_inference_never_touches_the_filesystem(tmp_path: Any) -> None:
@@ -303,10 +306,6 @@ def test_to_config_widens_when_inference_could_not_reproduce_the_ref() -> None:
     # A kind inference would NOT have guessed must be explicit or it misroutes.
     assert to_config(ModelRef(base="org/model", kind="api")) == {
         "base": "org/model",
-        "kind": "api",
-    }
-    assert to_config(ModelRef(base="foo/bar/baz", kind="api")) == {
-        "base": "foo/bar/baz",
         "kind": "api",
     }
 

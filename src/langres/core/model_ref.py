@@ -328,17 +328,24 @@ def infer_kind(base: str, *, api_base: str | None = None) -> BackboneKind:
     3. a known provider prefix (:data:`_API_MODEL_PREFIXES`) -> ``api``.
     4. no ``/`` -> ``api`` (a bare litellm id like ``"gpt-5-mini"``).
     5. exactly one ``/`` -> ``hf`` (an ``org/name`` Hub id).
-    6. otherwise -> :class:`InvalidModelRefError`.
+    6. two or more ``/`` -> ``api``.
 
-    Rule 6 is the "unknown forms raise" case, and it is deliberately the *only*
-    one: a multi-slash id with no known provider (``"foo/bar/baz"``) is neither a
-    valid Hub id (those carry exactly one slash) nor a provider id we can route,
-    so guessing would only defer the error to a 404. By contrast rule 5's
-    ``org/name`` genuinely *is* a well-formed Hub id even when the caller meant a
-    provider — see the module docstring on why that cannot be second-guessed.
+    **It is total over non-empty strings**: every one names a kind, and only an
+    empty string raises. That is deliberate, and rule 6 is why.
+
+    A Hub id carries *exactly one* slash (``org/name``), so a multi-slash string
+    is definitively **not** a Hub id, and rule 2 already claimed the paths. What
+    is left is a provider-routed litellm id — ``"openrouter/openai/gpt-4o-mini"``
+    when the provider is listed, ``"nvidia_nim/meta/llama3-8b"`` when it is not.
+    Rejecting the unlisted ones would be the :data:`LITELLM_ROUTABLE_KINDS`
+    mistake one level down: the prefix table is 26 of litellm's 146 providers, so
+    an "unknown provider" here means *unknown to this list*, not unknown to
+    litellm. Routing it to ``api`` hands it to the component that actually has
+    the full provider list and can produce a real error — which beats inventing
+    one from a table we know is incomplete.
 
     Raises:
-        InvalidModelRefError: An empty string, or an unrecognizable form.
+        InvalidModelRefError: An empty string (the only unrecognizable form).
     """
     if not isinstance(base, str) or not base:
         raise InvalidModelRefError(f"model string must be non-empty; got {base!r}")
@@ -348,18 +355,7 @@ def infer_kind(base: str, *, api_base: str | None = None) -> BackboneKind:
         return "local"
     if base.startswith(_API_MODEL_PREFIXES):
         return "api"
-    slashes = base.count("/")
-    if slashes == 0:
-        return "api"
-    if slashes == 1:
-        return "hf"
-    raise InvalidModelRefError(
-        f"cannot infer a backbone kind for {base!r}: it has {slashes} '/' separators, so it is "
-        "neither a Hugging Face Hub id ('org/name') nor an id starting with a known provider "
-        f"prefix ({', '.join(_API_MODEL_PREFIXES[:4])}, ...). Name the kind explicitly, e.g. "
-        f'{{"base": {base!r}, "kind": "api"}} to route it to litellm, or "kind": "local" for a '
-        "directory path."
-    )
+    return "hf" if base.count("/") == 1 else "api"
 
 
 def normalize_model_ref(
@@ -450,12 +446,9 @@ def to_config(ref: ModelRef) -> str | dict[str, str]:
     The invariant, pinned by test: ``normalize_model_ref(to_config(ref)) == ref``
     for every ref.
     """
-    try:
-        inferable = infer_kind(ref.base) == ref.kind
-    except InvalidModelRefError:
-        # `base` is a form inference cannot name (e.g. a multi-slash id routed by
-        # an explicit kind). It must carry its kind, or it would not survive load.
-        inferable = False
+    # `infer_kind` cannot raise here: it is total over non-empty strings, and
+    # `__post_init__` already rejected an empty `base`.
+    inferable = infer_kind(ref.base) == ref.kind
     if inferable and ref.adapter is None and ref.api_base is None and ref.revision is None:
         return ref.base
     config: dict[str, str] = {"base": ref.base, "kind": ref.kind}

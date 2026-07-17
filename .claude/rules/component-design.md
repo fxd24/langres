@@ -230,7 +230,9 @@ Rules that are load-bearing, each for a measured reason:
   to a *different backend in a different working directory* (reproduced: a
   `./gpt-5-mini` directory flipped that API id litellm → transformers). A path is
   recognized by **syntax** (`./`, `../`, `/`, `~`) — so a bare relative dir name is
-  an API id, not a path.
+  an API id, not a path. Inference is total over non-empty strings: a multi-slash
+  id is never a Hub id (those carry one slash), so it goes to `api` and litellm —
+  which owns the real provider list — reports any error.
 - **`revision` pins an `hf` ref** (B16). Without it `org/name` drifts as the Hub
   moves and an "identical versioned config" is not identical across time.
 - **Don't guess a provider typo.** `org/name` cannot be disambiguated from a
