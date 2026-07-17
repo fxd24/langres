@@ -17,7 +17,7 @@ Two constructors, both free:
   :class:`~langres.core.models.PairwiseJudgement` list, so pass it straight in.
 
 **Layering.** This is a *leaf* module. It imports from ``core.metrics``,
-``core.benchmark``, ``core.models`` and ``core._svg`` -- all import-light -- and
+``core.benchmark``, ``core.models`` and ``report._svg`` -- all import-light -- and
 **nothing in ``reports.py`` / ``module.py`` may import it**, which would reverse
 the dependency arrow and pull SVG/HTML into a bare ``import langres``. A dedicated
 import-budget test locks that this module never drags in a heavy dependency
@@ -551,7 +551,7 @@ class EvalReport(BaseModel):
         """Render a single self-contained HTML document (no external assets).
 
         The whole tearsheet -- styles inline, every chart an inline ``<svg>`` from
-        :mod:`langres.core._svg` -- fits in one string with zero network requests,
+        :mod:`langres.report._svg` -- fits in one string with zero network requests,
         no CDN, no matplotlib. Themes: neutral ``currentColor`` axes plus a
         ``prefers-color-scheme`` block, so it reads in light and dark.
         """

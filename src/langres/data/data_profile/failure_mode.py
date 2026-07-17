@@ -461,7 +461,7 @@ def _join_gold(judgements: Sequence[Mapping[str, Any]], gold: set[frozenset[str]
 def _in_unit_range(score: float | None) -> bool:
     """Whether a score is a real number in ``[0, 1]`` -- the only binnable range.
 
-    The overlay counts (via :func:`~langres.core._report_html._histogram`) drop
+    The overlay counts (via :func:`~langres.report._report_html._histogram`) drop
     scores outside the ``[0, 1]`` edges, and a raw/signed-score judge can emit
     such values. Both the overlay and the score-band slices exclude out-of-range
     (and ``None``) scores through this one predicate, so the two views stay

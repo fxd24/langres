@@ -11,7 +11,7 @@ CLI writes), ``harvest_labeled_pairs`` + ``derive_threshold_from_pairs``
 The harvest surface is already in the eager import graph (via ``langres.core``)
 so it is eager here for free. ``EvalReport`` / ``gold_pairs_from_clusters`` are
 import-light but live in modules kept out of the eager graph on purpose
-(``core.eval_report`` pulls ``core.benchmark``/``core.metrics``), so they stay
+(``report.eval_report`` pulls ``core.benchmark``/``core.metrics``), so they stay
 lazy -- they need no extra, and an ImportError from them is a genuine bug that
 must propagate unchanged.
 

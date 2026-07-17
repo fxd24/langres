@@ -130,7 +130,7 @@ class ScriptedJudge(Matcher[SchemaT]):
                 mirroring ``scores`` -- a ``dict`` keyed by the unordered pair or
                 a callable returning a ``float | None``. Lets the double model a
                 logprob judge offline, so the calibration panel of an
-                :class:`~langres.core.eval_report.EvalReport` has a real signal to
+                :class:`~langres.report.eval_report.EvalReport` has a real signal to
                 plot. A callable/dict returning ``None`` for a pair leaves that
                 judgement's ``confidence`` unset. ``None`` (default): no
                 confidence on any judgement.

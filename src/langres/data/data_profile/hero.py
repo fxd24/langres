@@ -11,7 +11,7 @@ Built with :func:`build_hero`, which reads the headline numbers off a
 :class:`~langres.data.data_profile.label_structure.LabelStructureSection` and a
 :class:`~langres.data.data_profile.separability.SeparabilitySection` when present.
 Every KPI is optional: a missing source section leaves that card as an honest
-``"n/a"`` (via :func:`~langres.core._report_html._num`), never a raise -- the same
+``"n/a"`` (via :func:`~langres.report._report_html._num`), never a raise -- the same
 graceful-degradation contract the rest of the report keeps.
 """
 
@@ -135,7 +135,7 @@ class HeroSection(ProfileSection):
         (``repeat(auto-fill, minmax(150px, 1fr))``): ``auto-fill`` keeps the empty
         trailing tracks, so a lone last card stays one cell wide and left-aligned
         instead of stretching across the row (as ``auto-fit`` or a flex row would).
-        It rides on the shared :mod:`langres.core._report_html` CSS variables
+        It rides on the shared :mod:`langres.report._report_html` CSS variables
         (``--line``/``--muted``/``--fg``), inheriting the report's light/dark
         palette without a new stylesheet, and reflows to fewer columns on narrow
         widths.

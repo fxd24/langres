@@ -71,6 +71,10 @@ langres/
 │   │   └── autoresearch/           # the langres.optimize engine: objective (keep-if-better) / search_space / factory / loop (propose→run→eval→keep)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
+│   │   ├── _svg.py         # pure-stdlib inline-SVG chart primitives (line_chart/bar_chart); imports nothing from langres
+│   │   ├── _report_html.py # shared HTML scaffold: document()/section()/_num/_histogram/safe_auc
+│   │   └── eval_report.py  # EvalReport, the $0 tearsheet (public home: langres.eval / root langres, both lazy)
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 │       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite
