@@ -9,7 +9,6 @@ Supports both direct OpenAI client and LiteLLM for enhanced observability.
 import asyncio
 import logging
 import math
-import os
 import re
 import string
 import time
@@ -26,7 +25,7 @@ except ImportError:
     RateLimitError = Exception
 
 from langres.clients.openrouter import parse_openrouter_billing
-from langres.core.model_ref import ModelRef, normalize_model_ref, to_config
+from langres.core.model_ref import ModelRef, backend_for, normalize_model_ref, to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
@@ -357,67 +356,6 @@ class _RateLimiter:
             self._token_usage.append((time.time(), token_count))
 
 
-# Known LiteLLM provider-route prefixes. A ``model`` carrying one of these (or no
-# ``/`` at all, i.e. a bare OpenAI-style name like ``gpt-5-mini``) is an API model
-# served over the wire; a bare ``org/name`` that matches NONE of these is treated
-# as an HF Hub id and run in-process. This is a heuristic — ``api_base`` (served
-# endpoint) and a base+adapter ``ModelRef`` (always in-process) are unambiguous and
-# decided first; see :func:`_default_backend_kind`.
-_API_MODEL_PREFIXES = (
-    "openrouter/",
-    "openai/",
-    "azure/",
-    "azure_ai/",
-    "anthropic/",
-    "gemini/",
-    "vertex_ai/",
-    "bedrock/",
-    "together_ai/",
-    "fireworks_ai/",
-    "groq/",
-    "mistral/",
-    "codestral/",
-    "cohere/",
-    "deepseek/",
-    "deepinfra/",
-    "perplexity/",
-    "xai/",
-    "cerebras/",
-    "sambanova/",
-    "huggingface/",
-    "ollama/",
-    "ollama_chat/",
-    "replicate/",
-    "watsonx/",
-)
-
-
-def _default_backend_kind(
-    ref: ModelRef, api_base: str | None
-) -> Literal["litellm", "transformers"]:
-    """Route a :class:`ModelRef` (+ optional ``api_base``) to a completion backend.
-
-    Decision order, unambiguous cases first:
-
-    1. **base+adapter** (``ref.adapter`` set) → ``"transformers"`` — an unmerged
-       PEFT adapter can only be assembled in-process.
-    2. **``api_base`` set** → ``"litellm"`` — a served (vLLM/Ollama/OpenAI-compatible)
-       endpoint is reached through litellm regardless of the model id's shape.
-    3. **existing local directory** → ``"transformers"``.
-    4. **bare name (no ``/``) or a known provider prefix** → ``"litellm"``.
-    5. otherwise (an ``org/name`` HF Hub id) → ``"transformers"``.
-    """
-    if ref.adapter is not None:
-        return "transformers"
-    if api_base is not None:
-        return "litellm"
-    if os.path.isdir(ref.base):
-        return "transformers"
-    if "/" not in ref.base or ref.base.startswith(_API_MODEL_PREFIXES):
-        return "litellm"
-    return "transformers"
-
-
 @register("llm_judge")
 class LLMMatcher(Matcher[SchemaT]):
     """Schema-agnostic LLM-based matching module using LiteLLM.
@@ -474,10 +412,11 @@ class LLMMatcher(Matcher[SchemaT]):
 
     Note:
         The same matcher runs a model over an **API** or **in-process**, decided
-        from ``model`` + ``api_base`` (see :meth:`__init__` and
-        :func:`_default_backend_kind`): an API name goes through litellm; a served
-        endpoint (``api_base=``) through litellm to that URL; an HF id / local dir
-        / base+adapter ref runs locally via a lazily-loaded transformers backend.
+        solely by the :class:`~langres.core.model_ref.ModelRef`'s ``kind``
+        discriminator (see :func:`~langres.core.model_ref.backend_for`): the
+        ``api``/``endpoint`` kinds go through litellm (the latter to
+        ``api_base``); the ``hf``/``local`` kinds — including a base+adapter ref —
+        run locally via a lazily-loaded transformers backend.
         Both backends feed the identical parse + first-token-logprob→score step,
         so ``run your fine-tuned model`` needs no new judge — just a different
         ``model`` / ``api_base``. See ``examples/serve_your_model.py``.
@@ -523,9 +462,13 @@ class LLMMatcher(Matcher[SchemaT]):
                 - a base+adapter dict ``{"base": ..., "adapter": ...}`` (a QLoRA
                   fine-tune served unmerged) — always run in-process.
 
-                The in-process route is chosen automatically for a local dir / HF
-                id / base+adapter ref when no ``api_base`` is given (see
-                :func:`_default_backend_kind`).
+                The in-process route is chosen for the ``hf``/``local`` kinds --
+                inferred from the string's shape by
+                :func:`~langres.core.model_ref.infer_kind`, or named outright via
+                a ``{"base": ..., "kind": ...}`` dict. Note a **bare relative
+                directory name is NOT a path**: write ``"./my-model"`` (or pass
+                ``kind="local"``), since guessing by probing the filesystem is
+                what made routing depend on the working directory (B17).
             api_base: Optional base URL of a served, OpenAI-compatible endpoint
                 (vLLM, Ollama, a hosted gateway). When set, the request is routed
                 there via litellm with ``model`` as the served model id — this is
@@ -608,16 +551,20 @@ class LLMMatcher(Matcher[SchemaT]):
             raise ValueError("confidence must be 'none' or 'logprob'")
 
         self.client = client
-        self.model_ref = normalize_model_ref(model)
+        self.model_ref = normalize_model_ref(model, api_base=api_base)
         # ``self.model`` stays the base id *string* for every existing consumer
         # (litellm ``model=``, provenance, ``LLMUsage``); the full weightless ref
         # (including any PEFT adapter) lives on ``self.model_ref``, and the raw
         # ref serializes in :attr:`config` via :func:`to_config`.
         self.model = self.model_ref.base
-        self.api_base = api_base
-        # Route to a backend once at construction (inputs are fixed): avoids a
-        # per-candidate filesystem stat and keeps sync/async paths consistent.
-        self._backend_kind = _default_backend_kind(self.model_ref, api_base)
+        # ``api_base`` is no longer a second model concept: it is absorbed into the
+        # ref above as the ``endpoint`` form, and read back from it so the two can
+        # never disagree.
+        self.api_base = self.model_ref.api_base
+        # Routing is a pure function of the ref's ``kind`` (B17) -- no filesystem
+        # probe, so a saved config resolves to the SAME backend in any working
+        # directory. Resolved once at construction: the kind is immutable.
+        self._backend_kind = backend_for(self.model_ref.kind)
         self._backend: TransformersBackend | None = None
         self.temperature = temperature
         self.entity_noun = entity_noun

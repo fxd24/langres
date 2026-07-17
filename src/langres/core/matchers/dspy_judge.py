@@ -34,6 +34,12 @@ from typing import Any, ClassVar, Self
 import dspy
 from dspy.utils.exceptions import AdapterParseError
 
+from langres.core.model_ref import (
+    ModelRef,
+    normalize_model_ref,
+    require_served,
+    to_config,
+)
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
@@ -173,7 +179,7 @@ class DSPyMatcher(Matcher[SchemaT]):
     def __init__(
         self,
         lm: Any = None,
-        model: str = "openrouter/openai/gpt-4o-mini",
+        model: str | dict[str, str] | ModelRef = "openrouter/openai/gpt-4o-mini",
         temperature: float = 0.0,
         entity_noun: str = "entity",
         program: Any = None,
@@ -185,14 +191,25 @@ class DSPyMatcher(Matcher[SchemaT]):
                 ``None`` a ``dspy.LM(model, cache=False)`` is built lazily on first
                 use — so ``from_config`` / ``load`` never need a key. Inject an LM
                 as an escape hatch (tests inject ``DummyLM`` for zero-spend runs).
-            model: OpenRouter/LiteLLM model id used when ``lm`` is built lazily.
+            model: The backbone that fills this slot — an API model id, or any
+                :class:`~langres.core.model_ref.ModelRef` surface form. **Served
+                kinds only** (``api``/``endpoint``): this slot is DSPy-backed, so
+                an ``hf``/``local``/base+adapter ref raises
+                :class:`~langres.core.model_ref.UnsupportedBackboneError` here —
+                see :func:`~langres.core.model_ref.require_served`.
             temperature: Sampling temperature for the lazily-built LM.
             entity_noun: Domain noun woven into the signature instructions.
             program: Optional pre-built DSPy program (e.g. a compiled one). When
                 ``None`` a fresh ``ChainOfThought`` over the woven signature is
                 built (uncompiled — call :meth:`compile` to tune it).
+
+        Raises:
+            UnsupportedBackboneError: ``model`` names an in-process backbone.
         """
-        self.model = model
+        self.model_ref = require_served(normalize_model_ref(model), slot="DSPyMatcher")
+        # ``self.model`` stays the base id *string* for litellm/provenance/pricing;
+        # the full ref (incl. any endpoint URL) lives on ``self.model_ref``.
+        self.model = self.model_ref.base
         self.temperature = temperature
         self.entity_noun = entity_noun
         self._lm = lm
@@ -218,9 +235,15 @@ class DSPyMatcher(Matcher[SchemaT]):
         self._compile_run_id: str | None = None
 
     def _get_lm(self) -> Any:
-        """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use."""
+        """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use.
+
+        ``api_base`` is forwarded for the ``endpoint`` kind: ``dspy.LM`` passes
+        unknown kwargs straight to litellm (it lists ``api_base`` among the args it
+        excludes from its cache key), so a served backbone needs no new judge.
+        """
         if self._lm is None:
-            self._lm = dspy.LM(self.model, cache=False, temperature=self.temperature)
+            extra = {"api_base": self.model_ref.api_base} if self.model_ref.api_base else {}
+            self._lm = dspy.LM(self.model, cache=False, temperature=self.temperature, **extra)
         return self._lm
 
     @property
@@ -243,7 +266,9 @@ class DSPyMatcher(Matcher[SchemaT]):
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the LM, program, or secrets)."""
         return {
-            "model": self.model,
+            # A plain API id serializes byte-identically to the pre-``kind`` config;
+            # only an endpoint ref widens to a dict (see ``to_config``).
+            "model": to_config(self.model_ref),
             "temperature": self.temperature,
             "entity_noun": self.entity_noun,
         }
@@ -257,7 +282,9 @@ class DSPyMatcher(Matcher[SchemaT]):
         """
         return cls(
             lm=None,
-            model=str(config["model"]),
+            # Passed through unchanged: a ``str()`` coercion here would stringify an
+            # endpoint ref's dict into ``"{'base': ...}"`` and silently misroute it.
+            model=config["model"],  # type: ignore[arg-type]
             temperature=float(config["temperature"]),  # type: ignore[arg-type]
             entity_noun=str(config["entity_noun"]),
         )

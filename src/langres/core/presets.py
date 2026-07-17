@@ -431,18 +431,22 @@ def _resolve_judge_uncapped(
     else:
         judge_used = judge
 
+    # The name is validated by build_judge below, but the backbone must be checked
+    # BEFORE construction: a method that cannot run this ref should say so here,
+    # not fail deep inside litellm (or, worse, drop the argument in silence).
+    spec = get_method(judge_used)
+    spec.check_backbone(resolved_model)
+
     built = build_judge(
         judge_used, schema, model=resolved_model, entity_noun=entity_noun, judge_params=judge_params
     )
-    # build_judge validated the name, so the spec lookup cannot fail here. The
-    # spec is the identity authority: a judge that ignores model= (embedding,
-    # string) reports its fixed default_model -- never the caller's ignored
-    # override -- so the stamped identity is what actually ran.
-    spec = get_method(judge_used)
-    if spec.accepts_model:
-        resolved_model = resolved_model or spec.default_model
-    else:
-        resolved_model = spec.default_model
+    # The spec is the identity authority: a method with no model slot reports its
+    # fixed default_model, and one WITH a slot reports the caller's override.
+    # ``check_backbone`` above already rejected a model= the method cannot honor,
+    # so this can no longer stamp an identity that did not run.
+    resolved_model = (
+        (resolved_model or spec.default_model) if spec.accepted_kinds else spec.default_model
+    )
     return ResolvedModule(built, judge_used, resolved_model)
 
 
@@ -515,8 +519,18 @@ def _text_field_extractor(schema: type[BaseModel]) -> Any:
     return extract
 
 
-def _build_vector_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
-    """Build a ``VectorBlocker`` (MiniLM + FAISS cosine) for ``schema``."""
+def _build_vector_blocker(
+    schema: type[BaseModel], *, model: str | None = None
+) -> VectorBlocker[Any]:
+    """Build a ``VectorBlocker`` (FAISS cosine) for ``schema`` over an embedder backbone.
+
+    ``model`` names the sentence-transformers backbone; ``None`` pins
+    :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`. This is the seam that
+    makes ``matcher="embedding", model=...`` mean something: the ``embedding``
+    method's model slot is the *blocker's* embedder (its matcher only passes the
+    blocker's cosine similarity through), so the caller's backbone has to land
+    here or nowhere.
+    """
     # Lazy: faiss/sentence-transformers ([semantic] extra) must stay out of
     # sys.modules unless a VectorBlocker is actually built (mirrors the
     # zero_shot_llm branch's lazy dspy import right below).
@@ -524,7 +538,7 @@ def _build_vector_blocker(schema: type[BaseModel]) -> VectorBlocker[Any]:
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes.vector_index import FAISSIndex
 
-    embedder = SentenceTransformerEmbedder(DEFAULT_EMBEDDING_MODEL)
+    embedder = SentenceTransformerEmbedder(model or DEFAULT_EMBEDDING_MODEL)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     return VectorBlocker(
         vector_index=index,
@@ -663,8 +677,16 @@ def build_resolver(
     )
 
     use_vector = resolved.judge_used == "embedding" or n_records > _ALL_PAIRS_MAX_N
+    # The caller's model= names the EMBEDDER backbone only for the "embedding"
+    # method, whose model slot IS this blocker (see _build_vector_blocker). For any
+    # other judge, model= names that judge's LLM backbone and the blocker -- built
+    # here only as a scaling choice above _ALL_PAIRS_MAX_N -- keeps its own default.
     blocker: Blocker[Any] = (
-        _build_vector_blocker(schema) if use_vector else AllPairsBlocker(schema=schema)
+        _build_vector_blocker(
+            schema, model=resolved.model if resolved.judge_used == "embedding" else None
+        )
+        if use_vector
+        else AllPairsBlocker(schema=schema)
     )
     comparator: Comparator[Any] | None = (
         StringComparator.from_schema(schema) if resolved.judge_used == "string" else None

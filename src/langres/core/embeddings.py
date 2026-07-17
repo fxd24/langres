@@ -50,6 +50,7 @@ import numpy as np
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
+from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
 from langres.core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class SentenceTransformerEmbedderConfig(BaseModel):
     first ``encode()`` call.
     """
 
-    model_name: str = "all-MiniLM-L6-v2"
+    model_name: str = DEFAULT_EMBEDDING_MODEL
     batch_size: int = 32
     show_progress_bar: bool = False
     normalize_embeddings: bool = True
@@ -74,6 +75,18 @@ class FakeEmbedderConfig(BaseModel):
 
     embedding_dim: int = 384
     normalize_embeddings: bool = True
+
+
+class FastEmbedSparseEmbedderConfig(BaseModel):
+    """Light, JSON-serializable construction config for a FastEmbedSparseEmbedder."""
+
+    model_name: str = "Qdrant/bm25"
+
+
+class FastEmbedLateInteractionEmbedderConfig(BaseModel):
+    """Light, JSON-serializable construction config for a FastEmbedLateInteractionEmbedder."""
+
+    model_name: str = "colbert-ir/colbertv2.0"
 
 
 class EmbeddingProvider(Protocol):
@@ -313,7 +326,7 @@ class SentenceTransformerEmbedder:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = DEFAULT_EMBEDDING_MODEL,
         batch_size: int = 32,
         show_progress_bar: bool = False,
         normalize_embeddings: bool = True,
@@ -591,6 +604,7 @@ class FakeEmbedder:
 # ============ SPARSE EMBEDDING IMPLEMENTATIONS ============
 
 
+@register("fastembed_sparse_embedder")
 class FastEmbedSparseEmbedder:
     """Sparse embedding provider using FastEmbed library.
 
@@ -617,16 +631,33 @@ class FastEmbedSparseEmbedder:
         Model is loaded lazily on first encode() call.
     """
 
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "fastembed_sparse_embedder"
+
     def __init__(self, model_name: str = "Qdrant/bm25"):
         """Initialize FastEmbed sparse embedder.
 
         Args:
-            model_name: FastEmbed sparse model name.
+            model_name: FastEmbed sparse model name -- the embedder's backbone.
                 Default: "Qdrant/bm25" (classic BM25)
                 Alternative: "prithivida/Splade_PP_en_v1" (neural sparse)
         """
         self.model_name = model_name
         self._model: Any = None  # Lazy-loaded on first encode
+
+    def config(self) -> FastEmbedSparseEmbedderConfig:
+        """Return the light, JSON-serializable construction config.
+
+        The loaded model is intentionally excluded -- it is reloaded lazily from
+        ``model_name`` in :meth:`from_config`.
+        """
+        return FastEmbedSparseEmbedderConfig(model_name=self.model_name)
+
+    @classmethod
+    def from_config(cls, config: FastEmbedSparseEmbedderConfig) -> "FastEmbedSparseEmbedder":
+        """Reconstruct an embedder from its config (model stays unloaded)."""
+        return cls(model_name=config.model_name)
 
     def encode(self, texts: list[str], prompt: str | None = None) -> list[dict[str, Any]]:
         """Generate sparse vectors using FastEmbed.
@@ -713,6 +744,7 @@ class FakeSparseEmbedder:
 # ============ LATE INTERACTION EMBEDDING IMPLEMENTATIONS ============
 
 
+@register("fastembed_late_interaction_embedder")
 class FastEmbedLateInteractionEmbedder:
     """Late-interaction embedding provider using FastEmbed library.
 
@@ -737,6 +769,10 @@ class FastEmbedLateInteractionEmbedder:
         Token count varies per text based on tokenization.
     """
 
+    # Registry key, mirrored as a class attribute so the Resolver's uniform
+    # serialization helper can discover the type name (see resolver.py).
+    type_name: ClassVar[str] = "fastembed_late_interaction_embedder"
+
     def __init__(self, model_name: str = "colbert-ir/colbertv2.0"):
         """Initialize FastEmbed late-interaction embedder.
 
@@ -752,6 +788,21 @@ class FastEmbedLateInteractionEmbedder:
         """
         self.model_name = model_name
         self._model: Any = None  # Lazy-loaded on first encode
+
+    def config(self) -> FastEmbedLateInteractionEmbedderConfig:
+        """Return the light, JSON-serializable construction config.
+
+        The loaded model is intentionally excluded -- it is reloaded lazily from
+        ``model_name`` in :meth:`from_config`.
+        """
+        return FastEmbedLateInteractionEmbedderConfig(model_name=self.model_name)
+
+    @classmethod
+    def from_config(
+        cls, config: FastEmbedLateInteractionEmbedderConfig
+    ) -> "FastEmbedLateInteractionEmbedder":
+        """Reconstruct an embedder from its config (model stays unloaded)."""
+        return cls(model_name=config.model_name)
 
     def _get_model(self) -> Any:
         """Get or load the FastEmbed late-interaction model.

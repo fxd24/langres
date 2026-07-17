@@ -242,6 +242,50 @@ def backend_for(kind: BackboneKind) -> Literal["litellm", "transformers"]:
     return "litellm" if kind in SERVED_KINDS else "transformers"
 
 
+def require_served(ref: ModelRef, *, slot: str) -> ModelRef:
+    """Assert ``ref`` can run behind an API, or raise :class:`UnsupportedBackboneError`.
+
+    The guard for **DSPy-backed slots**, which have no in-process route at all.
+    Verified against the installed ``dspy`` (3.2.1), not assumed:
+    ``dspy.clients.lm.LM.forward`` routes *every* completion through
+    ``litellm_completion`` -> ``litellm.completion``, and ``LM.__init__``
+    documents ``model`` as ``"llm_provider/llm_name"``. ``dspy.clients.lm_local``
+    looks like an in-process escape hatch but is not one: ``LocalProvider.launch``
+    requires ``sglang``, shells out with ``subprocess.Popen``, and then points
+    litellm at ``http://localhost:{port}/v1`` — i.e. it *serves* the model and
+    goes back through litellm.
+
+    So handing such a slot a ``local`` dir or a base+adapter ref cannot work; it
+    dies deep inside litellm with a provider error that names nothing useful.
+    Raising here — at construction — is that failure, hoisted to where the caller
+    can act on it.
+
+    Args:
+        ref: The backbone to check.
+        slot: The slot's user-facing name, woven into the message.
+
+    Raises:
+        UnsupportedBackboneError: ``ref.kind`` is an in-process kind.
+    """
+    if ref.kind in SERVED_KINDS:
+        return ref
+    detail = (
+        f"an unmerged base+adapter ref (base={ref.base!r}, adapter={ref.adapter!r})"
+        if ref.adapter is not None
+        else f"a {ref.kind!r} backbone ({ref.base!r})"
+    )
+    raise UnsupportedBackboneError(
+        f"{slot} cannot run {detail}: it is DSPy-backed, and DSPy routes every "
+        "completion through litellm — it has no in-process route, so local weights and "
+        "PEFT adapters are unreachable from this slot.\n"
+        "Fix A: serve the model (e.g. `vllm serve <model>`) and pass the endpoint — "
+        '{"base": "<served-id>", "kind": "endpoint", "api_base": "http://localhost:8000/v1"}.\n'
+        "Fix B: use LLMMatcher instead, which has a transformers backend and runs "
+        "hf/local/base+adapter refs in-process.\n"
+        "Fix C: name an API model (e.g. 'openrouter/openai/gpt-4o-mini')."
+    )
+
+
 def infer_kind(base: str, *, api_base: str | None = None) -> BackboneKind:
     """Infer a :data:`BackboneKind` from a bare model string, by **syntax alone**.
 

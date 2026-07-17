@@ -91,6 +91,8 @@ _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "dspy_judge": "langres.core.matchers.dspy_judge",
     "faiss_index": "langres.core.indexes.vector_index",
     "fake_embedder": "langres.core.embeddings",
+    "fastembed_late_interaction_embedder": "langres.core.embeddings",
+    "fastembed_sparse_embedder": "langres.core.embeddings",
     "fellegi_sunter_judge": "langres.core.matchers.fellegi_sunter",
     "key_blocker": "langres.core.blockers.key",
     "llm_judge": "langres.core.matchers.llm_judge",
