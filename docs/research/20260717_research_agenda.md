@@ -101,14 +101,36 @@ directions and one of them contradicts our own theory doc**:
   $\varphi$ is wrong and load-bearing. Blocker and matcher errors are **correlated** —
   both keyed on similarity […] $P \to 0$ survives iff $\inf \varphi > 0$, but
   constant-$\varphi$ **mis-locates the optimum**."* `[verified — quoted from 7a106ce]`
-- **The counter-evidence: *Drowning in Documents*** ([2411.11767](https://arxiv.org/abs/2411.11767))
-  is evidence that rerankers score far-out irrelevant documents highly, i.e. that
-  $\varphi$ **grows** with $k$ rather than decaying. `[see §7 reference tier — confirm the
-  paper's central finding and whether it supports "FP rate grows with rank" specifically,
-  before citing it as such]`
+- **The counter-evidence is weaker than it first appears — and this correction matters.**
+  *Drowning in Documents: Consequences of Scaling Reranker Inference* (Jacob, Lindgren,
+  Zaharia, Carbin, Khattab & Drozdov, **ReNeuIR@SIGIR 2025 workshop**,
+  [2411.11767](https://arxiv.org/abs/2411.11767)) is often read as showing $\varphi$ grows
+  with $k$. **It does not show that.** `[verified — LaTeX source]` What it actually
+  establishes:
+  - **Quantitative:** *"scaling K leads to a substantial decrease in recall"* — Recall@10
+    is *lower than retrieval alone* in **53.3%** (academic) and **44.4%** (enterprise) of
+    experiments. But degradation is **not monotone**: *"rerankers provide initial
+    improvements when scoring progressively more documents, but their effectiveness
+    gradually declines and can even degrade quality beyond a certain limit"* — quality
+    rises to a peak, *then* falls.
+  - **Qualitative only:** *"phantom hits"* is their coined term for *"completely irrelevant
+    documents […] scored very highly"*. But the paper **never measures a false-positive
+    rate** and never plots any error rate against $k$; the analysis is explicitly
+    **outcome-selected** (*"we filtered for queries where the Recall@10 decreased"*).
+    **Examples chosen because they failed cannot establish a rate.**
+  - The "each added document is another chance at a high-scoring irrelevant one" mechanism
+    appears in their Discussion but is **cited to Zamani et al. 2022** — borrowed framing,
+    not their measurement.
+
+  > **So: nobody has measured $\varphi(\text{rank})$.** The "phantom hits" story is
+  > *suggestive* of growth and is the best available reason to think §6.4's decay
+  > assumption may be wrong — but it is a hypothesis, not a result. That is precisely why
+  > A1 is worth running rather than citing.
 - **A corroborating signal is already in `THEORY.md` §6.4**: Meng et al., *Ranked List
-  Truncation* — *"a deeper re-ranking cut-off does not consistently result in improvement
-  and can even be detrimental."* `[verified — quoted from 7a106ce]`
+  Truncation for LLM-based Re-Ranking* (SIGIR 2024, [2404.18185](https://arxiv.org/abs/2404.18185))
+  — *"a deeper re-ranking cut-off does not consistently result in improvement and can even
+  be detrimental to re-ranking quality."* `[verified against the primary — THEORY.md's
+  ellipsis drops "to re-ranking quality"; harmless]`
 - **The field's own measurement says $\varphi$ is small**, which is the reason §6.5 hedges:
   Papadakis et al. — *"precision […] **significantly raises after matching**."* If that is
   right, A1 returns "$\varphi \approx 0$", §6 is operationally uninteresting, and **A2
@@ -122,19 +144,37 @@ directions and one of them contradicts our own theory doc**:
   effects are **separately measurable with components we already have**. `[verified]`
 
 **What would settle it.** $\varphi$ is measurable today, but **not with an off-the-shelf
-call** — the inventory is explicit that langres has **no false-positive-*rate* metric**:
-`core/metrics.py` computes FP *counts* (`PairMetrics.fp`, `classify_pairs`) and never
-counts true negatives. That omission is *correct* for ER in general — the negative class is
-$O(n^2)$, so a global FPR is meaningless — but $\varphi$ does not need a global denominator.
-**Within a candidate set $E_B$ the false pairs are finite and countable**, which is exactly
-the quantity §6.2's $F_B$ names. So, from functions that ship today:
+call, and the obvious way to compute it is wrong**. The inventory is explicit that langres
+has **no false-positive-*rate* metric**: `core/metrics.py` computes FP *counts*
+(`PairMetrics.fp`, `classify_pairs`) and never counts true negatives. That omission is
+*correct* for ER in general — the negative class is $O(n^2)$, so a global FPR is
+meaningless — but $\varphi$ needs no global denominator. **Within a candidate set $E_B$ the
+false pairs are finite and countable**, and that count is exactly §6.2's $F_B$.
 
-$$\varphi \;=\; \frac{\texttt{fp}}{|E_B| - (\texttt{tp} + \texttt{fn})}$$
+> **The trap, found by reading the source.** The natural formula —
+> `fp / (total_candidates - (tp + fn))` — is **wrong**. `classify_pairs`'s docstring is
+> explicit that *"`fn` counts gold pairs that were not predicted — **covering pairs the
+> blocker never surfaced**, pairs scored below `threshold`, and abstentions"*. So
+> $\texttt{tp} + \texttt{fn} = |{\rm gold}|$, the **whole** gold set — not the gold pairs
+> the matcher actually saw. That behaviour is right for `PairMetrics`'s own purpose
+> (end-to-end pair quality) and wrong for $\varphi$, which is **conditional on the matcher
+> having been shown the pair**. Using it would fold the *blocker's* misses into the
+> *matcher's* fall-out — i.e. measure the wrong stage, in a thread whose entire point is
+> that the two stages must be measured separately. `[verified — read
+> `core/metrics.py:281-327`]`
 
-where `tp`/`fp`/`fn` come from `classify_pairs(judgements, gold_pairs, threshold)` and
-$|E_B|$ = `total_candidates` from `evaluate_blocking`. The denominator is "candidate pairs
-that are not true pairs" — $F_B$ exactly. **Three caveats that decide whether the number is
-honest:**
+**The fix is a one-line discipline: restrict gold to the candidate set before classifying.**
+Let $E_B$ be the candidate pairs and $T_B = |{\rm gold} \cap E_B|$ (THEORY.md's $T_B = r_B T$).
+Call `classify_pairs(judgements, gold_pairs & candidate_pairs, threshold)`. Then, from
+functions that ship today, **both** of §6's matcher parameters fall out:
+
+$$\eta \;=\; \texttt{PairMetrics.recall} \qquad\qquad \varphi \;=\; \frac{\texttt{fp}}{|E_B| - T_B}$$
+
+$\eta$ is `recall` directly (with gold restricted, $\texttt{tp}+\texttt{fn} = T_B$, so
+$\texttt{recall} = \texttt{tp}/T_B = P(\text{yes} \mid \text{true})$ — the definition).
+$|E_B|$ is `total_candidates` from `evaluate_blocking`, and $T_B$ is recoverable as
+`candidate_recall × |gold|` from the same call. **Three further caveats that decide whether
+the number is honest:**
 
 - `PairMetrics` **excludes abstentions** from the predicted set. An abstain is not a
   "yes", so excluding them is right for $\varphi$ — but it must be *reported*, because a
@@ -159,6 +199,216 @@ The **$0 arm runs first**: `rapidfuzz` and `embedding_cosine` cost nothing and w
 whether the *shape* of $\varphi(\text{rank})$ is even interesting before any paid call.
 Prerequisites: **B2** (to know which benchmarks can show a difference). Shares apparatus
 with **C2**. **Blocks A2.**
+
+---
+
+### A2 — The Zamani follow-up: is there a defensible contribution here?
+
+**The question.** `THEORY.md` §6 transplants a published IR result into ER. There is a
+structural reason langres's version might be **stronger than its source**. What would it
+take to make that a real, defensible contribution — what would need to be **derived**, and
+what **measured**? And is it worth doing at all?
+
+**Why it matters to langres.** Mostly it *doesn't* — and that framing is deliberate. The
+owner's standard: *"We don't care how much we are contributing with novelty. We care that
+what we have is good and correct."* This item earns its place for a different reason:
+**working out whether the claim is defensible is the same work as working out whether it is
+correct.** The pressure-test is the deliverable; a paper would be a by-product. If A1
+returns $\varphi \approx 0$, **this item is dropped and that is a success.**
+
+**What's already known.** The source has now been read in full (authors' own OA copy), and
+it both **supports the gap and corrects our description of it**:
+
+- **Eq. 4 is k=1-only — CONFIRMED, stated explicitly twice.** `[verified — full text]`
+  Before the equation: *"For illustration, **let us assume 𝑘 = 1**, meaning that we care
+  solely about the relevance of the first retrieved document (e.g., Precision@1)."* And in
+  §5: *"**We formally derive this connection in Equation (4) for metrics when the ranking
+  cutoff 𝑘 = 1.** To complement our theoretical derivation, we demonstrate the impact of 𝜌
+  on metrics for deeper ranked lists **through a number of simulations**."*
+
+  > **This is the gap, and it is real.** Deeper $k$ is **simulated, not derived** (their
+  > simulation fixes $\varepsilon^+ = \varepsilon^- = 0.05$, $N=2000$, $n=50$, recall
+  > $0.5$). So a derivation at general $k$ is genuinely not in the source.
+- **⚠ But our description of Eq. 4 is wrong, and `THEORY.md` inherits the error.**
+  `[verified — full text]` The paper contains **two** *"instead of Recall@N (i.e., the
+  current popular belief)"* sentences with **different prescriptions**:
+  - **Optimal reranker, cutoff $k$** (this *precedes* Eq. 4): *"the retrieval model 𝜙
+    should **maximize min(1, 𝑛/𝑘)**."*
+  - **Sub-optimal reranker, k=1 — this is Eq. 4's actual takeaway:** *"the retrieval model
+    𝜙 should **minimize 𝜌 = 𝑁/𝑛**… Note that 𝜌 is equal to the inverse of precision."*
+
+  `THEORY.md` §6's attribution box quotes the **min(1, n/k)** sentence immediately after
+  asserting *"whose Eq. 4 — multiplied through by $n$ — **is** the precision formula
+  below"*, which reads as attributing min(1,n/k) to Eq. 4. **It belongs to the
+  optimal-reranker analysis instead.** Two things follow, and the second is the more
+  interesting: `THEORY.md` needs a precision fix; and since Eq. 4 is k=1-only, its
+  unqualified *"**is**"* **over-credits Zamani** — the correction runs in *both*
+  directions.
+- **The load-bearing assumption is confirmed, and it is asserted rather than argued.**
+  `[verified — full text]` Zamani: *"In this derivation, **𝜖+ and 𝜖− solely depend on the
+  reranker's quality**… On the other hand, **𝜌 solely depends on the retrieval quality by
+  𝜙**."* That clean factorization — error from the reranker, $\rho$ from the retriever — is
+  what makes the whole result separate. It enters via an **averaging step** that
+  homogenizes per-document noise into two constants ($\sum(1-\varepsilon_i) \to
+  n(1-\varepsilon^+)$). The paper never argues that a reranker's average noise is invariant
+  to *which* documents the retriever hands it. **So constant-$\varphi$ is a modelling
+  assumption in Zamani too** — §6.4's conceded weakness is inherited, not introduced.
+
+**The structural claim, stated precisely.** At $k=1$ the objective is pure precision, and
+Eq. 4 is monotone decreasing in $\rho$ for fixed $\varepsilon$ — so
+$\arg\min_N \rho(N)$ is **$\varepsilon$-invariant**: the retriever's optimum does not move
+as the reranker changes. That is exactly why Zamani's prescription (*"minimize $\rho$"*)
+contains no $\varepsilon$. langres's objective has no such property:
+
+$$F_1(k) = \frac{2\,\eta\,r_B(k)\,T}{\eta\,r_B(k)\,T + \varphi\,(nk - r_B(k)\,T) + T}$$
+
+Here $\varphi$ multiplies a $nk$ term that trades **against** the recall gain, so
+$\partial k^* / \partial \varphi \neq 0$ in general — **$k^*$ shifts continuously with
+$\varphi$**. *That* is the difference: Zamani's k=1 objective **factorizes** (retriever
+optimum free of reranker quality); ER's F1 objective at general $k$ **does not**.
+
+> **Hypothesis, not result.** The above is a sketch, not a derivation. It has not been
+> worked through, the conditions under which $\partial k^*/\partial\varphi \neq 0$ are not
+> stated, and the F1 expression itself is `THEORY.md`'s modelling choice. Treat it as the
+> thing to be established, not as an established thing.
+
+**What would settle it.** Four pieces, ordered, each able to kill the item:
+
+1. **Derive $\partial k^*/\partial \varphi$ at general $k$, with conditions.** State when it
+   is nonzero and when it vanishes. The sharpest form of the claim is a *reduction*: show
+   that at $k=1$ the objective collapses to Zamani's and the shift **disappears** — that
+   names precisely what is new and precisely what is theirs.
+2. **Do not assume constant $\varphi$ — carry $\varphi(\text{rank})$ through.** This is the
+   objection §6.4 pre-registers as *"the first objection any reviewer will raise"*, and
+   Zamani is exposed to it too. A derivation that merely inherits the assumption adds
+   nothing; one that carries a *measured* $\varphi(\text{rank})$ (from **A1**) through the
+   optimization is a real advance over the source — and is the strongest version of this
+   item.
+3. **Measure the prediction.** This is the falsification, and the reason the item is not
+   pure theory: **predict $k^*$ from measured $\varphi$, then sweep $k$ and find the
+   empirical $\arg\max F_1$.** If they agree, the model has predictive power. If they
+   disagree, the model is wrong and A2 dies with a useful negative.
+4. **Situate it against the nearest work honestly** (see A3) — RLT and the joint-training
+   line, not a claim of open ground.
+
+**The honest risks — any one of these sinks it:**
+
+- **$\varphi$ may be tiny.** §6.5's own caveat: then $k^* \approx$ saturation and the whole
+  section is *"true but operationally uninteresting."* **Most likely outcome.**
+- **Constant $\varphi$ is load-bearing and known-wrong** — in Zamani too. Piece (2) is
+  therefore not optional polish; it is the item.
+- **The empirical support for growth is thin.** *Drowning in Documents* does **not**
+  measure a false-positive rate (see A1). The strongest honest statement today is *"nobody
+  has measured $\varphi(\text{rank})$"*.
+- **F1 is itself arbitrary** — §6.5, via Elkan (IJCAI 2001): *"Choosing $F_1$ and then
+  finding an interior max is partly an artifact of the metric."* A result that only holds
+  for F1 is a result about F1.
+- **The reception risk is known and named** in `THEORY.md` §0: *"Expect exactly two
+  objections: 'that's meta-blocking' and 'that's BFKPT.'"* Add a third: *"that's Ranked
+  List Truncation"* (A3).
+- **ER already has an interior optimum.** §6.3: $F_{PC,RR}$ *"**does** have an interior
+  optimum in $k$."* The surviving distinction is narrow — RR is a *comparison-count*
+  metric, so ER's trade-off is quality-vs-**cost**, ours quality-vs-**quality**. That
+  distinction is real but subtle, and it is the whole contribution.
+
+**Cost & prerequisites.** **$0 in compute; expensive in the only currency that matters
+here — careful thought.** Piece (3) needs the $k$-sweep, and note the gap the inventory
+found: **`optimize()` has only a *blocking* scorer wired** (`candidate_recall`,
+`candidate_precision`, `reduction_ratio`, `total_candidates`) — **no end-to-end
+match/cluster-quality scorer**. Sweeping $k$ against downstream F1 therefore needs that
+scorer written first. The `Objective` machinery already supports it (metric-agnostic,
+Pareto + constraints), so this is a scorer, not an architecture. **Hard prerequisite: A1.**
+Do not start A2 before A1 reports.
+
+---
+
+### A3 — Joint blocking + matching: what is actually unclaimed?
+
+**The question.** Is there *any* joint blocking+matching training in ER? And is the
+**bilevel** framing of it genuinely unoccupied?
+
+**Why it matters to langres.** A2's entire value rests on the size of the gap it claims. If
+the gap is smaller than we think, A2 shrinks or dies — and it is far cheaper to find that
+out from a literature search than from a reviewer. This item is A2's due diligence.
+
+**What's already known.** ⚠ **This was posed as an open question. It is not one.** The
+search returned a populated field, and this is the single most important correction on the
+board:
+
+- **Joint blocker–matcher training in ER is an established line with at least three
+  papers:** `[verified — abstracts read]`
+
+  | Work | Cite | What it does |
+  |---|---|---|
+  | **MutualER** | Dou, Shen, Zhou, Bai, Kou, Nie, Cui & Yu, **CIKM 2024**, pp. 508–518, [10.1145/3627673.3679843](https://doi.org/10.1145/3627673.3679843) | *"**integrates and jointly trains the blocker and matcher**, balancing both the consensus and discrepancy between them"* — via Mutual Sample Selection + Similarity Knowledge Transferring. Siamese PLM blocker + cross-encoder/LLM matcher. |
+  | **CLER** | Wu, Wu, Dong, Hua & Zhou, **PVLDB 17(3):292–304, 2023**, [10.14778/3632093.3632096](https://doi.org/10.14778/3632093.3632096) | *"an **end-to-end iterative Co-learning framework for ER, aimed at jointly training the blocker and the matcher**"* via iteratively updated pseudo-labels. Code: `wusw14/CLER`. **Currently uncited in our docs.** |
+  | **DIAL** | Jain, Sarawagi & Sen, **PVLDB 2022**, [2104.03986](https://arxiv.org/abs/2104.03986) | *"**jointly learns embeddings to maximize recall for blocking and accuracy for matching** blocked pairs"* — joint training *with* stage-specific objectives. (Note: **accuracy**, not precision.) |
+
+- **The IR analogue is also well-established:** **RocketQAv2** (Ren et al., EMNLP 2021,
+  [2110.07367](https://arxiv.org/abs/2110.07367)) jointly trains retriever + reranker via
+  *"dynamic listwise distillation"*; **AR2** (Zhang et al., ICLR 2022,
+  [2110.03611](https://arxiv.org/abs/2110.03611)) optimizes them *"according to a minimax
+  adversarial objective"* with the ranker *"providing progressive direct feedback to the
+  dual-encoder retriever"* — i.e. training a first-stage retriever with the reranker's
+  objective in the loop. `[verified]`
+- **"Choose the cutoff for the downstream reranker" is its own IR subfield —
+  Ranked List Truncation (RLT):** Meng et al., SIGIR 2024
+  ([2404.18185](https://arxiv.org/abs/2404.18185)) study RLT *"from a novel
+  'retrieve-then-re-rank' perspective… investigating the impact of different types of
+  re-rankers on RLT methods"*; also *Choppy* ([2004.13012](https://arxiv.org/abs/2004.13012),
+  SIGIR 2020) and *Learning to Truncate Ranked Lists*
+  ([2102.12793](https://arxiv.org/abs/2102.12793)). **This is the third objection A2 must
+  answer**, and `THEORY.md` cites Meng et al. already — without noting it is a whole
+  subfield. `[verified]`
+- **The bilevel negative: real as literally stated, but do NOT over-read it.**
+  `[verified — searches re-run July 2026 with positive controls]` All five exact-phrase
+  pairs return **0**: `bilevel` × {`reranker`, `entity resolution`, `entity matching`,
+  `candidate generation`, `dense retrieval`}. Positive controls confirm the syntax works
+  (`bilevel`=1396; `dense retrieval`=790; `bilevel` AND `neural network`=131). **But three
+  caveats block the inference:**
+  1. **`bilevel` AND `retrieval` = 19, not zero.** All 19 were read: none train a retriever
+     via bilevel optimization (nearest: *PR-Attack*, [2504.07717](https://arxiv.org/abs/2504.07717),
+     bilevel to **attack** RAG; *Meta-Wrapper*, [2206.14647](https://arxiv.org/abs/2206.14647),
+     CTR feature selection). **The substantive negative survives — but via reading, not via
+     the zeros.**
+  2. arXiv `all:` covers **title/abstract/comments only, not full text**.
+  3. **arXiv fuzzy-tokenizes unknown terms**, so an exact-phrase zero is not proof of
+     nonexistence — **MutualER proves it**: a DBLP title search returns *zero* hits for
+     "MutualER" because the name appears only *inside* the paper.
+
+  > **Required phrasing.** *"No arXiv title/abstract combines 'bilevel' with dense
+  > retrieval / reranking / entity matching (searched July 2026); the 19 bilevel×retrieval
+  > hits apply bilevel to adversarial RAG or CTR, not to retriever training."* **Never**
+  > *"zero hits, therefore unexplored."*
+
+**What survives.** `THEORY.md` §6.3 is **already honest** — it says *"do not strawman the
+field"*, already cites MutualER as nearest work, and claims only that *"No ER source we
+found derives the blocking operating point from the matcher's error rate."* **That narrow
+claim survives the search. Keep it; do not widen it.** The genuinely unoccupied ground is
+correspondingly narrow: **not** joint blocker/matcher training (MutualER, CLER, DIAL);
+**not** cut-off selection for a downstream reranker (RLT); but the **ER instantiation of a
+matcher-error-*derived* blocking operating point**, and any **bilevel formulation** of it in
+either field. *(RLT mostly predicts the cutoff from score distributions, and Meng et al.
+study reranker impact **empirically** rather than deriving the cutoff from a measured error
+rate — so the distinction is real, but it is a distinction, not a chasm.)*
+
+**What would settle it.** Read the three ER papers properly (MutualER is closed-access,
+CIKM 2024; CLER has a PDF and code), and answer one question: **does any of them
+*derive* the blocker's operating point from the matcher's error, or do they co-train and
+let the operating point fall out implicitly?** If any derives it, **A2 is dead** and we
+have found the right citation — a cheap, excellent outcome. Then add CLER to
+`docs/research/README.md`, and add RLT to `THEORY.md` §6.3's "nearest work".
+
+**Cost & prerequisites.** **$0** — literature only; ~a day. CIKM 2024 access needed for
+MutualER. **No prerequisites. Run this before A2** — it is the cheapest way to kill A2, and
+killing A2 cheaply is a win.
+
+> **Method note, worth keeping.** This search produced **two confident false negatives**
+> before it produced a result: DBLP's title index said "MutualER doesn't exist"; arXiv's
+> bigram search said "bilevel×retrieval is empty". Both broke the same way — **an index
+> that does not cover the field being queried**. Positive controls and reading the primary
+> caught both. This is the `[a summary is not the source]` lesson in a new costume: *a
+> search index is not the literature*.
 
 ---
 
@@ -364,11 +614,19 @@ patch.
 
 **What's already known.** The supporting evidence is strong and comes from IR, not ER:
 
-- **ANCE** (Xiong et al., ICLR 2021, [2007.00808](https://arxiv.org/abs/2007.00808)) §6.1
-  reports its *retrieval* "nearly matches the accuracy of the cascade IR with
-  interaction-based BERT Reranker" at roughly **100× lower cost**. That is the
-  embedder-as-matcher thesis, already demonstrated — in IR. `[see §7 reference tier —
-  verify the exact wording and cost figure before quoting]`
+- **ANCE** (Xiong et al., ICLR 2021, [2007.00808](https://arxiv.org/abs/2007.00808)) §6.1,
+  verbatim: *"ANCE retrieval nearly matches the accuracy of the cascade IR with
+  interaction-based BERT Reranker."* That is the embedder-as-matcher thesis, already
+  demonstrated — in IR. `[verified — LaTeX source; §6.1 confirmed]`
+- **…but the "100×" needs three corrections before we repeat it.** `[verified — literal
+  table cells]` It is **latency, not cost** — the paper says *"100x speed up compared to
+  BERT Rerank"* and never mentions money. It is **99×** against the rerank step alone
+  (BERT Rerank 1.15s ÷ Dense Retrieval Total 11.6ms) or **122×** against the full sparse
+  pipeline (1.42s) — quote one and say which. And it **excludes the 10h offline corpus
+  encoding**, a real cost the cascade never pays. For langres the honest version is:
+  *the embedder amortizes a large offline cost into a ~100× cheaper online step* — which
+  is exactly the trade `optimize()`'s per-`(model, metric, field)` index cache already
+  makes, and is why the ER analogue is worth measuring at all.
 - **The ER counter-signal is on file.** `20260707_data_prep_hard_case_mining_survey.md`
   §11–12 records **UniBlocker** as a counter-signal, and documents how SOTA ER *divides*
   blocking recall from matching precision — i.e. the field's current answer to (2) is
@@ -564,28 +822,56 @@ harness, two questions. **Run this one.**
 ### C5 — Query-side-only training: the ADORE analogue
 
 **The question.** ADORE trains **only the query encoder** against a **frozen** document
-index — no index refresh, ever — and beats ANCE. The ER analogue: **retrain only the probe
-side against a frozen record index.** Does it work here?
+index — no index refresh, ever. The ER analogue: **retrain only the probe side against a
+frozen record index.** Does it work here?
 
 **Why it matters to langres.** Index refresh is the dominant cost of the ANCE-style
 training loop: every refresh re-embeds the entire corpus. On `dblp_scholar` (**66,879
 records**) that is the difference between a loop we can run on a 3070 and one we cannot.
-If the ER analogue holds, **the cheapest strong option on this board becomes available** —
-blocker improvement with no re-indexing. It also composes cleanly with the existing seam:
-a frozen index is exactly what `optimize()` already caches per
-`(embedding_model, metric, text_field)`.
+If the ER analogue holds, blocker improvement becomes available **with no re-indexing** —
+and it composes cleanly with the existing seam, since a frozen index is exactly what
+`optimize()` already caches per `(embedding_model, metric, text_field)`.
 
-**What's already known.**
+**What's already known.** ⚠ **The headline framing of this item was wrong, and checking it
+changed the item.** The correction is the most useful thing on this card:
 
-- **ADORE** ([2104.08051](https://arxiv.org/abs/2104.08051)): trains only the query encoder
-  against a frozen document index and reports **MRR@10 0.347 vs. ANCE's 0.338** and
-  **R@100 0.876 vs. 0.862**. `[see §7 reference tier — verify the numbers, the exact
-  split, and the "frozen index / query-encoder-only" characterization before publishing;
-  the paper's title is about hard negatives, not obviously about ADORE]`
-- **ANCE** is the thing it beats, and ANCE's defining cost *is* the index refresh
-  ([2007.00808](https://arxiv.org/abs/2007.00808), filed in
-  `docs/research/README.md` as *"index-refreshed model-mined negatives"*). The contrast is
-  the point: ADORE's win is *also* a cost win.
+- **ADORE** — Zhan, Mao, Liu, Guo, Zhang & Ma, *"Optimizing Dense Retrieval Model Training
+  with Hard Negatives"*, **SIGIR 2021**, [2104.08051](https://arxiv.org/abs/2104.08051).
+  The query-side-only, frozen-index characterization is **confirmed verbatim**:
+  *"Before training, ADORE pre-computes the document embeddings with a pre-trained document
+  encoder and builds the document index. **They are fixed throughout the entire training
+  process.**"* and *"STAR optimizes both the query encoder and the document encoder while
+  **ADORE only optimizes the query encoder**."* `[verified — LaTeX source]`
+- **But "ADORE beats ANCE 0.347 vs 0.338" is not a fact about ADORE.** Table 2 (TREC 2019
+  DL, MARCO Dev Passage) has **no standalone ADORE row** — ADORE is query-side only, so it
+  *structurally must* be paired with someone else's document encoder. The real table:
+  `[verified — literal table cells]`
+
+  | Model | MRR@10 | R@100 |
+  |---|---|---|
+  | ANCE | 0.338 | 0.862 |
+  | STAR (theirs, alone) | 0.340 | 0.867 |
+  | ADORE + In-Batch Neg | **0.316** | 0.860 |
+  | ADORE + Rand Neg | **0.326** | 0.865 |
+  | ADORE + BM25 Neg | **0.329** | 0.846 |
+  | ADORE + ANCE | 0.341 | 0.866 |
+  | **ADORE + STAR** | **0.347** | **0.876** |
+
+  **Three of five ADORE variants lose to ANCE.** The 0.347 row is `ADORE+STAR`, and STAR is
+  *the same paper's other contribution* — so that row is "both our things vs. ANCE", not
+  "ADORE vs. ANCE". The apples-to-apples line, holding the document encoder fixed at
+  ANCE's, is **ADORE+ANCE 0.341 vs. ANCE 0.338 — a gain of +0.003**. And **STAR alone
+  (0.340) already beats ANCE with no ADORE at all.**
+- **What this does to the item.** It survives, but the claim shrinks from *"beats ANCE"* to
+  **"gets within noise of ANCE while never refreshing the index"** — a *cost* argument, not
+  a quality one. That is still worth testing (index refresh is our binding constraint), but
+  it is a much weaker prior, and **ADORE's benefit is evidently conditional on the frozen
+  encoder being good** (0.316 with in-batch negatives vs. 0.347 with STAR — a 0.031 spread
+  driven entirely by *whose* index it trains against). For ER that is the real lesson:
+  query-side-only training inherits its ceiling from the frozen index.
+- **ANCE** is the comparison, and its defining cost *is* the index refresh
+  ([2007.00808](https://arxiv.org/abs/2007.00808), filed in `docs/research/README.md` as
+  *"index-refreshed model-mined negatives"*).
 - **The asymmetry question is ER-specific and unresolved.** IR has a real query/document
   asymmetry — a short query, a long document. **ER's two sides are the same kind of
   object** (a record vs. a record), and for `dedupe()` they are *literally the same set*.
@@ -598,18 +884,28 @@ a frozen index is exactly what `optimize()` already caches per
   **MRR, MAP, NDCG@K, recall@K** (via the `[eval]` extra / ranx) — the exact metrics ADORE
   reports. `[verified]`
 
-**What would settle it.** On a two-source linkage benchmark, freeze the B-side index,
-train only the A-side encoder against it, and compare **recall@k / MRR** to (a) the frozen
+**What would settle it.** On a two-source linkage benchmark, freeze the B-side index, train
+only the A-side encoder against it, and compare **recall@k / MRR** to (a) the frozen
 untrained baseline and (b) a full ANCE-style loop with index refresh — measuring **both
-quality and wall-clock/compute**. The claim to test is not "it wins" but **"it gets most
-of the win for a fraction of the cost"**, which is a different and more useful bar. Then
-the ER-specific question the IR literature cannot answer for us: **does the asymmetry
-survive when both sides are records?** Run it on `dedupe` (single corpus, self-linkage) and
-see whether "query side" still means anything.
+quality and wall-clock/compute**. Given the correction above, the bar is explicitly
+**"most of the quality for a fraction of the cost"**, not "it wins"; a result inside noise
+on quality but 5× cheaper is a *success* for this item, and should be pre-registered as
+such so it is not retro-fitted into a win. Two further asks the table above makes obvious:
+
+- **Vary the frozen index deliberately.** ADORE's spread (0.316 → 0.347) is driven entirely
+  by *whose* index it trains against. So the ER question is not "does query-side training
+  work" but **"how good must the frozen index be before query-side training pays"** — which
+  is directly measurable by freezing indexes of different quality (C1's ladder supplies
+  them).
+- **Then the ER-specific question the IR literature cannot answer for us: does the
+  asymmetry survive when both sides are records?** IR has a real query/document
+  asymmetry — short query, long document. Run it on `dedupe` (single corpus, self-linkage)
+  and see whether "query side" still means anything.
 
 **Cost & prerequisites.** **GPU**, moderate — but **cheaper than every alternative in this
 thread by construction** (no re-indexing). **$0**. Prerequisites: **B2**; a two-source
-benchmark (**have** — all 10 are linkage). Independent of C4; can run in parallel.
+benchmark (**have** — all 10 are linkage); **C1** to supply frozen indexes of varying
+quality. Independent of C4; can run in parallel.
 
 ---
 
