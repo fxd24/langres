@@ -97,8 +97,15 @@ a model is the user's job, not a heuristic's. The real layering is:)
      must stay importable *by* the components, not the reverse. The ratchet in
      `tests/test_import_tangle.py` measures it.
    - Philosophy: Like PyTorch's primitives.
+   - **Search is not core.** The autoresearch engine lives in `langres.optimize`
+     (facade + `objective`/`search_space`/`factory`/`loop` +
+     `blocker_optimizer.BlockerOptimizer`), *outside* `core`: `core` is ER
+     modelling, search is a consumer of it. The dependency is one-way and
+     measured — `core → optimize` is **0** edges in every kind; adding one would
+     put search beneath the primitives it drives.
    - **Not yet built** (roadmap, don't reference as existing): a general
-     `Optimizer` (only `optimizers.BlockerOptimizer` exists).
+     `Optimizer` (only `langres.optimize.blocker_optimizer.BlockerOptimizer`
+     exists).
 
 ## Key Design Principles
 

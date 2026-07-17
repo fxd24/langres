@@ -10,7 +10,7 @@ explicitly from the profiler functions, or via the convenience constructors
 :func:`from_embedder` on-ramp).
 
 A leaf, import-light package: numpy + stdlib + ``core.metrics`` + the shared
-render scaffold (:mod:`langres.core._report_html`). It *consumes* precomputed
+render scaffold (:mod:`langres.report._report_html`). It *consumes* precomputed
 embeddings (an :class:`EmbeddingSource`); it never generates them, so it carries
 no ``[semantic]`` dependency (``from_embedder`` imports sentence-transformers
 lazily inside its body). ``tests/test_import_budget.py`` locks the budget: a bare

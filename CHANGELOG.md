@@ -77,6 +77,64 @@ heuristic guessed well or a cap held.
   process cannot import, so it could never round-trip through `save()`/`load()`.
 - `examples/quickstart_verbs.py` → `examples/quickstart_models.py`.
 
+#### Moved out of `langres.core` — **breaking for deep imports, no shim**
+
+`langres.core` had grown to 67% of the source tree by carrying code that is not
+entity-resolution modelling. These moves are **relocations, not deletions**: every
+symbol still exists, and every *supported* import path still works. Only the deep
+`langres.core.*` paths break. No compatibility shims: a re-export relay would
+re-create the exact import edges these moves exist to remove (measured — see
+`tests/test_import_tangle.py`, which documents why a relay makes the graph worse
+while making the metric look better).
+
+- **The HTML/SVG render seam** → **`langres.report`**. `langres.core.eval_report`
+  → `langres.report.eval_report`; `langres.core._svg`/`langres.core._report_html`
+  (both private) → `langres.report.*`. **`langres.EvalReport` and
+  `langres.eval.EvalReport` are unchanged** — those are the supported paths, and
+  `EvalReport` was never in `langres.core.__all__`. Only the deep path advertised
+  in the old README breaks.
+- **The autoresearch/optimizer engine** → **`langres.optimize`**.
+  `langres.core.optimizers` → `langres.optimize.blocker_optimizer`;
+  `langres.core.autoresearch.*` → `langres.optimize.*`. **`langres.optimize()` and
+  `score_blocking()` are unchanged** — the facade is the supported surface.
+  `BlockerOptimizer` was in `langres.core.optimizers.__all__`, but never in
+  `langres.__all__` or `langres.core.__all__`, so it was reachable only by deep
+  import — the path documented in `docs/TECHNICAL_OVERVIEW.md`, which breaks.
+
+  **Migrate with the `from` form**, not the dotted form:
+
+  ```python
+  from langres.optimize.blocker_optimizer import BlockerOptimizer   # works
+
+  import langres.optimize.blocker_optimizer as bo                   # ImportError
+  import langres.optimize.blocker_optimizer
+  langres.optimize.blocker_optimizer.BlockerOptimizer               # AttributeError
+  ```
+
+  `langres.optimize` is a **callable** — that is the front door, and the root
+  package binds the name to the function. The engine's submodules now live under
+  that same shadowed name, so attribute traversal finds the function and stops.
+  The old `langres.core.optimizers.blocker_optimizer` supported both forms; its
+  replacement supports only `from ... import ...`. No test catches this because
+  every in-repo call site already uses the `from` form. Tracked as a follow-up:
+  the fix is to rename the *package* (the callable name is public API and stays).
+
+#### Logger names follow the code that moved
+
+Splitting `ERModel` out of `core/resolver.py` moves three log records onto the
+logger of their new module: the "Saved Resolver artifact to %s" and
+`langres_version`-mismatch records now emit under `langres.core._model_persist`,
+and "Embedding %d records…" under `langres.core._model_run`. All three previously
+emitted under `langres.core.resolver`.
+
+Nothing in the codebase filters on a logger name, and anyone configuring at
+`langres` or `langres.core` is unaffected via the hierarchy. But a caller who
+pinned the exact module — `logging.getLogger("langres.core.resolver").setLevel(INFO)`
+to watch saves — silently stops seeing those records. Configure at `langres.core`
+instead. This is inherent to moving code between modules, not a change of intent;
+it is called out because it is the one *observable* behaviour change in a refactor
+that is otherwise a pure move.
+
 #### Known limitation — `VectorLLMCascade` cannot `save()`
 
 `VectorLLMCascade(...).save(path)` raises `NotImplementedError`, by design,

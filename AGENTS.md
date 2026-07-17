@@ -52,7 +52,9 @@ langres/
 │   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
-│   │   ├── resolver.py     # ERModel (aliased Resolver): from_schema / dedupe / compare / resolve / save / load; no matcher="auto"
+│   │   ├── resolver.py     # ERModel (aliased Resolver): the class + from_schema / fit / the anchor surface; no matcher="auto"
+│   │   ├── _model_state.py, _model_run.py, _model_persist.py  # ERModel split by responsibility: what it IS / how it runs / how it persists
+│   │   ├── _artifacts.py           # save/load leaf (paths, manifest plumbing) under _model_persist
 │   │   ├── inputs.py       # normalize_records: raw dicts -> (schema, normalized records); schema inference for a schema-less dedupe()/compare()
 │   │   ├── results.py      # LinkVerdict / DedupeResult — architecture + backbone + score_type + threshold
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
@@ -65,7 +67,11 @@ langres/
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
 │   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
-│   │   └── optimizers/             # BlockerOptimizer (Optuna)
+│   │   └── usage.py                # LLMUsage + CostTrack — the token/cost leaf (imports nothing from langres)
+│   ├── optimize/       # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
+│   │   ├── __init__.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every sibling import is lazy)
+│   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
+│   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)

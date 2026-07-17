@@ -310,8 +310,8 @@ loader — is lazy inside the call, so a bare `import langres` never pulls the
 
 ```python
 from langres import optimize
-from langres.core.autoresearch.objective import Objective
-from langres.core.autoresearch.search_space import SearchSpace
+from langres.optimize.objective import Objective
+from langres.optimize.search_space import SearchSpace
 
 # 1. A SearchSpace is a declarative Cartesian grid of blocker configs. k_neighbors
 #    is the INNERMOST axis, so one vector index is built per

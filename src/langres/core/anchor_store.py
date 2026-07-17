@@ -450,8 +450,8 @@ class AnchorStore:
         (``similarity`` ``None``) when there is no index (e.g. an
         ``AllPairsBlocker``), the correct all-pairs behaviour for one new record.
 
-        The vector source is found via the resolver's own
-        :func:`~langres.core.resolver._iter_vector_blockers` — the *same* walk
+        The vector source is found via the model's own
+        :func:`~langres.core._model_run.iter_vector_blockers` — the *same* walk
         ``resolve()`` used to build the index — so a ``VectorBlocker`` nested
         (at any depth) inside a ``CompositeBlocker`` is searched against exactly
         the index that was built for it. The first reachable vector blocker
@@ -459,9 +459,9 @@ class AnchorStore:
         """
         # Lazy import (module-load circular-import safety, like `load`); reusing
         # the canonical walk guarantees we search the index resolve() built.
-        from langres.core.resolver import _iter_vector_blockers
+        from langres.core._model_run import iter_vector_blockers
 
-        blocker = next(iter(_iter_vector_blockers(self._resolver.blocker)), None)
+        blocker = next(iter(iter_vector_blockers(self._resolver.blocker)), None)
         if blocker is None or not self._anchor_ids:
             return [(anchor_id, None) for anchor_id in self._anchor_ids]
 

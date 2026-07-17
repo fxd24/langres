@@ -46,13 +46,23 @@ load only when you read/edit a file matching their `paths:`.
 langres/
 ├── src/langres/
 │   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
-│   ├── optimize.py     # langres.optimize / score_blocking: import-light autoresearch facade over blocking search
+│   ├── optimize/       # the autoresearch ENGINE — blocking search, NOT ER modelling, so it sits outside core (depends on core one-way; core imports nothing from here)
+│   │   ├── __init__.py     # langres.optimize / score_blocking: the import-light facade (stdlib-only module top; every sibling import is lazy, incl. factory/loop)
+│   │   ├── objective.py    # the immutable keep-if-better scorer (Pareto + log_loss)
+│   │   ├── search_space.py # the declarative config grid the loop enumerates
+│   │   ├── factory.py      # config -> runnable blocker. HEAVY ([semantic] at module top) — lazy-import only
+│   │   ├── loop.py         # propose → run → evaluate → keep, over core.runs persistence
+│   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── eval.py         # Curated evaluation facade (lazy): evaluate, list_benchmarks/get_benchmark, ER metrics
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
-│   │   ├── resolver.py     # ERModel (aliased Resolver): from_schema / dedupe / compare / resolve / save / load; no matcher="auto"
+│   │   ├── resolver.py     # ERModel (aliased Resolver): the class + from_schema / fit / the anchor surface; no matcher="auto"
+│   │   ├── _model_state.py     # ERModel layer: what a model IS — slots, identity, the 3 construction doors, schema binding
+│   │   ├── _model_run.py       # ERModel layer: how it RUNS — block → (compare) → score → cluster; dedupe / compare
+│   │   ├── _model_persist.py   # ERModel layer: how it PERSISTS — the resolver.json manifest + per-slot sidecars (no pickle)
+│   │   ├── _artifacts.py       # component ⇄ ComponentSpec adapters (the leaf _model_persist serializes each slot with)
 │   │   ├── inputs.py       # normalize_records: raw dicts -> (schema, normalized records); schema inference for a schema-less dedupe()/compare()
 │   │   ├── results.py      # LinkVerdict / DedupeResult — architecture + backbone + score_type + threshold
 │   │   ├── spend.py, spend_cap.py  # SpendMonitor/BudgetExceeded ledger + SpendCappedMatcher (the ONE enforcer) + DEFAULT_BUDGET_USD; core leaf, so ERModel/every architecture can cap
@@ -66,11 +76,13 @@ langres/
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
-│   │   ├── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
-│   │   ├── optimizers/             # BlockerOptimizer (Optuna)
-│   │   └── autoresearch/           # the langres.optimize engine: objective (keep-if-better) / search_space / factory / loop (propose→run→eval→keep)
+│   │   └── reports.py              # inspection/evaluation report models (ScoreInspectionReport, BlockerEvaluationReport, ...)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
+│   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
+│   │   ├── _svg.py         # pure-stdlib inline-SVG chart primitives (line_chart/bar_chart); imports nothing from langres
+│   │   ├── _report_html.py # shared HTML scaffold: document()/section()/_num/_histogram/safe_auc
+│   │   └── eval_report.py  # EvalReport, the $0 tearsheet (public home: langres.eval / root langres, both lazy)
 │   └── data/           # benchmark dataset loaders (FZ, Amazon-Google, ...)
 │       └── registry.py # name→benchmark manifest: list_benchmarks() / get_benchmark()
 ├── tests/              # Test suite

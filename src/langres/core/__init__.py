@@ -16,7 +16,7 @@ clusterer, embedder or index is imported from the package that owns it::
     from langres.core.embeddings import SentenceTransformerEmbedder
     from langres.core.indexes import FAISSIndex
     from langres.core.debugging import PipelineDebugger
-    import langres.core.metrics  # (and .benchmark / .optimizers)
+    import langres.core.metrics  # (and .benchmark)
 
 That indirection was removed deliberately: re-exporting implementations put
 this module *above* the components it is supposed to sit beneath, which knotted

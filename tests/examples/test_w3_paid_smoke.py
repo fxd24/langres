@@ -28,8 +28,8 @@ from dspy.utils.dummies import DummyLM
 
 from examples.research.w3_paid_smoke import SmokeConfig, run_smoke
 from langres.clients.openrouter import BudgetExceeded
-from langres.core.benchmark import CostTrack
 from langres.core.models import PairwiseJudgement
+from langres.core.usage import CostTrack
 
 # Small AG subset keeps the DummyLM answer pools + import cost modest.
 _AG_GROUPS = 3

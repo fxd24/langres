@@ -12,7 +12,10 @@ on:
     branches: [main, feat/m4-foundation, feat/m5-foundation, feat/tracking-observability, feat/autoresearch]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Mirrors `test.yml`: grouping on the ref alone means merging one PR CANCELS
+  # another's in-flight run, and a cancelled run is not a green one. Grouping on
+  # the SHA gives every merge commit its own group, gated on its own merits.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: true
 
 jobs:

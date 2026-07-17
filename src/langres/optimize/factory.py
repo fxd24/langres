@@ -10,9 +10,14 @@ k-innermost ordering contract on ``SearchSpace.configs``), not a cache here.
 (faiss/sentence-transformers, via the vector index + embedder) at module top, so
 it must only ever be imported **lazily** — on demand when a search actually runs,
 never from a bare ``import langres`` (unlike the sibling ``search_space``, which
-stays pure so it can live on the public API surface). The autoresearch package
-``__init__`` intentionally exports nothing, so importing ``langres`` does not
-reach this module.
+stays pure so it can live on the public API surface).
+
+This module's parent, :mod:`langres.optimize`, **is** on the eager
+``import langres`` path (it root-exports ``optimize`` / ``score_blocking``), so
+the invariant lives in that ``__init__``: it reaches ``factory`` only from inside
+a function body, never at module top. Keep it that way — an eager import here
+would drag faiss / sentence-transformers / torch into every bare ``import
+langres``. ``tests/test_import_budget.py`` locks it.
 """
 
 from __future__ import annotations

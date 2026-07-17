@@ -99,7 +99,7 @@ class TestFastEmbedBackbonesRoundTrip:
     A backbone that cannot round-trip is a backbone a saved pipeline silently
     loses. These two carry a ``model_name`` exactly like the dense embedder did,
     but had no ``@register``, no ``type_name``, and no ``config``/``from_config``
-    -- so a Resolver holding one could not ``save`` at all (``_component_spec``
+    -- so a Resolver holding one could not ``save`` at all (``component_spec``
     raises on a missing ``type_name``). All fast: FastEmbed models are lazy, so
     nothing is downloaded here.
     """

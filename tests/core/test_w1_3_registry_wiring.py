@@ -145,7 +145,7 @@ def test_resolver_fresh_process_roundtrip_with_key_blocker_alone(tmp_path: Path)
 
     The composite roundtrip test above only exercises ``key_blocker`` as a
     composite CHILD -- ``Resolver.load`` reconstructs a composite's children
-    via the same generic ``_rebuild_component``, so that already proves
+    via the same generic ``rebuild_component``, so that already proves
     ``get_component("key_blocker")`` resolves. This test additionally proves
     ``key_blocker`` resolves when it's the Resolver's top-level blocker slot
     (W0.4 exit check: every ``_LAZY_COMPONENT_MODULES`` entry must survive a

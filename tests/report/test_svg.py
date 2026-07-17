@@ -1,4 +1,4 @@
-"""Tests for the pure-stdlib inline-SVG chart primitives (``langres.core._svg``).
+"""Tests for the pure-stdlib inline-SVG chart primitives (``langres.report._svg``).
 
 Tested by STRUCTURE (element counts, parsed attributes, escaped substrings),
 never by full-string equality, so cosmetic tweaks don't churn the suite.
@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from langres.core._svg import Series, _rescale_counts, _scale, bar_chart, line_chart
+from langres.report._svg import Series, _rescale_counts, _scale, bar_chart, line_chart
 
 
 def _polyline_points(svg: str) -> list[tuple[float, float]]:

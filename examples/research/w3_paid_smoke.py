@@ -95,9 +95,9 @@ from langres.clients.openrouter import (  # noqa: E402
 )
 from langres.core.benchmark import (  # noqa: E402
     BudgetedModuleRunner,
-    CostTrack,
     evaluate_judge_on_candidates,
 )
+from langres.core.usage import CostTrack  # noqa: E402
 from langres.core.groups import ERCandidateGroup, derive_groups_from_pairs  # noqa: E402
 from langres.core.judgement_log import JudgementLog  # noqa: E402
 from langres.core.metrics import pair_pr_curve  # noqa: E402

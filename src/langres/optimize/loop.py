@@ -2,7 +2,7 @@
 
 This is the integration seam of the autoresearch loop (epic #145): it walks a
 stream of proposed configs, scores each one, and keeps the incumbent that the
-:class:`~langres.core.autoresearch.objective.Objective` says is best — logging
+:class:`~langres.optimize.objective.Objective` says is best — logging
 *every* trial (accepted and rejected) through the existing run-tracking spine
 (``core.runs``) so a run is durable, deduplicated, and lineage-linked.
 
@@ -13,7 +13,7 @@ embeddings, faiss, or benchmark load required. The concrete blocking scorer
 (and its index reuse) lives one layer up in :mod:`langres.optimize`; this module
 knows nothing about blockers.
 
-**Import-light by design.** Only stdlib + :mod:`~langres.core.autoresearch.objective`
+**Import-light by design.** Only stdlib + :mod:`~langres.optimize.objective`
 + :mod:`~langres.core.runs` (+ its ``trackers``) — all already on the bare
 ``import langres`` path. It imports no factory / data / metrics module, so it
 adds no weight and could sit on the public surface if ever needed.
@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from langres.core.autoresearch.objective import Objective
+from langres.optimize.objective import Objective
 from langres.core.runs import RunContext, capture_run, compute_recipe_id
 from langres.core.trackers import TrackerSpec, resolve_tracker
 
