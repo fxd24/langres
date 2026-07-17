@@ -258,6 +258,32 @@ class TestRoundTrip:
         # entity identity preserved through the whole round trip
         assert p2.store["a"] is a
 
+    def test_scored_roundtrip_through_candidates_drops_to_unscored(self) -> None:
+        """The candidate bridge is one-way for judge scores (F-W1a).
+
+        ``to_candidates`` strips a SCORED row's judge score (it is not a blocker
+        ``similarity_score``), so re-folding the candidates returns the row to the
+        unscored lifecycle state — ``score is None`` and ``score_type is None``.
+        """
+        a, b = _company("a", "A"), _company("b", "B")
+        scored = Pairs(
+            store={"a": a, "b": b},
+            rows=[
+                PairRow(
+                    left_id="a",
+                    right_id="b",
+                    blocker_name="vec",
+                    score=0.95,
+                    score_type="prob_llm",
+                    decision_step="llm",
+                )
+            ],
+        )
+        round_tripped = Pairs.from_candidates(scored.to_candidates())
+        row = round_tripped.rows[0]
+        assert row.score is None
+        assert row.score_type is None
+
 
 class TestToJudgement:
     """Projecting a SCORED row to a PairwiseJudgement (ids only)."""
@@ -359,11 +385,30 @@ class TestVerdictHelpers:
         assert row.is_abstain is True
         assert row.predicted_match(0.5) is None
 
-    def test_unscored_row_with_explicit_decision_is_a_match(self) -> None:
+    def test_decision_without_score_type_is_rejected(self) -> None:
+        """A verdict requires a score family — the carrier mirrors PairwiseJudgement.
+
+        ``decision`` is a judge output; a ``score_type is None`` ("blocked, not
+        yet scored") row carrying one is an un-projectable state, so construction
+        fails fast rather than deferring to ``to_judgement()``.
+        """
+        with pytest.raises(ValueError, match="score_type=None"):
+            PairRow(left_id="a", right_id="b", blocker_name="ap", decision=True)
+
+    def test_decider_row_is_valid_with_its_family_tag(self) -> None:
+        """The positive companion: a decider IS valid once it names its family."""
         a, b = _company("a", "A"), _company("b", "B")
         pairs = Pairs(
             store={"a": a, "b": b},
-            rows=[PairRow(left_id="a", right_id="b", blocker_name="ap", decision=True)],
+            rows=[
+                PairRow(
+                    left_id="a",
+                    right_id="b",
+                    blocker_name="ap",
+                    decision=True,
+                    score_type="prob_llm",
+                )
+            ],
         )
         row = pairs.rows[0]
         assert row.is_abstain is False

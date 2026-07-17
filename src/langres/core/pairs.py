@@ -110,6 +110,34 @@ class PairRow(BaseModel, Generic[SchemaT]):
     # ``model_copy`` because pydantic copies ``__pydantic_private__`` (F-W1b).
     _store: RecordStore[SchemaT] | None = PrivateAttr(default=None)
 
+    @model_validator(mode="after")
+    def _verdict_requires_score_type(self) -> "PairRow[SchemaT]":
+        """A "blocked, not yet scored" row (``score_type is None``) carries no judge output.
+
+        Mirrors ``PairwiseJudgement``'s contract — a verdict always has a score
+        family — so the carrier cannot hold a state the model it bridges to
+        cannot represent (``to_judgement`` would refuse such a row anyway; this
+        fails fast at construction instead). ``decision`` / ``confidence`` /
+        ``confidence_source`` are judge outputs and must be unset while unscored;
+        ``score`` (the blocker similarity) and ``comparison`` (the comparator's
+        output) are NOT judge outputs and stay allowed.
+
+        Raises:
+            ValueError: If ``score_type is None`` but any judge-output field is set.
+        """
+        if self.score_type is None and (
+            self.decision is not None
+            or self.confidence is not None
+            or self.confidence_source != "none"
+        ):
+            raise ValueError(
+                "PairRow with score_type=None ('blocked, not yet scored') must carry "
+                "no judge output (decision / confidence / confidence_source), but one "
+                "is set. A verdict requires a score family: set score_type to the "
+                "judge's family (e.g. 'prob_llm')."
+            )
+        return self
+
     def _bind(self, store: "RecordStore[SchemaT]") -> None:
         """Bind this row to its owning store (called by :class:`Pairs`)."""
         self._store = store
