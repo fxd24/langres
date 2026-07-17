@@ -27,7 +27,23 @@ from typing import ClassVar
 
 from pydantic import BaseModel
 
-__all__ = ["Method"]
+__all__ = ["Method", "UnsupportedMethodKind"]
+
+
+class UnsupportedMethodKind(TypeError):
+    """Raised when an architecture is asked to fit with a ``Method`` kind it rejects.
+
+    See ``Resolver.accepted_method_kinds`` for the declaration this enforces and
+    why the base :class:`~langres.core.resolver.Resolver` never raises it.
+
+    Subclasses :class:`TypeError` rather than :class:`ValueError` because
+    :attr:`Method.kind` is a ``ClassVar`` -- an identity of the strategy *type*,
+    not a per-instance value (see :class:`Method`) -- so rejecting a kind is
+    rejecting a type of argument. It also matches the sibling ``TypeError`` that
+    ``Resolver._fit_finetune`` already raises for a method-object mismatch
+    ("method kind 'finetune' requires a QLoRA method"), so one ``except
+    TypeError`` catches both shapes of "this method does not belong here".
+    """
 
 
 class Method(BaseModel):

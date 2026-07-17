@@ -800,6 +800,33 @@ unchanged):
   map with pure NumPy). `Platt()`/`Isotonic()` are import-light (no scikit-learn
   until the fit runs).
 
+#### Which kinds a class accepts: `accepted_method_kinds`
+
+Note the fine-tune bullet above: `fit(method=QLoRA(...))` **repoints the matcher
+slot**. That is deliberate and correct for a plain `Resolver`, which claims no
+identity — "a resolver" is not a topology, so a topology change falsifies
+nothing. It stops being free the moment a *class* names an architecture: a
+`FuzzyString` that quietly became LLM-backed while still being class
+`FuzzyString` is a name that describes a pipeline it no longer is.
+
+So a Resolver subclass may declare the kinds it can absorb without ceasing to be
+itself:
+
+```python
+class FuzzyString(Resolver):
+    accepted_method_kinds = frozenset({"calibrate"})   # no prompt/finetune
+```
+
+`fit()` checks it at the boundary, before dispatch, and refuses anything else
+with `langres.core.UnsupportedMethodKind` (a `TypeError` — `Method.kind` is a
+`ClassVar`, i.e. strategy-*type* identity, so rejecting a kind is rejecting a
+type) naming the class, the kind, `method.describe()`, and the accepted kinds.
+The three real kinds are `"prompt"`, `"finetune"`, `"calibrate"`.
+
+The base `Resolver` leaves `accepted_method_kinds = None` — **permissive**, every
+kind accepted, every fit path unchanged. An empty `frozenset()` is the opposite
+extreme: a fully frozen topology that takes no `method=` at all.
+
 `Resolver.describe()` is the pre-fit honesty device: a per-component string
 tagging each pipeline role **TRAINABLE** (implements a `langres.core.fit`
 Protocol, or is a prompt-compilable `DSPyMatcher`) or **frozen**. A pure string

@@ -37,7 +37,7 @@ import logging
 import warnings
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel
 
@@ -55,7 +55,7 @@ from langres.core.fit import (
 )
 from langres.core.fit_report import CalibrationDelta, FitReport
 from langres.core.harvest import Correction, LabeledPair, align_pairs
-from langres.core.methods_api import Method
+from langres.core.methods_api import Method, UnsupportedMethodKind
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import (
     PairMetrics,
@@ -358,6 +358,37 @@ class Resolver:
         resolver.save("artifacts/company_v0")
         reloaded = Resolver.load("artifacts/company_v0")
     """
+
+    #: The ``Method.kind``s :meth:`fit` accepts; ``None`` (the default) accepts
+    #: every kind.
+    #:
+    #: This exists for the named architectures of W4 (``FuzzyString``,
+    #: ``VectorLLMCascade``, ...), which make the claim *one architecture = one
+    #: class = one identity*. That claim is falsifiable by ``fit`` itself:
+    #: :meth:`_fit_finetune` deliberately **repoints the matcher slot** at the
+    #: fine-tuned model, so ``FuzzyString().fit(method=QLoRA(...))`` would return
+    #: an LLM-backed pipeline still calling itself ``FuzzyString``. A subclass
+    #: declares the kinds it can absorb without ceasing to be itself; anything
+    #: else is refused at the :meth:`fit` boundary with
+    #: :class:`~langres.core.methods_api.UnsupportedMethodKind`.
+    #:
+    #: The base ``Resolver`` stays ``None`` -- **permissive on purpose**. It makes
+    #: no identity claim ("a resolver" is not a topology), so there is nothing for
+    #: a topology change to falsify, and every fit path it accepts today keeps
+    #: working unchanged.
+    #:
+    #: Alternatives considered and rejected (recorded so this is cheap to flip):
+    #:
+    #: - *A topology-changing ``fit()`` returns a NEW architecture instance*
+    #:   (sklearn ``clone``-like). More principled -- identity would follow the
+    #:   topology instead of constraining it -- but ``fit`` mutates in place and
+    #:   returns ``self``/metrics today, and the flywheel loop depends on that;
+    #:   changing the return contract is far more churn than this gate.
+    #: - *Downgrade the invariant to advisory* (document that ``fit`` may change
+    #:   what the class name means). Zero code, but it guts the whole point of
+    #:   naming architectures: a name that may silently describe something else is
+    #:   not an identity.
+    accepted_method_kinds: ClassVar[frozenset[str] | None] = None
 
     def __init__(
         self,
@@ -666,8 +697,15 @@ class Resolver:
             NotImplementedError: If ``method`` is given but its ``kind``'s fit
                 path is not implemented yet (the seam is wired ahead of the
                 concrete methods; the error names the PR that will land it).
+            UnsupportedMethodKind: If this class declares
+                :attr:`accepted_method_kinds` and ``method.kind`` is not among
+                them. The base ``Resolver`` declares none and never raises it.
         """
         if method is not None:
+            # Architectures that claim an identity refuse the kinds that would
+            # change their topology out from under the class name. The base
+            # Resolver declares no kinds and this is a no-op for it.
+            self._check_method_accepted(method)
             # The ``method=`` object seam: a Method names *how* to train and
             # routes to its own per-kind handler below, so the concrete
             # strategies that fill these in later touch DISJOINT methods instead
@@ -741,6 +779,34 @@ class Resolver:
             )
         self.fit_report_ = FitReport.nothing_trainable(matcher_name)
         return self
+
+    @classmethod
+    def _check_method_accepted(cls, method: Method) -> None:
+        """Refuse a ``Method`` whose kind this architecture does not accept.
+
+        The enforcement half of :attr:`accepted_method_kinds` (see there for the
+        why and the rejected alternatives). A no-op when
+        ``accepted_method_kinds`` is ``None`` -- i.e. always, for the base
+        :class:`Resolver`.
+
+        Raises:
+            UnsupportedMethodKind: If this class declares
+                ``accepted_method_kinds`` and ``method.kind`` is not among them.
+                The message names the class, the offending kind, the method's
+                own ``describe()``, and the kinds that *are* accepted.
+        """
+        accepted = cls.accepted_method_kinds
+        if accepted is None or method.kind in accepted:
+            return
+        name = cls.__name__
+        allowed = ", ".join(repr(k) for k in sorted(accepted)) or "(no method kinds)"
+        raise UnsupportedMethodKind(
+            f"{name} does not accept method kind {method.kind!r} ({method.describe()}); "
+            f"{name} accepts: {allowed}. Fitting with {method.kind!r} would change the "
+            f"pipeline's topology, leaving {name} naming a pipeline it no longer is. "
+            f"Use a plain Resolver (which accepts every kind) or an architecture whose "
+            f"identity includes {method.kind!r}."
+        )
 
     # ------------------------------------------------------------------
     # ``method=`` per-kind fit handlers (the object seam)
