@@ -183,7 +183,7 @@ def test_run_finetune_unmerged_returns_base_plus_adapter_ref() -> None:
     outcome = run_finetune(pairs, QLoRA(base="tiny/model"), trainer=trainer, output_dir="/tmp/x")
 
     assert isinstance(outcome, FinetuneOutcome)
-    assert outcome.model_ref == ModelRef(base="tiny/model", adapter="/tmp/x")
+    assert outcome.model_ref == ModelRef(base="tiny/model", kind="hf", adapter="/tmp/x")
     assert outcome.base == "tiny/model"
     assert outcome.merged is False
     assert outcome.device == "cpu"
@@ -200,7 +200,7 @@ def test_run_finetune_merged_returns_self_contained_ref() -> None:
         pairs, QLoRA(base="tiny/model", merge_adapter=True), trainer=trainer, output_dir="/tmp/m"
     )
 
-    assert outcome.model_ref == ModelRef(base="/tmp/m", adapter=None)
+    assert outcome.model_ref == ModelRef(base="/tmp/m", kind="local", adapter=None)
     assert outcome.merged is True
 
 
@@ -269,7 +269,7 @@ def test_finetune_returns_the_model_ref() -> None:
 
     ref = finetune(pairs, QLoRA(base="tiny/model"), trainer=trainer, output_dir="/tmp/f")
 
-    assert ref == ModelRef(base="tiny/model", adapter="/tmp/f")
+    assert ref == ModelRef(base="tiny/model", kind="hf", adapter="/tmp/f")
 
 
 # --- The real peft/trl path: CPU dry-run (test-finetune job / --all-extras) ---

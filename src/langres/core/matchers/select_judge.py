@@ -58,6 +58,12 @@ import dspy
 from dspy.utils.exceptions import AdapterParseError
 
 from langres.core.groups import ERCandidateGroup
+from langres.core.model_ref import (
+    ModelRef,
+    normalize_model_ref,
+    require_litellm_routable,
+    to_config,
+)
 from langres.core.models import PairwiseJudgement
 from langres.core.matcher import GroupwiseMatcher, SchemaT, stamp_group_cost
 from langres.core.matchers.dspy_judge import _salvage_usage
@@ -115,7 +121,7 @@ class SelectMatcher(GroupwiseMatcher[SchemaT]):
     def __init__(
         self,
         lm: Any = None,
-        model: str = "openrouter/openai/gpt-4o-mini",
+        model: str | dict[str, str] | ModelRef = "openrouter/openai/gpt-4o-mini",
         temperature: float = 0.0,
         entity_noun: str = "entity",
     ) -> None:
@@ -125,11 +131,22 @@ class SelectMatcher(GroupwiseMatcher[SchemaT]):
             lm: Optional pre-built DSPy LM (``dspy.LM`` or ``DummyLM``). When
                 ``None`` a ``dspy.LM(model, cache=False)`` is built lazily on
                 first use, mirroring ``DSPyMatcher``.
-            model: OpenRouter/LiteLLM model id used when ``lm`` is built lazily.
+            model: The backbone that fills this slot — an API model id, or any
+                :class:`~langres.core.model_ref.ModelRef` surface form. **litellm-routable
+                refs only**: this slot is DSPy-backed, so a ``local`` directory or
+                a base+adapter ref raises
+                :class:`~langres.core.model_ref.UnsupportedBackboneError` here —
+                see :func:`~langres.core.model_ref.require_litellm_routable`.
             temperature: Sampling temperature for the lazily-built LM.
             entity_noun: Domain noun woven into the signature instructions.
+
+        Raises:
+            UnsupportedBackboneError: ``model`` names an in-process backbone.
         """
-        self.model = model
+        self.model_ref = require_litellm_routable(normalize_model_ref(model), slot="SelectMatcher")
+        # ``self.model`` stays the base id *string* for litellm/provenance/pricing;
+        # the full ref (incl. any endpoint URL) lives on ``self.model_ref``.
+        self.model = self.model_ref.base
         self.temperature = temperature
         self.entity_noun = entity_noun
         self._lm = lm
@@ -143,7 +160,9 @@ class SelectMatcher(GroupwiseMatcher[SchemaT]):
     def config(self) -> dict[str, object]:
         """Pure, serializable construction config (never the LM or secrets)."""
         return {
-            "model": self.model,
+            # A plain API id serializes byte-identically to the pre-``kind`` config;
+            # only an endpoint ref widens to a dict (see ``to_config``).
+            "model": to_config(self.model_ref),
             "temperature": self.temperature,
             "entity_noun": self.entity_noun,
         }
@@ -153,15 +172,23 @@ class SelectMatcher(GroupwiseMatcher[SchemaT]):
         """Rebuild a fresh judge from :attr:`config` (no injected LM; built lazily)."""
         return cls(
             lm=None,
-            model=str(config["model"]),
+            # Passed through unchanged: a ``str()`` coercion here would stringify an
+            # endpoint ref's dict into ``"{'base': ...}"`` and silently misroute it.
+            model=config["model"],  # type: ignore[arg-type]
             temperature=float(config["temperature"]),  # type: ignore[arg-type]
             entity_noun=str(config["entity_noun"]),
         )
 
     def _get_lm(self) -> Any:
-        """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use."""
+        """Return the DSPy LM, lazily building a ``dspy.LM`` from ``model`` on first use.
+
+        ``api_base`` is forwarded for the ``endpoint`` kind: ``dspy.LM`` passes
+        unknown kwargs straight to litellm (it lists ``api_base`` among the args it
+        excludes from its cache key), so a served backbone needs no new judge.
+        """
         if self._lm is None:
-            self._lm = dspy.LM(self.model, cache=False, temperature=self.temperature)
+            extra = {"api_base": self.model_ref.api_base} if self.model_ref.api_base else {}
+            self._lm = dspy.LM(self.model, cache=False, temperature=self.temperature, **extra)
         return self._lm
 
     def _cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:

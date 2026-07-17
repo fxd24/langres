@@ -513,6 +513,93 @@ ReviewQueue("review_queue.jsonl").write(items)
 
 ## 7. Core Data Contracts (Pydantic Models)
 
+### ModelRef (`langres.core.model_ref`) — the ONE backbone contract
+
+An *architecture* is a topology (which components, in what order). A **backbone**
+is what fills one of its model slots. `ModelRef` is how langres names one, and
+**swapping a backbone never mints a new architecture**.
+
+It is a frozen dataclass (not Pydantic — the module is a stdlib-only leaf that
+imports nothing from `langres`, so it stays out of every heavy-dep path),
+validated in `__post_init__`, and **weightless**: reference strings only, never
+weight bytes, so it round-trips as plain JSON config.
+
+```python
+ModelRef(
+    base: str,                 # the id or path
+    kind: BackboneKind,        # "api" | "endpoint" | "hf" | "local"  (REQUIRED)
+    adapter: str | None = None,    # unmerged PEFT adapter; in-process kinds only
+    api_base: str | None = None,   # required by — and exclusive to — kind="endpoint"
+    revision: str | None = None,   # HF Hub git revision; kind="hf" only
+)
+```
+
+**`kind` is the discriminator and the sole input to routing** —
+`backend_for(kind)` is the entire rule, and it never touches the filesystem:
+
+| `kind` | `base` names | routes to |
+|---|---|---|
+| `api` | a litellm id (`openai/gpt-4o`, `gpt-5-mini`) | litellm |
+| `endpoint` | a model served at `api_base` (vLLM/Ollama/OpenAI-compatible) | litellm |
+| `hf` | a Hugging Face Hub id (`org/name`) | transformers (in-process) |
+| `local` | a local directory path | transformers (in-process) |
+
+**Surface forms** — `normalize_model_ref(model, *, api_base=None)` accepts all
+three and infers `kind` by **syntax alone** when it is not named:
+
+```python
+normalize_model_ref("gpt-5-mini")                    # -> kind="api"   (bare id)
+normalize_model_ref("openai/gpt-4o")                 # -> kind="api"   (known provider prefix)
+normalize_model_ref("BAAI/bge-small-en-v1.5")        # -> kind="hf"    (org/name)
+normalize_model_ref("./my-ft")                       # -> kind="local" (path syntax)
+normalize_model_ref("m", api_base="http://x:8000/v1")  # -> kind="endpoint"
+normalize_model_ref({"base": "org/m", "kind": "api"})   # explicit kind wins
+normalize_model_ref({"base": "b", "adapter": "a"})      # -> in-process (QLoRA, unmerged)
+```
+
+Two rules that surprise people, both deliberate:
+
+- **A bare relative directory name is NOT a path.** `"my-model"` is an `api` id
+  even if `./my-model` exists — write `"./my-model"` or pass `kind="local"`.
+  Probing the filesystem is what made routing depend on the working directory:
+  the same saved config resolved to a *different backend* elsewhere.
+- **`org/name` is never second-guessed.** It cannot be distinguished from a
+  typo'd provider by syntax, so a caller who means an API model says
+  `{"base": "...", "kind": "api"}`. Conversely a **multi-slash** id
+  (`nvidia_nim/meta/llama3-8b`) is *never* a Hub id — those carry exactly one
+  slash — so it infers as `api` and litellm, which has the full provider list,
+  produces the error if the provider is wrong.
+
+Inference is **total over non-empty strings**: every one names a kind, so the
+only `InvalidModelRefError` from a bare string is the empty one.
+
+**`revision` is in the v1 schema on purpose.** Without it an `org/name` ref
+drifts as the Hub moves, so two runs of an "identical versioned config" are not
+identical across time.
+
+**Serialization** (`to_config` / `normalize_model_ref` are inverses) emits the
+compact bare-`base` string exactly when that string re-normalizes to an equal
+ref — so the common case stays **byte-identical to pre-`kind` artifacts** — and
+widens to `{"base", "kind", ...}` otherwise. The pinned invariant:
+`normalize_model_ref(to_config(ref)) == ref` for every ref. A stored dict without
+`kind` still loads (it is inferred), so older artifacts keep working.
+
+**Typed errors** (both `ValueError` subclasses):
+
+- `InvalidModelRefError` — the ref is malformed (an empty base, an unknown
+  `kind`, an adapter on a served kind, `api_base` on a non-endpoint, a `revision`
+  on a non-`hf` ref, a conflicting `api_base`, a non-string `adapter`/`revision`).
+- `UnsupportedBackboneError` — the ref is *fine*, but the slot cannot run it:
+  a DSPy-backed matcher handed a local dir/adapter (`require_litellm_routable`),
+  or a method with no model slot handed any `model=` at all
+  (`MethodSpec.check_backbone`).
+
+> **DSPy-backed slots are litellm-only.** `DSPyMatcher` / `SelectMatcher` route
+> every completion through litellm — DSPy has no in-process route — so a `local`
+> directory or an unmerged adapter raises at construction rather than dying deep
+> inside litellm. Use `LLMMatcher` (litellm **and** a transformers backend) to run
+> local weights, or serve the model and pass an `endpoint` ref.
+
 ### ERCandidate[SchemaT]
 
 The internal data wrapper passed into a Flow.
