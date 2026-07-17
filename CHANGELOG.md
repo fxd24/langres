@@ -123,6 +123,30 @@ while making the metric look better).
   *module* at `langres/optimize.py` (so plain `import langres.optimize` keeps
   working too), and `tests/test_import_budget.py` now asserts all three forms.
 
+#### Moved to `langres.training` — deep-import shims kept (temporarily)
+
+Fitting/calibrating a matcher is what *produces* a tuned model, not
+entity-resolution modelling itself, so the fit family moved out of
+`langres.core` into a new **`langres.training`** package beside it (the same cut
+that moved `langres.report` out): `core.finetune` → `training.finetune`,
+`core.calibration` → `training.calibration`, `core.fit_report` →
+`training.fit_report`, `core.methods_prompt` → `training.methods_prompt`,
+`core.methods_calibrate` → `training.methods_calibrate`.
+
+**Every supported path is unchanged** — `langres.QLoRA` / `run_finetune` /
+`finetune` / `derive_threshold`, and `langres.core.FitReport` / `Bootstrap` /
+`MIPRO` / `GEPA` / `Platt` / `Isotonic` / `Calibrator` all still resolve
+(`langres.__all__` = 36, `langres.core.__all__` = 76, both unchanged). Unlike the
+`report`/`autoresearch` moves above, the deep `langres.core.*` paths here **also
+keep working**, through back-compat shims at each old path marked
+`# TEMPORARY: deleted by the W2 sweep`. The shims are fan-in-0 leaves (nothing
+in-repo imports them), so they do **not** re-knot the import graph — the tangle
+is unchanged (`[9, 3, 2, 2, 2]` all-edges, `[]` runtime; measured). `core →
+training` is non-zero by design (`ERModel.fit` dispatches into `training` via
+function-local imports, plus one toplevel `fit_report` for the `fit_report_`
+attribute type, and the `core/_exports/_training` public surface) — see
+`tests/test_import_tangle.py`.
+
 #### Logger names follow the code that moved
 
 Every logger here is `getLogger(__name__)`, so a module that moves takes its
