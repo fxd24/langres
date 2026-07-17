@@ -1,7 +1,7 @@
 """Tests for the Trackio ``ExperimentTracker`` adapter.
 
 Behavior/smoke tier: ``trackio`` is fully mocked (a fake module patched over
-``langres.core.trackers.trackio_tracker.trackio``), so no test touches the
+``langres.tracking.trackers.trackio_tracker.trackio``), so no test touches the
 network or a real HF login. We assert that start_run -> log -> finish call the
 right trackio APIs with the flattened context, that ``run_url``/``native``
 derive from the underlying run, that the HF-sync credential guard fires
@@ -20,9 +20,9 @@ import huggingface_hub
 import pytest
 
 from langres.clients.settings import Settings
-from langres.core.runs import RunContext
-from langres.core.trackers import ExperimentTracker, resolve_tracker
-from langres.core.trackers.trackio_tracker import TrackioTracker, _flatten
+from langres.tracking.runs import RunContext
+from langres.tracking.trackers import ExperimentTracker, resolve_tracker
+from langres.tracking.trackers.trackio_tracker import TrackioTracker, _flatten
 
 
 class _FakeRun:
@@ -62,7 +62,7 @@ class _FakeTrackio:
 def fake_trackio(monkeypatch: pytest.MonkeyPatch) -> _FakeTrackio:
     """Patch the fake over ``trackio_tracker.trackio`` (the module-level import)."""
     fake = _FakeTrackio()
-    import langres.core.trackers.trackio_tracker as tracker_mod
+    import langres.tracking.trackers.trackio_tracker as tracker_mod
 
     monkeypatch.setattr(tracker_mod, "trackio", fake)
     return fake
@@ -417,7 +417,7 @@ class TestRealLocalSmoke:
     def test_real_local_run_writes_to_local_store(self, tmp_path: Any) -> None:
         import trackio
 
-        from langres.core.trackers.trackio_tracker import TrackioTracker as RealTracker
+        from langres.tracking.trackers.trackio_tracker import TrackioTracker as RealTracker
 
         project = f"langres-test-{os.getpid()}"
         tracker = RealTracker(Settings(), project=project)

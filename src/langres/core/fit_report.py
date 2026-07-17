@@ -20,7 +20,7 @@ Import-light on purpose (Pydantic + the two light leaves
 pull sklearn/torch, so a report built right after a heavy fit stays cheap to
 import, dump, and render (locked by ``tests/test_import_budget.py``). Lineage is
 *referenced*, not duplicated: ``run_ref`` carries the enclosing
-:class:`~langres.core.runs.RunRecord`'s ``attempt_id`` (the machine record),
+:class:`~langres.tracking.runs.RunRecord`'s ``attempt_id`` (the machine record),
 while this model is the human-facing digest.
 """
 
@@ -88,7 +88,7 @@ class FitReport(BaseModel):
         calibration: Before-vs-after Brier/ECE for a ``method="calibrate"`` fit
             (on the ``valid`` split), else ``None``.
         run_ref: The enclosing run's ``attempt_id`` (lineage reference to the
-            machine :class:`~langres.core.runs.RunRecord`), or ``None``.
+            machine :class:`~langres.tracking.runs.RunRecord`), or ``None``.
     """
 
     trainable: str | None

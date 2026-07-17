@@ -44,8 +44,8 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
-from langres.core.runs import RunContext, RunStore, capture_run
-from langres.core.trackers import ExperimentTracker, resolve_tracker
+from langres.tracking.runs import RunContext, RunStore, capture_run
+from langres.tracking.trackers import ExperimentTracker, resolve_tracker
 from langres.core.usage import LLMUsage
 
 logger = logging.getLogger(__name__)
@@ -145,9 +145,9 @@ def _trainset_fingerprint(trainset: Sequence[dspy.Example]) -> str:
     sorted before hashing, so an identical labeled set fingerprints identically
     regardless of row order, while any content change — a flipped label, an edited
     field, an added/removed example — changes the digest. Fed to the compile
-    :class:`~langres.core.runs.RunContext`'s ``dataset_fingerprint`` so two
+    :class:`~langres.tracking.runs.RunContext`'s ``dataset_fingerprint`` so two
     ``compile`` runs on different trainsets no longer collapse to the same
-    ``recipe_id``. Mirrors :func:`langres.core.runs.dataset_fingerprint`'s style.
+    ``recipe_id``. Mirrors :func:`langres.tracking.runs.dataset_fingerprint`'s style.
     """
     digest = hashlib.sha256()
     for line in sorted(
@@ -429,7 +429,7 @@ class DSPyMatcher(Matcher[SchemaT]):
         """Compile (tune) the DSPy program against a gold set, in place.
 
         The compilation is recorded as a first-class **optimization run** via
-        :func:`~langres.core.runs.capture_run`, and its ``attempt_id`` is stamped
+        :func:`~langres.tracking.runs.capture_run`, and its ``attempt_id`` is stamped
         onto :attr:`_compile_run_id` so a later ``capture_run`` (the eval run that
         uses the compiled program) can thread it into ``parent_run_id`` for the
         compile→eval lineage. Persistence is opt-in: with the default

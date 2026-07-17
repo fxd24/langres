@@ -1,4 +1,4 @@
-"""Tests for langres.core.judgement_log (JudgementLog / LoggingMatcher).
+"""Tests for langres.tracking.judgement_log (JudgementLog / LoggingMatcher).
 
 The opt-in signal-log seam (W0.2): a JSONL sink (``JudgementLog``) plus a
 boundary-component ``Matcher`` wrapper (``LoggingMatcher``) that logs each
@@ -18,11 +18,11 @@ from typing import Any, Literal
 import pytest
 
 from langres.clients.openrouter import BudgetExceeded
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.reports import ScoreInspectionReport
-from langres.core.runs import RunContext, capture_run
+from langres.tracking.runs import RunContext, capture_run
 
 
 def _judgement(

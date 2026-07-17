@@ -15,7 +15,7 @@ import pytest
 
 from langres.autoresearch.loop import LoopResult, Trial, run_loop
 from langres.autoresearch.objective import Objective
-from langres.core.runs import RunStore
+from langres.tracking.runs import RunStore
 
 
 def _scorer(table: dict[str, dict[str, float]]) -> Any:
@@ -226,7 +226,7 @@ def test_trial_is_a_frozen_dataclass() -> None:
 
 # ---------------------------------------------------------------------------
 # Tracker spec (DX: ``tracker="trackio"`` resolved internally via
-# ``core.trackers.resolve_tracker`` -- mirrors ``judge="..."`` presets).
+# ``tracking.trackers.resolve_tracker`` -- mirrors ``judge="..."`` presets).
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +300,7 @@ def test_tracker_string_resolves_to_the_named_backend_and_is_driven(
     the spec resolved AND the resulting tracker actually got driven by
     ``capture_run``, not just that ``resolve_tracker`` returns the right type.
     """
-    import langres.core.trackers.trackio_tracker as trackio_mod
+    import langres.tracking.trackers.trackio_tracker as trackio_mod
 
     class _FakeRun:
         def __init__(self) -> None:

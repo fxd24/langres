@@ -76,7 +76,7 @@ from langres.core.metrics import (
 )
 from langres.core.models import ERCandidate
 from langres.core.registry import get_model
-from langres.core.runs import current_run
+from langres.tracking.runs import current_run
 from langres.core.spend import SpendMonitor
 
 if TYPE_CHECKING:

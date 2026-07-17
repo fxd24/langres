@@ -23,7 +23,7 @@ from langres.clients.openrouter import BudgetExceeded
 from langres.core.clusterer import Clusterer
 from langres.core.feature import FeatureSpec
 from langres.core.groups import ERCandidateGroup
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.matcher import GroupwiseMatcher, Matcher

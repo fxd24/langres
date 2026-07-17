@@ -73,7 +73,7 @@ from langres.core.harvest import (
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher
 from langres.core.matchers.cascade_judge import CASCADE_ESCALATED_STEP, CascadeMatcher

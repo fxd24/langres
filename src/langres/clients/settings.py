@@ -54,7 +54,7 @@ class Settings(BaseSettings):
             setting, so a caller must pass store= explicitly today (e.g.
             store=Settings().run_store_path). Threading it as the zero-config
             default store is deferred to the benchmark/harness wrap; until then
-            capture_run(store=None) writes nothing. See langres.core.runs.
+            capture_run(store=None) writes nothing. See langres.tracking.runs.
         MLFLOW_TRACKING_URI: MLflow tracking server URI (optional). Read by the
             MLflow tracker (MlflowTracker / resolve_tracker("mlflow")), NOT by
             capture_run directly -- it only takes effect when you use the MLflow

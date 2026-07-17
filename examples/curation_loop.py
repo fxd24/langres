@@ -24,7 +24,7 @@ To keep the error rates legible, the held-out set is balanced down to ~1:4 (a
 1:150 blocked set drowns every slice's error rate in the easy-negative majority);
 this is a diagnostic view, not a deployment F1 benchmark. No LLM, no network, no
 spend -- the matcher is a RandomForest and the log is a real
-:class:`~langres.core.judgement_log.JudgementLog` round-tripped through disk.
+:class:`~langres.tracking.judgement_log.JudgementLog` round-tripped through disk.
 
 Run it (self-contained -- sets the macOS OpenMP guard itself):
     uv run python examples/curation_loop.py
@@ -44,7 +44,7 @@ from pathlib import Path
 
 from langres.core.comparators import StringComparator
 from langres.core.finetune import LabeledCandidate
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.core.models import ERCandidate
 from langres.core.resolver import Resolver

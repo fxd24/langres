@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from langres.core.inspection import Inspectable
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.matcher import Matcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.spend_cap import SpendCappedMatcher as _SpendCappedMatcher

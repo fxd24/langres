@@ -62,7 +62,7 @@ langres/
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
 │   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
-│   │   ├── judgement_log.py        # JudgementLog + LoggingModule (logs every judge call: ids, score, verdict, model, cost)
+│   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs
 │   │   ├── calibration.py          # derive_threshold
@@ -73,6 +73,7 @@ langres/
 │   │   ├── __init__.py     # docstring only — exports NOTHING, which is what keeps it import-light (factory/blocker_optimizer are heavy)
 │   │   ├── objective.py / search_space.py / factory.py / loop.py  # the keep-if-better scorer, the config grid, config→blocker (HEAVY), the propose→run→evaluate→keep driver
 │   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
+│   ├── tracking/       # observability, NOT ER modelling — beside core (one-way dep; the langres.core facade re-exports these for back-compat): runs.py (RunContext/RunStore + capture_run), judgement_log.py (JudgementLog/LoggingMatcher), factories.py (create_*_tracker), trackers/ (ExperimentTracker + lazy Mlflow/Wandb/Trackio adapters)
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing

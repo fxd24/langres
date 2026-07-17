@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel
 
 from langres.core.harvest import Correction
-from langres.core.judgement_log import JudgementLog, LoggingMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.review import ReviewItem, ReviewQueue, _is_well_formed, select_for_review
 from langres.testing import ScriptedJudge

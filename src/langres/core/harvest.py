@@ -1,6 +1,6 @@
 """The flywheel's harvest half: logged verdicts + human corrections -> labeled pairs.
 
-``JudgementLog`` (W0.2, :mod:`langres.core.judgement_log`) is the flywheel's
+``JudgementLog`` (W0.2, :mod:`langres.tracking.judgement_log`) is the flywheel's
 *inlet* -- an opt-in JSONL log of every judge call (ids, score, decision, verdict,
 model, cost, ``"v": 3``). This module is the *outlet*: it turns those logged
 judgements,
@@ -142,7 +142,7 @@ class CorrectionLog:
     """JSONL-file-backed reader/writer for ``corrections.jsonl`` -- the harvest inlet.
 
     The reference implementation of the :class:`Correction` file contract,
-    mirroring :class:`~langres.core.judgement_log.JudgementLog` so both flywheel
+    mirroring :class:`~langres.tracking.judgement_log.JudgementLog` so both flywheel
     files are appended and reloaded the same way. A downstream review tool may
     write the file itself (any JSONL of :class:`Correction`-shaped lines is
     valid); this class is what langres-side tooling and tests use to produce and
@@ -187,7 +187,7 @@ def harvest_labeled_pairs(
     """Merge logged judgements with human corrections into labeled pairs.
 
     Each judgement row (a ``JudgementLog``-format dict, e.g. from
-    :meth:`JudgementLog.read <langres.core.judgement_log.JudgementLog.read>`)
+    :meth:`JudgementLog.read <langres.tracking.judgement_log.JudgementLog.read>`)
     yields one :class:`LabeledPair`. Its label is the logged ``verdict`` (a weak
     label) unless a :class:`Correction` covers the same pair, in which case the
     human ``label`` overrides it and ``source`` is ``"correction"``. Pairs are

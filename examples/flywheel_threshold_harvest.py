@@ -1,6 +1,6 @@
 """The data flywheel, end to end: logged verdicts + human corrections -> a better threshold.
 
-langres logs every judge call (:class:`~langres.core.judgement_log.JudgementLog`,
+langres logs every judge call (:class:`~langres.tracking.judgement_log.JudgementLog`,
 the flywheel *inlet*). This demo runs the *harvest* half (W2.4): it turns a
 ``judgements.jsonl`` log plus a ``corrections.jsonl`` review-queue export into
 labeled pairs, and feeds them to
@@ -60,7 +60,7 @@ from langres.core.harvest import (
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )
-from langres.core.judgement_log import JudgementLog
+from langres.tracking.judgement_log import JudgementLog
 
 #: Where the committed fixtures live (regenerate with ``generate_fixtures.py``).
 DATA_DIR = Path(__file__).resolve().parent / "data" / "flywheel"

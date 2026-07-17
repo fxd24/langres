@@ -213,7 +213,7 @@ fan-in fan-out  module
     14       3  langres.core.indexes.vector_index
     13       4  langres.core.blockers.all_pairs
     13       8  langres.core.blockers.vector
-    11       1  langres.core.runs
+    11       1  langres.tracking.runs
     10       2  langres.core.comparator
 ```
 

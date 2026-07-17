@@ -225,7 +225,7 @@ RUNTIME = TangleBaseline(
 #    3  {core.analysis, core.reports, plotting.blockers}
 #    2  {core.anchor_store, core.resolver}
 #    2  {core.benchmark, langres.methods}
-#    2  {core.runs, core.trackers}
+#    2  {tracking.runs, tracking.trackers}
 # `tangled` covers all five; `largest_scc` pins the biggest so they cannot
 # silently merge into one.
 #
@@ -284,8 +284,8 @@ ALL_EDGES = TangleBaseline(
             "langres.core.benchmark",
             "langres.core.reports",
             "langres.core.resolver",
-            "langres.core.runs",
-            "langres.core.trackers",
+            "langres.tracking.runs",
+            "langres.tracking.trackers",
             "langres.data.data_profile.base",
             "langres.data.data_profile.builders",
             "langres.data.data_profile.corpus_field",

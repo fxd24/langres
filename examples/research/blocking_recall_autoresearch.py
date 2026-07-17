@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING
 from langres import optimize
 from langres.autoresearch.objective import Objective
 from langres.autoresearch.search_space import SearchSpace
-from langres.core.runs import RunStore
+from langres.tracking.runs import RunStore
 
 if TYPE_CHECKING:
     from langres.autoresearch.loop import LoopResult

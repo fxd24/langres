@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from langres.core.judgement_log import JudgementLog
+from langres.tracking.judgement_log import JudgementLog
 from langres.core.models import PairwiseJudgement
 from langres.core.review import select_for_review
 

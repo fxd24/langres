@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from langres.core.trackers import (
+from langres.tracking.trackers import (
     ExperimentTracker,
     MultiTracker,
     NoOpTracker,
@@ -178,7 +178,7 @@ class TestMultiTrackerErrorIsolation:
         boom, spy = _BoomTracker("finish"), _SpyTracker()
         multi = MultiTracker([boom, spy])
 
-        with caplog.at_level(logging.ERROR, logger="langres.core.trackers"):
+        with caplog.at_level(logging.ERROR, logger="langres.tracking.trackers"):
             multi.finish(status="completed")  # must NOT raise
 
         # The second child still received finish despite the first raising.
@@ -239,12 +239,12 @@ class TestResolveTracker:
         adapter import to fail (mirrors ``_fake_import`` below) -- the missing-extra
         translation is what ``resolve_tracker`` must surface either way.
         """
-        import langres.core.trackers as trackers_mod
+        import langres.tracking.trackers as trackers_mod
 
         real_import = trackers_mod.importlib.import_module
 
         def _fail_mlflow_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.mlflow_tracker":
+            if path == "langres.tracking.trackers.mlflow_tracker":
                 raise ImportError("No module named 'mlflow'")
             return real_import(path, *a, **k)
 
@@ -262,12 +262,12 @@ class TestResolveTracker:
         adapter import to fail (mirrors the ``mlflow`` twin above) -- the
         missing-extra translation is what ``resolve_tracker`` must surface either way.
         """
-        import langres.core.trackers as trackers_mod
+        import langres.tracking.trackers as trackers_mod
 
         real_import = trackers_mod.importlib.import_module
 
         def _fail_wandb_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.wandb_tracker":
+            if path == "langres.tracking.trackers.wandb_tracker":
                 raise ImportError("No module named 'wandb'")
             return real_import(path, *a, **k)
 
@@ -284,12 +284,12 @@ class TestResolveTracker:
         doesn't occur here. Simulate it by forcing the adapter import to fail
         (mirrors the mlflow/wandb twins above).
         """
-        import langres.core.trackers as trackers_mod
+        import langres.tracking.trackers as trackers_mod
 
         real_import = trackers_mod.importlib.import_module
 
         def _fail_trackio_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.trackio_tracker":
+            if path == "langres.tracking.trackers.trackio_tracker":
                 raise ImportError("No module named 'trackio'")
             return real_import(path, *a, **k)
 
@@ -309,7 +309,7 @@ class TestResolveTracker:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The success path: a present adapter module is imported + instantiated."""
-        import langres.core.trackers as trackers_mod
+        import langres.tracking.trackers as trackers_mod
 
         class _FakeMlflow(NoOpTracker):
             name = "fake-mlflow"
@@ -318,7 +318,7 @@ class TestResolveTracker:
         real_import = trackers_mod.importlib.import_module
 
         def _fake_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.mlflow_tracker":
+            if path == "langres.tracking.trackers.mlflow_tracker":
                 return fake_module
             return real_import(path, *a, **k)
 
@@ -335,12 +335,12 @@ class TestLazyAdapterGetattr:
         Absence is simulated (see the ``resolve_tracker`` twin above): S3 made the
         adapter module + ``mlflow`` present, so the raw missing case is forced here.
         """
-        import langres.core.trackers as trackers
+        import langres.tracking.trackers as trackers
 
         real_import = trackers.importlib.import_module
 
         def _fail_mlflow_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.mlflow_tracker":
+            if path == "langres.tracking.trackers.mlflow_tracker":
                 raise ImportError("No module named 'mlflow'")
             return real_import(path, *a, **k)
 
@@ -356,12 +356,12 @@ class TestLazyAdapterGetattr:
         Absence is simulated (see the ``resolve_tracker`` twin above): S4 made the
         adapter module + ``wandb`` present, so the raw missing case is forced here.
         """
-        import langres.core.trackers as trackers
+        import langres.tracking.trackers as trackers
 
         real_import = trackers.importlib.import_module
 
         def _fail_wandb_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.wandb_tracker":
+            if path == "langres.tracking.trackers.wandb_tracker":
                 raise ImportError("No module named 'wandb'")
             return real_import(path, *a, **k)
 
@@ -373,12 +373,12 @@ class TestLazyAdapterGetattr:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``trackers.TrackioTracker`` -> helpful ImportError when the extra is absent."""
-        import langres.core.trackers as trackers
+        import langres.tracking.trackers as trackers
 
         real_import = trackers.importlib.import_module
 
         def _fail_trackio_import(path: str, *a: Any, **k: Any) -> Any:
-            if path == "langres.core.trackers.trackio_tracker":
+            if path == "langres.tracking.trackers.trackio_tracker":
                 raise ImportError("No module named 'trackio'")
             return real_import(path, *a, **k)
 
@@ -387,7 +387,7 @@ class TestLazyAdapterGetattr:
             trackers.TrackioTracker  # noqa: B018
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
-        import langres.core.trackers as trackers
+        import langres.tracking.trackers as trackers
 
         with pytest.raises(AttributeError, match="not_a_real_attribute"):
             trackers.not_a_real_attribute  # noqa: B018

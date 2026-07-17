@@ -439,7 +439,7 @@ _TRACKING_CHECK_SCRIPT = (
 def test_import_langres_excludes_tracking_deps_from_sys_modules() -> None:
     """The S1 tracking layer must not pull ranx/mlflow/wandb on a bare import.
 
-    ``core/runs.py`` refs the result models (which need ``ranx``) only under
+    ``tracking/runs.py`` refs the result models (which need ``ranx``) only under
     ``TYPE_CHECKING``, and the ``ExperimentTracker`` adapters import
     ``mlflow``/``wandb`` lazily -- so eager ``import langres`` stays clean.
     """
@@ -847,7 +847,7 @@ class TestClientsLazyGetattr:
     def test_create_wandb_tracker_resolves(self) -> None:
         import langres.clients as clients
 
-        from langres.clients.tracking import create_wandb_tracker
+        from langres.tracking.factories import create_wandb_tracker
 
         assert clients.create_wandb_tracker is create_wandb_tracker
 

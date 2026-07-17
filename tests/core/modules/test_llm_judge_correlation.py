@@ -30,7 +30,7 @@ litellm = pytest.importorskip("litellm")
 
 from langres.core.models import CompanySchema, ERCandidate  # noqa: E402
 from langres.core.matchers.llm_judge import LLMMatcher  # noqa: E402
-from langres.core.runs import RunContext, capture_run  # noqa: E402
+from langres.tracking.runs import RunContext, capture_run  # noqa: E402
 
 
 def _pair() -> ERCandidate[CompanySchema]:
