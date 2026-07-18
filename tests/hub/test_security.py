@@ -16,6 +16,7 @@ from langres._pretrained_artifact import (
     PretrainedArtifactError,
     resource_facts,
     sensitive_config_paths,
+    validate_bundle,
 )
 from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
 from langres.core.blockers.all_pairs import AllPairsBlocker
@@ -175,6 +176,8 @@ def test_credential_bearing_transport_config_is_rejected_when_loading(
     (
         "https://user:token@host.example/v1",
         "https://host.example/v1?api_key=private",
+        "https://host.example/v1?apiKey=private",
+        "https://host.example/v1?accessToken=private",
     ),
 )
 def test_credential_bearing_endpoint_url_is_never_publishable(
@@ -229,6 +232,28 @@ def test_vector_components_declare_the_semantic_extra() -> None:
     )
 
     assert resource_facts(manifest) == ((), ("semantic",))
+
+
+def test_legacy_vector_bundle_without_semantic_extra_remains_valid(
+    model: ERModel,
+    tmp_path: Path,
+) -> None:
+    bundle = save_pretrained(model, tmp_path / "legacy-vector")
+    resolver = json.loads((bundle / "resolver.json").read_text())
+    resolver["components"][0]["type_name"] = "vector_blocker"
+    (bundle / "resolver.json").write_text(json.dumps(resolver))
+
+    manifest = json.loads((bundle / BUNDLE_MANIFEST).read_text())
+    import hashlib
+
+    content = (bundle / "resolver.json").read_bytes()
+    for item in manifest["files"]:
+        if item["path"] == "resolver.json":
+            item["size"] = len(content)
+            item["sha256"] = hashlib.sha256(content).hexdigest()
+    (bundle / BUNDLE_MANIFEST).write_text(json.dumps(manifest))
+
+    assert validate_bundle(bundle).required_extras == ()
 
 
 def test_unknown_model_name_component_fails_closed() -> None:

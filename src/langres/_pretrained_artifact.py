@@ -89,6 +89,27 @@ _CREDENTIAL_KEY = re.compile(
     r"set_cookie|signature|sig|subscription_key|token)(?:$|_)",
     re.IGNORECASE,
 )
+_COMPACT_CREDENTIAL_KEYS = frozenset(
+    {
+        "accesstoken",
+        "apikey",
+        "authentication",
+        "authorization",
+        "authtoken",
+        "bearer",
+        "cookie",
+        "credential",
+        "credentials",
+        "openaikey",
+        "password",
+        "privatekey",
+        "secret",
+        "setcookie",
+        "signature",
+        "subscriptionkey",
+        "token",
+    }
+)
 
 
 class PretrainedArtifactError(ValueError):
@@ -428,7 +449,21 @@ def validate_bundle(root: Path) -> PretrainedManifest:
             "be loaded from a pretrained artifact. Fields: " + ", ".join(credential_paths[:10])
         )
     actual_refs, actual_extras = resource_facts(resolver_manifest)
-    if actual_refs != manifest.model_refs or actual_extras != manifest.required_extras:
+    declared_extras = manifest.required_extras
+    missing_extras = set(actual_extras).difference(declared_extras)
+    legacy_compatible_missing = {
+        _COMPONENT_EXTRAS[spec.type_name]
+        for spec in component_specs(resolver_manifest)
+        if spec.type_name in _COMPONENT_EXTRAS
+    }
+    extras_without_compatible_omissions = tuple(
+        extra for extra in actual_extras if extra not in missing_extras
+    )
+    if (
+        actual_refs != manifest.model_refs
+        or not missing_extras.issubset(legacy_compatible_missing)
+        or extras_without_compatible_omissions != declared_extras
+    ):
         raise PretrainedArtifactError("outer resource identity does not match resolver.json")
     actual_sensitive = bool(sensitive_config_paths(resolver_manifest))
     if actual_sensitive != manifest.sensitive_config_included:
@@ -501,8 +536,10 @@ def credential_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, .
     found: list[str] = []
 
     def credential_key(value: object) -> bool:
-        normalized = re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
-        return _CREDENTIAL_KEY.search(normalized) is not None
+        key_text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+        normalized = re.sub(r"[^a-z0-9]+", "_", key_text.lower()).strip("_")
+        compact = re.sub(r"[^a-z0-9]+", "", key_text.lower())
+        return _CREDENTIAL_KEY.search(normalized) is not None or compact in _COMPACT_CREDENTIAL_KEYS
 
     def visit(value: object, path: str) -> None:
         if isinstance(value, Mapping):
