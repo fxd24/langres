@@ -180,7 +180,7 @@ It prints the exact five-topology × two-dataset, 18-cell plan, paid concurrency
 1, and the hard USD 20 cap, then exits before dataset/model loading or network.
 Paid execution is outside CI and requires both `--execute-paid` and the literal
 confirmation phrase printed by the command. The script then resolves dataset
-fingerprints before work and passes the experiment's one shared
+fingerprints, requires immutable embedder/reranker revisions, and passes the experiment's one shared
 `SpendMonitor` into every operation chain. Never automate the confirmation.
 
 This is the getting-started for **experimenting on entity-resolution scorers** in

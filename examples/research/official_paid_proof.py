@@ -205,7 +205,9 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, choices=(PAID_CONCURRENCY,), default=1)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/official-paid-proof"))
     parser.add_argument("--embedder", default="sentence-transformers/all-MiniLM-L6-v2")
+    parser.add_argument("--embedder-revision")
     parser.add_argument("--reranker", default="cross-encoder/ms-marco-MiniLM-L6-v2")
+    parser.add_argument("--reranker-revision")
     parser.add_argument("--llm", default="openrouter/openai/gpt-4o-mini")
     args = parser.parse_args()
 
@@ -222,11 +224,24 @@ def main() -> None:
         raise SystemExit(f"refusing paid execution: pass --confirm {CONFIRMATION}")
     if protocol.budget_usd != BUDGET_USD or args.concurrency != PAID_CONCURRENCY:
         raise SystemExit("refusing paid execution: the USD 20 cap and concurrency 1 are mandatory")
+    if not args.embedder_revision or not args.reranker_revision:
+        raise SystemExit(
+            "refusing official execution: pass immutable "
+            "--embedder-revision and --reranker-revision values"
+        )
     protocol = build_protocol(_dataset_fingerprints())
 
     factories = build_factories(
-        embedder_ref=ModelRef(base=args.embedder, kind="hf"),
-        reranker_ref=ModelRef(base=args.reranker, kind="hf"),
+        embedder_ref=ModelRef(
+            base=args.embedder,
+            kind="hf",
+            revision=args.embedder_revision,
+        ),
+        reranker_ref=ModelRef(
+            base=args.reranker,
+            kind="hf",
+            revision=args.reranker_revision,
+        ),
         llm_ref=ModelRef(base=args.llm, kind="api"),
     )
     report = Experiment(
