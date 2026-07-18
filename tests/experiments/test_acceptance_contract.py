@@ -255,6 +255,86 @@ def test_plan_and_dry_run_expose_matrix_budget_cache_and_publication(
     assert not (tmp_path / "runs.jsonl").exists()
 
 
+def test_non_dry_paid_proof_runs_preflight_before_loading_data(
+    _offline: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("one", "two"),
+        dataset_fingerprints={"one": "sha256:one", "two": "sha256:two"},
+        fixed_test_set_id="acceptance:test:v1",
+    )
+    factories = []
+    for name in (
+        "Retrieve",
+        "RetrieveRerank",
+        "RetrieveLLM",
+        "RetrieveRerankLLM",
+        "CustomTopology",
+    ):
+        base = _factory(name)
+        factories.append(
+            ArchitectureFactory(
+                name=name,
+                factory=base.factory,
+                cache_semantics=(
+                    "stochastic"
+                    if name in {"RetrieveLLM", "RetrieveRerankLLM"}
+                    else "deterministic"
+                ),
+                estimated_usd=None if name == "RetrieveLLM" else 0.0,
+            )
+        )
+    loaded = False
+
+    def load(_name: str) -> _Benchmark:
+        nonlocal loaded
+        loaded = True
+        return _Benchmark()
+
+    monkeypatch.setattr("langres.experiments.runner.get_benchmark", load)
+
+    with pytest.raises(
+        ValueError,
+        match="complete USD preflight estimate",
+    ):
+        Experiment(
+            architectures=factories,
+            protocol=protocol,
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+        ).run()
+
+    assert loaded is False
+
+
+def test_plan_never_counts_unrelated_cache_directories_as_hits(
+    _offline: None,
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    (cache_dir / "unrelated-cache-id").mkdir(parents=True)
+    experiment = Experiment(
+        architectures=[_factory("CustomTopology")],
+        protocol=_protocol().model_copy(
+            update={
+                "benchmark_ids": ("one",),
+                "architecture_repeats": {},
+                "stochastic_repeats": 1,
+            }
+        ),
+        cache_dir=cache_dir,
+    )
+
+    plan = experiment.plan()
+
+    assert plan.cache_hits == 0
+    assert plan.cache_misses == 0
+    assert plan.cache_unknown == 1
+    assert plan.cells[0].cache_status == "unknown"
+
+
 def test_reproduction_bundle_and_cli_validate_in_a_clean_subprocess(
     _offline: None,
     tmp_path: Path,

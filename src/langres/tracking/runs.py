@@ -268,6 +268,8 @@ class RunRecord(BaseModel):
     cache_id: str | None = None
     protocol: dict[str, Any] | None = None
     measurements: tuple[dict[str, Any], ...] | None = None
+    experiment_facts: dict[str, Any] | None = None
+    partial_judgements: tuple[dict[str, Any], ...] | None = None
 
     # -- Timing (never hashed) --
     started_at: str
@@ -281,7 +283,7 @@ class RunRecord(BaseModel):
     headline_metric: float | None = None
 
     # -- Cost (langres-native) --
-    spend_usd: float = 0.0
+    spend_usd: float | None = None
     budget_exceeded: bool = False
 
     # -- Artifacts --
@@ -302,6 +304,22 @@ class RunRecord(BaseModel):
     @field_validator("measurements", mode="after")
     @classmethod
     def _freeze_measurements(
+        cls,
+        value: tuple[dict[str, Any], ...] | None,
+    ) -> tuple[dict[str, Any], ...] | None:
+        return _snapshot_measurements(value)
+
+    @field_validator("experiment_facts", mode="after")
+    @classmethod
+    def _freeze_experiment_facts(
+        cls,
+        value: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        return _snapshot_mapping(value)
+
+    @field_validator("partial_judgements", mode="after")
+    @classmethod
+    def _freeze_partial_judgements(
         cls,
         value: tuple[dict[str, Any], ...] | None,
     ) -> tuple[dict[str, Any], ...] | None:
@@ -629,9 +647,11 @@ class _RunHandle:
         self._headline_metric: float | None = None
         self._artifacts: dict[str, str] = {}
         self._status_override: RunStatus | None = None
-        self._spend_usd: float = 0.0
+        self._spend_usd: float | None = None
         self._budget_exceeded: bool = False
         self._measurements: tuple[dict[str, Any], ...] | None = None
+        self._experiment_facts: dict[str, Any] | None = None
+        self._partial_judgements: tuple[dict[str, Any], ...] | None = None
 
     def log_metrics(
         self,
@@ -661,7 +681,12 @@ class _RunHandle:
         """Override the terminal status (e.g. ``"budget_exceeded"``)."""
         self._status_override = status
 
-    def record_cost(self, spend_usd: float, *, budget_exceeded: bool = False) -> None:
+    def record_cost(
+        self,
+        spend_usd: float | None,
+        *,
+        budget_exceeded: bool = False,
+    ) -> None:
         """Record the run's total spend (``SpendMonitor.spent``) and cap state."""
         self._spend_usd = spend_usd
         self._budget_exceeded = budget_exceeded
@@ -669,6 +694,17 @@ class _RunHandle:
     def record_measurements(self, measurements: Iterable[Mapping[str, Any]]) -> None:
         """Attach import-neutral serialized stage measurements to the terminal record."""
         self._measurements = _snapshot_measurements(measurements)
+
+    def record_experiment_facts(self, facts: Mapping[str, Any]) -> None:
+        """Attach an import-neutral typed-report snapshot to the terminal record."""
+        self._experiment_facts = _snapshot_mapping(facts)
+
+    def record_partial_judgements(
+        self,
+        judgements: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """Retain already-produced local judgements after a failed cell."""
+        self._partial_judgements = _snapshot_measurements(judgements)
 
 
 @contextmanager
@@ -753,6 +789,8 @@ def capture_run(
                 running_record.model_copy(
                     update={
                         "measurements": handle._measurements,
+                        "experiment_facts": handle._experiment_facts,
+                        "partial_judgements": handle._partial_judgements,
                         "finished_at": finished_at,
                         "duration_seconds": duration_seconds,
                         "metrics": handle._metrics,

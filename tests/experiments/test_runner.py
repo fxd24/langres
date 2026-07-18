@@ -9,11 +9,12 @@ from pydantic import BaseModel, ConfigDict
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.op import Score, ThresholdSelect
+from langres.core.models import PairwiseJudgement
 from langres.core.op_adapters import BlockerSource, ClustererStage
 from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel
 from langres.core.registry import register_op
-from langres.core.spend import SpendMonitor
+from langres.core.spend import BudgetExceeded, SpendMonitor
 from langres.experiments.identity import SourceState
 from langres.experiments.protocol import EvaluationProtocol
 from langres.experiments.runner import (
@@ -575,7 +576,20 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
 
         def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
             self.monitor.add(0.2)
-            self.monitor.check()
+            try:
+                self.monitor.check()
+            except BudgetExceeded as exc:
+                exc.partial_judgements = [
+                    PairwiseJudgement(
+                        left_id="a1",
+                        right_id="a2",
+                        decision=True,
+                        score_type="heuristic",
+                        decision_step="budget-test",
+                        provenance={"cost_usd": 0.2},
+                    )
+                ]
+                raise
             return pairs  # pragma: no cover - check raises
 
     def build(threshold: float, monitor: SpendMonitor) -> ERModel:
@@ -607,6 +621,9 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
     assert record.status == "budget_exceeded"
     assert record.budget_exceeded is True
     assert record.spend_usd == pytest.approx(0.2)
+    assert len(run.partial_judgements) == 1
+    assert run.partial_judgements[0]["left_id"] == "a1"
+    assert record.partial_judgements == run.partial_judgements
 
 
 def test_non_budget_failure_after_paid_work_records_spend(

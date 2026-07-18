@@ -15,7 +15,7 @@ from langres.experiments.statistics import SplitInstability, split_instability
 
 RunStatus = Literal["running", "completed", "failed", "budget_exceeded", "missing"]
 Direction = Literal["min", "max"]
-CachePlanStatus = Literal["hit", "miss", "not_replayable"]
+CachePlanStatus = Literal["hit", "miss", "unknown", "not_replayable"]
 
 
 class IncompatibleProtocolError(ValueError):
@@ -44,6 +44,8 @@ class ExperimentRun(BaseModel):
     metrics: dict[str, float | None] = Field(default_factory=dict)
     measurements: tuple[StageMeasurement, ...] = ()
     funnel: FunnelFacts | None = None
+    selected_threshold: float | None = None
+    partial_judgements: tuple[dict[str, object], ...] = ()
     wall_seconds: float | None = Field(default=None, ge=0.0)
     p95_latency_seconds: float | None = Field(default=None, ge=0.0)
     token_usage: TokenUsage | None = None
@@ -193,6 +195,7 @@ class ExperimentPlan(BaseModel):
     budget_usd: float | None = Field(default=None, ge=0.0)
     cache_hits: int = Field(ge=0)
     cache_misses: int = Field(ge=0)
+    cache_unknown: int = Field(ge=0)
     cache_not_replayable: int = Field(ge=0)
     publication_profile: str
     publication_eligible: bool

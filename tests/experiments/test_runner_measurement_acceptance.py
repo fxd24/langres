@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from langres.architectures import RetrieveLLM
 from langres.core.model_ref import ModelRef
+from langres.core.registry import register
 from langres.core.spend import SpendMonitor
 from langres.experiments import (
     ArchitectureFactory,
@@ -21,11 +22,13 @@ from langres.experiments import (
 from langres.experiments.identity import SourceState
 from langres.resources import (
     FakeEmbedder,
+    EmbeddingBatch,
     GenerationBatch,
     GenerationEnvelope,
     GenerationRequest,
     GenerationUsage,
     LLMRuntimeConfig,
+    ResourceRuntimeConfig,
 )
 from langres.tracking.runs import RunStore
 
@@ -67,7 +70,9 @@ class _MeasurementBenchmark:
         return corpus[:2], corpus[2:], gold_clusters[:1], gold_clusters[1:]
 
 
+@register("test_measured_llm_acceptance")
 class _MeasuredLLM:
+    type_name = "test_measured_llm_acceptance"
     requires_cost_accounting = False
 
     def __init__(self) -> None:
@@ -77,6 +82,15 @@ class _MeasuredLLM:
             device="cpu",
             dtype="float32",
         )
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> _MeasuredLLM:
+        assert config == {}
+        return cls()
 
     def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
         return GenerationBatch(
@@ -98,6 +112,71 @@ class _MeasuredLLM:
                     served_model="served-model",
                     cost_usd=0.0,
                     cost_basis="real",
+                )
+                for request in requests
+            ),
+            model_ref=self.model_ref,
+        )
+
+
+@register("test_measured_embedder_acceptance")
+class _MeasuredEmbedder:
+    type_name = "test_measured_embedder_acceptance"
+
+    def __init__(self) -> None:
+        self.model_ref = ModelRef(base="./measured/embedder", kind="local")
+        self.runtime_config = ResourceRuntimeConfig(batch_size=1024, device="cpu")
+        self._delegate = FakeEmbedder(dimension=8)
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> _MeasuredEmbedder:
+        assert config == {}
+        return cls()
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        batch = self._delegate.embed(texts)
+        return batch.model_copy(update={"model_ref": self.model_ref})
+
+
+class _CostedLLM:
+    def __init__(
+        self,
+        *,
+        cost_usd: float | None,
+        requires_cost_accounting: bool,
+    ) -> None:
+        self.model_ref = ModelRef(
+            base="test/accounting-model",
+            kind="api" if requires_cost_accounting else "local",
+        )
+        self.runtime_config = LLMRuntimeConfig(batch_size=1, device="cpu")
+        self.requires_cost_accounting = requires_cost_accounting
+        self.cost_usd = cost_usd
+
+    def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
+        return GenerationBatch(
+            outputs=tuple(
+                GenerationEnvelope.from_content(
+                    request_id=request.request_id,
+                    model_ref=self.model_ref,
+                    content="MATCH",
+                    usage=GenerationUsage(
+                        input_tokens=2,
+                        output_tokens=1,
+                        cache_read_input_tokens=0,
+                        cache_creation_input_tokens=0,
+                        reasoning_tokens=0,
+                        provider="test",
+                        model="accounting-model",
+                    ),
+                    provider="test",
+                    served_model="accounting-model",
+                    cost_usd=self.cost_usd,
+                    cost_basis="real" if self.cost_usd is not None else "none",
                 )
                 for request in requests
             ),
@@ -253,7 +332,8 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
     assert generate.resource_slot == "llm"
     assert generate.resource_id is not None and "measured/llm" in generate.resource_id
     assert generate.external_calls == 1
-    assert generate.usage == run.token_usage
+    assert generate.usage is not None
+    assert generate.usage.input_tokens == 0
     assert generate.observed_usd == 0.0
     assert generate.derived_usd == 0.0
     assert generate.price == price
@@ -268,6 +348,176 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
     assert "funnel.llm_pairs" in flattened
     assert "token_usage.input_tokens" in flattened
     assert "usd" in flattened
+
+
+def test_tuning_and_evaluation_usage_cost_and_stage_facts_are_aggregated(
+    tmp_path: Path,
+) -> None:
+    llm = _CostedLLM(cost_usd=0.25, requires_cost_accounting=True)
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.5,
+                )
+            ],
+            protocol=_protocol(),
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+            budget_usd=1.0,
+        )
+        .run()
+        .runs
+    )
+
+    assert run.usd == pytest.approx(0.5)
+    assert run.token_usage is not None
+    assert run.token_usage.input_tokens == 4
+    assert run.token_usage.output_tokens == 2
+    generation = [
+        measurement for measurement in run.measurements if measurement.operation_kind == "generate"
+    ]
+    assert [measurement.phase for measurement in generation] == [
+        "tuning",
+        "evaluation",
+    ]
+    assert sum(measurement.external_calls or 0 for measurement in generation) == 2
+    assert sum(measurement.observed_usd or 0.0 for measurement in generation) == pytest.approx(0.5)
+
+
+def test_unknown_paid_cost_remains_none_for_an_uncapped_run(tmp_path: Path) -> None:
+    llm = _CostedLLM(cost_usd=None, requires_cost_accounting=True)
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    [run] = (
+        Experiment(
+            architectures=[ArchitectureFactory(name="RetrieveLLM", factory=build)],
+            protocol=_protocol(),
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+        )
+        .run()
+        .runs
+    )
+
+    assert run.status == "completed"
+    assert run.usd is None
+    assert any(
+        measurement.operation_kind == "generate" and measurement.observed_usd is None
+        for measurement in run.measurements
+    )
+
+
+def test_resume_rehydrates_all_durable_typed_report_facts(tmp_path: Path) -> None:
+    llm = _MeasuredLLM()
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=_MeasuredEmbedder(),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    kwargs = {
+        "architectures": [
+            ArchitectureFactory(
+                name="RetrieveLLM",
+                factory=build,
+                estimated_usd=0.0,
+            )
+        ],
+        "protocol": _protocol(),
+        "tracker": _TrackerSpy(),
+        "store": tmp_path / "runs.jsonl",
+        "cache_dir": tmp_path / "cache",
+    }
+    first = Experiment(**kwargs).run().runs[0]
+    resumed = Experiment(**kwargs).run().runs[0]
+
+    assert resumed.funnel == first.funnel
+    assert resumed.token_usage == first.token_usage
+    assert resumed.selected_threshold == first.selected_threshold
+    assert resumed.measurements == first.measurements
+    assert resumed.usd == first.usd
+    assert resumed.warnings == (
+        *first.warnings,
+        "resumed from completed RunStore attempt",
+    )
+
+
+def test_budget_exceeded_persists_recoverable_generation_facts(tmp_path: Path) -> None:
+    llm = _CostedLLM(cost_usd=0.6, requires_cost_accounting=True)
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    store = RunStore(tmp_path / "runs.jsonl")
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.5,
+                )
+            ],
+            protocol=_protocol(),
+            store=store,
+            cache_dir=tmp_path / "cache",
+            budget_usd=0.5,
+        )
+        .run()
+        .runs
+    )
+
+    assert run.status == "budget_exceeded"
+    assert run.usd == pytest.approx(0.6)
+    assert run.token_usage is not None
+    assert run.token_usage.input_tokens == 2
+    [partial] = [measurement for measurement in run.measurements if measurement.phase == "partial"]
+    assert partial.resource_slot == "llm"
+    assert partial.external_calls == 1
+    assert partial.observed_usd == pytest.approx(0.6)
+    [record] = store.read()
+    assert record.measurements is not None
+    assert record.experiment_facts is not None
+    assert record.experiment_facts["token_usage"]["input_tokens"] == 2
 
 
 def test_failed_cell_error_is_contextual_actionable_sanitized_and_chained(

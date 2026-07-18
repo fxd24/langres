@@ -233,7 +233,8 @@ class StageMeasurement(BaseModel):
     version: Literal[1] = 1
     stage_id: str = Field(min_length=1)
     operation_kind: str = Field(min_length=1)
-    wall_seconds: float = Field(ge=0.0)
+    phase: Literal["tuning", "evaluation", "partial"] | None = None
+    wall_seconds: float | None = Field(default=None, ge=0.0)
     cpu_seconds: float | None = Field(default=None, ge=0.0)
     items_in: int | None = Field(default=None, ge=0)
     items_out: int | None = Field(default=None, ge=0)
