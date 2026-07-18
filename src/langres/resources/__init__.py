@@ -35,6 +35,7 @@ from langres.resources.op_adapters import (
     parse_binary_response,
     parse_score_response,
 )
+from langres.resources.retrieve import Retrieve
 from langres.resources.sentence_transformers import (
     CrossEncoderReranker,
     SentenceTransformer,
@@ -65,6 +66,7 @@ __all__ = [
     "RerankRequest",
     "Reranker",
     "RerankerRuntimeConfig",
+    "Retrieve",
     "ResourceRuntimeConfig",
     "SentenceTransformer",
     "SentenceTransformerRuntimeConfig",

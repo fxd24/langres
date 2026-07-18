@@ -27,6 +27,9 @@ flywheel harvest → closed-loop flywheel → person:
 
 - **`quickstart_models.py`** — dedupe records with zero labels in a handful of
   lines by naming a model: `FuzzyString`, the $0, offline, no-key architecture.
+- **`research_recipes.py`** — the research vocabulary in one zero-network
+  example: Retrieve → Rerank → LLM → Cluster, with one reusable resource per
+  model slot and no blocker/matcher-specific wrappers.
 - **`basic_usage.py`** — the foundational data contracts (`CompanySchema`,
   `ERCandidate`, `PairwiseJudgement`).
 - **`deduplication_example.py`** — end-to-end entity resolution on a
