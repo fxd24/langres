@@ -99,6 +99,11 @@
     "where an architecture places them. Keeping this prefix distinct preserves that",
     "resource-vs-operation boundary in the counterfactual graph.",
     "",
+    "The research-execution foundation adds langres.experiments as a sibling consumer",
+    "of core execution and tracking records. It owns protocol, identity, measurement,",
+    "statistics, and report contracts; core never imports it. The package therefore maps",
+    "to its own 'experiments' target rather than being folded into benchmarks or tracking.",
+    "",
     "'exact' wins over 'prefix'; among prefixes the longest match wins."
   ],
   "prefix": {
@@ -116,6 +121,7 @@
     "langres.core.matchers": "core",
     "langres.core.trackers": "tracking",
     "langres.curation": "curation",
+    "langres.experiments": "experiments",
     "langres.tracking.trackers": "tracking",
     "langres.data": "data",
     "langres.data.data_profile": "data",

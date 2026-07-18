@@ -19,7 +19,7 @@ Privacy (adopted DX): record content is OFF by default. Each line carries
 only ids, score, the judge's own ``decision`` plus the caller's ``verdict``, the
 judge's ``confidence``/``confidence_source``, model, cost, the typed ``usage``
 token vector (``LLMUsage.model_dump()``, or ``null`` for non-LLM judges),
-decision_step, timestamp, the enclosing run's ``run_id`` (the active
+decision_step, optional explicit-topology ``stage_id``, timestamp, the enclosing run's ``run_id`` (the active
 ``capture_run`` attempt id, or ``null`` outside one -- the join key to the
 ``RunRecord``/trace, W1 S5), and the schema-version field ``"v": 3`` -- never
 the underlying record fields or the judge's free-text reasoning. The ``usage``
@@ -59,8 +59,9 @@ __all__ = ["JudgementLog", "LoggingMatcher"]
 #: harvester (W2.4) or format-migration branch on it instead of guessing.
 #: Bumped 1 -> 2 when the default row gained the ``usage`` token-usage vector,
 #: 2 -> 3 when it gained the decision-contract columns (``decision`` /
-#: ``confidence`` / ``confidence_source``).
-_SCHEMA_VERSION = 3
+#: ``confidence`` / ``confidence_source``), 3 -> 4 when explicit multi-stage
+#: runs gained ``stage_id``.
+_SCHEMA_VERSION = 4
 
 #: The schema version at which :meth:`JudgementLog.append` began writing the
 #: decision-contract columns natively. :meth:`JudgementLog.read` trusts any row
@@ -108,6 +109,7 @@ def _backfill_decision_contract(row: dict[str, Any]) -> dict[str, Any]:
     a coerced ``False``), and ``confidence`` / ``confidence_source`` default to
     ``None`` / ``"none"``.
     """
+    row.setdefault("stage_id", None)
     v = row.get("v")
     if isinstance(v, int) and v >= _DECISION_CONTRACT_VERSION:
         return row
@@ -134,7 +136,12 @@ class JudgementLog:
         self.features = features
 
     def append(
-        self, judgement: PairwiseJudgement, *, verdict: bool | None, model: str | None = None
+        self,
+        judgement: PairwiseJudgement,
+        *,
+        verdict: bool | None,
+        model: str | None = None,
+        stage_id: str | None = None,
     ) -> None:
         """Append one JSON line for ``judgement`` (called by :class:`LoggingMatcher`).
 
@@ -147,6 +154,8 @@ class JudgementLog:
         models), so the logged identity is always what actually ran, and a
         non-LLM pipeline (the embedding judge) still logs the model the verbs
         report on the result.
+        ``stage_id`` identifies the scoring stage in an explicit multi-stage
+        topology; classic single-matcher runs leave it ``None``.
         """
         row: dict[str, Any] = {
             "v": _SCHEMA_VERSION,
@@ -173,6 +182,7 @@ class JudgementLog:
             # in the DEFAULT (features=False) row alongside cost_usd/model.
             "usage": judgement.provenance.get("usage"),
             "decision_step": judgement.decision_step,
+            "stage_id": stage_id,
             "timestamp": datetime.now(UTC).isoformat(),
         }
         if self.features:
@@ -214,10 +224,10 @@ class LoggingMatcher(Matcher[Any]):
     ``GroupwiseMatcher`` (W1.0): both yield ``PairwiseJudgement`` one at a
     time, so wrapping and logging is identical either way.
 
-    ``verdict`` is computed per judgement from ``threshold`` -- the same
-    match cutoff the calling model already resolved for its own
-    ``score >= threshold`` decision, so the logged verdict always agrees with
-    what the caller acted on.
+    ``verdict`` is computed per judgement from ``threshold`` when this stage's
+    score feeds a binary ``ThresholdSelect`` directly. ``threshold=None`` writes
+    ``verdict=None`` for retrieval/reranking stages whose scores are pruned,
+    transformed, or superseded before the final match decision.
 
     Wrapping a spend-capped module (e.g.
     :class:`~langres.core.spend_cap.SpendCappedMatcher`, as ``ERModel._scorer``
@@ -236,14 +246,15 @@ class LoggingMatcher(Matcher[Any]):
         module: Matcher[Any],
         *,
         log: JudgementLog,
-        threshold: float,
+        threshold: float | None,
         model: str | None = None,
+        stage_id: str | None = None,
     ) -> None:
         """Wrap ``module``, logging every judgement to ``log``.
 
-        ``threshold`` and ``model`` are the calling verb's *resolved* values --
-        the same ones it reports on the result -- so log rows and results
-        cannot drift apart. ``model`` only backfills rows whose judgement
+        ``threshold`` is the cut applied directly to this stage's score, or
+        ``None`` when this stage does not make a binary verdict. ``model`` is
+        this stage's own resource identity, not a later scorer's. It only backfills rows whose judgement
         carries no ``provenance["model"]`` of its own (see
         :meth:`JudgementLog.append`).
         """
@@ -251,6 +262,13 @@ class LoggingMatcher(Matcher[Any]):
         self._log = log
         self._threshold = threshold
         self._model = model
+        self._stage_id = stage_id
+
+    def _verdict(self, judgement: PairwiseJudgement) -> bool | None:
+        """Return this stage's binary verdict, or ``None`` when it has no direct cut."""
+        if self._threshold is None:
+            return None
+        return predicted_match(judgement, self._threshold)
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         logged = 0
@@ -258,8 +276,9 @@ class LoggingMatcher(Matcher[Any]):
             for judgement in self._module.forward(candidates):
                 self._log.append(
                     judgement,
-                    verdict=predicted_match(judgement, self._threshold),
+                    verdict=self._verdict(judgement),
                     model=self._model,
+                    stage_id=self._stage_id,
                 )
                 logged += 1
                 yield judgement
@@ -267,8 +286,9 @@ class LoggingMatcher(Matcher[Any]):
             for judgement in exc.partial_judgements[logged:]:
                 self._log.append(
                     judgement,
-                    verdict=predicted_match(judgement, self._threshold),
+                    verdict=self._verdict(judgement),
                     model=self._model,
+                    stage_id=self._stage_id,
                 )
             raise
 

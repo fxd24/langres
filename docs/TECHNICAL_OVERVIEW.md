@@ -184,8 +184,9 @@ verdict.backbone       # "openrouter/openai/gpt-4o-mini" (override with model=)
 ### What `save`/`load` records: components *and* class
 
 `resolver.json` is an `ArtifactManifest`: `artifact_version`, `langres_version`,
-the ordered per-slot `components` (each a registry `type_name` + config), any
-sidecar `checksums` — and an optional `model_class`.
+an optional `model_class`, and either the ordered four-slot `components` or the
+ordered explicit-chain `ops`. Stateful components/operations use sidecar
+directories; no pickle or downloaded Python is executed.
 
 `model_class` is the *architecture's* identity: the name a Resolver subclass
 registered with `langres.core.register_model("fuzzy_string")`. `save` stamps it;
@@ -198,10 +199,9 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 - **Absent ⇒ plain `Resolver`** — which is exactly what every pre-0.4 artifact
   is, and what an *unregistered* Resolver subclass still saves as (not an error;
   it degrades to the old behaviour).
-- **`ARTIFACT_VERSION` stays `"1"`.** A bump buys nothing here: the compatible
-  read costs one `if`, whereas `_check_versions` rejects an artifact whose
-  version is older *or* newer, so a bump would break every existing 0.3.0
-  artifact in both directions.
+- **Classic artifacts stay version `"1"`; explicit chains use version `"2"`.**
+  The reader accepts both layouts. A classic model therefore keeps identical
+  bytes and recipe identity as the explicit-chain format evolves additively.
 - Models are their **own registry namespace** (`register_model` / `get_model` /
   `model_type_name`), separate from components and schemas. A component fills a
   slot; a model owns the slots — sharing one namespace would let
@@ -223,6 +223,75 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 Both name-dispatch paths — `from_schema` and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg). (A third path, the deleted verbs' `core.presets.build_judge`, existed before named architectures replaced the verbs and resolved names the same way; naming a model explicitly replaced it, not a better heuristic.)
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
+
+### Explicit topology authoring and execution
+
+Advanced users can compose `Source -> Score/Select -> ClusterStage` directly
+with `ERModel.from_topology(ops=[...])`. The public authoring contracts live at
+`langres.core`: `Op`, `Score`, `Select`, `Source`, `ClusterStage`,
+`ThresholdSelect`, `TopKSelect`, `Sequential`, `Feasible`, and the optional
+`SpendMonitorBindable` capability for a `Spending` Op.
+
+An explicit model derives `.schema` and `.is_bound` from its Source. Both classic
+and explicit vector retrieval call `Source.prepare(records)` before streaming,
+so a `BlockerSource(VectorBlocker(...))` builds an unbound index, reuses it for
+the same corpus, and rebuilds it for changed input. `dedupe(log=...)` and
+`compare(log=...)` wrap every `MatcherScore` for that call without mutating the
+saved topology. Multi-stage rows carry a stable `stage_id`, the model identity
+of that scorer, and a binary `verdict` only when its score feeds a
+`ThresholdSelect` directly; retrieval/top-k scores log `verdict=None` instead of
+borrowing the final match threshold. The logged `stage_id` is exactly the
+corresponding `execution_plan().steps[*].stage_id`, so logs and plans join
+without a second naming convention. `compare` walks Scores and applicable
+Selects in order, and its `LinkVerdict.backbone` names the scorer that actually
+ran before the deciding Select.
+
+`model.execution_plan()` returns ordered, stable stage ids derived from each
+stage's safe runtime metadata plus its ordinal. Runtime inspection does not
+require artifact registration: runnable custom stages and opaque schema
+factories can be planned and executed, while `save()` remains fail-closed and
+requires registered serializers. `model.execute(records,
+observer=...)` runs that same Op spine and returns selected pairs, clusters, and
+immutable start/finish/failure events. Observers receive counts and durations,
+never records or mutable carriers; their return value is ignored. Callback
+exceptions cannot abort or alter inference and are surfaced as sanitized
+type-only diagnostics; exception messages are suppressed so observer metadata
+cannot leak record or credential content. Stage-failure events follow the same
+rule: observers see only a bounded exception type plus a generic failure
+message, while the original exception is still re-raised to the direct caller.
+
+A component-free custom `Score` or `Select` can opt into safe persistence:
+
+```python
+from pydantic import BaseModel, ConfigDict
+
+from langres.core import Score, register_op
+
+class AcmeScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    weight: float
+
+@register_op("acme_score")
+class AcmeScore(Score):
+    config_model = AcmeScoreConfig
+
+    def forward(self, pairs): ...
+
+    @property
+    def config(self) -> dict[str, object]: ...
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "AcmeScore": ...
+```
+
+The strict, extra-forbidding `config_model` is required. Artifact loading
+validates the complete role-specific parameter envelope before any nested
+component lookup or construction. Built-in roles use the same validator seam,
+so missing, unknown, or wrongly typed parameters fail closed.
+
+Registration is fail-closed and exact-class. Loading an unknown role raises; it
+does not import a module named by the artifact. Subclasses register separately
+so parent serializers cannot silently drop their state.
 
 ## 5. Core API: The Five Pillars (langres.core)
 

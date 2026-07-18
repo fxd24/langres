@@ -107,6 +107,22 @@ def test_describe_shows_calibrator_trainable_after_fit() -> None:
     assert "Calibrator" in row and "TRAINABLE" in row
 
 
+def test_execute_includes_the_calibrator_score_and_matches_resolve() -> None:
+    """Slot-neutral execution preserves fitted classic-model inference."""
+    records, pairs = _dataset()
+    resolver = _resolver().fit(records, pairs=pairs, method=Platt())
+
+    result = resolver.execute(records)
+
+    assert result.clusters == tuple(frozenset(cluster) for cluster in resolver.resolve(records))
+    assert "calibrator_score" in [step.spec.role for step in result.plan.steps]
+    assert all(
+        row.score_type == "calibrated_prob"
+        for row in result.pairs.rows
+        if row.score_type is not None
+    )
+
+
 # --- The calibrate fit path --------------------------------------------------
 
 
