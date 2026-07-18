@@ -170,6 +170,41 @@ def test_credential_bearing_transport_config_is_rejected_when_loading(
         from_pretrained(bundle)
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    (
+        "https://user:token@host.example/v1",
+        "https://host.example/v1?api_key=private",
+    ),
+)
+def test_credential_bearing_endpoint_url_is_never_publishable(
+    api_base: str,
+    tmp_path: Path,
+) -> None:
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=Entity)),
+            Generate(
+                LiteLLM(
+                    {
+                        "base": "served-model",
+                        "kind": "endpoint",
+                        "api_base": api_base,
+                    }
+                )
+            ),
+            Parse(),
+            ThresholdSelect(0.5),
+            ClustererStage(Clusterer(threshold=0.5)),
+        ]
+    )
+    destination = tmp_path / "credential-bearing-endpoint"
+
+    with pytest.raises(ArtifactEligibilityError, match="credential-bearing"):
+        save_pretrained(model, destination)
+    assert not destination.exists()
+
+
 def test_trained_components_declare_the_trained_extra() -> None:
     manifest = ArtifactManifest(
         artifact_version="1",
@@ -181,6 +216,19 @@ def test_trained_components_declare_the_trained_extra() -> None:
     )
 
     assert resource_facts(manifest) == ((), ("trained",))
+
+
+def test_vector_components_declare_the_semantic_extra() -> None:
+    manifest = ArtifactManifest(
+        artifact_version="1",
+        langres_version="0.3.0",
+        components=(
+            ComponentSpec(type_name="vector_blocker", config={}),
+            ComponentSpec(type_name="faiss_index", config={}),
+        ),
+    )
+
+    assert resource_facts(manifest) == ((), ("semantic",))
 
 
 def test_unknown_model_name_component_fails_closed() -> None:
