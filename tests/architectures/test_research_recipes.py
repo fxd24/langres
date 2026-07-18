@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
+import pytest
 from pydantic import BaseModel
 
 from langres.architectures import (
@@ -349,3 +350,34 @@ def test_retrieve_preserves_input_anchor_for_downstream_topk() -> None:
 
     assert any(row.left_id == "z" for row in candidates.rows)
     assert sum("z" in (row.left_id, row.right_id) for row in selected.rows) == 1
+
+
+def test_retrieve_compare_accepts_the_same_record_on_both_sides() -> None:
+    recipe = Retrieve(
+        embedder=_FixedEmbedder([[1.0, 0.0], [1.0, 0.0]]),
+        schema=CompanySchema,
+        threshold=0.5,
+    )
+
+    verdict = recipe.compare(RECORDS[0], RECORDS[0])
+
+    assert verdict.match is True
+    assert verdict.score == 1.0
+
+
+def test_llm_recipes_reject_nonpositive_candidate_caps() -> None:
+    with pytest.raises(ValueError, match="llm_k must be positive"):
+        RetrieveLLM(
+            embedder=FakeEmbedder(),
+            llm=FakeLLM(),
+            schema=CompanySchema,
+            llm_k=0,
+        )
+    with pytest.raises(ValueError, match="llm_k must be positive"):
+        RetrieveRerankLLM(
+            embedder=FakeEmbedder(),
+            reranker=FakeReranker(),
+            llm=FakeLLM(),
+            schema=CompanySchema,
+            llm_k=-1,
+        )

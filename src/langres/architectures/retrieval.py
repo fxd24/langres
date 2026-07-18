@@ -234,6 +234,8 @@ class RetrieveLLM(_ResearchRecipe):
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
     ) -> None:
+        if llm_k <= 0:
+            raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
         self.text_field = text_field
@@ -282,6 +284,8 @@ class RetrieveRerankLLM(_ResearchRecipe):
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
     ) -> None:
+        if llm_k <= 0:
+            raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
         self.text_field = text_field

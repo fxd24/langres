@@ -101,7 +101,11 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         """Embed records once and emit the union of their top-k cosine neighbours."""
         entities = [self._factory(record) for record in records]
         ids = [str(entity.id) for entity in entities]  # type: ignore[attr-defined]
-        require_unique_ids(ids, field="record ids", operation="Retrieve")
+        # ``ERModel.compare(a, a)`` deliberately permits a self-comparison. Its
+        # retrieval Source sees two positions with the same stable id, while
+        # dedupe rejects duplicate ids before entering the Source.
+        if not (len(ids) == 2 and ids[0] == ids[1]):
+            require_unique_ids(ids, field="record ids", operation="Retrieve")
         store = dict(zip(ids, entities, strict=True))
         if len(entities) < 2:
             return Pairs(store=store, rows=[])
