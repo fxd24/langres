@@ -83,6 +83,21 @@ def test_dedupe_backbone_reads_chain_matcher_model() -> None:
     assert model.dedupe(RECORDS).backbone == "fake/model"
 
 
+def test_from_topology_budget_and_uncapped_matcher_backbone() -> None:
+    """The ``budget_usd`` door (no shared ``monitor``) works, and backbone reads a
+    matcher-Score whose matcher is NOT spend-capped (there is no cap to peel)."""
+    raw = CostedNameMatcher(model="raw/model")  # deliberately NOT wrapped in SpendCappedMatcher
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        MatcherScore(raw, out_space="prob_llm"),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+    assert _canonical(model.resolve(RECORDS)) == [["a1", "a2"]]
+    assert model.dedupe(RECORDS).backbone == "raw/model"
+
+
 def test_compare_matches_and_nonmatches() -> None:
     """compare() folds only the chain's Score ops and gates on its ThresholdSelect."""
     model, _monitor, _matcher = build_explicit_chain_model()

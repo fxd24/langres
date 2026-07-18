@@ -503,7 +503,9 @@ class ModelState:
         for stage in self._require_ops():
             if isinstance(stage, ClusterStage):
                 return stage
-        raise AssertionError("explicit chain has no ClusterStage")  # from_topology guards this
+        raise AssertionError(  # pragma: no cover - from_topology guarantees exactly one
+            "explicit chain has no ClusterStage"
+        )
 
     def _chain_threshold(self) -> float | None:
         """The terminal :class:`~langres.core.op.ThresholdSelect`'s threshold -- the chain's
