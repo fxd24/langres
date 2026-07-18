@@ -36,6 +36,12 @@ The overshoot is one call because the tripping judgement's own cost is only
 observable after it was paid for. A tighter bound would need a reliable
 *pre-call* cost estimate, which no provider offers.
 
+If paid work completes and a later stage raises before yielding a judgement
+(for example strict response parsing), the original exception may carry a
+private :class:`~langres.core.spend.SpendObservation`. The wrapper records that
+observation before re-raising the unchanged exception, closing the retry path
+that would otherwise spend without touching the ledger.
+
 The monitor is per-INSTANCE, not per-call
 -----------------------------------------
 The :class:`~langres.core.spend.SpendMonitor` is built once, in
@@ -53,7 +59,13 @@ from typing import TYPE_CHECKING, Any
 
 from langres.core.inspection import _ensure_inspectable
 from langres.core.matcher import Matcher
-from langres.core.spend import BudgetExceeded, SpendMonitor, UnknownSpendError
+from langres.core.spend import (
+    BudgetExceeded,
+    SpendMonitor,
+    SpendObservation,
+    UnknownSpendError,
+    spend_observation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -160,24 +172,29 @@ class SpendCappedMatcher(Matcher[Any]):
         self._monitor.check()
         produced: list[PairwiseJudgement] = []
         judgements = self._module.forward(candidates)
-        for judgement in judgements:
+        while True:
+            try:
+                judgement = next(judgements)
+            except StopIteration:
+                return
+            except Exception as exc:
+                observation = spend_observation(exc)
+                if observation is not None:
+                    self._record_spend(observation, produced=produced, cause=exc)
+                raise
             produced.append(judgement)
             cost = judgement.provenance.get("cost_usd", 0.0)
             cost_required = judgement.provenance.get("cost_required") is True
-            if cost is None and cost_required and math.isfinite(self._monitor.budget_usd):
-                self._monitor.mark_unknown(
-                    "A paid matcher call succeeded, but its cost is unknown. "
-                    "The finite spend ledger is permanently blocked."
-                )
-                try:
-                    self._monitor.check()
-                except UnknownSpendError as exc:
-                    exc.partial_judgements = list(produced)
-                    raise
-            self._monitor.add(float(cost) if cost is not None else 0.0)
+            cost_unknown = judgement.provenance.get("cost_unknown") is True
             try:
-                self._monitor.check()
-            except BudgetExceeded as exc:
+                self._record_spend(
+                    SpendObservation(
+                        cost_usd=None if cost_unknown else cost,
+                        cost_required=cost_required,
+                    ),
+                    produced=produced,
+                )
+            except (BudgetExceeded, UnknownSpendError) as exc:
                 # A group-wise module (SelectMatcher) stamps the full call cost
                 # on the group's first judgement and $0 on its K-1 siblings,
                 # all sharing provenance["group_id"] and with
@@ -212,6 +229,33 @@ class SpendCappedMatcher(Matcher[Any]):
                 exc.partial_judgements = list(produced)
                 raise
             yield judgement
+
+    def _record_spend(
+        self,
+        observation: SpendObservation,
+        *,
+        produced: list[PairwiseJudgement],
+        cause: BaseException | None = None,
+    ) -> None:
+        """Record one successful paid observation, including exception paths."""
+        if (
+            observation.cost_usd is None
+            and observation.cost_required
+            and math.isfinite(self._monitor.budget_usd)
+        ):
+            self._monitor.mark_unknown(
+                "A paid matcher call succeeded, but its cost is unknown. "
+                "The finite spend ledger is permanently blocked."
+            )
+        elif observation.cost_usd is not None:
+            self._monitor.add(float(observation.cost_usd))
+        try:
+            self._monitor.check()
+        except (BudgetExceeded, UnknownSpendError) as exc:
+            exc.partial_judgements = list(produced)
+            if cause is not None:
+                raise exc from cause
+            raise
 
     def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
         """Delegate to the wrapped matcher, which must opt into ``Inspectable``."""

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 from pydantic import ValidationError
 
 from langres.core.model_ref import ModelRef
 from langres.core.models import CompanySchema, ERCandidate
-from langres.core.op import Score, ThresholdSelect, TopKSelect
+from langres.core.op import Score, Spending, ThresholdSelect, TopKSelect
 from langres.core.pairs import Pairs
 from langres.core.spend import BudgetExceeded, SpendMonitor, UnknownSpendError
 from langres.core.spend_cap import SpendCappedMatcher
@@ -161,6 +163,7 @@ def test_generate_and_parse_exchange_typed_private_envelopes_in_provenance() -> 
     assert all("_langres_generation" not in row.provenance for row in parsed.rows)
     assert all("generation" in row.provenance for row in parsed.rows)
     assert all("raw_content" not in row.provenance["generation"] for row in parsed.rows)
+    assert all("cost_usd" not in row.provenance for row in parsed.rows)
 
 
 def test_generate_and_parse_defaults_are_compatible() -> None:
@@ -301,10 +304,50 @@ def test_llm_matcher_adapter_unknown_paid_cost_poison_outer_cap() -> None:
 
     assert resource.calls == 1
     assert len(exc_info.value.partial_judgements) == 1
-    assert exc_info.value.partial_judgements[0].provenance["cost_usd"] is None
+    assert "cost_usd" not in exc_info.value.partial_judgements[0].provenance
+    assert exc_info.value.partial_judgements[0].provenance["cost_unknown"] is True
     with pytest.raises(UnknownSpendError):
         list(matcher.forward(iter(_pairs().to_candidates())))
     assert resource.calls == 1
+
+
+def test_llm_matcher_adapter_meters_paid_call_before_parse_error() -> None:
+    class _MalformedCostedLLM(FakeLLM):
+        requires_cost_accounting = True
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            batch = super().generate(requests)
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(update={"cost_usd": 0.6, "cost_basis": "real"})
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    resource = _MalformedCostedLLM(default_response="malformed")
+    matcher = SpendCappedMatcher(
+        LLMMatcherAdapter[CompanySchema](resource, on_parse_error="raise"),
+        budget_usd=1.0,
+    )
+    one_candidate = iter(_pairs().to_candidates()[:1])
+
+    with pytest.raises(ValueError, match="Could not parse"):
+        list(matcher.forward(one_candidate))
+    assert matcher.monitor.spent == pytest.approx(0.6)
+    assert resource.calls == 1
+
+    with pytest.raises(BudgetExceeded):
+        list(matcher.forward(iter(_pairs().to_candidates()[:1])))
+    assert matcher.monitor.spent == pytest.approx(1.2)
+    assert resource.calls == 2
+
+    with pytest.raises(BudgetExceeded):
+        list(matcher.forward(iter(_pairs().to_candidates()[:1])))
+    assert resource.calls == 2
 
 
 def test_generate_binds_one_spend_monitor_and_tallies_envelope_costs() -> None:
@@ -416,7 +459,34 @@ def test_generate_unknown_api_cost_is_nonfatal_when_unbound_or_uncapped() -> Non
     assert uncapped.spend_monitor.spent == 0.0
 
 
-def test_generate_treats_litellm_hf_ref_as_paid_transport_capability() -> None:
+def test_parse_marks_unknown_paid_cost_without_numeric_none_metadata() -> None:
+    class _UnknownPaidLLM(FakeLLM):
+        requires_cost_accounting = True
+
+    parsed = Parse[CompanySchema]().forward(
+        Generate[CompanySchema](_UnknownPaidLLM(default_response="MATCH")).forward(_pairs())
+    )
+
+    assert all("cost_usd" not in row.provenance for row in parsed.rows)
+    assert all(row.provenance["cost_unknown"] is True for row in parsed.rows)
+
+
+def test_generate_matches_topology_spend_binding_contract_when_available() -> None:
+    core_op = importlib.import_module("langres.core.op")
+    bindable = getattr(core_op, "SpendMonitorBindable", None)
+    if bindable is None:
+        pytest.skip("cross-branch gate: topology SpendMonitorBindable is not merged yet")
+
+    operation = Generate[CompanySchema](FakeLLM())
+    monitor = SpendMonitor(budget_usd=1.0)
+
+    assert isinstance(operation, Spending)
+    assert isinstance(operation, bindable)
+    assert operation.bind_spend_monitor(monitor) is operation
+    assert operation.spend_monitor is monitor
+
+
+def test_generate_rejects_zero_fallback_for_litellm_hf_ref_paid_capability() -> None:
     class _Client:
         calls = 0
 
@@ -438,10 +508,13 @@ def test_generate_treats_litellm_hf_ref_as_paid_transport_capability() -> None:
             )()
 
         def completion_cost(self, completion_response):
-            raise RuntimeError("unknown price")
+            return 0.0
 
     client = _Client()
-    resource = LiteLLM(ModelRef(base="provider/model", kind="hf"), client=client)
+    resource = LiteLLM(
+        ModelRef(base="openrouter/unpriced/model", kind="hf"),
+        client=client,
+    )
     operation = Generate[CompanySchema](resource).bind_spend_monitor(SpendMonitor(budget_usd=1.0))
 
     with pytest.raises(UnknownGenerationCostError):

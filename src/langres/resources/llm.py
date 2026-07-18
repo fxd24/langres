@@ -71,6 +71,12 @@ def _nonnegative_cost(value: Any) -> float | None:
     return cost if math.isfinite(cost) and cost >= 0.0 else None
 
 
+def _positive_estimated_cost(value: Any) -> float | None:
+    """Normalize a price-table estimate; zero means unpriced, not free."""
+    cost = _nonnegative_cost(value)
+    return cost if cost is not None and cost > 0.0 else None
+
+
 @register("resource_litellm")
 class LiteLLM:
     """Lazy LiteLLM-backed generation resource for API/endpoint refs."""
@@ -213,7 +219,7 @@ class LiteLLM:
             )
             if cost_usd is None:
                 try:
-                    cost_usd = _nonnegative_cost(
+                    cost_usd = _positive_estimated_cost(
                         client.completion_cost(completion_response=response)
                     )
                     cost_basis = "estimated" if cost_usd is not None else "none"

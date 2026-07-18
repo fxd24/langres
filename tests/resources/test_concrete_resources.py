@@ -289,6 +289,59 @@ def test_litellm_prefers_real_billing_and_preserves_serving_provenance() -> None
     assert output.usage.model == "openai/gpt-4o-mini-2024-07-18"
 
 
+def test_litellm_zero_price_table_fallback_stays_unknown() -> None:
+    class _Client:
+        def completion(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="MATCH"))],
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1),
+            )
+
+        def completion_cost(self, completion_response: Any) -> float:
+            return 0.0
+
+    output = (
+        LiteLLM(
+            ModelRef(base="openrouter/unpriced/model", kind="api"),
+            client=_Client(),
+        )
+        .generate([GenerationRequest.user("one", "prompt")])
+        .outputs[0]
+    )
+
+    assert output.cost_usd is None
+    assert output.cost_basis == "none"
+
+
+def test_litellm_explicit_zero_provider_billing_remains_real_zero() -> None:
+    class _Client:
+        def completion(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                provider="ExampleProvider",
+                choices=[SimpleNamespace(message=SimpleNamespace(content="MATCH"))],
+                usage=SimpleNamespace(
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    cost=0.0,
+                ),
+            )
+
+        def completion_cost(self, completion_response: Any) -> float:
+            raise AssertionError("explicit provider billing must win")
+
+    output = (
+        LiteLLM(
+            ModelRef(base="openrouter/free/model", kind="api"),
+            client=_Client(),
+        )
+        .generate([GenerationRequest.user("one", "prompt")])
+        .outputs[0]
+    )
+
+    assert output.cost_usd == 0.0
+    assert output.cost_basis == "real"
+
+
 def test_litellm_openrouter_requests_usage_and_preserves_routing_extras() -> None:
     calls: list[dict[str, Any]] = []
     supplied_extra_body = {

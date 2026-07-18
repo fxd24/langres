@@ -16,7 +16,7 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.op import Op, Score, Spending
 from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
-from langres.core.spend import SpendMonitor
+from langres.core.spend import SpendMonitor, attach_spend_observation
 from langres.resources.base import (
     GenerationBatch,
     GenerationEnvelope,
@@ -436,24 +436,40 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
         rows = []
         for row in pairs.rows:
             envelope = self._envelope(row)
+            cost_required = row.provenance.get(GENERATION_COST_REQUIRED_KEY, False) is True
             try:
                 parsed = self.parser(envelope.content)
-            except Exception:
+            except Exception as exc:
                 if self.on_parse_error == "raise":
+                    attach_spend_observation(
+                        exc,
+                        cost_usd=envelope.cost_usd,
+                        cost_required=cost_required,
+                    )
                     raise
                 parsed = ParsedGeneration(reasoning="generation parser raised")
             parse_error = parsed.decision is None and parsed.score is None
             if parse_error and self.on_parse_error == "raise":
-                raise ValueError(
+                parse_error_exc = ValueError(
                     f"Could not parse generation for pair {row.left_id!r}, {row.right_id!r}"
                 )
+                attach_spend_observation(
+                    parse_error_exc,
+                    cost_usd=envelope.cost_usd,
+                    cost_required=cost_required,
+                )
+                raise parse_error_exc
 
             provenance = dict(row.provenance)
             provenance.pop(GENERATION_ENVELOPE_KEY, None)
-            cost_required = provenance.pop(GENERATION_COST_REQUIRED_KEY, False) is True
+            provenance.pop(GENERATION_COST_REQUIRED_KEY, None)
             provenance[GENERATION_SUMMARY_KEY] = envelope.model_dump(mode="json")
             provenance["cost_required"] = cost_required
-            provenance["cost_usd"] = envelope.cost_usd
+            if envelope.cost_usd is None:
+                if cost_required:
+                    provenance["cost_unknown"] = True
+            else:
+                provenance["cost_usd"] = envelope.cost_usd
             provenance["parse_error"] = parse_error
             if envelope.usage is not None:
                 provenance["usage"] = envelope.usage.model_dump(mode="json")

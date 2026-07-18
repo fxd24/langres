@@ -29,12 +29,43 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langres.core.models import PairwiseJudgement
 
 logger = logging.getLogger(__name__)
+
+_SPEND_OBSERVATION_ATTR = "_langres_spend_observation"
+
+
+@dataclass(frozen=True)
+class SpendObservation:
+    """Cost facts attached to an exception raised after paid work completed."""
+
+    cost_usd: float | None
+    cost_required: bool
+
+
+def attach_spend_observation(
+    error: BaseException,
+    *,
+    cost_usd: float | None,
+    cost_required: bool,
+) -> None:
+    """Annotate an original stage exception without changing its public type."""
+    setattr(
+        error,
+        _SPEND_OBSERVATION_ATTR,
+        SpendObservation(cost_usd=cost_usd, cost_required=cost_required),
+    )
+
+
+def spend_observation(error: BaseException) -> SpendObservation | None:
+    """Read a trusted spend annotation from a downstream exception."""
+    value = getattr(error, _SPEND_OBSERVATION_ATTR, None)
+    return value if isinstance(value, SpendObservation) else None
 
 
 class UnknownSpendError(RuntimeError):

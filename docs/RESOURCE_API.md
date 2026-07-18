@@ -115,7 +115,9 @@ reasoning counts to those totals.
 provider request id, and whether cost came from real provider billing or an
 estimate. Provider billing is preferred over a price-table estimate. Pricing is
 post-call observability: if estimation fails after generation succeeds, langres
-keeps the generated result and records cost as unknown.
+keeps the generated result and records cost as unknown. A zero returned only by
+LiteLLM's fallback price table is also unknown: for paid transports, only an
+explicit provider-billing observation may establish a real `$0` call.
 
 OpenRouter `LiteLLM` calls always request provider usage accounting with
 `extra_body={"usage": {"include": true}}`. Existing `extra_body` keys are
@@ -160,7 +162,15 @@ candidate. The adapter also propagates the resource's
 `requires_cost_accounting` capability: a paid resource whose cost is unknown
 poisons the outer finite ledger after that first successful call. This capability
 comes from the resource, not model-id syntax, because LiteLLM provider ids and
-Hugging Face ids can have the same slash-delimited shape.
+Hugging Face ids can have the same slash-delimited shape. If strict parsing
+raises after a paid generation, the original parse exception carries an internal
+spend observation; `SpendCappedMatcher` records it before re-raising, so retries
+cannot bypass the cumulative cap.
+
+Unknown cost is represented as `cost_unknown=true` for a paid parsed judgement,
+not `cost_usd=None`. Numeric `cost_usd` remains absent until measured, preserving
+compatibility with benchmark and tracking readers that treat a present cost key
+as numeric.
 
 ### Topology merge checkpoint
 
@@ -168,5 +178,12 @@ Hugging Face ids can have the same slash-delimited shape.
 round-trip constructors. Their `OpSerializer` registrations intentionally land
 only after this resource branch is merged with the topology branch that defines
 that registry; adding a parallel registry here would create two persistence
-contracts. The merged follow-up must register these three adapters against the
-existing topology seam and add a full topology save/load test.
+contracts. The spending half is already proven on the current topology branch:
+commit `2e53784` introduced the runtime-checkable `SpendMonitorBindable` seam,
+`ERModel._secure_chain_scores()` binds every `Spending` stage to the model's exact
+ledger, and
+`test_from_topology_uses_the_generic_monitor_binding_capability` covers a
+non-matcher Generate-like operation. `Generate` structurally implements that
+same seam; the resource-side cross-branch regression activates automatically
+once the topology commit is merged. The remaining merged follow-up is serializer
+registration plus a full topology save/load test.
