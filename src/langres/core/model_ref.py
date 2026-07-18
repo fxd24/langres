@@ -191,6 +191,8 @@ class ModelRef:
             it from a user-supplied string.
         adapter: An optional PEFT-adapter HF id / local dir applied on top of
             ``base`` at load time (QLoRA served unmerged). In-process kinds only.
+        adapter_revision: The Hub revision pinning ``adapter`` independently
+            from the base model. Requires ``adapter``.
         api_base: The served endpoint's URL. Required by — and exclusive to —
             ``kind="endpoint"``.
         revision: The HF Hub git revision (a commit sha, tag, or branch) pinning
@@ -206,6 +208,7 @@ class ModelRef:
     base: str
     kind: BackboneKind
     adapter: str | None = None
+    adapter_revision: str | None = None
     api_base: str | None = None
     revision: str | None = None
 
@@ -239,6 +242,17 @@ class ModelRef:
                     "adapter can only be assembled in-process, but this kind runs behind an "
                     "API. Use kind='hf'/'local' to serve base+adapter in-process, or merge the "
                     "adapter into the base weights and reference the merged model."
+                )
+        if self.adapter_revision is not None:
+            if not isinstance(self.adapter_revision, str) or not self.adapter_revision:
+                raise InvalidModelRefError(
+                    "ModelRef.adapter_revision must be a non-empty string or None; "
+                    f"got {self.adapter_revision!r}"
+                )
+            if self.adapter is None:
+                raise InvalidModelRefError(
+                    "ModelRef.adapter_revision requires adapter: there is no adapter "
+                    "artifact to pin."
                 )
         if self.kind == "endpoint":
             if not self.api_base:
@@ -367,8 +381,8 @@ def normalize_model_ref(
 
     - ``str`` — the kind is inferred by :func:`infer_kind`.
     - ``dict`` — must carry a non-empty ``"base"``; ``"kind"`` is honored when
-      present and inferred otherwise; ``"adapter"``, ``"api_base"`` and
-      ``"revision"`` are optional.
+      present and inferred otherwise; ``"adapter"``, ``"adapter_revision"``,
+      ``"api_base"`` and ``"revision"`` are optional.
     - :class:`ModelRef` — returned unchanged (idempotent), since it is already
       validated by construction.
 
@@ -404,6 +418,12 @@ def normalize_model_ref(
             raise InvalidModelRefError(
                 f"model dict 'adapter' must be a string or absent; got {adapter!r}"
             )
+        adapter_revision = model.get("adapter_revision")
+        if adapter_revision is not None and not isinstance(adapter_revision, str):
+            raise InvalidModelRefError(
+                "model dict 'adapter_revision' must be a string or absent; "
+                f"got {adapter_revision!r}"
+            )
         revision = model.get("revision")
         if revision is not None and not isinstance(revision, str):
             raise InvalidModelRefError(
@@ -427,6 +447,7 @@ def normalize_model_ref(
             base=base,
             kind=kind,  # type: ignore[arg-type]  # validated in __post_init__
             adapter=adapter,
+            adapter_revision=adapter_revision,
             api_base=resolved_api_base,
             revision=revision,
         )
@@ -449,11 +470,19 @@ def to_config(ref: ModelRef) -> str | dict[str, str]:
     # `infer_kind` cannot raise here: it is total over non-empty strings, and
     # `__post_init__` already rejected an empty `base`.
     inferable = infer_kind(ref.base) == ref.kind
-    if inferable and ref.adapter is None and ref.api_base is None and ref.revision is None:
+    if (
+        inferable
+        and ref.adapter is None
+        and ref.adapter_revision is None
+        and ref.api_base is None
+        and ref.revision is None
+    ):
         return ref.base
     config: dict[str, str] = {"base": ref.base, "kind": ref.kind}
     if ref.adapter is not None:
         config["adapter"] = ref.adapter
+    if ref.adapter_revision is not None:
+        config["adapter_revision"] = ref.adapter_revision
     if ref.api_base is not None:
         config["api_base"] = ref.api_base
     if ref.revision is not None:

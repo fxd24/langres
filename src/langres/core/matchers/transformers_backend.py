@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from langres.core.model_ref import ModelRef
 
@@ -93,9 +93,22 @@ class TransformersBackend:
     #: the two-way yes/no subspace this backend can attribute mass to is as wide.
     _TOP_LOGPROBS = 20
 
-    def __init__(self, model_ref: ModelRef, *, max_new_tokens: int = 8):
+    def __init__(
+        self,
+        model_ref: ModelRef,
+        *,
+        max_new_tokens: int = 8,
+        device: str | None = None,
+        dtype: Literal["float16", "float32", "bfloat16"] | None = None,
+        local_files_only: bool = False,
+        seed: int | None = None,
+    ) -> None:
         self._ref = model_ref
         self._max_new_tokens = max_new_tokens
+        self._device = device
+        self._dtype = dtype
+        self._local_files_only = local_files_only
+        self._seed = seed
         self._model: Any = None
         self._tokenizer: Any = None
         # Generation on one shared model is serialized: the async path runs
@@ -110,8 +123,18 @@ class TransformersBackend:
         # Lazy, first-use only: torch/transformers must never import at module load.
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(self._ref.base)
-        model = AutoModelForCausalLM.from_pretrained(self._ref.base)
+        load_kwargs: dict[str, Any] = {
+            "revision": self._ref.revision,
+            "local_files_only": self._local_files_only,
+            "trust_remote_code": False,
+        }
+        tokenizer = AutoTokenizer.from_pretrained(self._ref.base, **load_kwargs)
+        model_kwargs = dict(load_kwargs)
+        if self._dtype is not None:
+            import torch
+
+            model_kwargs["torch_dtype"] = getattr(torch, self._dtype)
+        model = AutoModelForCausalLM.from_pretrained(self._ref.base, **model_kwargs)
         if self._ref.adapter is not None:
             try:
                 from peft import PeftModel
@@ -120,7 +143,14 @@ class TransformersBackend:
                     "Serving a base+adapter model_ref in-process needs PEFT. "
                     "Install it with `pip install langres[finetune]` (or `pip install peft`)."
                 ) from exc
-            model = PeftModel.from_pretrained(model, self._ref.adapter)
+            model = PeftModel.from_pretrained(
+                model,
+                self._ref.adapter,
+                revision=self._ref.adapter_revision,
+                local_files_only=self._local_files_only,
+            )
+        if self._device is not None:
+            model = model.to(self._device)
         model.eval()
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -136,8 +166,9 @@ class TransformersBackend:
     ) -> _Response:
         """Generate a completion for ``messages``, returning a LiteLLM-shaped response.
 
-        ``temperature`` is accepted for signature parity with the served path but
-        the probe decodes greedily (deterministic). When ``want_logprobs`` is set,
+        A zero temperature uses greedy decoding. A positive temperature enables
+        sampling and is reproducible when the backend was constructed with a
+        seed. When ``want_logprobs`` is set,
         the response carries per-token ``top_logprobs`` for the generated tokens so
         the shared first-token yes/no credence step can compute ``p_yes``.
         """
@@ -146,21 +177,30 @@ class TransformersBackend:
         with self._lock:
             self._ensure_loaded()
             tokenizer, model = self._tokenizer, self._model
+            if self._seed is not None:
+                torch.manual_seed(self._seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(self._seed)
             input_ids = self._encode(messages)
             prompt_len = int(input_ids.shape[1])
             # One sequence, no padding -> an all-ones mask is exact; passing it
             # explicitly silences transformers' "attention mask not set" warning
             # (pad_token == eos_token) and its "unexpected behavior" caveat.
             attention_mask = torch.ones_like(input_ids)
+            generation_kwargs: dict[str, Any] = {
+                "max_new_tokens": self._max_new_tokens,
+                "do_sample": temperature > 0.0,
+                "output_scores": want_logprobs,
+                "return_dict_in_generate": True,
+                "pad_token_id": tokenizer.pad_token_id,
+            }
+            if temperature > 0.0:
+                generation_kwargs["temperature"] = temperature
             with torch.no_grad():
                 generated = model.generate(
                     input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=self._max_new_tokens,
-                    do_sample=False,
-                    output_scores=want_logprobs,
-                    return_dict_in_generate=True,
-                    pad_token_id=tokenizer.pad_token_id,
+                    **generation_kwargs,
                 )
             new_ids = generated.sequences[0][prompt_len:]
             text = tokenizer.decode(new_ids, skip_special_tokens=True)

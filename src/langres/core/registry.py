@@ -102,9 +102,24 @@ _LAZY_COMPONENT_MODULES: dict[str, str] = {
     "key_blocker": "langres.core.blockers.key",
     "llm_judge": "langres.core.matchers.llm_judge",
     "random_forest": "langres.core.matchers.random_forest_judge",
+    "resource_cross_encoder_reranker": "langres.resources.sentence_transformers",
+    "resource_litellm": "langres.resources.llm",
+    "resource_sentence_transformer": "langres.resources.sentence_transformers",
+    "resource_transformers_llm": "langres.resources.llm",
     "select_judge": "langres.core.matchers.select_judge",
     "sentence_transformer_embedder": "langres.core.embeddings",
     "vector_blocker": "langres.core.blockers.vector",
+}
+
+# Trusted built-in Op roles whose serializers live outside core. Unlike a
+# general plugin mechanism, this map is closed and maintained in source: an
+# artifact may select one of these exact role strings, but it can never provide
+# an import path. This preserves fail-closed loading while allowing a fresh
+# process to load a shipped resource topology after importing only ERModel.
+_LAZY_OP_SERIALIZER_MODULES: dict[str, str] = {
+    "generate": "langres.resources.op_adapters",
+    "parse": "langres.resources.op_adapters",
+    "rerank": "langres.resources.op_adapters",
 }
 
 
@@ -157,9 +172,9 @@ class OpSerializer:
 def register_op_serializer(serializer: OpSerializer) -> None:
     """Register one trusted Op serializer by role and exact class.
 
-    Registration is process-local and never imports code named by an artifact.
-    Loading can therefore construct only serializers the application already
-    imported and explicitly registered.
+    Registration is process-local and never imports a path named by an artifact.
+    Loading can construct only serializers already registered by the application
+    or one of the shipped roles in the closed trusted lazy-role map.
     """
     if serializer.role in _OP_SERIALIZERS_BY_ROLE:
         raise ValueError(f"Op role '{serializer.role}' is already registered")
@@ -174,12 +189,22 @@ def register_op_serializer(serializer: OpSerializer) -> None:
 def get_op_serializer(role: str) -> OpSerializer:
     """Return the already-registered serializer for ``role``.
 
-    Unlike component lookup, this has no lazy module import map: an artifact can
-    never cause downloaded or otherwise untrusted Python to be imported.
+    Shipped cross-layer roles may trigger one hardcoded trusted module import.
+    The artifact supplies only ``role`` and can never choose a module path;
+    unknown roles import nothing and fail closed.
     """
     try:
         return _OP_SERIALIZERS_BY_ROLE[role]
     except KeyError:
+        module = _LAZY_OP_SERIALIZER_MODULES.get(role)
+        if module is not None:
+            importlib.import_module(module)
+            try:
+                return _OP_SERIALIZERS_BY_ROLE[role]
+            except KeyError:
+                raise UnknownOpType(
+                    f"Trusted Op module {module!r} did not register role {role!r}."
+                ) from None
         available = sorted(_OP_SERIALIZERS_BY_ROLE)
         suggestions = difflib.get_close_matches(role, available, n=3)
         hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""

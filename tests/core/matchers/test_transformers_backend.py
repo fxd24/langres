@@ -43,8 +43,10 @@ class _FakeModel:
     def __init__(self, sequences: Any, scores: Any) -> None:
         self._sequences = sequences
         self._scores = scores
+        self.kwargs: dict[str, Any] = {}
 
     def generate(self, input_ids: Any, **kwargs: Any) -> SimpleNamespace:
+        self.kwargs = kwargs
         return SimpleNamespace(sequences=self._sequences, scores=self._scores)
 
 
@@ -96,6 +98,39 @@ def test_complete_without_logprobs_omits_the_logprobs_block() -> None:
     assert resp.choices[0].logprobs is None
     assert resp.choices[0].message.content == "<2>"
     assert resp.usage.completion_tokens == 1
+
+
+def test_complete_honors_temperature_and_seed_for_sampling() -> None:
+    sequences = torch.tensor([[7, 8, 2]])
+    model = _FakeModel(sequences, None)
+    backend = TransformersBackend(ModelRef(base="fake/model", kind="hf"), seed=17)
+    backend._tokenizer = _FakeTokenizer()
+    backend._model = model
+
+    backend.complete(
+        [{"role": "user", "content": "hi"}],
+        temperature=0.7,
+        want_logprobs=False,
+    )
+
+    assert model.kwargs["do_sample"] is True
+    assert model.kwargs["temperature"] == pytest.approx(0.7)
+    assert torch.initial_seed() == 17
+
+
+def test_complete_uses_greedy_decoding_at_zero_temperature() -> None:
+    sequences = torch.tensor([[7, 8, 2]])
+    model = _FakeModel(sequences, None)
+    backend = _backend_with(model)
+
+    backend.complete(
+        [{"role": "user", "content": "hi"}],
+        temperature=0.0,
+        want_logprobs=False,
+    )
+
+    assert model.kwargs["do_sample"] is False
+    assert "temperature" not in model.kwargs
 
 
 def test_top_logprobs_capped_at_twenty() -> None:

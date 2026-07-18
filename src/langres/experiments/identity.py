@@ -242,6 +242,7 @@ class ResourceSlotIdentity(BaseModel):
             kind=ref.kind,
             revision=ref.revision,
             adapter=ref.adapter,
+            adapter_revision=ref.adapter_revision,
             provider=inferred_provider,
             endpoint=ref.api_base,
             content_digest=content_digest,

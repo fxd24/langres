@@ -664,7 +664,8 @@ widens to `{"base", "kind", ...}` otherwise. The pinned invariant:
 
 - `InvalidModelRefError` — the ref is malformed (an empty base, an unknown
   `kind`, an adapter on a served kind, `api_base` on a non-endpoint, a `revision`
-  on a non-`hf` ref, a conflicting `api_base`, a non-string `adapter`/`revision`).
+  on a non-`hf` ref, an `adapter_revision` without an adapter, a conflicting
+  `api_base`, or a non-string `adapter`/`adapter_revision`/`revision`).
 - `UnsupportedBackboneError` — the ref is *fine*, but the slot cannot run it:
   a DSPy-backed matcher handed a local dir/adapter (`require_litellm_routable`),
   or a method with no model slot handed any `model=` at all

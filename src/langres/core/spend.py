@@ -16,20 +16,69 @@ that only under ``TYPE_CHECKING`` -- it is in no cycle at all, and a *transport*
 module (``clients.openrouter``) no longer owns a *policy* primitive that core
 depends on.
 
-``clients.openrouter`` re-exports both names, so the long-standing
+``clients.openrouter`` re-exports the original budget names, so the long-standing
 ``from langres.clients.openrouter import BudgetExceeded, SpendMonitor`` keeps
 working unchanged; ``langres.BudgetExceeded`` is unaffected.
+
+An unmeasured paid call permanently poisons a finite monitor through
+``mark_unknown``. This is intentionally separate from the numeric tally:
+unknown cannot honestly be represented as zero or as a guessed amount.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langres.core.models import PairwiseJudgement
 
 logger = logging.getLogger(__name__)
+
+_SPEND_OBSERVATION_ATTR = "_langres_spend_observation"
+
+
+@dataclass(frozen=True)
+class SpendObservation:
+    """Cost facts attached to an exception raised after paid work completed."""
+
+    cost_usd: float | None
+    cost_required: bool
+
+
+def attach_spend_observation(
+    error: BaseException,
+    *,
+    cost_usd: float | None,
+    cost_required: bool,
+) -> None:
+    """Annotate an original stage exception without changing its public type."""
+    setattr(
+        error,
+        _SPEND_OBSERVATION_ATTR,
+        SpendObservation(cost_usd=cost_usd, cost_required=cost_required),
+    )
+
+
+def spend_observation(error: BaseException) -> SpendObservation | None:
+    """Read a trusted spend annotation from a downstream exception."""
+    value = getattr(error, _SPEND_OBSERVATION_ATTR, None)
+    return value if isinstance(value, SpendObservation) else None
+
+
+class UnknownSpendError(RuntimeError):
+    """Raised when a finite ledger can no longer account for paid work.
+
+    Once marked unknown, a monitor stays poisoned for its lifetime. Continuing
+    from a caught error would otherwise let every later paid call masquerade as
+    free. Matcher wrappers populate ``partial_judgements`` when applicable.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)
+        self.partial_judgements: list[PairwiseJudgement] = []
 
 
 class BudgetExceeded(RuntimeError):
@@ -41,11 +90,14 @@ class BudgetExceeded(RuntimeError):
     default empty list so any future raiser is safe even if it never sets it,
     and callers/mypy see the attribute without an ad hoc
     ``# type: ignore[attr-defined]`` at the one call site that populates it.
+    Resource operations that finish a paid call before detecting the breach
+    populate ``outputs`` with their validated, recoverable envelopes.
     """
 
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self.partial_judgements: list[PairwiseJudgement] = []
+        self.outputs: tuple[object, ...] = ()
 
 
 class SpendMonitor:
@@ -74,6 +126,7 @@ class SpendMonitor:
         self._budget_usd = budget_usd
         self._warn_frac = warn_frac
         self._spent = 0.0
+        self._unknown_reason: str | None = None
 
     def add(self, cost_usd: float) -> None:
         """Accumulate ``cost_usd`` into the running total."""
@@ -94,12 +147,25 @@ class SpendMonitor:
         """Budget left before the cap (USD); negative once over budget."""
         return self._budget_usd - self._spent
 
+    @property
+    def cost_is_unknown(self) -> bool:
+        """Whether an already-made paid call left this ledger unaccountable."""
+        return self._unknown_reason is not None
+
+    def mark_unknown(self, reason: str) -> None:
+        """Permanently poison a finite ledger after unmeasured paid work."""
+        if math.isfinite(self._budget_usd) and self._unknown_reason is None:
+            self._unknown_reason = reason
+
     def check(self) -> None:
         """Warn past the warn threshold; raise :class:`BudgetExceeded` past the budget.
 
         Raises:
             BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
+            UnknownSpendError: If paid work occurred without a measurable cost.
         """
+        if self._unknown_reason is not None:
+            raise UnknownSpendError(self._unknown_reason)
         if self._spent > self._budget_usd:
             raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
         if self._spent >= self._warn_frac * self._budget_usd:

@@ -94,6 +94,11 @@
     "spine this wave -- nothing imports the module -- so it joins no SCC in either view",
     "regardless; this mapping keeps the counterfactual layering honest for the W3 flip.)",
     "",
+    "The research execution foundation adds langres.resources as its own target package.",
+    "Resources are reusable model capabilities (Embedder/Reranker/LLM), independent of",
+    "where an architecture places them. Keeping this prefix distinct preserves that",
+    "resource-vs-operation boundary in the counterfactual graph.",
+    "",
     "The research-execution foundation adds langres.experiments as a sibling consumer",
     "of core execution and tracking records. It owns protocol, identity, measurement,",
     "statistics, and report contracts; core never imports it. The package therefore maps",
@@ -123,6 +128,7 @@
     "langres.metrics": "metrics",
     "langres.plotting": "plotting",
     "langres.report": "report",
+    "langres.resources": "resources",
     "langres.training": "training"
   },
   "exact": {
