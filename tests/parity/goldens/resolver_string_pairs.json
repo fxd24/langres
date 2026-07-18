@@ -1,0 +1,765 @@
+{
+  "bcubed": {
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "clusters": [
+    [
+      "b01",
+      "b02"
+    ],
+    [
+      "b03",
+      "b04"
+    ],
+    [
+      "b05",
+      "b06"
+    ],
+    [
+      "b07",
+      "b08"
+    ]
+  ],
+  "n_pairs": 91,
+  "pairs": [
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b02",
+      "score": 0.966667,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b03",
+      "score": 0.27193,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b04",
+      "score": 0.263993,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b05",
+      "score": 0.303342,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b06",
+      "score": 0.291394,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b07",
+      "score": 0.396807,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b08",
+      "score": 0.346353,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b09",
+      "score": 0.342294,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b10",
+      "score": 0.317901,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b11",
+      "score": 0.234568,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b12",
+      "score": 0.266993,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b13",
+      "score": 0.308201,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b01",
+      "right_id": "b14",
+      "score": 0.276984,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b03",
+      "score": 0.27698,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b04",
+      "score": 0.267656,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b05",
+      "score": 0.309274,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b06",
+      "score": 0.29732,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b07",
+      "score": 0.383987,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b08",
+      "score": 0.355251,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b09",
+      "score": 0.346743,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b10",
+      "score": 0.327778,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b11",
+      "score": 0.238519,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b12",
+      "score": 0.273343,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b13",
+      "score": 0.315527,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b02",
+      "right_id": "b14",
+      "score": 0.282479,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b04",
+      "score": 0.955556,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b05",
+      "score": 0.335137,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b06",
+      "score": 0.303093,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b07",
+      "score": 0.281746,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b08",
+      "score": 0.287518,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b09",
+      "score": 0.288384,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b10",
+      "score": 0.254347,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b11",
+      "score": 0.364176,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b12",
+      "score": 0.358135,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b13",
+      "score": 0.244444,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b03",
+      "right_id": "b14",
+      "score": 0.266993,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b05",
+      "score": 0.324217,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b06",
+      "score": 0.335137,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b07",
+      "score": 0.269841,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b08",
+      "score": 0.276598,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b09",
+      "score": 0.29985,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b10",
+      "score": 0.243201,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b11",
+      "score": 0.373232,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b12",
+      "score": 0.383598,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b13",
+      "score": 0.253595,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b04",
+      "right_id": "b14",
+      "score": 0.256536,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b06",
+      "score": 0.962963,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b07",
+      "score": 0.242857,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b08",
+      "score": 0.3,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b09",
+      "score": 0.290171,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b10",
+      "score": 0.292088,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b11",
+      "score": 0.301282,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b12",
+      "score": 0.41453,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b13",
+      "score": 0.280261,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b05",
+      "right_id": "b14",
+      "score": 0.326126,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b07",
+      "score": 0.231183,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b08",
+      "score": 0.277778,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b09",
+      "score": 0.301282,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b10",
+      "score": 0.282828,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b11",
+      "score": 0.315171,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b12",
+      "score": 0.430159,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b13",
+      "score": 0.270979,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b06",
+      "right_id": "b14",
+      "score": 0.280808,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b08",
+      "score": 0.933333,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b09",
+      "score": 0.25177,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b10",
+      "score": 0.246416,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b11",
+      "score": 0.305969,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b12",
+      "score": 0.21732,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b13",
+      "score": 0.243056,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b07",
+      "right_id": "b14",
+      "score": 0.283333,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b09",
+      "score": 0.280342,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b10",
+      "score": 0.287037,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b11",
+      "score": 0.352564,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b12",
+      "score": 0.241453,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b13",
+      "score": 0.246997,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b08",
+      "right_id": "b14",
+      "score": 0.29009,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b09",
+      "right_id": "b10",
+      "score": 0.240741,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b09",
+      "right_id": "b11",
+      "score": 0.354497,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b09",
+      "right_id": "b12",
+      "score": 0.275641,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b09",
+      "right_id": "b13",
+      "score": 0.221042,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b09",
+      "right_id": "b14",
+      "score": 0.326201,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b10",
+      "right_id": "b11",
+      "score": 0.215278,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b10",
+      "right_id": "b12",
+      "score": 0.178571,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b10",
+      "right_id": "b13",
+      "score": 0.378788,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b10",
+      "right_id": "b14",
+      "score": 0.314935,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b11",
+      "right_id": "b12",
+      "score": 0.374786,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b11",
+      "right_id": "b13",
+      "score": 0.300144,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b11",
+      "right_id": "b14",
+      "score": 0.275253,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b12",
+      "right_id": "b13",
+      "score": 0.292023,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b12",
+      "right_id": "b14",
+      "score": 0.303704,
+      "score_type": "heuristic"
+    },
+    {
+      "decision": null,
+      "decision_step": "weighted_average",
+      "left_id": "b13",
+      "right_id": "b14",
+      "score": 0.300654,
+      "score_type": "heuristic"
+    }
+  ],
+  "pairwise": {
+    "f1": 1.0,
+    "fn": 0,
+    "fp": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "tp": 4
+  },
+  "threshold": 0.7
+}

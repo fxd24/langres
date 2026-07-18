@@ -1,0 +1,37 @@
+{
+  "architecture": "FuzzyString",
+  "backbone": null,
+  "bcubed": {
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "clusters": [
+    [
+      "b01",
+      "b02"
+    ],
+    [
+      "b03",
+      "b04"
+    ],
+    [
+      "b05",
+      "b06"
+    ],
+    [
+      "b07",
+      "b08"
+    ]
+  ],
+  "pairwise": {
+    "f1": 1.0,
+    "fn": 0,
+    "fp": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "tp": 4
+  },
+  "score_type": "heuristic",
+  "threshold": 0.5
+}

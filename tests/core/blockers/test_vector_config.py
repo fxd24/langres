@@ -19,7 +19,12 @@ from typing import Any
 import numpy as np
 import pytest
 
-from langres.core.blockers.vector import VectorBlocker
+from langres.core.blockers.vector import (
+    TEXT_FIELD_EXTRACTORS,
+    VectorBlocker,
+    concat_comparable_fields,
+)
+from langres.core.comparators import StringComparator
 from langres.core.indexes.vector_index import inverse_distances_to_similarities
 from langres.core.models import CompanySchema
 from langres.core.registry import get_component, register
@@ -303,6 +308,132 @@ def test_from_config_without_state_dir_when_not_serializable() -> None:
 
     after = list(rebuilt.stream(COMPANY_DATA))
     assert len(after) > 0
+
+
+# ---------------------------------------------------------------------------
+# Named multi-field text_field_extractor (the serializable replacement for the
+# embedding-architecture closure -- the seam that makes VectorLLMCascade.save()
+# round-trip).
+# ---------------------------------------------------------------------------
+
+#: Records with a second comparable field populated, so ``concat_comparable_fields``
+#: has more than one field to join (name + address, both str on CompanySchema).
+MULTI_FIELD_DATA = [
+    {"id": "a", "name": "Acme", "address": "1 Main St"},
+    {"id": "b", "name": "Beta", "address": "2 Oak Ave"},
+    {"id": "c", "name": "Gamma", "address": "3 Pine Rd"},
+]
+
+
+def test_concat_comparable_fields_reproduces_the_closure_byte_for_byte() -> None:
+    """The named extractor equals the old inline closure on every entity.
+
+    The old embedding architectures built ``text_field_extractor=extract`` where
+    ``extract`` closed over ``[spec.name for spec in
+    StringComparator.from_schema(schema).feature_specs]``. Blocking candidates are
+    a pure function of this text, so a single differing character would change
+    which pairs are generated. This pins byte-identity against that exact closure.
+    """
+    field_names = [spec.name for spec in StringComparator.from_schema(CompanySchema).feature_specs]
+
+    def old_closure(entity: Any) -> str:
+        parts = [str(getattr(entity, n)) for n in field_names if getattr(entity, n, None)]
+        return " ".join(parts)
+
+    entities = [
+        CompanySchema(id="1", name="Acme Corporation", address="1 Main St"),
+        CompanySchema(id="2", name="Acme Corp", address=None),  # None field skipped
+        CompanySchema(id="3", name="", address="99 X St"),  # empty field skipped
+        CompanySchema(id="4", name="Solo", address=None, phone=None, website=None),
+        CompanySchema(id="5", name="A", address="B", phone="C", website="D"),
+    ]
+    for entity in entities:
+        assert concat_comparable_fields(entity) == old_closure(entity)
+
+
+def test_named_extractor_serializes_by_name() -> None:
+    """A registered extractor name round-trips in config; text_field stays None."""
+    blocker = VectorBlocker(
+        schema=CompanySchema,
+        text_field_extractor="concat_comparable_fields",
+        vector_index=_build_index(),
+        k_neighbors=2,
+    )
+
+    config = blocker.config
+
+    assert config["text_field_extractor"] == "concat_comparable_fields"
+    assert config["text_field"] is None
+    # And the resolved callable is the registered one, producing multi-field text.
+    entity = CompanySchema(id="x", name="Acme", address="1 Main St")
+    assert blocker.text_field_extractor(entity) == "Acme 1 Main St"
+
+
+def test_named_extractor_config_from_config_roundtrip(tmp_path: Path) -> None:
+    """config -> from_config with a NAMED extractor reproduces candidates + text."""
+    blocker = VectorBlocker(
+        schema=CompanySchema,
+        text_field_extractor="concat_comparable_fields",
+        vector_index=_FakeSerializableIndex(label="companies"),
+        k_neighbors=2,
+    )
+    blocker.vector_index.create_index(
+        [concat_comparable_fields(CompanySchema(**r)) for r in MULTI_FIELD_DATA]
+    )  # type: ignore[arg-type]
+
+    config = blocker.config
+    state_dir = tmp_path / "index"
+    state_dir.mkdir()
+    assert isinstance(blocker.vector_index, SerializableState)
+    blocker.vector_index.save_state(state_dir)
+
+    json_config: dict[str, Any] = dict(config)
+    json_config["vector_index"] = config["vector_index"].model_dump()
+
+    rebuilt = VectorBlocker.from_config(json_config, state_dir=state_dir)
+
+    # The reconstructed blocker uses the SAME named extractor, so identical text.
+    for record in MULTI_FIELD_DATA:
+        entity = CompanySchema(**record)  # type: ignore[arg-type]
+        assert rebuilt.text_field_extractor(entity) == blocker.text_field_extractor(entity)
+
+    before = [(c.left.id, c.right.id, c.similarity_score) for c in blocker.stream(MULTI_FIELD_DATA)]
+    after = [(c.left.id, c.right.id, c.similarity_score) for c in rebuilt.stream(MULTI_FIELD_DATA)]
+    assert before == after
+    assert len(after) > 0
+
+
+def test_passing_the_registered_callable_serializes_by_name() -> None:
+    """Passing the function object (not its name) still serializes by name.
+
+    resolve_named reverse-looks-up a registered callable to its key, so a caller
+    who imports ``concat_comparable_fields`` and passes it gets a serializable
+    blocker -- identical to passing the string.
+    """
+    blocker = VectorBlocker(
+        schema=CompanySchema,
+        text_field_extractor=concat_comparable_fields,
+        vector_index=_build_index(),
+        k_neighbors=2,
+    )
+
+    assert blocker.config["text_field_extractor"] == "concat_comparable_fields"
+
+
+def test_unknown_extractor_name_raises() -> None:
+    """An unregistered extractor NAME fails fast, listing the registered ones."""
+    with pytest.raises(ValueError, match="unknown text_field_extractor name"):
+        VectorBlocker(
+            schema=CompanySchema,
+            text_field_extractor="does_not_exist",
+            vector_index=_build_index(),
+            k_neighbors=2,
+        )
+
+
+def test_concat_comparable_fields_is_the_only_registered_extractor() -> None:
+    """Guard the registry contract: the one extractor the architectures rely on."""
+    assert TEXT_FIELD_EXTRACTORS["concat_comparable_fields"] is concat_comparable_fields
 
 
 def test_config_raises_for_unregistered_index() -> None:

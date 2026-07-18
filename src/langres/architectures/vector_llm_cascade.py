@@ -7,7 +7,6 @@ other code also knows how to build.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
@@ -67,23 +66,15 @@ class VectorLLMCascade(ERModel):
     Both are :class:`~langres.core.model_ref.ModelRef`\\ s, so both are
     **weightless**: neither carries weight bytes, only a reference string.
 
-    .. warning::
-       **This architecture cannot** ``save()`` **yet** -- it raises
-       :class:`NotImplementedError` with the reason. Its ``VectorBlocker`` is
-       built with a ``text_field_extractor`` closure (blocking text = every
-       comparable field concatenated), and a callable cannot round-trip through
-       JSON config. This is a **pre-existing limitation inherited from the
-       deleted ``presets``/``_build_embedding_blocker`` path, not a W4
-       regression** -- that path never called ``save()``, so it never surfaced.
-       What W4 changed is that this is now a named class that *looks* like it
-       persists, so the gap is stated rather than discovered at runtime.
-
-       The fix is a named-extractor seam mirroring the one
-       :class:`~langres.core.matchers.llm_judge.LLMMatcher` already has for
-       ``response_parser`` (accept ``Callable | str``, resolve a registered name,
-       serialize the name). Deliberately deferred: it changes what
-       ``VectorBlocker`` accepts, in the paid path. ``FuzzyString`` round-trips
-       today and proves the mechanism.
+    **It persists.** ``save()``/``load()`` round-trip like any other
+    architecture (inherited from :meth:`~langres.core.resolver.ERModel.save`).
+    The ``VectorBlocker``'s multi-field blocking text is a **named**, registered
+    extractor (``core.blockers.vector.concat_comparable_fields``) rather than a
+    closure, so it serializes as a name and reloads intact -- mirroring the
+    named-callable seam :class:`~langres.core.matchers.llm_judge.LLMMatcher` uses
+    for ``response_parser``. Pass ``schema=`` (not an inferred one) for anything
+    you intend to ``save`` -- an inferred schema is an ephemeral class a fresh
+    process cannot import back.
 
     **Where the money goes.** The student scores every blocked pair for free; only
     pairs in ``escalation_band`` reach the LLM. Cost therefore tracks the *band
@@ -194,32 +185,6 @@ class VectorLLMCascade(ERModel):
         llm: ModelRef | None = getattr(self, "llm", None)
         return None if llm is None else llm.base
 
-    def save(self, path: str | Path) -> None:
-        """Not supported yet -- fails with the reason instead of a confusing one.
-
-        Without this override the user gets ``VectorBlocker``'s own error, which
-        tells them to "construct with schema= and text_field= to persist" -- an
-        instruction they cannot act on, because they never constructed the
-        ``VectorBlocker``; :meth:`_topology` did. Raising here names the real
-        situation at the layer the user is actually holding.
-
-        Raises:
-            NotImplementedError: Always. See the class docstring's warning for
-                why, and for the named-extractor seam that would fix it.
-        """
-        raise NotImplementedError(
-            "VectorLLMCascade cannot be saved yet: its VectorBlocker uses a "
-            "text_field_extractor closure (blocking text = every comparable field "
-            "concatenated) and a callable cannot round-trip through JSON config. "
-            "This is a known gap inherited from the pre-W4 embedding path, not a "
-            "property of your model. FuzzyString saves and loads today. To persist "
-            "an embedding pipeline now, build a Resolver/ERModel directly via "
-            "ERModel.from_components(...) with a VectorBlocker constructed as "
-            "VectorBlocker(vector_index=..., schema=..., text_field='your_text_field') "
-            "-- text_field takes the NAME of one text field on your schema (e.g. "
-            "'name'), and a named field is serializable, unlike a closure."
-        )
-
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
         """Build the four slots for ``schema``. Called once, on binding.
 
@@ -236,22 +201,18 @@ class VectorLLMCascade(ERModel):
         from langres.core.matchers.llm_judge import LLMMatcher
 
         comparator: StringComparator[Any] = StringComparator.from_schema(schema)
-        field_names = [spec.name for spec in comparator.feature_specs]
-
-        def extract(entity: Any) -> str:
-            """Concatenate every comparable string field into one blocking text."""
-            parts = [
-                str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)
-            ]
-            return " ".join(parts)
 
         index = FAISSIndex(
             embedder=SentenceTransformerEmbedder(self.embedder.base), metric="cosine"
         )
+        # The blocking text is every comparable string field concatenated. Passed
+        # by REGISTERED NAME, not a closure, so the blocker (and therefore this
+        # whole model) round-trips through ``save``/``load`` -- see
+        # ``core.blockers.vector.concat_comparable_fields``.
         blocker = VectorBlocker(
             vector_index=index,
             schema=schema,
-            text_field_extractor=extract,
+            text_field_extractor="concat_comparable_fields",
             k_neighbors=self.k_neighbors,
         )
         student: EmbeddingScoreMatcher[Any] = EmbeddingScoreMatcher(threshold=self.threshold)

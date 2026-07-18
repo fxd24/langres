@@ -1,0 +1,108 @@
+{
+  "description": "Rich decision output from Matcher.forward() with full provenance.\n\nThis model captures not just the match decision, but all metadata\nnecessary for debugging, optimization, and cost tracking.\n\nA judge is one of two shapes (and may be both):\n\n- A **ranker** emits a ``score`` (a confidence-ordered number); the caller's\n  ``threshold`` turns it into a match/no-match.\n- A **decider** emits a boolean ``decision`` directly (a binary LLM says\n  \"Yes\"/\"No\"); it has no meaningful score, and the threshold is irrelevant.\n\nAsk \":func:`predicted_match`\" \u2014 never a raw ``score >= threshold`` \u2014 whether a\njudgement is a predicted match. It gives ``decision`` precedence over\n``score`` (a decider that also ranked already decided), and returns ``None``\nfor an abstention (neither set) rather than fabricating a \"no\".\n\nAttributes:\n    left_id: Identifier of the left entity\n    right_id: Identifier of the right entity\n    decision: The judge's explicit match verdict, if it decides directly\n        (a binary judge). ``None`` when the judge only ranks (emits a\n        ``score``) or abstains. Takes precedence over ``score`` in\n        :func:`predicted_match`.\n    score: Confidence-ordered match score in range [0.0, 1.0] for a ranking\n        judge, else ``None``. **Widened from a required float:** a decider\n        has no score, so a fabricated ``0.0``/``1.0`` would lie. ``None``\n        means \"this judge does not rank\", not \"score of zero\".\n    score_type: Type of score for proper interpretation. Stays **required**;\n        it doubles as the judge-family tag, so when ``score`` is ``None`` it\n        describes the *family* (e.g. ``\"prob_llm\"`` for a binary LLM judge),\n        not a score. This overloading is a known wart \u2014 do not widen it.\n    confidence: Optional \"how sure am I\" in range [0.0, 1.0], orthogonal to\n        the decision. ``None`` unless a judge supplies it (nothing does yet \u2014\n        that is Wave 2).\n    confidence_source: Provenance of ``confidence``. ``\"none\"`` means this\n        judge structurally has no confidence to give; ``\"unrequested\"`` means\n        it could but was not asked (nothing sets this yet \u2014 Wave 2). The\n        literal set is **provisional**, not a frozen API \u2014 expect it to grow.\n    decision_step: Which logic branch made this decision\n    reasoning: Optional natural language explanation (e.g., from LLM)\n    provenance: Full audit trail with arbitrary metadata",
+  "properties": {
+    "confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confidence"
+    },
+    "confidence_source": {
+      "default": "none",
+      "enum": [
+        "none",
+        "unrequested",
+        "logprob",
+        "calibrated",
+        "heuristic"
+      ],
+      "title": "Confidence Source",
+      "type": "string"
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decision"
+    },
+    "decision_step": {
+      "title": "Decision Step",
+      "type": "string"
+    },
+    "left_id": {
+      "title": "Left Id",
+      "type": "string"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    },
+    "reasoning": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reasoning"
+    },
+    "right_id": {
+      "title": "Right Id",
+      "type": "string"
+    },
+    "score": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Score"
+    },
+    "score_type": {
+      "enum": [
+        "sim_cos",
+        "prob_llm",
+        "heuristic",
+        "calibrated_prob",
+        "prob_fs",
+        "prob_rf",
+        "prob_group_llm"
+      ],
+      "title": "Score Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "left_id",
+    "right_id",
+    "score_type",
+    "decision_step",
+    "provenance"
+  ],
+  "title": "PairwiseJudgement",
+  "type": "object"
+}

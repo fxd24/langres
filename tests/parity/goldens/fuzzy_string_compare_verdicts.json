@@ -1,0 +1,24 @@
+{
+  "verdicts": [
+    {
+      "architecture": "FuzzyString",
+      "backbone": null,
+      "left_id": "b01",
+      "match": true,
+      "right_id": "b02",
+      "score": 0.966667,
+      "score_type": "heuristic",
+      "threshold": 0.5
+    },
+    {
+      "architecture": "FuzzyString",
+      "backbone": null,
+      "left_id": "b01",
+      "match": false,
+      "right_id": "b09",
+      "score": 0.342294,
+      "score_type": "heuristic",
+      "threshold": 0.5
+    }
+  ]
+}

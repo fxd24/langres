@@ -1,0 +1,30 @@
+{
+  "architecture": "ERModel",
+  "backbone": null,
+  "bcubed": {
+    "f1": 1.0,
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "clusters": [
+    [
+      "b01",
+      "b02"
+    ],
+    [
+      "b03",
+      "b04"
+    ],
+    [
+      "b05",
+      "b06"
+    ],
+    [
+      "b07",
+      "b08"
+    ]
+  ],
+  "loaded_class": "ERModel",
+  "score_type": "heuristic",
+  "threshold": 0.7
+}

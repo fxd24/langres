@@ -1,0 +1,79 @@
+{
+  "artifact_version": "1",
+  "langres_version": "0.3.0",
+  "model_class": "fuzzy_string",
+  "components": [
+    {
+      "type_name": "all_pairs_blocker",
+      "slot": "blocker",
+      "config_version": "1",
+      "config": {
+        "schema_type_name": "ParityBusinessW0"
+      }
+    },
+    {
+      "type_name": "comparator",
+      "slot": "comparator",
+      "config_version": "1",
+      "config": {
+        "feature_specs": [
+          {
+            "name": "name",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          },
+          {
+            "name": "city",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          },
+          {
+            "name": "phone",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          }
+        ],
+        "algorithm": "token_sort_ratio"
+      }
+    },
+    {
+      "type_name": "weighted_average_judge",
+      "slot": "module",
+      "config_version": "1",
+      "config": {
+        "feature_specs": [
+          {
+            "name": "name",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          },
+          {
+            "name": "city",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          },
+          {
+            "name": "phone",
+            "kind": "string",
+            "weight": 1.0,
+            "is_anchor": false
+          }
+        ]
+      }
+    },
+    {
+      "type_name": "clusterer",
+      "slot": "clusterer",
+      "config_version": "1",
+      "config": {
+        "threshold": 0.7
+      }
+    }
+  ],
+  "checksums": {}
+}

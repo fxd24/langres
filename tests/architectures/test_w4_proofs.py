@@ -529,7 +529,9 @@ class TestReviewFoundRegressions:
     * The proofs round-trip only ``FuzzyString`` -- the one architecture with no
       backbones -- so ``VectorLLMCascade``'s ``save`` and its reconstruction path
       were never executed at all. That gap is exactly where two of the three
-      lived.
+      lived. (W3-f later *closed* the ``save`` gap -- the two proofs that pinned
+      its ``NotImplementedError`` are now the round-trip proofs at the end of
+      this class.)
     * ``ERModel.schema`` was asserted nowhere, so a property that returned
       ``None`` for every model in the library looked fine.
     """
@@ -606,51 +608,57 @@ class TestReviewFoundRegressions:
             "openrouter/deepseek/deepseek-chat"
         )
 
-    def test_vector_llm_cascade_save_fails_with_a_followable_reason(self) -> None:
-        """The gap is real; the message must be about the user's model, not ours.
+    def test_vector_llm_cascade_now_saves_and_reloads_as_itself(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The gap is closed: ``save`` no longer raises, and the model round-trips.
 
-        `VectorLLMCascade` cannot persist: its `VectorBlocker` holds a
-        `text_field_extractor` closure. Unfixed, the user got VectorBlocker's own
-        error telling them to "construct with schema= and text_field=" -- but they
-        never constructed the VectorBlocker, `_topology` did. This pins the honest
-        failure until the named-extractor seam lands.
+        This replaces the two proofs that pinned the old ``NotImplementedError``.
+        The blocker's multi-field blocking text is now a NAMED, registered
+        extractor (``concat_comparable_fields``) rather than a closure, so it
+        serializes as a name and reloads intact -- and the whole cascade inherits
+        ``ERModel.save``. Fast (offline): the embedder loads its model only on the
+        first ``encode``, and construction/save/load never embed. No LLM call.
         """
-        model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", schema=Company)
-        with pytest.raises(NotImplementedError, match="cannot be saved yet"):
-            model.save("unreachable")
+        original = VectorLLMCascade(
+            llm="openrouter/openai/gpt-4o-mini",
+            embedder="all-MiniLM-L6-v2",
+            schema=Company,
+        )
+        original.save(tmp_path / "m")  # no longer raises
 
-    def test_save_error_names_every_required_arg_of_the_escape_hatch(self) -> None:
-        """The advice must RUN. It told users to do something that TypeErrors.
+        loaded = ERModel.load(tmp_path / "m")
 
-        The message's escape hatch is a hand-built `VectorBlocker` with a named
-        `text_field=` instead of the closure. As shipped it read
-        ``VectorBlocker(schema=..., text_field=...)`` -- which raises
-        ``TypeError: missing 1 required positional argument: 'vector_index'``.
-        Advice a user cannot copy is worse than none: it costs them the round-trip
-        to discover our error message is wrong.
+        # Back as ITSELF, with byte-identical config -- the named extractor is in it.
+        assert type(loaded) is VectorLLMCascade
+        assert loaded.config_dict() == original.config_dict()
+        manifest = (tmp_path / "m" / "resolver.json").read_text()
+        assert '"model_class": "vector_llm_cascade"' in manifest
+        assert "concat_comparable_fields" in manifest
+        # Idempotent: re-saving the loaded model reproduces the artifact exactly.
+        loaded.save(tmp_path / "m2")
+        assert (tmp_path / "m2" / "resolver.json").read_text() == (
+            tmp_path / "m" / "resolver.json"
+        ).read_text()
 
-        This asserts the message names every REQUIRED parameter, derived from the
-        live signature rather than hard-coded, so adding a required arg to
-        `VectorBlocker` fails here instead of silently rotting the message again.
+    @pytest.mark.slow  # embeds records with a real SentenceTransformer ([semantic])
+    def test_vector_llm_cascade_reload_blocks_identically(self, tmp_path: pathlib.Path) -> None:
+        """A round-trip that reconstructs a museum piece is not a round-trip.
+
+        Blocking candidates are a pure function of the extractor's text, so this
+        is the end-to-end guarantee that the named extractor reproduces the old
+        closure's blocking. Compares ``candidates()`` (blocking only -- no LLM
+        spend) before vs after a save/load.
         """
-        import inspect
+        original = VectorLLMCascade(
+            llm="openrouter/openai/gpt-4o-mini",
+            embedder="all-MiniLM-L6-v2",
+            schema=Company,
+        )
+        original.save(tmp_path / "m")
+        loaded = ERModel.load(tmp_path / "m")
 
-        from langres.core.blockers.vector import VectorBlocker
+        def pairs(model: Any) -> set[frozenset[str]]:
+            return {frozenset({c.left.id, c.right.id}) for c in model.candidates(RECORDS)}
 
-        model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", schema=Company)
-        try:
-            model.save("unreachable")
-        except NotImplementedError as exc:
-            message = str(exc)
-
-        required = [
-            name
-            for name, p in inspect.signature(VectorBlocker.__init__).parameters.items()
-            if name != "self" and p.default is inspect.Parameter.empty
-        ]
-        assert required, "VectorBlocker grew no required args -- rewrite this proof"
-        for name in required:
-            assert f"{name}=" in message, (
-                f"save()'s advice omits required VectorBlocker arg {name!r}; a user "
-                f"copying it hits a TypeError. Message: {message}"
-            )
+        assert pairs(loaded) == pairs(original)
