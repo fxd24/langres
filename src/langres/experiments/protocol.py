@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any, Literal, Never, Self
 
@@ -58,6 +59,8 @@ def deep_freeze(value: Any) -> Any:
         return tuple(deep_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
         raise ValueError("sets are not valid JSON protocol values; use an ordered list")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("experiment identity values must be finite")
     return value
 
 
@@ -78,7 +81,7 @@ class EvaluationProtocol(BaseModel):
     its exact USD 20 cap before work starts.
     """
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     version: Literal[1] = 1
     benchmark_ids: tuple[str, ...] = Field(min_length=1)
@@ -165,8 +168,12 @@ class EvaluationProtocol(BaseModel):
                     "official publication requires a composite fixed_test_set_id or a "
                     "test-set identity for every benchmark"
                 )
-        elif self.fixed_test_set_id is None and not self.test_set_identities:
-            raise ValueError("provide fixed_test_set_id or per-dataset test_set_identities")
+        elif self.fixed_test_set_id is None and not all(
+            self.test_set_identities.get(benchmark) for benchmark in self.benchmark_ids
+        ):
+            raise ValueError(
+                "provide fixed_test_set_id or a non-empty test_set_identity for every benchmark"
+            )
         return self
 
     @classmethod

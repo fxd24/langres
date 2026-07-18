@@ -344,6 +344,56 @@ def test_hyphenated_headers_and_signed_url_queries_never_serialize() -> None:
     assert "drop-me" not in str(dumped)
 
 
+def test_subscription_and_openai_keys_redact_inside_header_pair_sequences() -> None:
+    slot = ResourceSlotIdentity(
+        slot="llm",
+        base="served/model",
+        kind="endpoint",
+        provider="azure",
+        endpoint="https://host.example/v1?api-version=2026-01-01",
+        runtime_config={
+            "headers": [
+                ("Ocp-Apim-Subscription-Key", "subscription-secret"),
+                ("openai-key", "openai-secret"),
+                ("Accept", "application/json"),
+            ]
+        },
+    )
+
+    headers = slot.runtime_config["headers"]
+    assert headers == (
+        ("Ocp-Apim-Subscription-Key", "<redacted>"),
+        ("openai-key", "<redacted>"),
+        ("Accept", "application/json"),
+    )
+    assert "secret" not in str(slot.model_dump(mode="json"))
+
+
+def test_camel_case_credential_keys_are_normalized_before_redaction() -> None:
+    slot = ResourceSlotIdentity(
+        slot="llm",
+        base="served/model",
+        kind="endpoint",
+        provider="provider",
+        endpoint="https://host.example/v1",
+        runtime_config={
+            "apiKey": "api-secret",
+            "accessToken": "token-secret",
+            "clientSecret": "client-secret",
+            "privateKey": "private-secret",
+        },
+    )
+
+    assert set(slot.runtime_config.values()) == {"<redacted>"}
+    assert "secret" not in str(slot.model_dump(mode="json"))
+
+
+def test_default_resource_runtime_mapping_is_immutable() -> None:
+    slot = ResourceSlotIdentity(slot="embedder", base="org/model", kind="hf")
+    with pytest.raises(TypeError, match="immutable"):
+        slot.runtime_config["batch_size"] = 16
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
@@ -437,6 +487,20 @@ def test_official_cache_requires_publishable_provenance_and_pinned_resources() -
 def test_identity_mappings_reject_sets_instead_of_hash_seed_dependent_serialization() -> None:
     with pytest.raises(ValidationError, match="sets are not valid JSON"):
         _cache_input(operation_identity={"type": "Rerank", "labels": {"match", "no-match"}})
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_identity_mappings_recursively_reject_non_finite_numbers(non_finite: float) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        _cache_input(operation_identity={"type": "Rerank", "nested": {"value": non_finite}})
+
+    context = RunContext(
+        experiment="race",
+        dataset_name="dataset",
+        resolver_config={"nested": {"value": non_finite}},
+    )
+    with pytest.raises(ValueError, match="Out of range float values"):
+        compute_recipe_identity(context)
 
 
 def test_attempt_identity_reads_the_existing_run_record() -> None:

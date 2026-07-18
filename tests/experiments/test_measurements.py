@@ -132,6 +132,23 @@ def test_cache_tokens_need_specialized_rate_unless_fallback_is_explicit() -> Non
     assert fallback_estimate.amount == pytest.approx(0.1)
 
 
+def test_zero_inclusive_input_makes_unknown_cache_subsets_exactly_zero() -> None:
+    price = PriceSnapshot(
+        provider="provider",
+        model="model",
+        captured_at="2026-07-18T12:00:00Z",
+        input_usd_per_token=0.001,
+        output_usd_per_token=0.002,
+        source="provider",
+    )
+
+    estimate = price.reprice(TokenUsage(input_tokens=0, output_tokens=0), requests=0)
+
+    assert estimate.complete is True
+    assert estimate.amount == 0.0
+    assert estimate.missing == ()
+
+
 def test_embedding_runtime_stage_and_funnel_facts_round_trip() -> None:
     embedding = EmbeddingFacts(
         dimensions=384,

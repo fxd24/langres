@@ -63,6 +63,7 @@ def test_cache_and_report_nested_identity_fields_are_deeply_immutable() -> None:
         recipe_id="recipe",
         evaluation_id=evaluation_id,
         architecture="fuzzy",
+        variant_id="fuzzy-default",
         benchmark_id="tiny_fixture",
         split_id="smoke",
         split_seed=0,
@@ -84,3 +85,22 @@ def test_cache_and_report_nested_identity_fields_are_deeply_immutable() -> None:
 
     assert cache.model_dump_json() == cache_json
     assert report.model_dump_json() == report_json
+
+
+def test_default_experiment_run_metrics_mapping_is_immutable() -> None:
+    protocol = EvaluationProtocol.smoke()
+    run = ExperimentRun(
+        recipe_id="recipe",
+        evaluation_id=compute_evaluation_identity(protocol).evaluation_id,
+        architecture="fuzzy",
+        variant_id="fuzzy-default",
+        benchmark_id="tiny_fixture",
+        split_id="smoke",
+        split_seed=0,
+        repeat_index=0,
+        status="completed",
+        cohort_id="local-smoke",
+    )
+
+    with pytest.raises(TypeError, match="immutable"):
+        run.metrics["pair_f1"] = 1.0

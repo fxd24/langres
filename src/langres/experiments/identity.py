@@ -32,7 +32,7 @@ _EXPERIMENT_RECIPE_FIELDS = (
 )
 _SECRET_KEY = re.compile(
     r"(?:^|_)(?:api_key|access_token|auth|authorization|bearer|credential|"
-    r"password|private_key|secret|signature|sig|token)(?:$|_)",
+    r"openai_key|password|private_key|secret|signature|sig|subscription_key|token)(?:$|_)",
     re.IGNORECASE,
 )
 _SAFE_ENDPOINT_QUERY_KEYS = frozenset(
@@ -59,7 +59,13 @@ _EXECUTION_POLICY_KEYS = frozenset(
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=_json_default)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_json_default,
+        allow_nan=False,
+    )
 
 
 def _json_default(value: Any) -> Any:
@@ -129,7 +135,9 @@ class SourceState(BaseModel):
 
 def _normalized_key(value: object) -> str:
     """Normalize config/header/query spellings before classifying secrets."""
-    return re.sub(r"[^a-z0-9]+", "_", str(value).casefold()).strip("_")
+    separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", str(value))
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", separated)
+    return re.sub(r"[^a-z0-9]+", "_", separated.casefold()).strip("_")
 
 
 def _is_secret_key(value: object) -> bool:
@@ -143,6 +151,8 @@ def _redact_secrets(value: Any) -> Any:
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
+        if len(value) == 2 and isinstance(value[0], str) and _is_secret_key(value[0]):
+            return (value[0], "<redacted>")
         return tuple(_redact_secrets(item) for item in value)
     return value
 
@@ -171,7 +181,7 @@ def _safe_endpoint(value: str | None) -> str | None:
 class ResourceSlotIdentity(BaseModel):
     """Complete, secret-safe identity for one model-bearing architecture slot."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, validate_default=True)
 
     slot: str = Field(min_length=1)
     base: str = Field(min_length=1)

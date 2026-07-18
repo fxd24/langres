@@ -24,13 +24,14 @@ class IncompatibleProtocolError(ValueError):
 class ExperimentRun(BaseModel):
     """One immutable matrix cell, including failures and explicit missing cells."""
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     recipe_id: str
     evaluation_id: str
     attempt_id: str | None = None
     cache_id: str | None = None
     architecture: str
+    variant_id: str = Field(min_length=1)
     benchmark_id: str
     split_id: str
     split_seed: int
@@ -85,6 +86,7 @@ class AggregateRow(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     architecture: str
+    variant_id: str
     benchmark_id: str
     split_id: str
     cohort_id: str
@@ -116,12 +118,17 @@ class ParetoRow(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     architecture: str
+    variant_id: str
     benchmark_id: str
     split_id: str
     cohort_id: str
     aggregation: Literal["mean", "median"]
     objectives: dict[str, float]
     completed: int
+    observed: int
+    failed: int
+    missing: int
+    total: int
 
     @field_validator("objectives", mode="after")
     @classmethod
@@ -170,7 +177,7 @@ class ExperimentReport(BaseModel):
                 f"evaluation_id {derived_id!r}"
             )
         object.__setattr__(self, "evaluation_id", derived_id)
-        logical_cells: set[tuple[str, str, str, int, int]] = set()
+        logical_cells: set[tuple[str, str, str, str, int, int]] = set()
         for index, run in enumerate(self.runs):
             if run.evaluation_id != derived_id:
                 raise ValueError(
@@ -204,6 +211,7 @@ class ExperimentReport(BaseModel):
                 )
             logical_cell = (
                 run.architecture,
+                run.variant_id,
                 run.benchmark_id,
                 run.split_id,
                 run.split_seed,
@@ -234,11 +242,25 @@ class ExperimentReport(BaseModel):
         )
 
     def aggregate(self, metric: str) -> tuple[AggregateRow, ...]:
-        grouped: dict[tuple[str, str, str, str], list[ExperimentRun]] = defaultdict(list)
+        grouped: dict[tuple[str, str, str, str, str], list[ExperimentRun]] = defaultdict(list)
         for run in self.runs:
-            grouped[(run.architecture, run.benchmark_id, run.split_id, run.cohort_id)].append(run)
+            grouped[
+                (
+                    run.architecture,
+                    run.variant_id,
+                    run.benchmark_id,
+                    run.split_id,
+                    run.cohort_id,
+                )
+            ].append(run)
         output: list[AggregateRow] = []
-        for (architecture, benchmark_id, split_id, cohort_id), rows in sorted(grouped.items()):
+        for (
+            architecture,
+            variant_id,
+            benchmark_id,
+            split_id,
+            cohort_id,
+        ), rows in sorted(grouped.items()):
             values = [
                 value
                 for run in rows
@@ -276,6 +298,7 @@ class ExperimentReport(BaseModel):
             output.append(
                 AggregateRow(
                     architecture=architecture,
+                    variant_id=variant_id,
                     benchmark_id=benchmark_id,
                     split_id=split_id,
                     cohort_id=cohort_id,
@@ -300,7 +323,7 @@ class ExperimentReport(BaseModel):
             value = run.metrics.get(metric)
             if run.status != "completed" or value is None:
                 continue
-            key = f"{run.architecture}:{run.benchmark_id}"
+            key = f"{run.architecture}:{run.variant_id}:{run.benchmark_id}"
             split_key = f"{run.split_id}:seed-{run.split_seed}"
             repeated[key][split_key].append(value)
         grouped = {
@@ -327,6 +350,7 @@ class ExperimentReport(BaseModel):
         cohort_id: str | None = None,
         benchmark_id: str | None = None,
         split_id: str | None = None,
+        include_incomplete: bool = False,
     ) -> tuple[ParetoRow, ...]:
         """Return non-dominated architecture aggregates in one comparable slice."""
         if not objectives:
@@ -390,9 +414,16 @@ class ExperimentReport(BaseModel):
             run for run in completed if selected_split is None or run.split_id == selected_split
         ]
 
-        grouped: dict[str, list[ExperimentRun]] = defaultdict(list)
-        for run in completed:
-            grouped[run.architecture].append(run)
+        selected_rows = [
+            run
+            for run in self.runs
+            if (selected_cohort is None or run.cohort_id == selected_cohort)
+            and (selected_benchmark is None or run.benchmark_id == selected_benchmark)
+            and (selected_split is None or run.split_id == selected_split)
+        ]
+        grouped: dict[tuple[str, str], list[ExperimentRun]] = defaultdict(list)
+        for run in selected_rows:
+            grouped[(run.architecture, run.variant_id)].append(run)
         required_names = set(objectives)
         if constraints is not None:
             if constraints.max_p95_latency_seconds is not None:
@@ -407,29 +438,46 @@ class ExperimentReport(BaseModel):
                 required_names.add("loaded_memory_bytes")
             required_names.update(constraints.minimum_metrics)
         candidates: list[ParetoRow] = []
-        for architecture, rows in sorted(grouped.items()):
+        for (architecture, variant_id), rows in sorted(grouped.items()):
+            completed_rows = [run for run in rows if run.status == "completed"]
+            failed = sum(run.status in {"failed", "budget_exceeded"} for run in rows)
+            missing = sum(run.status in {"missing", "running"} for run in rows)
             aggregated: dict[str, float] = {}
-            for name in required_names:
-                values = [run.fact(name) for run in rows]
-                if any(value is None for value in values):
+            observed = len(completed_rows)
+            for name in sorted(required_names):
+                values = [run.fact(name) for run in completed_rows]
+                name_observed = sum(value is not None for value in values)
+                observed = min(observed, name_observed)
+                observed_values = [value for value in values if value is not None]
+                if not observed_values:
                     break
-                observed = [value for value in values if value is not None]
                 aggregated[name] = (
-                    statistics.fmean(observed)
+                    statistics.fmean(observed_values)
                     if self.protocol.aggregation == "mean"
-                    else statistics.median(observed)
+                    else statistics.median(observed_values)
                 )
             else:
                 candidate = ParetoRow(
                     architecture=architecture,
+                    variant_id=variant_id,
                     benchmark_id=rows[0].benchmark_id,
                     split_id=rows[0].split_id,
                     cohort_id=rows[0].cohort_id,
                     aggregation=self.protocol.aggregation,
                     objectives=aggregated,
-                    completed=len(rows),
+                    completed=len(completed_rows),
+                    observed=observed,
+                    failed=failed,
+                    missing=missing,
+                    total=len(rows),
                 )
-                if constraints is None or self._pareto_meets_constraints(candidate, constraints):
+                complete = (
+                    candidate.completed == candidate.total
+                    and candidate.observed == candidate.completed
+                )
+                if (include_incomplete or complete) and (
+                    constraints is None or self._pareto_meets_constraints(candidate, constraints)
+                ):
                     candidates.append(candidate)
 
         front: list[ParetoRow] = []
@@ -532,9 +580,9 @@ class ExperimentReport(BaseModel):
     def to_markdown(self) -> str:
         """Render every row, including failed and missing matrix cells."""
         header = (
-            "| architecture | benchmark | split | repeat | status | pair_f1 | "
+            "| architecture | variant | benchmark | split | repeat | status | pair_f1 | "
             "bcubed_f1 | seconds | tokens | usd |\n"
-            "|---|---|---|---:|---|---:|---:|---:|---:|---:|"
+            "|---|---|---|---|---:|---|---:|---:|---:|---:|---:|"
         )
         rows = [header]
         for run in self.runs:
@@ -550,6 +598,7 @@ class ExperimentReport(BaseModel):
                 + " | ".join(
                     (
                         run.architecture,
+                        run.variant_id,
                         run.benchmark_id,
                         run.split_id,
                         str(run.repeat_index),

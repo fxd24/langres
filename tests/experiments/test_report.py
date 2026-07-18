@@ -40,6 +40,7 @@ def _run(
     split_id: str = "fixed",
     split_seed: int = 1,
     repeat_index: int = 0,
+    variant_id: str | None = None,
 ) -> ExperimentRun:
     resolved_evaluation_id = evaluation_id or compute_evaluation_identity(_protocol()).evaluation_id
     return ExperimentRun(
@@ -47,6 +48,7 @@ def _run(
         evaluation_id=resolved_evaluation_id,
         attempt_id=f"attempt-{architecture}",
         architecture=architecture,
+        variant_id=variant_id or f"variant-{architecture}",
         benchmark_id=benchmark_id,
         split_id=split_id,
         split_seed=split_seed,
@@ -183,6 +185,26 @@ def test_report_rejects_duplicate_logical_cells_so_retries_are_not_samples() -> 
         )
 
 
+def test_same_architecture_with_distinct_config_variants_coexists_and_aggregates_separately() -> (
+    None
+):
+    report = ExperimentReport(
+        protocol=_protocol(),
+        runs=(
+            _run("Retrieve", variant_id="embedder-a", pair_f1=0.8),
+            _run("Retrieve", variant_id="embedder-b", pair_f1=0.9),
+        ),
+    )
+
+    aggregates = report.aggregate("pair_f1")
+    assert {(row.variant_id, row.value) for row in aggregates} == {
+        ("embedder-a", 0.8),
+        ("embedder-b", 0.9),
+    }
+    [front] = report.pareto({"pair_f1": "max"})
+    assert front.variant_id == "embedder-b"
+
+
 def test_pareto_aggregates_repeats_and_requires_one_benchmark_split_slice() -> None:
     protocol = EvaluationProtocol(
         benchmark_ids=("dataset-a", "dataset-b"),
@@ -238,3 +260,52 @@ def test_pareto_aggregates_repeats_and_requires_one_benchmark_split_slice() -> N
     assert row.completed == 2
     assert row.objectives["pair_f1"] == pytest.approx(0.9)
     assert row.objectives["wall_seconds"] == pytest.approx(2.0)
+
+
+def test_pareto_excludes_incomplete_variants_by_default_and_exposes_denominators() -> None:
+    protocol = _protocol().model_copy(update={"stochastic_repeats": 2})
+    evaluation_id = compute_evaluation_identity(protocol).evaluation_id
+    report = ExperimentReport(
+        protocol=protocol,
+        runs=(
+            _run(
+                "RetrieveLLM",
+                variant_id="complete",
+                evaluation_id=evaluation_id,
+                repeat_index=0,
+                pair_f1=0.8,
+            ),
+            _run(
+                "RetrieveLLM",
+                variant_id="complete",
+                evaluation_id=evaluation_id,
+                repeat_index=1,
+                pair_f1=0.9,
+            ),
+            _run(
+                "RetrieveLLM",
+                variant_id="incomplete",
+                evaluation_id=evaluation_id,
+                repeat_index=0,
+                pair_f1=1.0,
+            ),
+            _run(
+                "RetrieveLLM",
+                variant_id="incomplete",
+                evaluation_id=evaluation_id,
+                repeat_index=1,
+                status="failed",
+            ),
+        ),
+    )
+
+    [default_front] = report.pareto({"pair_f1": "max"})
+    assert default_front.variant_id == "complete"
+
+    [partial_front] = report.pareto({"pair_f1": "max"}, include_incomplete=True)
+    assert partial_front.variant_id == "incomplete"
+    assert partial_front.completed == 1
+    assert partial_front.observed == 1
+    assert partial_front.failed == 1
+    assert partial_front.missing == 0
+    assert partial_front.total == 2

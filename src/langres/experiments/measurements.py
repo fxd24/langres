@@ -163,20 +163,21 @@ class PriceSnapshot(BaseModel):
                 missing.append("input_usd_per_token")
         else:
             amount += usage.input_tokens * self.input_usd_per_token
-            amount, cache_missing = self._adjust_cache_rate(
-                amount,
-                usage.cache_read_input_tokens,
-                self.cache_read_input_usd_per_token,
-                "cache_read_input_tokens",
-            )
-            missing.extend(cache_missing)
-            amount, cache_missing = self._adjust_cache_rate(
-                amount,
-                usage.cache_creation_input_tokens,
-                self.cache_creation_input_usd_per_token,
-                "cache_creation_input_tokens",
-            )
-            missing.extend(cache_missing)
+            if usage.input_tokens != 0:
+                amount, cache_missing = self._adjust_cache_rate(
+                    amount,
+                    usage.cache_read_input_tokens,
+                    self.cache_read_input_usd_per_token,
+                    "cache_read_input_tokens",
+                )
+                missing.extend(cache_missing)
+                amount, cache_missing = self._adjust_cache_rate(
+                    amount,
+                    usage.cache_creation_input_tokens,
+                    self.cache_creation_input_usd_per_token,
+                    "cache_creation_input_tokens",
+                )
+                missing.extend(cache_missing)
 
         if usage.output_tokens is None:
             missing.append("output_tokens")

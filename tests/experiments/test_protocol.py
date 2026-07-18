@@ -32,6 +32,14 @@ def test_ordinary_protocol_may_omit_budget() -> None:
     assert protocol.budget_usd is None
 
 
+def test_default_protocol_identity_mappings_are_immutable() -> None:
+    protocol = EvaluationProtocol.smoke()
+    with pytest.raises(TypeError, match="immutable"):
+        protocol.dataset_fingerprints["tiny_fixture"] = "changed"
+    with pytest.raises(TypeError, match="immutable"):
+        protocol.deterministic_resources["embedder"] = {"batch_size": 16}
+
+
 def test_official_zero_cost_protocol_may_be_uncapped_but_requires_dataset_provenance() -> None:
     kwargs = {
         "benchmark_ids": ("a",),
@@ -90,6 +98,26 @@ def test_official_protocol_requires_data_and_test_set_identity() -> None:
             dataset_fingerprints={"a": ""},
             fixed_test_set_id="composite:test",
         )
+
+
+def test_exploratory_protocol_without_composite_test_id_requires_every_dataset_identity() -> None:
+    common = {
+        "benchmark_ids": ("a", "b"),
+        "split_ids": ("fixed",),
+        "split_seeds": (0,),
+        "threshold_split_id": "validation",
+        "test_split_id": "test",
+        "hardware_cohort": "cpu-local",
+        "benchmark_version": "1",
+    }
+    with pytest.raises(ValidationError, match="every benchmark"):
+        EvaluationProtocol(**common, test_set_identities={"a": "a:test"})
+
+    protocol = EvaluationProtocol(
+        **common,
+        test_set_identities={"a": "a:test", "b": "b:test"},
+    )
+    assert protocol.fixed_test_set_id is None
 
 
 def test_threshold_and_test_splits_must_be_distinct() -> None:
@@ -213,6 +241,22 @@ def test_protocol_mappings_reject_non_json_sets() -> None:
             fixed_test_set_id="a:test:v1",
             split_seeds=(0,),
             deterministic_resources={"devices": {"cpu", "gpu"}},
+            threshold_split_id="validation",
+            test_split_id="test",
+            hardware_cohort="cpu-local",
+            benchmark_version="1",
+        )
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_protocol_mappings_recursively_reject_non_finite_values(non_finite: float) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        EvaluationProtocol(
+            benchmark_ids=("a",),
+            split_ids=("fixed",),
+            fixed_test_set_id="a:test:v1",
+            split_seeds=(0,),
+            deterministic_resources={"runtime": {"temperature": non_finite}},
             threshold_split_id="validation",
             test_split_id="test",
             hardware_cohort="cpu-local",

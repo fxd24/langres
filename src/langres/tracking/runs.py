@@ -31,6 +31,7 @@ import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 import subprocess
 import time
@@ -39,9 +40,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from langres.tracking.trackers import ExperimentTracker, NoOpTracker
 
@@ -159,6 +160,66 @@ class RunContext(BaseModel):
     seeds: dict[str, int] = Field(default_factory=dict)
 
 
+class _FrozenSnapshotDict(dict[str, Any]):
+    """JSON-serializable immutable mapping used for persisted run snapshots."""
+
+    @staticmethod
+    def _immutable(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise TypeError("run snapshots are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+    def popitem(self) -> tuple[str, Any]:
+        self._raise_immutable()
+
+    def __ior__(self, value: Any) -> Self:  # type: ignore[override,misc]
+        del value
+        self._raise_immutable()
+
+    @staticmethod
+    def _raise_immutable() -> Never:
+        raise TypeError("run snapshots are immutable")
+
+
+def _deep_snapshot(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _FrozenSnapshotDict({str(key): _deep_snapshot(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_snapshot(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        raise ValueError("run snapshots must contain JSON values; sets are not supported")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("run snapshots must contain finite numeric values")
+    return value
+
+
+def _snapshot_mapping(value: Mapping[str, Any] | None) -> _FrozenSnapshotDict | None:
+    if value is None:
+        return None
+    snapshot = _deep_snapshot(value)
+    assert isinstance(snapshot, _FrozenSnapshotDict)
+    return snapshot
+
+
+def _snapshot_measurements(
+    values: Iterable[Mapping[str, Any]] | None,
+) -> tuple[_FrozenSnapshotDict, ...] | None:
+    if values is None:
+        return None
+    snapshots: list[_FrozenSnapshotDict] = []
+    for value in values:
+        snapshot = _snapshot_mapping(value)
+        assert snapshot is not None
+        snapshots.append(snapshot)
+    return tuple(snapshots)
+
+
 class RunRecord(BaseModel):
     """A :class:`RunContext` plus outcomes -- one JSONL line, ``"v": 1`` idiom.
 
@@ -177,7 +238,7 @@ class RunRecord(BaseModel):
     evaluation_id: str | None = None
     cache_id: str | None = None
     protocol: dict[str, Any] | None = None
-    measurements: list[dict[str, Any]] | None = None
+    measurements: tuple[dict[str, Any], ...] | None = None
 
     # -- Timing (never hashed) --
     started_at: str
@@ -204,6 +265,19 @@ class RunRecord(BaseModel):
     error_type: str | None = None
     error_message: str | None = None
 
+    @field_validator("protocol", mode="after")
+    @classmethod
+    def _freeze_protocol(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _snapshot_mapping(value)
+
+    @field_validator("measurements", mode="after")
+    @classmethod
+    def _freeze_measurements(
+        cls,
+        value: tuple[dict[str, Any], ...] | None,
+    ) -> tuple[dict[str, Any], ...] | None:
+        return _snapshot_measurements(value)
+
 
 # ---------------------------------------------------------------------------
 # Identity + fingerprint helpers
@@ -223,7 +297,13 @@ def _json_default(obj: Any) -> Any:
 
 def _canonical_json(obj: Any) -> str:
     """Order-stable JSON: sorted keys, no whitespace -- the hashing normal form."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=_json_default)
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_json_default,
+        allow_nan=False,
+    )
 
 
 def compute_recipe_id(context: RunContext) -> str:
@@ -489,7 +569,7 @@ class _RunHandle:
         self._status_override: RunStatus | None = None
         self._spend_usd: float = 0.0
         self._budget_exceeded: bool = False
-        self._measurements: list[dict[str, Any]] | None = None
+        self._measurements: tuple[dict[str, Any], ...] | None = None
 
     def log_metrics(
         self,
@@ -526,7 +606,7 @@ class _RunHandle:
 
     def record_measurements(self, measurements: Iterable[Mapping[str, Any]]) -> None:
         """Attach import-neutral serialized stage measurements to the terminal record."""
-        self._measurements = [dict(measurement) for measurement in measurements]
+        self._measurements = _snapshot_measurements(measurements)
 
 
 @contextmanager
@@ -560,20 +640,19 @@ def capture_run(
     started_at = datetime.now(UTC).isoformat()
     attempt_id = f"{resolved_recipe_id}-{started_at}"
     started_perf = time.perf_counter()
+    running_record = RunRecord(
+        attempt_id=attempt_id,
+        recipe_id=resolved_recipe_id,
+        context=context,
+        evaluation_id=evaluation_id,
+        cache_id=cache_id,
+        protocol=dict(protocol) if protocol is not None else None,
+        started_at=started_at,
+        status="running",
+    )
 
     if resolved_store is not None:
-        resolved_store.append(
-            RunRecord(
-                attempt_id=attempt_id,
-                recipe_id=resolved_recipe_id,
-                context=context,
-                evaluation_id=evaluation_id,
-                cache_id=cache_id,
-                protocol=dict(protocol) if protocol is not None else None,
-                started_at=started_at,
-                status="running",
-            )
-        )
+        resolved_store.append(running_record)
     handle = _RunHandle(attempt_id, resolved_recipe_id, tracker)
     token = current_run.set(attempt_id)
     error_type: str | None = None
@@ -597,28 +676,23 @@ def capture_run(
             artifacts.setdefault("run_url", tracker.run_url)
         if resolved_store is not None:
             resolved_store.append(
-                RunRecord(
-                    attempt_id=attempt_id,
-                    recipe_id=resolved_recipe_id,
-                    context=context,
-                    evaluation_id=evaluation_id,
-                    cache_id=cache_id,
-                    protocol=dict(protocol) if protocol is not None else None,
-                    measurements=handle._measurements,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    duration_seconds=duration_seconds,
-                    metrics=handle._metrics,
-                    metric_definition=handle._metric_definition,
-                    per_seed_metrics=handle._per_seed_metrics,
-                    headline_metric=handle._headline_metric,
-                    spend_usd=handle._spend_usd,
-                    budget_exceeded=handle._budget_exceeded,
-                    trace_id=attempt_id,
-                    artifacts=artifacts,
-                    status=final_status,
-                    error_type=error_type,
-                    error_message=error_message,
+                running_record.model_copy(
+                    update={
+                        "measurements": handle._measurements,
+                        "finished_at": finished_at,
+                        "duration_seconds": duration_seconds,
+                        "metrics": handle._metrics,
+                        "metric_definition": handle._metric_definition,
+                        "per_seed_metrics": handle._per_seed_metrics,
+                        "headline_metric": handle._headline_metric,
+                        "spend_usd": handle._spend_usd,
+                        "budget_exceeded": handle._budget_exceeded,
+                        "trace_id": attempt_id,
+                        "artifacts": artifacts,
+                        "status": final_status,
+                        "error_type": error_type,
+                        "error_message": error_message,
+                    }
                 )
             )
         tracker.finish(status=final_status)

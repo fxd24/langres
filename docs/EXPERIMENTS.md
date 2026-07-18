@@ -329,7 +329,10 @@ The four identities answer different questions:
   lock/environment, execution plan and operation, input fingerprint, and every
   resource slot's base/kind/revision/adapter/provider/endpoint-safe runtime
   identity. Credential-like runtime values are detected after normalizing
-  header/config spelling (`X-API-Key`, underscores, and similar forms).
+  header/config spelling (`X-API-Key`, `openai-key`,
+  `Ocp-Apim-Subscription-Key`, underscores, and similar forms), including
+  camel-case forms (`apiKey`, `accessToken`, `clientSecret`, `privateKey`) and
+  headers represented as key/value tuple sequences.
   Endpoint identity retains only an explicit allowlist of routing query
   parameters, so signed-URL credentials/signatures are never hashed or
   serialized.
@@ -343,21 +346,31 @@ commit, lock, environment, and required model revisions are pinned; local model
 resources additionally require a content digest. Dirty exploratory source
 includes its tree/diff hash. Identity/protocol mappings accept JSON-shaped
 values only; unordered sets are rejected instead of depending on process hash
-order.
+order. Non-finite numbers are rejected recursively and canonical identity JSON
+uses strict JSON (`NaN`/infinity are never hashed). Default mapping fields are
+frozen too; omitting a mapping never leaves a mutable default inside a frozen
+protocol/resource/run object.
 
 Measurements keep unknown facts as `None`; measured zero remains `0`.
 `PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
 inference. Cache-token discounts require their specialized rate unless the
-snapshot explicitly declares base-rate fallback. `ExperimentReport` derives its
+snapshot explicitly declares base-rate fallback. The exact-zero exception is
+an inclusive `input_tokens=0`: unknown cache subsets are necessarily zero and
+do not make repricing incomplete. `ExperimentReport` derives its
 `evaluation_id` from the protocol, rejects rows outside the declared
 benchmark/split/seed/cohort, retains completed, failed, budget-exceeded, and
 missing cells, rejects duplicate logical cells (retries remain run attempts),
 and offers cohort-safe aggregate, constraint, Pareto, markdown, and
-split-seed-instability views. Pareto fronts compare per-architecture aggregates
-inside one explicitly selected benchmark/split/hardware slice, never raw repeats
-or mixed datasets. Aggregate confidence intervals explicitly say `unavailable`
-until paired entity/cluster observations exist; summary rows are never treated
-as independent bootstrap samples. The package's
+split-seed-instability views. Every row carries a stable `variant_id`, so two
+resource/config variants of the same named architecture remain separate in
+duplicate detection, aggregates, and Pareto fronts. Pareto fronts compare
+per-variant architecture aggregates inside one explicitly selected
+benchmark/split/hardware slice, never raw repeats or mixed datasets. Incomplete
+variants are excluded by default; the explicit `include_incomplete=True` view
+retains completion/observation/failure/missing/total denominators. Aggregate
+confidence intervals explicitly say `unavailable` until paired entity/cluster
+observations exist; summary rows are never treated as independent bootstrap
+samples. The package's
 `paired_entity_bootstrap()` computes fixed-test-set uncertainty over paired
 cluster/entity units rather than dependent pair rows, and reports
 `insufficient` when fewer than two resampling units exist.
@@ -365,11 +378,17 @@ cluster/entity units rather than dependent pair rows, and reports
 Ordinary protocols may omit `budget_usd`, and a zero-cost official publication
 may also be uncapped. Official eligibility requires dataset
 fingerprints/revisions plus per-dataset or composite test-set identity. The
+same test-set rule applies to exploratory comparisons: without a composite
+`fixed_test_set_id`, every declared benchmark needs its own non-empty identity.
+The
 separate guarded paid-proof policy requires **exactly USD 20**.
 `EvaluationProtocol.official_proof(...)` expands the fixed five-topology,
 two-dataset acceptance matrix to exactly 18 cells before retries only when
 `paid_proof=True` and every dataset/test provenance value is non-empty: one
 deterministic attempt per cell and three attempts for the two LLM topologies.
+`capture_run` deep-snapshots protocol and measurement mappings once, reuses the
+protocol snapshot for running and terminal records, and persists immutable
+JSON-shaped values so caller mutation cannot rewrite recorded provenance.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)
 
