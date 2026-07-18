@@ -46,6 +46,10 @@ ModelRef(
 )
 ```
 
+`ResourceSlotIdentity.from_model_ref()` preserves both revisions, so changing
+only the adapter commit changes the cache identity and a fully pinned base plus
+adapter is eligible for official cache publication.
+
 ## Deterministic offline resources
 
 `FakeEmbedder`, `FakeReranker`, and `FakeLLM` are deterministic, zero-network
@@ -96,7 +100,11 @@ request ids are rejected before any provider call, and measured envelope costs
 are added to that ledger. Once bound, `Generate` invokes the resource one request
 at a time and checks the ledger between calls, preserving the framework-wide
 budget guarantee: the configured budget plus the cost of at most one further
-paid call. A finite-budget API/endpoint run also fails closed after the first
+paid call. If that completed call crosses the cap, the raised
+`BudgetExceeded.outputs` contains every validated envelope produced in that
+operation, including the breaching response, so paid work is recoverable for
+logging without allowing another call. A finite-budget API/endpoint run also
+fails closed after the first
 successful response whose cost is unknown. The typed
 `UnknownGenerationCostError.outputs` retains that response for logging or
 explicit recovery, but the operation never treats it as `$0` or starts a second
@@ -172,18 +180,17 @@ not `cost_usd=None`. Numeric `cost_usd` remains absent until measured, preservin
 compatibility with benchmark and tracking readers that treat a present cost key
 as numeric.
 
-### Topology merge checkpoint
+### Topology persistence
 
-`Rerank`, `Generate`, and `Parse` already expose safe named-callable configs and
-round-trip constructors. Their `OpSerializer` registrations intentionally land
-only after this resource branch is merged with the topology branch that defines
-that registry; adding a parallel registry here would create two persistence
-contracts. The spending half is already proven on the current topology branch:
-commit `2e53784` introduced the runtime-checkable `SpendMonitorBindable` seam,
-`ERModel._secure_chain_scores()` binds every `Spending` stage to the model's exact
-ledger, and
-`test_from_topology_uses_the_generic_monitor_binding_capability` covers a
-non-matcher Generate-like operation. `Generate` structurally implements that
-same seam; the resource-side cross-branch regression activates automatically
-once the topology commit is merged. The remaining merged follow-up is serializer
-registration plus a full topology save/load test.
+`Rerank`, `Generate`, and `Parse` register strict, exact-class serializers with
+the explicit topology registry. `Rerank` and `Generate` persist their nested
+model under the common `resource` component slot; `Parse` is component-free.
+Only the built-in named serializer, request-builder, and parser choices can be
+loaded, unknown fields fail before component lookup, and a rebuilt nested model
+must still satisfy the corresponding `Reranker` or `LLM` protocol.
+
+Artifacts therefore round-trip both `Generate -> Parse` and
+`Rerank -> Generate -> Parse` chains. Execution plans report the same registered
+roles (`rerank`, `generate`, and `parse`) without importing resource classes into
+core. Loaded `Generate` operations are rebound to the loaded model's fresh
+cumulative spend ledger.

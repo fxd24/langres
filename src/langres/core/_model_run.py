@@ -100,6 +100,7 @@ from langres.core.op_adapters import (
     MatcherScore,
 )
 from langres.core.pairs import Pairs
+from langres.core.registry import UnknownOpType, op_serializer_for_type
 from langres.core.results import DedupeResult, LinkVerdict
 from langres.core.serialization import OpSpec
 from langres.core.spend_cap import SpendCappedMatcher
@@ -540,7 +541,14 @@ class ModelRun(ModelState):
         factories. Only ``save()`` requires an explicitly registered serializer,
         so this deliberately does not call ``op_spec(stage)``.
         """
-        if isinstance(stage, BlockerSource):
+        try:
+            registered_role = op_serializer_for_type(type(stage)).role
+        except UnknownOpType:
+            registered_role = None
+
+        if registered_role is not None:
+            role = registered_role
+        elif isinstance(stage, BlockerSource):
             role = "blocker_source"
         elif isinstance(stage, ComparatorScore):
             role = "comparator_score"

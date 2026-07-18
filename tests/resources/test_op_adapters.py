@@ -404,11 +404,47 @@ def test_generate_bound_budget_limits_overshoot_to_one_paid_call() -> None:
     monitor = SpendMonitor(budget_usd=0.5)
     operation = Generate[CompanySchema](resource).bind_spend_monitor(monitor)
 
-    with pytest.raises(BudgetExceeded):
+    with pytest.raises(BudgetExceeded) as exc_info:
         operation.forward(_pairs())
 
     assert resource.calls == 1
     assert monitor.spent == pytest.approx(0.6)
+    assert [output.request_id for output in exc_info.value.outputs] == ['["a","b"]']
+    output = exc_info.value.outputs[0]
+    assert isinstance(output, GenerationEnvelope)
+    assert output.content == "NO_MATCH"
+
+
+def test_generate_budget_error_retains_prior_and_breaching_outputs() -> None:
+    class _CostedLLM(FakeLLM):
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            batch = super().generate(requests)
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(update={"cost_usd": 0.6, "cost_basis": "real"})
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    resource = _CostedLLM(default_response="MATCH")
+    monitor = SpendMonitor(budget_usd=1.0)
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(monitor)
+
+    with pytest.raises(BudgetExceeded) as exc_info:
+        operation.forward(_pairs())
+
+    assert resource.calls == 2
+    assert [output.request_id for output in exc_info.value.outputs] == [
+        '["a","b"]',
+        '["a","c"]',
+    ]
+    assert all(isinstance(output, GenerationEnvelope) for output in exc_info.value.outputs)
+    assert monitor.spent == pytest.approx(1.2)
 
 
 def test_generate_finite_api_budget_stops_after_unknown_cost_and_retains_output() -> None:

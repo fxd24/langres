@@ -6,6 +6,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -15,8 +16,9 @@ from langres.core.model_ref import to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.op import Op, Score, Spending
 from langres.core.pairs import PairRow, Pairs
+from langres.core.registry import OpSerializer, register_op_serializer
 from langres.core.score_type import ScoreType
-from langres.core.spend import SpendMonitor, attach_spend_observation
+from langres.core.spend import BudgetExceeded, SpendMonitor, attach_spend_observation
 from langres.resources.base import (
     GenerationBatch,
     GenerationEnvelope,
@@ -351,8 +353,12 @@ class Generate(Op[SchemaT], Spending, Generic[SchemaT]):
                 output.cost_usd for output in validated if output.cost_usd is not None
             ]
             self._spend_monitor.add(sum(measured_costs))
-            self._spend_monitor.check()
             outputs.extend(validated)
+            try:
+                self._spend_monitor.check()
+            except BudgetExceeded as exc:
+                exc.outputs = tuple(outputs)
+                raise
         return outputs
 
     def _validated_outputs(
@@ -492,6 +498,124 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
                 )
             )
         return Pairs(store=pairs.store, rows=rows)
+
+
+class _RerankOpParams(BaseModel):
+    """Strict artifact envelope for the built-in Rerank operation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    out_space: ScoreType
+    serializer: Literal["json"]
+
+
+class _GenerateOpParams(BaseModel):
+    """Strict artifact envelope for the built-in Generate operation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_builder: Literal["binary_pair"]
+
+
+class _ParseOpParams(BaseModel):
+    """Strict artifact envelope for the built-in Parse operation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    parser: Literal["binary", "score"]
+    on_parse_error: Literal["abstain", "raise"]
+
+
+def _validated_params(
+    model: type[BaseModel],
+    params: dict[str, object],
+) -> dict[str, object]:
+    """Validate a complete resource Op envelope before component lookup."""
+    return model.model_validate(params).model_dump()
+
+
+def _dump_rerank(stage: object) -> tuple[dict[str, object], object | None]:
+    if not isinstance(stage, Rerank):
+        raise TypeError("rerank serializer requires an exact Rerank operation")
+    return stage.config, stage.resource
+
+
+def _load_rerank(
+    params: dict[str, object],
+    component: object | None,
+    _state_dir: Path,
+) -> Rerank[Any]:
+    if not isinstance(component, Reranker):
+        raise TypeError("OpSpec role 'rerank' requires a Reranker resource")
+    return Rerank.from_config(component, params)
+
+
+def _dump_generate(stage: object) -> tuple[dict[str, object], object | None]:
+    if not isinstance(stage, Generate):
+        raise TypeError("generate serializer requires an exact Generate operation")
+    return stage.config, stage.resource
+
+
+def _load_generate(
+    params: dict[str, object],
+    component: object | None,
+    _state_dir: Path,
+) -> Generate[Any]:
+    if not isinstance(component, LLM):
+        raise TypeError("OpSpec role 'generate' requires an LLM resource")
+    return Generate.from_config(component, params)
+
+
+def _dump_parse(stage: object) -> tuple[dict[str, object], object | None]:
+    if not isinstance(stage, Parse):
+        raise TypeError("parse serializer requires an exact Parse operation")
+    return stage.config, None
+
+
+def _load_parse(
+    params: dict[str, object],
+    component: object | None,
+    _state_dir: Path,
+) -> Parse[Any]:
+    if component is not None:
+        raise ValueError("OpSpec role 'parse' does not accept a resource component")
+    return Parse.from_config(params)
+
+
+def _register_resource_op_serializers() -> None:
+    """Register resource-owned operations with core's fail-closed topology seam."""
+    register_op_serializer(
+        OpSerializer(
+            role="rerank",
+            op_type=Rerank,
+            dump=_dump_rerank,
+            load=_load_rerank,
+            component_slot="resource",
+            validate_params=lambda params: _validated_params(_RerankOpParams, params),
+        )
+    )
+    register_op_serializer(
+        OpSerializer(
+            role="generate",
+            op_type=Generate,
+            dump=_dump_generate,
+            load=_load_generate,
+            component_slot="resource",
+            validate_params=lambda params: _validated_params(_GenerateOpParams, params),
+        )
+    )
+    register_op_serializer(
+        OpSerializer(
+            role="parse",
+            op_type=Parse,
+            dump=_dump_parse,
+            load=_load_parse,
+            validate_params=lambda params: _validated_params(_ParseOpParams, params),
+        )
+    )
+
+
+_register_resource_op_serializers()
 
 
 class LLMMatcherAdapter(Matcher[SchemaT], Generic[SchemaT]):

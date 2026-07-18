@@ -177,6 +177,52 @@ def test_resource_slot_order_is_canonical_and_model_ref_projection_is_secret_saf
     assert endpoint.runtime_config["api_key"] == "<redacted>"
 
 
+def test_model_ref_projection_preserves_adapter_revision_in_cache_identity() -> None:
+    first = ResourceSlotIdentity.from_model_ref(
+        "reranker",
+        ModelRef(
+            base="org/model",
+            kind="hf",
+            revision="base-sha",
+            adapter="org/adapter",
+            adapter_revision="adapter-sha-a",
+        ),
+    )
+    second = ResourceSlotIdentity.from_model_ref(
+        "reranker",
+        ModelRef(
+            base="org/model",
+            kind="hf",
+            revision="base-sha",
+            adapter="org/adapter",
+            adapter_revision="adapter-sha-b",
+        ),
+    )
+
+    assert first.adapter_revision == "adapter-sha-a"
+    assert second.adapter_revision == "adapter-sha-b"
+    assert compute_cache_identity(_cache_input(resource_slots=(first,))) != (
+        compute_cache_identity(_cache_input(resource_slots=(second,)))
+    )
+
+
+def test_official_cache_accepts_fully_pinned_projected_base_and_adapter() -> None:
+    resource = ResourceSlotIdentity.from_model_ref(
+        "reranker",
+        ModelRef(
+            base="org/model",
+            kind="hf",
+            revision="base-sha",
+            adapter="org/adapter",
+            adapter_revision="adapter-sha",
+        ),
+    )
+
+    identity = compute_cache_identity(_cache_input(resource_slots=(resource,), official=True))
+
+    assert identity.official is True
+
+
 def test_publication_claim_does_not_change_output_cache_identity() -> None:
     common = {
         "stage_id": "embed",

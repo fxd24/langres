@@ -90,11 +90,14 @@ class BudgetExceeded(RuntimeError):
     default empty list so any future raiser is safe even if it never sets it,
     and callers/mypy see the attribute without an ad hoc
     ``# type: ignore[attr-defined]`` at the one call site that populates it.
+    Resource operations that finish a paid call before detecting the breach
+    populate ``outputs`` with their validated, recoverable envelopes.
     """
 
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self.partial_judgements: list[PairwiseJudgement] = []
+        self.outputs: tuple[object, ...] = ()
 
 
 class SpendMonitor:
