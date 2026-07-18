@@ -7,6 +7,7 @@ from langres.experiments import (
     EvaluationProtocol,
     ExperimentReport,
     ExperimentRun,
+    IncompatibleProtocolError,
     ReportConstraints,
     compute_evaluation_identity,
 )
@@ -35,6 +36,10 @@ def _run(
     wall_seconds: float | None = None,
     usd: float | None = None,
     model_size_bytes: int | None = None,
+    benchmark_id: str = "dataset",
+    split_id: str = "fixed",
+    split_seed: int = 1,
+    repeat_index: int = 0,
 ) -> ExperimentRun:
     resolved_evaluation_id = evaluation_id or compute_evaluation_identity(_protocol()).evaluation_id
     return ExperimentRun(
@@ -42,10 +47,10 @@ def _run(
         evaluation_id=resolved_evaluation_id,
         attempt_id=f"attempt-{architecture}",
         architecture=architecture,
-        benchmark_id="dataset",
-        split_id="fixed",
-        split_seed=1,
-        repeat_index=0,
+        benchmark_id=benchmark_id,
+        split_id=split_id,
+        split_seed=split_seed,
+        repeat_index=repeat_index,
         status=status,
         cohort_id=cohort_id,
         metrics={"pair_f1": pair_f1},
@@ -128,15 +133,21 @@ def test_report_derives_identity_and_rejects_spoofed_or_out_of_protocol_rows() -
 
 
 def test_aggregate_honors_median_and_exhaustive_denominators_without_fake_ci() -> None:
-    protocol = _protocol().model_copy(update={"aggregation": "median"})
+    protocol = _protocol().model_copy(update={"aggregation": "median", "stochastic_repeats": 6})
     evaluation_id = compute_evaluation_identity(protocol).evaluation_id
     runs = (
-        _run("a", evaluation_id=evaluation_id, pair_f1=0.1),
-        _run("a", evaluation_id=evaluation_id, pair_f1=0.9),
-        _run("a", evaluation_id=evaluation_id, pair_f1=0.8),
-        _run("a", evaluation_id=evaluation_id, status="completed", pair_f1=None),
-        _run("a", evaluation_id=evaluation_id, status="failed"),
-        _run("a", evaluation_id=evaluation_id, status="missing"),
+        _run("a", evaluation_id=evaluation_id, repeat_index=0, pair_f1=0.1),
+        _run("a", evaluation_id=evaluation_id, repeat_index=1, pair_f1=0.9),
+        _run("a", evaluation_id=evaluation_id, repeat_index=2, pair_f1=0.8),
+        _run(
+            "a",
+            evaluation_id=evaluation_id,
+            repeat_index=3,
+            status="completed",
+            pair_f1=None,
+        ),
+        _run("a", evaluation_id=evaluation_id, repeat_index=4, status="failed"),
+        _run("a", evaluation_id=evaluation_id, repeat_index=5, status="missing"),
     )
 
     [row] = ExperimentReport(protocol=protocol, runs=runs).aggregate("pair_f1")
@@ -161,3 +172,69 @@ def test_non_finite_metrics_and_bad_pareto_requests_fail_actionably() -> None:
         report.pareto({"pair_f1": "up"})  # type: ignore[dict-item]
     with pytest.raises(ValueError, match="unknown Pareto objective"):
         report.pareto({"made_up_metric": "max"})
+
+
+def test_report_rejects_duplicate_logical_cells_so_retries_are_not_samples() -> None:
+    duplicate = _run("a", pair_f1=0.9)
+    with pytest.raises(pydantic.ValidationError, match="duplicate logical experiment cell"):
+        ExperimentReport(
+            protocol=_protocol(),
+            runs=(duplicate, duplicate.model_copy(update={"attempt_id": "retry-2"})),
+        )
+
+
+def test_pareto_aggregates_repeats_and_requires_one_benchmark_split_slice() -> None:
+    protocol = EvaluationProtocol(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        split_ids=("split-a", "split-b"),
+        fixed_test_set_id="composite:test",
+        split_seeds=(1,),
+        stochastic_repeats=2,
+        threshold_split_id="validation",
+        test_split_id="test",
+        hardware_cohort="cpu-a",
+        benchmark_version="1",
+    )
+    evaluation_id = compute_evaluation_identity(protocol).evaluation_id
+    runs = (
+        _run(
+            "steady",
+            evaluation_id=evaluation_id,
+            benchmark_id="dataset-a",
+            split_id="split-a",
+            repeat_index=0,
+            pair_f1=0.8,
+            wall_seconds=1.0,
+        ),
+        _run(
+            "steady",
+            evaluation_id=evaluation_id,
+            benchmark_id="dataset-a",
+            split_id="split-a",
+            repeat_index=1,
+            pair_f1=1.0,
+            wall_seconds=3.0,
+        ),
+        _run(
+            "other",
+            evaluation_id=evaluation_id,
+            benchmark_id="dataset-b",
+            split_id="split-b",
+            pair_f1=0.99,
+            wall_seconds=0.1,
+        ),
+    )
+    report = ExperimentReport(protocol=protocol, runs=runs)
+
+    with pytest.raises(IncompatibleProtocolError, match="multiple benchmark_id"):
+        report.pareto({"pair_f1": "max", "wall_seconds": "min"})
+
+    [row] = report.pareto(
+        {"pair_f1": "max", "wall_seconds": "min"},
+        benchmark_id="dataset-a",
+        split_id="split-a",
+    )
+    assert row.architecture == "steady"
+    assert row.completed == 2
+    assert row.objectives["pair_f1"] == pytest.approx(0.9)
+    assert row.objectives["wall_seconds"] == pytest.approx(2.0)

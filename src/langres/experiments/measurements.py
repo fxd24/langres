@@ -137,7 +137,7 @@ class PriceSnapshot(BaseModel):
 
     provider: str
     model: str
-    currency: str = "USD"
+    currency: Literal["USD"] = "USD"
     effective_at: datetime | None = None
     captured_at: datetime
     input_usd_per_token: float | None = Field(default=None, ge=0.0)

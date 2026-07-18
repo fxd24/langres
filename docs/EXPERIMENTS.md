@@ -328,15 +328,22 @@ The four identities answer different questions:
 - `cache_id`: same immutable stage output, including clean/dirty source,
   lock/environment, execution plan and operation, input fingerprint, and every
   resource slot's base/kind/revision/adapter/provider/endpoint-safe runtime
-  identity. Credential-like runtime values and endpoint user/query secrets are
-  redacted before hashing or serialization.
+  identity. Credential-like runtime values are detected after normalizing
+  header/config spelling (`X-API-Key`, underscores, and similar forms).
+  Endpoint identity retains only an explicit allowlist of routing query
+  parameters, so signed-URL credentials/signatures are never hashed or
+  serialized.
 - `attempt_id`: one concrete execution, still minted by `capture_run`.
 
 Deterministic cache keys exclude seeds and attempts. Seeded keys require their
-seed. Stochastic keys require repeat and attempt identity and cannot substitute
-for an independent repeat. Clean committed source can support an official cache
-claim only when commit, lock, environment, and required model revisions are
-pinned; dirty exploratory source includes its tree/diff hash.
+seed. Stochastic keys require repeat and attempt identity: the exact output may
+be resumed inside that attempt, but it cannot substitute for an independent
+repeat. Clean committed source can support an official cache claim only when
+commit, lock, environment, and required model revisions are pinned; local model
+resources additionally require a content digest. Dirty exploratory source
+includes its tree/diff hash. Identity/protocol mappings accept JSON-shaped
+values only; unordered sets are rejected instead of depending on process hash
+order.
 
 Measurements keep unknown facts as `None`; measured zero remains `0`.
 `PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
@@ -344,10 +351,13 @@ inference. Cache-token discounts require their specialized rate unless the
 snapshot explicitly declares base-rate fallback. `ExperimentReport` derives its
 `evaluation_id` from the protocol, rejects rows outside the declared
 benchmark/split/seed/cohort, retains completed, failed, budget-exceeded, and
-missing cells, and offers cohort-safe aggregate, constraint, Pareto, markdown,
-and split-seed-instability views. Aggregate confidence intervals explicitly say
-`unavailable` until paired entity/cluster observations exist; summary rows are
-never treated as independent bootstrap samples. The package's
+missing cells, rejects duplicate logical cells (retries remain run attempts),
+and offers cohort-safe aggregate, constraint, Pareto, markdown, and
+split-seed-instability views. Pareto fronts compare per-architecture aggregates
+inside one explicitly selected benchmark/split/hardware slice, never raw repeats
+or mixed datasets. Aggregate confidence intervals explicitly say `unavailable`
+until paired entity/cluster observations exist; summary rows are never treated
+as independent bootstrap samples. The package's
 `paired_entity_bootstrap()` computes fixed-test-set uncertainty over paired
 cluster/entity units rather than dependent pair rows, and reports
 `insufficient` when fewer than two resampling units exist.
@@ -357,7 +367,8 @@ may also be uncapped. Official eligibility requires dataset
 fingerprints/revisions plus per-dataset or composite test-set identity. The
 separate guarded paid-proof policy requires **exactly USD 20**.
 `EvaluationProtocol.official_proof(...)` expands the fixed five-topology,
-two-dataset acceptance matrix to exactly 18 cells before retries: one
+two-dataset acceptance matrix to exactly 18 cells before retries only when
+`paid_proof=True` and every dataset/test provenance value is non-empty: one
 deterministic attempt per cell and three attempts for the two LLM topologies.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)

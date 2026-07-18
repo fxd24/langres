@@ -104,7 +104,11 @@ def paired_entity_bootstrap(
         assert observation.baseline is not None
         assert observation.candidate is not None
         difference = observation.candidate - observation.baseline
-        cluster_id = observation.cluster_id or observation.entity_id
+        cluster_id = (
+            f"cluster:{observation.cluster_id}"
+            if observation.cluster_id is not None
+            else f"entity:{observation.entity_id}"
+        )
         by_cluster.setdefault(cluster_id, []).append(difference)
         all_differences.append(difference)
 

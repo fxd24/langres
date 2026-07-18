@@ -60,6 +60,21 @@ def test_one_resampling_unit_is_explicitly_insufficient() -> None:
     assert "at least two" in (result.reason or "")
 
 
+def test_explicit_cluster_ids_cannot_collide_with_entity_fallback_ids() -> None:
+    result = paired_entity_bootstrap(
+        (
+            PairedScore(
+                entity_id="entity-in-cluster", cluster_id="same", baseline=0.1, candidate=0.2
+            ),
+            PairedScore(entity_id="same", baseline=0.2, candidate=0.4),
+        ),
+        samples=100,
+    )
+
+    assert result.n_clusters == 2
+    assert result.status == "available"
+
+
 def test_non_finite_scores_are_rejected() -> None:
     with pytest.raises(ValidationError, match="finite"):
         PairedScore(entity_id="a", baseline=math.nan, candidate=0.2)

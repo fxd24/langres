@@ -212,7 +212,7 @@ def test_seeded_and_stochastic_cache_semantics_are_explicit() -> None:
     )
 
     assert seeded_a != seeded_b
-    assert stochastic.reusable is False
+    assert stochastic.reusable is True
     assert stochastic.counts_as_independent_repeat is False
 
 
@@ -318,6 +318,32 @@ def test_endpoint_and_secret_runtime_config_are_safely_canonicalized() -> None:
     assert dumped["runtime_config"]["nested"]["token"] == "<redacted>"
 
 
+def test_hyphenated_headers_and_signed_url_queries_never_serialize() -> None:
+    slot = ResourceSlotIdentity(
+        slot="llm",
+        base="served/model",
+        kind="endpoint",
+        provider="vllm",
+        endpoint=(
+            "https://host.example/v1?api-version=2026-01-01"
+            "&X-Amz-Credential=credential-secret&X-Amz-Signature=signed-secret"
+            "&unreviewed=drop-me"
+        ),
+        runtime_config={
+            "X-API-Key": "header-secret",
+            "Proxy-Authorization": "bearer-secret",
+            "temperature": 0,
+        },
+    )
+
+    dumped = slot.model_dump(mode="json")
+    assert dumped["endpoint"] == "https://host.example/v1?api-version=2026-01-01"
+    assert dumped["runtime_config"]["X-API-Key"] == "<redacted>"
+    assert dumped["runtime_config"]["Proxy-Authorization"] == "<redacted>"
+    assert "secret" not in str(dumped)
+    assert "drop-me" not in str(dumped)
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
@@ -389,6 +415,28 @@ def test_official_cache_requires_publishable_provenance_and_pinned_resources() -
             resource_slots=(ResourceSlotIdentity(slot="reranker", base="org/model", kind="hf"),),
             official=True,
         )
+    with pytest.raises(ValidationError, match="content_digest"):
+        _cache_input(
+            resource_slots=(ResourceSlotIdentity(slot="reranker", base="./model", kind="local"),),
+            official=True,
+        )
+    local = _cache_input(
+        resource_slots=(
+            ResourceSlotIdentity(
+                slot="reranker",
+                base="./model",
+                kind="local",
+                content_digest="sha256:model-a",
+            ),
+        ),
+        official=True,
+    )
+    assert compute_cache_identity(local).official is True
+
+
+def test_identity_mappings_reject_sets_instead_of_hash_seed_dependent_serialization() -> None:
+    with pytest.raises(ValidationError, match="sets are not valid JSON"):
+        _cache_input(operation_identity={"type": "Rerank", "labels": {"match", "no-match"}})
 
 
 def test_attempt_identity_reads_the_existing_run_record() -> None:

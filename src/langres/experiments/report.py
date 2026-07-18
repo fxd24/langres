@@ -110,6 +110,28 @@ class CohortView(BaseModel):
     runs: tuple[ExperimentRun, ...]
 
 
+class ParetoRow(BaseModel):
+    """One architecture aggregate inside a comparable benchmark/split cohort."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    architecture: str
+    benchmark_id: str
+    split_id: str
+    cohort_id: str
+    aggregation: Literal["mean", "median"]
+    objectives: dict[str, float]
+    completed: int
+
+    @field_validator("objectives", mode="after")
+    @classmethod
+    def _freeze_objectives(cls, value: dict[str, float]) -> FrozenDict:
+        return freeze_mapping(value)
+
+    def fact(self, name: str) -> float | None:
+        return self.objectives.get(name)
+
+
 class ReportConstraints(BaseModel):
     """Optional hard filters applied before ranking or Pareto analysis."""
 
@@ -148,6 +170,7 @@ class ExperimentReport(BaseModel):
                 f"evaluation_id {derived_id!r}"
             )
         object.__setattr__(self, "evaluation_id", derived_id)
+        logical_cells: set[tuple[str, str, str, int, int]] = set()
         for index, run in enumerate(self.runs):
             if run.evaluation_id != derived_id:
                 raise ValueError(
@@ -179,6 +202,19 @@ class ExperimentReport(BaseModel):
                     f"runs[{index}].cohort_id={run.cohort_id!r} does not match protocol "
                     f"hardware_cohort={self.protocol.hardware_cohort!r}"
                 )
+            logical_cell = (
+                run.architecture,
+                run.benchmark_id,
+                run.split_id,
+                run.split_seed,
+                run.repeat_index,
+            )
+            if logical_cell in logical_cells:
+                raise ValueError(
+                    "runs contain duplicate logical experiment cell "
+                    f"{logical_cell!r}; retries belong in RunStore attempts, not report samples"
+                )
+            logical_cells.add(logical_cell)
         return self
 
     @property
@@ -289,8 +325,10 @@ class ExperimentReport(BaseModel):
         *,
         constraints: ReportConstraints | None = None,
         cohort_id: str | None = None,
-    ) -> tuple[ExperimentRun, ...]:
-        """Return the non-dominated completed rows within exactly one cohort."""
+        benchmark_id: str | None = None,
+        split_id: str | None = None,
+    ) -> tuple[ParetoRow, ...]:
+        """Return non-dominated architecture aggregates in one comparable slice."""
         if not objectives:
             raise ValueError("pareto requires at least one objective")
         invalid_directions = {
@@ -327,15 +365,74 @@ class ExperimentReport(BaseModel):
                 f"cohort_id {cohort_id!r} is not present; available cohorts are "
                 f"{sorted(cohort_ids)}"
             )
-        candidates = [
+        completed = [
             run
             for run in self.runs
             if run.status == "completed"
             and (selected_cohort is None or run.cohort_id == selected_cohort)
-            and all(run.fact(name) is not None for name in objectives)
-            and (constraints is None or self._meets_constraints(run, constraints))
         ]
-        front: list[ExperimentRun] = []
+        selected_benchmark = self._select_pareto_slice(
+            completed,
+            field="benchmark_id",
+            requested=benchmark_id,
+        )
+        completed = [
+            run
+            for run in completed
+            if selected_benchmark is None or run.benchmark_id == selected_benchmark
+        ]
+        selected_split = self._select_pareto_slice(
+            completed,
+            field="split_id",
+            requested=split_id,
+        )
+        completed = [
+            run for run in completed if selected_split is None or run.split_id == selected_split
+        ]
+
+        grouped: dict[str, list[ExperimentRun]] = defaultdict(list)
+        for run in completed:
+            grouped[run.architecture].append(run)
+        required_names = set(objectives)
+        if constraints is not None:
+            if constraints.max_p95_latency_seconds is not None:
+                required_names.add("p95_latency_seconds")
+            if constraints.max_wall_seconds is not None:
+                required_names.add("wall_seconds")
+            if constraints.max_usd is not None:
+                required_names.add("usd")
+            if constraints.max_model_size_bytes is not None:
+                required_names.add("model_size_bytes")
+            if constraints.max_loaded_memory_bytes is not None:
+                required_names.add("loaded_memory_bytes")
+            required_names.update(constraints.minimum_metrics)
+        candidates: list[ParetoRow] = []
+        for architecture, rows in sorted(grouped.items()):
+            aggregated: dict[str, float] = {}
+            for name in required_names:
+                values = [run.fact(name) for run in rows]
+                if any(value is None for value in values):
+                    break
+                observed = [value for value in values if value is not None]
+                aggregated[name] = (
+                    statistics.fmean(observed)
+                    if self.protocol.aggregation == "mean"
+                    else statistics.median(observed)
+                )
+            else:
+                candidate = ParetoRow(
+                    architecture=architecture,
+                    benchmark_id=rows[0].benchmark_id,
+                    split_id=rows[0].split_id,
+                    cohort_id=rows[0].cohort_id,
+                    aggregation=self.protocol.aggregation,
+                    objectives=aggregated,
+                    completed=len(rows),
+                )
+                if constraints is None or self._pareto_meets_constraints(candidate, constraints):
+                    candidates.append(candidate)
+
+        front: list[ParetoRow] = []
         for candidate in candidates:
             if not any(
                 other is not candidate and self._dominates(other, candidate, objectives)
@@ -346,8 +443,8 @@ class ExperimentReport(BaseModel):
 
     @staticmethod
     def _dominates(
-        candidate: ExperimentRun,
-        other: ExperimentRun,
+        candidate: ParetoRow,
+        other: ParetoRow,
         objectives: Mapping[str, Direction],
     ) -> bool:
         at_least_as_good = True
@@ -363,6 +460,51 @@ class ExperimentReport(BaseModel):
                 at_least_as_good &= candidate_value <= other_value
                 strictly_better |= candidate_value < other_value
         return at_least_as_good and strictly_better
+
+    @staticmethod
+    def _select_pareto_slice(
+        runs: list[ExperimentRun],
+        *,
+        field: Literal["benchmark_id", "split_id"],
+        requested: str | None,
+    ) -> str | None:
+        available = {getattr(run, field) for run in runs}
+        if requested is not None:
+            if requested not in available:
+                raise IncompatibleProtocolError(
+                    f"{field} {requested!r} is not present; available values are "
+                    f"{sorted(available)}"
+                )
+            return requested
+        if len(available) > 1:
+            raise IncompatibleProtocolError(
+                f"Pareto comparison spans multiple {field} values; pass {field} explicitly"
+            )
+        return next(iter(available)) if available else None
+
+    @staticmethod
+    def _pareto_meets_constraints(
+        row: ParetoRow,
+        constraints: ReportConstraints,
+    ) -> bool:
+        limits: tuple[tuple[str, float | int | None], ...] = (
+            ("p95_latency_seconds", constraints.max_p95_latency_seconds),
+            ("wall_seconds", constraints.max_wall_seconds),
+            ("usd", constraints.max_usd),
+            ("model_size_bytes", constraints.max_model_size_bytes),
+            ("loaded_memory_bytes", constraints.max_loaded_memory_bytes),
+        )
+        for name, limit in limits:
+            if limit is None:
+                continue
+            value = row.fact(name)
+            if value is None or value > limit:
+                return False
+        for metric, minimum in constraints.minimum_metrics.items():
+            value = row.fact(metric)
+            if value is None or value < minimum:
+                return False
+        return True
 
     @staticmethod
     def _meets_constraints(run: ExperimentRun, constraints: ReportConstraints) -> bool:

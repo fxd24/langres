@@ -84,6 +84,12 @@ def test_official_protocol_requires_data_and_test_set_identity() -> None:
         EvaluationProtocol(**common, fixed_test_set_id="composite:test")
     with pytest.raises(ValidationError, match="test-set identity"):
         EvaluationProtocol(**common, dataset_fingerprints={"a": "sha256:a"})
+    with pytest.raises(ValidationError, match="dataset fingerprint or revision"):
+        EvaluationProtocol(
+            **common,
+            dataset_fingerprints={"a": ""},
+            fixed_test_set_id="composite:test",
+        )
 
 
 def test_threshold_and_test_splits_must_be_distinct() -> None:
@@ -158,3 +164,57 @@ def test_official_proof_expands_to_exactly_18_cells_before_retries() -> None:
     assert protocol.budget_usd == 20.0
     assert protocol.publication_profile == "official"
     assert protocol.paid_proof is True
+
+
+def test_official_proof_expander_rejects_non_paid_official_protocol() -> None:
+    protocol = EvaluationProtocol(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        split_ids=("official",),
+        fixed_test_set_id="composite:test:v1",
+        split_seeds=(11,),
+        stochastic_repeats=3,
+        threshold_split_id="validation",
+        test_split_id="test",
+        hardware_cohort="official-declared",
+        benchmark_version="1",
+        publication_profile="official",
+    )
+
+    with pytest.raises(ValueError, match="paid_proof=True"):
+        expand_official_proof_matrix(protocol)
+
+
+def test_official_proof_expander_defends_against_empty_provenance_values() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+
+    missing_data = protocol.model_copy(
+        update={"dataset_fingerprints": {"dataset-a": "", "dataset-b": ""}}
+    )
+    with pytest.raises(ValueError, match="non-empty dataset provenance"):
+        expand_official_proof_matrix(missing_data)
+
+    missing_test = protocol.model_copy(
+        update={"fixed_test_set_id": None, "test_set_identities": {}}
+    )
+    with pytest.raises(ValueError, match="non-empty composite"):
+        expand_official_proof_matrix(missing_test)
+
+
+def test_protocol_mappings_reject_non_json_sets() -> None:
+    with pytest.raises(ValidationError, match="sets are not valid JSON"):
+        EvaluationProtocol(
+            benchmark_ids=("a",),
+            split_ids=("fixed",),
+            fixed_test_set_id="a:test:v1",
+            split_seeds=(0,),
+            deterministic_resources={"devices": {"cpu", "gpu"}},
+            threshold_split_id="validation",
+            test_split_id="test",
+            hardware_cohort="cpu-local",
+            benchmark_version="1",
+        )

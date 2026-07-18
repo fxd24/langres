@@ -31,8 +31,19 @@ _EXPERIMENT_RECIPE_FIELDS = (
     "seeds",
 )
 _SECRET_KEY = re.compile(
-    r"(?:^|_)(?:api_?key|token|secret|password|authorization|credential)(?:$|_)",
+    r"(?:^|_)(?:api_key|access_token|auth|authorization|bearer|credential|"
+    r"password|private_key|secret|signature|sig|token)(?:$|_)",
     re.IGNORECASE,
+)
+_SAFE_ENDPOINT_QUERY_KEYS = frozenset(
+    {
+        "api_version",
+        "deployment",
+        "location",
+        "project",
+        "region",
+        "version",
+    }
 )
 _EXECUTION_POLICY_KEYS = frozenset(
     {
@@ -55,7 +66,9 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, (set, frozenset)):
-        return sorted(value, key=str)
+        raise TypeError(
+            "sets are not valid JSON identity values; use a deterministically ordered list"
+        )
     raise TypeError(f"cannot canonicalize {type(value).__name__}")
 
 
@@ -114,10 +127,19 @@ class SourceState(BaseModel):
         return "dirty" if self.git_dirty else "clean"
 
 
+def _normalized_key(value: object) -> str:
+    """Normalize config/header/query spellings before classifying secrets."""
+    return re.sub(r"[^a-z0-9]+", "_", str(value).casefold()).strip("_")
+
+
+def _is_secret_key(value: object) -> bool:
+    return _SECRET_KEY.search(_normalized_key(value)) is not None
+
+
 def _redact_secrets(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): ("<redacted>" if _SECRET_KEY.search(str(key)) else _redact_secrets(item))
+            str(key): ("<redacted>" if _is_secret_key(key) else _redact_secrets(item))
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
@@ -140,7 +162,7 @@ def _safe_endpoint(value: str | None) -> str | None:
         sorted(
             (key, item)
             for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-            if not _SECRET_KEY.search(key)
+            if _normalized_key(key) in _SAFE_ENDPOINT_QUERY_KEYS
         )
     )
     return urlunsplit((parsed.scheme.lower(), f"{hostname}{port}", parsed.path, safe_query, ""))
@@ -159,6 +181,7 @@ class ResourceSlotIdentity(BaseModel):
     adapter_revision: str | None = Field(default=None, min_length=1)
     provider: str | None = Field(default=None, min_length=1)
     endpoint: str | None = Field(default=None, min_length=1)
+    content_digest: str | None = Field(default=None, min_length=1)
     runtime_config: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("endpoint", mode="before")
@@ -190,6 +213,7 @@ class ResourceSlotIdentity(BaseModel):
         ref: ModelRef,
         *,
         provider: str | None = None,
+        content_digest: str | None = None,
         runtime_config: Mapping[str, Any] | None = None,
     ) -> "ResourceSlotIdentity":
         """Project the established ``ModelRef`` into cache identity."""
@@ -204,6 +228,7 @@ class ResourceSlotIdentity(BaseModel):
             adapter=ref.adapter,
             provider=inferred_provider,
             endpoint=ref.api_base,
+            content_digest=content_digest,
             runtime_config=dict(runtime_config or {}),
         )
 
@@ -248,6 +273,10 @@ class CacheIdentityInput(BaseModel):
                 if resource.kind == "hf" and resource.revision is None:
                     raise ValueError(
                         f"official cache resource {resource.slot!r} requires a pinned revision"
+                    )
+                if resource.kind == "local" and resource.content_digest is None:
+                    raise ValueError(
+                        f"official local cache resource {resource.slot!r} requires content_digest"
                     )
                 if resource.adapter is not None and resource.adapter_revision is None:
                     raise ValueError(
@@ -343,6 +372,6 @@ def compute_cache_identity(inputs: CacheIdentityInput) -> CacheIdentity:
         semantics=inputs.semantics,
         source_claim=inputs.source.claim,
         official=inputs.official and not inputs.source.git_dirty,
-        reusable=inputs.semantics != "stochastic",
+        reusable=True,
         counts_as_independent_repeat=inputs.semantics != "stochastic",
     )

@@ -33,6 +33,7 @@ from langres.experiments.report import (
     ExperimentRun,
     IncompatibleProtocolError,
     MetricConfidenceInterval,
+    ParetoRow,
     ReportConstraints,
 )
 from langres.experiments.statistics import (
@@ -59,6 +60,7 @@ __all__ = [
     "IncompatibleProtocolError",
     "MetricConfidenceInterval",
     "PairedScore",
+    "ParetoRow",
     "PriceEstimate",
     "PriceSnapshot",
     "ProofCell",

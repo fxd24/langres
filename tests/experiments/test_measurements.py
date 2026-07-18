@@ -79,6 +79,17 @@ def test_price_snapshot_reprices_without_inference() -> None:
     assert estimate.currency == "USD"
 
 
+def test_price_snapshot_rejects_non_usd_currency_for_usd_named_rates() -> None:
+    with pytest.raises(ValidationError, match="USD"):
+        PriceSnapshot(
+            provider="provider",
+            model="model",
+            currency="EUR",
+            captured_at="2026-07-18T12:00:00Z",
+            source="user",
+        )
+
+
 def test_repricing_preserves_unknown_instead_of_manufacturing_zero() -> None:
     price = PriceSnapshot(
         provider="provider",

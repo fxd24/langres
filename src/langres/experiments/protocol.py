@@ -57,7 +57,7 @@ def deep_freeze(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return tuple(deep_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
-        return frozenset(deep_freeze(item) for item in value)
+        raise ValueError("sets are not valid JSON protocol values; use an ordered list")
     return value
 
 
@@ -149,8 +149,8 @@ class EvaluationProtocol(BaseModel):
             missing_data = [
                 benchmark
                 for benchmark in self.benchmark_ids
-                if benchmark not in self.dataset_fingerprints
-                and benchmark not in self.dataset_revisions
+                if not self.dataset_fingerprints.get(benchmark)
+                and not self.dataset_revisions.get(benchmark)
             ]
             if missing_data:
                 raise ValueError(
@@ -158,7 +158,7 @@ class EvaluationProtocol(BaseModel):
                     f"every benchmark; missing {missing_data}"
                 )
             per_dataset_test_ids = all(
-                benchmark in self.test_set_identities for benchmark in self.benchmark_ids
+                self.test_set_identities.get(benchmark) for benchmark in self.benchmark_ids
             )
             if self.fixed_test_set_id is None and not per_dataset_test_ids:
                 raise ValueError(
@@ -251,12 +251,32 @@ def expand_official_proof_matrix(protocol: EvaluationProtocol) -> tuple[ProofCel
     """Expand five topologies x two datasets to exactly 18 pre-retry cells."""
     if protocol.publication_profile != "official":
         raise ValueError("the official proof matrix requires publication_profile='official'")
+    if not protocol.paid_proof:
+        raise ValueError("the official proof matrix requires paid_proof=True")
     if len(protocol.benchmark_ids) != 2:
         raise ValueError("the official proof matrix requires exactly two benchmark_ids")
     if len(protocol.split_ids) != 1 or len(protocol.split_seeds) != 1:
         raise ValueError("the official proof matrix requires one split_id and one split seed")
     if protocol.stochastic_repeats != 3:
         raise ValueError("the official proof matrix requires stochastic_repeats=3")
+    missing_data = [
+        benchmark_id
+        for benchmark_id in protocol.benchmark_ids
+        if not protocol.dataset_fingerprints.get(benchmark_id)
+        and not protocol.dataset_revisions.get(benchmark_id)
+    ]
+    if missing_data:
+        raise ValueError(
+            "the official proof matrix requires non-empty dataset provenance for "
+            f"every benchmark; missing {missing_data}"
+        )
+    if protocol.fixed_test_set_id is None and not all(
+        protocol.test_set_identities.get(benchmark_id) for benchmark_id in protocol.benchmark_ids
+    ):
+        raise ValueError(
+            "the official proof matrix requires a non-empty composite fixed_test_set_id "
+            "or test-set identity for every benchmark"
+        )
 
     cells: list[ProofCell] = []
     for topology in OFFICIAL_TOPOLOGIES:
