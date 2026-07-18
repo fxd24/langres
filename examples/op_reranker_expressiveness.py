@@ -271,7 +271,9 @@ def main() -> None:
     assert reranker == truth, f"reranker should recover the true merges, got {reranker}"
     assert baseline != reranker, "the reranker topology should change the outcome"
     tightened = [group for group in baseline if group not in reranker]
-    print(f"Result: the reranker is tighter — it dropped {len(tightened)} wrong merge(s): {tightened}")
+    print(
+        f"Result: the reranker is tighter — it dropped {len(tightened)} wrong merge(s): {tightened}"
+    )
     print("The four-slot core could not place that second Score; the Op algebra composes it.")
 
 
