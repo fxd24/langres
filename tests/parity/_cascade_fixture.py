@@ -51,7 +51,6 @@ golden -- a change here is a deliberate re-baseline, never an accident.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -207,8 +206,3 @@ def build_cascade_model() -> tuple[Resolver, ScriptedDecider[CascadeBusinessW3D]
         clusterer=Clusterer(threshold=CASCADE_THRESHOLD),
     )
     return model, escalation
-
-
-def record(record_id: str) -> dict[str, Any]:
-    """The one fixture record with ``id == record_id`` (fixture ids are unique)."""
-    return next(r for r in RECORDS if r["id"] == record_id)
