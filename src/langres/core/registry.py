@@ -120,6 +120,18 @@ _LAZY_OP_SERIALIZER_MODULES: dict[str, str] = {
     "generate": "langres.resources.op_adapters",
     "parse": "langres.resources.op_adapters",
     "rerank": "langres.resources.op_adapters",
+    "retrieve": "langres.resources.retrieve",
+}
+
+# Named research recipes stay off the eager root-import path because importing
+# their topology module also imports the resource Op adapters. Loading a saved
+# recipe in a fresh process still needs to recover its exact ERModel subclass,
+# so resolve these trusted built-ins by registered model name on demand.
+_LAZY_MODEL_MODULES: dict[str, str] = {
+    "retrieve": "langres.architectures.retrieval",
+    "retrieve_llm": "langres.architectures.retrieval",
+    "retrieve_rerank": "langres.architectures.retrieval",
+    "retrieve_rerank_llm": "langres.architectures.retrieval",
 }
 
 
@@ -376,17 +388,15 @@ def get_model(type_name: str) -> type:
     import cycle. ``tests/test_import_tangle.py`` counts that edge; ``get_component``
     returns a bare ``type`` for the same reason.
 
-    .. note::
-       There is no lazy ``type_name -> module`` map for models yet (contrast
-       :data:`_LAZY_COMPONENT_MODULES`), because no model is registered anywhere
-       yet — W4 lands the architectures. If W4 puts them off the eager-import
-       path, it needs the same saved-artifact safety net, or a fresh process
-       loading such an artifact will raise :class:`UnknownModelType` here.
+    Built-in models kept off the eager import path resolve through the closed
+    :data:`_LAZY_MODEL_MODULES` map. Artifacts cannot supply import paths.
 
     Raises:
         UnknownModelType: If ``type_name`` is not registered. The message lists
             the available models and a did-you-mean suggestion.
     """
+    if type_name not in _MODEL_REGISTRY and type_name in _LAZY_MODEL_MODULES:
+        importlib.import_module(_LAZY_MODEL_MODULES[type_name])
     if type_name not in _MODEL_REGISTRY:
         available = sorted(_MODEL_REGISTRY)
         suggestions = difflib.get_close_matches(type_name, available, n=3)
