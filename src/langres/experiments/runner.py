@@ -48,7 +48,7 @@ from langres.experiments.report import (
     ExperimentRun,
     PlannedExperimentCell,
 )
-from langres.resources.base import GenerationEnvelope
+from langres.resources.base import GenerationEnvelope, UnknownGenerationCostError
 from langres.tracking.runs import (
     RunContext,
     RunRecord,
@@ -508,7 +508,7 @@ def _envelope_usage(outputs: Sequence[GenerationEnvelope]) -> TokenUsage | None:
 
 
 def _partial_generation_facts(
-    error: BudgetExceeded,
+    error: BudgetExceeded | UnknownGenerationCostError,
     *,
     hardware_cohort: str,
     resource_runtime: Mapping[str, Mapping[str, Any]],
@@ -549,6 +549,37 @@ def _partial_generation_facts(
         usage,
         cost,
     )
+
+
+def _tuning_measurements(
+    tuning: _TuningOutcome | None,
+    *,
+    hardware_cohort: str,
+    resource_runtime: Mapping[str, Mapping[str, Any]],
+    price_snapshots: Mapping[str, PriceSnapshot],
+) -> tuple[StageMeasurement, ...]:
+    """Materialize completed tuning facts available before a later failure."""
+    if tuning is None:
+        return ()
+    return tuple(
+        measurement
+        for execution, cache_hit in tuning.executions
+        for measurement in _measurements(
+            execution,
+            cache_hit=cache_hit,
+            hardware_cohort=hardware_cohort,
+            resource_runtime=resource_runtime,
+            price_snapshots=price_snapshots,
+            phase="tuning",
+        )
+    )
+
+
+def _tuning_usage(tuning: _TuningOutcome | None) -> tuple[TokenUsage | None, ...]:
+    """Return usage observations from completed threshold-tuning executions."""
+    if tuning is None:
+        return ()
+    return tuple(_token_usage(execution) for execution, _cache_hit in tuning.executions)
 
 
 def _experiment_facts(
@@ -1031,6 +1062,9 @@ class Experiment:
             attempt_id=attempt_id,
             suppress_error_details=False,
         ) as handle:
+            tuning: _TuningOutcome | None = None
+            selected_threshold: float | None = None
+            model = initial
             try:
                 tuning = self._tune_threshold(
                     architecture,
@@ -1126,24 +1160,37 @@ class Experiment:
                 )
                 handle.record_cost(observed_usd)
             except BudgetExceeded as exc:
-                resource_runtime = getattr(initial, "resource_runtime", {})
+                resource_runtime = getattr(model, "resource_runtime", {})
                 if not isinstance(resource_runtime, Mapping):
                     resource_runtime = {}
-                partial_measurements, partial_usage, partial_usd = _partial_generation_facts(
+                partial_measurements, partial_usage, _partial_usd = _partial_generation_facts(
                     exc,
                     hardware_cohort=self.protocol.hardware_cohort,
                     resource_runtime=resource_runtime,
                 )
+                completed_measurements = _tuning_measurements(
+                    tuning,
+                    hardware_cohort=self.protocol.hardware_cohort,
+                    resource_runtime=resource_runtime,
+                    price_snapshots=self.price_snapshots,
+                )
+                token_usage = _merge_token_usage((*_tuning_usage(tuning), partial_usage))
+                observed_usd = (
+                    self._monitor.spent - starting_spend
+                    if not self._monitor.cost_is_unknown
+                    else None
+                )
                 handle.record_measurements(
-                    measurement.model_dump(mode="json") for measurement in partial_measurements
+                    measurement.model_dump(mode="json")
+                    for measurement in (*completed_measurements, *partial_measurements)
                 )
                 safe_tracker.finish(status="budget_exceeded")
                 handle.record_experiment_facts(
                     _experiment_facts(
                         funnel=None,
-                        token_usage=partial_usage,
-                        selected_threshold=None,
-                        usd=partial_usd,
+                        token_usage=token_usage,
+                        selected_threshold=selected_threshold,
+                        usd=observed_usd,
                         warnings=safe_tracker.errors,
                     )
                 )
@@ -1152,14 +1199,49 @@ class Experiment:
                 )
                 handle.set_status("budget_exceeded")
                 handle.record_cost(
-                    (
-                        self._monitor.spent - starting_spend
-                        if not self._monitor.cost_is_unknown
-                        else None
-                    ),
+                    observed_usd,
                     budget_exceeded=True,
                 )
                 raise
+            except UnknownGenerationCostError as exc:
+                resource_runtime = getattr(model, "resource_runtime", {})
+                if not isinstance(resource_runtime, Mapping):
+                    resource_runtime = {}
+                partial_measurements, partial_usage, _partial_usd = _partial_generation_facts(
+                    exc,
+                    hardware_cohort=self.protocol.hardware_cohort,
+                    resource_runtime=resource_runtime,
+                )
+                completed_measurements = _tuning_measurements(
+                    tuning,
+                    hardware_cohort=self.protocol.hardware_cohort,
+                    resource_runtime=resource_runtime,
+                    price_snapshots=self.price_snapshots,
+                )
+                token_usage = _merge_token_usage((*_tuning_usage(tuning), partial_usage))
+                handle.record_measurements(
+                    measurement.model_dump(mode="json")
+                    for measurement in (*completed_measurements, *partial_measurements)
+                )
+                safe_tracker.finish(status="failed")
+                handle.record_experiment_facts(
+                    _experiment_facts(
+                        funnel=None,
+                        token_usage=token_usage,
+                        selected_threshold=selected_threshold,
+                        usd=None,
+                        warnings=safe_tracker.errors,
+                    )
+                )
+                handle.record_cost(None)
+                raise self._cell_error(
+                    architecture,
+                    benchmark_id=benchmark_id,
+                    split_id=split_id,
+                    repeat_index=repeat_index,
+                    phase="execute",
+                    error=exc,
+                ) from exc
             except ExperimentCellError:
                 safe_tracker.finish(status="failed")
                 handle.record_cost(

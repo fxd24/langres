@@ -520,6 +520,107 @@ def test_budget_exceeded_persists_recoverable_generation_facts(tmp_path: Path) -
     assert record.experiment_facts["token_usage"]["input_tokens"] == 2
 
 
+def test_budget_exceeded_after_tuning_preserves_total_cell_accounting(
+    tmp_path: Path,
+) -> None:
+    llm = _CostedLLM(cost_usd=0.3, requires_cost_accounting=True)
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    store = RunStore(tmp_path / "runs.jsonl")
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.5,
+                )
+            ],
+            protocol=_protocol(),
+            store=store,
+            cache_dir=tmp_path / "cache",
+            budget_usd=0.5,
+        )
+        .run()
+        .runs
+    )
+
+    assert run.status == "budget_exceeded"
+    assert run.selected_threshold == pytest.approx(0.5)
+    assert run.usd == pytest.approx(0.6)
+    assert run.token_usage is not None
+    assert run.token_usage.input_tokens == 4
+    generation = [
+        measurement for measurement in run.measurements if measurement.operation_kind == "generate"
+    ]
+    assert [measurement.phase for measurement in generation] == ["tuning", "partial"]
+    assert sum(measurement.observed_usd or 0.0 for measurement in generation) == pytest.approx(0.6)
+    [record] = store.read()
+    assert record.spend_usd == pytest.approx(0.6)
+    assert record.experiment_facts is not None
+    assert record.experiment_facts["usd"] == pytest.approx(0.6)
+    assert record.experiment_facts["selected_threshold"] == pytest.approx(0.5)
+
+
+def test_unknown_finite_budget_cost_persists_partial_generation_as_unknown(
+    tmp_path: Path,
+) -> None:
+    llm = _CostedLLM(cost_usd=None, requires_cost_accounting=True)
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    store = RunStore(tmp_path / "runs.jsonl")
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.5,
+                )
+            ],
+            protocol=_protocol(),
+            store=store,
+            cache_dir=tmp_path / "cache",
+            budget_usd=1.0,
+        )
+        .run()
+        .runs
+    )
+
+    assert run.status == "failed"
+    assert run.usd is None
+    assert run.token_usage is not None
+    assert run.token_usage.input_tokens == 2
+    [partial] = [measurement for measurement in run.measurements if measurement.phase == "partial"]
+    assert partial.observed_usd is None
+    assert partial.external_calls == 1
+    [record] = store.read()
+    assert record.spend_usd is None
+    assert record.experiment_facts is not None
+    assert record.experiment_facts["usd"] is None
+    assert record.experiment_facts["token_usage"]["input_tokens"] == 2
+
+
 def test_failed_cell_error_is_contextual_actionable_sanitized_and_chained(
     tmp_path: Path,
 ) -> None:
