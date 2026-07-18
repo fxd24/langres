@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Research execution foundation
+
+- Added lazy `langres.experiments.Experiment` and `ArchitectureFactory`: expand
+  architecture × benchmark × real split × seed matrices, tune on train,
+  evaluate untouched test data, capture attempts automatically, resume completed
+  cells, continue independent failures, and publish flattened numeric facts to
+  optional trackers.
+- Added explicit execution replay checkpoints and an immutable atomic,
+  checksummed `StageArtifactStore`. Cache reads validate plan/cache/input
+  identity, preserve row order in input fingerprints, reject duplicate pair
+  identities, and quarantine corrupt entries.
+- Run provenance now detects untracked files explicitly, mints attempt ids
+  before stochastic cache identity, and redacts common credential assignments
+  from persisted error messages.
+
 ### The model is explicit: `ERModel` + named architectures — **breaking**
 
 Nothing in langres named a *whole* ER pipeline. `link()`/`dedupe()` took a

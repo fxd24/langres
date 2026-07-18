@@ -13,6 +13,7 @@ from langres.experiments import (
     compute_cache_identity,
     compute_evaluation_identity,
     compute_recipe_identity,
+    detect_source_state,
 )
 from langres.tracking.runs import RunContext, RunRecord
 
@@ -269,6 +270,17 @@ def test_dirty_source_hash_participates_in_cache_identity() -> None:
     assert a != b
     assert a.source_claim == "dirty"
     assert a.official is False
+
+
+def test_unknown_git_provenance_uses_a_dirty_source_fallback(tmp_path: Path) -> None:
+    source = detect_source_state(tmp_path)
+    identity = compute_cache_identity(_cache_input(source=source))
+
+    assert source.git_sha is None
+    assert source.git_dirty is True
+    assert source.dirty_tree_hash is not None
+    assert identity.source_claim == "dirty"
+    assert identity.official is False
 
 
 @pytest.mark.parametrize(

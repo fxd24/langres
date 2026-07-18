@@ -96,6 +96,7 @@ class ModelPersistence(ModelState):
                 langres_version=LANGRES_VERSION,
                 model_class=model_class,
                 ops=[op_spec(stage) for stage in self._ops],
+                replay_boundary=self._replay_boundary_index,
             )
         components = [
             component_spec(component, slot=slot_name) for slot_name, component in self._slots()
@@ -146,7 +147,11 @@ class ModelPersistence(ModelState):
         # the byte-identical ``{"components": ...}`` dict it always has, so a classic
         # model's recipe_id never forks (F2 — the crown invariant).
         if self._ops is not None:
-            return {"ops": self._build_manifest().model_dump()["ops"]}
+            manifest = self._build_manifest()
+            snapshot: dict[str, object] = {"ops": manifest.model_dump()["ops"]}
+            if manifest.replay_boundary is not None:
+                snapshot["replay_boundary"] = manifest.replay_boundary
+            return snapshot
         return {"components": self._build_manifest().model_dump()["components"]}
 
     def save(self, path: str | Path) -> None:
@@ -210,7 +215,10 @@ class ModelPersistence(ModelState):
             # resolver.json stays byte-identical to pre-#193 — without this every
             # classic save would gain an ``"ops": null`` line and fork the frozen
             # legacy bytes (F1 / the crown invariant).
-            payload = manifest.model_dump_json(indent=2, exclude={"ops"})
+            payload = manifest.model_dump_json(
+                indent=2,
+                exclude={"ops", "replay_boundary"},
+            )
 
         (out_dir / _MANIFEST_FILENAME).write_text(payload)
         logger.info("Saved Resolver artifact to %s", out_dir)
@@ -257,7 +265,10 @@ class ModelPersistence(ModelState):
                 rebuild_op(spec, state_dir=in_dir / f"op{index}")
                 for index, spec in enumerate(manifest.ops)
             ]
-            return manifest, {"ops": ops}
+            return manifest, {
+                "ops": ops,
+                "replay_boundary": manifest.replay_boundary,
+            }
 
         # Map specs back to slots self-describingly. Each spec written by a
         # current ``save`` carries its ``slot`` name, so a registered subclass

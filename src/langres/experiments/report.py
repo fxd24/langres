@@ -34,6 +34,8 @@ class ExperimentRun(BaseModel):
     variant_id: str = Field(min_length=1)
     benchmark_id: str
     split_id: str
+    threshold_split_id: str | None = None
+    evaluation_split_id: str | None = None
     split_seed: int
     repeat_index: int = Field(ge=0)
     status: RunStatus

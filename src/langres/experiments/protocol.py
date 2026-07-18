@@ -224,11 +224,11 @@ class EvaluationProtocol(BaseModel):
         """A deterministic, uncapped, zero-network CI protocol."""
         return cls(
             benchmark_ids=("tiny_fixture",),
-            split_ids=("smoke",),
+            split_ids=("test",),
             fixed_test_set_id="tiny_fixture:test:v1",
             split_seeds=(seed,),
             stochastic_repeats=1,
-            threshold_split_id="validation",
+            threshold_split_id="train",
             test_split_id="test",
             threshold_grid=(0.5,),
             confidence_interval_method="none",
@@ -260,7 +260,7 @@ class EvaluationProtocol(BaseModel):
             split_seeds=(split_seed,),
             stochastic_repeats=3,
             architecture_repeats=OFFICIAL_ARCHITECTURE_REPEATS,
-            threshold_split_id="validation",
+            threshold_split_id="train",
             test_split_id="test",
             hardware_cohort="official-declared",
             benchmark_version="1",
