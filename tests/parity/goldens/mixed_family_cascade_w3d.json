@@ -1,0 +1,772 @@
+{
+  "band": [
+    0.3,
+    0.7
+  ],
+  "dedupe": {
+    "architecture": "ERModel",
+    "backbone": null,
+    "clusters": [
+      [
+        "r01",
+        "r02"
+      ],
+      [
+        "r05",
+        "r06"
+      ],
+      [
+        "r11",
+        "r12"
+      ]
+    ],
+    "score_type": "sim_cos",
+    "threshold": 0.5
+  },
+  "n_pairs": 91,
+  "pairs": [
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r02",
+      "score": 0.95,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r03",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r04",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r05",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r06",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r01",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r03",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r04",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r05",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r06",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r02",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r04",
+      "score": 0.1,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r05",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r06",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r03",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r05",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r06",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r04",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": true,
+      "decision_step": "cascade_escalated",
+      "left_id": "r05",
+      "right_id": "r06",
+      "score": null,
+      "score_type": "prob_llm"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r05",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r07",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r08",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r06",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": false,
+      "decision_step": "cascade_escalated",
+      "left_id": "r07",
+      "right_id": "r08",
+      "score": null,
+      "score_type": "prob_llm"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r07",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r09",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r10",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r08",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_escalated",
+      "left_id": "r09",
+      "right_id": "r10",
+      "score": null,
+      "score_type": "prob_llm"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r09",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r09",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r09",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r09",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r10",
+      "right_id": "r11",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r10",
+      "right_id": "r12",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r10",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r10",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": true,
+      "decision_step": "cascade_escalated",
+      "left_id": "r11",
+      "right_id": "r12",
+      "score": 0.2,
+      "score_type": "prob_llm"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r11",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r11",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r12",
+      "right_id": "r13",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": null,
+      "decision_step": "cascade_student",
+      "left_id": "r12",
+      "right_id": "r14",
+      "score": 0.05,
+      "score_type": "sim_cos"
+    },
+    {
+      "decision": false,
+      "decision_step": "cascade_escalated",
+      "left_id": "r13",
+      "right_id": "r14",
+      "score": 0.9,
+      "score_type": "prob_llm"
+    }
+  ],
+  "resolve_clusters": [
+    [
+      "r01",
+      "r02"
+    ],
+    [
+      "r05",
+      "r06"
+    ],
+    [
+      "r11",
+      "r12"
+    ]
+  ],
+  "threshold": 0.5
+}
