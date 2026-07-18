@@ -9,12 +9,19 @@ Covers the keystone contract at the core tier (behavior + edges + errors):
   ``is_heuristic``) and the exact-feasible path (no algorithm needed);
 - :class:`ClusterStage` defaulting its algorithm, marking heuristic, and
   rejecting an unknown one (the same validator ``Select(CLUSTERING)`` uses);
+- the concrete W3-b Selects — :class:`ThresholdSelect` (keep the
+  ``predicted_match`` rows: decision-wins, abstain dropped) and
+  :class:`TopKSelect` (keep the k best per ``left_id``);
+- the ``"unknown"`` OutSpace sentinel — a scalar-family placeholder a
+  :class:`Score` may declare, so a :class:`Select` legally follows it while a
+  ``"vector"`` Score still raises;
 - :meth:`Sequential.check` running at construction — a valid pipeline builds; a
   Select-after-vector-Score, a carrier mismatch and a missing Source all raise a
   problem + fix message.
 
-The stages are trivial test doubles (identity ``forward``\\ s), since this wave
-ships the wiring CONTRACT, not the concrete impls or an executor.
+The boundary/``Score`` stages are trivial test doubles (identity ``forward``\\ s),
+since this contract ships no executor; the two concrete Selects are real and
+their ``forward`` selection semantics are exercised on built ``Pairs``.
 """
 
 import pytest
@@ -32,8 +39,10 @@ from langres.core.op import (
     Select,
     Sequential,
     Source,
+    ThresholdSelect,
+    TopKSelect,
 )
-from langres.core.pairs import Pairs
+from langres.core.pairs import PairRow, Pairs
 
 # --------------------------------------------------------------------------------------
 # Test doubles — trivial forwards, one per role/boundary.
@@ -316,3 +325,126 @@ def test_an_unknown_stage_type_raises_typeerror():
 
     with pytest.raises(TypeError, match="not a Source, Op"):
         Sequential([_NotAStage()])  # type: ignore[list-item]
+
+
+# --------------------------------------------------------------------------------------
+# Concrete Selects — ThresholdSelect / TopKSelect (W3-b).
+# --------------------------------------------------------------------------------------
+
+
+def _scored(
+    left: str, right: str, score: float | None, *, decision: bool | None = None
+) -> PairRow[CompanySchema]:
+    """A SCORED heuristic-family row — the input a Select consumes (score_type set)."""
+    return PairRow(
+        left_id=left,
+        right_id=right,
+        blocker_name="test",
+        score=score,
+        score_type="heuristic",
+        decision=decision,
+    )
+
+
+def _pairs(rows: list[PairRow[CompanySchema]]) -> Pairs[CompanySchema]:
+    """A Pairs over a minimal store (a Select reads ids/score/decision, not entities)."""
+    ids = {rid for row in rows for rid in (row.left_id, row.right_id)}
+    return Pairs(store={i: CompanySchema(id=i, name=i) for i in ids}, rows=rows)
+
+
+def test_threshold_and_topk_construct_at_their_feasible():
+    thr = ThresholdSelect[CompanySchema](0.7)
+    assert isinstance(thr, Select) and isinstance(thr, Op)
+    assert thr.feasible is Feasible.THRESHOLD
+    assert thr.threshold == 0.7
+    assert thr.algorithm is None and thr.is_heuristic is False  # exact feasible
+
+    topk = TopKSelect[CompanySchema](3)
+    assert isinstance(topk, Select) and isinstance(topk, Op)
+    assert topk.feasible is Feasible.TOPK
+    assert topk.k == 3
+    assert topk.algorithm is None and topk.is_heuristic is False
+
+
+def test_threshold_select_keeps_exactly_the_predicted_matches():
+    """Keep the ``predicted_match(t) is True`` rows: abstain -> None dropped, decision wins."""
+    pairs = _pairs(
+        [
+            _scored("a", "b", 0.9),  # clears the price -> kept
+            _scored("a", "c", 0.3),  # below the price -> dropped
+            _scored("d", "e", None),  # abstain (no score, no decision) -> dropped, not a "no"
+            _scored("f", "g", 0.1, decision=True),  # decision wins over a low score -> kept
+            _scored("h", "i", 0.99, decision=False),  # decision wins over a high score -> dropped
+        ]
+    )
+    kept = ThresholdSelect[CompanySchema](0.5).forward(pairs)
+
+    # Exactly the predicted matches, in input order.
+    assert [(r.left_id, r.right_id) for r in kept.rows] == [("a", "b"), ("f", "g")]
+    assert all(r.predicted_match(0.5) is True for r in kept.rows)
+    # Entities are carried by reference (never deep-copied).
+    assert all(kept.store[k] is pairs.store[k] for k in pairs.store)
+
+
+def test_topk_select_keeps_the_k_best_rows_per_left_id():
+    """Keep at most k highest-scoring rows per left_id; a smaller group keeps all of it."""
+    pairs = _pairs(
+        [
+            _scored("x", "a", 0.9),  # x: top-2 by score are a(0.9) and c(0.7)
+            _scored("x", "b", 0.5),  # dropped (3rd best for x)
+            _scored("x", "c", 0.7),
+            _scored("x", "d", 0.2),  # dropped (4th best for x)
+            _scored("y", "e", 0.4),  # y has one row < k -> kept
+        ]
+    )
+    kept = TopKSelect[CompanySchema](2).forward(pairs)
+
+    # k best per left_id, and input order preserved among the survivors.
+    assert [(r.left_id, r.right_id) for r in kept.rows] == [("x", "a"), ("x", "c"), ("y", "e")]
+
+
+def test_topk_select_ties_keep_input_order():
+    """On a score tie the earlier (input-order) row wins the last kept slot."""
+    pairs = _pairs(
+        [
+            _scored("x", "a", 0.5),  # tie with b; a appears first -> kept
+            _scored("x", "b", 0.5),  # tie with a; dropped (k=1, a came first)
+        ]
+    )
+    kept = TopKSelect[CompanySchema](1).forward(pairs)
+    assert [(r.left_id, r.right_id) for r in kept.rows] == [("x", "a")]
+
+
+# --------------------------------------------------------------------------------------
+# The "unknown" OutSpace sentinel — a scalar family, so a Select may follow it.
+# --------------------------------------------------------------------------------------
+
+
+def test_score_out_space_may_be_the_unknown_sentinel():
+    score = _Score(scope="pair", out_space="unknown")
+    assert score.out_space == "unknown"
+
+
+def test_select_after_an_unknown_score_is_legal_but_after_a_vector_still_raises():
+    """The sentinel is a scalar: selection is defined on it (unlike a vector)."""
+    # Legal: a Select after a scalar "unknown" Score (a concrete TopKSelect composes too).
+    ok = Sequential(
+        [
+            _Source(),
+            _Score(scope="pair", out_space="unknown"),
+            TopKSelect[CompanySchema](2),
+            _ClusterStage(),
+        ]
+    )
+    assert any(isinstance(stage, TopKSelect) for stage in ok.stages)
+
+    # Still illegal: a Select after a "vector" Score (a ComparisonVector is not orderable).
+    with pytest.raises(ValueError, match="not orderable"):
+        Sequential(
+            [
+                _Source(),
+                _Score(scope="pair", out_space="vector"),
+                ThresholdSelect[CompanySchema](0.5),
+                _ClusterStage(),
+            ]
+        )

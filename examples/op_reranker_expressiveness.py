@@ -30,98 +30,25 @@ difference is the inserted TOPK-prune + rescoring ``Score``. On the fixed datase
 below the reranker recovers the true duplicate structure, while the name-only
 baseline over-merges same-name / different-address branches.
 
-**A gap this script surfaces (see the NOTE on the Select classes).** The adapters
-in ``op_adapters.py`` bridge Source / Score / ClusterStage / Finalize, but there
-is **no concrete ``Select`` adapter** on the branch — the old core folded
-thresholding into the ``Clusterer``, so a first-class selection ``Op`` has no
-shipped implementation yet. The two ``Select`` subclasses here realize the real
-selection semantics (THRESHOLD, TOPK); they are the example's own, not stubs
-hiding a gap. W3 will need a concrete ``Select`` to make selection a real pipeline
-stage rather than a knob on the clusterer.
+**Selection is now first-class (W3-b).** The adapters in ``op_adapters.py`` bridge
+Source / Score / ClusterStage / Finalize, and W3-b added the two concrete
+``Select`` ops — :class:`~langres.core.op.ThresholdSelect` (keep the rows that
+clear the price) and :class:`~langres.core.op.TopKSelect` (keep each anchor's k
+best) — to :mod:`langres.core.op`. So selection is a real pipeline stage now, not
+a knob folded into the clusterer's own threshold; this script imports both from
+src rather than defining its own.
 
 Run it:  ``uv run python examples/op_reranker_expressiveness.py``
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Generic, TypeVar
-
-from pydantic import BaseModel
-
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
 from langres.core.models import CompanySchema
-from langres.core.op import Feasible, Records, Select, Sequential
+from langres.core.op import Records, Sequential, ThresholdSelect, TopKSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
-from langres.core.pairs import PairRow, Pairs
-
-SchemaT = TypeVar("SchemaT", bound=BaseModel)
-
-
-# --------------------------------------------------------------------------------------
-# Concrete Select ops.
-#
-# NOTE (de-risk finding): op.py defines Select as an ABSTRACT role — it validates
-# the Feasible class in __init__ but never implements forward(), and
-# op_adapters.py ships NO concrete Select (the legacy 4-slot core folded
-# thresholding into the Clusterer's own threshold). So expressing selection as a
-# first-class Op requires implementing forward() here. These are the real
-# selection semantics for two Feasible classes, not stubs:
-#   * THRESHOLD -> keep every row whose score clears the price (no shape rule).
-#   * TOPK      -> keep at most k rows per left record (the retrieval shape).
-# --------------------------------------------------------------------------------------
-
-
-class ThresholdSelect(Select[SchemaT], Generic[SchemaT]):
-    """``Select`` at :attr:`~langres.core.op.Feasible.THRESHOLD`: keep rows that clear ``threshold``.
-
-    Uses the canonical match rule (:meth:`~langres.core.pairs.PairRow.predicted_match`
-    — decision wins over score, an abstention is dropped) rather than testing
-    ``score >= threshold`` by hand.
-    """
-
-    def __init__(self, threshold: float) -> None:
-        super().__init__(feasible=Feasible.THRESHOLD)
-        self.threshold = threshold
-
-    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
-        """Keep the rows whose score clears ``threshold`` (order preserved)."""
-        kept = [row for row in pairs.rows if row.predicted_match(self.threshold) is True]
-        return Pairs(store=pairs.store, rows=kept)
-
-
-class TopKSelect(Select[SchemaT], Generic[SchemaT]):
-    """``Select`` at :attr:`~langres.core.op.Feasible.TOPK`: keep the ``k`` best rows per left id.
-
-    The retrieval / blocking shape — each anchor keeps its ``k`` highest-scoring
-    partners. Grouping by ``left_id`` is exactly "at most k per left record" over
-    the blocker's ``i < j`` pair set; ties keep input order.
-    """
-
-    def __init__(self, k: int) -> None:
-        super().__init__(feasible=Feasible.TOPK)
-        self.k = k
-
-    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
-        """Keep at most ``k`` highest-scoring rows per ``left_id`` (input order preserved)."""
-        by_left: dict[str, list[PairRow[SchemaT]]] = defaultdict(list)
-        for row in pairs.rows:
-            by_left[row.left_id].append(row)
-
-        keep: set[tuple[str, str]] = set()
-        for group in by_left.values():
-            ranked = sorted(
-                group,
-                key=lambda row: row.score if row.score is not None else -1.0,
-                reverse=True,
-            )
-            for row in ranked[: self.k]:
-                keep.add((row.left_id, row.right_id))
-
-        kept = [row for row in pairs.rows if (row.left_id, row.right_id) in keep]
-        return Pairs(store=pairs.store, rows=kept)
 
 
 # --------------------------------------------------------------------------------------
