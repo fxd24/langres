@@ -43,6 +43,7 @@ from langres.core.op import (
 )
 from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher, effective_budget
+from langres.core.serialization import ArtifactSource
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,10 @@ class ModelState:
         # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
         # None until fit() runs (never serialized -- it is a fit-time artifact).
         self.fit_report_: FitReport | None = None
+        # Runtime provenance for models loaded through langres.hub. Kept out of
+        # resolver.json/config identity: the artifact's repository revision is
+        # provenance, while resource ModelRef revisions remain model identity.
+        self.pretrained_source_: ArtifactSource | None = None
         # Slots start empty so a named architecture can defer binding until it
         # knows the schema (see _topology). The base __init__ fills them at once.
         #

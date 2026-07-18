@@ -135,6 +135,14 @@ a model is the user's job, not a heuristic's. The real layering is:)
    - **Not yet built** (roadmap, don't reference as existing): a general
      `Optimizer` (only `langres.autoresearch.blocker_optimizer.BlockerOptimizer`
      exists).
+   - **Hub transport is not core.** `langres.hub` is an outer adapter around the
+     unchanged `ERModel.save` / `ERModel.load` persistence contract. The pure
+     artifact envelope validates an exact file allowlist and immutable
+     provenance, while `huggingface_hub` is imported lazily only for remote
+     operations. Core may own transport-neutral `ArtifactSource` provenance and
+     its convenience methods may dynamically dispatch to the public adapter,
+     but core has no static Hub dependency and must never execute
+     artifact-controlled Python imports/remote code.
 
 ## Key Design Principles
 
