@@ -338,6 +338,13 @@ def test_endpoint_and_secret_runtime_config_are_safely_canonicalized() -> None:
         ResourceSlotIdentity(
             slot="llm",
             base="served/model",
+            kind="endpoint",
+            provider="vllm",
+            endpoint="https://host.example/v1?api-version=2",
+        ),
+        ResourceSlotIdentity(
+            slot="llm",
+            base="served/model",
             kind="api",
             provider="vllm",
         ),

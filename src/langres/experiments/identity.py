@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -126,7 +126,7 @@ def _redact_secrets(value: Any) -> Any:
 
 
 def _safe_endpoint(value: str | None) -> str | None:
-    """Retain routing identity while dropping user info, query secrets, and fragments."""
+    """Retain routing identity and safe query config while dropping endpoint secrets."""
     if value is None:
         return None
     parsed = urlsplit(value)
@@ -136,7 +136,14 @@ def _safe_endpoint(value: str | None) -> str | None:
     if ":" in hostname:
         hostname = f"[{hostname}]"
     port = f":{parsed.port}" if parsed.port is not None else ""
-    return urlunsplit((parsed.scheme.lower(), f"{hostname}{port}", parsed.path, "", ""))
+    safe_query = urlencode(
+        sorted(
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _SECRET_KEY.search(key)
+        )
+    )
+    return urlunsplit((parsed.scheme.lower(), f"{hostname}{port}", parsed.path, safe_query, ""))
 
 
 class ResourceSlotIdentity(BaseModel):
