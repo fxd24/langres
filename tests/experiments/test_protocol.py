@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from decimal import Decimal
 
 import numpy as np
@@ -241,6 +244,83 @@ def test_official_proof_expander_defends_against_empty_provenance_values() -> No
     )
     with pytest.raises(ValueError, match="non-empty composite"):
         expand_official_proof_matrix(missing_test)
+
+
+def test_official_proof_expander_revalidates_budget_after_unvalidated_copy() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+    bypassed = protocol.model_copy(update={"budget_usd": 19.0})
+
+    with pytest.raises(ValueError, match="exactly USD 20"):
+        expand_official_proof_matrix(bypassed)
+
+
+@pytest.mark.parametrize(
+    ("field", "unordered"),
+    [
+        ("benchmark_ids", {"a", "b"}),
+        ("split_ids", frozenset({"fixed", "other"})),
+        ("split_seeds", {0, 1}),
+        ("threshold_grid", {0.4, 0.6}),
+        ("pair_metrics", {"pair_f1", "precision"}),
+        ("cluster_metrics", frozenset({"bcubed_f1", "ari"})),
+    ],
+)
+def test_protocol_tuple_identity_fields_reject_unordered_inputs(
+    field: str,
+    unordered: object,
+) -> None:
+    values: dict[str, object] = {
+        "benchmark_ids": ("a", "b"),
+        "split_ids": ("fixed",),
+        "fixed_test_set_id": "composite:test",
+        "split_seeds": (0,),
+        "threshold_split_id": "validation",
+        "test_split_id": "test",
+        "hardware_cohort": "cpu",
+        "benchmark_version": "1",
+    }
+    values[field] = unordered
+
+    with pytest.raises(ValidationError, match="ordered sequence"):
+        EvaluationProtocol(**values)
+
+
+def test_unordered_protocol_input_rejection_is_hash_seed_independent() -> None:
+    script = """
+from pydantic import ValidationError
+from langres.experiments import EvaluationProtocol
+try:
+    EvaluationProtocol(
+        benchmark_ids={"dataset-a", "dataset-b"},
+        split_ids=("fixed",),
+        fixed_test_set_id="composite:test",
+        split_seeds=(0,),
+        threshold_split_id="validation",
+        test_split_id="test",
+        hardware_cohort="cpu",
+        benchmark_version="1",
+    )
+except ValidationError:
+    print("rejected")
+else:
+    print("accepted")
+"""
+    outcomes = []
+    for hash_seed in ("1", "777"):
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": hash_seed},
+        )
+        outcomes.append(result.stdout.strip())
+
+    assert outcomes == ["rejected", "rejected"]
 
 
 def test_protocol_mappings_reject_non_json_sets() -> None:

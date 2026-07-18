@@ -128,6 +128,21 @@ class EvaluationProtocol(BaseModel):
     def _freeze_mappings(cls, value: dict[str, Any]) -> FrozenDict:
         return freeze_mapping(value)
 
+    @field_validator(
+        "benchmark_ids",
+        "split_ids",
+        "split_seeds",
+        "threshold_grid",
+        "pair_metrics",
+        "cluster_metrics",
+        mode="before",
+    )
+    @classmethod
+    def _reject_unordered_tuple_inputs(cls, value: Any) -> Any:
+        if isinstance(value, (set, frozenset)):
+            raise ValueError("protocol tuple fields require an ordered sequence, not a set")
+        return value
+
     @model_validator(mode="after")
     def _validate_protocol(self) -> "EvaluationProtocol":
         if self.threshold_split_id == self.test_split_id:
@@ -293,6 +308,8 @@ def expand_official_proof_matrix(protocol: EvaluationProtocol) -> tuple[ProofCel
         raise ValueError("the official proof matrix requires publication_profile='official'")
     if not protocol.paid_proof:
         raise ValueError("the official proof matrix requires paid_proof=True")
+    if protocol.budget_usd != OFFICIAL_PAID_PROOF_BUDGET_USD:
+        raise ValueError("the official proof matrix requires a budget cap of exactly USD 20")
     if len(protocol.benchmark_ids) != 2:
         raise ValueError("the official proof matrix requires exactly two benchmark_ids")
     if len(protocol.split_ids) != 1 or len(protocol.split_seeds) != 1:

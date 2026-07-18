@@ -352,6 +352,8 @@ uses strict JSON (`NaN`/infinity are never hashed), including `Decimal` and
 non-builtin real-number values. Default mapping fields are frozen too; omitting
 a mapping never leaves a mutable default inside a frozen
 protocol/resource/run/measurement object.
+Tuple-valued protocol identity fields reject `set`/`frozenset` before Pydantic
+coercion, so their order can never vary with `PYTHONHASHSEED`.
 
 Measurements keep unknown facts as `None`; measured zero remains `0`.
 `PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
@@ -380,7 +382,9 @@ observations exist; summary rows are never treated as independent bootstrap
 samples. The package's
 `paired_entity_bootstrap()` computes fixed-test-set uncertainty over paired
 cluster/entity units rather than dependent pair rows, and reports
-`insufficient` when fewer than two resampling units exist.
+`insufficient` when fewer than two resampling units exist. Cluster identifiers
+and within-cluster differences are canonicalized before seeded sampling, so
+permuting input rows cannot change the interval.
 
 Ordinary protocols may omit `budget_usd`, and a zero-cost official publication
 may also be uncapped. Official eligibility requires dataset
@@ -393,6 +397,8 @@ separate guarded paid-proof policy requires **exactly USD 20**.
 two-dataset acceptance matrix to exactly 18 cells before retries only when
 `paid_proof=True` and every dataset/test provenance value is non-empty: one
 deterministic attempt per cell and three attempts for the two LLM topologies.
+Expansion revalidates the exact USD 20 cap even after an unvalidated model-copy
+path.
 `capture_run` deep-snapshots protocol and measurement mappings once, reuses the
 protocol snapshot for running and terminal records, and persists immutable
 JSON-shaped values so caller mutation cannot rewrite recorded provenance. It

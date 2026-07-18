@@ -112,7 +112,10 @@ def paired_entity_bootstrap(
         by_cluster.setdefault(cluster_id, []).append(difference)
         all_differences.append(difference)
 
-    cluster_ids = tuple(by_cluster)
+    for differences in by_cluster.values():
+        differences.sort()
+    all_differences.sort()
+    cluster_ids = tuple(sorted(by_cluster))
     observed_difference = statistics.fmean(all_differences)
     if len(cluster_ids) < 2:
         return BootstrapInterval(

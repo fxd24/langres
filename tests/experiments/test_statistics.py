@@ -75,6 +75,20 @@ def test_explicit_cluster_ids_cannot_collide_with_entity_fallback_ids() -> None:
     assert result.status == "available"
 
 
+def test_seeded_bootstrap_is_invariant_to_observation_input_order() -> None:
+    observations = (
+        PairedScore(entity_id="a", cluster_id="c2", baseline=0.1, candidate=0.5),
+        PairedScore(entity_id="b", cluster_id="c1", baseline=0.2, candidate=0.3),
+        PairedScore(entity_id="c", cluster_id="c2", baseline=0.4, candidate=0.2),
+        PairedScore(entity_id="d", cluster_id="c3", baseline=0.3, candidate=0.9),
+    )
+
+    forward = paired_entity_bootstrap(observations, samples=200, seed=17)
+    reversed_order = paired_entity_bootstrap(tuple(reversed(observations)), samples=200, seed=17)
+
+    assert forward == reversed_order
+
+
 def test_non_finite_scores_are_rejected() -> None:
     with pytest.raises(ValidationError, match="finite"):
         PairedScore(entity_id="a", baseline=math.nan, candidate=0.2)
