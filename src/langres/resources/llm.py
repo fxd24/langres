@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar, Literal
 
+from langres.clients.openrouter import parse_openrouter_billing
 from langres.core.model_ref import (
     IN_PROCESS_KINDS,
     ModelRef,
     UnsupportedBackboneError,
     normalize_model_ref,
     require_litellm_routable,
+    to_config,
 )
+from langres.core.registry import register
+from langres.resources._model_ref import normalize_inprocess_ref
 from langres.resources.base import (
     GenerationBatch,
     GenerationEnvelope,
@@ -19,7 +25,10 @@ from langres.resources.base import (
     GenerationUsage,
     LLM,
     LLMRuntimeConfig,
+    require_unique_ids,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _content(response: Any) -> str:
@@ -31,8 +40,25 @@ def _finish_reason(response: Any) -> str | None:
     return str(value) if value is not None else None
 
 
+def _response_string(response: Any, field: str) -> str | None:
+    value = getattr(response, field, None)
+    return str(value) if value is not None else None
+
+
+def _nonnegative_cost(value: Any) -> float | None:
+    """Normalize a usable USD observation; malformed pricing stays unknown."""
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) and cost >= 0.0 else None
+
+
+@register("resource_litellm")
 class LiteLLM:
     """Lazy LiteLLM-backed generation resource for API/endpoint refs."""
+
+    type_name: ClassVar[str] = "resource_litellm"
 
     def __init__(
         self,
@@ -59,8 +85,29 @@ class LiteLLM:
             self._client = litellm
         return self._client
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Weightless config; injected clients and credentials never persist."""
+        return {
+            "model": to_config(self.model_ref),
+            "runtime_config": self.runtime_config.model_dump(mode="json"),
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "LiteLLM":
+        """Rebuild lazily without retaining an injected client."""
+        return cls(
+            config["model"],  # type: ignore[arg-type]
+            runtime_config=LLMRuntimeConfig.model_validate(config["runtime_config"]),
+        )
+
     def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
         """Generate in request order and retain raw content only locally."""
+        require_unique_ids(
+            [request.request_id for request in requests],
+            field="request_ids",
+            operation="LiteLLM.generate",
+        )
         client = self._get_client()
         outputs: list[GenerationEnvelope] = []
         for request in requests:
@@ -74,29 +121,74 @@ class LiteLLM:
                 kwargs["api_base"] = self.model_ref.api_base
             if self.runtime_config.timeout_seconds is not None:
                 kwargs["timeout"] = self.runtime_config.timeout_seconds
+            if self.runtime_config.seed is not None:
+                kwargs["seed"] = self.runtime_config.seed
             response = client.completion(**kwargs)
-            usage = GenerationUsage.from_response(response, model=self.model_ref.base)
-            cost_usd: float | None = None
             try:
-                cost_usd = float(client.completion_cost(completion_response=response))
-            except (AttributeError, TypeError, ValueError):
-                pass
+                real_cost, provider = parse_openrouter_billing(response)
+            except Exception as exc:
+                # Billing/provider extraction is post-call observability. Keep
+                # a successful response even if an SDK returns a novel shape.
+                logger.warning(
+                    "Could not read provider billing for %s: %s",
+                    self.model_ref.base,
+                    exc,
+                )
+                real_cost, provider = None, None
+            served_model = _response_string(response, "model") or self.model_ref.base
+            try:
+                usage = GenerationUsage.from_response(
+                    response,
+                    model=served_model,
+                    provider=provider,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not read completion usage for %s: %s",
+                    self.model_ref.base,
+                    exc,
+                )
+                usage = None
+            cost_usd = _nonnegative_cost(real_cost)
+            cost_basis: Literal["real", "estimated", "none"] = (
+                "real" if cost_usd is not None else "none"
+            )
+            if cost_usd is None:
+                try:
+                    cost_usd = _nonnegative_cost(
+                        client.completion_cost(completion_response=response)
+                    )
+                    cost_basis = "estimated" if cost_usd is not None else "none"
+                except Exception as exc:
+                    # Pricing is observability after a successful paid call. A
+                    # broken/missing price table must not discard the response.
+                    logger.warning(
+                        "Could not estimate completion cost for %s: %s",
+                        self.model_ref.base,
+                        exc,
+                    )
             outputs.append(
                 GenerationEnvelope.from_content(
                     request_id=request.request_id,
                     model_ref=self.model_ref,
                     content=_content(response),
                     usage=usage,
+                    provider=provider,
+                    served_model=served_model,
+                    provider_request_id=_response_string(response, "id"),
                     finish_reason=_finish_reason(response),
                     cost_usd=cost_usd,
-                    cost_basis="estimated" if cost_usd is not None else "none",
+                    cost_basis=cost_basis,
                 )
             )
         return GenerationBatch(outputs=tuple(outputs), model_ref=self.model_ref)
 
 
+@register("resource_transformers_llm")
 class TransformersLLM:
     """Lazy local/Hugging Face causal-LM generation resource."""
+
+    type_name: ClassVar[str] = "resource_transformers_llm"
 
     def __init__(
         self,
@@ -104,7 +196,7 @@ class TransformersLLM:
         *,
         runtime_config: LLMRuntimeConfig | None = None,
     ) -> None:
-        self.model_ref = normalize_model_ref(model)
+        self.model_ref = normalize_inprocess_ref(model, slot="TransformersLLM")
         if self.model_ref.kind not in IN_PROCESS_KINDS:
             raise UnsupportedBackboneError(
                 "TransformersLLM requires kind='hf' or kind='local'. "
@@ -112,6 +204,22 @@ class TransformersLLM:
             )
         self.runtime_config = runtime_config or LLMRuntimeConfig()
         self._backend: Any = None
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Weightless local/HF construction config."""
+        return {
+            "model": to_config(self.model_ref),
+            "runtime_config": self.runtime_config.model_dump(mode="json"),
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "TransformersLLM":
+        """Rebuild with weights still unloaded."""
+        return cls(
+            config["model"],  # type: ignore[arg-type]
+            runtime_config=LLMRuntimeConfig.model_validate(config["runtime_config"]),
+        )
 
     def _get_backend(self) -> Any:
         if self._backend is None:
@@ -123,11 +231,17 @@ class TransformersLLM:
                 device=self.runtime_config.device,
                 dtype=self.runtime_config.dtype,
                 local_files_only=self.runtime_config.local_files_only,
+                seed=self.runtime_config.seed,
             )
         return self._backend
 
     def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
         """Generate locally through the existing LiteLLM-shaped backend."""
+        require_unique_ids(
+            [request.request_id for request in requests],
+            field="request_ids",
+            operation="TransformersLLM.generate",
+        )
         backend = self._get_backend()
         outputs = []
         for request in requests:

@@ -250,7 +250,8 @@ plain string, a dict, or a ref).
 `ModelRef` is a stdlib-only leaf (it imports nothing from `langres`), frozen,
 validated in `__post_init__`, and **weightless** — reference strings only, so it
 round-trips as JSON config via `to_config`. Its fields: `base`, `kind`,
-`adapter`, `api_base`, `revision`.
+`adapter`, `adapter_revision`, `api_base`, `revision`. Base and adapter Hub
+artifacts carry independent revision pins.
 
 **`kind` is the discriminator, and routing reads nothing else:**
 

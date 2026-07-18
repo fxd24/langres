@@ -9,6 +9,7 @@ from langres.core.model_ref import ModelRef
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.op import Score, ThresholdSelect, TopKSelect
 from langres.core.pairs import Pairs
+from langres.core.spend import BudgetExceeded, SpendMonitor
 from langres.resources import (
     FakeLLM,
     FakeReranker,
@@ -94,6 +95,46 @@ def test_resource_ops_reject_model_identity_drift() -> None:
         Generate[CompanySchema](_WrongLLM()).forward(_pairs())
 
 
+def test_builtin_resource_ops_expose_safe_round_trip_params() -> None:
+    reranker = FakeReranker(scores={'["a","b"]': 0.9, '["a","c"]': 0.2})
+    rerank = Rerank[CompanySchema](reranker)
+    llm = FakeLLM(default_response="MATCH")
+    generate = Generate[CompanySchema](llm)
+    parse = Parse[CompanySchema]()
+
+    rebuilt_rerank = Rerank[CompanySchema].from_config(reranker, rerank.config)
+    rebuilt_generate = Generate[CompanySchema].from_config(llm, generate.config)
+    rebuilt_parse = Parse[CompanySchema].from_config(parse.config)
+
+    assert rebuilt_rerank.config == rerank.config
+    assert rebuilt_generate.config == generate.config
+    assert rebuilt_parse.config == parse.config
+    assert [
+        row.decision for row in rebuilt_parse.forward(rebuilt_generate.forward(_pairs())).rows
+    ] == [
+        True,
+        True,
+    ]
+
+
+def test_resource_op_persistence_rejects_custom_callables() -> None:
+    def custom_serializer(record):
+        return record.model_dump_json()
+
+    def custom_builder(row):
+        return GenerationRequest.user("custom", "prompt")
+
+    def custom_parser(content):
+        return ParsedGeneration(decision=True)
+
+    with pytest.raises(TypeError, match="custom callable"):
+        _ = Rerank[CompanySchema](FakeReranker(), serializer=custom_serializer).config
+    with pytest.raises(TypeError, match="custom callable"):
+        _ = Generate[CompanySchema](FakeLLM(), request_builder=custom_builder).config
+    with pytest.raises(TypeError, match="custom callable"):
+        _ = Parse[CompanySchema](custom_parser).config
+
+
 def test_generate_and_parse_exchange_typed_private_envelopes_in_provenance() -> None:
     generated = Generate[CompanySchema](
         FakeLLM(
@@ -117,6 +158,22 @@ def test_generate_and_parse_exchange_typed_private_envelopes_in_provenance() -> 
     assert all("_langres_generation" not in row.provenance for row in parsed.rows)
     assert all("generation" in row.provenance for row in parsed.rows)
     assert all("raw_content" not in row.provenance["generation"] for row in parsed.rows)
+
+
+def test_generate_and_parse_defaults_are_compatible() -> None:
+    generated = Generate[CompanySchema](
+        FakeLLM(
+            responses={
+                '["a","b"]': "MATCH",
+                '["a","c"]': "NO_MATCH",
+            }
+        )
+    ).forward(_pairs())
+
+    parsed = Parse[CompanySchema]().forward(generated)
+
+    assert [row.decision for row in parsed.rows] == [True, False]
+    assert all(row.provenance["parse_error"] is False for row in parsed.rows)
 
 
 def test_score_parser_preserves_score_and_reasoning() -> None:
@@ -183,11 +240,71 @@ def test_llm_matcher_adapter_preserves_the_legacy_matcher_contract() -> None:
                 '["a","b"]': "MATCH",
                 '["a","c"]': "NO_MATCH",
             }
-        ),
-        parser=parse_binary_response,
+        )
     )
 
     judgements = list(matcher.forward(iter(candidates)))
 
     assert [judgement.decision for judgement in judgements] == [True, False]
     assert all(judgement.score_type == "prob_llm" for judgement in judgements)
+
+
+def test_generate_binds_one_spend_monitor_and_tallies_envelope_costs() -> None:
+    class _CostedLLM(FakeLLM):
+        def generate(self, requests):
+            batch = super().generate(requests)
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(update={"cost_usd": 0.3, "cost_basis": "real"})
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    monitor = SpendMonitor(budget_usd=1.0)
+    operation = Generate[CompanySchema](_CostedLLM()).bind_spend_monitor(monitor)
+
+    operation.forward(_pairs())
+
+    assert operation.spend_monitor is monitor
+    assert monitor.spent == pytest.approx(0.6)
+    with pytest.raises(ValueError, match="different SpendMonitor"):
+        operation.bind_spend_monitor(SpendMonitor(budget_usd=1.0))
+
+
+def test_generate_checks_bound_budget_before_another_paid_call() -> None:
+    resource = FakeLLM()
+    monitor = SpendMonitor(budget_usd=0.0)
+    monitor.add(0.01)
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(monitor)
+
+    with pytest.raises(BudgetExceeded):
+        operation.forward(_pairs())
+
+
+def test_generate_bound_budget_limits_overshoot_to_one_paid_call() -> None:
+    class _CostedLLM(FakeLLM):
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            batch = super().generate(requests)
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(update={"cost_usd": 0.6, "cost_basis": "real"})
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    resource = _CostedLLM()
+    monitor = SpendMonitor(budget_usd=0.5)
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(monitor)
+
+    with pytest.raises(BudgetExceeded):
+        operation.forward(_pairs())
+
+    assert resource.calls == 1
+    assert monitor.spent == pytest.approx(0.6)

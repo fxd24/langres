@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
 from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.model_ref import ModelRef, UnsupportedBackboneError
+from langres.core.model_ref import ModelRef, UnsupportedBackboneError, to_config
+from langres.core.registry import register
 from langres.resources._model_ref import normalize_inprocess_ref
 from langres.resources.base import (
     EmbeddingBatch,
@@ -17,6 +18,7 @@ from langres.resources.base import (
     RerankRequest,
     RerankerRuntimeConfig,
     SentenceTransformerRuntimeConfig,
+    require_unique_ids,
 )
 
 
@@ -28,8 +30,11 @@ def _torch_dtype(name: str | None) -> Any:
     return getattr(torch, name)
 
 
+@register("resource_sentence_transformer")
 class SentenceTransformer:
     """Dense embedding resource backed by the existing lazy embedder."""
+
+    type_name: ClassVar[str] = "resource_sentence_transformer"
 
     def __init__(
         self,
@@ -38,6 +43,11 @@ class SentenceTransformer:
         runtime_config: SentenceTransformerRuntimeConfig | None = None,
     ) -> None:
         self.model_ref = normalize_inprocess_ref(model, slot="SentenceTransformer")
+        if self.model_ref.adapter is not None:
+            raise UnsupportedBackboneError(
+                "SentenceTransformer does not assemble PEFT adapters. Fix: merge the "
+                "adapter into an embedding checkpoint or pass the merged model ref."
+            )
         self.runtime_config = runtime_config or SentenceTransformerRuntimeConfig()
         self._embedder = SentenceTransformerEmbedder(
             model_name=self.model_ref,
@@ -53,6 +63,11 @@ class SentenceTransformer:
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         """Embed ordered texts and attach measured vector facts."""
         vectors = self._embedder.encode(list(texts))
+        if len(vectors) != len(texts):
+            raise ValueError(
+                "SentenceTransformer requires one vector per input text; "
+                f"got {len(vectors)} vectors for {len(texts)} texts."
+            )
         return EmbeddingBatch(
             vectors=vectors,
             model_ref=self.model_ref,
@@ -63,9 +78,30 @@ class SentenceTransformer:
             ),
         )
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Weightless model and runtime configuration."""
+        return {
+            "model": to_config(self.model_ref),
+            "runtime_config": self.runtime_config.model_dump(mode="json"),
+        }
 
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "SentenceTransformer":
+        """Rebuild with weights still unloaded."""
+        return cls(
+            config["model"],  # type: ignore[arg-type]
+            runtime_config=SentenceTransformerRuntimeConfig.model_validate(
+                config["runtime_config"]
+            ),
+        )
+
+
+@register("resource_cross_encoder_reranker")
 class CrossEncoderReranker:
     """Lazy one-score CrossEncoder resource for pair reranking."""
+
+    type_name: ClassVar[str] = "resource_cross_encoder_reranker"
 
     def __init__(
         self,
@@ -104,8 +140,29 @@ class CrossEncoderReranker:
             )
         return self._model
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Weightless model and runtime configuration."""
+        return {
+            "model": to_config(self.model_ref),
+            "runtime_config": self.runtime_config.model_dump(mode="json"),
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "CrossEncoderReranker":
+        """Rebuild with weights still unloaded."""
+        return cls(
+            config["model"],  # type: ignore[arg-type]
+            runtime_config=RerankerRuntimeConfig.model_validate(config["runtime_config"]),
+        )
+
     def rerank(self, pairs: Sequence[RerankRequest]) -> RerankBatch:
         """Score each pair without filtering or assigning a topology role."""
+        require_unique_ids(
+            [pair.pair_id for pair in pairs],
+            field="pair_ids",
+            operation="CrossEncoderReranker.rerank",
+        )
         if not pairs:
             return RerankBatch(pair_ids=(), scores=(), model_ref=self.model_ref)
         values = self._get_model().predict(

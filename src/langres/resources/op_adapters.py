@@ -15,12 +15,15 @@ from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.op import Op, Score, Spending
 from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
+from langres.core.spend import SpendMonitor
 from langres.resources.base import (
+    GenerationBatch,
     GenerationEnvelope,
     GenerationRequest,
     LLM,
     RerankRequest,
     Reranker,
+    require_unique_ids,
 )
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -81,21 +84,6 @@ def _pair_id(row: PairRow[Any]) -> str:
     return json.dumps([row.left_id, row.right_id], separators=(",", ":"))
 
 
-def _require_unique(values: list[str], *, field: str, operation: str) -> None:
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for value in values:
-        if value in seen:
-            duplicates.add(value)
-        seen.add(value)
-    if duplicates:
-        preview = ", ".join(repr(value) for value in sorted(duplicates)[:3])
-        raise ValueError(
-            f"{operation} requires unique {field}; duplicate ids: {preview}. "
-            "Deduplicate pair rows or provide a request builder with stable unique ids."
-        )
-
-
 def _default_generation_request(row: PairRow[Any]) -> GenerationRequest:
     prompt = (
         "Determine whether these records refer to the same entity.\n"
@@ -104,6 +92,45 @@ def _default_generation_request(row: PairRow[Any]) -> GenerationRequest:
         "Answer MATCH or NO_MATCH."
     )
     return GenerationRequest.user(_pair_id(row), prompt)
+
+
+PAIR_SERIALIZERS: dict[str, PairSerializer] = {"json": _serialize_record}
+REQUEST_BUILDERS: dict[str, RequestBuilder] = {"binary_pair": _default_generation_request}
+GENERATION_PARSERS: dict[str, GenerationParser] = {
+    "binary": parse_binary_response,
+    "score": parse_score_response,
+}
+
+
+def _registered_callable_name(
+    value: Callable[..., Any],
+    registry: dict[str, Callable[..., Any]],
+    *,
+    role: str,
+) -> str:
+    for name, registered in registry.items():
+        if value is registered:
+            return name
+    raise TypeError(
+        f"{role} uses a custom callable and cannot be serialized safely. "
+        f"Use one of the registered names: {', '.join(sorted(registry))}."
+    )
+
+
+def _resolve_callable(
+    config: dict[str, object],
+    key: str,
+    registry: dict[str, Callable[..., Any]],
+    *,
+    role: str,
+) -> Callable[..., Any]:
+    name = config.get(key)
+    if not isinstance(name, str) or name not in registry:
+        raise ValueError(
+            f"{role} config requires {key!r} to be one of "
+            f"{', '.join(sorted(registry))}; got {name!r}."
+        )
+    return registry[name]
 
 
 class Rerank(Score[SchemaT], Generic[SchemaT]):
@@ -125,6 +152,40 @@ class Rerank(Score[SchemaT], Generic[SchemaT]):
         self.resource = resource
         self.serializer = serializer
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Safe topology params; arbitrary serializers fail closed."""
+        return {
+            "out_space": self.out_space,
+            "serializer": _registered_callable_name(
+                self.serializer,
+                PAIR_SERIALIZERS,
+                role="Rerank",
+            ),
+        }
+
+    @classmethod
+    def from_config(
+        cls,
+        resource: Reranker,
+        config: dict[str, object],
+    ) -> "Rerank[SchemaT]":
+        """Rebuild from trusted registered params plus a resource component."""
+        serializer = _resolve_callable(
+            config,
+            "serializer",
+            PAIR_SERIALIZERS,
+            role="Rerank",
+        )
+        out_space = config.get("out_space")
+        if not isinstance(out_space, str):
+            raise ValueError("Rerank config requires a string 'out_space'")
+        return cls(
+            resource,
+            out_space=out_space,  # type: ignore[arg-type]  # Score validates the family
+            serializer=serializer,
+        )
+
     def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
         """Rerank all rows once, preserving row identity and order."""
         requests = [
@@ -135,7 +196,7 @@ class Rerank(Score[SchemaT], Generic[SchemaT]):
             )
             for row in pairs.rows
         ]
-        _require_unique(
+        require_unique_ids(
             [request.pair_id for request in requests],
             field="pair_ids",
             operation="Rerank",
@@ -185,34 +246,103 @@ class Generate(Op[SchemaT], Spending, Generic[SchemaT]):
     ) -> None:
         self.resource = resource
         self.request_builder = request_builder
+        self._spend_monitor: SpendMonitor | None = None
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Safe topology params; arbitrary prompt builders fail closed."""
+        return {
+            "request_builder": _registered_callable_name(
+                self.request_builder,
+                REQUEST_BUILDERS,
+                role="Generate",
+            )
+        }
+
+    @classmethod
+    def from_config(
+        cls,
+        resource: LLM,
+        config: dict[str, object],
+    ) -> "Generate[SchemaT]":
+        """Rebuild from trusted registered params plus an LLM resource."""
+        builder = _resolve_callable(
+            config,
+            "request_builder",
+            REQUEST_BUILDERS,
+            role="Generate",
+        )
+        return cls(resource, request_builder=builder)
+
+    @property
+    def spend_monitor(self) -> SpendMonitor | None:
+        """The topology-owned spend ledger, once bound."""
+        return self._spend_monitor
+
+    def bind_spend_monitor(self, monitor: SpendMonitor) -> "Generate[SchemaT]":
+        """Bind generation spend to exactly one cumulative ledger."""
+        if self._spend_monitor is not None and self._spend_monitor is not monitor:
+            raise ValueError(
+                "Generate is already bound to a different SpendMonitor. "
+                "Build a separate Generate operation for a separate model budget."
+            )
+        self._spend_monitor = monitor
+        return self
 
     def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
         """Generate once per pair and keep scores unchanged for the Parse stage."""
         requests = [self.request_builder(row) for row in pairs.rows]
-        _require_unique(
+        require_unique_ids(
             [request.request_id for request in requests],
             field="request_ids",
             operation="Generate",
         )
-        batch = self.resource.generate(requests)
+        outputs = (
+            list(self._validated_outputs(requests, self.resource.generate(requests)))
+            if self._spend_monitor is None
+            else self._generate_one_at_a_time(requests)
+        )
+        rows = []
+        for row, envelope in zip(pairs.rows, outputs, strict=True):
+            provenance = dict(row.provenance)
+            provenance[GENERATION_ENVELOPE_KEY] = envelope
+            rows.append(row.model_copy(update={"provenance": provenance}))
+        return Pairs(store=pairs.store, rows=rows)
+
+    def _generate_one_at_a_time(
+        self,
+        requests: list[GenerationRequest],
+    ) -> list[GenerationEnvelope]:
+        """Meter each provider request, limiting overshoot to one paid call."""
+        assert self._spend_monitor is not None
+        outputs: list[GenerationEnvelope] = []
+        for request in requests:
+            self._spend_monitor.check()
+            batch = self.resource.generate([request])
+            self._spend_monitor.add(sum(output.cost_usd or 0.0 for output in batch.outputs))
+            self._spend_monitor.check()
+            outputs.extend(self._validated_outputs([request], batch))
+        return outputs
+
+    def _validated_outputs(
+        self,
+        expected: list[GenerationRequest],
+        batch: GenerationBatch,
+    ) -> tuple[GenerationEnvelope, ...]:
+        """Validate model, cardinality, identity, and order for one resource call."""
         if batch.model_ref != self.resource.model_ref:
             raise ValueError(
                 "LLM returned a batch with a different model_ref from the resource. "
                 "Resource identity must remain stable for provenance and cache keys."
             )
-        expected_ids = tuple(request.request_id for request in requests)
+        expected_ids = tuple(request.request_id for request in expected)
         output_ids = tuple(output.request_id for output in batch.outputs)
         if output_ids != expected_ids:
             raise ValueError(
-                "LLM changed request identity/order. An LLM resource must return "
-                "one envelope per request in the same order."
+                "LLM changed request identity/order/cardinality. An LLM resource must "
+                "return one envelope per request in the same order."
             )
-        rows = []
-        for row, envelope in zip(pairs.rows, batch.outputs, strict=True):
-            provenance = dict(row.provenance)
-            provenance[GENERATION_ENVELOPE_KEY] = envelope
-            rows.append(row.model_copy(update={"provenance": provenance}))
-        return Pairs(store=pairs.store, rows=rows)
+        return batch.outputs
 
 
 class Parse(Score[SchemaT], Generic[SchemaT]):
@@ -220,7 +350,7 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
 
     def __init__(
         self,
-        parser: GenerationParser = parse_score_response,
+        parser: GenerationParser = parse_binary_response,
         *,
         on_parse_error: Literal["abstain", "raise"] = "abstain",
     ) -> None:
@@ -229,6 +359,35 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
         super().__init__(scope="pair", out_space="prob_llm")
         self.parser = parser
         self.on_parse_error = on_parse_error
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Safe topology params; arbitrary response parsers fail closed."""
+        return {
+            "parser": _registered_callable_name(
+                self.parser,
+                GENERATION_PARSERS,
+                role="Parse",
+            ),
+            "on_parse_error": self.on_parse_error,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "Parse[SchemaT]":
+        """Rebuild only a named built-in parser."""
+        parser = _resolve_callable(
+            config,
+            "parser",
+            GENERATION_PARSERS,
+            role="Parse",
+        )
+        on_parse_error = config.get("on_parse_error")
+        if on_parse_error not in {"abstain", "raise"}:
+            raise ValueError("Parse config requires on_parse_error='abstain' or 'raise'")
+        return cls(
+            parser,
+            on_parse_error=on_parse_error,
+        )
 
     def _envelope(self, row: PairRow[SchemaT]) -> GenerationEnvelope:
         value = row.provenance.get(GENERATION_ENVELOPE_KEY)
@@ -293,7 +452,7 @@ class LLMMatcherAdapter(Matcher[SchemaT], Generic[SchemaT]):
         self,
         resource: LLM,
         *,
-        parser: GenerationParser = parse_score_response,
+        parser: GenerationParser = parse_binary_response,
         request_builder: RequestBuilder = _default_generation_request,
         on_parse_error: Literal["abstain", "raise"] = "abstain",
     ) -> None:

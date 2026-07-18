@@ -25,6 +25,27 @@ from langres.core.model_ref import ModelRef
 RuntimeDType = Literal["float16", "float32", "bfloat16"]
 
 
+def require_unique_ids(
+    values: Sequence[str],
+    *,
+    field: str,
+    operation: str,
+) -> None:
+    """Reject ambiguous request identities before a resource can perform work."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    if duplicates:
+        preview = ", ".join(repr(value) for value in sorted(duplicates)[:3])
+        raise ValueError(
+            f"{operation} requires unique {field}; duplicate ids: {preview}. "
+            "Deduplicate inputs or provide stable unique ids."
+        )
+
+
 def _read(value: Any, key: str) -> Any:
     """Read a field from a mapping or response object without importing an SDK."""
     if value is None:
@@ -86,6 +107,7 @@ class LLMRuntimeConfig(ResourceRuntimeConfig):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_new_tokens: int = Field(default=64, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
+    seed: int | None = Field(default=None, ge=0)
 
 
 class EmbeddingFacts(BaseModel):
@@ -263,6 +285,8 @@ class GenerationEnvelope(BaseModel):
     model_ref: ModelRef
     usage: GenerationUsage | None = None
     provider: str | None = None
+    served_model: str | None = None
+    provider_request_id: str | None = None
     finish_reason: str | None = None
     cost_usd: float | None = Field(default=None, ge=0.0)
     cost_basis: Literal["real", "estimated", "none"] = "none"
@@ -278,6 +302,8 @@ class GenerationEnvelope(BaseModel):
         content: str,
         usage: GenerationUsage | None = None,
         provider: str | None = None,
+        served_model: str | None = None,
+        provider_request_id: str | None = None,
         finish_reason: str | None = None,
         cost_usd: float | None = None,
         cost_basis: Literal["real", "estimated", "none"] = "none",
@@ -288,6 +314,8 @@ class GenerationEnvelope(BaseModel):
             model_ref=model_ref,
             usage=usage,
             provider=provider,
+            served_model=served_model,
+            provider_request_id=provider_request_id,
             finish_reason=finish_reason,
             cost_usd=cost_usd,
             cost_basis=cost_basis,

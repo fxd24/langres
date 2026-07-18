@@ -232,6 +232,44 @@ def test_revision_pins_an_hf_ref_and_survives_the_round_trip() -> None:
     assert normalize_model_ref(to_config(ref)) == ref
 
 
+def test_adapter_revision_pins_an_adapter_and_survives_the_round_trip() -> None:
+    ref = normalize_model_ref(
+        {
+            "base": "org/model",
+            "kind": "hf",
+            "revision": "base-sha",
+            "adapter": "org/adapter",
+            "adapter_revision": "adapter-sha",
+        }
+    )
+
+    assert ref.adapter_revision == "adapter-sha"
+    assert to_config(ref) == {
+        "base": "org/model",
+        "kind": "hf",
+        "adapter": "org/adapter",
+        "adapter_revision": "adapter-sha",
+        "revision": "base-sha",
+    }
+    assert normalize_model_ref(to_config(ref)) == ref
+
+
+def test_adapter_revision_requires_an_adapter() -> None:
+    with pytest.raises(InvalidModelRefError, match="requires adapter"):
+        ModelRef(base="org/model", kind="hf", adapter_revision="adapter-sha")
+
+
+def test_non_string_adapter_revision_rejected() -> None:
+    with pytest.raises(InvalidModelRefError, match="adapter_revision"):
+        normalize_model_ref(
+            {
+                "base": "org/model",
+                "adapter": "org/adapter",
+                "adapter_revision": 7,
+            }
+        )
+
+
 def test_two_revisions_of_one_base_are_different_refs() -> None:
     """The point of B16: without ``revision``, ``org/name`` drifts as the Hub moves,
     so an 'identical versioned config' is not identical across time."""
@@ -320,6 +358,12 @@ def test_to_config_widens_when_inference_could_not_reproduce_the_ref() -> None:
         ModelRef(base="./m", kind="local"),
         ModelRef(base="/abs/m", kind="local"),
         ModelRef(base="org/b", kind="hf", adapter="org/a"),
+        ModelRef(
+            base="org/b",
+            kind="hf",
+            adapter="org/a",
+            adapter_revision="adapter-sha",
+        ),
         ModelRef(base="foo/bar/baz", kind="api"),
         ModelRef(base="m", kind="endpoint", api_base="http://localhost:8000/v1"),
     ],

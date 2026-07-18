@@ -31,9 +31,20 @@ reranker = CrossEncoderReranker(
 )
 ```
 
-The Hugging Face revision, device, dtype, batch size, backend, and offline-cache
-policy remain configuration. They do not load weights and can be captured before
-an experiment runs.
+The Hugging Face base revision, optional adapter revision, device, dtype, batch
+size, backend, seed, and offline-cache policy remain configuration. They do not
+load weights and can be captured before an experiment runs. A base and PEFT
+adapter are pinned independently:
+
+```python
+ModelRef(
+    base="org/base",
+    kind="hf",
+    revision="<base-commit-sha>",
+    adapter="org/adapter",
+    adapter_revision="<adapter-commit-sha>",
+)
+```
 
 ## Deterministic offline resources
 
@@ -73,12 +84,32 @@ Raw generated content is process-local by default:
 This prevents experiment reports and trackers from publishing prompts, records,
 or model responses simply because they serialize pair provenance.
 
+The built-in `Generate` prompt asks for `MATCH` / `NO_MATCH`, and the default
+`Parse` and `LLMMatcherAdapter` parser consumes that same binary shape. Numeric
+`Score: 0..1` output remains available explicitly through
+`parse_score_response`.
+
+Paid `Generate` operations implement the structural `SpendMonitorBindable`
+capability. An
+explicit topology binds them to the model's cumulative `SpendMonitor`; duplicate
+request ids are rejected before any provider call, and measured envelope costs
+are added to that ledger. Once bound, `Generate` invokes the resource one request
+at a time and checks the ledger between calls, preserving the framework-wide
+budget guarantee: the configured budget plus the cost of at most one further
+paid call.
+
 `GenerationUsage` records input/output totals plus cache-read, cache-creation,
 and reasoning subsets. Providers do not expose every field, so an absent count
 is `None`; a real zero remains `0`. This distinction prevents benchmarks from
 silently treating unmeasured usage as free usage. LiteLLM's normalized input and
 output totals already include their subsets, so callers must not add cache or
 reasoning counts to those totals.
+
+`GenerationEnvelope` also records the actual served model, serving provider,
+provider request id, and whether cost came from real provider billing or an
+estimate. Provider billing is preferred over a price-table estimate. Pricing is
+post-call observability: if estimation fails after generation succeeds, langres
+keeps the generated result and records cost as unknown.
 
 ## API and local LLMs
 
@@ -93,6 +124,18 @@ local_llm = llm_from_model_ref(
     {"base": "./checkpoints/my-model", "kind": "local"}
 )
 ```
+
+Constructing `TransformersLLM("distilgpt2")` treats the bare name as an
+in-process Hugging Face id, consistently with embedding and reranker resources.
+At `temperature=0`, local generation is greedy. A positive temperature enables
+sampling; set `LLMRuntimeConfig(seed=...)` to make that runtime choice explicit
+and reproducible.
+
+The four production resources (`SentenceTransformer`, `CrossEncoderReranker`,
+`LiteLLM`, and `TransformersLLM`) expose registered, weightless construction
+specs. Their model reference and runtime configuration round-trip without model
+weights, credentials, or injected clients. Custom request builders and parsers
+remain runtime callables and are not silently serialized.
 
 `LLMMatcherAdapter` exposes `LLM + Generate + Parse` through the existing
 `Matcher.forward()` contract so legacy resolver construction remains usable

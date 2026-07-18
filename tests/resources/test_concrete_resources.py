@@ -22,6 +22,7 @@ from langres.resources import (
     TransformersLLM,
     llm_from_model_ref,
 )
+from langres.core._artifacts import component_spec, rebuild_component
 
 
 def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() -> None:
@@ -65,9 +66,24 @@ def test_sentence_transformer_resource_embeds_through_legacy_provider() -> None:
     assert batch.facts.dimension == 3
 
 
+def test_sentence_transformer_rejects_wrong_embedding_cardinality() -> None:
+    resource = SentenceTransformer("sentence-transformers/test")
+
+    class _Embedder:
+        def encode(self, texts: list[str]) -> np.ndarray:
+            return np.ones((1, 3), dtype=np.float32)
+
+    resource._embedder = _Embedder()
+
+    with pytest.raises(ValueError, match="one vector per input text"):
+        resource.embed(["Acme", "Globex"])
+
+
 def test_inprocess_resources_reject_served_and_adapter_refs() -> None:
     with pytest.raises(UnsupportedBackboneError, match="in-process"):
         CrossEncoderReranker(ModelRef(base="openai/model", kind="api"))
+    with pytest.raises(UnsupportedBackboneError, match="does not assemble PEFT"):
+        SentenceTransformer(ModelRef(base="org/model", kind="hf", adapter="org/adapter"))
     with pytest.raises(UnsupportedBackboneError, match="does not assemble PEFT"):
         CrossEncoderReranker(ModelRef(base="org/model", kind="hf", adapter="org/adapter"))
 
@@ -120,6 +136,28 @@ def test_cross_encoder_handles_empty_single_column_and_invalid_outputs() -> None
         resource.rerank(request)
 
 
+def test_cross_encoder_rejects_duplicate_ids_before_model_inference() -> None:
+    resource = CrossEncoderReranker("org/model")
+
+    class _Model:
+        calls = 0
+
+        def predict(self, pairs: list[tuple[str, str]], **kwargs: Any) -> np.ndarray:
+            self.calls += 1
+            return np.array([0.4, 0.6], dtype=np.float32)
+
+    model = _Model()
+    resource._model = model
+    duplicate = [
+        RerankRequest(pair_id="same", left="a", right="b"),
+        RerankRequest(pair_id="same", left="c", right="d"),
+    ]
+
+    with pytest.raises(ValueError, match="requires unique pair_ids"):
+        resource.rerank(duplicate)
+    assert model.calls == 0
+
+
 def test_cross_encoder_loader_receives_model_identity_and_runtime(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -151,6 +189,7 @@ def test_litellm_resource_uses_injected_client_without_importing_backend() -> No
     class _Client:
         def completion(self, **kwargs: Any) -> Any:
             assert kwargs["model"] == "openai/gpt-4o-mini"
+            assert kwargs["seed"] == 11
             return SimpleNamespace(
                 choices=[
                     SimpleNamespace(
@@ -166,7 +205,7 @@ def test_litellm_resource_uses_injected_client_without_importing_backend() -> No
 
     resource = LiteLLM(
         ModelRef(base="openai/gpt-4o-mini", kind="api"),
-        runtime_config=LLMRuntimeConfig(temperature=0.0, max_new_tokens=8),
+        runtime_config=LLMRuntimeConfig(temperature=0.0, max_new_tokens=8, seed=11),
         client=_Client(),
     )
 
@@ -191,7 +230,7 @@ def test_litellm_resource_forwards_endpoint_timeout_and_tolerates_unknown_cost()
             )
 
         def completion_cost(self, completion_response: Any) -> float:
-            raise ValueError("price unknown")
+            raise RuntimeError("pricing service unavailable")
 
     resource = LiteLLM(
         ModelRef(
@@ -208,6 +247,64 @@ def test_litellm_resource_forwards_endpoint_timeout_and_tolerates_unknown_cost()
     assert calls[0]["timeout"] == 12.0
     assert output.cost_usd is None
     assert output.finish_reason is None
+
+
+def test_litellm_prefers_real_billing_and_preserves_serving_provenance() -> None:
+    class _Client:
+        def completion(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                id="provider-request-1",
+                model="openai/gpt-4o-mini-2024-07-18",
+                provider="ExampleProvider",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="MATCH"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1, cost=0.002),
+            )
+
+        def completion_cost(self, completion_response: Any) -> float:
+            raise AssertionError("real provider billing must win")
+
+    output = (
+        LiteLLM(
+            ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+            client=_Client(),
+        )
+        .generate([GenerationRequest.user("one", "prompt")])
+        .outputs[0]
+    )
+
+    assert output.cost_usd == pytest.approx(0.002)
+    assert output.cost_basis == "real"
+    assert output.provider == "ExampleProvider"
+    assert output.served_model == "openai/gpt-4o-mini-2024-07-18"
+    assert output.provider_request_id == "provider-request-1"
+    assert output.usage is not None
+    assert output.usage.provider == "ExampleProvider"
+    assert output.usage.model == "openai/gpt-4o-mini-2024-07-18"
+
+
+def test_litellm_rejects_duplicate_request_ids_before_paid_call() -> None:
+    class _Client:
+        calls = 0
+
+        def completion(self, **kwargs: Any) -> Any:
+            self.calls += 1
+            raise AssertionError("must not be called")
+
+    client = _Client()
+    resource = LiteLLM(ModelRef(base="openai/gpt-4o-mini", kind="api"), client=client)
+    duplicate = [
+        GenerationRequest.user("same", "first"),
+        GenerationRequest.user("same", "second"),
+    ]
+
+    with pytest.raises(ValueError, match="requires unique request_ids"):
+        resource.generate(duplicate)
+    assert client.calls == 0
 
 
 def test_litellm_rejects_a_hub_revision_it_cannot_honor() -> None:
@@ -241,6 +338,30 @@ def test_transformers_llm_uses_the_same_generation_contract() -> None:
     assert batch.outputs[0].usage.output_tokens == 1
 
 
+def test_transformers_llm_treats_bare_model_name_as_hf_and_preflights_ids() -> None:
+    resource = TransformersLLM("distilgpt2")
+
+    class _Backend:
+        calls = 0
+
+        def complete(self, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+            self.calls += 1
+            raise AssertionError("must not be called")
+
+    backend = _Backend()
+    resource._backend = backend
+
+    assert resource.model_ref == ModelRef(base="distilgpt2", kind="hf")
+    with pytest.raises(ValueError, match="requires unique request_ids"):
+        resource.generate(
+            [
+                GenerationRequest.user("same", "first"),
+                GenerationRequest.user("same", "second"),
+            ]
+        )
+    assert backend.calls == 0
+
+
 def test_llm_factory_routes_only_on_model_ref_kind() -> None:
     assert isinstance(
         llm_from_model_ref(ModelRef(base="./local", kind="local")),
@@ -250,7 +371,7 @@ def test_llm_factory_routes_only_on_model_ref_kind() -> None:
         llm_from_model_ref(ModelRef(base="openai/gpt-4o-mini", kind="api")),
         LiteLLM,
     )
-    with pytest.raises(UnsupportedBackboneError, match="requires kind"):
+    with pytest.raises(UnsupportedBackboneError, match="requires an in-process"):
         TransformersLLM(ModelRef(base="openai/gpt-4o-mini", kind="api"))
 
 
@@ -262,6 +383,7 @@ def test_lazy_backend_construction_preserves_local_runtime() -> None:
             device="cpu",
             dtype="float32",
             local_files_only=True,
+            seed=7,
         ),
     )
     backend = resource._get_backend()
@@ -269,11 +391,51 @@ def test_lazy_backend_construction_preserves_local_runtime() -> None:
     assert backend._device == "cpu"
     assert backend._dtype == "float32"
     assert backend._local_files_only is True
+    assert backend._seed == 7
 
 
+@pytest.mark.parametrize(
+    ("resource", "type_name"),
+    [
+        (
+            SentenceTransformer(ModelRef(base="org/embed", kind="hf", revision="embed-sha")),
+            "resource_sentence_transformer",
+        ),
+        (
+            CrossEncoderReranker(ModelRef(base="org/rerank", kind="hf", revision="rerank-sha")),
+            "resource_cross_encoder_reranker",
+        ),
+        (LiteLLM(ModelRef(base="openai/gpt-4o-mini", kind="api")), "resource_litellm"),
+        (
+            TransformersLLM(ModelRef(base="org/llm", kind="hf", revision="llm-sha")),
+            "resource_transformers_llm",
+        ),
+    ],
+)
+def test_builtin_resources_have_safe_weightless_persistence_specs(
+    resource: Any,
+    type_name: str,
+) -> None:
+    spec = component_spec(resource, slot="resource")
+    rebuilt = rebuild_component(spec)
+
+    assert spec.type_name == type_name
+    assert rebuilt.model_ref == resource.model_ref
+    assert rebuilt.runtime_config == resource.runtime_config
+    assert getattr(rebuilt, "_client", None) is None
+    assert getattr(rebuilt, "_model", None) is None
+
+
+@pytest.mark.integration
 @pytest.mark.slow
 def test_real_cross_encoder_smoke() -> None:
-    resource = CrossEncoderReranker("cross-encoder/ms-marco-MiniLM-L6-v2")
+    resource = CrossEncoderReranker(
+        ModelRef(
+            base="cross-encoder/ms-marco-MiniLM-L6-v2",
+            kind="hf",
+            revision="c5ee24cb16019beea0893ab7796b1df96625c6b8",
+        )
+    )
     batch = resource.rerank(
         [RerankRequest(pair_id="one", left="How many people live in Berlin?", right="Berlin")]
     )
