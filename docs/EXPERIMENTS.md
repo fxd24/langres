@@ -253,10 +253,14 @@ runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
   **status** (`running` / `completed` / `failed` / `budget_exceeded` — `running` is
   written at *start*, so a crashed run leaves a visible lone line).
 
-**The API.** `capture_run(context, *, store=None, tracker=NoOpTracker())` computes
-the identity, writes the `running` line, yields a handle (`log_metrics` /
-`record_cost` / `log_artifact` / `set_status`), then finalizes the terminal record
-on exit. `store` accepts a path or a `RunStore`; **`store=None` writes nothing**.
+**The API.** `capture_run(context, *, store=None, tracker=NoOpTracker(),
+recipe_id=None, evaluation_id=None, cache_id=None, protocol=None)` computes the
+legacy recipe identity unless a new experiment `recipe_id` is supplied, writes
+the `running` line, yields a handle (`log_metrics` / `record_cost` /
+`record_measurements` / `log_artifact` / `set_status`), then finalizes the
+terminal record on exit. The experiment fields are optional, so existing callers
+and old JSONL rows remain valid. `store` accepts a path or a `RunStore`;
+**`store=None` writes nothing**.
 `RunStore.read()` collapses each attempt's `running`+terminal lines
 **last-wins-by-`attempt_id`** and takes an `fcntl.flock` per append, so several
 agents can write one file safely. Pass `tracker=` (an `ExperimentTracker`) to *also*
@@ -293,6 +297,116 @@ Runnable, zero-spend end to end: **`examples/research/experiment_tracking_demo.p
 captures a two-threshold sweep, reads it back, and prints the two-run metric diff
 plus the agent two-liner. Run it:
 `uv run python examples/research/experiment_tracking_demo.py`.
+
+## Versioned experiment contracts
+
+`langres.experiments` is the import-light contract used by the next
+architecture-neutral runner. It does not replace `RunStore`; its identities and
+measurements attach to the existing `RunContext` / `RunRecord` lifecycle.
+
+```python
+from langres.experiments import (
+    EvaluationProtocol,
+    ExperimentReport,
+    TokenUsage,
+    compute_evaluation_identity,
+    compute_recipe_identity,
+)
+
+protocol = EvaluationProtocol.smoke(seed=0)
+evaluation = compute_evaluation_identity(protocol)
+recipe = compute_recipe_identity(context)
+```
+
+The four identities answer different questions:
+
+- `recipe_id`: same logical architecture, data, split, and seeds. The experiment
+  `compute_recipe_identity(RunContext)` excludes budget/retry/concurrency policy
+  and also returns `legacy_recipe_id`; the established `compute_recipe_id`
+  remains unchanged for old stores and callers.
+- `evaluation_id`: same protocol, metrics, fixed test set, and hardware cohort.
+- `cache_id`: same immutable stage output, including clean/dirty source,
+  lock/environment, execution plan and operation, input fingerprint, and every
+  resource slot's base/kind/revision/adapter/provider/endpoint-safe runtime
+  identity. Credential-like runtime values are detected after normalizing
+  header/config spelling (`X-API-Key`, `openai-key`,
+  `Ocp-Apim-Subscription-Key`, underscores, and similar forms), including
+  camel-case forms (`apiKey`, `accessToken`, `clientSecret`, `privateKey`) and
+  headers represented as key/value tuple sequences. Cookie, `Set-Cookie`, and
+  `Authentication` header forms are credentials too and are always redacted.
+  Endpoint identity retains only an explicit allowlist of routing query
+  parameters, so signed-URL credentials/signatures are never hashed or
+  serialized.
+- `attempt_id`: one concrete execution, still minted by `capture_run`.
+
+Deterministic cache keys exclude seeds and attempts. Seeded keys require their
+seed. Stochastic keys require repeat and attempt identity: the exact output may
+be resumed inside that attempt, but it cannot substitute for an independent
+repeat. Clean committed source can support an official cache claim only when
+commit, lock, environment, and required model revisions are pinned; local model
+resources additionally require a content digest. Dirty exploratory source
+includes its tree/diff hash. Identity/protocol mappings accept JSON-shaped
+values only; unordered sets are rejected instead of depending on process hash
+order. Non-finite numbers are rejected recursively and canonical identity JSON
+uses strict JSON (`NaN`/infinity are never hashed), including `Decimal` and
+non-builtin real-number values. Default mapping fields are frozen too; omitting
+a mapping never leaves a mutable default inside a frozen
+protocol/resource/run/measurement object.
+Tuple-valued protocol identity fields reject `set`/`frozenset` before Pydantic
+coercion, so their order can never vary with `PYTHONHASHSEED`.
+
+Measurements keep unknown facts as `None`; measured zero remains `0`.
+`PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
+inference. Cache-token discounts require their specialized rate unless the
+snapshot explicitly declares base-rate fallback. The exact-zero exception is
+an inclusive `input_tokens=0`: unknown cache subsets are necessarily zero and
+do not make repricing incomplete. `ExperimentReport` derives its
+`evaluation_id` from the protocol, rejects rows outside the declared
+benchmark/split/seed/cohort, retains completed, failed, budget-exceeded, and
+missing cells, rejects duplicate logical cells (retries remain run attempts),
+and offers cohort-safe aggregate, constraint, Pareto, markdown, and
+split-seed-instability views. Every row carries a stable `variant_id`, so two
+resource/config variants of the same named architecture remain separate in
+duplicate detection, aggregates, and Pareto fronts. Pareto fronts compare
+per-variant architecture aggregates inside one explicitly selected
+benchmark/split/hardware slice, never raw repeats or mixed datasets. Incomplete
+variants are excluded by default; the explicit `include_incomplete=True` view
+retains completion/observation/failure/missing/total denominators. Aggregate
+completeness is checked against the protocol's planned split seeds and
+immutable `architecture_repeats` mapping, so an omitted row counts as missing
+even when no explicit `status="missing"` record arrived. Undeclared
+architectures safely default to one repeat; observed repeat indexes never
+expand the plan, and an unplanned row is rejected. Aggregate
+confidence intervals explicitly say `unavailable` until paired entity/cluster
+observations exist; summary rows are never treated as independent bootstrap
+samples. The package's
+`paired_entity_bootstrap()` computes fixed-test-set uncertainty over paired
+cluster/entity units rather than dependent pair rows, and reports
+`insufficient` when fewer than two resampling units exist. Cluster identifiers
+and within-cluster differences are canonicalized before seeded sampling, so
+permuting input rows cannot change the interval.
+
+Ordinary protocols may omit `budget_usd`, and a zero-cost official publication
+may also be uncapped. Official eligibility requires dataset
+fingerprints/revisions plus per-dataset or composite test-set identity. The
+same test-set rule applies to exploratory comparisons: without a composite
+`fixed_test_set_id`, every declared benchmark needs its own non-empty identity.
+The
+separate guarded paid-proof policy requires **exactly USD 20**.
+`EvaluationProtocol.official_proof(...)` expands the fixed five-topology,
+two-dataset acceptance matrix to exactly 18 cells before retries only when
+`paid_proof=True` and every dataset/test provenance value is non-empty: one
+deterministic attempt per cell and three attempts for the two LLM topologies.
+Expansion revalidates the exact USD 20 cap even after an unvalidated model-copy
+path.
+`capture_run` deep-snapshots protocol and measurement mappings once, reuses the
+protocol snapshot for running and terminal records, and persists immutable
+JSON-shaped values so caller mutation cannot rewrite recorded provenance. It
+also validates and freezes one `RunContext` snapshot before computing
+`recipe_id`; running and terminal records share that exact context object, so
+mutating a caller-owned config or seed mapping cannot drift identity after the
+run starts. Context tags and run artifacts, including their empty defaults and
+terminal artifact updates, use the same deep-immutable snapshot contract.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)
 
