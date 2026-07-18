@@ -124,6 +124,12 @@ wandb = [
 trackio = [
     "trackio>=0.20,<1",
 ]
+# Direct Hub lifecycle dependency. Do not rely on Trackio or the semantic stack
+# to install this transitively: local save/load remains client-free, while
+# remote from_pretrained/push_to_hub imports it lazily.
+hub = [
+    "huggingface-hub>=0.34,<2",
+]
 
 [build-system]
 requires = ["hatchling"]
