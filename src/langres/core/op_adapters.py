@@ -68,6 +68,16 @@ if TYPE_CHECKING:
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
+def _unordered_pair_key(left_id: str, right_id: str) -> tuple[str, str]:
+    """Canonical identity for an undirected entity pair.
+
+    Matchers historically may emit the same pair in either orientation. The
+    carrier keeps its original orientation, but correspondence validation must
+    treat ``(left, right)`` and ``(right, left)`` as the same requested pair.
+    """
+    return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
+
+
 def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> Pairs[SchemaT]:
     """Map each judgement back onto its row by ``(left_id, right_id)`` identity.
 
@@ -82,10 +92,15 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     declared ``out_space``), so a mixed-family matcher (a cascade) faithfully
     labels each row rather than being flattened to one family.
 
-    The mapping is a strict bijection. Duplicate input rows, duplicate outputs,
+    Pair identity is orientation-insensitive because legacy matchers may return
+    ``(right_id, left_id)`` for a requested ``(left_id, right_id)``. Otherwise
+    the mapping is a strict bijection: duplicate input rows, duplicate outputs,
     missing outputs, and unexpected outputs all raise before any result is
-    returned. Silently passing an unjudged row through would leave an upstream
-    score in place and let a later Select treat it as this matcher's decision.
+    returned. The sole compatibility exception is an empty matcher result over
+    an entirely unscored carrier, which is a safe no-op used by non-trainable
+    classic matchers. An empty result over rows carrying any upstream score still
+    fails loudly, so a later Select cannot mistake that score for this matcher's
+    decision.
 
     Args:
         pairs: The incoming scored relation (rows carry the identities to map to).
@@ -94,7 +109,7 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     Returns:
         A new ``Pairs`` over the *same* store with rescored rows in input order.
     """
-    input_keys = [(row.left_id, row.right_id) for row in pairs.rows]
+    input_keys = [_unordered_pair_key(row.left_id, row.right_id) for row in pairs.rows]
     duplicate_inputs = _duplicates(input_keys)
     if duplicate_inputs:
         raise ValueError(
@@ -103,7 +118,13 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
         )
 
     materialized = list(judgements)
-    output_keys = [(judgement.left_id, judgement.right_id) for judgement in materialized]
+    if not materialized and all(row.score_type is None for row in pairs.rows):
+        return pairs
+
+    output_keys = [
+        _unordered_pair_key(judgement.left_id, judgement.right_id)
+        for judgement in materialized
+    ]
     duplicate_outputs = _duplicates(output_keys)
     if duplicate_outputs:
         raise ValueError(
@@ -129,7 +150,7 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     by_pair = dict(zip(output_keys, materialized, strict=True))
     rows: list[PairRow[SchemaT]] = []
     for row in pairs.rows:
-        judgement = by_pair[(row.left_id, row.right_id)]
+        judgement = by_pair[_unordered_pair_key(row.left_id, row.right_id)]
         rows.append(
             row.model_copy(
                 update={

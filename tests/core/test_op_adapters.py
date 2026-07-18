@@ -254,6 +254,56 @@ def test_matcher_score_rejects_a_missing_judgement() -> None:
         MatcherScore(_SkipFirstMatcher(), out_space="heuristic").forward(pairs)
 
 
+def test_matcher_score_accepts_reversed_pair_orientation() -> None:
+    """Legacy matchers may identify a requested undirected pair in reverse."""
+
+    class _ReverseMatcher(Matcher[CompanySchema]):
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            for candidate in candidates:
+                yield PairwiseJudgement(
+                    left_id=str(candidate.right.id),
+                    right_id=str(candidate.left.id),
+                    score=0.8,
+                    score_type="heuristic",
+                    decision_step="reverse",
+                    provenance={},
+                )
+
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    out = MatcherScore(_ReverseMatcher(), out_space="heuristic").forward(pairs)
+
+    assert [(row.left_id, row.right_id) for row in out.rows] == [
+        (row.left_id, row.right_id) for row in pairs.rows
+    ]
+    assert all(row.score == 0.8 for row in out.rows)
+
+
+def test_matcher_score_allows_empty_noop_only_for_unscored_pairs() -> None:
+    """A classic non-trainable matcher can safely leave an unscored carrier alone."""
+
+    class _EmptyMatcher(Matcher[CompanySchema]):
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            yield from ()
+
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    assert MatcherScore(_EmptyMatcher(), out_space="heuristic").forward(pairs) is pairs
+
+    scored = pairs.model_copy(
+        update={
+            "rows": [
+                row.model_copy(update={"score": 0.9, "score_type": "sim_cos"})
+                for row in pairs.rows
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="missing judgements"):
+        MatcherScore(_EmptyMatcher(), out_space="heuristic").forward(scored)
+
+
 def test_matcher_score_rejects_duplicate_judgements() -> None:
     """Duplicate output identities are ambiguous even if every input pair appears."""
 
