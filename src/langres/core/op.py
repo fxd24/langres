@@ -119,6 +119,28 @@ class ExecutionPlan(BaseModel):
     is_bound: bool
     steps: tuple[ExecutionStep, ...]
     replay_boundary: str | None = None
+    replay_prefix_id: str | None = None
+
+
+class ExecutionCheckpoint(BaseModel):
+    """Immutable carrier captured immediately before a declared replay stage.
+
+    Checkpoints deliberately store normalized records and id-referenced rows,
+    not a second execution representation. :meth:`ERModel.execute_from`
+    reconstitutes the established :class:`Pairs` carrier and resumes the same
+    stage driver used by :meth:`ERModel.execute`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    version: Literal[1] = 1
+    prefix_plan_id: str
+    cache_id: str
+    boundary_index: int
+    boundary_stage_id: str
+    input_fingerprint: str
+    records: tuple[dict[str, Any], ...]
+    rows: tuple[PairRow[Any], ...]
 
 
 class ExecutionEvent(BaseModel):
@@ -165,6 +187,7 @@ class ExecutionResult(BaseModel):
     clusters: tuple[frozenset[str], ...]
     events: tuple[ExecutionEvent, ...]
     observer_errors: tuple[ExecutionObserverError, ...] = ()
+    checkpoint: ExecutionCheckpoint | None = None
 
 
 def _validate_clustering_algorithm(algorithm: str) -> None:

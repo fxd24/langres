@@ -156,6 +156,9 @@ class ArtifactManifest(BaseModel):
             ``None`` for the classic four-slot layout. ``None`` by design so a
             pre-#193 v1 ``resolver.json`` — which has no ``ops`` key — validates to
             ``None`` and reads through the classic ``components`` path unchanged.
+        replay_boundary: Optional index of the explicit chain's tunable
+            :class:`Select`. It is omitted from classic artifacts and ``None``
+            for explicit topologies that do not declare replay safety.
         checksums: Optional sidecar checksum map (filename -> checksum) for
             out-of-band state files written by :class:`SerializableState`
             components. Empty when no component has out-of-band state.
@@ -166,4 +169,5 @@ class ArtifactManifest(BaseModel):
     model_class: str | None = None
     components: list[ComponentSpec] = Field(default_factory=list)
     ops: list[OpSpec] | None = None
+    replay_boundary: int | None = None
     checksums: dict[str, str] = Field(default_factory=dict)

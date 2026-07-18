@@ -1253,7 +1253,7 @@ class ERModel(ModelRun, ModelPersistence):
         # four-slot kwargs -> from_components (NOT the class's own __init__, so an
         # architecture keeps its ergonomic signature).
         if "ops" in payload:
-            return target.from_topology(ops=payload["ops"])
+            return target.from_topology(**payload)
         return target.from_components(**payload)
 
 

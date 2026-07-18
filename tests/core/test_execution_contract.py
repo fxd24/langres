@@ -13,7 +13,14 @@ from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.indexes.vector_index import FakeVectorIndex
 from langres.core.models import CompanySchema
-from langres.core.op import ExecutionEvent, Score, Stage, ThresholdSelect, TopKSelect
+from langres.core.op import (
+    ExecutionCheckpoint,
+    ExecutionEvent,
+    Score,
+    Stage,
+    ThresholdSelect,
+    TopKSelect,
+)
 from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
 from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel, Resolver
@@ -318,6 +325,145 @@ def test_execute_uses_the_plan_and_emits_immutable_observer_events() -> None:
         observed[0].stage_id = "mutated"  # type: ignore[misc]
 
 
+def test_declared_boundary_checkpoints_once_and_replays_without_rescoring() -> None:
+    score = _CountingScore(0.9)
+    first = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            score,
+            ThresholdSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=2,
+    )
+
+    executed = first.execute(
+        RECORDS,
+        checkpoint_cache_id="cache-a",
+        input_fingerprint="ordered-a",
+    )
+
+    assert score.calls == 1
+    assert executed.checkpoint is not None
+    assert first.execution_plan().replay_boundary is not None
+
+    replay_score = _CountingScore(0.9)
+    replay = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            replay_score,
+            ThresholdSelect(0.95),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=2,
+    ).execute_from(
+        executed.checkpoint,
+        cache_id="cache-a",
+        input_fingerprint="ordered-a",
+    )
+
+    assert replay_score.calls == 0
+    assert replay.pairs.rows == []
+
+
+def test_execute_from_rejects_stale_cache_input_and_prefix_identity() -> None:
+    score = _CountingScore(0.9)
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            score,
+            ThresholdSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=2,
+    )
+    checkpoint = model.execute(
+        RECORDS,
+        checkpoint_cache_id="cache-a",
+        input_fingerprint="ordered-a",
+    ).checkpoint
+    assert checkpoint is not None
+
+    with pytest.raises(ValueError, match="cache_id"):
+        model.execute_from(
+            checkpoint,
+            cache_id="cache-b",
+            input_fingerprint="ordered-a",
+        )
+    with pytest.raises(ValueError, match="input_fingerprint"):
+        model.execute_from(
+            checkpoint,
+            cache_id="cache-a",
+            input_fingerprint="ordered-b",
+        )
+
+    changed_prefix = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            _CountingScore(0.1),
+            TopKSelect(k=1),
+            ThresholdSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=3,
+    )
+    with pytest.raises(ValueError, match="prefix_plan_id"):
+        changed_prefix.execute_from(
+            checkpoint,
+            cache_id="cache-a",
+            input_fingerprint="ordered-a",
+        )
+
+
+def test_execute_from_rejects_duplicate_checkpoint_pair_ids() -> None:
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            _CountingScore(0.9),
+            ThresholdSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=2,
+    )
+    checkpoint = model.execute(
+        RECORDS,
+        checkpoint_cache_id="cache-a",
+        input_fingerprint="ordered-a",
+    ).checkpoint
+    assert checkpoint is not None
+    duplicate = ExecutionCheckpoint.model_validate(
+        {
+            **checkpoint.model_dump(),
+            "rows": [checkpoint.rows[0], checkpoint.rows[0]],
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate pairs"):
+        model.execute_from(
+            duplicate,
+            cache_id="cache-a",
+            input_fingerprint="ordered-a",
+        )
+
+
+def test_declared_replay_boundary_round_trips_with_topology(tmp_path: Path) -> None:
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            MatcherScore(CostedNameMatcher(), out_space="prob_llm"),
+            ThresholdSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ],
+        replay_boundary=2,
+    )
+    model.save(tmp_path)
+
+    loaded = ERModel.load(tmp_path)
+
+    assert loaded.execution_plan().replay_boundary is not None
+    assert loaded.execution_plan().replay_prefix_id == model.execution_plan().replay_prefix_id
+
+
 def test_observer_failure_is_isolated_explicit_and_cannot_change_results() -> None:
     def broken(_event: ExecutionEvent) -> None:
         raise LookupError("secret record content")
@@ -386,6 +532,7 @@ def test_authoring_contracts_are_public_core_exports() -> None:
     expected = {
         "ClusterStage",
         "ExecutionEvent",
+        "ExecutionCheckpoint",
         "ExecutionObserver",
         "ExecutionObserverError",
         "ExecutionPlan",

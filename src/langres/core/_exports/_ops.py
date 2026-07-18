@@ -2,6 +2,7 @@
 
 from langres.core.op import (
     ClusterStage,
+    ExecutionCheckpoint,
     ExecutionEvent,
     ExecutionObserver,
     ExecutionObserverError,
@@ -24,6 +25,7 @@ from langres.core.registry import register_op
 __all__ = [
     "ClusterStage",
     "ExecutionEvent",
+    "ExecutionCheckpoint",
     "ExecutionObserver",
     "ExecutionObserverError",
     "ExecutionPlan",

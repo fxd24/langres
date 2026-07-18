@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import re
+import subprocess
+import sys
 from collections.abc import Mapping
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -391,4 +395,58 @@ def compute_cache_identity(inputs: CacheIdentityInput) -> CacheIdentity:
         official=inputs.official and not inputs.source.git_dirty,
         reusable=True,
         counts_as_independent_repeat=inputs.semantics != "stochastic",
+    )
+
+
+def detect_source_state(repo_root: str | Path | None = None) -> SourceState:
+    """Capture commit, lock, environment, and dirty bytes for cache identity."""
+    cwd = Path(repo_root) if repo_root is not None else Path.cwd()
+
+    def run(*args: str) -> bytes:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+            timeout=5.0,
+        )
+        return result.stdout if result.returncode == 0 else b""
+
+    sha = run("rev-parse", "HEAD").decode("utf-8", errors="replace").strip() or None
+    status = run("status", "--porcelain=v1", "--untracked-files=all", "-z")
+    dirty = bool(status)
+    dirty_tree_hash: str | None = None
+    if dirty:
+        digest = hashlib.sha256()
+        digest.update(status)
+        digest.update(run("diff", "--binary", "HEAD"))
+        entries = status.split(b"\0")
+        for entry in entries:
+            if not entry.startswith(b"?? "):
+                continue
+            relative = entry[3:].decode("utf-8", errors="surrogateescape")
+            path = cwd / relative
+            digest.update(relative.encode("utf-8", errors="surrogateescape"))
+            if path.is_file() and not path.is_symlink():
+                digest.update(path.read_bytes())
+        dirty_tree_hash = digest.hexdigest()
+    lockfile = cwd / "uv.lock"
+    lockfile_hash = (
+        hashlib.sha256(lockfile.read_bytes()).hexdigest() if lockfile.is_file() else None
+    )
+    environment = json.dumps(
+        {
+            "implementation": platform.python_implementation(),
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return SourceState(
+        git_sha=sha,
+        git_dirty=dirty,
+        dirty_tree_hash=dirty_tree_hash,
+        lockfile_hash=lockfile_hash,
+        environment_hash=hashlib.sha256(environment.encode("utf-8")).hexdigest(),
     )

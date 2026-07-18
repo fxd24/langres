@@ -78,6 +78,7 @@ from langres.core.models import (
 )
 from langres.core.op import (
     ClusterStage,
+    ExecutionCheckpoint,
     ExecutionEvent,
     ExecutionObserver,
     ExecutionObserverError,
@@ -665,11 +666,58 @@ class ModelRun(ModelState):
             return ExecutionPlan(schema_name=None, is_bound=False, steps=())
         stages = self._execution_stages()
         schema = self.schema
-        return ExecutionPlan(
+        steps = tuple(self._execution_step(stage, index) for index, stage in enumerate(stages))
+        replay_boundary = (
+            steps[self._replay_boundary_index].stage_id
+            if self._replay_boundary_index is not None
+            else None
+        )
+        plan = ExecutionPlan(
             schema_name=schema.__name__ if schema is not None else None,
             is_bound=self.is_bound,
-            steps=tuple(self._execution_step(stage, index) for index, stage in enumerate(stages)),
+            steps=steps,
+            replay_boundary=replay_boundary,
         )
+        if self._replay_boundary_index is None:
+            return plan
+        return plan.model_copy(
+            update={
+                "replay_prefix_id": self._prefix_plan_id(
+                    plan, self._replay_boundary_index
+                )
+            }
+        )
+
+    @staticmethod
+    def _prefix_plan_id(plan: ExecutionPlan, boundary_index: int) -> str:
+        """Hash the immutable expensive prefix, excluding tunable suffix params."""
+        payload = {
+            "schema_name": plan.schema_name,
+            "steps": [
+                step.model_dump(mode="json") for step in plan.steps[:boundary_index]
+            ],
+            "boundary_index": boundary_index,
+            "boundary_role": plan.steps[boundary_index].spec.role,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _check_unique_pairs(pairs: Pairs[Any]) -> None:
+        """Reject ambiguous pair identities before replay or cache commit."""
+        seen: set[tuple[str, str]] = set()
+        duplicates: set[tuple[str, str]] = set()
+        for row in pairs.rows:
+            key = (row.left_id, row.right_id)
+            if key in seen:
+                duplicates.add(key)
+            seen.add(key)
+        if duplicates:
+            preview = ", ".join(repr(pair) for pair in sorted(duplicates)[:3])
+            raise ValueError(
+                "execution checkpoint requires unique ordered pair ids; "
+                f"duplicate pairs: {preview}"
+            )
 
     @staticmethod
     def _safe_exception_type(exc: Exception) -> str:
@@ -704,6 +752,8 @@ class ModelRun(ModelState):
         records: list[dict[str, Any]],
         *,
         observer: ExecutionObserver | None = None,
+        checkpoint_cache_id: str | None = None,
+        input_fingerprint: str | None = None,
     ) -> ExecutionResult:
         """Run the existing Op spine and return its slot-neutral intermediates.
 
@@ -719,17 +769,127 @@ class ModelRun(ModelState):
         check_no_duplicate_ids([record["id"] for record in normalized])
 
         stages = self._execution_stages()
-        plan = ExecutionPlan(
-            schema_name=self.schema.__name__ if self.schema is not None else None,
-            is_bound=self.is_bound,
-            steps=tuple(self._execution_step(stage, index) for index, stage in enumerate(stages)),
+        plan = self.execution_plan()
+        if (checkpoint_cache_id is None) != (input_fingerprint is None):
+            raise ValueError(
+                "checkpoint_cache_id and input_fingerprint must be provided together"
+            )
+        return self._execute_plan(
+            normalized,
+            stages=stages,
+            plan=plan,
+            start_index=0,
+            pairs=None,
+            observer=observer,
+            checkpoint_cache_id=checkpoint_cache_id,
+            input_fingerprint=input_fingerprint,
         )
+
+    def execute_from(
+        self,
+        checkpoint: ExecutionCheckpoint,
+        *,
+        cache_id: str,
+        input_fingerprint: str,
+        observer: ExecutionObserver | None = None,
+    ) -> ExecutionResult:
+        """Resume the same execution driver from a validated replay checkpoint."""
+        plan = self.execution_plan()
+        boundary_index = self._replay_boundary_index
+        if boundary_index is None:
+            raise ValueError("this execution plan does not declare a replay boundary")
+        expected = {
+            "prefix_plan_id": self._prefix_plan_id(plan, boundary_index),
+            "cache_id": cache_id,
+            "boundary_index": boundary_index,
+            "input_fingerprint": input_fingerprint,
+        }
+        actual = {
+            "prefix_plan_id": checkpoint.prefix_plan_id,
+            "cache_id": checkpoint.cache_id,
+            "boundary_index": checkpoint.boundary_index,
+            "input_fingerprint": checkpoint.input_fingerprint,
+        }
+        mismatches = [
+            name for name, value in expected.items() if actual[name] != value
+        ]
+        if mismatches:
+            raise ValueError(
+                "checkpoint identity does not match this execution request; "
+                f"different fields: {', '.join(mismatches)}"
+            )
+        if checkpoint.boundary_stage_id != plan.steps[boundary_index].stage_id:
+            # A threshold is the one supported tunable suffix parameter, so its
+            # content-derived stage id may differ while the role/index remain
+            # fixed. Any non-threshold boundary must match exactly.
+            if plan.steps[boundary_index].spec.role != "threshold_select":
+                raise ValueError("checkpoint boundary stage identity does not match")
+        if self._ops is not None:
+            schema, normalized = normalize_records(
+                list(checkpoint.records), self._chain_source_schema()
+            )
+        else:  # pragma: no cover - classic plans cannot declare a boundary
+            schema = cast(type[Any], self.schema)
+            normalized = self._prepare(list(checkpoint.records))
+        store = {
+            record["id"]: schema.model_validate(record)
+            for record in normalized
+        }
+        pairs = Pairs(store=store, rows=list(checkpoint.rows))
+        self._check_unique_pairs(pairs)
+        return self._execute_plan(
+            normalized,
+            stages=self._execution_stages(),
+            plan=plan,
+            start_index=boundary_index,
+            pairs=pairs,
+            observer=observer,
+            checkpoint_cache_id=None,
+            input_fingerprint=None,
+        )
+
+    def _execute_plan(
+        self,
+        normalized: list[Any],
+        *,
+        stages: Sequence[Stage],
+        plan: ExecutionPlan,
+        start_index: int,
+        pairs: Pairs[Any] | None,
+        observer: ExecutionObserver | None,
+        checkpoint_cache_id: str | None,
+        input_fingerprint: str | None,
+    ) -> ExecutionResult:
+        """Run all or a suffix of the one established stage driver."""
         events: list[ExecutionEvent] = []
         observer_errors: list[ExecutionObserverError] = []
-        pairs: Pairs[Any] | None = None
         clusters: list[set[str]] = []
+        checkpoint: ExecutionCheckpoint | None = None
 
-        for step, stage in zip(plan.steps, stages, strict=True):
+        for step, stage in zip(
+            plan.steps[start_index:], stages[start_index:], strict=True
+        ):
+            if (
+                self._replay_boundary_index == step.index
+                and checkpoint_cache_id is not None
+                and input_fingerprint is not None
+            ):
+                assert pairs is not None
+                self._check_unique_pairs(pairs)
+                checkpoint = ExecutionCheckpoint(
+                    prefix_plan_id=self._prefix_plan_id(plan, step.index),
+                    cache_id=checkpoint_cache_id,
+                    boundary_index=step.index,
+                    boundary_stage_id=step.stage_id,
+                    input_fingerprint=input_fingerprint,
+                    records=tuple(
+                        record.model_dump(mode="json")
+                        if hasattr(record, "model_dump")
+                        else dict(record)
+                        for record in normalized
+                    ),
+                    rows=tuple(pairs.rows),
+                )
             input_count = len(normalized) if pairs is None else len(pairs.rows)
             start = ExecutionEvent(
                 kind="start",
@@ -788,6 +948,7 @@ class ModelRun(ModelState):
             clusters=tuple(frozenset(cluster) for cluster in clusters),
             events=tuple(events),
             observer_errors=tuple(observer_errors),
+            checkpoint=checkpoint,
         )
 
     def _closure_clusterer(self) -> Clusterer:
