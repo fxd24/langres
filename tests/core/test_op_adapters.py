@@ -129,10 +129,14 @@ def test_comparator_score_matches_direct_compare(resolver: Resolver) -> None:
 
 
 def test_matcher_score_is_a_score_with_declared_out_space(resolver: Resolver) -> None:
-    adapter = MatcherScore(resolver.module, out_space="heuristic")
+    # "unknown" is the honest declaration for a generic matcher (W3-b/W3-c): a
+    # Matcher has no class-level score_type -- each row is stamped its own family
+    # per-judgement in MatcherScore._rescore -- so the family is not knowable
+    # pre-run. This mirrors what the spine declares in ModelRun._matcher_score.
+    adapter = MatcherScore(resolver.module, out_space="unknown")
     assert isinstance(adapter, Score)
     assert adapter.scope == "pair"
-    assert adapter.out_space == "heuristic"
+    assert adapter.out_space == "unknown"
 
 
 def test_matcher_score_rejects_unknown_out_space(resolver: Resolver) -> None:

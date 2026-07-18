@@ -21,10 +21,12 @@ adapters** (:mod:`langres.core.op_adapters`), derived from the four slots
 wraps the spend-capped, optionally-logged matcher (:meth:`ModelRun._matcher_score`
 over :meth:`ModelRun._scorer`) into the scoring half (:meth:`ModelRun._scored_pairs`);
 :class:`~langres.core.op_adapters.ClustererStage` is the exit
-(:meth:`ModelRun.resolve` / :meth:`ModelRun.dedupe`). The slots stay the source
-of truth -- the ops are assembled from them per call, never cached, so the
-topology is an explicit chain of ``forward`` calls over the one ``Pairs``
-carrier.
+(:meth:`ModelRun.resolve` / :meth:`ModelRun.dedupe`). The one per-call factory
+:meth:`ModelRun._stages` assembles the block -> (compare) -> score stages from the
+slots (W3-c), and the generic driver :func:`_run_stages` folds ``forward`` across
+them. The slots stay the source of truth -- the stages are assembled from them
+per call, never cached, so the topology is an explicit chain of ``forward`` calls
+over the one ``Pairs`` carrier.
 
 **What "same behavior" means, precisely.** The *resolution* outputs are
 byte-identical to the legacy direct-call spine -- clusters, ``DedupeResult``
@@ -65,6 +67,7 @@ from langres.core.models import (
     PairwiseJudgement,
     predicted_match,
 )
+from langres.core.op import Score, Source
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -123,6 +126,26 @@ def _coerce_log(log: "JudgementLog | str | Path | None") -> JudgementLog | None:
     return JudgementLog(log)
 
 
+def _run_stages(records: list[Any], stages: list[Source[Any] | Score[Any]]) -> Pairs[Any]:
+    """Fold ``forward`` across ``stages`` to turn ``records`` into a scored ``Pairs``.
+
+    The generic driver behind :meth:`ModelRun._candidates` and
+    :meth:`ModelRun._scored_pairs`. A stage list :meth:`ModelRun._stages` builds
+    always leads with the :class:`~langres.core.op.Source` (records -> pairs) and
+    continues with :class:`~langres.core.op.Score`\\ s (pairs -> pairs), so the
+    fold walks ``Records -> Pairs -> ... -> Pairs``. The two narrowing ``cast``\\ s
+    encode that Source-first shape (which ``_stages`` guarantees) precisely --
+    ``Source.forward`` takes records while ``Score.forward`` takes a ``Pairs``, so
+    the heterogeneous first stage cannot share one loosely-typed loop variable
+    with the rest, and the cast is a typed assertion of the shape, not an ``Any``.
+    """
+    source, *scores = stages
+    pairs = cast(Source[Any], source).forward(records)
+    for score in scores:
+        pairs = cast(Score[Any], score).forward(pairs)
+    return pairs
+
+
 class ModelRun(ModelState):
     """The run path of an ``ERModel``: candidates, scoring, clustering, front door."""
 
@@ -146,19 +169,25 @@ class ModelRun(ModelState):
         lightweight id-refs over one shared entity store, and behavior --
         clusters, scores -- is byte-identical.
 
-        The block/compare half runs through the Op adapters (W3-a, epic #193):
-        :class:`~langres.core.op_adapters.BlockerSource` bridges
-        ``blocker.stream(records)`` into the ``Pairs``, and (when a comparator is
-        configured) :class:`~langres.core.op_adapters.ComparatorScore` attaches
-        each row's ``ComparisonVector``. The index side-effect is deliberately
-        NOT absorbed by the source adapter -- :meth:`_ensure_index_built` still
-        runs here first, before the source streams.
+        The block/compare half is the scoring pipeline's prefix (W3-c, epic #193):
+        it folds the driver (:func:`_run_stages`) over :meth:`_stages` **minus its
+        final** :class:`~langres.core.op_adapters.MatcherScore` -- i.e. the
+        :class:`~langres.core.op_adapters.BlockerSource` (bridging
+        ``blocker.stream(records)`` into the ``Pairs``) plus, when a comparator is
+        configured, the :class:`~langres.core.op_adapters.ComparatorScore` that
+        attaches each row's ``ComparisonVector``. Reusing the one ``_stages``
+        factory keeps a single adapter-construction site; the discarded matcher
+        stage is a cheap, side-effect-free ``SpendCappedMatcher`` wrapper (no
+        ``forward`` is called on it here, so nothing is scored or spent). The index
+        side-effect is deliberately NOT absorbed by the source adapter --
+        :meth:`_ensure_index_built` still runs here first, before the source
+        streams.
         """
         self._ensure_index_built(records)
-        pairs = BlockerSource(self.blocker).forward(records)
-        if self.comparator is not None:
-            pairs = ComparatorScore(self.comparator).forward(pairs)
-        return pairs
+        # _stages is the full scoring pipeline; _candidates is its pre-scoring
+        # prefix, so drop the trailing MatcherScore (never scored here).
+        *block_compare, _matcher = self._stages()
+        return _run_stages(records, block_compare)
 
     def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
         """Block records into a materialized list of judge-ready candidates.
@@ -252,41 +281,85 @@ class ModelRun(ModelState):
         (budget + at most one call) exactly as before. Deliberately wraps the
         *capped* matcher, never the raw ``self.module``.
 
-        ``out_space`` is the Score's advertised score-family metadata and is
-        **inert in the spine**: :func:`~langres.core.op_adapters._rescore` stamps
-        each row with its judgement's OWN ``score_type`` (never this declared
-        family), and nothing in the run path reads a ``Score.out_space``. So the
-        declared value cannot change behavior; it is a neutral placeholder, while
-        the authoritative per-row family is the matcher's own (also what
-        :meth:`dedupe`'s ``DedupeResult.score_type`` reports). If a later wave
-        makes ``out_space`` load-bearing (e.g. a wiring check in the spine),
-        derive it from the matcher's real family here.
+        ``out_space="unknown"`` is the honest sentinel (W3-b): a ``Matcher`` has no
+        class-level ``score_type`` constant -- each judgement is stamped its own
+        family per-row in :func:`~langres.core.op_adapters._rescore` -- so the
+        family this generic ``self.module`` produces is genuinely not knowable at
+        build time. ``"unknown"`` says exactly that (an orderable scalar of an
+        unpinned family), rather than borrowing a real family like ``"heuristic"``
+        as a stand-in. It is also **inert in the spine**: ``_rescore`` stamps each
+        row with its judgement's OWN ``score_type`` (never this declared family),
+        and nothing in the run path reads a ``Score.out_space``, so the declared
+        value cannot change behavior. The authoritative per-row family is the
+        matcher's own (also what :meth:`dedupe`'s ``DedupeResult.score_type``
+        reports). If a later wave makes ``out_space`` load-bearing (e.g. a wiring
+        check in the spine), derive it from the matcher's real family here.
         """
-        return MatcherScore(self._scorer(log=log), out_space="heuristic")
+        return MatcherScore(self._scorer(log=log), out_space="unknown")
+
+    def _stages(self, *, log: JudgementLog | None = None) -> list[Source[Any] | Score[Any]]:
+        """The scoring pipeline as one ordered stage list, built from the slots.
+
+        The single per-call factory for the block -> (compare) -> score Op chain
+        (W3-c, epic #193): a :class:`~langres.core.op_adapters.BlockerSource`, then
+        (only when a comparator is configured) a
+        :class:`~langres.core.op_adapters.ComparatorScore`, then the
+        :class:`~langres.core.op_adapters.MatcherScore` (:meth:`_matcher_score`).
+        :func:`_run_stages` folds ``forward`` across the returned list to turn
+        ``records`` into scored ``Pairs``; :meth:`_candidates` folds the same list
+        minus its final scoring stage.
+
+        **Rebuilt every call, never cached** -- exactly like :meth:`_scorer`,
+        which it wraps. ``self.module`` is reassignable (``fit`` repoints it) and
+        the ``log`` differs per call, so a cached stage list would pin a stale
+        matcher and empty the judgement log. The stages hold id-refs and slot
+        references only, so rebuilding is a handful of cheap allocations.
+
+        The return type is a ``Source``/``Score`` union rather than one base: the
+        first stage is a :class:`~langres.core.op.Source` (records -> pairs) and
+        the rest are :class:`~langres.core.op.Score`\\ s (pairs -> pairs), which
+        share no tighter common base than that (a ``Source`` is not an ``Op``).
+
+        Args:
+            log: Optional per-call judgement sink, threaded into the
+                :class:`~langres.core.op_adapters.MatcherScore` (see :meth:`dedupe`).
+
+        Returns:
+            The ordered scoring stages, source-first.
+        """
+        stages: list[Source[Any] | Score[Any]] = [BlockerSource(self.blocker)]
+        if self.comparator is not None:
+            stages.append(ComparatorScore(self.comparator))
+        stages.append(self._matcher_score(log=log))
+        return stages
 
     def _scored_pairs(self, records: list[Any], *, log: JudgementLog | None = None) -> Pairs[Any]:
         """Block -> (compare) -> score as an Op chain, then calibrate: the scoring spine.
 
-        The block/compare half is :meth:`_candidates`
-        (:class:`~langres.core.op_adapters.BlockerSource` +
-        :class:`~langres.core.op_adapters.ComparatorScore`); this adds the
-        :class:`~langres.core.op_adapters.MatcherScore` scoring Op
-        (:meth:`_matcher_score`) and runs the whole thing as an explicit chain of
-        ``forward`` calls over the one ``Pairs`` carrier. Scoring runs through
-        :meth:`_scorer`, so this model's spend cap (``budget_usd=``) and its
-        ledger are shared across every :meth:`resolve`/:meth:`predict`/:meth:`dedupe`
-        call on this instance -- two successive resolves cannot each spend a full
-        budget, and a matcher that overruns the cap raises ``BudgetExceeded`` from
-        the ``MatcherScore`` drain here.
+        Folds the driver (:func:`_run_stages`) over the full :meth:`_stages`
+        pipeline -- :class:`~langres.core.op_adapters.BlockerSource`, then
+        (optionally) :class:`~langres.core.op_adapters.ComparatorScore`, then the
+        :class:`~langres.core.op_adapters.MatcherScore` (:meth:`_matcher_score`) --
+        so the topology is one explicit chain of ``forward`` calls over the single
+        ``Pairs`` carrier, built from one factory rather than scattered inline.
+        The index side-effect is not in the source adapter, so
+        :meth:`_ensure_index_built` runs here first (as it did via
+        :meth:`_candidates`). Scoring runs through :meth:`_scorer`, so this model's
+        spend cap (``budget_usd=``) and its ledger are shared across every
+        :meth:`resolve`/:meth:`predict`/:meth:`dedupe` call on this instance -- two
+        successive resolves cannot each spend a full budget, and a matcher that
+        overruns the cap raises ``BudgetExceeded`` from the ``MatcherScore`` drain
+        here.
 
         When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
         every scored ranking row's raw ``score`` is mapped to a calibrated
         probability (:meth:`_apply_calibrator_to_pairs`) before clustering, so the
         clusterer thresholds on a real probability. Pure pass-through otherwise.
         Calibration is a per-score transform applied in the spine, NOT an Op
-        adapter (W3-a keeps it here).
+        adapter (kept here through W3-c).
         """
-        pairs = self._matcher_score(log=log).forward(self._candidates(records))
+        self._ensure_index_built(records)
+        pairs = _run_stages(records, self._stages(log=log))
         if self.calibrator is not None:
             pairs = self._apply_calibrator_to_pairs(pairs, self.calibrator)
         return pairs
