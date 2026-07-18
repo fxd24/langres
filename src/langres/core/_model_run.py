@@ -13,9 +13,40 @@ Two audiences, one pipeline:
   :meth:`ModelRun.compare` (one pair -> a verdict), the replacements for the
   deleted ``langres.dedupe`` / ``langres.link`` verbs.
 
+**The block -> (compare) -> score -> cluster pipeline runs through the Op
+adapters** (:mod:`langres.core.op_adapters`), derived from the four slots
+(W3-a, epic #193): :class:`~langres.core.op_adapters.BlockerSource` +
+:class:`~langres.core.op_adapters.ComparatorScore` are the block/compare half
+(:meth:`ModelRun._candidates`); :class:`~langres.core.op_adapters.MatcherScore`
+wraps the spend-capped, optionally-logged matcher (:meth:`ModelRun._matcher_score`
+over :meth:`ModelRun._scorer`) into the scoring half (:meth:`ModelRun._scored_pairs`);
+:class:`~langres.core.op_adapters.ClustererStage` is the exit
+(:meth:`ModelRun.resolve` / :meth:`ModelRun.dedupe`). The slots stay the source
+of truth -- the ops are assembled from them per call, never cached, so the
+topology is an explicit chain of ``forward`` calls over the one ``Pairs``
+carrier.
+
+**What "same behavior" means, precisely.** The *resolution* outputs are
+byte-identical to the legacy direct-call spine -- clusters, ``DedupeResult``
+metadata (``score_type``/``threshold``), metrics, and the judgement log all
+match the frozen goldens (``tests/parity/test_behavior_parity_w0.py``). The one
+deliberate change is the *order* of :meth:`ModelRun.predict` /
+:meth:`ModelRun._judgements`: they now emit in deterministic carrier (blocker)
+order, because :class:`~langres.core.op_adapters.MatcherScore` maps each
+judgement back onto its row by ``(left_id, right_id)`` identity. For a pairwise
+matcher that equals the legacy matcher-emission order (one judgement per
+candidate, in candidate order), so it is invisible. For a *reordering* matcher --
+a :class:`~langres.core.matcher.GroupwiseMatcher`, whose ``forward`` regroups the
+stream by anchor -- the legacy spine returned that anchor-group emission order;
+the new spine returns the blocker's carrier order. That intentional, more
+deterministic contract is pinned by ``tests/parity/test_groupwise_spine_w3a.py``.
+
 Everything that scores goes through :meth:`ModelRun._scorer`, so the spend cap
 cannot be bypassed; ``tests/core/test_resolver_spend_cap.py`` AST-bans
-``<any>.module.forward(...)`` in ``src/`` to keep it that way.
+``<any>.module.forward(...)`` in ``src/`` to keep it that way. The
+:class:`~langres.core.op_adapters.MatcherScore` adapter wraps the *capped*
+matcher (not the raw one), so draining its rescored rows still trips the cap
+mid-pull.
 """
 
 import logging
@@ -34,7 +65,13 @@ from langres.core.models import (
     PairwiseJudgement,
     predicted_match,
 )
-from langres.core.pairs import Pairs
+from langres.core.op_adapters import (
+    BlockerSource,
+    ClustererStage,
+    ComparatorScore,
+    MatcherScore,
+)
+from langres.core.pairs import PairRow, Pairs
 from langres.core.results import DedupeResult, LinkVerdict
 from langres.core.spend_cap import SpendCappedMatcher
 
@@ -108,16 +145,20 @@ class ModelRun(ModelState):
         it lazily as this method used to) is the W1 carrier trade-off: rows are
         lightweight id-refs over one shared entity store, and behavior --
         clusters, scores -- is byte-identical.
+
+        The block/compare half runs through the Op adapters (W3-a, epic #193):
+        :class:`~langres.core.op_adapters.BlockerSource` bridges
+        ``blocker.stream(records)`` into the ``Pairs``, and (when a comparator is
+        configured) :class:`~langres.core.op_adapters.ComparatorScore` attaches
+        each row's ``ComparisonVector``. The index side-effect is deliberately
+        NOT absorbed by the source adapter -- :meth:`_ensure_index_built` still
+        runs here first, before the source streams.
         """
         self._ensure_index_built(records)
-        candidates = self.blocker.stream(records)
+        pairs = BlockerSource(self.blocker).forward(records)
         if self.comparator is not None:
-            comparator = self.comparator
-            candidates = (
-                c.model_copy(update={"comparison": comparator.compare(c.left, c.right)})
-                for c in candidates
-            )
-        return Pairs.from_candidates(list(candidates))
+            pairs = ComparatorScore(self.comparator).forward(pairs)
+        return pairs
 
     def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
         """Block records into a materialized list of judge-ready candidates.
@@ -202,59 +243,109 @@ class ModelRun(ModelState):
             )
         return SpendCappedMatcher(module, monitor=self._spend_monitor)
 
+    def _matcher_score(self, *, log: JudgementLog | None = None) -> MatcherScore[Any]:
+        """This model's scoring :class:`~langres.core.op_adapters.MatcherScore` Op.
+
+        Wraps :meth:`_scorer` -- the SAME ``SpendCappedMatcher(LoggingMatcher)``
+        the legacy spine scored through -- so the cap stays lazy: the adapter
+        drains the capped generator to rescore rows, and the cap trips mid-pull
+        (budget + at most one call) exactly as before. Deliberately wraps the
+        *capped* matcher, never the raw ``self.module``.
+
+        ``out_space`` is the Score's advertised score-family metadata and is
+        **inert in the spine**: :func:`~langres.core.op_adapters._rescore` stamps
+        each row with its judgement's OWN ``score_type`` (never this declared
+        family), and nothing in the run path reads a ``Score.out_space``. So the
+        declared value cannot change behavior; it is a neutral placeholder, while
+        the authoritative per-row family is the matcher's own (also what
+        :meth:`dedupe`'s ``DedupeResult.score_type`` reports). If a later wave
+        makes ``out_space`` load-bearing (e.g. a wiring check in the spine),
+        derive it from the matcher's real family here.
+        """
+        return MatcherScore(self._scorer(log=log), out_space="heuristic")
+
+    def _scored_pairs(self, records: list[Any], *, log: JudgementLog | None = None) -> Pairs[Any]:
+        """Block -> (compare) -> score as an Op chain, then calibrate: the scoring spine.
+
+        The block/compare half is :meth:`_candidates`
+        (:class:`~langres.core.op_adapters.BlockerSource` +
+        :class:`~langres.core.op_adapters.ComparatorScore`); this adds the
+        :class:`~langres.core.op_adapters.MatcherScore` scoring Op
+        (:meth:`_matcher_score`) and runs the whole thing as an explicit chain of
+        ``forward`` calls over the one ``Pairs`` carrier. Scoring runs through
+        :meth:`_scorer`, so this model's spend cap (``budget_usd=``) and its
+        ledger are shared across every :meth:`resolve`/:meth:`predict`/:meth:`dedupe`
+        call on this instance -- two successive resolves cannot each spend a full
+        budget, and a matcher that overruns the cap raises ``BudgetExceeded`` from
+        the ``MatcherScore`` drain here.
+
+        When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
+        every scored ranking row's raw ``score`` is mapped to a calibrated
+        probability (:meth:`_apply_calibrator_to_pairs`) before clustering, so the
+        clusterer thresholds on a real probability. Pure pass-through otherwise.
+        Calibration is a per-score transform applied in the spine, NOT an Op
+        adapter (W3-a keeps it here).
+        """
+        pairs = self._matcher_score(log=log).forward(self._candidates(records))
+        if self.calibrator is not None:
+            pairs = self._apply_calibrator_to_pairs(pairs, self.calibrator)
+        return pairs
+
     def _judgements(
         self, records: list[Any], *, log: JudgementLog | None = None
     ) -> Iterator[PairwiseJudgement]:
         """Block records into candidates, score them, and calibrate if fitted.
 
-        Scoring runs through :meth:`_scorer`, so this model's spend cap
-        (``budget_usd=``) and its ledger are shared across every
-        :meth:`resolve`/:meth:`predict` call on this instance -- two successive
-        resolves cannot each spend a full budget.
-
-        When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
-        every ranking judgement's raw ``score`` is mapped to a calibrated
-        probability before it reaches :meth:`predict`/:meth:`resolve` -- so the
-        clusterer thresholds on a real probability. Pure pass-through otherwise.
-
-        The :meth:`_candidates` :class:`~langres.core.pairs.Pairs` is bridged
-        back to the legacy ``ERCandidate`` stream at the matcher boundary (W1):
-        the matcher, its spend cap and its logging wrapper still consume
-        ``Iterator[ERCandidate]`` unchanged -- migrating them is W2.
+        Projects the scored :class:`~langres.core.pairs.Pairs`
+        (:meth:`_scored_pairs`) back to the legacy judgement stream: a matcher
+        yields exactly one judgement per candidate, so every scored row
+        (``score_type is not None``) becomes one ``PairwiseJudgement`` in the
+        carrier's row order (the blocker's stream order). A generator body keeps
+        the projection lazy -- ``_scored_pairs`` runs (and any ``BudgetExceeded``
+        raises) only when the stream is first drained, exactly as the legacy
+        ``_scorer(...).forward`` stream did.
         """
-        judgements = self._scorer(log=log).forward(iter(self._candidates(records).to_candidates()))
-        if self.calibrator is None:
-            return judgements
-        return self._apply_calibrator(judgements, self.calibrator)
+        for row in self._scored_pairs(records, log=log).rows:
+            if row.score_type is not None:
+                yield row.to_judgement()
 
-    def _apply_calibrator(
-        self, judgements: Iterator[PairwiseJudgement], calibrator: CalibratorFitMixin
-    ) -> Iterator[PairwiseJudgement]:
-        """Map each ranking judgement's ``score`` through the fitted calibrator.
+    def _apply_calibrator_to_pairs(
+        self, pairs: Pairs[Any], calibrator: CalibratorFitMixin
+    ) -> Pairs[Any]:
+        """Map each scored ranking row's ``score`` through the fitted calibrator.
 
-        Deciders (``score is None``) pass through untouched -- there is no score to
-        calibrate. A mapped judgement keeps its ids/decision, retags
-        ``score_type="calibrated_prob"``, and records the raw score under
-        ``provenance["calibration"]`` for auditability.
+        The carrier counterpart to the legacy judgement-stream calibration.
+        Deciders (a scored row with ``score is None``) pass through untouched --
+        there is no score to calibrate -- as do unscored rows (``score_type is
+        None``), whose ``score`` is a *blocker* similarity, never a judge score
+        (``F-W1a``), and so must not be run through a score calibrator. A mapped
+        row keeps its ids/decision, retags ``score_type="calibrated_prob"``, and
+        records the raw score under ``provenance["calibration"]`` for
+        auditability -- byte-identical to what the old ``_apply_calibrator``
+        produced on the judgement stream (which only ever saw scored rows).
         """
-        for judgement in judgements:
-            if judgement.score is None:
-                yield judgement
+        rows: list[PairRow[Any]] = []
+        for row in pairs.rows:
+            if row.score_type is None or row.score is None:
+                rows.append(row)
                 continue
-            calibrated = calibrator.transform([judgement.score])[0]
-            yield judgement.model_copy(
-                update={
-                    "score": calibrated,
-                    "score_type": "calibrated_prob",
-                    "provenance": {
-                        **judgement.provenance,
-                        "calibration": {
-                            "method": getattr(calibrator, "method", None),
-                            "raw_score": judgement.score,
+            calibrated = calibrator.transform([row.score])[0]
+            rows.append(
+                row.model_copy(
+                    update={
+                        "score": calibrated,
+                        "score_type": "calibrated_prob",
+                        "provenance": {
+                            **row.provenance,
+                            "calibration": {
+                                "method": getattr(calibrator, "method", None),
+                                "raw_score": row.score,
+                            },
                         },
-                    },
-                }
+                    }
+                )
             )
+        return Pairs(store=pairs.store, rows=rows)
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.
@@ -267,8 +358,11 @@ class ModelRun(ModelState):
     def resolve(self, records: list[Any]) -> list[set[str]]:
         """Resolve records into entity clusters (sets of IDs).
 
-        Orchestrates blocking -> (compare) -> score -> cluster. Singletons are
-        dropped by the Clusterer (it returns only connected components with an
+        Orchestrates blocking -> (compare) -> score -> cluster through the Op
+        adapters (:meth:`_scored_pairs` +
+        :class:`~langres.core.op_adapters.ClustererStage`, the pipeline exit that
+        keeps the match cut folded in the ``Clusterer``'s threshold). Singletons
+        are dropped by the Clusterer (it returns only connected components with an
         edge), so the result contains only multi-record clusters.
 
         Args:
@@ -277,7 +371,7 @@ class ModelRun(ModelState):
         Returns:
             A list of clusters, each a set of entity IDs.
         """
-        return self.clusterer.cluster(self._judgements(records))
+        return ClustererStage(self.clusterer).forward(self._scored_pairs(records))
 
     # ------------------------------------------------------------------
     # The front door: dedupe a batch / compare one pair
@@ -342,16 +436,22 @@ class ModelRun(ModelState):
             )
         normalized = self._prepare(records)
         check_no_duplicate_ids([record["id"] for record in normalized])
-        judgements = list(self._judgements(normalized, log=_coerce_log(log)))
-        clusters = self.clusterer.cluster(iter(judgements))
+        pairs = self._scored_pairs(normalized, log=_coerce_log(log))
+        clusters = ClustererStage(self.clusterer).forward(pairs)
+        # The scored rows' OWN score_type, not a per-name lookup table: the
+        # matcher that ran is the only honest authority on what its scores mean.
+        # The first scored row is the first candidate's judgement (one judgement
+        # per candidate, in blocker order -- so this equals the legacy
+        # ``judgements[0].score_type``). None only when the blocker yielded no
+        # pair at all, which reports "unknown".
+        score_type = next(
+            (row.score_type for row in pairs.rows if row.score_type is not None), None
+        )
         return DedupeResult(
             clusters,
             architecture=type(self).__name__,
             backbone=self.backbone,
-            # The judgements' OWN score_type, not a per-name lookup table: the
-            # matcher that ran is the only honest authority on what its scores
-            # mean. "unknown" only when the blocker yielded no pair at all.
-            score_type=judgements[0].score_type if judgements else "unknown",
+            score_type=score_type if score_type is not None else "unknown",
             threshold=self.clusterer.threshold,
         )
 
@@ -397,16 +497,17 @@ class ModelRun(ModelState):
         """
         normalized = self._prepare([left, right])
         pair = self._pair_candidate(normalized)
-        judgements = list(self._scorer(log=_coerce_log(log)).forward(iter(pair.to_candidates())))
-        if not judgements:
+        scored = self._matcher_score(log=_coerce_log(log)).forward(pair)
+        if self.calibrator is not None:
+            scored = self._apply_calibrator_to_pairs(scored, self.calibrator)
+        scored_rows = [row for row in scored.rows if row.score_type is not None]
+        if not scored_rows:
             raise RuntimeError(
                 f"the {type(self.module).__name__} matcher produced no judgement for this pair; "
                 "every candidate must yield exactly one PairwiseJudgement. This indicates a bug "
                 "in the matcher."
             )
-        judgement = judgements[0]
-        if self.calibrator is not None:
-            judgement = next(self._apply_calibrator(iter([judgement]), self.calibrator))
+        judgement = scored_rows[0].to_judgement()
 
         threshold = self.clusterer.threshold
         predicted = predicted_match(judgement, threshold)
