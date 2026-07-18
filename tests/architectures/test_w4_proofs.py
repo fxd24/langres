@@ -529,7 +529,9 @@ class TestReviewFoundRegressions:
     * The proofs round-trip only ``FuzzyString`` -- the one architecture with no
       backbones -- so ``VectorLLMCascade``'s ``save`` and its reconstruction path
       were never executed at all. That gap is exactly where two of the three
-      lived.
+      lived. (W3-f later *closed* the ``save`` gap -- the two proofs that pinned
+      its ``NotImplementedError`` are now the round-trip proofs at the end of
+      this class.)
     * ``ERModel.schema`` was asserted nowhere, so a property that returned
       ``None`` for every model in the library looked fine.
     """
