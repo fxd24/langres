@@ -131,7 +131,25 @@ class _ResearchRecipe(ERModel):
         self,
         ops: list[Stage],
     ) -> None:
-        built = type(self).from_topology(ops=ops, monitor=self._spend_monitor)
+        replay_boundary = max(
+            index for index, stage in enumerate(ops) if isinstance(stage, ThresholdSelect)
+        )
+        try:
+            built = type(self).from_topology(
+                ops=ops,
+                replay_boundary=replay_boundary,
+                monitor=self._spend_monitor,
+            )
+        except ValueError as exc:
+            if not str(exc).startswith(
+                "replay_boundary requires every prefix stage to have a "
+                "registered, stable output identity"
+            ):
+                raise
+            # Dependency-injected test/custom resources may be runnable without
+            # being safely serializable. Keep them benchmarkable, but do not
+            # claim byte-replay identity until their exact type is registered.
+            built = type(self).from_topology(ops=ops, monitor=self._spend_monitor)
         self.__dict__ = built.__dict__
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -208,6 +226,25 @@ class _ResearchRecipe(ERModel):
             elif isinstance(stage, Generate):
                 slots["llm"] = stage.resource.model_ref
         return slots
+
+    @property
+    def resource_runtime(self) -> dict[str, dict[str, Any]]:
+        """Weightless runtime configuration for each declared resource slot."""
+        if self._ops is None:
+            resources = self._resource_values
+        else:
+            resources = {}
+            for stage in self._require_ops():
+                if isinstance(stage, RetrieveOp):
+                    resources["embedder"] = stage.resource
+                elif isinstance(stage, Rerank):
+                    resources["reranker"] = stage.resource
+                elif isinstance(stage, Generate):
+                    resources["llm"] = stage.resource
+        return {
+            slot: resource.runtime_config.model_dump(mode="json")
+            for slot, resource in resources.items()
+        }
 
     @property
     def backbone(self) -> str | None:
@@ -320,6 +357,7 @@ class RetrieveLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
+        threshold: float = 0.5,
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
@@ -329,6 +367,7 @@ class RetrieveLLM(_ResearchRecipe):
             raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
+        self.threshold = threshold
         self.text_field = text_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
@@ -354,7 +393,7 @@ class RetrieveLLM(_ResearchRecipe):
             TopKSelect(self.llm_k),
             Generate(llm),
             Parse(),
-            ThresholdSelect(0.5),
+            ThresholdSelect(self.threshold),
             _cluster_stage(self.clusterer_override),
         ]
 
@@ -372,6 +411,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
+        threshold: float = 0.5,
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
@@ -381,6 +421,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
             raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
+        self.threshold = threshold
         self.text_field = text_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
@@ -409,7 +450,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
             TopKSelect(self.llm_k),
             Generate(llm),
             Parse(),
-            ThresholdSelect(0.5),
+            ThresholdSelect(self.threshold),
             _cluster_stage(self.clusterer_override),
         ]
 

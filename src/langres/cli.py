@@ -99,6 +99,16 @@ def main(
         return _import_csv(
             Path(args.in_csv), Path(args.queue), Path(args.out), args.reviewer, out_stream
         )
+    if args.command == "experiments" and args.experiments_command == "reproduce":
+        from langres.experiments.reproduction import reconstruct_reproduction_bundle
+
+        reconstruct_reproduction_bundle(Path(args.artifact), output=out_stream)
+        return 0
+    if args.command == "experiments" and args.experiments_command == "verify":
+        from langres.experiments.reproduction import verify_reproduction_bundle
+
+        verify_reproduction_bundle(Path(args.artifact), output=out_stream)
+        return 0
 
     parser.print_help(out_stream)
     return 0
@@ -128,7 +138,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show the installed langres version and exit.",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="{review,export-csv,import-csv}")
+    subparsers = parser.add_subparsers(
+        dest="command",
+        metavar="{review,export-csv,import-csv,experiments}",
+    )
 
     p_review = subparsers.add_parser(
         "review",
@@ -192,6 +205,33 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="NAME",
         help="Optional reviewer name recorded on each correction.",
+    )
+
+    p_experiments = subparsers.add_parser(
+        "experiments",
+        help="Inspect and reproduce saved experiment handoff bundles.",
+    )
+    experiment_commands = p_experiments.add_subparsers(
+        dest="experiments_command",
+        metavar="{reproduce,verify}",
+    )
+    p_reproduce = experiment_commands.add_parser(
+        "reproduce",
+        help="Reconstruct saved local model artifacts and verify their plans.",
+    )
+    p_reproduce.add_argument(
+        "artifact",
+        metavar="reproduction.json",
+        help="The reproduction artifact emitted by Experiment.run().",
+    )
+    p_verify = experiment_commands.add_parser(
+        "verify",
+        help="Validate a saved experiment bundle without reconstructing models.",
+    )
+    p_verify.add_argument(
+        "artifact",
+        metavar="reproduction.json",
+        help="The reproduction artifact emitted by Experiment.run().",
     )
     return parser
 

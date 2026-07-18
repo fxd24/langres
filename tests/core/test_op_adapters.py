@@ -295,8 +295,7 @@ def test_matcher_score_allows_empty_noop_only_for_unscored_pairs() -> None:
     scored = pairs.model_copy(
         update={
             "rows": [
-                row.model_copy(update={"score": 0.9, "score_type": "sim_cos"})
-                for row in pairs.rows
+                row.model_copy(update={"score": 0.9, "score_type": "sim_cos"}) for row in pairs.rows
             ]
         }
     )

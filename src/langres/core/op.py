@@ -41,7 +41,17 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeAlias, TypeVar, get_args, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    get_args,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict
 

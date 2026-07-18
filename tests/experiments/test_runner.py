@@ -9,11 +9,12 @@ from pydantic import BaseModel, ConfigDict
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.op import Score, ThresholdSelect
+from langres.core.models import PairwiseJudgement
 from langres.core.op_adapters import BlockerSource, ClustererStage
 from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel
 from langres.core.registry import register_op
-from langres.core.spend import SpendMonitor
+from langres.core.spend import BudgetExceeded, SpendMonitor
 from langres.experiments.identity import SourceState
 from langres.experiments.protocol import EvaluationProtocol
 from langres.experiments.runner import (
@@ -340,6 +341,36 @@ def test_official_proof_requires_stochastic_llm_cache_semantics() -> None:
         Experiment(architectures=factories, protocol=protocol)
 
 
+def test_official_proof_requires_complete_preflight_cost_estimates() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+    factories = [
+        ArchitectureFactory(
+            name=name,
+            factory=_factory([0], name=name).factory,
+            cache_semantics=(
+                "stochastic" if name in {"RetrieveLLM", "RetrieveRerankLLM"} else "deterministic"
+            ),
+        )
+        for name in (
+            "Retrieve",
+            "RetrieveRerank",
+            "RetrieveLLM",
+            "RetrieveRerankLLM",
+            "CustomTopology",
+        )
+    ]
+
+    with pytest.raises(
+        ExperimentConfigurationError,
+        match="complete USD preflight estimate",
+    ):
+        Experiment(architectures=factories, protocol=protocol).plan()
+
+
 def test_duplicate_architecture_variant_is_rejected_before_execution() -> None:
     first = _factory([0], name="Same", variant_id="v1")
     duplicate = _factory([0], name="Same", variant_id="v1")
@@ -426,7 +457,12 @@ def test_failure_continues_to_independent_architecture(tmp_path: Path) -> None:
     ).run()
 
     assert [run.status for run in report.runs] == ["failed", "completed"]
-    assert report.runs[0].error_message == "run failed; exception details suppressed"
+    assert report.runs[0].error_type == "ExperimentCellError"
+    assert report.runs[0].error_message is not None
+    assert "Cannot initialize architecture 'Broken'" in report.runs[0].error_message
+    assert "Fix:" in report.runs[0].error_message
+    assert "secret" not in report.runs[0].error_message
+    assert "payload" not in report.runs[0].error_message
     records = RunStore(tmp_path / "runs.jsonl").read()
     assert [record.status for record in records] == [
         "failed",
@@ -540,7 +576,20 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
 
         def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
             self.monitor.add(0.2)
-            self.monitor.check()
+            try:
+                self.monitor.check()
+            except BudgetExceeded as exc:
+                exc.partial_judgements = [
+                    PairwiseJudgement(
+                        left_id="a1",
+                        right_id="a2",
+                        decision=True,
+                        score_type="heuristic",
+                        decision_step="budget-test",
+                        provenance={"cost_usd": 0.2},
+                    )
+                ]
+                raise
             return pairs  # pragma: no cover - check raises
 
     def build(threshold: float, monitor: SpendMonitor) -> ERModel:
@@ -572,6 +621,9 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
     assert record.status == "budget_exceeded"
     assert record.budget_exceeded is True
     assert record.spend_usd == pytest.approx(0.2)
+    assert len(run.partial_judgements) == 1
+    assert run.partial_judgements[0]["left_id"] == "a1"
+    assert record.partial_judgements == run.partial_judgements
 
 
 def test_non_budget_failure_after_paid_work_records_spend(

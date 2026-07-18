@@ -122,8 +122,7 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
         return pairs
 
     output_keys = [
-        _unordered_pair_key(judgement.left_id, judgement.right_id)
-        for judgement in materialized
+        _unordered_pair_key(judgement.left_id, judgement.right_id) for judgement in materialized
     ]
     duplicate_outputs = _duplicates(output_keys)
     if duplicate_outputs:
