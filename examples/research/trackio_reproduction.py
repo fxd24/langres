@@ -15,7 +15,7 @@ def reproduce_with_trackio(output_dir: Path) -> ExperimentReport:
     from langres.tracking.trackers import TrackioTracker
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    tracker = TrackioTracker(project="langres-reproduction", space_id=None)
+    tracker = TrackioTracker(project="langres-reproduction", local_only=True)
     return Experiment(
         architectures=(retrieve_factory(),),
         protocol=EvaluationProtocol.smoke(seed=0),

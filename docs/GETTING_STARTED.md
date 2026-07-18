@@ -21,7 +21,7 @@ The research surface is intentionally progressive:
 
 Resources are the replaceable model capabilities (`Embedder`, `Reranker`,
 `LLM`). Operations state what happens (`Retrieve`, `Rerank`, `Select`,
-`Generate`, `Parse`, `ClusterStage`). A recipe is the named ordered operation
+`Generate`, `Parse`, `Cluster`). A recipe is the named ordered operation
 topology. This distinction matters in experiments: changing a resource creates
 a configuration variant; changing operation order creates a different
 architecture.

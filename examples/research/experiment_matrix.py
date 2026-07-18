@@ -1,4 +1,4 @@
-"""Expand recipes across multiple bundled benchmarks, splits, and seeds."""
+"""Expand recipes across local synthetic benchmarks, splits, and seeds."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from _research_foundation import retrieve_factory
 def build_protocol() -> EvaluationProtocol:
     """Declare the complete statistical question before any work starts."""
     return EvaluationProtocol(
-        benchmark_ids=("tiny_fixture", "fodors_zagat"),
+        benchmark_ids=("local_companies", "local_products"),
         split_ids=("train", "test"),
-        fixed_test_set_id="langres-bundled-research-matrix-v1",
+        fixed_test_set_id="langres-local-research-matrix-v1",
         split_seeds=(0, 1),
         threshold_split_id="train",
         test_split_id="test",
@@ -53,10 +53,7 @@ def main() -> None:
     args = parser.parse_args()
     protocol = build_protocol()
     cell_count = (
-        2
-        * len(protocol.benchmark_ids)
-        * len(protocol.split_ids)
-        * len(protocol.split_seeds)
+        2 * len(protocol.benchmark_ids) * len(protocol.split_ids) * len(protocol.split_seeds)
     )
     print(
         f"{cell_count} cells: 2 recipes × {len(protocol.benchmark_ids)} benchmarks "

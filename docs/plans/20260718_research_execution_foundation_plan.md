@@ -305,7 +305,7 @@ than method-registry names or legacy slots.
 - Accept one or more architectures, benchmark ids, split ids, and seeds.
 - Accept an optional spend budget. Ordinary local or paid experiments may omit
   it; when supplied, it is enforced as a cap. The guarded official paid proof
-  always supplies the plan's USD 20 cap.
+  always supplies the plan's USD 20 stopping threshold.
 - Resolve benchmark datasets through the existing registry.
 - Record dataset name, fingerprint/revision, protocol version, split, and seed.
 - Tune thresholds only on the configured training/validation data.
@@ -708,7 +708,7 @@ The first official proof matrix is deliberately exact:
 - one attempt for deterministic cells;
 - three attempts for `RetrieveLLM` and `RetrieveRerankLLM`;
 - 18 cells before retries;
-- a preflight estimate with a hard USD 20 cap;
+- a preflight estimate checked against a USD 20 stopping threshold;
 - paid-call concurrency of one.
 
 The same matrix must have a fake/local smoke form that runs in CI. The paid
@@ -1466,7 +1466,8 @@ Parallelization: 6 lanes; 3 foundation lanes parallel, 3 dependent lanes paralle
 P1 tasks: 9
 P2 tasks: 1
 Required fake/local acceptance: 5 topologies × 2 datasets
-Paid acceptance: 18 cells, concurrency 1, hard preflight cap USD 20, not CI
+Paid acceptance: 18 cells, concurrency 1, USD 20 preflight stopping threshold,
+not CI; one in-flight provider call may overshoot
 Legacy deletion: none
 External Codex voice: unavailable by policy; repository-audit voice used
 ```
@@ -1634,7 +1635,7 @@ matrix:
 10 cells: 5 topologies × 2 datasets
 6 deterministic attempts, 12 stochastic attempts, 18 total
 paid concurrency: 1
-estimated maximum: USD 12.40 / hard cap: USD 20.00
+estimated maximum: USD 12.40 / stopping threshold: USD 20.00
 cache: 4 reusable prefixes, 14 misses
 publication: local + Trackio; official claim eligible
 ```

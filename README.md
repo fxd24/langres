@@ -18,7 +18,7 @@ repeatable. The public research vocabulary has three layers:
 - **resources** are model-bearing capabilities: an `Embedder`, `Reranker`, or
   `LLM`;
 - **operations** transform the record/pair stream: `Retrieve`, `Rerank`,
-  `Select`, `Generate`, `Parse`, and `ClusterStage`;
+  `Select`, `Generate`, `Parse`, and `Cluster`;
 - **recipes** are named ordered operation topologies, equipped with resources.
 
 Swap a resource to compare weights or providers. Change the ordered operations

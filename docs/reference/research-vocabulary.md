@@ -4,7 +4,7 @@ The research API uses **resources, operations, and recipes**:
 
 - a **resource** is a model-bearing capability (`Embedder`, `Reranker`, `LLM`);
 - an **operation** transforms a carrier (`Retrieve`, `Rerank`, `Select`,
-  `Generate`, `Parse`, `ClusterStage`);
+  `Generate`, `Parse`, `Cluster`);
 - a **recipe** is a named, readable ordered operation topology equipped with
   resources.
 
@@ -16,7 +16,7 @@ reading older docs, code, and artifacts:
 | `Blocker` | usually a `Source`; vector candidate generation becomes `Retrieve` | `Blocker` remains a supported classic component. Do not mechanically rename key/all-pairs blocking to an embedding resource. |
 | `Comparator` | a resource-free `Score` operation | It still exists in the classic path and may attach a `ComparisonVector`. |
 | `Matcher`, `Judge`, or historical `Module` | a `Score`, or `Generate` + `Parse` operations backed by an `LLM` resource | “LLM” names the capability; `Generate` and `Parse` state how it is used. |
-| `Clusterer` slot | `ClusterStage` operation wrapping a clustering algorithm | The algorithm remains reusable; the operation places it in the topology. |
+| `Clusterer` slot | conceptual `Cluster` operation, implemented by `ClustererStage` through the `ClusterStage` class | The algorithm remains reusable; the implementation places it in the topology. |
 | four slots: blocker → comparator → matcher → clusterer | explicit ordered operation topology | Compatibility models still derive an operation chain internally. |
 | backbone/model string | resource `ModelRef` in a named slot | Use `architecture.resources`; singular `.backbone` is compatibility sugar only when exactly one slot exists. |
 | named architecture | recipe when referring to a shipped, equipped research topology | “Architecture” remains the general topology concept. A recipe is its named user-facing construction. |

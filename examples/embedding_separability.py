@@ -18,18 +18,18 @@ NON_MATCHES = ((0, 2), (0, 4), (2, 4))
 
 
 def cosine_scores(
-    embedder: Embedder,
+    vectors: np.ndarray,
     pairs: Sequence[tuple[int, int]],
 ) -> tuple[float, ...]:
-    """Embed once, then return one cosine score per declared pair."""
-    vectors = embedder.embed(TEXTS).vectors
+    """Return one cosine score per declared pair from precomputed vectors."""
     return tuple(float(np.dot(vectors[left], vectors[right])) for left, right in pairs)
 
 
 def separability_margin(embedder: Embedder) -> float:
     """Return mean(match cosine) minus mean(non-match cosine)."""
-    match_scores = cosine_scores(embedder, MATCHES)
-    non_match_scores = cosine_scores(embedder, NON_MATCHES)
+    vectors = embedder.embed(TEXTS).vectors
+    match_scores = cosine_scores(vectors, MATCHES)
+    non_match_scores = cosine_scores(vectors, NON_MATCHES)
     return float(np.mean(match_scores) - np.mean(non_match_scores))
 
 

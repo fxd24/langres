@@ -11,8 +11,9 @@
   recipes, the first `Experiment`, benchmark/split/seed matrices, local Trackio
   reproduction, stored-token repricing, and local/Hub pretrained lifecycle.
 - Added a guarded official proof command: plan-only by default, exact 18 cells,
-  paid concurrency one, hard USD 20 cap, and literal confirmation required
-  before paid execution.
+  paid concurrency one, a USD 20 stopping threshold, and literal confirmation
+  required before paid execution. Since provider cost is observed after a
+  response, spend can overshoot the threshold by one in-flight call.
 - Added a mechanically generated fake-resource smoke table backed by a real
   local `ExperimentReport`; it is explicitly a contract check, not a quality or
   performance claim.

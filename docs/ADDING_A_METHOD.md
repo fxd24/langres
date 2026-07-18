@@ -34,9 +34,10 @@ Python module paths, or arbitrary code.
 
 ## Add an operation
 
-Reuse the public topology contracts: `Source`, `Op`, `Score`, `Select`,
-`ClusterStage`, and `Sequential`. An operation has one responsibility and must
-preserve its carrier contract.
+Reuse the public topology contracts: `Source`, `Op`, `Score`, `Select`, the
+conceptual `Cluster` operation, and `Sequential`. In Python, terminal clustering
+implements the `ClusterStage` class (normally through `ClustererStage`). An
+operation has one responsibility and must preserve its carrier contract.
 
 Persistence requires:
 

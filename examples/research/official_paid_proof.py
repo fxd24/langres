@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -37,6 +38,18 @@ BUDGET_USD = 20.0
 PAID_CONCURRENCY = 1
 CONFIRMATION = "I_ACCEPT_USD_20_MAXIMUM"
 BENCHMARKS = ("amazon_google", "abt_buy")
+_FULL_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def _require_immutable_hf_revision(label: str, ref: ModelRef) -> None:
+    """Reject mutable HF branches/tags before any model load or paid work."""
+    if ref.kind != "hf":
+        return
+    if ref.revision is None or _FULL_COMMIT_SHA.fullmatch(ref.revision) is None:
+        raise ValueError(
+            f"{label} requires an immutable 40-hex Hugging Face commit SHA; "
+            f"got revision={ref.revision!r}"
+        )
 
 
 def _dataset_fingerprints() -> dict[str, str]:
@@ -56,10 +69,7 @@ def build_protocol(
         benchmark: "resolve-before-paid-execution" for benchmark in BENCHMARKS
     }
     test_id = hashlib.sha256(
-        "|".join(
-            f"{key}:{value}"
-            for key, value in sorted(identity_inputs.items())
-        ).encode()
+        "|".join(f"{key}:{value}" for key, value in sorted(identity_inputs.items())).encode()
     ).hexdigest()
     return EvaluationProtocol.official_proof(
         benchmark_ids=BENCHMARKS,
@@ -94,6 +104,12 @@ def build_factories(
     llm_ref: ModelRef,
 ) -> tuple[ArchitectureFactory, ...]:
     """Build the four named operation chains plus one custom topology."""
+    for label, ref in (
+        ("embedder_ref", embedder_ref),
+        ("reranker_ref", reranker_ref),
+        ("llm_ref", llm_ref),
+    ):
+        _require_immutable_hf_revision(label, ref)
 
     def factory(
         name: str,
@@ -213,37 +229,54 @@ def main() -> None:
 
     protocol = build_protocol()
     cells = expand_official_proof_matrix(protocol)
-    print(f"preflight: {len(cells)} cells, concurrency={args.concurrency}, cap=USD {BUDGET_USD:.2f}")
+    print(
+        f"preflight: {len(cells)} cells, concurrency={args.concurrency}, "
+        f"stopping threshold=USD {BUDGET_USD:.2f}"
+    )
     if not args.execute_paid:
         print(
             "plan only: dataset hashes are unresolved; no model load, "
             "network request, or paid call was made"
         )
+        print(f"confirmation phrase: {CONFIRMATION}")
+        print(
+            "next command: uv run python examples/research/official_paid_proof.py "
+            f"--execute-paid --confirm {CONFIRMATION} --concurrency {PAID_CONCURRENCY} "
+            "--embedder-revision <40-hex-commit-sha> "
+            "--reranker-revision <40-hex-commit-sha>"
+        )
         return
     if args.confirm != CONFIRMATION:
         raise SystemExit(f"refusing paid execution: pass --confirm {CONFIRMATION}")
     if protocol.budget_usd != BUDGET_USD or args.concurrency != PAID_CONCURRENCY:
-        raise SystemExit("refusing paid execution: the USD 20 cap and concurrency 1 are mandatory")
-    if not args.embedder_revision or not args.reranker_revision:
         raise SystemExit(
-            "refusing official execution: pass immutable "
-            "--embedder-revision and --reranker-revision values"
+            "refusing paid execution: the USD 20 stopping threshold and concurrency 1 are mandatory"
         )
-    protocol = build_protocol(_dataset_fingerprints())
-
-    factories = build_factories(
-        embedder_ref=ModelRef(
-            base=args.embedder,
-            kind="hf",
-            revision=args.embedder_revision,
-        ),
-        reranker_ref=ModelRef(
-            base=args.reranker,
-            kind="hf",
-            revision=args.reranker_revision,
-        ),
-        llm_ref=ModelRef(base=args.llm, kind="api"),
+    embedder_ref = ModelRef(
+        base=args.embedder,
+        kind="hf",
+        revision=args.embedder_revision,
     )
+    reranker_ref = ModelRef(
+        base=args.reranker,
+        kind="hf",
+        revision=args.reranker_revision,
+    )
+    try:
+        _require_immutable_hf_revision("embedder_ref", embedder_ref)
+        _require_immutable_hf_revision("reranker_ref", reranker_ref)
+    except ValueError as exc:
+        raise SystemExit(f"refusing official execution: {exc}") from exc
+
+    protocol = build_protocol(_dataset_fingerprints())
+    try:
+        factories = build_factories(
+            embedder_ref=embedder_ref,
+            reranker_ref=reranker_ref,
+            llm_ref=ModelRef(base=args.llm, kind="api"),
+        )
+    except ValueError as exc:
+        raise SystemExit(f"refusing official execution: {exc}") from exc
     report = Experiment(
         architectures=factories,
         protocol=protocol,

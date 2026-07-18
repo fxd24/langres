@@ -17,7 +17,9 @@ cp .env.example .env
 
 All environment variables are optional — most examples below run at **$0**
 with no key required. Scripts that spend money say so explicitly in their
-docstring and are gated behind an explicit flag or a hard budget cap.
+docstring and are gated behind an explicit flag or budget stopping threshold.
+Where a provider reports cost only after a call, actual spend can overshoot the
+threshold by that one in-flight call.
 
 ## Start here
 
@@ -85,21 +87,23 @@ by several research scripts:
 ## Research & benchmark reproductions (`examples/research/`)
 
 Milestone exit-criteria runs, benchmark harnesses, and exploratory demos.
-Several spend real money (OpenRouter) under an explicit hard budget cap — read
-each script's docstring before running it. Companion `*_results*.json` /
+Several spend real money (OpenRouter) under an explicit budget stopping
+threshold; one in-flight provider call can overshoot it — read each script's
+docstring before running it. Companion `*_results*.json` /
 `*_output.md` files are committed snapshots of past runs.
 
 - **`first_experiment.py`** — the real `Experiment` runner on `tiny_fixture`,
-  zero network and a hard `$0` budget.
+  zero network and a `$0` budget assertion.
 - **`experiment_matrix.py`** — plan, then optionally run, two recipes × two
-  benchmarks × train/test × two seeds.
+  local synthetic benchmarks × train/test × two seeds.
 - **`trackio_reproduction.py`** — re-execute the smoke protocol with a
   local-only Trackio view.
 - **`reprice_tokens.py`** — reprice stored usage with a new `PriceSnapshot`.
 - **`hub_lifecycle.py`** — local `save_pretrained`/`from_pretrained` and an
   explicit private `push_to_hub` path.
 - **`official_paid_proof.py`** — free 18-cell preflight by default; paid
-  execution needs two explicit confirmations, concurrency 1, and a hard USD 20 cap.
+  execution needs two explicit confirmations, concurrency 1, and a USD 20
+  stopping threshold (possible one-provider-call overshoot).
 - **`generate_smoke_table.py`** — mechanically regenerate the docs table from a
   real fake-resource `ExperimentReport`.
 

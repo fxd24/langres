@@ -57,8 +57,9 @@ Trackio is an optional view, not the authoritative record:
 uv run python examples/research/trackio_reproduction.py
 ```
 
-The example sets `space_id=None`, so Trackio stays local. Configure an HF Space
-only as an explicit publication step.
+The example sets `local_only=True`, so Trackio stays local even when Settings or
+environment variables name a Space. Configure an HF Space only as an explicit
+publication step.
 
 ## Pretrained bundles and the Hub
 
@@ -89,7 +90,8 @@ allowlist/security contract.
 ## Privacy defaults
 
 - `RunStore` and stage caches are local unless you choose a remote tracker.
-- Trackio is local unless `space_id` is set.
+- Trackio is guaranteed local with `local_only=True`; otherwise a
+  Settings-derived `space_id` may enable sync.
 - Hub upload happens only through `push_to_hub`.
 - Prompt-bearing configuration requires `allow_sensitive_config=True`.
 - Benchmark datasets and user records are never uploaded implicitly.

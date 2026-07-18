@@ -62,7 +62,8 @@ An official publication protocol may use the matrix label `"official"`, but its
 
 Replay is explicit, not inferred. `replay_boundary` points at the tunable
 `Select`; execution checkpoints immediately before it. Every later stage must
-be another `Select` or the terminal `ClusterStage`, so replay cannot silently
+be another `Select` or the terminal conceptual `Cluster` operation
+(`ClusterStage` implementation class), so replay cannot silently
 rerun or rebill a downstream scorer. Every prefix stage must also have a
 registered `OpSpec`: the replay identity hashes the complete serialized stage
 configuration, and an opaque custom stage is rejected instead of risking reuse
@@ -86,9 +87,10 @@ measurements rather than fabricating a cheaper report. Factory failures that
 happen before an execution plan exists are still persisted as failed, linked
 attempts, and failed report-row identities retain the architecture
 `variant_id`.
-The exact paid official proof remains separately guarded by
+The paid official proof remains separately guarded by
 `EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
-USD 20); it requires exactly one factory for each named topology and stochastic
+USD 20 stopping threshold); it requires exactly one factory for each named
+topology and stochastic
 cache semantics for the repeated LLM topologies. Every matrix also rejects
 duplicate `(name, variant_id)` factories before execution. When Git provenance
 cannot be read, cache identity falls back to a hash of the installed langres
@@ -107,7 +109,7 @@ it exactly; it does not invent a validation alias or omit failed cells.
 # Print the 16-cell plan only.
 uv run python examples/research/experiment_matrix.py
 
-# Execute two fake-resource recipes × two bundled benchmarks × train/test × two seeds.
+# Execute two fake-resource recipes × two local synthetic benchmarks × train/test × two seeds.
 uv run python examples/research/experiment_matrix.py --execute
 ```
 
@@ -163,10 +165,11 @@ SQLite store:
 uv run python examples/research/trackio_reproduction.py
 ```
 
-The script constructs `TrackioTracker(space_id=None)`, so it requires no token
-and makes no Hub request. The `RunStore` and protocol remain the reproduction
-source of truth; Trackio is a view. Setting a Space id is a separate,
-credentialed publication action.
+The script constructs `TrackioTracker(local_only=True)`, which suppresses
+Settings and environment Space fallbacks, so it requires no token and makes no
+Hub request. The `RunStore` and protocol remain the reproduction source of
+truth; Trackio is a view. Setting a Space id is a separate, credentialed
+publication action.
 
 ## Guarded official paid proof
 
@@ -177,24 +180,29 @@ uv run python examples/research/official_paid_proof.py
 ```
 
 It prints the exact five-topology × two-dataset, 18-cell plan, paid concurrency
-1, and the hard USD 20 cap, then exits before dataset/model loading or network.
+1, and the USD 20 stopping threshold, then exits before dataset/model loading
+or network. The shared ledger checks after each provider response, so actual
+spend can exceed USD 20 by at most the cost of one in-flight provider call;
+concurrency one keeps that overshoot bound to one call.
 Paid execution is outside CI and requires both `--execute-paid` and the literal
 confirmation phrase printed by the command. The script then resolves dataset
-fingerprints, requires immutable embedder/reranker revisions, and passes the experiment's one shared
-`SpendMonitor` into every operation chain. Never automate the confirmation.
+fingerprints, requires full 40-hex immutable embedder/reranker commit revisions,
+and passes the experiment's one shared `SpendMonitor` into every operation
+chain. Never automate the confirmation.
 
-This is the getting-started for **experimenting on entity-resolution scorers** in
-langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything below
-runs at **$0** with DSPy's `DummyLM` — no API key, no network. See the full
-runnable script:
+The sections below document scorer-specific compatibility APIs. New
+architecture comparisons should use `Experiment` and `ArchitectureFactory`
+above. Use this material when maintaining code that literally calls
+`run_methods` or `evaluate_judge_on_candidates`. Everything below runs at
+**$0** with DSPy's `DummyLM` — no API key, no network. See the full runnable
+script:
 
 - **`examples/research/m4_experiment_loop.py`** — the whole loop end-to-end, zero-spend.
   Run it: `uv run python examples/research/m4_experiment_loop.py`.
 
-## Two experiment surfaces — and when to use each
+## Legacy compatibility: method and matcher evaluation surfaces
 
-langres gives you two measurement surfaces. Pick by **what you are measuring** and
-**how expensive the scorer is**.
+Pick by **what you are measuring** and **how expensive the matcher is**.
 
 ### (a) `run_methods` — full-pipeline race, for cheap zero-spend methods
 
@@ -207,19 +215,19 @@ print(table.best().method)          # winner by pair-F1
 print(table.to_markdown())          # BCubed-F1 + pair-F1 + cost per method
 ```
 
-- **What it measures:** the *full pipeline* — block → judge → tune threshold →
+- **What it measures:** the *full pipeline* — block → match → tune threshold →
   cluster → grade **BCubed F1** (post-clustering) *and* pair-F1.
 - **How it works:** for each method it builds a resolver factory
   (`make_resolver_factory`) and runs `run_method`, which calls
   `resolver_factory(threshold)` **repeatedly** — once per grid threshold while
   tuning, again for the pair curve, again for test. Each call rebuilds the module
-  and **re-judges** the candidates.
+  and **re-scores** the candidates.
 - **When to use:** **cheap, zero-spend** methods (`rapidfuzz`, `embedding_cosine`,
   `weighted_average`, …) where rebuild-and-re-judge-per-threshold is free.
 - **`budget=0.0`** asserts genuine zero spend — a **post-hoc** guard that raises
   *after* a method runs if its measured spend was charged, not a pre-flight block.
 
-### (b) `evaluate_judge_on_candidates` — pairwise-F1 for a compiled/paid judge, judged once
+### (b) `evaluate_judge_on_candidates` — pairwise-F1 for a compiled/paid matcher, scored once
 
 ```python
 from langres.core.benchmark import evaluate_judge_on_candidates
@@ -237,12 +245,12 @@ print(result.pair.f1, result.pair.precision, result.pair.recall, result.best_thr
   at the best-F1 grid threshold, plus the full PR curve. No blocking, no
   clustering — so the number is directly **comparable to pairwise-F1 SOTA** with no
   blocking-recall ceiling or clustering amplification.
-- **How it works:** takes a **module instance**, judges the candidate set **exactly
+- **How it works:** takes a **matcher instance**, scores the candidate set **exactly
   once**, and grades it. Returns `(JudgePairEval, list[PairwiseJudgement])` — the
   graded summary plus the raw judgements (kept in-process for error-map analysis).
-- **When to use:** a **compiled and/or paid** scorer — this is the **DSPy
+- **When to use:** a **compiled and/or paid** matcher — this is the **DSPy
   experimentation surface** and the SOTA-comparable precision measurement. For a
-  paid judge, pass a `BudgetedModuleRunner` via `runner=` to cap spend (enforced
+  paid matcher, pass a `BudgetedModuleRunner` via `runner=` to monitor spend (enforced
   between calls — one in-flight call can overrun the cap by its own cost); this
   surface keeps the full cost knobs (`runner=` / `price_per_token_or_pair=` /
   `cost_track_fn=`) and hands you the raw judgements back. The `evaluate()`
@@ -485,8 +493,9 @@ plus the agent two-liner. Run it:
 
 ## Versioned experiment contracts
 
-`langres.experiments` is the import-light contract used by the next
-architecture-neutral runner. It does not replace `RunStore`; its identities and
+`langres.experiments` is the import-light contract used by the shipped
+architecture-neutral `Experiment` runner. It does not replace `RunStore`; its
+identities and
 measurements attach to the existing `RunContext` / `RunRecord` lifecycle.
 
 ```python
@@ -577,13 +586,15 @@ fingerprints/revisions plus per-dataset or composite test-set identity. The
 same test-set rule applies to exploratory comparisons: without a composite
 `fixed_test_set_id`, every declared benchmark needs its own non-empty identity.
 The
-separate guarded paid-proof policy requires **exactly USD 20**.
+separate guarded paid-proof policy requires a configured **USD 20 stopping
+threshold**. Because cost is observed only after a provider response, paid
+execution can overshoot that threshold by the cost of one in-flight call.
 `EvaluationProtocol.official_proof(...)` expands the fixed five-topology,
 two-dataset acceptance matrix to exactly 18 cells before retries only when
 `paid_proof=True` and every dataset/test provenance value is non-empty: one
 deterministic attempt per cell and three attempts for the two LLM topologies.
-Expansion revalidates the exact USD 20 cap even after an unvalidated model-copy
-path.
+Expansion revalidates that the stopping-threshold value is USD 20 even after an
+unvalidated model-copy path.
 `capture_run` deep-snapshots protocol and measurement mappings once, reuses the
 protocol snapshot for running and terminal records, and persists immutable
 JSON-shaped values so caller mutation cannot rewrite recorded provenance. It
