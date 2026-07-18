@@ -242,11 +242,17 @@ def _validate_benchmark_claim(
 
 
 def _version_minor(version: str) -> tuple[int, int]:
-    core = version.split("+", 1)[0].split("-", 1)[0]
-    parts = core.split(".")
-    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+    parsed = re.fullmatch(
+        r"(?:\d+!)?"
+        r"(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+        r"(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?"
+        r"(?:\+[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)?",
+        version,
+        flags=re.IGNORECASE,
+    )
+    if parsed is None:
         raise ValueError(f"unsupported langres version format {version!r}")
-    return int(parts[0]), int(parts[1])
+    return int(parsed["major"]), int(parsed["minor"])
 
 
 def _compatibility_for(version: str) -> str:
@@ -466,6 +472,8 @@ def sensitive_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, ..
 
     for index, spec in enumerate(component_specs(resolver_manifest)):
         visit(spec.config, f"component[{index}].{spec.type_name}")
+    for index, op_spec in enumerate(resolver_manifest.ops or ()):
+        visit(op_spec.params, f"op[{index}].{op_spec.role}")
     return tuple(sorted(set(found)))
 
 
@@ -482,6 +490,7 @@ def resource_facts(
         if metadata is None:
             if spec.type_name.startswith("resource_") or {
                 "model",
+                "model_name",
                 "model_ref",
             }.intersection(spec.config):
                 raise PretrainedArtifactError(

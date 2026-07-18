@@ -14,7 +14,10 @@ from langres._pretrained_artifact import (
     MAX_MANIFEST_BYTES,
     MAX_RESOLVER_BYTES,
     PretrainedArtifactError,
+    resource_facts,
+    sensitive_config_paths,
 )
+from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
 from langres.core.resolver import ERModel
 from langres.hub import from_pretrained, push_to_hub, save_pretrained
 
@@ -77,6 +80,37 @@ def test_prompt_bearing_config_requires_explicit_publication_consent(
     assert prompt in resolver
     assert system in resolver
     assert json.loads((bundle / BUNDLE_MANIFEST).read_text())["sensitive_config_included"]
+
+
+def test_prompt_bearing_op_params_require_publication_consent() -> None:
+    manifest = ArtifactManifest(
+        artifact_version="2",
+        langres_version="0.3.0",
+        ops=(
+            OpSpec(
+                role="custom_prompt_op",
+                params={"prompt_template": "PRIVATE {left} {right}"},
+            ),
+        ),
+    )
+
+    assert sensitive_config_paths(manifest) == ("op[0].custom_prompt_op.prompt_template",)
+
+
+def test_unknown_model_name_component_fails_closed() -> None:
+    manifest = ArtifactManifest(
+        artifact_version="1",
+        langres_version="0.3.0",
+        components=(
+            ComponentSpec(
+                type_name="unknown_model_component",
+                config={"model_name": "organization/repository"},
+            ),
+        ),
+    )
+
+    with pytest.raises(PretrainedArtifactError, match="model-bearing component"):
+        resource_facts(manifest)
 
 
 def test_symlink_in_local_bundle_is_rejected(model: ERModel, tmp_path: Path) -> None:

@@ -53,7 +53,8 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   `core.metrics` / `core.benchmark` stays importable without it. (There is no
   `pytrec_eval` anywhere in the tree.)
 - **`[hub]`** — huggingface-hub: the optional remote transport used by
-  `ERModel.from_pretrained(..., repo_id=...)` and `ERModel.push_to_hub(...)`.
+  `ERModel.from_pretrained("organization/repository", ...)` and
+  `ERModel.push_to_hub(...)`.
   Local `save_pretrained` / `from_pretrained` stays available without this
   extra.
 

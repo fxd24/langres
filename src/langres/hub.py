@@ -7,6 +7,7 @@ The Hub client is an optional transport. Local ``save_pretrained`` and
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 from collections.abc import Sequence
@@ -479,6 +480,11 @@ def from_pretrained(
             source=ArtifactSource(kind="local", location=str(candidate.absolute())),
         )
     if isinstance(repo_or_path, Path):
+        raise FileNotFoundError(f"local pretrained artifact does not exist: {candidate}")
+    if (
+        str(repo_or_path).startswith((".", "~", "/", "\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", str(repo_or_path)) is not None
+    ):
         raise FileNotFoundError(f"local pretrained artifact does not exist: {candidate}")
     resolved_transport = transport or HuggingFaceHubTransport()
     return _remote_from_pretrained(

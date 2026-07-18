@@ -10,6 +10,7 @@ from langres._pretrained_artifact import (
     ArtifactEligibilityError,
     MeasurementSummary,
     PretrainedArtifactError,
+    _version_minor,
     validate_bundle,
 )
 from langres.architectures import VectorLLMCascade
@@ -120,6 +121,27 @@ def test_missing_path_object_is_not_mistaken_for_hub_repo(tmp_path: Path) -> Non
     missing = tmp_path / "missing"
     with pytest.raises(FileNotFoundError, match="does not exist"):
         from_pretrained(missing)
+
+
+@pytest.mark.parametrize("missing", ("./missing", "/tmp/langres-missing", "~/langres-missing"))
+def test_missing_path_like_string_is_not_mistaken_for_hub_repo(missing: str) -> None:
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        from_pretrained(missing)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    (
+        ("0.0.0.dev0", (0, 0)),
+        ("0.3.0rc1", (0, 3)),
+        ("0.3.0.post1", (0, 3)),
+        ("1.2.3+local.1", (1, 2)),
+    ),
+)
+def test_version_compatibility_accepts_pep440_versions(
+    version: str, expected: tuple[int, int]
+) -> None:
+    assert _version_minor(version) == expected
 
 
 def _transformer_topology(
