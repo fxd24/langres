@@ -10,8 +10,10 @@ from pydantic import BaseModel
 
 from langres.core.clusterer import Clusterer
 from langres.core.model_ref import ModelRef
-from langres.core.op import Stage, ThresholdSelect, TopKSelect
+from langres.core.models import predicted_match
+from langres.core.op import Op, Stage, ThresholdSelect, TopKSelect
 from langres.core.op_adapters import ClustererStage
+from langres.core.pairs import Pairs
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult, LinkVerdict
@@ -57,6 +59,45 @@ def _cluster_stage(clusterer: Clusterer | None) -> ClustererStage[Any]:
     return ClustererStage(threshold_free)
 
 
+def _validate_threshold(threshold: float) -> None:
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold must be between 0.0 and 1.0")
+
+
+class _LoggingParse(Parse[Any]):
+    """Per-call Parse wrapper that records paid LLM decisions."""
+
+    def __init__(
+        self,
+        parse: Parse[Any],
+        *,
+        log: JudgementLog,
+        threshold: float | None,
+        model: str | None,
+        stage_id: str,
+    ) -> None:
+        super().__init__(parse.parser, on_parse_error=parse.on_parse_error)
+        self._log = log
+        self._threshold = threshold
+        self._model = model
+        self._stage_id = stage_id
+
+    def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
+        parsed = super().forward(pairs)
+        for row in parsed.rows:
+            judgement = row.to_judgement()
+            verdict = (
+                predicted_match(judgement, self._threshold) if self._threshold is not None else None
+            )
+            self._log.append(
+                judgement,
+                verdict=verdict,
+                model=self._model,
+                stage_id=self._stage_id,
+            )
+        return parsed
+
+
 class _ResearchRecipe(ERModel):
     """Shared inspection sugar; each concrete class still spells out its topology."""
 
@@ -86,6 +127,33 @@ class _ResearchRecipe(ERModel):
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
         raise NotImplementedError
+
+    def _explicit_body(self, *, log: JudgementLog | None = None) -> list[Op[Any]]:
+        """Add per-call logging around LLM Parse decisions without mutating topology."""
+        body = super()._explicit_body(log=log)
+        if log is None:
+            return body
+        wrapped: list[Op[Any]] = []
+        for body_index, op in enumerate(body):
+            if not isinstance(op, Parse):
+                wrapped.append(op)
+                continue
+            model = None
+            for upstream in reversed(body[:body_index]):
+                model = self._stage_resource_ref(upstream)
+                if model is not None:
+                    break
+            threshold = self._direct_log_threshold(body, body_index)
+            wrapped.append(
+                _LoggingParse(
+                    op,
+                    log=log,
+                    threshold=threshold,
+                    model=model,
+                    stage_id=self._execution_step(op, body_index + 1).stage_id,
+                )
+            )
+        return wrapped
 
     def _bind(self, schema: type[BaseModel]) -> None:
         """Build this recipe's explicit topology once schema is known."""
@@ -156,6 +224,7 @@ class Retrieve(_ResearchRecipe):
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
     ) -> None:
+        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
         self.threshold = threshold
         self.text_field = text_field
@@ -196,6 +265,7 @@ class RetrieveRerank(_ResearchRecipe):
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
     ) -> None:
+        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
         self.threshold = threshold
         self.text_field = text_field
