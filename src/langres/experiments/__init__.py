@@ -40,12 +40,21 @@ from langres.experiments.protocol import (
 from langres.experiments.report import (
     AggregateRow,
     CohortView,
+    ExperimentPlan,
     ExperimentReport,
     ExperimentRun,
     IncompatibleProtocolError,
     MetricConfidenceInterval,
     ParetoRow,
+    PlannedExperimentCell,
     ReportConstraints,
+)
+from langres.experiments.reproduction import (
+    ReproductionArchitecture,
+    ReproductionBundle,
+    load_reproduction_bundle,
+    verify_reproduction_bundle,
+    write_reproduction_bundle,
 )
 from langres.experiments.statistics import (
     BootstrapInterval,
@@ -54,6 +63,7 @@ from langres.experiments.statistics import (
     paired_entity_bootstrap,
     split_instability,
 )
+
 if TYPE_CHECKING:
     from langres.experiments.runner import (
         ArchitectureFactory,
@@ -72,6 +82,7 @@ __all__ = [
     "EmbeddingFacts",
     "Experiment",
     "ExperimentConfigurationError",
+    "ExperimentPlan",
     "EvaluationIdentity",
     "EvaluationProtocol",
     "ExperimentReport",
@@ -84,9 +95,12 @@ __all__ = [
     "PriceEstimate",
     "PriceSnapshot",
     "ProofCell",
+    "PlannedExperimentCell",
     "RecipeIdentity",
     "ResourceSlotIdentity",
     "ReportConstraints",
+    "ReproductionArchitecture",
+    "ReproductionBundle",
     "RuntimeFacts",
     "ScoreCacheError",
     "SourceState",
@@ -101,9 +115,12 @@ __all__ = [
     "detect_source_state",
     "expand_official_proof_matrix",
     "flatten_numeric",
+    "load_reproduction_bundle",
     "ordered_input_fingerprint",
     "paired_entity_bootstrap",
     "split_instability",
+    "verify_reproduction_bundle",
+    "write_reproduction_bundle",
 ]
 
 

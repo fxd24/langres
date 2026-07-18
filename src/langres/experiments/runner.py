@@ -33,7 +33,12 @@ from langres.experiments.protocol import (
     EvaluationProtocol,
     expand_official_proof_matrix,
 )
-from langres.experiments.report import ExperimentReport, ExperimentRun
+from langres.experiments.report import (
+    ExperimentPlan,
+    ExperimentReport,
+    ExperimentRun,
+    PlannedExperimentCell,
+)
 from langres.tracking.runs import (
     RunContext,
     RunRecord,
@@ -60,6 +65,15 @@ class ArchitectureFactory:
     factory: Callable[[float, SpendMonitor], ERModel]
     variant_id: str = "default"
     cache_semantics: CacheSemantics = "deterministic"
+    estimated_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("ArchitectureFactory.name must not be empty")
+        if not self.variant_id:
+            raise ValueError("ArchitectureFactory.variant_id must not be empty")
+        if self.estimated_usd is not None and self.estimated_usd < 0:
+            raise ValueError("ArchitectureFactory.estimated_usd must be non-negative")
 
     def build(self, threshold: float, monitor: SpendMonitor) -> ERModel:
         model = self.factory(threshold, monitor)
@@ -201,6 +215,7 @@ class Experiment:
         store: str | Path | RunStore | None = None,
         cache_dir: str | Path | None = None,
         budget_usd: float | None = None,
+        reproduction_path: str | Path | None = None,
         resume: bool = True,
         fail_fast: bool = False,
     ) -> None:
@@ -274,9 +289,117 @@ class Experiment:
         )
         self.resume = resume
         self.fail_fast = fail_fast
+        self.reproduction_path = Path(reproduction_path) if reproduction_path is not None else None
 
-    def run(self) -> ExperimentReport:
+    def plan(self) -> ExperimentPlan:
+        """Return the expanded matrix without loading data or executing inference."""
+        source = detect_source_state()
+        available_cache_entries = 0
+        if self.cache.root.is_dir():
+            available_cache_entries = sum(
+                path.is_dir() and path.name != "quarantine" for path in self.cache.root.iterdir()
+            )
+
+        cells: list[PlannedExperimentCell] = []
+        deterministic_attempts = 0
+        stochastic_attempts = 0
+        cache_hits = 0
+        cache_misses = 0
+        cache_not_replayable = 0
+        estimated_usd = 0.0
+        estimate_complete = True
+        for architecture in self.architectures:
+            try:
+                model = architecture.build(self.protocol.threshold_grid[0], self._monitor)
+            except Exception as exc:
+                raise ExperimentConfigurationError(
+                    f"Cannot initialize architecture {architecture.name!r} during preflight. "
+                    f"Cause: {type(exc).__name__}; configuration could not be inspected. "
+                    "Fix: install the resource's optional extra or pass a locally available "
+                    "resource, then retry."
+                ) from exc
+            replayable = model.execution_plan().replay_boundary is not None
+            repeats = self.protocol.repeats_for(architecture.name)
+            attempts_per_architecture = (
+                len(self.protocol.benchmark_ids)
+                * len(self.protocol.split_ids)
+                * len(self.protocol.split_seeds)
+                * repeats
+            )
+            if architecture.cache_semantics == "stochastic":
+                stochastic_attempts += attempts_per_architecture
+            else:
+                deterministic_attempts += attempts_per_architecture
+            if architecture.estimated_usd is None:
+                estimate_complete = False
+            else:
+                estimated_usd += architecture.estimated_usd * attempts_per_architecture
+
+            for benchmark_id in self.protocol.benchmark_ids:
+                for split_id in self.protocol.split_ids:
+                    for seed in self.protocol.split_seeds:
+                        if not replayable:
+                            status: Literal["hit", "miss", "not_replayable"] = "not_replayable"
+                            cache_not_replayable += repeats
+                        elif available_cache_entries >= repeats:
+                            status = "hit"
+                            cache_hits += repeats
+                            available_cache_entries -= repeats
+                        else:
+                            status = "miss"
+                            cache_misses += repeats
+                        cells.append(
+                            PlannedExperimentCell(
+                                architecture=architecture.name,
+                                variant_id=architecture.variant_id,
+                                benchmark_id=benchmark_id,
+                                split_id=split_id,
+                                split_seed=seed,
+                                repeats=repeats,
+                                cache_status=status,
+                                estimated_usd=(
+                                    None
+                                    if architecture.estimated_usd is None
+                                    else architecture.estimated_usd * repeats
+                                ),
+                            )
+                        )
+
+        total_attempts = deterministic_attempts + stochastic_attempts
+        estimate = estimated_usd if estimate_complete else None
+        if estimate is not None and self.budget_usd is not None and estimate > self.budget_usd:
+            raise ExperimentConfigurationError(
+                f"Cannot start experiment: estimated maximum USD {estimate:.2f} exceeds "
+                f"the hard cap USD {self.budget_usd:.2f}. "
+                "Fix: reduce the matrix/model estimates or raise the explicit budget."
+            )
+        publication_reasons: list[str] = []
+        if source.git_dirty:
+            publication_reasons.append("source tree is dirty")
+        if self.tracker.name not in {"trackio", "multi"}:
+            publication_reasons.append("Trackio publication is not configured")
+        return ExperimentPlan(
+            cells=tuple(cells),
+            topology_count=len(self.architectures),
+            benchmark_count=len(self.protocol.benchmark_ids),
+            cell_count=len(cells),
+            deterministic_attempts=deterministic_attempts,
+            stochastic_attempts=stochastic_attempts,
+            total_attempts=total_attempts,
+            estimated_usd=estimate,
+            budget_usd=self.budget_usd,
+            cache_hits=cache_hits,
+            cache_misses=cache_misses,
+            cache_not_replayable=cache_not_replayable,
+            publication_profile=self.protocol.publication_profile,
+            publication_eligible=not publication_reasons,
+            publication_reasons=tuple(publication_reasons),
+        )
+
+    def run(self, *, dry_run: bool = False) -> ExperimentReport | ExperimentPlan:
         """Execute every independent cell, retaining failures and resumable rows."""
+        if dry_run:
+            return self.plan()
         evaluation_id = compute_evaluation_identity(self.protocol).evaluation_id
         source = detect_source_state()
         loaded: dict[str, tuple[Benchmark[Any], list[Any], list[set[str]], str]] = {}
@@ -335,7 +458,37 @@ class Experiment:
                                     budget_exceeded=isinstance(exc, BudgetExceeded),
                                 )
                             runs.append(run)
-        return ExperimentReport(protocol=self.protocol, runs=tuple(runs))
+        artifact = str(self.reproduction_path) if self.reproduction_path is not None else None
+        report = ExperimentReport(
+            protocol=self.protocol,
+            runs=tuple(runs),
+            reproduction_artifact=artifact,
+        )
+        if self.reproduction_path is not None:
+            from langres.experiments.reproduction import (
+                ReproductionArchitecture,
+                write_reproduction_bundle,
+            )
+
+            architecture_snapshots = []
+            for architecture in self.architectures:
+                model = architecture.build(self.protocol.threshold_grid[0], self._monitor)
+                architecture_snapshots.append(
+                    ReproductionArchitecture(
+                        name=architecture.name,
+                        variant_id=architecture.variant_id,
+                        cache_semantics=architecture.cache_semantics,
+                        estimated_usd=architecture.estimated_usd,
+                        execution_plan=model.execution_plan().model_dump(mode="json"),
+                    )
+                )
+            write_reproduction_bundle(
+                self.reproduction_path,
+                source=source,
+                architectures=architecture_snapshots,
+                report=report,
+            )
+        return report
 
     def _context(
         self,

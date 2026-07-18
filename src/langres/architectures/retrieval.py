@@ -15,6 +15,7 @@ from langres.core.op_adapters import ClustererStage
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.spend import SpendMonitor
 from langres.resources import (
     CrossEncoderReranker,
     Embedder,
@@ -68,12 +69,17 @@ class _ResearchRecipe(ERModel):
         *,
         schema: type[BaseModel] | None,
         budget_usd: float | None,
+        monitor: SpendMonitor | None,
     ) -> None:
+        if budget_usd is not None and monitor is not None:
+            raise ValueError("pass budget_usd= or monitor=, not both")
         self._declared_resources = {
             slot: resource.model_ref for slot, resource in resources.items()
         }
         self._resource_values = resources
         self._init_state(budget_usd=budget_usd)
+        if monitor is not None:
+            self._spend_monitor = monitor
         if schema is not None:
             self._bind(schema)
 
@@ -81,7 +87,25 @@ class _ResearchRecipe(ERModel):
         self,
         ops: list[Stage],
     ) -> None:
-        built = type(self).from_topology(ops=ops, monitor=self._spend_monitor)
+        replay_boundary = max(
+            index for index, stage in enumerate(ops) if isinstance(stage, ThresholdSelect)
+        )
+        try:
+            built = type(self).from_topology(
+                ops=ops,
+                replay_boundary=replay_boundary,
+                monitor=self._spend_monitor,
+            )
+        except ValueError as exc:
+            if not str(exc).startswith(
+                "replay_boundary requires every prefix stage to have a "
+                "registered, stable output identity"
+            ):
+                raise
+            # Dependency-injected test/custom resources may be runnable without
+            # being safely serializable. Keep them benchmarkable, but do not
+            # claim byte-replay identity until their exact type is registered.
+            built = type(self).from_topology(ops=ops, monitor=self._spend_monitor)
         self.__dict__ = built.__dict__
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -155,6 +179,7 @@ class Retrieve(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         self.retrieve_k = retrieve_k
         self.threshold = threshold
@@ -164,6 +189,7 @@ class Retrieve(_ResearchRecipe):
             {"embedder": _embedder(embedder)},
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -195,6 +221,7 @@ class RetrieveRerank(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         self.retrieve_k = retrieve_k
         self.threshold = threshold
@@ -207,6 +234,7 @@ class RetrieveRerank(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -237,14 +265,17 @@ class RetrieveLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
+        threshold: float = 0.5,
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
+        self.threshold = threshold
         self.text_field = text_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
@@ -254,6 +285,7 @@ class RetrieveLLM(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -269,7 +301,7 @@ class RetrieveLLM(_ResearchRecipe):
             TopKSelect(self.llm_k),
             Generate(llm),
             Parse(),
-            ThresholdSelect(0.5),
+            ThresholdSelect(self.threshold),
             _cluster_stage(self.clusterer_override),
         ]
 
@@ -287,14 +319,17 @@ class RetrieveRerankLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
+        threshold: float = 0.5,
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
+        self.threshold = threshold
         self.text_field = text_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
@@ -305,6 +340,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -322,7 +358,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
             TopKSelect(self.llm_k),
             Generate(llm),
             Parse(),
-            ThresholdSelect(0.5),
+            ThresholdSelect(self.threshold),
             _cluster_stage(self.clusterer_override),
         ]
 

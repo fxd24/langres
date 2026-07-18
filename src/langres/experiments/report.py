@@ -15,6 +15,7 @@ from langres.experiments.statistics import SplitInstability, split_instability
 
 RunStatus = Literal["running", "completed", "failed", "budget_exceeded", "missing"]
 Direction = Literal["min", "max"]
+CachePlanStatus = Literal["hit", "miss", "not_replayable"]
 
 
 class IncompatibleProtocolError(ValueError):
@@ -157,6 +158,45 @@ class ReportConstraints(BaseModel):
     @classmethod
     def _freeze_minimum_metrics(cls, value: dict[str, float]) -> FrozenDict:
         return freeze_mapping(value)
+
+
+class PlannedExperimentCell(BaseModel):
+    """One logical preflight cell before deterministic/stochastic repeats."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    architecture: str
+    variant_id: str
+    benchmark_id: str
+    split_id: str
+    split_seed: int
+    repeats: int = Field(ge=1)
+    cache_status: CachePlanStatus
+    estimated_usd: float | None = Field(default=None, ge=0.0)
+
+
+class ExperimentPlan(BaseModel):
+    """Expanded, side-effect-free matrix and spend/publication preflight."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    version: Literal[1] = 1
+    cells: tuple[PlannedExperimentCell, ...]
+    topology_count: int = Field(ge=1)
+    benchmark_count: int = Field(ge=1)
+    cell_count: int = Field(ge=1)
+    deterministic_attempts: int = Field(ge=0)
+    stochastic_attempts: int = Field(ge=0)
+    total_attempts: int = Field(ge=1)
+    paid_concurrency: Literal[1] = 1
+    estimated_usd: float | None = Field(default=None, ge=0.0)
+    budget_usd: float | None = Field(default=None, ge=0.0)
+    cache_hits: int = Field(ge=0)
+    cache_misses: int = Field(ge=0)
+    cache_not_replayable: int = Field(ge=0)
+    publication_profile: str
+    publication_eligible: bool
+    publication_reasons: tuple[str, ...] = ()
 
 
 class ExperimentReport(BaseModel):
