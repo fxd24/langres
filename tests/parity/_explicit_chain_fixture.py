@@ -106,6 +106,27 @@ class CostedNameMatcher(Matcher[Any]):
         raise NotImplementedError
 
 
+class AbstainingMatcher(Matcher[Any]):
+    """``$0`` fake that abstains on every pair: a stamped ``score_type`` but neither a
+    ``score`` nor a ``decision``. Used to exercise ``compare``'s
+    :class:`~langres.core.models.MatcherAbstainedError` path on an explicit chain."""
+
+    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            yield PairwiseJudgement(
+                left_id=str(candidate.left.id),
+                right_id=str(candidate.right.id),
+                score=None,
+                score_type="prob_llm",
+                decision=None,
+                decision_step="abstain",
+                provenance={},
+            )
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> Any:
+        raise NotImplementedError
+
+
 def _capped(matcher: Matcher[Any], monitor: SpendMonitor) -> SpendCappedMatcher:
     """Wrap ``matcher`` in the model's spend cap (share ONE ledger)."""
     return SpendCappedMatcher(matcher, monitor=monitor)
@@ -156,9 +177,13 @@ def build_score_after_select_model(*, budget_usd: float = 1.0, k: int = 5) -> ER
     monitor = SpendMonitor(budget_usd=effective_budget(budget_usd))
     ops: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
-        MatcherScore(_capped(CostedNameMatcher(score_type="sim_cos"), monitor), out_space="sim_cos"),
+        MatcherScore(
+            _capped(CostedNameMatcher(score_type="sim_cos"), monitor), out_space="sim_cos"
+        ),
         TopKSelect(k=k),
-        MatcherScore(_capped(CostedNameMatcher(score_type="prob_llm"), monitor), out_space="prob_llm"),
+        MatcherScore(
+            _capped(CostedNameMatcher(score_type="prob_llm"), monitor), out_space="prob_llm"
+        ),
         ThresholdSelect(THRESHOLD),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
@@ -200,4 +225,17 @@ def build_factory_source_model(*, budget_usd: float = 1.0) -> ERModel:
         source=lambda: AllPairsBlocker(schema_factory=lambda record: ChainCo(**record)),
         with_comparator=False,
     )
+    return ERModel.from_topology(ops=ops, monitor=monitor)
+
+
+def build_abstaining_chain_model(*, budget_usd: float = 1.0) -> ERModel:
+    """A chain whose matcher abstains on every pair -- so ``compare`` raises
+    :class:`~langres.core.models.MatcherAbstainedError` rather than fabricating a verdict."""
+    monitor = SpendMonitor(budget_usd=effective_budget(budget_usd))
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        MatcherScore(_capped(AbstainingMatcher(), monitor), out_space="prob_llm"),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
     return ERModel.from_topology(ops=ops, monitor=monitor)

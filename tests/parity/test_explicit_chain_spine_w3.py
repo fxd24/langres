@@ -32,6 +32,7 @@ from tests.parity._explicit_chain_fixture import (
     THRESHOLD,
     ChainCo,
     CostedNameMatcher,
+    build_abstaining_chain_model,
     build_explicit_chain_model,
     build_factory_source_model,
     build_key_source_model,
@@ -164,6 +165,14 @@ def test_compare_without_a_cut_raises() -> None:
         model.compare(_record("a1"), _record("a2"))
 
 
+def test_compare_raises_on_an_abstaining_chain_matcher() -> None:
+    """compare() owes a verdict: an abstaining chain matcher raises MatcherAbstainedError
+    (the Selects are skipped, so the abstaining pair reaches the gate rather than being cut)."""
+    model = build_abstaining_chain_model()
+    with pytest.raises(MatcherAbstainedError):
+        model.compare(_record("a1"), _record("a2"))
+
+
 def test_compare_builds_the_pair_when_the_source_vetoes_it() -> None:
     """Blocking must not veto a compare verdict: a KeyBlocker source that yields no
     candidate for two different-name records still gets a scored, gated verdict."""
@@ -201,32 +210,46 @@ def test_from_topology_rejects_monitor_and_budget_together() -> None:
         ERModel.from_topology(ops=ops, monitor=monitor, budget_usd=2.0)
 
 
-def test_from_topology_requires_exactly_one_cluster_stage() -> None:
-    """resolve()/dedupe() need a phase-1 exit: no ClusterStage (or two) is refused."""
+def test_from_topology_requires_a_terminal_cluster_stage() -> None:
+    """resolve()/dedupe() need a phase-1 exit: a Sequential-valid chain with no
+    ClusterStage (it ends in Scores) is refused by from_topology's own count check
+    -- the one thing Sequential does not enforce."""
     monitor = SpendMonitor(budget_usd=1.0)
     no_stage: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
-        MatcherScore(SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"),
+        MatcherScore(
+            SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"
+        ),
     ]
     with pytest.raises(ValueError, match="exactly one terminal ClusterStage"):
         ERModel.from_topology(ops=no_stage, monitor=monitor)
 
+
+def test_from_topology_rejects_a_second_cluster_stage_at_the_wiring_guard() -> None:
+    """Two ClusterStages can't both sit terminally -- Sequential catches the carrier
+    mismatch (a ClusterStage consumes 'pairs', the first produced 'clusters') before
+    the count check ever runs."""
+    monitor = SpendMonitor(budget_usd=1.0)
     two_stages: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
-        MatcherScore(SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"),
+        MatcherScore(
+            SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"
+        ),
         ThresholdSelect(THRESHOLD),
         ClustererStage(Clusterer(threshold=0.0)),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
-    with pytest.raises(ValueError, match="exactly one terminal ClusterStage"):
-        ERModel.from_topology(ops=two_stages, monitor=SpendMonitor(budget_usd=1.0))
+    with pytest.raises(ValueError, match="out of pipeline order"):
+        ERModel.from_topology(ops=two_stages, monitor=monitor)
 
 
 def test_from_topology_rejects_a_miswired_chain() -> None:
     """The Sequential wiring guard runs at construction (here: no Source first)."""
     monitor = SpendMonitor(budget_usd=1.0)
     miswired: list[Stage] = [
-        MatcherScore(SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"),
+        MatcherScore(
+            SpendCappedMatcher(CostedNameMatcher(), monitor=monitor), out_space="prob_llm"
+        ),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
     with pytest.raises(ValueError, match="must start with a Source"):
