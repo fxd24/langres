@@ -20,6 +20,7 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel
 
+from langres.core._artifacts import op_spec
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
@@ -32,6 +33,7 @@ from langres.core.op import (
     Finalize,
     Op,
     Score,
+    Select,
     Sequential,
     Source,
     Spending,
@@ -181,6 +183,10 @@ class ModelState:
         # then the terminal ClusterStage (pairs -> clusters) and an optional
         # Finalize. All classic construction doors leave it ``None``.
         self._ops: list[Stage] | None = None
+        # Explicit replay is opt-in and names the Select stage at which cheap
+        # suffix execution may resume. Classic models and unannotated custom
+        # topologies remain benchmarkable without claiming replay safety.
+        self._replay_boundary_index: int | None = None
 
     @property
     def blocker(self) -> Blocker[Any]:
@@ -324,6 +330,7 @@ class ModelState:
         cls,
         *,
         ops: Sequence[Stage],
+        replay_boundary: int | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
         calibrator: CalibratorFitMixin | None = None,
@@ -428,6 +435,39 @@ class ModelState:
                 f"resolve()/dedupe() have a phase-1 exit, but the chain has {len(cluster_stages)}. "
                 "Fix: end the chain with exactly one ClusterStage."
             )
+        if replay_boundary is not None:
+            if not 1 <= replay_boundary < len(chain):
+                raise ValueError(
+                    "replay_boundary must be the index of a body Select stage "
+                    "(after Source and before ClusterStage)"
+                )
+            if not isinstance(chain[replay_boundary], Select):
+                raise ValueError(
+                    "replay_boundary must point to a Select stage; only the "
+                    "selection/clustering/evaluation suffix is safe to replay"
+                )
+            unsafe_suffix = [
+                (index, type(stage).__name__)
+                for index, stage in enumerate(
+                    chain[replay_boundary + 1 :], start=replay_boundary + 1
+                )
+                if not isinstance(stage, (Select, ClusterStage))
+            ]
+            if unsafe_suffix:
+                raise ValueError(
+                    "replay_boundary suffix may contain only Select and "
+                    "ClusterStage stages; later scoring or spending would be "
+                    f"re-executed during threshold replay: {unsafe_suffix!r}"
+                )
+            for index, stage in enumerate(chain[:replay_boundary]):
+                try:
+                    op_spec(stage)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "replay_boundary requires every prefix stage to have a "
+                        "registered, stable output identity; "
+                        f"stage {index} ({type(stage).__name__}) is opaque: {exc}"
+                    ) from None
         model = cls.__new__(cls)
         model._init_state(budget_usd=budget_usd)
         if monitor is not None:
@@ -437,6 +477,7 @@ class ModelState:
         # not enforced -- a raw MatcherScore billed off-ledger). Do this AFTER the
         # monitor is finalized so every wrap shares this model's one ledger.
         model._ops = model._secure_chain_scores(chain)
+        model._replay_boundary_index = replay_boundary
         return model
 
     def _secure_chain_scores(self, chain: list[Stage]) -> list[Stage]:

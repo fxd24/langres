@@ -260,6 +260,15 @@ cannot leak record or credential content. Stage-failure events follow the same
 rule: observers see only a bounded exception type plus a generic failure
 message, while the original exception is still re-raised to the direct caller.
 
+An explicit topology may opt into one replay boundary with
+`ERModel.from_topology(..., replay_boundary=<select index>)`. `execute()` then
+accepts a cache identity plus ordered-input fingerprint and returns an immutable
+`ExecutionCheckpoint` captured immediately before that `Select`.
+`execute_from(checkpoint, cache_id=..., input_fingerprint=...)` validates the
+expensive-prefix plan identity, boundary, cache identity, input identity, and
+duplicate pair guard before resuming through the same stage driver. It is not a
+second executor and does not claim transparent replay for arbitrary operations.
+
 A component-free custom `Score` or `Select` can opt into safe persistence:
 
 ```python

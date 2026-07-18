@@ -387,6 +387,27 @@ class TestGitSha:
         assert len(sha) == 40
         assert isinstance(dirty, bool)
 
+    def test_dirty_detection_explicitly_includes_untracked_files(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        commands: list[list[str]] = []
+
+        def _record(command: list[str], **kwargs: Any) -> Any:
+            del kwargs
+            commands.append(command)
+            stdout = "a" * 40 if command[1:3] == ["rev-parse", "HEAD"] else "?? new.txt\n"
+            return types.SimpleNamespace(stdout=stdout, returncode=0)
+
+        monkeypatch.setattr(runs.subprocess, "run", _record)
+
+        assert git_sha() == ("a" * 40, True)
+        assert [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ] in commands
+
     def test_missing_git_returns_none_and_warns_once(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -627,6 +648,36 @@ class TestCaptureRun:
         assert record.error_message is not None and "boom" in record.error_message
         # contextvar still reset after an exception.
         assert current_run.get() is None
+
+    def test_status_override_survives_a_reraised_budget_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "runs.jsonl"
+        with pytest.raises(RuntimeError, match="budget"):
+            with capture_run(_context(), store=RunStore(path)) as handle:
+                handle.set_status("budget_exceeded")
+                handle.record_cost(0.2, budget_exceeded=True)
+                raise RuntimeError("budget")
+
+        record = RunStore(path).read()[0]
+        assert record.status == "budget_exceeded"
+        assert record.budget_exceeded is True
+        assert record.spend_usd == 0.2
+
+    def test_failure_redacts_credentials_from_persisted_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "runs.jsonl"
+        with pytest.raises(RuntimeError, match="super-secret"):
+            with capture_run(_context(), store=RunStore(path)):
+                raise RuntimeError(
+                    "provider failed api_key=super-secret token: abc123 "
+                    "Authorization: Bearer bearer-secret"
+                )
+
+        record = RunStore(path).read()[0]
+        assert record.error_message is not None
+        assert "super-secret" not in record.error_message
+        assert "abc123" not in record.error_message
+        assert "bearer-secret" not in record.error_message
+        assert "Bearer" not in record.error_message
+        assert record.error_message.count("<redacted>") == 3
 
     def test_tracker_start_run_failure_writes_failed_record_and_resets_contextvar(
         self, tmp_path: Path

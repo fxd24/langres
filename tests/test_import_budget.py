@@ -86,6 +86,27 @@ def test_import_langres_excludes_heavy_modules_from_sys_modules() -> None:
     )
 
 
+def test_experiment_contracts_keep_runner_and_heavy_backends_lazy() -> None:
+    script = (
+        "import sys; import langres.experiments as experiments; "
+        "assert 'langres.experiments.runner' not in sys.modules; "
+        "assert 'langres.benchmarks.runner' not in sys.modules; "
+        f"leaked = [m for m in {_HEAVY_MODULES!r} if m in sys.modules]; "
+        "assert not leaked, leaked; "
+        "assert experiments.EvaluationProtocol; "
+        "print('OK')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"experiment import-budget check failed.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+
+
 # The autoresearch facade (``langres.optimize`` / ``langres.score_blocking``,
 # PR P-C) is eager-exported from ``langres/__init__.py`` -- so a bare
 # ``import langres`` must expose both as callables WHILE staying import-light:

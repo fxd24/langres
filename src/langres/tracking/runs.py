@@ -33,8 +33,10 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import time
+import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -68,6 +70,7 @@ __all__ = [
     "current_run",
     "dataset_fingerprint",
     "git_sha",
+    "mint_attempt_id",
     "resolve_store",
 ]
 
@@ -447,7 +450,7 @@ def git_sha() -> tuple[str | None, bool]:
             cwd=cwd,
         )
         porcelain = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--untracked-files=all"],
             capture_output=True,
             text=True,
             check=False,
@@ -465,6 +468,28 @@ def git_sha() -> tuple[str | None, bool]:
         logger.warning("git could not resolve HEAD (not a repo?); recording git_sha=None")
         _GIT_SHA_WARNED = True
     return (sha, dirty)
+
+
+def mint_attempt_id(recipe_id: str) -> str:
+    """Mint a unique concrete execution id before cache identity is computed."""
+    started_at = datetime.now(UTC).isoformat()
+    return f"{recipe_id}-{started_at}-{uuid.uuid4().hex[:12]}"
+
+
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(api[_-]?key|authorization|bearer|cookie|password|secret|token)"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+_AUTHORIZATION_HEADER = re.compile(
+    r"(?i)(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?([^\s,;]+)"
+)
+
+
+def _sanitize_error_message(message: str) -> str:
+    """Bound persisted errors and redact common credential assignments."""
+    sanitized = _AUTHORIZATION_HEADER.sub(r"\1<redacted>", message)
+    sanitized = _SECRET_ASSIGNMENT.sub(r"\1\2<redacted>", sanitized)
+    return sanitized[:_MAX_ERROR_MESSAGE_LEN]
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +681,8 @@ def capture_run(
     evaluation_id: str | None = None,
     cache_id: str | None = None,
     protocol: Mapping[str, Any] | None = None,
+    attempt_id: str | None = None,
+    suppress_error_details: bool = False,
 ) -> Iterator[_RunHandle]:
     """Capture one run: identity, a ``running`` marker, and a terminal record.
 
@@ -676,10 +703,10 @@ def capture_run(
     context_snapshot = RunContext.model_validate(context.model_dump(mode="python"))
     resolved_recipe_id = recipe_id or compute_recipe_id(context_snapshot)
     started_at = datetime.now(UTC).isoformat()
-    attempt_id = f"{resolved_recipe_id}-{started_at}"
+    resolved_attempt_id = attempt_id or mint_attempt_id(resolved_recipe_id)
     started_perf = time.perf_counter()
     running_record = RunRecord(
-        attempt_id=attempt_id,
+        attempt_id=resolved_attempt_id,
         recipe_id=resolved_recipe_id,
         context=context_snapshot,
         evaluation_id=evaluation_id,
@@ -691,8 +718,8 @@ def capture_run(
 
     if resolved_store is not None:
         resolved_store.append(running_record)
-    handle = _RunHandle(attempt_id, resolved_recipe_id, tracker)
-    token = current_run.set(attempt_id)
+    handle = _RunHandle(resolved_attempt_id, resolved_recipe_id, tracker)
+    token = current_run.set(resolved_attempt_id)
     error_type: str | None = None
     error_message: str | None = None
     try:
@@ -700,15 +727,22 @@ def capture_run(
         yield handle
     except BaseException as exc:
         error_type = type(exc).__name__
-        error_message = str(exc)[:_MAX_ERROR_MESSAGE_LEN]
+        error_message = (
+            "run failed; exception details suppressed"
+            if suppress_error_details
+            else _sanitize_error_message(str(exc))
+        )
         raise
     finally:
         current_run.reset(token)
         finished_at = datetime.now(UTC).isoformat()
         duration_seconds = time.perf_counter() - started_perf
-        final_status: RunStatus = (
-            "failed" if error_type is not None else (handle._status_override or "completed")
-        )
+        if error_type is not None:
+            final_status: RunStatus = (
+                "budget_exceeded" if handle._status_override == "budget_exceeded" else "failed"
+            )
+        else:
+            final_status = handle._status_override or "completed"
         artifacts = dict(handle._artifacts)
         if tracker.run_url is not None:
             artifacts.setdefault("run_url", tracker.run_url)
@@ -727,7 +761,7 @@ def capture_run(
                         "headline_metric": handle._headline_metric,
                         "spend_usd": handle._spend_usd,
                         "budget_exceeded": handle._budget_exceeded,
-                        "trace_id": attempt_id,
+                        "trace_id": resolved_attempt_id,
                         "artifacts": artifacts_snapshot,
                         "status": final_status,
                         "error_type": error_type,

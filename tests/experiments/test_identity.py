@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -13,6 +16,7 @@ from langres.experiments import (
     compute_cache_identity,
     compute_evaluation_identity,
     compute_recipe_identity,
+    detect_source_state,
 )
 from langres.tracking.runs import RunContext, RunRecord
 
@@ -269,6 +273,60 @@ def test_dirty_source_hash_participates_in_cache_identity() -> None:
     assert a != b
     assert a.source_claim == "dirty"
     assert a.official is False
+
+
+def test_unknown_git_provenance_uses_a_dirty_source_fallback(tmp_path: Path) -> None:
+    source = detect_source_state(tmp_path)
+    identity = compute_cache_identity(_cache_input(source=source))
+
+    assert source.git_sha is None
+    assert source.git_dirty is True
+    assert source.dirty_tree_hash is not None
+    assert identity.source_claim == "dirty"
+    assert identity.official is False
+
+
+def test_source_state_excludes_configured_run_and_cache_artifacts(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "langres tests"],
+        cwd=tmp_path,
+        check=True,
+    )
+    source_file = tmp_path / "source.py"
+    source_file.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "fixture"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    run_store = tmp_path / "runs.jsonl"
+    run_store.write_text('{"attempt": 1}\n', encoding="utf-8")
+    cache_dir = tmp_path / ".langres-cache"
+    cache_dir.mkdir()
+    (cache_dir / "checkpoint.json").write_text("{}", encoding="utf-8")
+
+    clean = detect_source_state(
+        tmp_path,
+        ignored_paths=(run_store, cache_dir),
+    )
+    source_file.write_text("VALUE = 2\n", encoding="utf-8")
+    dirty = detect_source_state(
+        tmp_path,
+        ignored_paths=(run_store, cache_dir),
+    )
+
+    assert clean.git_dirty is False
+    assert clean.dirty_tree_hash is None
+    assert dirty.git_dirty is True
+    assert dirty.dirty_tree_hash is not None
 
 
 @pytest.mark.parametrize(

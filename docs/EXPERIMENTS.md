@@ -1,5 +1,91 @@
 # Running experiments in langres
 
+## Architecture experiment runner
+
+`Experiment` is the architecture-first surface for reproducible benchmark
+matrices. It consumes named architecture factories, resolves datasets through
+the existing benchmark registry, expands benchmark × split × seed × repeat
+cells, captures every attempt in the existing `RunStore`, and returns one
+immutable `ExperimentReport`.
+
+```python
+from langres.core import ERModel
+from langres.core.spend import SpendMonitor
+from langres.experiments import ArchitectureFactory, EvaluationProtocol, Experiment
+
+def build(threshold: float, monitor: SpendMonitor) -> ERModel:
+    return ERModel.from_topology(
+        ops=make_ops(threshold),
+        replay_boundary=2,  # index of the tunable Select
+        monitor=monitor,
+    )
+
+protocol = EvaluationProtocol(
+    benchmark_ids=("amazon_google", "abt_buy"),
+    split_ids=("train", "test"),
+    fixed_test_set_id="research-v1",
+    split_seeds=(0, 1, 2),
+    threshold_split_id="train",
+    test_split_id="test",
+    threshold_grid=(0.4, 0.5, 0.6),
+    hardware_cohort="cpu-local",
+    benchmark_version="1",
+)
+
+report = Experiment(
+    architectures=[ArchitectureFactory(name="MyTopology", factory=build)],
+    protocol=protocol,
+    store="runs/experiments.jsonl",
+    cache_dir="runs/stage-cache",
+    tracker=None,       # or "trackio"
+    budget_usd=None,    # ordinary runs may be uncapped
+).run()
+```
+
+The current benchmark registry exposes an actual `train`/`test` split. The
+runner therefore requires `threshold_split_id="train"` and never relabels that
+data as validation. Thresholds are selected on train; test remains untouched.
+An official publication protocol may use the matrix label `"official"`, but its
+`ExperimentRun.evaluation_split_id` still records `"test"`.
+
+Replay is explicit, not inferred. `replay_boundary` points at the tunable
+`Select`; execution checkpoints immediately before it. Every later stage must
+be another `Select` or the terminal `ClusterStage`, so replay cannot silently
+rerun or rebill a downstream scorer. Every prefix stage must also have a
+registered `OpSpec`: the replay identity hashes the complete serialized stage
+configuration, and an opaque custom stage is rejected instead of risking reuse
+after an output-affecting configuration change. Checkpoint cache identity ends
+at the prefix boundary and is therefore independent of the downstream
+`Select` threshold or threshold-grid ordering. The local
+`StageArtifactStore` commits those checkpoints atomically and immutably, checks
+their payload hash and full plan/cache/input identity on load, and quarantines a
+corrupt entry before recomputation. Input fingerprints preserve row order, and
+duplicate pair identities fail before cache commit.
+
+Architecture factories receive the experiment's shared `SpendMonitor`, so an
+optional `budget_usd` covers all model instances built during threshold replay.
+Budget overruns are persisted as `status="budget_exceeded"` with their measured
+spend and cap flag, even though the exception still stops that cell. Resume
+accepts a completed attempt only when both its evaluation identity and complete
+protocol snapshot match. Architecture `variant_id` participates in recipe
+identity and resume selection, so two variants sharing a display name cannot
+reuse each other's attempt. A resumed row rehydrates its stored cost and stage
+measurements rather than fabricating a cheaper report. Factory failures that
+happen before an execution plan exists are still persisted as failed, linked
+attempts, and failed report-row identities retain the architecture
+`variant_id`.
+The exact paid official proof remains separately guarded by
+`EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
+USD 20); it requires exactly one factory for each named topology and stochastic
+cache semantics for the repeated LLM topologies. Every matrix also rejects
+duplicate `(name, variant_id)` factories before execution. When Git provenance
+cannot be read, cache identity falls back to a hash of the installed langres
+sources and is marked dirty rather than claiming reusable clean code. Concurrent
+same-bytes checkpoint commits are idempotent. Tracker publication is optional
+plumbing: a tracker failure leaves the local completed attempt intact and marks
+publication incomplete in run warnings. Persisted failure text redacts complete
+authorization header values, including bearer tokens.
+
 This is the getting-started for **experimenting on entity-resolution scorers** in
 langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything below
 runs at **$0** with DSPy's `DummyLM` — no API key, no network. See the full
@@ -241,7 +327,8 @@ runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
 
 - **Identity.** `recipe_id` = `sha256` over the *recipe fields* (`resolver_config`,
   `dataset_name`, `dataset_fingerprint`, `llm_model`, `seeds`, …); `attempt_id` =
-  `f"{recipe_id}-{started_at}"` is the record PK.
+  a unique `recipe_id` + start timestamp + nonce is the record PK. A resumed
+  cell mints a new attempt; it never reopens a terminal attempt.
 - **Config snapshot** — `resolver_config` (best-effort; `None` for a bespoke run
   with no registered config) plus `llm_model` / `blocking_k` / `method` / `budget_usd`.
 - **Provenance, recorded but *not* hashed** — `git_sha` + `git_dirty`,
@@ -254,7 +341,8 @@ runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
   written at *start*, so a crashed run leaves a visible lone line).
 
 **The API.** `capture_run(context, *, store=None, tracker=NoOpTracker(),
-recipe_id=None, evaluation_id=None, cache_id=None, protocol=None)` computes the
+recipe_id=None, evaluation_id=None, cache_id=None, protocol=None,
+attempt_id=None, suppress_error_details=False)` computes the
 legacy recipe identity unless a new experiment `recipe_id` is supplied, writes
 the `running` line, yields a handle (`log_metrics` / `record_cost` /
 `record_measurements` / `log_artifact` / `set_status`), then finalizes the
