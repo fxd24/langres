@@ -188,7 +188,7 @@ class ExecutionObserverError(BaseModel):
 
 
 class ExecutionResult(BaseModel):
-    """The selected pairs and clusters returned by :meth:`ERModel.execute`."""
+    """Selected output plus sanitized pre-selection rows used for accounting."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -198,6 +198,7 @@ class ExecutionResult(BaseModel):
     events: tuple[ExecutionEvent, ...]
     observer_errors: tuple[ExecutionObserverError, ...] = ()
     checkpoint: ExecutionCheckpoint | None = None
+    accounting_rows: tuple[PairRow[Any], ...] = ()
 
 
 def _validate_clustering_algorithm(algorithm: str) -> None:

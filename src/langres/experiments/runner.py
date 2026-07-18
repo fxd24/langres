@@ -244,6 +244,8 @@ def _runtime_facts(
 
 
 def _measurement_rows(result: ExecutionResult) -> tuple[Any, ...]:
+    if result.accounting_rows:
+        return result.accounting_rows
     if result.checkpoint is not None:
         return result.checkpoint.rows
     return tuple(result.pairs.rows)
@@ -380,6 +382,26 @@ def _embedding_facts(
     return None
 
 
+def _price_snapshot(
+    resource_ref: str | None,
+    price_snapshots: Mapping[str, PriceSnapshot],
+) -> PriceSnapshot | None:
+    """Resolve a tariff by exact resource identity, never substring overlap."""
+    if resource_ref is None:
+        return None
+    identities = [resource_ref]
+    try:
+        payload = json.loads(resource_ref)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, Mapping) and isinstance(payload.get("base"), str):
+        identities.append(payload["base"])
+    return next(
+        (price_snapshots[identity] for identity in identities if identity in price_snapshots),
+        None,
+    )
+
+
 def _measurements(
     result: ExecutionResult,
     *,
@@ -408,10 +430,7 @@ def _measurements(
         price = None
         derived_usd = None
         if slot == "llm":
-            for key, candidate in price_snapshots.items():
-                if step.resource_ref is not None and key in step.resource_ref:
-                    price = candidate
-                    break
+            price = _price_snapshot(step.resource_ref, price_snapshots)
             if price is not None and usage is not None:
                 derived_usd = price.reprice(
                     usage,

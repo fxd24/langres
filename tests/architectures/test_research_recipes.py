@@ -176,6 +176,25 @@ def test_recipe_adopts_the_experiment_spend_monitor_exactly() -> None:
         )
 
 
+@pytest.mark.parametrize("threshold", [-0.1, 1.1])
+def test_llm_recipes_reject_out_of_range_thresholds(threshold: float) -> None:
+    with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
+        RetrieveLLM(
+            embedder=FakeEmbedder(),
+            llm=FakeLLM(),
+            schema=CompanySchema,
+            threshold=threshold,
+        )
+    with pytest.raises(ValueError, match="threshold must be between 0.0 and 1.0"):
+        RetrieveRerankLLM(
+            embedder=FakeEmbedder(),
+            reranker=FakeReranker(),
+            llm=FakeLLM(),
+            schema=CompanySchema,
+            threshold=threshold,
+        )
+
+
 def test_recipe_resources_are_complete_and_backbone_is_singular_sugar() -> None:
     embedder = FakeEmbedder()
     reranker = FakeReranker()
