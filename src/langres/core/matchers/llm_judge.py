@@ -28,6 +28,7 @@ from langres.clients.openrouter import parse_openrouter_billing
 from langres.core.model_ref import ModelRef, backend_for, normalize_model_ref, to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
+from langres.core.named_callable import resolve_named
 from langres.core.registry import register
 from langres.core.reports import ScoreInspectionReport, _inspect_scores_impl
 from langres.tracking.runs import current_run
@@ -228,38 +229,6 @@ RECORD_SERIALIZERS: dict[str, Callable[[Any], str]] = {
     "json": default_record_serializer,
     "colval": colval_serializer,
 }
-
-
-def _resolve_named(
-    value: Callable[..., Any] | str | None,
-    registry: dict[str, Callable[..., Any]],
-    *,
-    kind: str,
-    default_name: str,
-) -> tuple[Callable[..., Any], str | None]:
-    """Resolve a parser/serializer given by name, callable, or ``None``.
-
-    Returns ``(callable, name)`` where ``name`` is the registered name to
-    serialize in :attr:`LLMMatcher.config` -- ``None`` for a custom callable that
-    is not in ``registry`` (documented as non-serializable: it reverts to the
-    default on load).
-
-    Raises:
-        ValueError: For an unknown name, listing the registered ones.
-    """
-    if value is None:
-        return registry[default_name], default_name
-    if isinstance(value, str):
-        resolved = registry.get(value)
-        if resolved is None:
-            raise ValueError(
-                f"unknown {kind} name {value!r}; registered names: "
-                f"{', '.join(sorted(registry))}. Pass a callable for a custom "
-                f"{kind} (it will not serialize in config)."
-            )
-        return resolved, value
-    name = next((n for n, fn in registry.items() if fn is value), None)
-    return value, name
 
 
 class _RateLimiter:
@@ -572,10 +541,10 @@ class LLMMatcher(Matcher[SchemaT]):
         self.system_prompt = system_prompt
         self.on_parse_error = on_parse_error
         self.confidence = confidence
-        self._parse, self._parser_name = _resolve_named(
+        self._parse, self._parser_name = resolve_named(
             response_parser, RESPONSE_PARSERS, kind="response_parser", default_name="score"
         )
-        self._serialize, self._serializer_name = _resolve_named(
+        self._serialize, self._serializer_name = resolve_named(
             record_serializer, RECORD_SERIALIZERS, kind="record_serializer", default_name="json"
         )
         self.prompt_template = (

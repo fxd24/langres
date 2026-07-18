@@ -163,6 +163,7 @@
     "langres.core.metrics": "metrics",
     "langres.core.model_ref": "core",
     "langres.core.models": "core",
+    "langres.core.named_callable": "core",
     "langres.core.op": "core",
     "langres.core.op_adapters": "architectures",
     "langres.core.pairs": "core",
