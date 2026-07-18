@@ -142,7 +142,7 @@ def _offline_runner(
     )
     monkeypatch.setattr(
         "langres.experiments.runner.detect_source_state",
-        lambda: SourceState(
+        lambda **_kwargs: SourceState(
             git_sha="a" * 40,
             lockfile_hash="lock",
             environment_hash="environment",
@@ -260,6 +260,30 @@ def test_variant_id_is_part_of_recipe_identity_and_resume_selection(
     assert report.runs[0].recipe_id != report.runs[1].recipe_id
     assert report.runs[0].metrics["bcubed_f1"] != report.runs[1].metrics["bcubed_f1"]
     assert all(not run.warnings for run in report.runs)
+    assert len(RunStore(store).read()) == 2
+
+
+def test_serialized_model_config_invalidates_resume_identity(tmp_path: Path) -> None:
+    store = tmp_path / "runs.jsonl"
+    high_counter = [0]
+    low_counter = [0]
+    first = Experiment(
+        architectures=[_factory(high_counter, score=0.9)],
+        protocol=_protocol(),
+        store=store,
+        cache_dir=tmp_path / "cache",
+    ).run()
+    second = Experiment(
+        architectures=[_factory(low_counter, score=0.1)],
+        protocol=_protocol(),
+        store=store,
+        cache_dir=tmp_path / "cache",
+    ).run()
+
+    assert high_counter == [2]
+    assert low_counter == [2]
+    assert first.runs[0].recipe_id != second.runs[0].recipe_id
+    assert first.runs[0].metrics["bcubed_f1"] != second.runs[0].metrics["bcubed_f1"]
     assert len(RunStore(store).read()) == 2
 
 
@@ -402,11 +426,15 @@ def test_failure_continues_to_independent_architecture(tmp_path: Path) -> None:
     ).run()
 
     assert [run.status for run in report.runs] == ["failed", "completed"]
-    assert report.runs[0].error_message == "cell failed; exception details suppressed"
-    assert [record.status for record in RunStore(tmp_path / "runs.jsonl").read()] == [
+    assert report.runs[0].error_message == "run failed; exception details suppressed"
+    records = RunStore(tmp_path / "runs.jsonl").read()
+    assert [record.status for record in records] == [
         "failed",
         "completed",
     ]
+    assert report.runs[0].recipe_id == records[0].recipe_id
+    assert report.runs[0].attempt_id == records[0].attempt_id
+    assert report.runs[0].cache_id == records[0].cache_id
 
 
 def test_factory_failure_attempts_are_durable_and_parent_linked(tmp_path: Path) -> None:
@@ -449,8 +477,9 @@ def test_failed_cells_with_shared_name_keep_variant_specific_recipe_ids(
 
     assert [run.status for run in report.runs] == ["failed", "failed"]
     assert report.runs[0].recipe_id != report.runs[1].recipe_id
-    assert ":one:" in report.runs[0].recipe_id
-    assert ":two:" in report.runs[1].recipe_id
+    stored = RunStore(tmp_path / "runs.jsonl").read()
+    assert [run.recipe_id for run in report.runs] == [record.recipe_id for record in stored]
+    assert [run.attempt_id for run in report.runs] == [record.attempt_id for record in stored]
 
 
 def test_current_registry_does_not_mislabel_train_as_validation() -> None:
@@ -542,6 +571,53 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
     assert run.status == "budget_exceeded"
     assert record.status == "budget_exceeded"
     assert record.budget_exceeded is True
+    assert record.spend_usd == pytest.approx(0.2)
+
+
+def test_non_budget_failure_after_paid_work_records_spend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SpendingScore(Score[Any]):
+        def __init__(self, monitor: SpendMonitor) -> None:
+            super().__init__(scope="pair", out_space="heuristic")
+            self.monitor = monitor
+
+        def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
+            self.monitor.add(0.2)
+            return pairs
+
+    def build(threshold: float, monitor: SpendMonitor) -> ERModel:
+        return ERModel.from_topology(
+            ops=[
+                BlockerSource(AllPairsBlocker(schema=_Record)),
+                SpendingScore(monitor),
+                ThresholdSelect(threshold),
+                ClustererStage(Clusterer(threshold=0.0)),
+            ],
+            monitor=monitor,
+        )
+
+    monkeypatch.setattr(
+        "langres.experiments.runner.evaluate_execution_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("evaluation failed")),
+    )
+    store = RunStore(tmp_path / "runs.jsonl")
+    [run] = (
+        Experiment(
+            architectures=[ArchitectureFactory(name="PaidThenFailed", factory=build)],
+            protocol=_protocol(),
+            store=store,
+            cache_dir=tmp_path / "cache",
+        )
+        .run()
+        .runs
+    )
+
+    [record] = store.read()
+    assert run.status == "failed"
+    assert run.attempt_id == record.attempt_id
+    assert run.usd == pytest.approx(0.2)
     assert record.spend_usd == pytest.approx(0.2)
 
 

@@ -8,7 +8,7 @@ import platform
 import re
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -411,9 +411,28 @@ def _fallback_source_hash() -> str:
     return digest.hexdigest()
 
 
-def detect_source_state(repo_root: str | Path | None = None) -> SourceState:
-    """Capture commit, lock, environment, and dirty bytes for cache identity."""
-    cwd = Path(repo_root) if repo_root is not None else Path.cwd()
+def detect_source_state(
+    repo_root: str | Path | None = None,
+    *,
+    ignored_paths: Sequence[str | Path] = (),
+) -> SourceState:
+    """Capture commit, lock, environment, and source-only dirty bytes.
+
+    ``ignored_paths`` removes configured run/cache artifacts from Git's status
+    and diff pathspecs so an experiment does not invalidate its own cache.
+    """
+    cwd = (Path(repo_root) if repo_root is not None else Path.cwd()).resolve()
+    exclusions: list[str] = []
+    for raw_path in ignored_paths:
+        path = Path(raw_path)
+        absolute = (path if path.is_absolute() else cwd / path).resolve()
+        try:
+            relative = absolute.relative_to(cwd).as_posix()
+        except ValueError:
+            continue
+        exclusions.append(f":(exclude){relative}")
+        exclusions.append(f":(exclude){relative}/**")
+    pathspec = ("--", ".", *exclusions)
 
     def run(*args: str) -> tuple[bool, bytes]:
         try:
@@ -430,7 +449,13 @@ def detect_source_state(repo_root: str | Path | None = None) -> SourceState:
 
     sha_ok, sha_bytes = run("rev-parse", "HEAD")
     sha = sha_bytes.decode("utf-8", errors="replace").strip() or None
-    status_ok, status = run("status", "--porcelain=v1", "--untracked-files=all", "-z")
+    status_ok, status = run(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "-z",
+        *pathspec,
+    )
     unknown = not sha_ok or sha is None or not status_ok
     dirty = unknown or bool(status)
     dirty_tree_hash: str | None = None
@@ -439,7 +464,7 @@ def detect_source_state(repo_root: str | Path | None = None) -> SourceState:
     elif dirty:
         digest = hashlib.sha256()
         digest.update(status)
-        _, diff = run("diff", "--binary", "HEAD")
+        _, diff = run("diff", "--binary", "HEAD", *pathspec)
         digest.update(diff)
         entries = status.split(b"\0")
         for entry in entries:
