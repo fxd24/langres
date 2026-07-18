@@ -181,7 +181,11 @@ class TestHfSyncCredentialGuard:
         self, fake_trackio: _FakeTrackio, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
-        tracker = TrackioTracker(Settings(), space_id="acme/langres-runs")
+        # Isolate the no-token case from a developer's real project ``.env``.
+        # ``Settings()`` intentionally loads that file, so using it here makes
+        # this negative-path test fail whenever the checkout has HF_TOKEN set.
+        settings = Settings(hf_token=None, _env_file=None)  # type: ignore[call-arg]
+        tracker = TrackioTracker(settings, space_id="acme/langres-runs")
 
         with pytest.raises(ValueError, match=r"acme/langres-runs.*HF_TOKEN"):
             tracker.start_run(_context())
