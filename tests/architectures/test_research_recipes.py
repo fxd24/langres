@@ -24,10 +24,13 @@ from langres.core.models import CompanySchema
 from langres.core.op import ThresholdSelect, TopKSelect
 from langres.core.op_adapters import ClustererStage
 from langres.core.resolver import ERModel
+from langres.tracking.judgement_log import JudgementLog
 from langres.resources import (
     FakeEmbedder,
     FakeLLM,
     FakeReranker,
+    GenerationBatch,
+    GenerationRequest,
     Generate,
     EmbeddingBatch,
     Parse,
@@ -74,6 +77,16 @@ class _RecordingEmbedder(FakeEmbedder):
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         self.texts.append(tuple(texts))
         return super().embed(texts)
+
+
+class _CountingLLM(FakeLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
+        self.calls += len(requests)
+        return super().generate(requests)
 
 
 def _canonical(model: ERModel) -> list[list[str]]:
@@ -424,6 +437,26 @@ def test_retrieve_compare_accepts_the_same_record_on_both_sides() -> None:
     assert verdict.score == 1.0
 
 
+def test_retrieve_rejects_distinct_records_with_one_id_before_downstream_models() -> None:
+    reranker = FakeReranker()
+    llm = _CountingLLM()
+    recipe = RetrieveRerankLLM(
+        embedder=FakeEmbedder(),
+        reranker=reranker,
+        llm=llm,
+        schema=CompanySchema,
+    )
+
+    with pytest.raises(ValueError, match="duplicate ids"):
+        recipe.compare(
+            {"id": "same", "name": "Alpha"},
+            {"id": "same", "name": "Beta"},
+        )
+
+    assert reranker.calls == 0
+    assert llm.calls == 0
+
+
 def test_llm_recipes_reject_nonpositive_candidate_caps() -> None:
     with pytest.raises(ValueError, match="llm_k must be positive"):
         RetrieveLLM(
@@ -440,3 +473,61 @@ def test_llm_recipes_reject_nonpositive_candidate_caps() -> None:
             schema=CompanySchema,
             llm_k=-1,
         )
+
+
+@pytest.mark.parametrize("recipe_type", [Retrieve, RetrieveRerank])
+@pytest.mark.parametrize("threshold", [-0.1, 1.1])
+def test_retrieval_recipes_reject_out_of_range_thresholds(
+    recipe_type: type[Retrieve] | type[RetrieveRerank],
+    threshold: float,
+) -> None:
+    kwargs = {
+        "embedder": FakeEmbedder(),
+        "schema": CompanySchema,
+        "threshold": threshold,
+    }
+    if recipe_type is RetrieveRerank:
+        kwargs["reranker"] = FakeReranker()
+
+    with pytest.raises(ValueError, match="threshold must be between"):
+        recipe_type(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("with_reranker", [False, True])
+def test_llm_recipe_parse_decisions_are_written_to_judgement_log(
+    tmp_path: Path,
+    with_reranker: bool,
+) -> None:
+    log = JudgementLog(tmp_path / "judgements.jsonl")
+    if with_reranker:
+        recipe: RetrieveLLM | RetrieveRerankLLM = RetrieveRerankLLM(
+            embedder=FakeEmbedder(),
+            reranker=FakeReranker(scores=RERANK_SCORES),
+            llm=FakeLLM(responses=LLM_RESPONSES),
+            schema=CompanySchema,
+            retrieve_k=2,
+            llm_k=2,
+        )
+    else:
+        recipe = RetrieveLLM(
+            embedder=FakeEmbedder(),
+            llm=FakeLLM(responses=LLM_RESPONSES),
+            schema=CompanySchema,
+            retrieve_k=2,
+            llm_k=2,
+        )
+
+    recipe.dedupe(RECORDS, log=log)
+
+    rows = log.read()
+    assert len(rows) == 3
+    assert {row["verdict"] for row in rows} == {False, True}
+    assert {row["decision_step"] for row in rows} == {"llm_parse"}
+    assert {row["model"] for row in rows} == {"./fake/llm"}
+    assert all(row["stage_id"] is not None for row in rows)
+
+    compare_log = JudgementLog(tmp_path / "compare.jsonl")
+    verdict = recipe.compare(RECORDS[0], RECORDS[1], log=compare_log)
+    [compare_row] = compare_log.read()
+    assert compare_row["verdict"] is verdict.match
+    assert compare_row["decision_step"] == "llm_parse"

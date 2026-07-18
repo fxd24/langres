@@ -32,8 +32,8 @@ ecosystem:
 |---|---|
 | `Retrieve` | Retrieve → threshold → Cluster |
 | `RetrieveRerank` | Retrieve → Rerank → threshold → Cluster |
-| `RetrieveLLM` | Retrieve → top-k → LLM Generate/Parse → Cluster |
-| `RetrieveRerankLLM` | Retrieve → Rerank → top-k → LLM Generate/Parse → Cluster |
+| `RetrieveLLM` | Retrieve → top-k → LLM Generate/Parse → `ThresholdSelect(0.5)` → Cluster |
+| `RetrieveRerankLLM` | Retrieve → Rerank → top-k → LLM Generate/Parse → `ThresholdSelect(0.5)` → Cluster |
 
 Each model slot accepts either a resource object or a model reference. The
 resource name describes what it does, while the following `Select` determines
@@ -56,6 +56,10 @@ architecture = RetrieveRerankLLM(
 Recipes infer a schema from records on their first `.dedupe()` or `.compare()`
 call. Pass `schema=YourPydanticModel` explicitly when saving an artifact; an
 inferred runtime schema is intentionally ephemeral.
+
+`Retrieve` and `RetrieveRerank` validate `threshold` in `[0, 1]`. For the paid
+recipes, `dedupe(..., log=...)` and `compare(..., log=...)` record each parsed
+LLM decision, including its model, usage/cost provenance, verdict, and stage id.
 
 `architecture.resources` returns every slot as `dict[str, ModelRef]`.
 `architecture.backbone` remains compatibility sugar only for `Retrieve`, the
