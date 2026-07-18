@@ -105,7 +105,9 @@ class OpSpec(BaseModel):
         role: The stage's role tag, e.g. ``"blocker_source"``,
             ``"comparator_score"``, ``"matcher_score"``, ``"threshold_select"``,
             ``"topk_select"``, ``"clusterer_stage"`` — how ``rebuild_op`` knows
-            which adapter to reconstruct.
+            which already-registered safe serializer to use. Custom roles load
+            only after their exact class was explicitly registered in-process;
+            an artifact never triggers a Python import.
         params: Role-specific scalar parameters (e.g. ``{"threshold": 0.5}`` for a
             ThresholdSelect, ``{"k": 10}`` for a TopKSelect, ``{"out_space":
             "prob_llm"}`` for a MatcherScore). Empty for a role carrying no scalar

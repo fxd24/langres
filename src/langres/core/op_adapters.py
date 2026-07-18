@@ -15,19 +15,14 @@ method names and signatures.
 
 This module bridges the two **additively**. Each adapter *holds* a legacy
 component instance and implements the Op-role ``forward`` by translating through
-the carrier — it does **not** rename or re-parent the legacy classes. Nothing in
-the spine uses these adapters yet: the spine still drives the legacy path
-directly, and the flip that adopts these adapters is W3. Their only correctness
-proof this wave is ``tests/core/test_op_adapters.py``.
+the carrier — it does **not** rename or re-parent the legacy classes. Both the
+classic four-slot spine and explicit topologies execute through these adapters.
 
-**What each adapter deliberately does NOT absorb.** Index lifecycle
-(``_ensure_index_built`` / ``iter_vector_blockers``) stays in the spine this
-wave, so :class:`BlockerSource` is a thin ``stream`` bridge — a ``VectorBlocker``
-must already have its index built before its ``BlockerSource`` runs. The lazy
-spend/logging wrappers (``SpendCappedMatcher`` / ``LoggingMatcher``) are NOT
-migrated either: they depend on the scorer being a lazy generator
-(budget-check-before-next-pull), which fights the eager materialized ``Pairs``;
-that is a W3 spend-seam problem. These adapters wrap the *raw* components.
+``BlockerSource.prepare`` owns the shared vector-index bind/build lifecycle:
+same corpus reuses the index and changed input rebuilds it before ``forward``.
+Spend and per-call logging remain wrappers around the matcher held by
+``MatcherScore``; this preserves lazy budget enforcement while keeping the
+durable topology free of run-specific logging state.
 
 **Import discipline.** This module imports both :mod:`~langres.core.op` and the
 concrete legacy component contracts, so it is NOT a leaf and must NOT be
@@ -42,6 +37,7 @@ re-exported from the ``langres.core`` contracts surface. It is mapped to the
 
 from __future__ import annotations
 
+from copy import copy
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -50,6 +46,7 @@ from pydantic import BaseModel
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.fit import CalibratorFitMixin
 from langres.core.groups import derive_groups_from_pairs
 from langres.core.matcher import GroupwiseMatcher, Matcher
 from langres.core.op import (
@@ -65,9 +62,20 @@ from langres.core.pairs import PairRow, Pairs
 
 if TYPE_CHECKING:
     from langres.core.models import PairwiseJudgement
+    from langres.core.spend import SpendMonitor
     from langres.curation.canonicalizer import Canonicalizer
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+def _unordered_pair_key(left_id: str, right_id: str) -> tuple[str, str]:
+    """Canonical identity for an undirected entity pair.
+
+    Matchers historically may emit the same pair in either orientation. The
+    carrier keeps its original orientation, but correspondence validation must
+    treat ``(left, right)`` and ``(right, left)`` as the same requested pair.
+    """
+    return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
 
 
 def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> Pairs[SchemaT]:
@@ -84,22 +92,15 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     declared ``out_space``), so a mixed-family matcher (a cascade) faithfully
     labels each row rather than being flattened to one family.
 
-    A row with no matching judgement is passed through unchanged (a matcher's
-    contract is one judgement per candidate, so this is a defensive no-op).
-
-    Uniqueness assumption: the back-map keys judgements by ``(left_id, right_id)``
-    and assumes each such pair appears **at most once** per ``Pairs`` — the
-    invariant every shipping blocker already satisfies (``AllPairsBlocker`` emits
-    strictly ``i < j``, ``VectorBlocker`` canonicalizes pair order by id, and
-    ``CompositeBlocker`` dedups via frozenset pair-keys). ``Pairs`` does not
-    *enforce* uniqueness, so were a future carrier to hold duplicate
-    ``(left_id, right_id)`` rows, the ``by_pair`` dict would collapse them
-    last-wins and every duplicate row would take the same judgement. A
-    ``Pairs``-level uniqueness invariant is a possible future hardening (noted,
-    not added here — no shipping blocker produces duplicates, so a runtime guard
-    would defend a state that cannot occur). A judgement whose key matches no row
-    is simply dropped (consistent with the one-judgement-per-received-candidate
-    matcher contract).
+    Pair identity is orientation-insensitive because legacy matchers may return
+    ``(right_id, left_id)`` for a requested ``(left_id, right_id)``. Otherwise
+    the mapping is a strict bijection: duplicate input rows, duplicate outputs,
+    missing outputs, and unexpected outputs all raise before any result is
+    returned. The sole compatibility exception is an empty matcher result over
+    an entirely unscored carrier, which is a safe no-op used by non-trainable
+    classic matchers. An empty result over rows carrying any upstream score still
+    fails loudly, so a later Select cannot mistake that score for this matcher's
+    decision.
 
     Args:
         pairs: The incoming scored relation (rows carry the identities to map to).
@@ -108,15 +109,48 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     Returns:
         A new ``Pairs`` over the *same* store with rescored rows in input order.
     """
-    by_pair: dict[tuple[str, str], PairwiseJudgement] = {
-        (judgement.left_id, judgement.right_id): judgement for judgement in judgements
-    }
+    input_keys = [_unordered_pair_key(row.left_id, row.right_id) for row in pairs.rows]
+    duplicate_inputs = _duplicates(input_keys)
+    if duplicate_inputs:
+        raise ValueError(
+            "MatcherScore cannot rescore duplicate input pairs: "
+            f"{_pair_preview(duplicate_inputs)}. Each pair identity must occur exactly once."
+        )
+
+    materialized = list(judgements)
+    if not materialized and all(row.score_type is None for row in pairs.rows):
+        return pairs
+
+    output_keys = [
+        _unordered_pair_key(judgement.left_id, judgement.right_id)
+        for judgement in materialized
+    ]
+    duplicate_outputs = _duplicates(output_keys)
+    if duplicate_outputs:
+        raise ValueError(
+            "MatcherScore received duplicate judgements: "
+            f"{_pair_preview(duplicate_outputs)}. A matcher must emit exactly one judgement "
+            "per input pair."
+        )
+
+    input_set = set(input_keys)
+    output_set = set(output_keys)
+    missing = input_set - output_set
+    unexpected = output_set - input_set
+    faults: list[str] = []
+    if missing:
+        faults.append(f"missing judgements for {_pair_preview(missing)}")
+    if unexpected:
+        faults.append(f"unexpected judgements for {_pair_preview(unexpected)}")
+    if faults:
+        raise ValueError(
+            "MatcherScore requires a one-to-one pair/judgement mapping; " + "; ".join(faults) + "."
+        )
+
+    by_pair = dict(zip(output_keys, materialized, strict=True))
     rows: list[PairRow[SchemaT]] = []
     for row in pairs.rows:
-        judgement = by_pair.get((row.left_id, row.right_id))
-        if judgement is None:
-            rows.append(row)
-            continue
+        judgement = by_pair[_unordered_pair_key(row.left_id, row.right_id)]
         rows.append(
             row.model_copy(
                 update={
@@ -134,6 +168,22 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     return Pairs(store=pairs.store, rows=rows)
 
 
+def _duplicates(keys: Iterable[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Return identities occurring more than once."""
+    seen: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+    for key in keys:
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    return duplicates
+
+
+def _pair_preview(keys: Iterable[tuple[str, str]]) -> str:
+    """Render a deterministic bounded identity preview for contract errors."""
+    return ", ".join(repr(key) for key in sorted(keys)[:3])
+
+
 class BlockerSource(Source[SchemaT], Generic[SchemaT]):
     """:class:`~langres.core.op.Source` adapter over a legacy :class:`~langres.core.blocker.Blocker`.
 
@@ -143,19 +193,54 @@ class BlockerSource(Source[SchemaT], Generic[SchemaT]):
     ``similarity_score`` lands as an *unscored* row score, ``score_type is None``
     — a blocker similarity, never a judge score).
 
-    Index lifecycle is **not** absorbed: a ``VectorBlocker`` must already have its
-    index built (the spine's ``_ensure_index_built`` still owns that this wave),
-    so this adapter is a plain ``stream`` bridge.
+    ``prepare(records)`` owns the vector-index lifecycle for every nested
+    ``VectorBlocker``: identical corpora reuse the current index and changed
+    corpora rebuild before ``forward`` streams candidates.
     """
 
     def __init__(self, blocker: Blocker[SchemaT]) -> None:
         """Wrap ``blocker``.
 
         Args:
-            blocker: The legacy blocker to adapt. Any :class:`Blocker` works; its
-                index (if any) must already be built.
+            blocker: The legacy blocker to adapt. Any :class:`Blocker` works;
+                vector indexes are prepared automatically before execution.
         """
         self.blocker = blocker
+        self._prepared_corpora: dict[int, list[str]] = {}
+
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The wrapped blocker's declarative schema, when available."""
+        return self.blocker.schema
+
+    def prepare(self, records: Records) -> None:
+        """Build vector indexes in the wrapped blocker tree for ``records``.
+
+        Identical corpora reuse their current index; changed corpora rebuild
+        before streaming. Detection reads the import-light ``type_name`` rather
+        than importing semantic backends.
+        """
+
+        def vector_blockers(blocker: object) -> Iterable[Any]:
+            if getattr(blocker, "type_name", None) == "vector_blocker":
+                yield blocker
+            for child in getattr(blocker, "children", ()):
+                yield from vector_blockers(child)
+
+        for blocker in vector_blockers(self.blocker):
+            entities = [blocker.schema_factory(record) for record in records]
+            texts = [blocker.text_field_extractor(entity) for entity in entities]
+            index = blocker.vector_index
+            indexed_texts = getattr(index, "_corpus_texts", None)
+            if indexed_texts is None:
+                indexed_texts = self._prepared_corpora.get(id(blocker))
+            if blocker._index_is_built() and indexed_texts == texts:
+                continue
+            index.create_index(texts)
+            # Some lightweight/custom indexes record only cardinality. The
+            # durable Source remembers exact input so same-sized changed corpora
+            # still rebuild and identical explicit executions reuse.
+            self._prepared_corpora[id(blocker)] = list(texts)
 
     def forward(self, records: Records) -> Pairs[SchemaT]:
         """Block ``records`` into a ``Pairs`` (candidates from ``blocker.stream``)."""
@@ -236,6 +321,72 @@ class MatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
         """Score every row through ``matcher.forward`` and map judgements back onto rows."""
         judgements = self.matcher.forward(iter(pairs.to_candidates()))
         return _rescore(pairs, judgements)
+
+    @property
+    def spend_monitor(self) -> SpendMonitor | None:
+        """The wrapped matcher's ledger, or ``None`` before spend binding."""
+        from langres.core.spend_cap import SpendCappedMatcher
+
+        if isinstance(self.matcher, SpendCappedMatcher):
+            return self.matcher.monitor
+        return None
+
+    def with_matcher(self, matcher: Matcher[SchemaT]) -> "MatcherScore[SchemaT]":
+        """Clone this exact adapter class while replacing only its matcher.
+
+        A shallow clone preserves state carried by a ``MatcherScore`` subclass,
+        which is required both for spend binding and per-call logging. Rebuilding
+        a subclass as the base class would silently discard that state.
+        """
+        rebound = copy(self)
+        rebound.matcher = matcher
+        return rebound
+
+    def bind_spend_monitor(self, monitor: SpendMonitor) -> "MatcherScore[SchemaT]":
+        """Return this score metered by ``monitor``, preserving exact subclass state."""
+        from langres.core.spend_cap import SpendCappedMatcher
+
+        if isinstance(self.matcher, SpendCappedMatcher):
+            if self.matcher.monitor is not monitor:
+                raise ValueError(
+                    "MatcherScore is already bound to a different SpendMonitor. "
+                    "Pass that monitor to from_topology(monitor=...), or provide the raw matcher."
+                )
+            return self
+        return self.with_matcher(SpendCappedMatcher(self.matcher, monitor=monitor))
+
+
+class CalibratorScore(Score[SchemaT], Generic[SchemaT]):
+    """Apply a fitted score-to-probability calibrator as an ordinary Score."""
+
+    def __init__(self, calibrator: CalibratorFitMixin) -> None:
+        super().__init__(scope="pair", out_space="calibrated_prob")
+        self.calibrator = calibrator
+
+    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
+        """Calibrate scored rows; pass deciders and unscored rows through."""
+        rows: list[PairRow[SchemaT]] = []
+        for row in pairs.rows:
+            if row.score_type is None or row.score is None:
+                rows.append(row)
+                continue
+            calibrated = self.calibrator.transform([row.score])[0]
+            rows.append(
+                row.model_copy(
+                    update={
+                        "score": calibrated,
+                        "score_type": "calibrated_prob",
+                        "provenance": {
+                            **row.provenance,
+                            "calibration": {
+                                "method": getattr(self.calibrator, "method", None),
+                                "raw_score": row.score,
+                            },
+                        },
+                    }
+                )
+            )
+        return Pairs(store=pairs.store, rows=rows)
 
 
 class GroupwiseMatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
@@ -374,6 +525,7 @@ class CanonicalizeFinalize(Finalize):
 
 __all__ = [
     "BlockerSource",
+    "CalibratorScore",
     "CanonicalizeFinalize",
     "ClustererStage",
     "ComparatorScore",
