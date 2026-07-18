@@ -46,6 +46,7 @@ to normalize a record identically; that is exactly what a contract is for.
 """
 
 from langres.architectures.fuzzy_string import FuzzyString
+from langres.architectures.reranker import Reranker
 from langres.architectures.vector_llm_cascade import VectorLLMCascade
 
-__all__ = ["FuzzyString", "VectorLLMCascade"]
+__all__ = ["FuzzyString", "Reranker", "VectorLLMCascade"]
