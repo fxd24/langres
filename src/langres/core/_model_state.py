@@ -445,6 +445,19 @@ class ModelState:
                     "replay_boundary must point to a Select stage; only the "
                     "selection/clustering/evaluation suffix is safe to replay"
                 )
+            unsafe_suffix = [
+                (index, type(stage).__name__)
+                for index, stage in enumerate(
+                    chain[replay_boundary + 1 :], start=replay_boundary + 1
+                )
+                if not isinstance(stage, (Select, ClusterStage))
+            ]
+            if unsafe_suffix:
+                raise ValueError(
+                    "replay_boundary suffix may contain only Select and "
+                    "ClusterStage stages; later scoring or spending would be "
+                    f"re-executed during threshold replay: {unsafe_suffix!r}"
+                )
         model = cls.__new__(cls)
         model._init_state(budget_usd=budget_usd)
         if monitor is not None:

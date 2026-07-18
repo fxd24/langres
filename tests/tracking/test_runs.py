@@ -649,6 +649,21 @@ class TestCaptureRun:
         # contextvar still reset after an exception.
         assert current_run.get() is None
 
+    def test_status_override_survives_a_reraised_budget_error(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "runs.jsonl"
+        with pytest.raises(RuntimeError, match="budget"):
+            with capture_run(_context(), store=RunStore(path)) as handle:
+                handle.set_status("budget_exceeded")
+                handle.record_cost(0.2, budget_exceeded=True)
+                raise RuntimeError("budget")
+
+        record = RunStore(path).read()[0]
+        assert record.status == "budget_exceeded"
+        assert record.budget_exceeded is True
+        assert record.spend_usd == 0.2
+
     def test_failure_redacts_credentials_from_persisted_error(self, tmp_path: Path) -> None:
         path = tmp_path / "runs.jsonl"
         with pytest.raises(RuntimeError, match="super-secret"):

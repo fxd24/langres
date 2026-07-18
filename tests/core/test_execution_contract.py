@@ -415,6 +415,21 @@ def test_execute_from_rejects_stale_cache_input_and_prefix_identity() -> None:
         )
 
 
+def test_replay_boundary_rejects_a_downstream_score() -> None:
+    with pytest.raises(ValueError, match="suffix may contain only"):
+        ERModel.from_topology(
+            ops=[
+                BlockerSource(AllPairsBlocker(schema=ChainCo)),
+                _CountingScore(0.9),
+                ThresholdSelect(0.5),
+                _CountingScore(0.8),
+                ThresholdSelect(0.7),
+                ClustererStage(Clusterer(threshold=0.0)),
+            ],
+            replay_boundary=2,
+        )
+
+
 def test_execute_from_rejects_duplicate_checkpoint_pair_ids() -> None:
     model = ERModel.from_topology(
         ops=[

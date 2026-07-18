@@ -384,7 +384,7 @@ class Experiment:
             plan=plan.model_dump(mode="json"),
         )
         recipe_id = compute_recipe_identity(context).recipe_id
-        existing = self._completed(recipe_id)
+        existing = self._completed(recipe_id, evaluation_id=evaluation_id)
         if self.resume and existing is not None:
             return self._from_record(existing, architecture, evaluation_id)
         parent = self._latest(recipe_id)
@@ -417,47 +417,58 @@ class Experiment:
             attempt_id=attempt_id,
             suppress_error_details=True,
         ) as handle:
-            selected_threshold = self._tune_threshold(
-                architecture,
-                train_records,
-                train_clusters,
-                source=source,
-                seed=seed,
-                repeat_index=repeat_index,
-                attempt_id=attempt_id,
-            )
-            model = architecture.build(selected_threshold, self._monitor)
-            safe_tracker.log_params(
-                {
-                    "architecture": architecture.name,
-                    "variant_id": architecture.variant_id,
-                    "benchmark_id": benchmark_id,
-                    "split_id": split_id,
-                    "seed": seed,
-                    "repeat_index": repeat_index,
-                    "selected_threshold": selected_threshold,
-                }
-            )
-            result, cache_hit = self._execute_cached(
-                model,
-                records,
-                cache_id=cache_id,
-                input_fingerprint=input_fp,
-            )
-            quality = evaluate_execution_result(
-                result,
-                records,
-                truth_clusters,
-                threshold=selected_threshold,
-            ).model_dump()
-            measurements = _measurements(result, cache_hit=cache_hit)
-            numeric = flatten_numeric({"quality": quality})
-            numeric["selected_threshold"] = selected_threshold
-            handle.log_metrics(numeric, headline_metric=quality.get("pair_f1"))
-            handle.record_measurements(
-                measurement.model_dump(mode="json") for measurement in measurements
-            )
-            handle.record_cost(self._monitor.spent - starting_spend)
+            try:
+                selected_threshold = self._tune_threshold(
+                    architecture,
+                    train_records,
+                    train_clusters,
+                    source=source,
+                    seed=seed,
+                    repeat_index=repeat_index,
+                    attempt_id=attempt_id,
+                )
+                model = architecture.build(selected_threshold, self._monitor)
+                safe_tracker.log_params(
+                    {
+                        "architecture": architecture.name,
+                        "variant_id": architecture.variant_id,
+                        "benchmark_id": benchmark_id,
+                        "split_id": split_id,
+                        "seed": seed,
+                        "repeat_index": repeat_index,
+                        "selected_threshold": selected_threshold,
+                    }
+                )
+                result, cache_hit = self._execute_cached(
+                    model,
+                    records,
+                    cache_id=cache_id,
+                    input_fingerprint=input_fp,
+                )
+                quality = evaluate_execution_result(
+                    result,
+                    records,
+                    truth_clusters,
+                    threshold=selected_threshold,
+                ).model_dump()
+                measurements = _measurements(result, cache_hit=cache_hit)
+                numeric = flatten_numeric({"quality": quality})
+                numeric["selected_threshold"] = selected_threshold
+                handle.log_metrics(
+                    numeric, headline_metric=quality.get("pair_f1")
+                )
+                handle.record_measurements(
+                    measurement.model_dump(mode="json")
+                    for measurement in measurements
+                )
+                handle.record_cost(self._monitor.spent - starting_spend)
+            except BudgetExceeded:
+                handle.set_status("budget_exceeded")
+                handle.record_cost(
+                    self._monitor.spent - starting_spend,
+                    budget_exceeded=True,
+                )
+                raise
         wall = time.perf_counter() - started
         warnings = tuple(dict.fromkeys(safe_tracker.errors))
         return ExperimentRun(
@@ -637,9 +648,28 @@ class Experiment:
         self.cache.put(result.checkpoint)
         return result, False
 
-    def _completed(self, recipe_id: str) -> RunRecord | None:
-        latest = self._latest(recipe_id, status="completed")
-        return latest
+    def _completed(
+        self,
+        recipe_id: str,
+        *,
+        evaluation_id: str,
+    ) -> RunRecord | None:
+        if self.store is None:
+            return None
+        for record in reversed(self.store.read()):
+            if (
+                record.recipe_id != recipe_id
+                or record.status != "completed"
+                or record.evaluation_id != evaluation_id
+            ):
+                continue
+            try:
+                stored_protocol = EvaluationProtocol.model_validate(record.protocol)
+            except (TypeError, ValueError):
+                continue
+            if stored_protocol == self.protocol:
+                return record
+        return None
 
     def _latest(
         self,
@@ -688,7 +718,12 @@ class Experiment:
             status="completed",
             cohort_id=self.protocol.hardware_cohort,
             metrics=metrics,
+            measurements=tuple(
+                StageMeasurement.model_validate(measurement)
+                for measurement in (record.measurements or ())
+            ),
             wall_seconds=record.duration_seconds,
+            usd=record.spend_usd,
             warnings=("resumed from completed RunStore attempt",),
         )
 

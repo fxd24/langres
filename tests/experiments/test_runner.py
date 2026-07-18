@@ -162,7 +162,36 @@ def test_threshold_sweep_scores_each_input_split_once_and_resume_skips_work(
     second = Experiment(**kwargs).run()
     assert counter == [2]
     assert second.runs[0].warnings == ("resumed from completed RunStore attempt",)
+    assert second.runs[0].measurements == first.runs[0].measurements
+    assert second.runs[0].usd == first.runs[0].usd
     assert len(RunStore(tmp_path / "runs.jsonl").read()) == 1
+
+
+def test_resume_requires_the_exact_evaluation_protocol(tmp_path: Path) -> None:
+    counter = [0]
+    store = tmp_path / "runs.jsonl"
+    first_protocol = _protocol()
+    first = Experiment(
+        architectures=[_factory(counter)],
+        protocol=first_protocol,
+        store=store,
+        cache_dir=tmp_path / "cache-first",
+    ).run()
+
+    changed_protocol = first_protocol.model_copy(
+        update={"threshold_grid": (0.5, 0.95, 0.99)}
+    )
+    second = Experiment(
+        architectures=[_factory(counter)],
+        protocol=changed_protocol,
+        store=store,
+        cache_dir=tmp_path / "cache-second",
+    ).run()
+
+    assert counter == [4]
+    assert first.evaluation_id != second.evaluation_id
+    assert second.runs[0].warnings == ()
+    assert len(RunStore(store).read()) == 2
 
 
 def test_tracker_failure_keeps_local_run_complete_and_numeric_only(tmp_path: Path) -> None:
@@ -288,6 +317,45 @@ def test_optional_budget_is_shared_across_every_factory_build(tmp_path: Path) ->
     assert seen
     assert len({id(monitor) for monitor in seen}) == 1
     assert seen[0].budget_usd == 0.25
+
+
+def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
+    class BudgetScore(Score[Any]):
+        def __init__(self, monitor: SpendMonitor) -> None:
+            super().__init__(scope="pair", out_space="heuristic")
+            self.monitor = monitor
+
+        def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
+            self.monitor.add(0.2)
+            self.monitor.check()
+            return pairs  # pragma: no cover - check raises
+
+    def build(threshold: float, monitor: SpendMonitor) -> ERModel:
+        return ERModel.from_topology(
+            ops=[
+                BlockerSource(AllPairsBlocker(schema=_Record)),
+                BudgetScore(monitor),
+                ThresholdSelect(threshold),
+                ClustererStage(Clusterer(threshold=0.0)),
+            ],
+            replay_boundary=2,
+            monitor=monitor,
+        )
+
+    store = RunStore(tmp_path / "runs.jsonl")
+    [run] = Experiment(
+        architectures=[ArchitectureFactory(name="Budgeted", factory=build)],
+        protocol=_protocol(),
+        budget_usd=0.1,
+        store=store,
+        cache_dir=tmp_path / "cache",
+    ).run().runs
+
+    [record] = store.read()
+    assert run.status == "budget_exceeded"
+    assert record.status == "budget_exceeded"
+    assert record.budget_exceeded is True
+    assert record.spend_usd == pytest.approx(0.2)
 
 
 def test_failed_cell_resume_mints_new_attempt_parent_and_stochastic_cache(

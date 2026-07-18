@@ -733,9 +733,14 @@ def capture_run(
         current_run.reset(token)
         finished_at = datetime.now(UTC).isoformat()
         duration_seconds = time.perf_counter() - started_perf
-        final_status: RunStatus = (
-            "failed" if error_type is not None else (handle._status_override or "completed")
-        )
+        if error_type is not None:
+            final_status: RunStatus = (
+                "budget_exceeded"
+                if handle._status_override == "budget_exceeded"
+                else "failed"
+            )
+        else:
+            final_status = handle._status_override or "completed"
         artifacts = dict(handle._artifacts)
         if tracker.run_url is not None:
             artifacts.setdefault("run_url", tracker.run_url)

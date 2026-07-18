@@ -49,7 +49,9 @@ An official publication protocol may use the matrix label `"official"`, but its
 `ExperimentRun.evaluation_split_id` still records `"test"`.
 
 Replay is explicit, not inferred. `replay_boundary` points at the tunable
-`Select`; execution checkpoints immediately before it. The local
+`Select`; execution checkpoints immediately before it. Every later stage must
+be another `Select` or the terminal `ClusterStage`, so replay cannot silently
+rerun or rebill a downstream scorer. The local
 `StageArtifactStore` commits those checkpoints atomically and immutably, checks
 their payload hash and full plan/cache/input identity on load, and quarantines a
 corrupt entry before recomputation. Input fingerprints preserve row order, and
@@ -57,6 +59,11 @@ duplicate pair identities fail before cache commit.
 
 Architecture factories receive the experiment's shared `SpendMonitor`, so an
 optional `budget_usd` covers all model instances built during threshold replay.
+Budget overruns are persisted as `status="budget_exceeded"` with their measured
+spend and cap flag, even though the exception still stops that cell. Resume
+accepts a completed attempt only when both its evaluation identity and complete
+protocol snapshot match; a resumed row rehydrates its stored cost and stage
+measurements rather than fabricating a cheaper report.
 The exact paid official proof remains separately guarded by
 `EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
 USD 20). Tracker publication is optional plumbing: a tracker failure leaves the
