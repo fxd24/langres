@@ -130,11 +130,13 @@ def _run_stages(records: list[Any], stages: list[Source[Any] | Score[Any]]) -> P
     """Fold ``forward`` across ``stages`` to turn ``records`` into a scored ``Pairs``.
 
     The generic driver behind :meth:`ModelRun._candidates` and
-    :meth:`ModelRun._scored_pairs`. A stage list :meth:`ModelRun._stages` builds
-    always leads with the :class:`~langres.core.op.Source` (records -> pairs) and
-    continues with :class:`~langres.core.op.Score`\\ s (pairs -> pairs), so the
-    fold walks ``Records -> Pairs -> ... -> Pairs``. The two narrowing ``cast``\\ s
-    encode that Source-first shape (which ``_stages`` guarantees) precisely --
+    :meth:`ModelRun._scored_pairs`. Both stage lists it is handed --
+    :meth:`ModelRun._stages` (full) and its matcher-free prefix
+    :meth:`ModelRun._block_compare_stages` -- lead with the
+    :class:`~langres.core.op.Source` (records -> pairs) and continue with
+    :class:`~langres.core.op.Score`\\ s (pairs -> pairs), so the fold walks
+    ``Records -> Pairs -> ... -> Pairs``. The two narrowing ``cast``\\ s
+    encode that Source-first shape (which the factories guarantee) precisely --
     ``Source.forward`` takes records while ``Score.forward`` takes a ``Pairs``, so
     the heterogeneous first stage cannot share one loosely-typed loop variable
     with the rest, and the cast is a typed assertion of the shape, not an ``Any``.
@@ -169,25 +171,22 @@ class ModelRun(ModelState):
         lightweight id-refs over one shared entity store, and behavior --
         clusters, scores -- is byte-identical.
 
-        The block/compare half is the scoring pipeline's prefix (W3-c, epic #193):
-        it folds the driver (:func:`_run_stages`) over :meth:`_stages` **minus its
-        final** :class:`~langres.core.op_adapters.MatcherScore` -- i.e. the
+        The block/compare half is the scoring pipeline's matcher-free prefix
+        (W3-c, epic #193): it folds the driver (:func:`_run_stages`) over
+        :meth:`_block_compare_stages` -- the
         :class:`~langres.core.op_adapters.BlockerSource` (bridging
         ``blocker.stream(records)`` into the ``Pairs``) plus, when a comparator is
         configured, the :class:`~langres.core.op_adapters.ComparatorScore` that
-        attaches each row's ``ComparisonVector``. Reusing the one ``_stages``
-        factory keeps a single adapter-construction site; the discarded matcher
-        stage is a cheap, side-effect-free ``SpendCappedMatcher`` wrapper (no
-        ``forward`` is called on it here, so nothing is scored or spent). The index
-        side-effect is deliberately NOT absorbed by the source adapter --
-        :meth:`_ensure_index_built` still runs here first, before the source
-        streams.
+        attaches each row's ``ComparisonVector``. It depends on the
+        blocker/comparator slots ALONE -- no matcher, no clusterer -- so
+        blocking-only callers (``candidates`` on the hot fit/eval paths, and a
+        future retrieval-only topology the four-slot core forbids) neither build
+        nor require a scoring slot. The index side-effect is deliberately NOT
+        absorbed by the source adapter -- :meth:`_ensure_index_built` still runs
+        here first, before the source streams.
         """
         self._ensure_index_built(records)
-        # _stages is the full scoring pipeline; _candidates is its pre-scoring
-        # prefix, so drop the trailing MatcherScore (never scored here).
-        *block_compare, _matcher = self._stages()
-        return _run_stages(records, block_compare)
+        return _run_stages(records, self._block_compare_stages())
 
     def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
         """Block records into a materialized list of judge-ready candidates.
@@ -297,17 +296,43 @@ class ModelRun(ModelState):
         """
         return MatcherScore(self._scorer(log=log), out_space="unknown")
 
+    def _block_compare_stages(self) -> list[Source[Any] | Score[Any]]:
+        """The matcher-free block/compare prefix, from the blocker/comparator slots.
+
+        A :class:`~langres.core.op_adapters.BlockerSource` (records -> pairs),
+        then -- only when a comparator is configured -- a
+        :class:`~langres.core.op_adapters.ComparatorScore` that attaches each
+        row's ``ComparisonVector``. Shared by :meth:`_candidates` (which folds
+        exactly this) and :meth:`_stages` (which appends the
+        :class:`~langres.core.op_adapters.MatcherScore` to it), so the
+        source/compare adapters are constructed in ONE place.
+
+        Deliberately depends on ``self.blocker``/``self.comparator`` only -- it
+        never reads the matcher or clusterer slot -- so the blocking half stays
+        expressible without a scoring slot (a retrieval-only topology the
+        four-slot core forbids today, epic #193's direction). Rebuilt every call:
+        the adapters hold slot references, so caching would pin a stale
+        blocker/comparator across a rebind.
+
+        Returns:
+            The source-first block/compare stages (one or two of them).
+        """
+        stages: list[Source[Any] | Score[Any]] = [BlockerSource(self.blocker)]
+        if self.comparator is not None:
+            stages.append(ComparatorScore(self.comparator))
+        return stages
+
     def _stages(self, *, log: JudgementLog | None = None) -> list[Source[Any] | Score[Any]]:
         """The scoring pipeline as one ordered stage list, built from the slots.
 
-        The single per-call factory for the block -> (compare) -> score Op chain
-        (W3-c, epic #193): a :class:`~langres.core.op_adapters.BlockerSource`, then
-        (only when a comparator is configured) a
-        :class:`~langres.core.op_adapters.ComparatorScore`, then the
-        :class:`~langres.core.op_adapters.MatcherScore` (:meth:`_matcher_score`).
-        :func:`_run_stages` folds ``forward`` across the returned list to turn
-        ``records`` into scored ``Pairs``; :meth:`_candidates` folds the same list
-        minus its final scoring stage.
+        The single per-call factory for the full block -> (compare) -> score Op
+        chain (W3-c, epic #193): :meth:`_block_compare_stages` (a
+        :class:`~langres.core.op_adapters.BlockerSource`, then optionally a
+        :class:`~langres.core.op_adapters.ComparatorScore`) with the
+        :class:`~langres.core.op_adapters.MatcherScore` (:meth:`_matcher_score`)
+        appended. :func:`_run_stages` folds ``forward`` across the returned list
+        to turn ``records`` into scored ``Pairs``; :meth:`_candidates` folds the
+        matcher-free prefix (:meth:`_block_compare_stages`) alone.
 
         **Rebuilt every call, never cached** -- exactly like :meth:`_scorer`,
         which it wraps. ``self.module`` is reassignable (``fit`` repoints it) and
@@ -327,9 +352,7 @@ class ModelRun(ModelState):
         Returns:
             The ordered scoring stages, source-first.
         """
-        stages: list[Source[Any] | Score[Any]] = [BlockerSource(self.blocker)]
-        if self.comparator is not None:
-            stages.append(ComparatorScore(self.comparator))
+        stages = self._block_compare_stages()
         stages.append(self._matcher_score(log=log))
         return stages
 
