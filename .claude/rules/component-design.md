@@ -8,6 +8,21 @@ paths:
 **The layered API, the design principles, and what "lightweight & composable"
 means in practice.** Read before adding or refactoring a component under `src/`.
 
+## Canonical research vocabulary
+
+- **Resource**: a model-bearing capability (`Embedder`, `Reranker`, `LLM`) with
+  a complete `ModelRef`, runtime config, and measured output facts.
+- **Operation**: one ordered carrier transformation (`Retrieve`, `Rerank`,
+  `Select`, `Generate`, `Parse`, `ClusterStage`).
+- **Recipe**: a named readable operation topology equipped with resources.
+- **Architecture**: the general topology concept; changing weights/providers is
+  a resource variant, while changing operation order is a new architecture.
+
+The four-slot Blocker/Comparator/Matcher/Clusterer API remains supported.
+Treat it as compatibility vocabulary, not names to copy into new
+resource-neutral research APIs. The exact migration map lives in
+`docs/reference/research-vocabulary.md`.
+
 ## The Layered API (architectures → ERModel → core)
 
 langres exposes three layers, each a thin shell over the one below. (Note: there
@@ -258,16 +273,17 @@ Extract when you see:
    directly — needs none of this wiring. For `save`/`load`, the component
    config-registry (`core/registry.py:register`) remains a separate, orthogonal
    namespace.
-3. **Composition happens in `ERModel`**, not a `Task` class: a resolve is
-   blocker → (compare) → matcher → clusterer. The named architectures in
-   `langres.architectures` (`FuzzyString`, `VectorLLMCascade`) are the
-   user-facing sugar over it — each fixes its own topology and exposes
+3. **Composition happens in `ERModel`**, not a `Task` class. Classic models
+   derive an operation chain from blocker → comparator → matcher → clusterer;
+   research recipes declare the resource-neutral chain directly. Named
+   architectures in `langres.architectures` fix a readable topology and expose
    `.dedupe()`/`.compare()` as methods.
 
-## Backbones: `ModelRef` is the ONE model-reference concept
+## Resources: `ModelRef` is the ONE model-reference concept
 
-**Architecture = topology** (which components, in what order). **Backbone = what
-fills a model slot.** Swapping a backbone must never mint a new architecture, so
+**Architecture = topology** (which operations, in what order). A **resource**
+fills a model slot. `backbone` is compatibility sugar for a single resource
+slot only. Swapping a resource must never mint a new architecture, so
 a component never invents its own model-reference shape: it takes a
 `langres.core.model_ref.ModelRef` (via `normalize_model_ref`, which accepts a
 plain string, a dict, or a ref).

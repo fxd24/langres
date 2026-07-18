@@ -1,6 +1,70 @@
-# Getting started: the langres flywheel, end to end
+# Getting started
 
-**Start here.** This is the lifecycle at altitude — how a langres project goes
+Start with a complete, offline experiment:
+
+```bash
+uv run python examples/research/first_experiment.py
+```
+
+It uses the bundled `tiny_fixture`, `FakeEmbedder`, the real `Experiment`
+runner, a local `RunStore`, and an immutable `ExperimentReport`. It makes no
+network request and has `budget_usd=0.0`.
+
+The research surface is intentionally progressive:
+
+| Step | Recipe | What changed |
+|---|---|---|
+| 1 | `Retrieve` | embed and retrieve candidates, then threshold |
+| 2 | `RetrieveRerank` | add a pairwise reranker before the threshold |
+| 3 | `RetrieveLLM` | prune candidates, then generate and parse LLM decisions |
+| 4 | `RetrieveRerankLLM` | rerank before the bounded LLM stage |
+
+Resources are the replaceable model capabilities (`Embedder`, `Reranker`,
+`LLM`). Operations state what happens (`Retrieve`, `Rerank`, `Select`,
+`Generate`, `Parse`, `Cluster`). A recipe is the named ordered operation
+topology. This distinction matters in experiments: changing a resource creates
+a configuration variant; changing operation order creates a different
+architecture.
+
+Run the four recipes without downloading weights:
+
+```bash
+uv run python examples/research_recipes.py
+```
+
+Before selecting an embedding model, measure whether it separates labeled
+matches from non-matches:
+
+```bash
+uv run python examples/embedding_separability.py
+```
+
+The example uses `FakeEmbedder` to test the measurement path only. Replace that
+resource with a pinned production embedder and rerun on your labeled sample;
+do not interpret fake-resource numbers as semantic quality.
+
+Next, declare more than one benchmark, split, and seed. Plan first, then opt
+into the 16 local cells:
+
+```bash
+uv run python examples/research/experiment_matrix.py
+uv run python examples/research/experiment_matrix.py --execute
+```
+
+From there:
+
+- [Experiments](EXPERIMENTS.md) covers score replay, matrices, reports,
+  compatible cohorts, repricing, and Trackio.
+- [Architectures](reference/architectures.md) shows the operations behind each
+  recipe and custom topology construction.
+- [Reproducibility](REPRODUCIBILITY.md) covers identities, dirty/clean claims,
+  local bundles, Hub revisions, and privacy.
+- [Adding a resource or architecture](ADDING_A_METHOD.md) is the extension
+  checklist.
+
+## The langres flywheel, end to end
+
+This is the lifecycle at altitude — how a langres project goes
 from *no labels* to a *cheap, self-improving matcher* with a human in the loop.
 Every step below carries a short runnable snippet **inline**; the links point
 *down* to the mechanics (they are for depth, never for the code you need to get

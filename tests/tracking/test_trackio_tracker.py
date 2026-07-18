@@ -120,8 +120,35 @@ class TestProtocolAndConstruction:
         assert tracker.native is None
         assert tracker.run_url is None
 
+    @pytest.mark.parametrize(
+        ("keyword", "value"),
+        (("space_id", "acme/space"), ("dataset_id", "acme/dataset")),
+    )
+    def test_local_only_rejects_explicit_sync_targets(
+        self,
+        keyword: str,
+        value: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="local_only=True"):
+            TrackioTracker(local_only=True, **{keyword: value})
+
 
 class TestStartRunLocal:
+    def test_local_only_suppresses_settings_sync_targets(
+        self,
+        fake_trackio: _FakeTrackio,
+    ) -> None:
+        settings = Settings(
+            trackio_space_id="settings/space",
+            trackio_dataset_id="settings/dataset",
+        )
+        tracker = TrackioTracker(settings, local_only=True)
+        tracker.start_run(_context())
+
+        assert fake_trackio.init_kwargs is not None
+        assert fake_trackio.init_kwargs["space_id"] is None
+        assert fake_trackio.init_kwargs["dataset_id"] is None
+
     def test_local_run_needs_no_token(self, fake_trackio: _FakeTrackio) -> None:
         """The default (no space_id) path never touches the HF-token guard."""
         tracker = TrackioTracker(Settings())

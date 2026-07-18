@@ -11,7 +11,17 @@
 
 ## Project Overview
 
-**langres** is a Python entity resolution framework in early development. It aims to provide a composable, optimizable approach to entity resolution with a layered API: named **architectures** (`langres.architectures.FuzzyString` / `VectorLLMCascade` — whole ER pipelines you construct, then call `.dedupe()`/`.compare()` on) over a declarative **`ERModel`** (aliased as `Resolver`) over low-level **`langres.core`** primitives. There is no `matcher="auto"` key-sniffing front door — W4 deleted the two module-level verbs (`langres.link`/`langres.dedupe`) and `core.presets` outright; naming a model is the user's job, not a heuristic's. (Note: there is also no `langres.tasks`/`flows` layer — that was earlier doc fiction; see `docs/USE_CASES.md` and `.claude/rules/component-design.md`.)
+**langres** is a Python entity resolution framework in early development. Its
+research vocabulary is **resources** (model-bearing `Embedder`/`Reranker`/`LLM`
+capabilities), **operations** (ordered `Retrieve`/`Rerank`/`Select`/
+`Generate`/`Parse`/cluster transformations), and named **recipes**
+(`Retrieve`, `RetrieveRerank`, `RetrieveLLM`, `RetrieveRerankLLM`). These sit
+alongside the established named architectures (`FuzzyString`,
+`VectorLLMCascade`) over declarative `ERModel` (`Resolver`) and low-level core
+contracts. The classic Blocker/Comparator/Matcher/Clusterer slots remain a
+compatibility surface; use `docs/reference/research-vocabulary.md` for the
+explicit migration map. There is no `matcher="auto"` or module-level
+`langres.link`/`langres.dedupe`, and no `tasks`/`flows` layer.
 
 **Current Stage**: The initial POC — validating classical rapidfuzz, semantic
 vectors, and hybrid blocking + LLM matching — is **complete**;
@@ -49,7 +59,8 @@ path-scoped rule before editing files in its scope.
 ```
 langres/
 ├── src/langres/
-│   ├── architectures/  # Named ER pipelines: FuzzyString ($0/offline), VectorLLMCascade (paid) — construct one, call .dedupe()/.compare()
+│   ├── architectures/  # Named pipelines/recipes: FuzzyString, VectorLLMCascade, Retrieve*
+│   ├── resources/      # Import-light Embedder/Reranker/LLM contracts, fakes, lazy adapters and Ops
 │   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # ERModel (aliased Resolver): the class + from_schema / fit / the anchor surface; no matcher="auto"
@@ -103,6 +114,8 @@ modules, a general `Optimizer`, a synthetic data generator.
 - `[semantic]` — sentence-transformers, torch, faiss-cpu, onnxruntime/optimum, qdrant-client (`VectorBlocker`, embeddings, vector indexes).
 - `[llm]` — litellm, dspy-ai, openai (`LLMJudge`, DSPy-compiled judges).
 - `[trained]` — scikit-learn (`RandomForestJudge`, the W1.2 trained-family judge, and `langres.training.calibration.derive_threshold`).
+- `[trackio]` — local-first Trackio dashboards; no network unless a Space is configured.
+- `[hub]` — remote Hugging Face artifact download/upload; local `save_pretrained`/`from_pretrained` need no Hub client.
 
 These heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py` and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn into `sys.modules` — see `tests/test_import_budget.py`. Optuna/wandb/langfuse/ranx are dev-only (`[dependency-groups] dev`), for eval tooling, not the production `dedupe()`/`compare()` path (scikit-learn is duplicated in the dev group too, so the repo's own test suite doesn't need `--all-extras` for a bare `uv sync`).
 
@@ -135,5 +148,7 @@ The `.agent/` folder contains external expert analyses of the langres project:
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 - **`docs/EXPERIMENTS.md`** — experimentation DX getting-started: the `run_methods` full-pipeline race vs. `evaluate_judge_on_candidates` (judged-once) for compiled/paid judges; `derive_threshold` to kill magic constants; the `SpendMonitor` budget seam.
+- **`docs/REPRODUCIBILITY.md`** — identities, compatible cohorts, clean/dirty claims, local/Trackio/Hub handoff, and privacy defaults.
+- **`docs/reference/research-vocabulary.md`** — canonical resources/operations/recipes vocabulary and the legacy Blocker/Matcher/Judge migration map.
 - **`docs/HUGGING_FACE.md`** — validated local/Hub artifact lifecycle, immutable revision pinning, model-card facts, and claim levels.
 - **`CHANGELOG.md`** (repo root) — release history (0.3.0 / 0.2.0); pre-0.2.0 POC milestone history is preserved in git history and `docs/research/`.
