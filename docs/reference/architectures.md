@@ -61,6 +61,10 @@ inferred runtime schema is intentionally ephemeral.
 `Retrieve` and `RetrieveRerank` validate `threshold` in `[0, 1]`. For the paid
 recipes, `dedupe(..., log=...)` and `compare(..., log=...)` record each parsed
 LLM decision, including its model, usage/cost provenance, verdict, and stage id.
+Pass either `budget_usd=` for a recipe-local cap or `monitor=` to adopt an
+existing `SpendMonitor`. Experiment factories use `monitor=` so every recipe in
+a matrix charges the same cumulative ledger; the two arguments are mutually
+exclusive.
 
 `architecture.resources` returns every slot as `dict[str, ModelRef]`.
 `architecture.backbone` remains compatibility sugar only for `Retrieve`, the

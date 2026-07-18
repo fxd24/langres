@@ -17,6 +17,7 @@ from langres.core.pairs import Pairs
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.spend import SpendMonitor
 from langres.resources import (
     CrossEncoderReranker,
     Embedder,
@@ -109,12 +110,20 @@ class _ResearchRecipe(ERModel):
         *,
         schema: type[BaseModel] | None,
         budget_usd: float | None,
+        monitor: SpendMonitor | None,
     ) -> None:
+        if monitor is not None and budget_usd is not None:
+            raise ValueError(
+                "pass budget_usd= or monitor=, not both: the supplied SpendMonitor already "
+                "carries the shared experiment budget"
+            )
         self._declared_resources = {
             slot: resource.model_ref for slot, resource in resources.items()
         }
         self._resource_values = resources
         self._init_state(budget_usd=budget_usd)
+        if monitor is not None:
+            self._spend_monitor = monitor
         if schema is not None:
             self._bind(schema)
 
@@ -223,6 +232,7 @@ class Retrieve(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
@@ -233,6 +243,7 @@ class Retrieve(_ResearchRecipe):
             {"embedder": _embedder(embedder)},
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -264,6 +275,7 @@ class RetrieveRerank(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
@@ -277,6 +289,7 @@ class RetrieveRerank(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -310,6 +323,7 @@ class RetrieveLLM(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
@@ -324,6 +338,7 @@ class RetrieveLLM(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
@@ -360,6 +375,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
         text_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
@@ -375,6 +391,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
             },
             schema=schema,
             budget_usd=budget_usd,
+            monitor=monitor,
         )
 
     def _recipe_ops(self, schema: type[BaseModel]) -> list[Stage]:
