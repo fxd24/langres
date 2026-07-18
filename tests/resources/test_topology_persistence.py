@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -10,13 +12,22 @@ import pytest
 from langres.core._artifacts import op_spec, rebuild_op
 from langres.core.blockers import AllPairsBlocker
 from langres.core.clusterer import Clusterer
+from langres.core.model_ref import ModelRef
 from langres.core.models import CompanySchema
 from langres.core.op import ThresholdSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage
 from langres.core.registry import register
 from langres.core.resolver import ERModel
 from langres.core.serialization import ComponentSpec, OpSpec
-from langres.resources import FakeLLM, FakeReranker, Generate, Parse, Rerank
+from langres.resources import (
+    CrossEncoderReranker,
+    FakeLLM,
+    FakeReranker,
+    Generate,
+    Parse,
+    Rerank,
+    TransformersLLM,
+)
 
 
 @register("test_persist_resource_reranker")
@@ -192,3 +203,64 @@ def test_resource_op_rebuild_checks_nested_resource_protocol(tmp_path: Path) -> 
             ),
             state_dir=tmp_path,
         )
+
+
+def test_fresh_process_loads_production_resource_roles_from_only_ermodel_import(
+    tmp_path: Path,
+) -> None:
+    """Trusted role names lazily register shipped serializers, never artifact code."""
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            Rerank[CompanySchema](
+                CrossEncoderReranker(
+                    ModelRef(
+                        base="org/reranker",
+                        kind="hf",
+                        revision="reranker-sha",
+                    )
+                )
+            ),
+            Generate[CompanySchema](
+                TransformersLLM(
+                    ModelRef(
+                        base="org/llm",
+                        kind="hf",
+                        revision="llm-sha",
+                    )
+                )
+            ),
+            Parse[CompanySchema](),
+            ThresholdSelect[CompanySchema](0.5),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    model.save(tmp_path)
+
+    script = """
+import sys
+from pathlib import Path
+
+assert "langres.resources.op_adapters" not in sys.modules
+from langres.core import ERModel
+assert "langres.resources.op_adapters" not in sys.modules
+
+model = ERModel.load(Path(sys.argv[1]))
+assert [step.spec.role for step in model.execution_plan().steps] == [
+    "blocker_source",
+    "rerank",
+    "generate",
+    "parse",
+    "threshold_select",
+    "clusterer_stage",
+]
+assert "langres.resources.op_adapters" in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

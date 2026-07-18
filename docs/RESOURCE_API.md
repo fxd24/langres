@@ -193,4 +193,7 @@ Artifacts therefore round-trip both `Generate -> Parse` and
 `Rerank -> Generate -> Parse` chains. Execution plans report the same registered
 roles (`rerank`, `generate`, and `parse`) without importing resource classes into
 core. Loaded `Generate` operations are rebound to the loaded model's fresh
-cumulative spend ledger.
+cumulative spend ledger. A fresh process may import only `ERModel` and load these
+shipped roles: core maps those exact role names to the trusted built-in resource
+adapter module. Artifact data can never supply an arbitrary module path, and an
+unknown role still fails closed without importing code.
