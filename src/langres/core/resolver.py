@@ -1202,6 +1202,13 @@ class ERModel(ModelRun, ModelPersistence):
         ``from_components`` for why building-from-config beats replaying
         constructor args, and for the one invariant it asks of an architecture.
 
+        An **explicit-chain** artifact (epic #193 persist v2, an ``ops`` list
+        instead of ``components``) reconstructs through
+        :meth:`~langres.core._model_state.ModelState.from_topology` instead, which
+        re-secures each raw ``MatcherScore`` against a fresh default-budget
+        :class:`~langres.core.spend.SpendMonitor` -- the spend cap is re-established
+        on load, never persisted.
+
         Args:
             path: Directory containing ``resolver.json`` and any sidecars.
 
@@ -1216,7 +1223,7 @@ class ERModel(ModelRun, ModelPersistence):
                 process has not registered (usually: its module was never
                 imported).
         """
-        manifest, components = cls._read_artifact(path)
+        manifest, payload = cls._read_artifact(path)
 
         # Reconstruct the class the artifact says it is, so a named architecture
         # round-trips as itself instead of decaying into a plain Resolver. Absent
@@ -1236,9 +1243,18 @@ class ERModel(ModelRun, ModelPersistence):
                 f"subclass; register_model is for ERModel subclasses (architectures)."
             )
         # No cast needed: the issubclass guard above narrows ``target`` to
-        # ``type[ERModel]`` for the type checker. from_components (NOT the class's
-        # own __init__) is what lets an architecture keep an ergonomic signature.
-        return target.from_components(**components)
+        # ``type[ERModel]`` for the type checker.
+        #
+        # Explicit Op chain (persist v2): ``_read_artifact`` returns ``{"ops": [...]}``
+        # of RAW-matcher stages -> from_topology, which re-secures every paid Score
+        # against a FRESH default-budget monitor (the budget is a run policy, not
+        # architecture, and is deliberately not persisted -- exactly as
+        # from_components refuses to bake in a saved budget). Otherwise the classic
+        # four-slot kwargs -> from_components (NOT the class's own __init__, so an
+        # architecture keeps its ergonomic signature).
+        if "ops" in payload:
+            return target.from_topology(ops=payload["ops"])
+        return target.from_components(**payload)
 
 
 #: The pre-W4 name for :class:`ERModel`, kept as a plain alias.

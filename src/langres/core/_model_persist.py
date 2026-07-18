@@ -17,10 +17,22 @@ from pathlib import Path
 from typing import Any
 
 from langres._version import __version__ as LANGRES_VERSION
-from langres.core._artifacts import component_spec, rebuild_component, state_owner
+from langres.core._artifacts import (
+    component_spec,
+    op_spec,
+    op_state_owner,
+    rebuild_component,
+    rebuild_op,
+    state_owner,
+)
 from langres.core._model_state import ModelState
 from langres.core.registry import model_type_name
-from langres.core.serialization import ARTIFACT_VERSION, ArtifactManifest, ComponentSpec
+from langres.core.serialization import (
+    ARTIFACT_VERSION,
+    CLASSIC_ARTIFACT_VERSION,
+    ArtifactManifest,
+    ComponentSpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,24 +64,46 @@ class ModelPersistence(ModelState):
         """Assemble the in-memory :class:`ArtifactManifest` (no disk I/O).
 
         Shared by :meth:`save` (which writes it, plus sidecars) and
-        :meth:`config_dict` (which returns it as a dict). Serializes each slot
-        component into a :class:`ComponentSpec` via
-        :func:`~langres.core._artifacts.component_spec`, which raises
-        :class:`TypeError` for a component lacking a registry ``type_name`` —
-        that error is intentional and not swallowed here.
+        :meth:`config_dict` (which returns it as a dict). Branches on the model's
+        topology:
+
+        - **Classic four-slot** (``self._ops is None``): serializes each slot into
+          a :class:`ComponentSpec` via
+          :func:`~langres.core._artifacts.component_spec` and stamps
+          :data:`~langres.core.serialization.CLASSIC_ARTIFACT_VERSION` (``"1"``).
+          Deliberately NOT :data:`~langres.core.serialization.ARTIFACT_VERSION`
+          (now ``"2"``): a classic save's on-disk bytes — and the ``recipe_id``
+          derived from its ``config_dict`` — must not restamp when the reader's max
+          advances (F1).
+        - **Explicit Op chain** (``self._ops is not None``): serializes each stage
+          into an :class:`~langres.core.serialization.OpSpec` via
+          :func:`~langres.core._artifacts.op_spec` and stamps ``ARTIFACT_VERSION``
+          (``"2"``).
+
+        Either builder raises :class:`TypeError` for a component/stage lacking a
+        registry ``type_name`` (or an unserializable stage) — intentional, not
+        swallowed here.
 
         Also stamps ``model_class`` with this class's registered model name so a
         named architecture survives ``save``/``load``. It is ``None`` for the
         base ``Resolver`` and for any unregistered subclass — see
         :func:`~langres.core.registry.model_type_name`.
         """
+        model_class = model_type_name(type(self))
+        if self._ops is not None:
+            return ArtifactManifest(
+                artifact_version=ARTIFACT_VERSION,
+                langres_version=LANGRES_VERSION,
+                model_class=model_class,
+                ops=[op_spec(stage) for stage in self._ops],
+            )
         components = [
             component_spec(component, slot=slot_name) for slot_name, component in self._slots()
         ]
         return ArtifactManifest(
-            artifact_version=ARTIFACT_VERSION,
+            artifact_version=CLASSIC_ARTIFACT_VERSION,
             langres_version=LANGRES_VERSION,
-            model_class=model_type_name(type(self)),
+            model_class=model_class,
             components=components,
         )
 
@@ -99,14 +133,20 @@ class ModelPersistence(ModelState):
         :meth:`save`, not through this dict).
 
         Returns:
-            A plain, JSON-serializable dict with a single ``components`` key: the
-            ordered slot specs (each a ``type_name`` + ``config``). No version
-            fields — see above.
+            A plain, JSON-serializable dict with a single key: ``components`` for a
+            classic four-slot model (the ordered slot specs, each a ``type_name`` +
+            ``config``) or ``ops`` for an explicit-chain model (the ordered stage
+            specs). No version fields — see above.
 
         Raises:
-            TypeError: If a slot component lacks a registry ``type_name`` (same
-                contract as :meth:`save`; not swallowed).
+            TypeError: If a slot component / stage lacks a registry ``type_name``
+                (same contract as :meth:`save`; not swallowed).
         """
+        # The explicit-chain snapshot keys on ``ops``; the classic snapshot returns
+        # the byte-identical ``{"components": ...}`` dict it always has, so a classic
+        # model's recipe_id never forks (F2 — the crown invariant).
+        if self._ops is not None:
+            return {"ops": self._build_manifest().model_dump()["ops"]}
         return {"components": self._build_manifest().model_dump()["components"]}
 
     def save(self, path: str | Path) -> None:
@@ -123,27 +163,56 @@ class ModelPersistence(ModelState):
         ``model_class`` when it has one, so :meth:`load` can rebuild the same
         architecture rather than a plain ``Resolver``.
 
+        An **explicit-chain** model (``self._ops is not None``, epic #193 persist
+        v2) writes the same ``resolver.json`` with an ``ops`` list instead of
+        ``components``, and keys any sidecars by stage **ordinal** (``op{i}``)
+        rather than slot name. Its paid Scores are serialized RAW (the spend cap is
+        unwrapped, never written); ``load`` re-establishes the cap via
+        ``from_topology``.
+
         Args:
             path: Directory to write the artifact into (created if absent).
         """
         out_dir = Path(path)
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        # Build first: op_spec / component_spec raise on an unserializable
+        # stage/component BEFORE any file is written (no half-written artifact).
         manifest = self._build_manifest()
-        for slot_name, component in self._slots():
-            owner = state_owner(component)
-            if owner is not None:
-                state_dir = out_dir / slot_name
-                state_dir.mkdir(parents=True, exist_ok=True)
-                owner.save_state(state_dir)
-                # A SerializableState owner with nothing to persist (e.g. a
-                # VectorBlocker whose index was never built) writes no files;
-                # drop the empty sidecar so load() doesn't later try to read a
-                # missing state file from a dir that only signals "has state".
-                if not any(state_dir.iterdir()):
-                    state_dir.rmdir()
+        if self._ops is not None:
+            # Explicit chain: a stage has no slot name, so sidecars key by ORDINAL.
+            # Same state_owner/has_state seam via op_state_owner (a built
+            # VectorBlocker Source is the one stateful case in practice).
+            for index, stage in enumerate(self._ops):
+                owner = op_state_owner(stage)
+                if owner is not None:
+                    state_dir = out_dir / f"op{index}"
+                    state_dir.mkdir(parents=True, exist_ok=True)
+                    owner.save_state(state_dir)
+                    if not any(state_dir.iterdir()):
+                        state_dir.rmdir()
+            # Drop the (empty) ``components`` field from the explicit artifact.
+            payload = manifest.model_dump_json(indent=2, exclude={"components"})
+        else:
+            for slot_name, component in self._slots():
+                owner = state_owner(component)
+                if owner is not None:
+                    state_dir = out_dir / slot_name
+                    state_dir.mkdir(parents=True, exist_ok=True)
+                    owner.save_state(state_dir)
+                    # A SerializableState owner with nothing to persist (e.g. a
+                    # VectorBlocker whose index was never built) writes no files;
+                    # drop the empty sidecar so load() doesn't later try to read a
+                    # missing state file from a dir that only signals "has state".
+                    if not any(state_dir.iterdir()):
+                        state_dir.rmdir()
+            # Exclude the ``ops`` field (defaults to None) so a classic
+            # resolver.json stays byte-identical to pre-#193 — without this every
+            # classic save would gain an ``"ops": null`` line and fork the frozen
+            # legacy bytes (F1 / the crown invariant).
+            payload = manifest.model_dump_json(indent=2, exclude={"ops"})
 
-        (out_dir / _MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
+        (out_dir / _MANIFEST_FILENAME).write_text(payload)
         logger.info("Saved Resolver artifact to %s", out_dir)
 
     @classmethod
@@ -164,9 +233,13 @@ class ModelPersistence(ModelState):
         cycles. So this returns the parts; the leaf picks the class and assembles.
 
         Returns:
-            The validated manifest, and the ``from_components`` kwargs
-            (``blocker``/``comparator``/``matcher``/``clusterer``/``calibrator``)
-            rebuilt from it.
+            The validated manifest, and the load kwargs. For a classic four-slot
+            artifact that is the ``from_components`` kwargs
+            (``blocker``/``comparator``/``matcher``/``clusterer``/``calibrator``);
+            for an explicit-chain artifact (``manifest.ops is not None``, persist
+            v2) it is ``{"ops": [<rebuilt Stage>, ...]}`` for ``from_topology`` —
+            the leaf in :meth:`~langres.core.resolver.ERModel.load` dispatches on
+            which key is present.
 
         Raises:
             ValueError: If the artifact's ``artifact_version`` is unreadable by
@@ -175,6 +248,16 @@ class ModelPersistence(ModelState):
         in_dir = Path(path)
         manifest = ArtifactManifest.model_validate_json((in_dir / _MANIFEST_FILENAME).read_text())
         cls._check_versions(manifest)
+
+        # Explicit Op chain (persist v2): rebuild each stage by ordinal, restoring
+        # any per-stage sidecar (op{i}). Each MatcherScore comes back with its RAW
+        # matcher; the leaf's from_topology re-wraps the cap against a fresh ledger.
+        if manifest.ops is not None:
+            ops = [
+                rebuild_op(spec, state_dir=in_dir / f"op{index}")
+                for index, spec in enumerate(manifest.ops)
+            ]
+            return manifest, {"ops": ops}
 
         # Map specs back to slots self-describingly. Each spec written by a
         # current ``save`` carries its ``slot`` name, so a registered subclass
@@ -240,21 +323,32 @@ class ModelPersistence(ModelState):
 
     @staticmethod
     def _check_versions(manifest: ArtifactManifest) -> None:
-        """Validate artifact compatibility; raise on an unreadably-new artifact.
+        """Validate artifact compatibility; raise outside the readable version window.
 
-        ``ARTIFACT_VERSION`` is a monotonic integer-valued string bumped on an
-        incompatible layout change. Each bump breaks the config schema, so only
-        an artifact at the *exact* supported layout is readable: a *newer* layout
-        (this build is too old), an *older* layout (predates an incompatible
-        bump), or a malformed/non-integer layout are all hard errors — without
-        this guard an older artifact would fall through to a raw ``KeyError`` on
-        the changed config. A ``langres_version`` mismatch is logged as a
-        warning, not a failure — configs are forward-compatible *within* a layout
-        version.
+        ``ARTIFACT_VERSION`` (the reader's max, ``"2"``) is a monotonic
+        integer-valued string. The reader accepts any layout in the **window**
+        ``[CLASSIC_ARTIFACT_VERSION, ARTIFACT_VERSION]`` = ``[1, 2]``:
+
+        - **Too new** (``> ARTIFACT_VERSION``): this build cannot read a layout it
+          predates — a hard "upgrade langres" error.
+        - **Below the window** (``< 1``, e.g. a pre-M0.5 ``"0"`` with incompatible
+          configs): a hard "predates the readable layout" error, rather than
+          falling through to a raw ``KeyError`` on the changed config.
+        - **Malformed/non-integer**: a hard error.
+
+        The change #193 made here: v1 is now *inside* the window (v2 is an
+        **additive** layout — it only adds an ``ops`` list — so a v1
+        ``components`` artifact still reads unchanged). Before, ``artifact_v <
+        current_v`` rejected every older layout; that was correct only while each
+        bump was config-breaking, which v1→v2 is not.
+
+        A ``langres_version`` mismatch is logged as a warning, not a failure —
+        configs are forward-compatible *within* the window.
         """
         try:
             artifact_v = int(manifest.artifact_version)
             current_v = int(ARTIFACT_VERSION)
+            min_v = int(CLASSIC_ARTIFACT_VERSION)
         except ValueError:  # malformed/non-integer layout version -> incompatible.
             raise ValueError(
                 f"Artifact version {manifest.artifact_version!r} differs from "
@@ -265,11 +359,12 @@ class ModelPersistence(ModelState):
                 f"Artifact version {manifest.artifact_version!r} is newer than this "
                 f"langres build supports ({ARTIFACT_VERSION!r}); upgrade langres to load it."
             )
-        if artifact_v < current_v:
+        if artifact_v < min_v:
             raise ValueError(
                 f"Artifact version {manifest.artifact_version!r} predates the supported "
-                f"layout ({ARTIFACT_VERSION!r}) and is no longer readable (the config "
-                f"schema changed incompatibly); re-save with this langres build."
+                f"layout (readable range {CLASSIC_ARTIFACT_VERSION!r}..{ARTIFACT_VERSION!r}) and "
+                f"is no longer readable (the config schema changed incompatibly); re-save with "
+                f"this langres build."
             )
         if manifest.langres_version != LANGRES_VERSION:
             logger.warning(

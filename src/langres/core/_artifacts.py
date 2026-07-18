@@ -27,12 +27,20 @@ reconstructed by its registered ``type_name``.
 
 import inspect
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any, TypeGuard, cast
 
 from pydantic import BaseModel
 
+from langres.core.op import OutSpace, Stage, ThresholdSelect, TopKSelect
+from langres.core.op_adapters import (
+    BlockerSource,
+    ClustererStage,
+    ComparatorScore,
+    MatcherScore,
+)
 from langres.core.registry import get_component
-from langres.core.serialization import ComponentSpec, SerializableState
+from langres.core.serialization import ComponentSpec, OpSpec, SerializableState
+from langres.core.spend_cap import SpendCappedMatcher
 
 
 def component_config_dict(obj: object) -> dict[str, object]:
@@ -137,3 +145,167 @@ def rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> Any
     if not accepts_state_dir and isinstance(component, SerializableState) and has_state(state_dir):
         component.load_state(state_dir)
     return component
+
+
+# ----------------------------------------------------------------------------------
+# Explicit Op-chain adapters (#193, persist v2): the OpSpec analogue of
+# component_spec / rebuild_component. A classic four-slot model serializes each
+# slot with the pair above; an explicit-chain model
+# (:meth:`~langres.core._model_state.ModelState.from_topology`) serializes each
+# :class:`~langres.core.op.Stage` with the pair below. These import ``op`` /
+# ``op_adapters`` / ``spend_cap``, which is why they live HERE (the ``architectures``
+# tier that already imports those) and NOT in the ``serialization`` leaf that owns
+# the pure :class:`~langres.core.serialization.OpSpec` data model.
+# ----------------------------------------------------------------------------------
+
+#: role -> the classic slot name stamped on a stage's *nested* ComponentSpec. The
+#: slot is cosmetic in the ops path (``rebuild_op`` rebuilds by role, and
+#: ``rebuild_component`` ignores ``ComponentSpec.slot``), but naming it after the
+#: classic slot keeps the on-disk json legible.
+_ROLE_COMPONENT_SLOT: dict[str, str] = {
+    "blocker_source": "blocker",
+    "comparator_score": "comparator",
+    "matcher_score": "module",
+    "clusterer_stage": "clusterer",
+}
+
+
+def _stage_serialization(stage: Stage) -> tuple[str, dict[str, object], object | None]:
+    """The ``(role, params, nested_component)`` an explicit-chain stage serializes to.
+
+    The ONE dispatch shared by :func:`op_spec` (which builds the
+    :class:`~langres.core.serialization.OpSpec`) and :func:`op_state_owner` (which
+    finds the sidecar owner) — so the two can never disagree on which stages are
+    serializable, or on which component a stage carries.
+
+    A :class:`~langres.core.op_adapters.MatcherScore` is **unwrapped**: its nested
+    component is the *raw inner* matcher, never the
+    :class:`~langres.core.spend_cap.SpendCappedMatcher` wrapper (which holds a live
+    per-model :class:`~langres.core.spend.SpendMonitor` and has no registry
+    ``type_name``). ``from_topology`` re-wraps the raw matcher against a fresh
+    monitor on load, so the budget/monitor are deliberately not persisted.
+
+    Raises:
+        TypeError: (F3) for a stage this door cannot faithfully round-trip — a
+            ``MatcherScore`` *subclass* (rebuilding it as a base ``MatcherScore``
+            would silently drop the subclass's own state, exactly as
+            ``from_topology`` rejects on re-secure), a ``GroupwiseMatcherScore`` or
+            any other ``Spending`` Score ``from_topology`` also refuses, or a
+            ``Finalize`` (``from_topology`` does not run one). Failing loud at save
+            time beats writing a spec that load cannot rebuild.
+    """
+    if isinstance(stage, BlockerSource):
+        return "blocker_source", {}, stage.blocker
+    if isinstance(stage, ComparatorScore):
+        return "comparator_score", {}, stage.comparator
+    # ``type(stage) is MatcherScore`` (not isinstance): a subclass must be rejected
+    # below, since rebuild would drop its extra state (mirrors _secure_chain_scores).
+    if type(stage) is MatcherScore:
+        matcher = stage.matcher
+        inner = matcher._module if isinstance(matcher, SpendCappedMatcher) else matcher
+        return "matcher_score", {"out_space": stage.out_space}, inner
+    if isinstance(stage, ThresholdSelect):
+        return "threshold_select", {"threshold": stage.threshold}, None
+    if isinstance(stage, TopKSelect):
+        return "topk_select", {"k": stage.k}, None
+    if isinstance(stage, ClustererStage):
+        return "clusterer_stage", {}, stage.clusterer
+    raise TypeError(
+        f"op_spec() cannot serialize a {type(stage).__name__}: only BlockerSource, "
+        "ComparatorScore, a base MatcherScore, ThresholdSelect, TopKSelect and ClustererStage "
+        "round-trip. A MatcherScore subclass / GroupwiseMatcherScore / Finalize is rejected "
+        "(from_topology would reject or drop it on re-secure anyway). Fix: express the chain "
+        "with the round-trippable stages, or pre-cap a paid matcher into a base MatcherScore."
+    )
+
+
+def op_spec(stage: Stage) -> OpSpec:
+    """Serialize one explicit-chain :class:`~langres.core.op.Stage` into an
+    :class:`~langres.core.serialization.OpSpec`.
+
+    Records the stage's role, its role-specific scalar params, and (for a stage
+    that adapts a legacy component) that component as a nested
+    :class:`~langres.core.serialization.ComponentSpec` via :func:`component_spec`.
+    A ``MatcherScore``'s matcher is serialized RAW (unwrapped past any spend cap);
+    see :func:`_stage_serialization` for the unwrap and the F3 rejection rules.
+
+    Raises:
+        TypeError: If ``stage`` is not one of the round-trippable stage types, or
+            its nested component lacks a registry ``type_name`` (both surface the
+            same fail-loud-at-save contract as :func:`component_spec`).
+    """
+    role, params, component = _stage_serialization(stage)
+    component_spec_obj = (
+        component_spec(component, slot=_ROLE_COMPONENT_SLOT[role])
+        if component is not None
+        else None
+    )
+    return OpSpec(role=role, params=params, component=component_spec_obj)
+
+
+def op_state_owner(stage: Stage) -> SerializableState | None:
+    """The out-of-band-state owner of an explicit-chain stage, if any.
+
+    The sidecar seam ``save`` walks per stage (keyed by ordinal ``op{i}``). It
+    delegates to :func:`state_owner` on the SAME nested component :func:`op_spec`
+    serializes, so a ``BlockerSource`` over a built ``VectorBlocker`` writes/reads
+    its index sidecar exactly as the classic blocker slot does. A Select carries no
+    component and owns no state; the shipped rerankers source from
+    ``AllPairsBlocker`` and own none either. Called only after ``_build_manifest``
+    has already validated every stage via :func:`op_spec`, so it never meets an
+    unserializable stage.
+    """
+    _role, _params, component = _stage_serialization(stage)
+    return state_owner(component) if component is not None else None
+
+
+def _require_op_component(spec: OpSpec) -> ComponentSpec:
+    """Return ``spec.component``, or raise on a malformed component-bearing OpSpec."""
+    if spec.component is None:
+        raise ValueError(
+            f"OpSpec role {spec.role!r} requires a nested component to rebuild, but the spec "
+            "carries none. Fix: this role must be written with component=component_spec(...)."
+        )
+    return spec.component
+
+
+def rebuild_op(spec: OpSpec, *, state_dir: Path) -> Stage:
+    """Rebuild an explicit-chain :class:`~langres.core.op.Stage` from its
+    :class:`~langres.core.serialization.OpSpec`.
+
+    The reverse of :func:`op_spec`: dispatches on ``spec.role``, rebuilds any
+    nested component via :func:`rebuild_component` (restoring its sidecar state from
+    ``state_dir``), and reconstructs the stage. A ``matcher_score`` is rebuilt
+    around the **raw** inner matcher — ``from_topology`` re-wraps it in a
+    :class:`~langres.core.spend_cap.SpendCappedMatcher` sharing the reloaded model's
+    fresh ledger, so the cap is re-established on load rather than persisted.
+
+    Args:
+        spec: The stage spec to rebuild.
+        state_dir: The per-stage sidecar directory (``op{i}``) any stateful nested
+            component restores from.
+
+    Raises:
+        ValueError: If ``spec.role`` is unknown, or a component-bearing role's
+            ``component`` is missing (a malformed manifest).
+    """
+    if spec.role == "blocker_source":
+        return BlockerSource(rebuild_component(_require_op_component(spec), state_dir=state_dir))
+    if spec.role == "comparator_score":
+        return ComparatorScore(rebuild_component(_require_op_component(spec), state_dir=state_dir))
+    if spec.role == "matcher_score":
+        return MatcherScore(
+            rebuild_component(_require_op_component(spec), state_dir=state_dir),
+            out_space=cast(OutSpace, spec.params["out_space"]),
+        )
+    if spec.role == "threshold_select":
+        return ThresholdSelect(cast(float, spec.params["threshold"]))
+    if spec.role == "topk_select":
+        return TopKSelect(cast(int, spec.params["k"]))
+    if spec.role == "clusterer_stage":
+        return ClustererStage(rebuild_component(_require_op_component(spec), state_dir=state_dir))
+    raise ValueError(
+        f"rebuild_op() got an unknown OpSpec role {spec.role!r}. Known roles: "
+        "blocker_source, comparator_score, matcher_score, threshold_select, topk_select, "
+        "clusterer_stage. The artifact was likely written by a newer langres."
+    )

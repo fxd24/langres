@@ -29,6 +29,7 @@ from langres.core.serialization import (
     ARTIFACT_VERSION,
     ArtifactManifest,
     ComponentSpec,
+    OpSpec,
     SerializableState,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     "get_schema",
     "LinkVerdict",
     "model_type_name",
+    "OpSpec",
     "register",
     "register_model",
     "register_schema",
