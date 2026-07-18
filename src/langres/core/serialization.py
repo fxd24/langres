@@ -10,8 +10,15 @@ Two things live here:
    doing so would force Qdrant/hybrid/reranking indexes to implement it.
 
 2. The artifact manifest types — the typed shape of ``resolver.json`` so
-   save/load (Wave 3) has a contract: :class:`ComponentSpec`,
-   :class:`ArtifactManifest`, and the :data:`ARTIFACT_VERSION` constant.
+   save/load has a contract: :class:`ComponentSpec` (a classic four-slot
+   component), :class:`OpSpec` (an explicit-chain stage), :class:`ArtifactManifest`,
+   and the :data:`ARTIFACT_VERSION` / :data:`CLASSIC_ARTIFACT_VERSION` constants.
+
+This is a ``core`` leaf: it imports only pydantic + stdlib and MUST NOT import
+:mod:`~langres.core.op` / :mod:`~langres.core.op_adapters`. The op↔spec *instance*
+adapters (``op_spec`` / ``rebuild_op``, which reach into those modules) live in
+:mod:`langres.core._artifacts`, a tier that already imports them — so the on-disk
+data contract stays a dependency-free leaf.
 """
 
 from pathlib import Path
@@ -19,8 +26,18 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-# Bump when the on-disk artifact layout changes incompatibly.
-ARTIFACT_VERSION = "1"
+#: The **classic four-slot** on-disk layout, frozen at ``"1"``. A classic
+#: (``self._ops is None``) save always stamps this, so its bytes — and the
+#: ``recipe_id`` derived from its ``config_dict`` — never fork when the reader's
+#: max advances. Do NOT bump this: bumping :data:`ARTIFACT_VERSION` (the reader's
+#: max) is how a new *additive* layout ships without restamping classic artifacts.
+CLASSIC_ARTIFACT_VERSION = "1"
+
+#: The reader's **maximum** supported layout. Bumped ``"1"`` → ``"2"`` when the
+#: explicit Op-chain layout (an ``ops`` list instead of ``components``) landed
+#: (#193, persist v2). The reader accepts any layout in ``[1, ARTIFACT_VERSION]``;
+#: only an explicit-chain (``self._ops is not None``) save stamps ``"2"``.
+ARTIFACT_VERSION = "2"
 
 
 @runtime_checkable
@@ -69,12 +86,56 @@ class ComponentSpec(BaseModel):
     config: dict[str, object]
 
 
+class OpSpec(BaseModel):
+    """Serialized record of one **explicit-chain** stage in the manifest.
+
+    The explicit-chain (:meth:`~langres.core._model_state.ModelState.from_topology`)
+    analogue of :class:`ComponentSpec`: where a classic four-slot model serializes
+    each slot as a ``ComponentSpec`` under ``ArtifactManifest.components``, an
+    explicit-chain model serializes each :class:`~langres.core.op.Stage` as an
+    ``OpSpec`` under :attr:`ArtifactManifest.ops`.
+
+    Kept a pure data model beside ``ComponentSpec`` (this module is a leaf that
+    imports only pydantic/stdlib). The op↔spec instance adapters that build one
+    from a live stage and reverse it — ``op_spec`` / ``rebuild_op``, which import
+    :mod:`~langres.core.op` / :mod:`~langres.core.op_adapters` — live in
+    :mod:`langres.core._artifacts`.
+
+    Attributes:
+        role: The stage's role tag, e.g. ``"blocker_source"``,
+            ``"comparator_score"``, ``"matcher_score"``, ``"threshold_select"``,
+            ``"topk_select"``, ``"clusterer_stage"`` — how ``rebuild_op`` knows
+            which adapter to reconstruct.
+        params: Role-specific scalar parameters (e.g. ``{"threshold": 0.5}`` for a
+            ThresholdSelect, ``{"k": 10}`` for a TopKSelect, ``{"out_space":
+            "prob_llm"}`` for a MatcherScore). Empty for a role carrying no scalar
+            of its own.
+        component: The nested legacy component (blocker / comparator / matcher /
+            clusterer) the stage adapts, as a :class:`ComponentSpec` — or ``None``
+            for a component-free stage (a Select carries only ``params``). A
+            spend-cap wrapper is deliberately never serialized here: a
+            ``MatcherScore``'s spec records the *raw inner* matcher, and
+            ``from_topology`` re-wraps it on load.
+    """
+
+    role: str
+    params: dict[str, object] = Field(default_factory=dict)
+    component: ComponentSpec | None = None
+
+
 class ArtifactManifest(BaseModel):
     """Typed shape of ``resolver.json``.
 
+    Carries **either** ``components`` (the classic four-slot layout) **or** ``ops``
+    (the explicit Op-chain layout, #193 persist v2) — never meaningfully both. A
+    classic save writes ``components`` and omits ``ops``; an explicit-chain save
+    writes ``ops`` and omits ``components``. ``ops`` defaults to ``None`` so an old
+    v1 ``resolver.json`` (which has no ``ops`` key) validates straight onto the
+    classic read path.
+
     Attributes:
         artifact_version: Layout version of the artifact (see
-            :data:`ARTIFACT_VERSION`).
+            :data:`ARTIFACT_VERSION` / :data:`CLASSIC_ARTIFACT_VERSION`).
         langres_version: The ``langres.__version__`` that wrote the artifact.
         model_class: Registered name of the Resolver *subclass* that wrote the
             artifact (see ``langres.core.registry.register_model``), so a named
@@ -86,7 +147,13 @@ class ArtifactManifest(BaseModel):
             bump would make ``Resolver._check_versions`` reject existing 0.3.0
             artifacts in *both* directions (it raises on older *and* newer) for
             no gain.
-        components: Ordered component specs composing the Resolver.
+        components: Ordered component specs composing a **classic four-slot**
+            Resolver. Empty for an explicit-chain artifact (which uses ``ops``).
+        ops: Ordered stage specs composing an **explicit Op chain**
+            (:meth:`~langres.core._model_state.ModelState.from_topology`), or
+            ``None`` for the classic four-slot layout. ``None`` by design so a
+            pre-#193 v1 ``resolver.json`` — which has no ``ops`` key — validates to
+            ``None`` and reads through the classic ``components`` path unchanged.
         checksums: Optional sidecar checksum map (filename -> checksum) for
             out-of-band state files written by :class:`SerializableState`
             components. Empty when no component has out-of-band state.
@@ -95,5 +162,6 @@ class ArtifactManifest(BaseModel):
     artifact_version: str
     langres_version: str
     model_class: str | None = None
-    components: list[ComponentSpec]
+    components: list[ComponentSpec] = Field(default_factory=list)
+    ops: list[OpSpec] | None = None
     checksums: dict[str, str] = Field(default_factory=dict)

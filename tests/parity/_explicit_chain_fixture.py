@@ -28,7 +28,7 @@ so the builders here stay clean and importable.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel
 
@@ -39,6 +39,7 @@ from langres.core.comparators import StringComparator
 from langres.core.matcher import Matcher
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.op import Stage, ThresholdSelect, TopKSelect
+from langres.core.registry import register
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -71,6 +72,7 @@ RECORDS: list[dict[str, Any]] = [
 THRESHOLD = 0.5
 
 
+@register("costed_name_matcher")
 class CostedNameMatcher(Matcher[Any]):
     """``$0`` fake matcher: scores ``1.0`` iff the two names match else ``0.0``.
 
@@ -79,7 +81,15 @@ class CostedNameMatcher(Matcher[Any]):
     network and no key (the same technique as ``test_resolver_spend_cap``). An
     optional ``model`` is advertised so :attr:`~langres.core._model_state.ModelState.backbone`
     reporting through the chain can be exercised.
+
+    **Registry-serializable** (``type_name`` + ``config``/``from_config``, epic
+    #193 persist PR-B): the persist PR must ``save``/``load`` a ``from_topology``
+    chain, and every stage's nested component has to round-trip through the
+    component registry. ``produced`` is runtime state, not config, so a reloaded
+    matcher starts at ``0`` -- correct, it has scored nothing yet.
     """
+
+    type_name: ClassVar[str] = "costed_name_matcher"
 
     def __init__(
         self,
@@ -93,6 +103,20 @@ class CostedNameMatcher(Matcher[Any]):
         self.produced = 0
         #: Advertised backbone id (``None`` = weightless, like a string matcher).
         self.model: str | None = model
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Serializable construction config (no ``produced`` -- that is runtime state)."""
+        return {"cost_each": self._cost_each, "score_type": self._score_type, "model": self.model}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "CostedNameMatcher":
+        """Rebuild from :attr:`config`."""
+        return cls(
+            cost_each=float(cast(float, config["cost_each"])),
+            score_type=cast(ScoreType, config["score_type"]),
+            model=cast("str | None", config["model"]),
+        )
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         for candidate in candidates:
