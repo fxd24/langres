@@ -256,6 +256,29 @@ def test_legacy_vector_bundle_without_semantic_extra_remains_valid(
     assert validate_bundle(bundle).required_extras == ()
 
 
+def test_missing_trained_extra_is_not_legacy_compatible(
+    model: ERModel,
+    tmp_path: Path,
+) -> None:
+    bundle = save_pretrained(model, tmp_path / "missing-trained")
+    resolver = json.loads((bundle / "resolver.json").read_text())
+    resolver["components"][0]["type_name"] = "calibrator"
+    (bundle / "resolver.json").write_text(json.dumps(resolver))
+
+    manifest = json.loads((bundle / BUNDLE_MANIFEST).read_text())
+    import hashlib
+
+    content = (bundle / "resolver.json").read_bytes()
+    for item in manifest["files"]:
+        if item["path"] == "resolver.json":
+            item["size"] = len(content)
+            item["sha256"] = hashlib.sha256(content).hexdigest()
+    (bundle / BUNDLE_MANIFEST).write_text(json.dumps(manifest))
+
+    with pytest.raises(PretrainedArtifactError, match="outer resource identity"):
+        validate_bundle(bundle)
+
+
 def test_unknown_model_name_component_fails_closed() -> None:
     manifest = ArtifactManifest(
         artifact_version="1",

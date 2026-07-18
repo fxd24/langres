@@ -75,6 +75,7 @@ _COMPONENT_EXTRAS: dict[str, str] = {
     "random_forest": "trained",
     "vector_blocker": "semantic",
 }
+_LEGACY_MISSING_EXTRA_COMPONENTS = frozenset({"faiss_index", "vector_blocker"})
 _HF_MODEL_NAME_COMPONENTS = frozenset(
     {
         "fastembed_sparse_embedder",
@@ -454,7 +455,7 @@ def validate_bundle(root: Path) -> PretrainedManifest:
     legacy_compatible_missing = {
         _COMPONENT_EXTRAS[spec.type_name]
         for spec in component_specs(resolver_manifest)
-        if spec.type_name in _COMPONENT_EXTRAS
+        if spec.type_name in _LEGACY_MISSING_EXTRA_COMPONENTS
     }
     extras_without_compatible_omissions = tuple(
         extra for extra in actual_extras if extra not in missing_extras
