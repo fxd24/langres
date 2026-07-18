@@ -27,8 +27,17 @@ from langres.core.fit import CalibratorFitMixin
 from langres.training.fit_report import FitReport
 from langres.core.inputs import normalize_records
 from langres.core.matcher import Matcher
+from langres.core.op import (
+    ClusterStage,
+    Op,
+    Score,
+    Sequential,
+    Source,
+    Stage,
+    ThresholdSelect,
+)
 from langres.core.spend import SpendMonitor
-from langres.core.spend_cap import effective_budget
+from langres.core.spend_cap import SpendCappedMatcher, effective_budget
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +169,15 @@ class ModelState:
         self._comparator: Comparator[Any] | None = None
         self._module: Matcher[Any] | None = None
         self._clusterer: Clusterer | None = None
+        # An OPTIONAL explicit Op chain (epic #193, PR-A). ``None`` -> this is a
+        # classic four-slot topology and every run/read below takes its
+        # slot-derived path unchanged; a list -> this model runs the explicit
+        # chain instead (set ONLY by :meth:`from_topology`). A ``Stage`` is a
+        # ``Source | Op | ClusterStage | Finalize`` (op.py's union): the Source
+        # (records -> pairs), the body Ops (pairs -> pairs, INCLUDING Selects),
+        # then the terminal ClusterStage (pairs -> clusters) and an optional
+        # Finalize. All classic construction doors leave it ``None``.
+        self._ops: list[Stage] | None = None
 
     @property
     def blocker(self) -> Blocker[Any]:
@@ -298,6 +316,95 @@ class ModelState:
         )
         return model
 
+    @classmethod
+    def from_topology(
+        cls,
+        *,
+        ops: Sequence[Stage],
+        budget_usd: float | None = None,
+        monitor: SpendMonitor | None = None,
+        calibrator: CalibratorFitMixin | None = None,
+    ) -> Self:
+        """Build a model that runs an EXPLICIT Op chain instead of the four slots.
+
+        The breaking-change door of the final wave (epic #193, PR-A): where
+        :meth:`from_components` wires a classic four-slot topology (which the run
+        path *derives* an Op chain from), this door takes the chain **directly** --
+        so a model can express a topology the four slots cannot (a Score after a
+        Select, a second matcher, a retrieval-only prefix). Like
+        :meth:`from_components` it bypasses ``__init__`` (``__new__`` + the shared
+        state setup), then stores the chain in ``self._ops`` and leaves the four
+        slots empty. Every method dispatches on ``self._ops``: ``None`` (every
+        classic door) runs the slot-derived path unchanged; a list walks this
+        chain.
+
+        The chain's wiring is validated at construction via :class:`~langres.core.op.Sequential`
+        (Source first, then Ops, then a ClusterStage, optionally a Finalize -- a
+        Select over a vector score is rejected), and it must carry exactly one
+        terminal :class:`~langres.core.op.ClusterStage` so ``resolve``/``dedupe``
+        have a phase-1 exit.
+
+        Args:
+            ops: The explicit chain, in pipeline order (a Source, zero+ Ops
+                including Selects, one terminal ClusterStage, optional Finalize).
+                **Any paid Score in the chain must already wrap its matcher in a
+                :class:`~langres.core.spend_cap.SpendCappedMatcher`** -- the
+                ``.module.forward`` AST-ban only catches the literal slot call, so
+                nothing mechanical stops an explicit-chain Score from billing
+                off-ledger. Share this model's ledger by passing that same
+                ``monitor=`` here.
+            budget_usd: Spend cap for this instance's lifetime (see
+                :meth:`__init__`). Mutually exclusive with ``monitor``.
+            monitor: An existing :class:`~langres.core.spend.SpendMonitor` to adopt
+                as this model's ledger -- pass the SAME monitor the chain's
+                ``SpendCappedMatcher`` wraps, so the model's budget genuinely caps
+                the chain. Mutually exclusive with ``budget_usd``.
+            calibrator: **Rejected.** Calibration is a bespoke per-score transform
+                that only the classic path applies; a ``CalibratorScore`` Op is a
+                later wave, so an explicit chain must express any score mapping as
+                its own Score. Passing one raises.
+
+        Returns:
+            A model wired to run ``ops``, ready to ``resolve``/``dedupe``/``compare``.
+
+        Raises:
+            ValueError: If ``calibrator`` is given, if both ``budget_usd`` and
+                ``monitor`` are given, if the chain is mis-wired, or if it does not
+                carry exactly one terminal ClusterStage.
+        """
+        if calibrator is not None:
+            raise ValueError(
+                "from_topology() does not accept a calibrator: calibration is a bespoke "
+                "per-score transform only the classic four-slot path applies (a CalibratorScore "
+                "Op is a later wave). Fix: express any score mapping as a Score in the chain, or "
+                "build the classic path with from_components(...)."
+            )
+        if monitor is not None and budget_usd is not None:
+            raise ValueError(
+                "pass budget_usd= or monitor=, not both: a SpendMonitor already carries its own "
+                f"budget (${monitor.budget_usd:.2f}), so budget_usd={budget_usd!r} would silently "
+                "lose. Pass the monitor the chain's SpendCappedMatcher already shares."
+            )
+        chain = list(ops)
+        # Reuse the one wiring guard rather than a second, decoupled check: a Source
+        # first, Ops (pairs -> pairs) in the middle, a ClusterStage, an optional
+        # Finalize -- and NO Select over a non-orderable vector score.
+        Sequential(chain)
+        cluster_stages = [stage for stage in chain if isinstance(stage, ClusterStage)]
+        if len(cluster_stages) != 1:
+            raise ValueError(
+                f"from_topology() needs exactly one terminal ClusterStage (pairs -> clusters) so "
+                f"resolve()/dedupe() have a phase-1 exit, but the chain has {len(cluster_stages)}. "
+                "Fix: end the chain with exactly one ClusterStage."
+            )
+        model = cls.__new__(cls)
+        model._init_state(budget_usd=budget_usd)
+        if monitor is not None:
+            # Adopt the caller's ledger so the model's cap IS the chain's cap.
+            model._spend_monitor = monitor
+        model._ops = chain
+        return model
+
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
         """Build this architecture's components for ``schema``. The subclass hook.
 
@@ -350,9 +457,89 @@ class ModelState:
         weights in the scoring slot (pure string similarity) rather than
         fabricating an identity. An architecture whose backbone lives elsewhere
         (e.g. in the blocker's embedder) overrides this to say so.
+
+        For an explicit-chain model (``_ops`` set) there is no ``module`` slot, so
+        it reads the chain's own scoring matcher instead (:meth:`_chain_scoring_matcher`,
+        unwrapped past its spend cap), and ``None`` when that matcher exposes no
+        ``model``.
         """
+        if self._ops is not None:
+            matcher = self._chain_scoring_matcher()
+            candidate = getattr(matcher, "model", None) if matcher is not None else None
+            return candidate if isinstance(candidate, str) else None
         candidate = getattr(self.module, "model", None)
         return candidate if isinstance(candidate, str) else None
+
+    # ------------------------------------------------------------------
+    # Explicit-chain readers (``_ops`` set) -- the chain is the source of
+    # truth, so these parse it instead of reading the four slots. Every one
+    # asserts ``_ops`` is set; callers guard on ``self._ops is not None``.
+    # ``from_topology`` (via Sequential) guarantees the shape they assume:
+    # a Source first, Ops in the middle, exactly one ClusterStage.
+    # ------------------------------------------------------------------
+
+    def _require_ops(self) -> list[Stage]:
+        assert self._ops is not None  # callers guard on ``self._ops is not None``
+        return self._ops
+
+    def _chain_source(self) -> Source[Any]:
+        """The chain's Source (records -> pairs) -- ``ops[0]``, guaranteed a Source."""
+        source = self._require_ops()[0]
+        assert isinstance(source, Source)  # Sequential requires a Source first
+        return source
+
+    def _chain_body(self) -> list[Op[Any]]:
+        """The body Ops (Scores AND Selects). Every ``Op`` in the chain is a body Op:
+        the Source, ClusterStage and Finalize are not ``Op``\\ s, so this filter picks
+        out exactly the pairs -> pairs middle."""
+        return [stage for stage in self._require_ops() if isinstance(stage, Op)]
+
+    def _chain_body_scores(self) -> list[Score[Any]]:
+        """The body's Score ops only (skips Selects) -- what ``compare`` folds on one pair."""
+        return [op for op in self._chain_body() if isinstance(op, Score)]
+
+    def _chain_cluster_stage(self) -> ClusterStage[Any]:
+        """The chain's terminal ClusterStage (from_topology guarantees exactly one)."""
+        for stage in self._require_ops():
+            if isinstance(stage, ClusterStage):
+                return stage
+        raise AssertionError("explicit chain has no ClusterStage")  # from_topology guards this
+
+    def _chain_threshold(self) -> float | None:
+        """The terminal :class:`~langres.core.op.ThresholdSelect`'s threshold -- the chain's
+        match cut -- or ``None`` if the chain has no ThresholdSelect. The LAST one wins."""
+        threshold: float | None = None
+        for op in self._chain_body():
+            if isinstance(op, ThresholdSelect):
+                threshold = op.threshold
+        return threshold
+
+    def _chain_scoring_matcher(self) -> Matcher[Any] | None:
+        """The chain's last matcher-``Score``'s matcher, unwrapped past its spend cap.
+
+        The chain's paid Scores wrap their matcher in a
+        :class:`~langres.core.spend_cap.SpendCappedMatcher` (that wrapper has no
+        ``model``), so peel it to expose the real matcher for :attr:`backbone`. A
+        matcher-Score is a Score carrying a ``matcher`` attribute (``MatcherScore`` /
+        ``GroupwiseMatcherScore``); a ``ComparatorScore`` carries ``comparator``, not
+        ``matcher``, so it is skipped.
+        """
+        matcher: Matcher[Any] | None = None
+        for op in self._chain_body():
+            candidate = getattr(op, "matcher", None)
+            if isinstance(op, Score) and isinstance(candidate, Matcher):
+                matcher = candidate
+        if isinstance(matcher, SpendCappedMatcher):
+            return matcher._module  # peel the cap; the wrapped matcher owns ``model``
+        return matcher
+
+    def _chain_source_schema(self) -> type[BaseModel] | None:
+        """The schema the chain's Source blocks against (for front-door normalization),
+        or ``None`` when the Source carries none (an opaque ``schema_factory`` blocker)."""
+        blocker = getattr(self._chain_source(), "blocker", None)
+        if isinstance(blocker, Blocker):
+            return blocker.schema
+        return None
 
     def _require_bound(self, action: str) -> None:
         """Raise a directed error if this model has no components yet."""
