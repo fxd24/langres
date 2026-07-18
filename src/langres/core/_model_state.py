@@ -502,9 +502,10 @@ class ModelState:
                     f"from_topology() cannot cap a {type(stage).__name__}: it declares Spending "
                     "(it may bill a paid model) but is not a MatcherScore, so this door cannot "
                     "route its billing through the model ledger (a SpendCappedMatcher meters "
-                    "Matcher.forward, not e.g. GroupwiseMatcher.forward_groups). It refuses to run "
-                    "an uncapped paid Score off-ledger. Fix: express the scoring as a MatcherScore, "
-                    "or cap its paid work through a model-monitor SpendCappedMatcher yourself."
+                    "Matcher.forward, not e.g. GroupwiseMatcher.forward_groups -- pre-capping its "
+                    "matcher would NOT help). It refuses to run an uncapped paid Score off-ledger. "
+                    "Fix: express the scoring as a MatcherScore (the only Spending Score this door "
+                    "can route onto the ledger)."
                 )
             matcher = stage.matcher
             if isinstance(matcher, SpendCappedMatcher):

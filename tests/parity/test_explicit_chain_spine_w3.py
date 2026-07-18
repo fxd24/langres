@@ -169,6 +169,33 @@ def test_from_topology_leaves_an_already_capped_matcher_alone() -> None:
     assert model._spend_monitor is monitor
 
 
+def test_from_topology_leaves_a_precapped_matcherscore_subclass_alone() -> None:
+    """A MatcherScore SUBCLASS whose matcher is already capped through the model
+    monitor takes the leave-alone branch (no rebuild, so its subclass state survives)
+    -- the rebuild-reject fires only for a subclass with a RAW matcher."""
+
+    class _TaggedMatcherScore(MatcherScore[Any]):
+        def __init__(self, matcher: Any, *, out_space: Any, tag: str) -> None:
+            super().__init__(matcher, out_space=out_space)
+            self.tag = tag
+
+    monitor = SpendMonitor(budget_usd=1.0)
+    capped = SpendCappedMatcher(CostedNameMatcher(), monitor=monitor)
+    subclass_score = _TaggedMatcherScore(capped, out_space="prob_llm", tag="keep-me")
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        subclass_score,
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    model = ERModel.from_topology(ops=ops, monitor=monitor)
+
+    (stored,) = _chain_matcher_scores(model)
+    assert stored is subclass_score  # same object -- not rebuilt, subclass state intact
+    assert subclass_score.tag == "keep-me"  # subclass state survived (no base rebuild)
+    assert stored.matcher is capped
+
+
 def test_from_topology_rejects_a_spending_score_it_cannot_cap() -> None:
     """A Spending Score the door cannot wrap (a GroupwiseMatcherScore, whose
     ``forward_groups`` bypasses a SpendCappedMatcher's per-judgement metering) is
@@ -245,14 +272,19 @@ def test_from_topology_admits_a_free_non_spending_custom_score() -> None:
         def forward(self, pairs: Any) -> Any:
             return pairs  # a no-op transform on the scored rows
 
+    free = _FreePassthroughScore()
     ops: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
         MatcherScore(CostedNameMatcher(), out_space="prob_llm"),
-        _FreePassthroughScore(),
+        free,
         ThresholdSelect(THRESHOLD),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
     model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+    # The door must PRESERVE the free stage (not silently drop it): same object, same
+    # position (index 2). A no-op forward() alone would pass even if it were dropped.
+    assert model._ops is not None
+    assert model._ops[2] is free
     assert _canonical(model.resolve(RECORDS)) == [["a1", "a2"]]
 
 
