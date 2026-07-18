@@ -11,7 +11,13 @@ import pytest
 from pydantic import BaseModel
 from pydantic import ConfigDict
 
-from langres.architectures import Retrieve, RetrieveLLM, RetrieveRerank, RetrieveRerankLLM
+from langres.architectures import (
+    FuzzyString,
+    Retrieve,
+    RetrieveLLM,
+    RetrieveRerank,
+    RetrieveRerankLLM,
+)
 from langres.cli import main
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
@@ -21,6 +27,7 @@ from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel
 from langres.core.registry import register_op
 from langres.core.spend import SpendMonitor
+from langres.core.models import CompanySchema
 from langres.experiments import (
     ArchitectureFactory,
     EvaluationProtocol,
@@ -124,6 +131,21 @@ def _factory(
         factory=build,
         cache_semantics=semantics,  # type: ignore[arg-type]
         estimated_usd=estimated_usd,
+    )
+
+
+def _reproduction_factory() -> ArchitectureFactory:
+    def build(threshold: float, monitor: SpendMonitor) -> ERModel:
+        return FuzzyString(
+            threshold=threshold,
+            schema=CompanySchema,
+            budget_usd=monitor.budget_usd,
+        )
+
+    return ArchitectureFactory(
+        name="FuzzyString",
+        factory=build,
+        estimated_usd=0.0,
     )
 
 
@@ -335,12 +357,12 @@ def test_plan_never_counts_unrelated_cache_directories_as_hits(
     assert plan.cells[0].cache_status == "unknown"
 
 
-def test_reproduction_bundle_and_cli_validate_in_a_clean_subprocess(
+def test_reproduction_bundle_reconstructs_models_in_a_clean_subprocess(
     _offline: None,
     tmp_path: Path,
 ) -> None:
     report = Experiment(
-        architectures=[_factory("CustomTopology")],
+        architectures=[_reproduction_factory()],
         protocol=_protocol().model_copy(
             update={
                 "benchmark_ids": ("one",),
@@ -360,7 +382,18 @@ def test_reproduction_bundle_and_cli_validate_in_a_clean_subprocess(
     bundle = load_reproduction_bundle(tmp_path / "reproduce.json")
     assert isinstance(bundle, ReproductionBundle)
     assert bundle.report == report
-    assert bundle.architectures[0].name == "CustomTopology"
+    assert bundle.architectures[0].name == "FuzzyString"
+    assert bundle.architectures[0].artifact_path == ("reproduce.models/000-fuzzystring")
+
+    output = io.StringIO()
+    assert (
+        main(
+            ["experiments", "verify", str(tmp_path / "reproduce.json")],
+            output_stream=output,
+        )
+        == 0
+    )
+    assert "verified reproduction bundle" in output.getvalue().lower()
 
     output = io.StringIO()
     assert (
@@ -370,7 +403,7 @@ def test_reproduction_bundle_and_cli_validate_in_a_clean_subprocess(
         )
         == 0
     )
-    assert "verified reproduction bundle" in output.getvalue().lower()
+    assert "reconstructed 1 architecture" in output.getvalue().lower()
 
     completed = subprocess.run(
         [
@@ -387,7 +420,8 @@ def test_reproduction_bundle_and_cli_validate_in_a_clean_subprocess(
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "CustomTopology" in completed.stdout
+    assert "Reconstructed 1 architecture" in completed.stdout
+    assert "FuzzyString" in completed.stdout
 
 
 class _TrackioSpy:

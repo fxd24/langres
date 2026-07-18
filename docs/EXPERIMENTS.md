@@ -42,6 +42,16 @@ report = Experiment(
 ).run()
 ```
 
+Pass `reproduction_path="runs/my-experiment.json"` to emit both a validated
+JSON handoff and a sibling `my-experiment.models/` directory containing safe
+`ERModel.save()` artifacts. `langres experiments reproduce
+runs/my-experiment.json` reconstructs every model in a clean process and checks
+that its execution plan still matches the bundle. Use `langres experiments
+verify runs/my-experiment.json` when only schema/report validation is wanted.
+Keep the JSON and sibling model directory together when moving the handoff; the
+bundle stores relative artifact paths and never imports artifact-supplied
+Python.
+
 The current benchmark registry exposes an actual `train`/`test` split. The
 runner therefore requires `threshold_split_id="train"` and never relabels that
 data as validation. Thresholds are selected on train; test remains untouched.
@@ -64,8 +74,14 @@ duplicate pair identities fail before cache commit.
 
 Architecture factories receive the experiment's shared `SpendMonitor`, so an
 optional `budget_usd` covers all model instances built during threshold replay.
-Budget overruns are persisted as `status="budget_exceeded"` with their measured
-spend and cap flag, even though the exception still stops that cell. Resume
+Paid official-proof runs require complete factory estimates and reject an
+over-budget matrix before loading benchmark data or building a model. Ordinary
+runs retain optional budgeting: incomplete estimates may proceed, while a
+complete over-budget estimate still fails preflight. Tuning and evaluation
+measurements, calls, tokens, and known costs are aggregated in the final row;
+unknown cost remains `None`, never a fabricated zero. Budget overruns persist
+recoverable partial generation measurements, tokens, judgements, measured
+spend, and the cap flag, even though the exception still stops that cell. Resume
 accepts a completed attempt only when both its evaluation identity and complete
 protocol snapshot match. Architecture `variant_id` participates in recipe
 identity and resume selection, so two variants sharing a display name cannot

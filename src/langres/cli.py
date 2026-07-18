@@ -100,6 +100,11 @@ def main(
             Path(args.in_csv), Path(args.queue), Path(args.out), args.reviewer, out_stream
         )
     if args.command == "experiments" and args.experiments_command == "reproduce":
+        from langres.experiments.reproduction import reconstruct_reproduction_bundle
+
+        reconstruct_reproduction_bundle(Path(args.artifact), output=out_stream)
+        return 0
+    if args.command == "experiments" and args.experiments_command == "verify":
         from langres.experiments.reproduction import verify_reproduction_bundle
 
         verify_reproduction_bundle(Path(args.artifact), output=out_stream)
@@ -208,13 +213,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     experiment_commands = p_experiments.add_subparsers(
         dest="experiments_command",
-        metavar="{reproduce}",
+        metavar="{reproduce,verify}",
     )
     p_reproduce = experiment_commands.add_parser(
         "reproduce",
-        help="Validate a saved experiment's protocol and architecture plans.",
+        help="Reconstruct saved local model artifacts and verify their plans.",
     )
     p_reproduce.add_argument(
+        "artifact",
+        metavar="reproduction.json",
+        help="The reproduction artifact emitted by Experiment.run().",
+    )
+    p_verify = experiment_commands.add_parser(
+        "verify",
+        help="Validate a saved experiment bundle without reconstructing models.",
+    )
+    p_verify.add_argument(
         "artifact",
         metavar="reproduction.json",
         help="The reproduction artifact emitted by Experiment.run().",

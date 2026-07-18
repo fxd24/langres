@@ -16,6 +16,13 @@
 - Run provenance now detects untracked files explicitly, mints attempt ids
   before stochastic cache identity, and redacts common credential assignments
   from persisted error messages.
+- Experiment accounting now aggregates tuning and evaluation calls, tokens,
+  stage facts, and known costs; preserves unknown cost and recoverable
+  budget-exceeded partial outputs; and rehydrates those facts on resume. Paid
+  proof matrices are budget-validated before data or model construction.
+- Reproduction handoffs now include safe local `ERModel` artifacts:
+  `langres experiments reproduce` reconstructs and plan-checks them in a clean
+  process, while `langres experiments verify` remains validation-only.
 
 ### The model is explicit: `ERModel` + named architectures — **breaking**
 

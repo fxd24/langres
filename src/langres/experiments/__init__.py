@@ -53,6 +53,7 @@ from langres.experiments.reproduction import (
     ReproductionArchitecture,
     ReproductionBundle,
     load_reproduction_bundle,
+    reconstruct_reproduction_bundle,
     verify_reproduction_bundle,
     write_reproduction_bundle,
 )
@@ -120,6 +121,7 @@ __all__ = [
     "load_reproduction_bundle",
     "ordered_input_fingerprint",
     "paired_entity_bootstrap",
+    "reconstruct_reproduction_bundle",
     "split_instability",
     "verify_reproduction_bundle",
     "write_reproduction_bundle",

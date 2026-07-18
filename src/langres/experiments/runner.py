@@ -173,6 +173,15 @@ def flatten_numeric(
     return flattened
 
 
+def _reproduction_artifact_name(index: int, architecture_name: str) -> str:
+    """Return a path-safe, stable directory name for one saved architecture."""
+    slug = "".join(
+        character.lower() if character.isalnum() else "-" for character in architecture_name
+    )
+    slug = "-".join(part for part in slug.split("-") if part)
+    return f"{index:03d}-{slug or 'architecture'}"
+
+
 def _resource_slots(
     plan: Any,
     *,
@@ -850,14 +859,22 @@ class Experiment:
             )
 
             architecture_snapshots = []
-            for architecture in self.architectures:
+            artifact_root = self.reproduction_path.with_suffix(".models")
+            for index, architecture in enumerate(self.architectures):
                 model = architecture.build(self.protocol.threshold_grid[0], self._monitor)
+                artifact_directory = artifact_root / _reproduction_artifact_name(
+                    index, architecture.name
+                )
+                model.save(artifact_directory)
                 architecture_snapshots.append(
                     ReproductionArchitecture(
                         name=architecture.name,
                         variant_id=architecture.variant_id,
                         cache_semantics=architecture.cache_semantics,
                         estimated_usd=architecture.estimated_usd,
+                        artifact_path=artifact_directory.relative_to(
+                            self.reproduction_path.parent
+                        ).as_posix(),
                         execution_plan=model.execution_plan().model_dump(mode="json"),
                     )
                 )

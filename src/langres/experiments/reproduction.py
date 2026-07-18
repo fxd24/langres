@@ -1,19 +1,22 @@
-"""Safe, weightless experiment handoff bundles and verification."""
+"""Safe experiment handoff bundles, verification, and local reconstruction."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import TYPE_CHECKING, Any, Literal, TextIO
 
 from pydantic import BaseModel, ConfigDict
 
 from langres.experiments.identity import SourceState
 from langres.experiments.report import ExperimentReport
 
+if TYPE_CHECKING:
+    from langres.core.resolver import ERModel
+
 
 class ReproductionArchitecture(BaseModel):
-    """One architecture's safe execution-plan snapshot."""
+    """One architecture's safe execution-plan and local artifact reference."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -21,6 +24,7 @@ class ReproductionArchitecture(BaseModel):
     variant_id: str
     cache_semantics: str
     estimated_usd: float | None = None
+    artifact_path: str
     execution_plan: dict[str, Any]
 
 
@@ -88,10 +92,60 @@ def verify_reproduction_bundle(path: str | Path, *, output: TextIO) -> Reproduct
     return bundle
 
 
+def reconstruct_reproduction_bundle(
+    path: str | Path,
+    *,
+    output: TextIO,
+) -> tuple["ERModel", ...]:
+    """Reconstruct every local model artifact and verify its execution plan."""
+    from langres.core.resolver import ERModel
+
+    source = Path(path)
+    bundle = load_reproduction_bundle(source)
+    base = source.resolve().parent
+    reconstructed: list[ERModel] = []
+    for architecture in bundle.architectures:
+        relative = Path(architecture.artifact_path)
+        if relative.is_absolute():
+            raise ValueError(
+                f"Cannot reconstruct architecture {architecture.name!r}: "
+                "artifact_path must be relative to the reproduction bundle."
+            )
+        artifact = (base / relative).resolve()
+        if not artifact.is_relative_to(base):
+            raise ValueError(
+                f"Cannot reconstruct architecture {architecture.name!r}: "
+                "artifact_path escapes the reproduction bundle directory."
+            )
+        try:
+            model = ERModel.load(artifact)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"Cannot reconstruct architecture {architecture.name!r} from "
+                f"{artifact}. Cause: its local model artifact is missing or "
+                "incompatible. Fix: copy the sibling model-artifact directory "
+                "with the reproduction JSON, or regenerate the bundle."
+            ) from exc
+        actual_plan = model.execution_plan().model_dump(mode="json")
+        if actual_plan != architecture.execution_plan:
+            raise ValueError(
+                f"Cannot reconstruct architecture {architecture.name!r}: the "
+                "saved model artifact does not match the bundled execution plan. "
+                "Fix: regenerate the bundle and keep its JSON and model-artifact "
+                "directory together."
+            )
+        reconstructed.append(model)
+
+    names = ", ".join(architecture.name for architecture in bundle.architectures)
+    output.write(f"Reconstructed {len(reconstructed)} architecture(s) from {source}: {names}\n")
+    return tuple(reconstructed)
+
+
 __all__ = [
     "ReproductionArchitecture",
     "ReproductionBundle",
     "load_reproduction_bundle",
+    "reconstruct_reproduction_bundle",
     "verify_reproduction_bundle",
     "write_reproduction_bundle",
 ]
