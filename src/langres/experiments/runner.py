@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import platform
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from langres._version import __version__
 from langres.benchmarks.runner import evaluate_execution_result
 from langres.core.op import ExecutionEvent, ExecutionResult
 from langres.core.model_ref import normalize_model_ref
@@ -27,7 +29,14 @@ from langres.experiments.identity import (
     compute_recipe_identity,
     detect_source_state,
 )
-from langres.experiments.measurements import StageMeasurement
+from langres.experiments.measurements import (
+    EmbeddingFacts,
+    FunnelFacts,
+    PriceSnapshot,
+    RuntimeFacts,
+    StageMeasurement,
+    TokenUsage,
+)
 from langres.experiments.protocol import (
     STOCHASTIC_TOPOLOGIES,
     EvaluationProtocol,
@@ -55,6 +64,10 @@ CacheSemantics = Literal["deterministic", "seeded", "stochastic"]
 
 class ExperimentConfigurationError(ValueError):
     """The experiment matrix cannot be executed as declared."""
+
+
+class ExperimentCellError(RuntimeError):
+    """A sanitized architecture/cell failure with remediation context."""
 
 
 @dataclass(frozen=True)
@@ -174,9 +187,147 @@ def _resource_slots(
     return tuple(slots)
 
 
-def _measurements(result: ExecutionResult, *, cache_hit: bool) -> tuple[StageMeasurement, ...]:
+def _resource_slot(role: str) -> str | None:
+    return {
+        "retrieve": "embedder",
+        "rerank": "reranker",
+        "generate": "llm",
+    }.get(role)
+
+
+def _runtime_facts(
+    *,
+    cohort: str,
+    config: Mapping[str, Any] | None,
+) -> RuntimeFacts:
+    values = config or {}
+    return RuntimeFacts(
+        hardware_cohort=cohort,
+        host=platform.node() or None,
+        operating_system=platform.platform(),
+        python_version=platform.python_version(),
+        langres_version=__version__,
+        cpu=platform.processor() or platform.machine() or None,
+        device=values.get("device") if isinstance(values.get("device"), str) else None,
+        dtype=values.get("dtype") if isinstance(values.get("dtype"), str) else None,
+        quantization=(
+            values.get("quantization") if isinstance(values.get("quantization"), str) else None
+        ),
+        batch_size=(
+            values.get("batch_size") if isinstance(values.get("batch_size"), int) else None
+        ),
+        worker_count=(
+            values.get("worker_count") if isinstance(values.get("worker_count"), int) else None
+        ),
+    )
+
+
+def _measurement_rows(result: ExecutionResult) -> tuple[Any, ...]:
+    if result.checkpoint is not None:
+        return result.checkpoint.rows
+    return tuple(result.pairs.rows)
+
+
+def _token_usage(result: ExecutionResult) -> TokenUsage | None:
+    usages = [
+        row.provenance["usage"]
+        for row in _measurement_rows(result)
+        if isinstance(row.provenance.get("usage"), Mapping)
+    ]
+    if not usages:
+        return None
+
+    def total(name: str) -> int | None:
+        count = 0
+        for usage in usages:
+            value = usage.get(name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                return None
+            count += value
+        return count
+
+    first = usages[0]
+    provider = first.get("provider")
+    model = first.get("model")
+    provider_usage: dict[str, dict[str, str | int | float | bool | None]] = {}
+    if isinstance(provider, str) or isinstance(model, str):
+        provider_usage["generation"] = {
+            "provider": provider if isinstance(provider, str) else None,
+            "model": model if isinstance(model, str) else None,
+        }
+    return TokenUsage(
+        input_tokens=total("input_tokens"),
+        output_tokens=total("output_tokens"),
+        cache_read_input_tokens=total("cache_read_input_tokens"),
+        cache_creation_input_tokens=total("cache_creation_input_tokens"),
+        reasoning_output_tokens=total("reasoning_tokens"),
+        provider_usage=provider_usage,
+    )
+
+
+def _observed_usd(result: ExecutionResult) -> float | None:
+    rows = _measurement_rows(result)
+    if any(row.provenance.get("cost_unknown") is True for row in rows):
+        return None
+    costs = [row.provenance.get("cost_usd") for row in rows]
+    measured = [float(value) for value in costs if isinstance(value, (int, float))]
+    return sum(measured) if measured else None
+
+
+def _embedding_facts(
+    result: ExecutionResult,
+    *,
+    vectors_produced: int | None,
+) -> EmbeddingFacts | None:
+    for row in _measurement_rows(result):
+        retrieve = row.provenance.get("retrieve")
+        if not isinstance(retrieve, Mapping):
+            continue
+        facts = retrieve.get("embedding")
+        if not isinstance(facts, Mapping):
+            continue
+        dimension = facts.get("dimension")
+        dtype = facts.get("dtype")
+        dimensions = dimension if isinstance(dimension, int) else None
+        dtype_name = dtype if isinstance(dtype, str) else None
+        bytes_per_scalar = {
+            "float16": 2,
+            "float32": 4,
+            "float64": 8,
+            "int8": 1,
+        }.get(dtype_name or "")
+        bytes_per_vector = (
+            dimensions * bytes_per_scalar
+            if dimensions is not None and bytes_per_scalar is not None
+            else None
+        )
+        return EmbeddingFacts(
+            dimensions=dimensions,
+            dtype=dtype_name,
+            vectors_produced=vectors_produced,
+            bytes_per_vector=bytes_per_vector,
+            total_vector_bytes=(
+                vectors_produced * bytes_per_vector
+                if vectors_produced is not None and bytes_per_vector is not None
+                else None
+            ),
+        )
+    return None
+
+
+def _measurements(
+    result: ExecutionResult,
+    *,
+    cache_hit: bool,
+    hardware_cohort: str,
+    resource_runtime: Mapping[str, Mapping[str, Any]],
+    price_snapshots: Mapping[str, PriceSnapshot],
+) -> tuple[StageMeasurement, ...]:
     output: list[StageMeasurement] = []
     first_finished = True
+    usage = _token_usage(result)
+    observed_usd = _observed_usd(result)
+    steps = {step.stage_id: step for step in result.plan.steps}
     for event in result.events:
         if event.kind != "finish" or event.duration_seconds is None:
             continue
@@ -186,6 +337,20 @@ def _measurements(result: ExecutionResult, *, cache_hit: bool) -> tuple[StageMea
             if count is not None and event.duration_seconds > 0
             else None
         )
+        slot = _resource_slot(event.role)
+        step = steps[event.stage_id]
+        price = None
+        derived_usd = None
+        if slot == "llm":
+            for key, candidate in price_snapshots.items():
+                if step.resource_ref is not None and key in step.resource_ref:
+                    price = candidate
+                    break
+            if price is not None and usage is not None:
+                derived_usd = price.reprice(
+                    usage,
+                    requests=event.input_count,
+                ).amount
         output.append(
             StageMeasurement(
                 stage_id=event.stage_id,
@@ -197,10 +362,61 @@ def _measurements(result: ExecutionResult, *, cache_hit: bool) -> tuple[StageMea
                 pairs_out=event.output_count if event.role != "clusterer_stage" else None,
                 throughput_per_second=throughput,
                 cache_hit=cache_hit if first_finished else None,
+                resource_slot=slot,
+                resource_id=step.resource_ref,
+                usage=usage if slot == "llm" else None,
+                embedding=(
+                    _embedding_facts(result, vectors_produced=event.input_count)
+                    if slot == "embedder"
+                    else None
+                ),
+                runtime=(
+                    _runtime_facts(
+                        cohort=hardware_cohort,
+                        config=resource_runtime.get(slot, {}),
+                    )
+                    if slot is not None
+                    else None
+                ),
+                price=price,
+                observed_usd=observed_usd if slot == "llm" else None,
+                derived_usd=derived_usd,
+                external_calls=event.input_count if slot == "llm" else None,
             )
         )
         first_finished = False
     return tuple(output)
+
+
+def _funnel(result: ExecutionResult, *, record_count: int) -> FunnelFacts:
+    finished = [event for event in result.events if event.kind == "finish"]
+
+    def first(role: str, field: Literal["input_count", "output_count"]) -> int | None:
+        event = next((item for item in finished if item.role == role), None)
+        return getattr(event, field) if event is not None else None
+
+    rows = _measurement_rows(result)
+    parse_seen = any(event.role == "parse" for event in finished) or any(
+        "parse_error" in row.provenance for row in rows
+    )
+    parsed_abstentions = (
+        sum(row.provenance.get("parse_error") is True for row in rows) if parse_seen else None
+    )
+    select_counts = tuple(
+        event.output_count
+        for event in finished
+        if event.role.endswith("select") and event.output_count is not None
+    )
+    return FunnelFacts(
+        possible_pairs=record_count * (record_count - 1) // 2,
+        retrieved_pairs=first("retrieve", "output_count"),
+        pairs_after_select=select_counts,
+        reranker_pairs=first("rerank", "input_count"),
+        llm_pairs=first("generate", "input_count"),
+        parsed_abstentions=parsed_abstentions,
+        selected_match_edges=(select_counts[-1] if select_counts else len(result.pairs.rows)),
+        clusters_produced=first("clusterer_stage", "output_count"),
+    )
 
 
 class Experiment:
@@ -215,6 +431,7 @@ class Experiment:
         store: str | Path | RunStore | None = None,
         cache_dir: str | Path | None = None,
         budget_usd: float | None = None,
+        price_snapshots: Mapping[str, PriceSnapshot] | None = None,
         reproduction_path: str | Path | None = None,
         resume: bool = True,
         fail_fast: bool = False,
@@ -284,6 +501,7 @@ class Experiment:
             )
         )
         self.budget_usd = budget_usd if budget_usd is not None else protocol.budget_usd
+        self.price_snapshots = dict(price_snapshots or {})
         self._monitor = SpendMonitor(
             budget_usd=(self.budget_usd if self.budget_usd is not None else float("inf"))
         )
@@ -367,6 +585,17 @@ class Experiment:
 
         total_attempts = deterministic_attempts + stochastic_attempts
         estimate = estimated_usd if estimate_complete else None
+        if self.protocol.paid_proof and estimate is None:
+            unknown = sorted(
+                architecture.name
+                for architecture in self.architectures
+                if architecture.estimated_usd is None
+            )
+            raise ExperimentConfigurationError(
+                "Cannot start official paid proof without a complete USD preflight "
+                f"estimate; missing estimates for {unknown}. "
+                "Fix: declare ArchitectureFactory.estimated_usd for every topology."
+            )
         if estimate is not None and self.budget_usd is not None and estimate > self.budget_usd:
             raise ExperimentConfigurationError(
                 f"Cannot start experiment: estimated maximum USD {estimate:.2f} exceeds "
@@ -455,6 +684,7 @@ class Experiment:
                                     seed,
                                     repeat_index,
                                     evaluation_id,
+                                    error=exc,
                                     budget_exceeded=isinstance(exc, BudgetExceeded),
                                 )
                             runs.append(run)
@@ -598,7 +828,7 @@ class Experiment:
             cache_id=cache_id,
             protocol=self.protocol.model_dump(mode="json"),
             attempt_id=attempt_id,
-            suppress_error_details=True,
+            suppress_error_details=False,
         ) as handle:
             try:
                 selected_threshold = self._tune_threshold(
@@ -634,8 +864,29 @@ class Experiment:
                     truth_clusters,
                     threshold=selected_threshold,
                 ).model_dump()
-                measurements = _measurements(result, cache_hit=cache_hit)
-                numeric = flatten_numeric({"quality": quality})
+                resource_runtime = getattr(model, "resource_runtime", {})
+                if not isinstance(resource_runtime, Mapping):
+                    resource_runtime = {}
+                measurements = _measurements(
+                    result,
+                    cache_hit=cache_hit,
+                    hardware_cohort=self.protocol.hardware_cohort,
+                    resource_runtime=resource_runtime,
+                    price_snapshots=self.price_snapshots,
+                )
+                funnel = _funnel(result, record_count=len(records))
+                token_usage = _token_usage(result)
+                observed_usd = _observed_usd(result)
+                numeric = flatten_numeric(
+                    {
+                        "quality": quality,
+                        "funnel": funnel.model_dump(mode="json"),
+                        "token_usage": (
+                            token_usage.model_dump(mode="json") if token_usage is not None else {}
+                        ),
+                        "usd": observed_usd,
+                    }
+                )
                 numeric["selected_threshold"] = selected_threshold
                 handle.log_metrics(numeric, headline_metric=quality.get("pair_f1"))
                 handle.record_measurements(
@@ -649,6 +900,17 @@ class Experiment:
                     budget_exceeded=True,
                 )
                 raise
+            except ExperimentCellError:
+                raise
+            except Exception as exc:
+                raise self._cell_error(
+                    architecture,
+                    benchmark_id=benchmark_id,
+                    split_id=split_id,
+                    repeat_index=repeat_index,
+                    phase="execute",
+                    error=exc,
+                ) from exc
         wall = time.perf_counter() - started
         warnings = tuple(dict.fromkeys(safe_tracker.errors))
         return ExperimentRun(
@@ -668,8 +930,12 @@ class Experiment:
             cohort_id=self.protocol.hardware_cohort,
             metrics={key: float(value) for key, value in quality.items()},
             measurements=measurements,
+            funnel=funnel,
             wall_seconds=wall,
-            usd=self._monitor.spent - starting_spend,
+            token_usage=token_usage,
+            usd=(
+                observed_usd if observed_usd is not None else self._monitor.spent - starting_spend
+            ),
             warnings=warnings,
         )
 
@@ -862,6 +1128,14 @@ class Experiment:
         error: Exception,
     ) -> None:
         """Persist a factory failure before a runnable plan exists."""
+        contextual = self._cell_error(
+            architecture,
+            benchmark_id=benchmark_id,
+            split_id=split_id,
+            repeat_index=repeat_index,
+            phase="initialize",
+            error=error,
+        )
         context = self._context(
             architecture,
             benchmark_id=benchmark_id,
@@ -884,9 +1158,39 @@ class Experiment:
             evaluation_id=evaluation_id,
             protocol=self.protocol.model_dump(mode="json"),
             attempt_id=attempt_id,
-            suppress_error_details=True,
+            suppress_error_details=False,
         ):
-            raise error
+            raise contextual from error
+
+    @staticmethod
+    def _cell_error(
+        architecture: ArchitectureFactory,
+        *,
+        benchmark_id: str,
+        split_id: str,
+        repeat_index: int,
+        phase: Literal["initialize", "execute"],
+        error: Exception,
+    ) -> ExperimentCellError:
+        action = "initialize" if phase == "initialize" else "execute"
+        if isinstance(error, ImportError):
+            fix = (
+                "Install the optional extra required by the declared resource "
+                "and retry, or pass a resource already available locally."
+            )
+        else:
+            fix = (
+                "Inspect the chained backend exception in debug mode, correct "
+                "the declared resource/configuration, and retry this cell."
+            )
+        return ExperimentCellError(
+            f"Cannot {action} architecture {architecture.name!r}. "
+            f"Cause: {type(error).__name__} during architecture {action}. "
+            f"Fix: {fix} "
+            "Resource slot: architecture factory or declared topology stage. "
+            f"Cell: {architecture.name} / {benchmark_id} / {split_id} / "
+            f"repeat {repeat_index}"
+        )
 
     def _latest(
         self,
@@ -952,6 +1256,7 @@ class Experiment:
         repeat_index: int,
         evaluation_id: str,
         *,
+        error: Exception,
         budget_exceeded: bool = False,
     ) -> ExperimentRun:
         return ExperimentRun(
@@ -970,14 +1275,19 @@ class Experiment:
             repeat_index=repeat_index,
             status="budget_exceeded" if budget_exceeded else "failed",
             cohort_id=self.protocol.hardware_cohort,
-            error_type=("BudgetExceeded" if budget_exceeded else "ExperimentCellError"),
-            error_message="cell failed; exception details suppressed",
+            error_type=("BudgetExceeded" if budget_exceeded else type(error).__name__),
+            error_message=(
+                "Budget exceeded; partial measurements are retained."
+                if budget_exceeded
+                else str(error)
+            ),
         )
 
 
 __all__ = [
     "ArchitectureFactory",
     "Experiment",
+    "ExperimentCellError",
     "ExperimentConfigurationError",
     "flatten_numeric",
 ]

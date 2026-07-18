@@ -316,6 +316,36 @@ def test_official_proof_requires_stochastic_llm_cache_semantics() -> None:
         Experiment(architectures=factories, protocol=protocol)
 
 
+def test_official_proof_requires_complete_preflight_cost_estimates() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+    factories = [
+        ArchitectureFactory(
+            name=name,
+            factory=_factory([0], name=name).factory,
+            cache_semantics=(
+                "stochastic" if name in {"RetrieveLLM", "RetrieveRerankLLM"} else "deterministic"
+            ),
+        )
+        for name in (
+            "Retrieve",
+            "RetrieveRerank",
+            "RetrieveLLM",
+            "RetrieveRerankLLM",
+            "CustomTopology",
+        )
+    ]
+
+    with pytest.raises(
+        ExperimentConfigurationError,
+        match="complete USD preflight estimate",
+    ):
+        Experiment(architectures=factories, protocol=protocol).plan()
+
+
 def test_duplicate_architecture_variant_is_rejected_before_execution() -> None:
     first = _factory([0], name="Same", variant_id="v1")
     duplicate = _factory([0], name="Same", variant_id="v1")
@@ -402,7 +432,12 @@ def test_failure_continues_to_independent_architecture(tmp_path: Path) -> None:
     ).run()
 
     assert [run.status for run in report.runs] == ["failed", "completed"]
-    assert report.runs[0].error_message == "cell failed; exception details suppressed"
+    assert report.runs[0].error_type == "ExperimentCellError"
+    assert report.runs[0].error_message is not None
+    assert "Cannot initialize architecture 'Broken'" in report.runs[0].error_message
+    assert "Fix:" in report.runs[0].error_message
+    assert "secret" not in report.runs[0].error_message
+    assert "payload" not in report.runs[0].error_message
     assert [record.status for record in RunStore(tmp_path / "runs.jsonl").read()] == [
         "failed",
         "completed",

@@ -157,6 +157,25 @@ class _ResearchRecipe(ERModel):
         return slots
 
     @property
+    def resource_runtime(self) -> dict[str, dict[str, Any]]:
+        """Weightless runtime configuration for each declared resource slot."""
+        if self._ops is None:
+            resources = self._resource_values
+        else:
+            resources = {}
+            for stage in self._require_ops():
+                if isinstance(stage, RetrieveOp):
+                    resources["embedder"] = stage.resource
+                elif isinstance(stage, Rerank):
+                    resources["reranker"] = stage.resource
+                elif isinstance(stage, Generate):
+                    resources["llm"] = stage.resource
+        return {
+            slot: resource.runtime_config.model_dump(mode="json")
+            for slot, resource in resources.items()
+        }
+
+    @property
     def backbone(self) -> str | None:
         """Compatibility sugar only when the recipe has exactly one model slot."""
         resources = self.resources

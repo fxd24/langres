@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from langres.experiments.runner import (
         ArchitectureFactory,
         Experiment,
+        ExperimentCellError,
         ExperimentConfigurationError,
     )
 
@@ -81,6 +82,7 @@ __all__ = [
     "CohortView",
     "EmbeddingFacts",
     "Experiment",
+    "ExperimentCellError",
     "ExperimentConfigurationError",
     "ExperimentPlan",
     "EvaluationIdentity",
@@ -129,6 +131,7 @@ def __getattr__(name: str) -> Any:
     if name in {
         "ArchitectureFactory",
         "Experiment",
+        "ExperimentCellError",
         "ExperimentConfigurationError",
         "flatten_numeric",
     }:

@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 from pydantic import ConfigDict
 
+from langres.architectures import Retrieve, RetrieveLLM, RetrieveRerank, RetrieveRerankLLM
 from langres.cli import main
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
@@ -24,6 +25,7 @@ from langres.experiments import (
     ArchitectureFactory,
     EvaluationProtocol,
     Experiment,
+    ExperimentCellError,
     ExperimentPlan,
     ExperimentReport,
     ReproductionBundle,
@@ -162,11 +164,57 @@ def _offline(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_public_acceptance_imports_and_signatures_are_stable() -> None:
     assert ExperimentPlan.__module__ == "langres.experiments.report"
+    assert ExperimentCellError.__module__ == "langres.experiments.runner"
     assert ReproductionBundle.__module__ == "langres.experiments.reproduction"
+    assert str(inspect.signature(ArchitectureFactory)) == (
+        "(name: 'str', factory: 'Callable[[float, SpendMonitor], ERModel]', "
+        "variant_id: 'str' = 'default', "
+        "cache_semantics: 'CacheSemantics' = 'deterministic', "
+        "estimated_usd: 'float | None' = None) -> None"
+    )
+    assert str(inspect.signature(Experiment)) == (
+        "(*, architectures: 'Sequence[ArchitectureFactory]', "
+        "protocol: 'EvaluationProtocol', tracker: 'TrackerSpec' = None, "
+        "store: 'str | Path | RunStore | None' = None, "
+        "cache_dir: 'str | Path | None' = None, budget_usd: 'float | None' = None, "
+        "price_snapshots: 'Mapping[str, PriceSnapshot] | None' = None, "
+        "reproduction_path: 'str | Path | None' = None, resume: 'bool' = True, "
+        "fail_fast: 'bool' = False) -> 'None'"
+    )
     assert str(inspect.signature(Experiment.run)) == (
         "(self, *, dry_run: 'bool' = False) -> 'ExperimentReport | ExperimentPlan'"
     )
     assert str(inspect.signature(Experiment.plan)) == "(self) -> 'ExperimentPlan'"
+    assert str(inspect.signature(Retrieve)) == (
+        "(*, embedder: 'EmbedderLike', schema: 'type[BaseModel] | None' = None, "
+        "retrieve_k: 'int' = 20, threshold: 'float' = 0.5, "
+        "text_field: 'str | None' = None, clusterer: 'Clusterer | None' = None, "
+        "budget_usd: 'float | None' = None, "
+        "monitor: 'SpendMonitor | None' = None) -> 'None'"
+    )
+    assert str(inspect.signature(RetrieveRerank)) == (
+        "(*, embedder: 'EmbedderLike', reranker: 'RerankerLike', "
+        "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
+        "threshold: 'float' = 0.5, text_field: 'str | None' = None, "
+        "clusterer: 'Clusterer | None' = None, budget_usd: 'float | None' = None, "
+        "monitor: 'SpendMonitor | None' = None) -> 'None'"
+    )
+    assert str(inspect.signature(RetrieveLLM)) == (
+        "(*, embedder: 'EmbedderLike', llm: 'LLMLike', "
+        "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
+        "llm_k: 'int' = 5, threshold: 'float' = 0.5, "
+        "text_field: 'str | None' = None, clusterer: 'Clusterer | None' = None, "
+        "budget_usd: 'float | None' = None, "
+        "monitor: 'SpendMonitor | None' = None) -> 'None'"
+    )
+    assert str(inspect.signature(RetrieveRerankLLM)) == (
+        "(*, embedder: 'EmbedderLike', reranker: 'RerankerLike', llm: 'LLMLike', "
+        "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
+        "llm_k: 'int' = 5, threshold: 'float' = 0.5, "
+        "text_field: 'str | None' = None, clusterer: 'Clusterer | None' = None, "
+        "budget_usd: 'float | None' = None, "
+        "monitor: 'SpendMonitor | None' = None) -> 'None'"
+    )
 
 
 def test_plan_and_dry_run_expose_matrix_budget_cache_and_publication(
