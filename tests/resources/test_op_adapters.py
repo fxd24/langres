@@ -442,6 +442,47 @@ def test_generate_finite_api_budget_stops_after_unknown_cost_and_retains_output(
     assert resource.calls == 1
 
 
+def test_generate_unknown_cost_error_retains_prior_paid_outputs() -> None:
+    class _PartiallyMeteredAPI(FakeLLM):
+        requires_cost_accounting = True
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            batch = super().generate(requests)
+            cost = 0.1 if self.calls == 1 else None
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(
+                            update={
+                                "cost_usd": cost,
+                                "cost_basis": "real" if cost is not None else "none",
+                            }
+                        )
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    resource = _PartiallyMeteredAPI(default_response="MATCH")
+    monitor = SpendMonitor(budget_usd=1.0)
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(monitor)
+
+    with pytest.raises(UnknownGenerationCostError) as exc_info:
+        operation.forward(_pairs())
+
+    assert resource.calls == 2
+    assert [output.request_id for output in exc_info.value.outputs] == [
+        '["a","b"]',
+        '["a","c"]',
+    ]
+    assert exc_info.value.outputs[0].cost_usd == pytest.approx(0.1)
+    assert exc_info.value.outputs[1].cost_usd is None
+    assert monitor.spent == pytest.approx(0.1)
+    assert monitor.cost_is_unknown is True
+
+
 def test_generate_unknown_api_cost_is_nonfatal_when_unbound_or_uncapped() -> None:
     class _UnknownCostAPI(FakeLLM):
         def __init__(self) -> None:

@@ -345,7 +345,7 @@ class Generate(Op[SchemaT], Spending, Generic[SchemaT]):
                     "budget cannot safely continue because unknown spend must not "
                     "be counted as $0. The successful output is available on "
                     "exception.outputs.",
-                    outputs=validated,
+                    outputs=(*outputs, *validated),
                 )
             measured_costs = [
                 output.cost_usd for output in validated if output.cost_usd is not None
