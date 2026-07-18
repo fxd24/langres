@@ -26,9 +26,10 @@ notation live in ``docs/THEORY.md``; this is its ASCII realization. Read the
 theory for *why* these are one operation (§2–§8); read this for *what* to build
 against.
 
-**Import discipline.** A strict leaf: it imports only two sibling core leaves
-(:mod:`langres.core.pairs`, :mod:`langres.core.score_type`) plus stdlib /
-pydantic / typing. It imports nothing from ``matcher`` / ``blocker`` /
+**Import discipline.** A strict leaf: it imports only sibling core leaves
+(:mod:`langres.core.pairs`, :mod:`langres.core.score_type`,
+:mod:`langres.core.serialization`) plus stdlib / pydantic / typing. It imports
+nothing from ``matcher`` / ``blocker`` /
 ``comparator`` / ``clusterer`` / ``resolver`` — those adopt *this* contract in a
 later wave, so the edge runs one way, into this module.
 """
@@ -40,12 +41,13 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Literal, TypeAlias, TypeVar, get_args
+from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, get_args, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
+from langres.core.serialization import OpSpec
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
@@ -92,6 +94,74 @@ _VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector", "unknown"}
 #: name. Correlation clustering with real weights is not approximable, so there
 #: is no exact algorithm to default to — the caller names one.
 _CLUSTERING_ALGORITHMS: frozenset[str] = frozenset({"transitive_closure", "pivot"})
+
+
+class ExecutionStep(BaseModel):
+    """One stable, safely serializable stage in an :class:`ExecutionPlan`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage_id: str
+    index: int
+    spec: OpSpec
+    resource_ref: str | None = None
+
+
+class ExecutionPlan(BaseModel):
+    """Read-only, slot-neutral description of the stages an ER model executes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_name: str | None
+    is_bound: bool
+    steps: tuple[ExecutionStep, ...]
+    replay_boundary: str | None = None
+
+
+class ExecutionEvent(BaseModel):
+    """Immutable metadata emitted around one stage execution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["start", "finish", "failure"]
+    stage_id: str
+    index: int
+    role: str
+    input_count: int | None = None
+    output_count: int | None = None
+    duration_seconds: float | None = None
+    error: str | None = None
+
+
+@runtime_checkable
+class ExecutionObserver(Protocol):
+    """Callback receiving immutable metadata events, never inference carriers."""
+
+    def __call__(self, event: ExecutionEvent) -> object:
+        """Observe ``event``; the return value is ignored."""
+        ...  # pragma: no cover
+
+
+class ExecutionObserverError(BaseModel):
+    """One observer failure isolated from inference and reported after the run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event: ExecutionEvent
+    exception_type: str
+    message: str
+
+
+class ExecutionResult(BaseModel):
+    """The selected pairs and clusters returned by :meth:`ERModel.execute`."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    plan: ExecutionPlan
+    pairs: Pairs[Any]
+    clusters: tuple[frozenset[str], ...]
+    events: tuple[ExecutionEvent, ...]
+    observer_errors: tuple[ExecutionObserverError, ...] = ()
 
 
 def _validate_clustering_algorithm(algorithm: str) -> None:
@@ -459,10 +529,32 @@ class Source(ABC, Generic[SchemaT]):
     """The pipeline entry: records in, pairs out.
 
     A ``Source`` turns :data:`Records` into a
-    :class:`~langres.core.pairs.Pairs` — a blocker's job, plus (in a later wave)
-    ownership of its own index lifecycle (building a vector index moves here). It
-    is not an :class:`Op` because its input carrier is records, not pairs.
+    :class:`~langres.core.pairs.Pairs` and owns any input-dependent preparation,
+    such as building or reusing a vector index. It is not an :class:`Op` because
+    its input carrier is records, not pairs.
     """
+
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The input schema when this Source declares one, else ``None``."""
+        return None
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether this Source is ready to execute.
+
+        A schema-less custom Source may still be fully configured, so the
+        conservative default is ``True``. Deferred sources override this.
+        """
+        return True
+
+    def prepare(self, records: Records) -> None:
+        """Bind/build input-dependent state before :meth:`forward`.
+
+        Stateless Sources need no preparation. Index-backed Sources override
+        this explicit lifecycle hook.
+        """
+        return None
 
     @abstractmethod
     def forward(self, records: Records) -> Pairs[SchemaT]:

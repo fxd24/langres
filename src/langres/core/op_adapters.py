@@ -15,19 +15,14 @@ method names and signatures.
 
 This module bridges the two **additively**. Each adapter *holds* a legacy
 component instance and implements the Op-role ``forward`` by translating through
-the carrier — it does **not** rename or re-parent the legacy classes. Nothing in
-the spine uses these adapters yet: the spine still drives the legacy path
-directly, and the flip that adopts these adapters is W3. Their only correctness
-proof this wave is ``tests/core/test_op_adapters.py``.
+the carrier — it does **not** rename or re-parent the legacy classes. Both the
+classic four-slot spine and explicit topologies execute through these adapters.
 
-**What each adapter deliberately does NOT absorb.** Index lifecycle
-(``_ensure_index_built`` / ``iter_vector_blockers``) stays in the spine this
-wave, so :class:`BlockerSource` is a thin ``stream`` bridge — a ``VectorBlocker``
-must already have its index built before its ``BlockerSource`` runs. The lazy
-spend/logging wrappers (``SpendCappedMatcher`` / ``LoggingMatcher``) are NOT
-migrated either: they depend on the scorer being a lazy generator
-(budget-check-before-next-pull), which fights the eager materialized ``Pairs``;
-that is a W3 spend-seam problem. These adapters wrap the *raw* components.
+``BlockerSource.prepare`` owns the shared vector-index bind/build lifecycle:
+same corpus reuses the index and changed input rebuilds it before ``forward``.
+Spend and per-call logging remain wrappers around the matcher held by
+``MatcherScore``; this preserves lazy budget enforcement while keeping the
+durable topology free of run-specific logging state.
 
 **Import discipline.** This module imports both :mod:`~langres.core.op` and the
 concrete legacy component contracts, so it is NOT a leaf and must NOT be
@@ -50,6 +45,7 @@ from pydantic import BaseModel
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
+from langres.core.fit import CalibratorFitMixin
 from langres.core.groups import derive_groups_from_pairs
 from langres.core.matcher import GroupwiseMatcher, Matcher
 from langres.core.op import (
@@ -143,19 +139,54 @@ class BlockerSource(Source[SchemaT], Generic[SchemaT]):
     ``similarity_score`` lands as an *unscored* row score, ``score_type is None``
     — a blocker similarity, never a judge score).
 
-    Index lifecycle is **not** absorbed: a ``VectorBlocker`` must already have its
-    index built (the spine's ``_ensure_index_built`` still owns that this wave),
-    so this adapter is a plain ``stream`` bridge.
+    ``prepare(records)`` owns the vector-index lifecycle for every nested
+    ``VectorBlocker``: identical corpora reuse the current index and changed
+    corpora rebuild before ``forward`` streams candidates.
     """
 
     def __init__(self, blocker: Blocker[SchemaT]) -> None:
         """Wrap ``blocker``.
 
         Args:
-            blocker: The legacy blocker to adapt. Any :class:`Blocker` works; its
-                index (if any) must already be built.
+            blocker: The legacy blocker to adapt. Any :class:`Blocker` works;
+                vector indexes are prepared automatically before execution.
         """
         self.blocker = blocker
+        self._prepared_corpora: dict[int, list[str]] = {}
+
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The wrapped blocker's declarative schema, when available."""
+        return self.blocker.schema
+
+    def prepare(self, records: Records) -> None:
+        """Build vector indexes in the wrapped blocker tree for ``records``.
+
+        Identical corpora reuse their current index; changed corpora rebuild
+        before streaming. Detection reads the import-light ``type_name`` rather
+        than importing semantic backends.
+        """
+
+        def vector_blockers(blocker: object) -> Iterable[Any]:
+            if getattr(blocker, "type_name", None) == "vector_blocker":
+                yield blocker
+            for child in getattr(blocker, "children", ()):
+                yield from vector_blockers(child)
+
+        for blocker in vector_blockers(self.blocker):
+            entities = [blocker.schema_factory(record) for record in records]
+            texts = [blocker.text_field_extractor(entity) for entity in entities]
+            index = blocker.vector_index
+            indexed_texts = getattr(index, "_corpus_texts", None)
+            if indexed_texts is None:
+                indexed_texts = self._prepared_corpora.get(id(blocker))
+            if blocker._index_is_built() and indexed_texts == texts:
+                continue
+            index.create_index(texts)
+            # Some lightweight/custom indexes record only cardinality. The
+            # durable Source remembers exact input so same-sized changed corpora
+            # still rebuild and identical explicit executions reuse.
+            self._prepared_corpora[id(blocker)] = list(texts)
 
     def forward(self, records: Records) -> Pairs[SchemaT]:
         """Block ``records`` into a ``Pairs`` (candidates from ``blocker.stream``)."""
@@ -236,6 +267,39 @@ class MatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
         """Score every row through ``matcher.forward`` and map judgements back onto rows."""
         judgements = self.matcher.forward(iter(pairs.to_candidates()))
         return _rescore(pairs, judgements)
+
+
+class CalibratorScore(Score[SchemaT], Generic[SchemaT]):
+    """Apply a fitted score-to-probability calibrator as an ordinary Score."""
+
+    def __init__(self, calibrator: CalibratorFitMixin) -> None:
+        super().__init__(scope="pair", out_space="calibrated_prob")
+        self.calibrator = calibrator
+
+    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
+        """Calibrate scored rows; pass deciders and unscored rows through."""
+        rows: list[PairRow[SchemaT]] = []
+        for row in pairs.rows:
+            if row.score_type is None or row.score is None:
+                rows.append(row)
+                continue
+            calibrated = self.calibrator.transform([row.score])[0]
+            rows.append(
+                row.model_copy(
+                    update={
+                        "score": calibrated,
+                        "score_type": "calibrated_prob",
+                        "provenance": {
+                            **row.provenance,
+                            "calibration": {
+                                "method": getattr(self.calibrator, "method", None),
+                                "raw_score": row.score,
+                            },
+                        },
+                    }
+                )
+            )
+        return Pairs(store=pairs.store, rows=rows)
 
 
 class GroupwiseMatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
@@ -374,6 +438,7 @@ class CanonicalizeFinalize(Finalize):
 
 __all__ = [
     "BlockerSource",
+    "CalibratorScore",
     "CanonicalizeFinalize",
     "ClustererStage",
     "ComparatorScore",

@@ -63,6 +63,21 @@ a model is the user's job, not a heuristic's. The real layering is:)
 
 3. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines.
    - Target: advanced users building bespoke pipelines.
+   - The public topology contracts are `Source`, `Op`, `Score`, `Select`,
+     `ClusterStage`, and `Sequential`. Build non-four-slot pipelines with
+     `ERModel.from_topology(ops=[...])`; inspect them with
+     `execution_plan()` and run observer-instrumented inference with
+     `execute(records, observer=...)`. Do not add a second executor around
+     these contracts. Observers receive immutable metadata only; isolate callback
+     exceptions from inference and report them in `ExecutionResult.observer_errors`.
+   - A custom component-free `Score`/`Select` that must persist uses
+     `@register_op("<role>")` plus `config`/`from_config`. Registration is
+     exact-class and fail-closed: artifacts never name Python modules to import.
+     Stateful resources still use the component registry/sidecar seam.
+   - `Source.prepare(records)` owns input-dependent bind/build work. In
+     particular, `BlockerSource` builds/reuses nested vector indexes for both
+     classic and explicit topologies; do not reintroduce a separate explicit
+     index lifecycle.
    - Real components: `Matcher` (judge), `Blocker` (`AllPairsBlocker`,
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
      matchers (`LLMMatcher`, `EmbeddingScoreMatcher`, `WeightedAverageMatcher`,

@@ -24,14 +24,14 @@ from langres.core.clusterer import Clusterer
 from langres.core.groups import ERCandidateGroup
 from langres.core.matcher import GroupwiseMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.op import Finalize, Stage, ThresholdSelect
+from langres.core.op import Finalize, Score, Select, Stage, ThresholdSelect
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
     GroupwiseMatcherScore,
     MatcherScore,
 )
-from langres.core.registry import register
+from langres.core.registry import register, register_op
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult
 from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
@@ -419,3 +419,88 @@ def test_op_spec_round_trips_every_stage_kind(tmp_path: Path) -> None:
     threshold_stage = rebuilt[3]
     assert isinstance(threshold_stage, ThresholdSelect)
     assert threshold_stage.threshold == THRESHOLD
+
+
+# ----------------------------------------------------------------------------------
+# 9. Registered custom Ops round-trip without adding serializer conditionals
+# ----------------------------------------------------------------------------------
+
+
+@register_op("persist_v2_constant_score")
+class _ConstantScore(Score[Any]):
+    """Small safe custom Score using the public config/from_config convention."""
+
+    def __init__(self, score: float) -> None:
+        super().__init__(scope="pair", out_space="heuristic")
+        self.score = score
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {"score": self.score}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_ConstantScore":
+        return cls(float(config["score"]))
+
+    def forward(self, pairs: Any) -> Any:
+        rows = [
+            row.model_copy(update={"score": self.score, "score_type": "heuristic"})
+            for row in pairs.rows
+        ]
+        return type(pairs)(store=pairs.store, rows=rows)
+
+
+@register_op("persist_v2_floor_select")
+class _FloorSelect(Select[Any]):
+    """Small safe custom Select using the same registered serializer path."""
+
+    def __init__(self, floor: float) -> None:
+        from langres.core.op import Feasible
+
+        super().__init__(feasible=Feasible.THRESHOLD)
+        self.floor = floor
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {"floor": self.floor}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_FloorSelect":
+        return cls(float(config["floor"]))
+
+    def forward(self, pairs: Any) -> Any:
+        rows = [row for row in pairs.rows if row.score is not None and row.score >= self.floor]
+        return type(pairs)(store=pairs.store, rows=rows)
+
+
+def test_registered_custom_score_and_select_round_trip_without_core_branch(
+    tmp_path: Path,
+) -> None:
+    from langres.core.blockers.all_pairs import AllPairsBlocker
+    from langres.core.models import CompanySchema
+
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            _ConstantScore(0.9),
+            _FloorSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    before = model.dedupe(RECORDS)
+
+    model.save(tmp_path)
+    manifest = ArtifactManifest.model_validate_json((tmp_path / "resolver.json").read_text())
+    assert manifest.ops is not None
+    assert [spec.role for spec in manifest.ops] == [
+        "blocker_source",
+        "persist_v2_constant_score",
+        "persist_v2_floor_select",
+        "clusterer_stage",
+    ]
+
+    loaded = ERModel.load(tmp_path)
+    assert loaded._ops is not None
+    assert isinstance(loaded._ops[1], _ConstantScore)
+    assert isinstance(loaded._ops[2], _FloorSelect)
+    assert loaded.dedupe(RECORDS) == before

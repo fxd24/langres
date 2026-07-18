@@ -365,19 +365,15 @@ class ModelState:
         at most one further call -- holds on every explicit-chain ``resolve``). See
         :meth:`_secure_chain_scores`, whose docstring states the residual limit (a
         custom Score that bills without declaring ``Spending`` is the author's own
-        bug). **Deferred, with no money hole:** the per-call ``JudgementLog``
-        (``dedupe(log=)``) is NOT threaded into an explicit chain's Scores (its Ops
-        are fixed pre-built objects); only the LOG is deferred -- the cap is not.
+        bug). Per-call ``JudgementLog`` wrapping is applied to every base
+        ``MatcherScore`` at execution time without mutating the durable chain.
 
         **A terminal ``Finalize`` is rejected** (deferred, same pattern as the
         calibrator reject): the explicit exit runs the ClusterStage and stops, so a
         ``Finalize`` would be silently dropped. Rejecting it loud beats a silent
-        drop until a later wave executes it. **A ``VectorBlocker`` Source must carry
-        a pre-built index:** the explicit run path does not call
-        ``_ensure_index_built`` (that is a four-slot convenience), so a
-        vector-backed Source with an unbuilt index raises loud from
-        ``blocker.stream`` on the first ``resolve`` -- build the index before
-        passing the blocker (the shipped rerankers use ``AllPairsBlocker``).
+        drop until a later wave executes it. A ``BlockerSource`` builds or reuses
+        any nested ``VectorBlocker`` indexes through ``Source.prepare`` before
+        streaming, the same lifecycle used by the classic path.
 
         Args:
             ops: The explicit chain, in pipeline order (a Source, zero+ Ops
@@ -394,10 +390,9 @@ class ModelState:
             monitor: An existing :class:`~langres.core.spend.SpendMonitor` to adopt
                 as this model's ledger -- the chain's Scores are capped through it.
                 Mutually exclusive with ``budget_usd``.
-            calibrator: **Rejected.** Calibration is a bespoke per-score transform
-                that only the classic path applies; a ``CalibratorScore`` Op is a
-                later wave, so an explicit chain must express any score mapping as
-                its own Score. Passing one raises.
+            calibrator: **Rejected.** This keyword is a classic-slot convenience;
+                an explicit chain must declare score mapping as a Score in
+                ``ops``. Passing one raises.
 
         Returns:
             A model wired to run ``ops``, ready to ``resolve``/``dedupe``/``compare``.
@@ -410,10 +405,9 @@ class ModelState:
         """
         if calibrator is not None:
             raise ValueError(
-                "from_topology() does not accept a calibrator: calibration is a bespoke "
-                "per-score transform only the classic four-slot path applies (a CalibratorScore "
-                "Op is a later wave). Fix: express any score mapping as a Score in the chain, or "
-                "build the classic path with from_components(...)."
+                "from_topology() does not accept the legacy calibrator= slot. Fix: express score "
+                "mapping as a Score in the explicit chain, or build the classic path with "
+                "from_components(...)."
             )
         if monitor is not None and budget_usd is not None:
             raise ValueError(
@@ -561,21 +555,25 @@ class ModelState:
 
     @property
     def is_bound(self) -> bool:
-        """Whether the four slots are filled and this model can run.
+        """Whether this model has a runnable source/topology.
 
-        ``False`` only for a named architecture constructed without a ``schema=``
-        and not yet used -- it binds on its first ``dedupe``/``compare``.
+        Explicit models delegate to their Source; classic models are bound once
+        the blocker slot exists. ``False`` is the deferred named-architecture
+        state before its first ``dedupe``/``compare``.
         """
+        if self._ops is not None:
+            return self._chain_source().is_bound
         return self._blocker is not None
 
     @property
     def schema(self) -> type[BaseModel] | None:
         """The schema this model is bound to, or ``None`` while unbound.
 
-        Derived from the blocker slot rather than stored: keeping it as separate
-        state would be a second source of truth that :meth:`from_components`
-        (which never runs ``__init__``) could not restore.
+        Derived from the explicit Source or classic blocker rather than stored:
+        keeping separate state would create a second source of truth.
         """
+        if self._ops is not None:
+            return self._chain_source().schema
         return None if self._blocker is None else getattr(self._blocker, "schema", None)
 
     @property
@@ -668,14 +666,16 @@ class ModelState:
     def _chain_source_schema(self) -> type[BaseModel] | None:
         """The schema the chain's Source blocks against (for front-door normalization),
         or ``None`` when the Source carries none (an opaque ``schema_factory`` blocker)."""
-        blocker = getattr(self._chain_source(), "blocker", None)
-        if isinstance(blocker, Blocker):
-            return blocker.schema
-        return None
+        return self._chain_source().schema
 
     def _require_bound(self, action: str) -> None:
         """Raise a directed error if this model has no components yet."""
-        if not self.is_bound:
+        if self._ops is not None:
+            raise RuntimeError(
+                f"cannot {action}: this ERModel uses an explicit, slot-neutral Op topology. "
+                "Inspect execution_plan() instead of reading a legacy four-slot property."
+            )
+        if self._blocker is None:
             raise RuntimeError(
                 f"cannot {action}: {type(self).__name__} has not been bound to a schema yet, "
                 "so it has no components. Pass schema=<YourModel> to the constructor, or "

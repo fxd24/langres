@@ -28,7 +28,10 @@ No abstract base classes live here — only registration, lookup, and errors.
 
 import difflib
 import importlib
+import inspect
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -38,6 +41,8 @@ T = TypeVar("T")
 _COMPONENT_REGISTRY: dict[str, type] = {}
 _SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {}
 _MODEL_REGISTRY: dict[str, type] = {}
+_OP_SERIALIZERS_BY_ROLE: dict[str, "OpSerializer"] = {}
+_OP_SERIALIZERS_BY_TYPE: dict[type, "OpSerializer"] = {}
 
 # Lazy-registration map: ``type_name -> module path``. A component listed here is
 # NOT eager-imported by ``langres.core`` — importing it would pull a heavy or
@@ -122,6 +127,116 @@ class UnknownModelType(KeyError):
     like :class:`UnknownComponentType`. The usual cause is loading an artifact
     whose architecture lives in a module the process never imported.
     """
+
+
+class UnknownOpType(KeyError):
+    """Raised when an explicit-chain Op role or class has no safe serializer."""
+
+
+@dataclass(frozen=True)
+class OpSerializer:
+    """One explicitly registered, fail-closed serializer for an Op class.
+
+    ``dump`` returns the scalar params and optional nested legacy component
+    carried by the stage. ``load`` reverses that data. The registry stores exact
+    classes: a subclass must register itself rather than silently losing state
+    through its parent's serializer.
+    """
+
+    role: str
+    op_type: type
+    dump: Callable[[object], tuple[dict[str, object], object | None]]
+    load: Callable[[dict[str, object], object | None, Path], object]
+    component_slot: str | None = None
+    state_owner: Callable[[object], object | None] | None = None
+
+
+def register_op_serializer(serializer: OpSerializer) -> None:
+    """Register one trusted Op serializer by role and exact class.
+
+    Registration is process-local and never imports code named by an artifact.
+    Loading can therefore construct only serializers the application already
+    imported and explicitly registered.
+    """
+    if serializer.role in _OP_SERIALIZERS_BY_ROLE:
+        raise ValueError(f"Op role '{serializer.role}' is already registered")
+    if serializer.op_type in _OP_SERIALIZERS_BY_TYPE:
+        raise ValueError(
+            f"Op type '{serializer.op_type.__name__}' already has a registered serializer"
+        )
+    _OP_SERIALIZERS_BY_ROLE[serializer.role] = serializer
+    _OP_SERIALIZERS_BY_TYPE[serializer.op_type] = serializer
+
+
+def get_op_serializer(role: str) -> OpSerializer:
+    """Return the already-registered serializer for ``role``.
+
+    Unlike component lookup, this has no lazy module import map: an artifact can
+    never cause downloaded or otherwise untrusted Python to be imported.
+    """
+    try:
+        return _OP_SERIALIZERS_BY_ROLE[role]
+    except KeyError:
+        available = sorted(_OP_SERIALIZERS_BY_ROLE)
+        suggestions = difflib.get_close_matches(role, available, n=3)
+        hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        raise UnknownOpType(
+            f"Unknown OpSpec role '{role}'.{hint} Registered roles: "
+            f"{', '.join(available) or '(none registered)'}. Import and register the "
+            "trusted Op implementation before loading this artifact."
+        ) from None
+
+
+def op_serializer_for_type(op_type: type) -> OpSerializer:
+    """Return the serializer registered for the exact ``op_type``."""
+    try:
+        return _OP_SERIALIZERS_BY_TYPE[op_type]
+    except KeyError:
+        raise UnknownOpType(
+            f"Op type '{op_type.__name__}' is not serializable. Register that exact class "
+            "with @register_op(...) or register_op_serializer(...); parent-class serializers "
+            "are deliberately not inherited because that could drop subclass state."
+        ) from None
+
+
+def _registered_op_config(op: object) -> dict[str, object]:
+    """Read a custom registered Op's ``config`` property/method as plain data."""
+    config = op.config() if callable(getattr(type(op), "config", None)) else op.config  # type: ignore[attr-defined]
+    if isinstance(config, BaseModel):
+        return config.model_dump()
+    return dict(config)
+
+
+def register_op(role: str) -> Callable[[type[T]], type[T]]:
+    """Register a safe, component-free custom Op for artifact round-trips.
+
+    The class must expose a JSON-compatible ``config`` property (or method) and
+    ``from_config(config)`` classmethod, mirroring registered model components.
+    Stateful Ops may additionally implement ``SerializableState``; the artifact
+    layer detects that capability without broadening this leaf's dependencies.
+    """
+
+    def decorator(cls: type[T]) -> type[T]:
+        if not callable(getattr(cls, "from_config", None)):
+            raise TypeError(f"@register_op({role!r}) requires {cls.__name__}.from_config(config)")
+        config_member = inspect.getattr_static(cls, "config", None)
+        if config_member is None:
+            raise TypeError(f"@register_op({role!r}) requires {cls.__name__}.config")
+
+        def dump(op: object) -> tuple[dict[str, object], object | None]:
+            return _registered_op_config(op), None
+
+        def load(params: dict[str, object], component: object | None, _state_dir: Path) -> object:
+            if component is not None:
+                raise ValueError(
+                    f"custom Op role {role!r} is component-free but its spec carries a component"
+                )
+            return cls.from_config(params)  # type: ignore[attr-defined]
+
+        register_op_serializer(OpSerializer(role=role, op_type=cls, dump=dump, load=load))
+        return cls
+
+    return decorator
 
 
 def register(type_name: str) -> Callable[[type[T]], type[T]]:
