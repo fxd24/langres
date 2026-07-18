@@ -467,7 +467,9 @@ topology `stage_id`, `timestamp`, and a schema-version field `"v": 4` (bumped
 1→2→3 for the decision contract and 3→4 for stage-aware logging; `read()`
 backfills `decision` from `verdict` for older v1/v2 rows). A retrieval or
 reranking stage that does not feed a binary threshold directly records
-`verdict=null`, rather than being mislabeled with a later match cut. Record content is **off by
+`verdict=null`, rather than being mislabeled with a later match cut. The
+`stage_id` is the exact public execution-plan step id, so experiment tooling can
+join log rows to plan metadata directly. Record content is **off by
 default** — pass `JudgementLog(path, features=True)` to additionally log
 `reasoning` and the judge's raw `provenance` (comparison levels,
 similarities, token counts, ...): this may contain PII (the record content a

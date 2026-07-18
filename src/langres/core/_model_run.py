@@ -414,8 +414,9 @@ class ModelRun(ModelState):
                 log=log,
                 threshold=self._direct_log_threshold(body, body_index),
                 model=self._stage_resource_ref(op),
-                # The Source is index 0, so body indices begin at one.
-                stage_id=f"{body_index + 1:02d}-matcher_score",
+                # The Source is index 0, so body indices begin at one. Reuse the
+                # public plan helper so the log join key is byte-identical.
+                stage_id=self._execution_step(op, body_index + 1).stage_id,
             )
             wrapped.append(
                 op.with_matcher(
@@ -663,6 +664,12 @@ class ModelRun(ModelState):
         )
 
     @staticmethod
+    def _safe_exception_type(exc: Exception) -> str:
+        """Return a bounded identifier safe to expose in observer metadata."""
+        exception_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:80]
+        return exception_type or "Exception"
+
+    @staticmethod
     def _emit_execution_event(
         event: ExecutionEvent,
         events: list[ExecutionEvent],
@@ -676,11 +683,10 @@ class ModelRun(ModelState):
         try:
             observer(event)
         except Exception as exc:
-            exception_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:80]
             observer_errors.append(
                 ExecutionObserverError(
                     event=event,
-                    exception_type=exception_type or "Exception",
+                    exception_type=ModelRun._safe_exception_type(exc),
                     message="observer callback raised; exception details suppressed",
                 )
             )
@@ -749,7 +755,10 @@ class ModelRun(ModelState):
                     role=step.spec.role,
                     input_count=input_count,
                     duration_seconds=perf_counter() - started,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=(
+                        f"{self._safe_exception_type(exc)}: stage execution failed; "
+                        "exception details suppressed"
+                    ),
                 )
                 self._emit_execution_event(failure, events, observer, observer_errors)
                 raise

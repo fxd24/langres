@@ -138,9 +138,11 @@ class OpSerializer:
     """One explicitly registered, fail-closed serializer for an Op class.
 
     ``dump`` returns the scalar params and optional nested legacy component
-    carried by the stage. ``load`` reverses that data. The registry stores exact
-    classes: a subclass must register itself rather than silently losing state
-    through its parent's serializer.
+    carried by the stage. ``validate_params`` validates the complete parameter
+    envelope before any nested component lookup/construction, and ``load``
+    reverses the validated data. The registry stores exact classes: a subclass
+    must register itself rather than silently losing state through its parent's
+    serializer.
     """
 
     role: str
@@ -149,6 +151,7 @@ class OpSerializer:
     load: Callable[[dict[str, object], object | None, Path], object]
     component_slot: str | None = None
     state_owner: Callable[[object], object | None] | None = None
+    validate_params: Callable[[dict[str, object]], dict[str, object]] | None = None
 
 
 def register_op_serializer(serializer: OpSerializer) -> None:
@@ -210,10 +213,12 @@ def _registered_op_config(op: object) -> dict[str, object]:
 def register_op(role: str) -> Callable[[type[T]], type[T]]:
     """Register a safe, component-free custom Op for artifact round-trips.
 
-    The class must expose a JSON-compatible ``config`` property (or method) and
-    ``from_config(config)`` classmethod, mirroring registered model components.
-    Stateful Ops may additionally implement ``SerializableState``; the artifact
-    layer detects that capability without broadening this leaf's dependencies.
+    The class must expose a JSON-compatible ``config`` property (or method), a
+    ``from_config(config)`` classmethod, and a Pydantic ``config_model`` with
+    ``extra="forbid"`` and ``strict=True``. The model makes allowed keys and
+    types explicit before any construction. Stateful Ops may additionally
+    implement ``SerializableState``; the artifact layer detects that capability
+    without broadening this leaf's dependencies.
     """
 
     def decorator(cls: type[T]) -> type[T]:
@@ -222,6 +227,22 @@ def register_op(role: str) -> Callable[[type[T]], type[T]]:
         config_member = inspect.getattr_static(cls, "config", None)
         if config_member is None:
             raise TypeError(f"@register_op({role!r}) requires {cls.__name__}.config")
+        config_model = getattr(cls, "config_model", None)
+        if not isinstance(config_model, type) or not issubclass(config_model, BaseModel):
+            raise TypeError(
+                f"@register_op({role!r}) requires {cls.__name__}.config_model to be a "
+                "Pydantic BaseModel class"
+            )
+        if config_model.model_config.get("extra") != "forbid":
+            raise TypeError(
+                f"@register_op({role!r}) requires {cls.__name__}.config_model to set "
+                "ConfigDict(extra='forbid')"
+            )
+        if config_model.model_config.get("strict") is not True:
+            raise TypeError(
+                f"@register_op({role!r}) requires {cls.__name__}.config_model to set "
+                "ConfigDict(strict=True)"
+            )
 
         def dump(op: object) -> tuple[dict[str, object], object | None]:
             return _registered_op_config(op), None
@@ -233,7 +254,18 @@ def register_op(role: str) -> Callable[[type[T]], type[T]]:
                 )
             return cls.from_config(params)  # type: ignore[attr-defined]
 
-        register_op_serializer(OpSerializer(role=role, op_type=cls, dump=dump, load=load))
+        def validate_params(params: dict[str, object]) -> dict[str, object]:
+            return config_model.model_validate(params).model_dump()
+
+        register_op_serializer(
+            OpSerializer(
+                role=role,
+                op_type=cls,
+                dump=dump,
+                load=load,
+                validate_params=validate_params,
+            )
+        )
         return cls
 
     return decorator

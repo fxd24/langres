@@ -240,7 +240,9 @@ the same corpus, and rebuilds it for changed input. `dedupe(log=...)` and
 saved topology. Multi-stage rows carry a stable `stage_id`, the model identity
 of that scorer, and a binary `verdict` only when its score feeds a
 `ThresholdSelect` directly; retrieval/top-k scores log `verdict=None` instead of
-borrowing the final match threshold. `compare` walks Scores and applicable
+borrowing the final match threshold. The logged `stage_id` is exactly the
+corresponding `execution_plan().steps[*].stage_id`, so logs and plans join
+without a second naming convention. `compare` walks Scores and applicable
 Selects in order, and its `LinkVerdict.backbone` names the scorer that actually
 ran before the deciding Select.
 
@@ -254,15 +256,25 @@ immutable start/finish/failure events. Observers receive counts and durations,
 never records or mutable carriers; their return value is ignored. Callback
 exceptions cannot abort or alter inference and are surfaced as sanitized
 type-only diagnostics; exception messages are suppressed so observer metadata
-cannot leak record or credential content.
+cannot leak record or credential content. Stage-failure events follow the same
+rule: observers see only a bounded exception type plus a generic failure
+message, while the original exception is still re-raised to the direct caller.
 
 A component-free custom `Score` or `Select` can opt into safe persistence:
 
 ```python
+from pydantic import BaseModel, ConfigDict
+
 from langres.core import Score, register_op
+
+class AcmeScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    weight: float
 
 @register_op("acme_score")
 class AcmeScore(Score):
+    config_model = AcmeScoreConfig
+
     def forward(self, pairs): ...
 
     @property
@@ -271,6 +283,11 @@ class AcmeScore(Score):
     @classmethod
     def from_config(cls, config: dict[str, object]) -> "AcmeScore": ...
 ```
+
+The strict, extra-forbidding `config_model` is required. Artifact loading
+validates the complete role-specific parameter envelope before any nested
+component lookup or construction. Built-in roles use the same validator seam,
+so missing, unknown, or wrongly typed parameters fail closed.
 
 Registration is fail-closed and exact-class. Loading an unknown role raises; it
 does not import a module named by the artifact. Subclasses register separately

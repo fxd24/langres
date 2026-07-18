@@ -91,12 +91,15 @@ def test_explicit_multi_stage_log_uses_each_stage_identity_and_decision_semantic
 
     assert verdict.backbone == "final/model"
     first, second = log.read()
+    matcher_steps = [
+        step for step in model.execution_plan().steps if step.spec.role == "matcher_score"
+    ]
     assert first["model"] == "student/model"
     assert first["verdict"] is None
-    assert first["stage_id"] == "01-matcher_score"
+    assert first["stage_id"] == matcher_steps[0].stage_id
     assert second["model"] == "final/model"
     assert second["verdict"] is True
-    assert second["stage_id"] == "03-matcher_score"
+    assert second["stage_id"] == matcher_steps[1].stage_id
 
 
 def test_explicit_verdict_backbone_is_the_scorer_that_ran_before_an_early_select(
@@ -331,6 +334,34 @@ def test_observer_failure_is_isolated_explicit_and_cannot_change_results() -> No
         "observer callback raised; exception details suppressed"
     }
     assert "secret record content" not in observed.model_dump_json()
+
+
+def test_stage_failure_event_suppresses_raw_exception_text() -> None:
+    class _HostileFailure(Score[Any]):
+        def __init__(self) -> None:
+            super().__init__(scope="pair", out_space="heuristic")
+
+        def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
+            raise RuntimeError("api_key=secret record=Acme provider payload")
+
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=ChainCo)),
+            _HostileFailure(),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    observed: list[ExecutionEvent] = []
+
+    with pytest.raises(RuntimeError, match="api_key=secret"):
+        model.execute(RECORDS, observer=observed.append)
+
+    failure = next(event for event in observed if event.kind == "failure")
+    assert failure.error == (
+        "RuntimeError: stage execution failed; exception details suppressed"
+    )
+    assert "secret" not in failure.model_dump_json()
+    assert "Acme" not in failure.model_dump_json()
 
 
 def test_classic_model_exposes_the_same_execution_contract() -> None:

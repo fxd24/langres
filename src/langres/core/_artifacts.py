@@ -29,7 +29,7 @@ import inspect
 from pathlib import Path
 from typing import Any, TypeGuard, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from langres.core.op import OutSpace, Stage, ThresholdSelect, TopKSelect
 from langres.core.op_adapters import (
@@ -49,6 +49,75 @@ from langres.core.registry import (
 )
 from langres.core.serialization import ComponentSpec, OpSpec, SerializableState
 from langres.core.spend_cap import SpendCappedMatcher
+
+
+class _EmptyOpParams(BaseModel):
+    """No-parameter role envelope; unknown keys are always malformed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _MatcherScoreParams(BaseModel):
+    """Validated matcher-score parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    out_space: OutSpace
+
+
+class _ThresholdSelectParams(BaseModel):
+    """Validated threshold-select parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    threshold: float
+
+
+class _TopKSelectParams(BaseModel):
+    """Validated top-k parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    k: int
+
+
+def _validate_params_as(
+    model: type[BaseModel], params: dict[str, object]
+) -> dict[str, object]:
+    """Validate one complete role envelope and return normalized plain data."""
+    return model.model_validate(params).model_dump()
+
+
+def _validate_empty_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_EmptyOpParams, params)
+
+
+def _validate_matcher_score_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_MatcherScoreParams, params)
+
+
+def _validate_threshold_select_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_ThresholdSelectParams, params)
+
+
+def _validate_topk_select_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_TopKSelectParams, params)
+
+
+def _validated_op_params(serializer: OpSerializer, params: dict[str, object]) -> dict[str, object]:
+    """Fail closed on params before any nested component is reconstructed."""
+    if serializer.validate_params is None:
+        raise ValueError(
+            f"OpSpec role {serializer.role!r} has no registered parameter schema. "
+            "Register a validate_params callable before loading artifacts."
+        )
+    try:
+        return serializer.validate_params(params)
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise ValueError(
+            f"OpSpec role {serializer.role!r} has invalid params; allowed keys and types are "
+            f"defined by its registered serializer: {exc}"
+        ) from None
 
 
 def component_config_dict(obj: object) -> dict[str, object]:
@@ -265,6 +334,7 @@ def _register_builtin_op_serializers() -> None:
             _dump_blocker_source,
             _load_blocker_source,
             component_slot="blocker",
+            validate_params=_validate_empty_params,
         ),
         OpSerializer(
             "comparator_score",
@@ -272,6 +342,7 @@ def _register_builtin_op_serializers() -> None:
             _dump_comparator_score,
             _load_comparator_score,
             component_slot="comparator",
+            validate_params=_validate_empty_params,
         ),
         OpSerializer(
             "matcher_score",
@@ -279,6 +350,7 @@ def _register_builtin_op_serializers() -> None:
             _dump_matcher_score,
             _load_matcher_score,
             component_slot="module",
+            validate_params=_validate_matcher_score_params,
         ),
         OpSerializer(
             "calibrator_score",
@@ -286,20 +358,29 @@ def _register_builtin_op_serializers() -> None:
             _dump_calibrator_score,
             _load_calibrator_score,
             component_slot="calibrator",
+            validate_params=_validate_empty_params,
         ),
         OpSerializer(
             "threshold_select",
             ThresholdSelect,
             _dump_threshold_select,
             _load_threshold_select,
+            validate_params=_validate_threshold_select_params,
         ),
-        OpSerializer("topk_select", TopKSelect, _dump_topk_select, _load_topk_select),
+        OpSerializer(
+            "topk_select",
+            TopKSelect,
+            _dump_topk_select,
+            _load_topk_select,
+            validate_params=_validate_topk_select_params,
+        ),
         OpSerializer(
             "clusterer_stage",
             ClustererStage,
             _dump_clusterer_stage,
             _load_clusterer_stage,
             component_slot="clusterer",
+            validate_params=_validate_empty_params,
         ),
     )
     for serializer in serializers:
@@ -355,6 +436,7 @@ def op_spec(stage: Stage) -> OpSpec:
     """
     role, params, component = _stage_serialization(stage)
     serializer = get_op_serializer(role)
+    params = _validated_op_params(serializer, params)
     component_spec_obj = None
     if component is not None:
         if serializer.component_slot is None:
@@ -423,6 +505,7 @@ def rebuild_op(spec: OpSpec, *, state_dir: Path) -> Stage:
         serializer = get_op_serializer(spec.role)
     except UnknownOpType as exc:
         raise ValueError(f"rebuild_op() got an unknown OpSpec role {spec.role!r}: {exc}") from None
+    params = _validated_op_params(serializer, spec.params)
 
     # Validate the role/component envelope BEFORE looking up or constructing the
     # nested component. A stray component on a component-free role must not
@@ -446,7 +529,7 @@ def rebuild_op(spec: OpSpec, *, state_dir: Path) -> Stage:
             )
         component = rebuild_component(component_spec_obj, state_dir=state_dir)
 
-    stage = serializer.load(spec.params, component, state_dir)
+    stage = serializer.load(params, component, state_dir)
     if not isinstance(
         stage,
         (

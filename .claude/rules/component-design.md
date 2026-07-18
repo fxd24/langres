@@ -71,8 +71,10 @@ a model is the user's job, not a heuristic's. The real layering is:)
      these contracts. Observers receive immutable metadata only; isolate callback
      exceptions from inference and report them in `ExecutionResult.observer_errors`.
    - A custom component-free `Score`/`Select` that must persist uses
-     `@register_op("<role>")` plus `config`/`from_config`. Registration is
-     exact-class and fail-closed: artifacts never name Python modules to import.
+     `@register_op("<role>")` plus `config`/`from_config` and a strict Pydantic
+     `config_model` (`extra="forbid"`, `strict=True`). Registration is
+     exact-class and fail-closed: the complete parameter envelope is validated
+     before construction, and artifacts never name Python modules to import.
      Stateful resources still use the component registry/sidecar seam.
    - `Source.prepare(records)` owns input-dependent bind/build work. In
      particular, `BlockerSource` builds/reuses nested vector indexes for both

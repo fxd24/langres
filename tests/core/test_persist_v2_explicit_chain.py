@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from langres.core._artifacts import op_spec, rebuild_op
 from langres.core.blocker import Blocker
@@ -281,6 +282,23 @@ def test_op_spec_rejects_unregistered_inner_matcher() -> None:
 # ----------------------------------------------------------------------------------
 
 
+@register("persist_v2_probe_matcher")
+class _ProbeMatcher(CostedNameMatcher):
+    """Construction probe proving params validation precedes component lookup."""
+
+    type_name: ClassVar[str] = "persist_v2_probe_matcher"
+    rebuilds: ClassVar[int] = 0
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_ProbeMatcher":
+        cls.rebuilds += 1
+        return cls()
+
+
 def test_rebuild_op_rejects_unknown_role(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown OpSpec role"):
         rebuild_op(OpSpec(role="not_a_role"), state_dir=tmp_path)
@@ -338,6 +356,36 @@ def test_rebuild_op_rejects_a_missing_component_slot_before_lookup(tmp_path: Pat
 
     with pytest.raises(ValueError, match="requires component slot 'module'"):
         rebuild_op(spec, state_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"out_space": 7},
+        {"out_space": "not_a_score_family"},
+        {"out_space": "prob_llm", "unexpected": "credential-like text"},
+    ],
+)
+def test_rebuild_op_validates_params_before_component_construction(
+    tmp_path: Path,
+    params: dict[str, object],
+) -> None:
+    spec = OpSpec(
+        role="matcher_score",
+        params=params,
+        component=ComponentSpec(
+            type_name="persist_v2_probe_matcher",
+            slot="module",
+            config={},
+        ),
+    )
+    before = _ProbeMatcher.rebuilds
+
+    with pytest.raises(ValueError, match="invalid params"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+    assert _ProbeMatcher.rebuilds == before
 
 
 # ----------------------------------------------------------------------------------
@@ -473,9 +521,17 @@ def test_op_spec_round_trips_every_stage_kind(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------------------
 
 
+class _ConstantScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    score: float
+
+
 @register_op("persist_v2_constant_score")
 class _ConstantScore(Score[Any]):
     """Small safe custom Score using the public config/from_config convention."""
+
+    config_model: ClassVar[type[BaseModel]] = _ConstantScoreConfig
 
     def __init__(self, score: float) -> None:
         super().__init__(scope="pair", out_space="heuristic")
@@ -497,9 +553,17 @@ class _ConstantScore(Score[Any]):
         return type(pairs)(store=pairs.store, rows=rows)
 
 
+class _FloorSelectConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    floor: float
+
+
 @register_op("persist_v2_floor_select")
 class _FloorSelect(Select[Any]):
     """Small safe custom Select using the same registered serializer path."""
+
+    config_model: ClassVar[type[BaseModel]] = _FloorSelectConfig
 
     def __init__(self, floor: float) -> None:
         from langres.core.op import Feasible
@@ -551,3 +615,14 @@ def test_registered_custom_score_and_select_round_trip_without_core_branch(
     assert isinstance(loaded._ops[1], _ConstantScore)
     assert isinstance(loaded._ops[2], _FloorSelect)
     assert loaded.dedupe(RECORDS) == before
+
+
+def test_registered_custom_op_rejects_unknown_params_before_from_config(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid params"):
+        rebuild_op(
+            OpSpec(
+                role="persist_v2_constant_score",
+                params={"score": 0.9, "unexpected": "secret"},
+            ),
+            state_dir=tmp_path,
+        )
