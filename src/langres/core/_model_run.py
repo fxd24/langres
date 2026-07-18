@@ -24,7 +24,22 @@ over :meth:`ModelRun._scorer`) into the scoring half (:meth:`ModelRun._scored_pa
 (:meth:`ModelRun.resolve` / :meth:`ModelRun.dedupe`). The slots stay the source
 of truth -- the ops are assembled from them per call, never cached, so the
 topology is an explicit chain of ``forward`` calls over the one ``Pairs``
-carrier and behavior is byte-identical to the legacy direct-call spine.
+carrier.
+
+**What "same behavior" means, precisely.** The *resolution* outputs are
+byte-identical to the legacy direct-call spine -- clusters, ``DedupeResult``
+metadata (``score_type``/``threshold``), metrics, and the judgement log all
+match the frozen goldens (``tests/parity/test_behavior_parity_w0.py``). The one
+deliberate change is the *order* of :meth:`ModelRun.predict` /
+:meth:`ModelRun._judgements`: they now emit in deterministic carrier (blocker)
+order, because :class:`~langres.core.op_adapters.MatcherScore` maps each
+judgement back onto its row by ``(left_id, right_id)`` identity. For a pairwise
+matcher that equals the legacy matcher-emission order (one judgement per
+candidate, in candidate order), so it is invisible. For a *reordering* matcher --
+a :class:`~langres.core.matcher.GroupwiseMatcher`, whose ``forward`` regroups the
+stream by anchor -- the legacy spine returned that anchor-group emission order;
+the new spine returns the blocker's carrier order. That intentional, more
+deterministic contract is pinned by ``tests/parity/test_groupwise_spine_w3a.py``.
 
 Everything that scores goes through :meth:`ModelRun._scorer`, so the spend cap
 cannot be bypassed; ``tests/core/test_resolver_spend_cap.py`` AST-bans
@@ -56,7 +71,7 @@ from langres.core.op_adapters import (
     ComparatorScore,
     MatcherScore,
 )
-from langres.core.pairs import Pairs
+from langres.core.pairs import PairRow, Pairs
 from langres.core.results import DedupeResult, LinkVerdict
 from langres.core.spend_cap import SpendCappedMatcher
 
@@ -309,7 +324,7 @@ class ModelRun(ModelState):
         auditability -- byte-identical to what the old ``_apply_calibrator``
         produced on the judgement stream (which only ever saw scored rows).
         """
-        rows = []
+        rows: list[PairRow[Any]] = []
         for row in pairs.rows:
             if row.score_type is None or row.score is None:
                 rows.append(row)
