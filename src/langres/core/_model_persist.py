@@ -12,9 +12,10 @@ no pickle**: every slot is rebuilt from the component registry by its
 ``type_name``.
 """
 
+import importlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 from langres._version import __version__ as LANGRES_VERSION
 from langres.core._artifacts import (
@@ -40,8 +41,78 @@ logger = logging.getLogger(__name__)
 _MANIFEST_FILENAME = "resolver.json"
 
 
+def _hub_callable(name: str) -> Callable[..., Any]:
+    """Resolve one outer Hub adapter function without a core -> Hub import edge."""
+    function = getattr(importlib.import_module("langres.hub"), name, None)
+    if not callable(function):
+        raise RuntimeError(f"langres.hub does not provide callable {name!r}")
+    return cast(Callable[..., Any], function)
+
+
 class ModelPersistence(ModelState):
     """``save`` / ``load`` / ``config_dict`` for an ``ERModel``."""
+
+    def save_pretrained(
+        self,
+        path: str | Path,
+        *,
+        measurement_summary: object | None = None,
+        model_card: object | None = None,
+        claim_level: str = "reference-only",
+        allow_sensitive_config: bool = False,
+        overwrite: bool = False,
+    ) -> Path:
+        """Write a validated shareable bundle using the optional Hub lifecycle.
+
+        Dispatch is resolved only when called, so local Resolver construction
+        and ``import langres`` never import the Hub adapter or optional client.
+        """
+        save_pretrained = _hub_callable("save_pretrained")
+        return cast(
+            Path,
+            save_pretrained(
+                self,
+                path,
+                measurement_summary=measurement_summary,
+                model_card=model_card,
+                claim_level=claim_level,
+                allow_sensitive_config=allow_sensitive_config,
+                overwrite=overwrite,
+            ),
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_or_path: str | Path,
+        *,
+        revision: str | None = None,
+        token: str | None = None,
+        transport: object | None = None,
+    ) -> Any:
+        """Load a local or immutable Hub bundle through the safe outer manifest."""
+        from_pretrained = _hub_callable("_from_pretrained_as")
+        model = from_pretrained(
+            cls,
+            repo_or_path,
+            revision=revision,
+            token=token,
+            transport=transport,
+        )
+        if not isinstance(model, cls):
+            raise TypeError(
+                f"artifact reconstructed {type(model).__name__}, not requested {cls.__name__}"
+            )
+        return model
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        **kwargs: object,
+    ) -> Any:
+        """Build and upload a fresh validated bundle through a lazy Hub transport."""
+        push_to_hub = _hub_callable("push_to_hub")
+        return push_to_hub(self, repo_id, **kwargs)
 
     def _slots(self) -> list[tuple[str, object]]:
         """Ordered (slot_name, component) pairs, skipping absent optional slots.
