@@ -1125,8 +1125,13 @@ class ModelRun(ModelState):
         _schema, normalized = normalize_records([left, right], self._chain_source_schema())
         pair = self._chain_pair_candidate(normalized)
         current = pair
-        judgement: PairwiseJudgement | None = None
-        backbone: str | None = None
+        source_scored_rows = [row for row in pair.rows if row.score_type is not None]
+        judgement: PairwiseJudgement | None = (
+            source_scored_rows[0].to_judgement() if source_scored_rows else None
+        )
+        backbone: str | None = (
+            self._stage_resource_ref(self._chain_source()) if judgement is not None else None
+        )
         threshold: float | None = None
         for op in self._explicit_body(log=log):
             if isinstance(op, ThresholdSelect):

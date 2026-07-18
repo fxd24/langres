@@ -127,15 +127,29 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         similarities = normalized @ normalized.T
         np.fill_diagonal(similarities, -np.inf)
 
-        selected: dict[tuple[str, str], float] = {}
+        positions = {entity_id: index for index, entity_id in enumerate(ids)}
+        selected: dict[tuple[str, str], tuple[str, str, float]] = {}
         limit = min(self.k, len(entities) - 1)
         for index, row in enumerate(similarities):
             neighbours = np.argsort(-row, kind="stable")[:limit]
             for neighbour in neighbours:
-                left_id, right_id = sorted((ids[index], ids[int(neighbour)]))
-                pair = (left_id, right_id)
+                first_id, second_id = ids[index], ids[int(neighbour)]
+                pair = (
+                    (first_id, second_id)
+                    if first_id <= second_id
+                    else (second_id, first_id)
+                )
+                left_id, right_id = sorted(
+                    (first_id, second_id),
+                    key=positions.__getitem__,
+                )
                 score = float(np.clip(row[int(neighbour)], 0.0, 1.0))
-                selected[pair] = max(score, selected.get(pair, 0.0))
+                prior = selected.get(pair)
+                selected[pair] = (
+                    left_id,
+                    right_id,
+                    max(score, prior[2] if prior is not None else 0.0),
+                )
 
         provenance = {
             "retrieve": {
@@ -156,7 +170,7 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
                 decision_step="retrieve",
                 provenance=provenance,
             )
-            for (left_id, right_id), score in sorted(selected.items())
+            for _, (left_id, right_id, score) in sorted(selected.items())
         ]
         return Pairs(store=store, rows=rows)
 

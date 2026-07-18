@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 from pydantic import BaseModel
 
 from langres.architectures import (
@@ -26,6 +28,7 @@ from langres.resources import (
     FakeLLM,
     FakeReranker,
     Generate,
+    EmbeddingBatch,
     Parse,
     Rerank,
     Retrieve as RetrieveOp,
@@ -50,6 +53,16 @@ LLM_RESPONSES = {
 
 class _IdentifierOnly(BaseModel):
     id: str
+
+
+class _FixedEmbedder(FakeEmbedder):
+    def __init__(self, vectors: list[list[float]]) -> None:
+        super().__init__(dimension=len(vectors[0]))
+        self._vectors = np.asarray(vectors, dtype=np.float32)
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        assert len(texts) == len(self._vectors)
+        return EmbeddingBatch(vectors=self._vectors, model_ref=self.model_ref)
 
 
 def _canonical(model: ERModel) -> list[list[str]]:
@@ -298,3 +311,41 @@ def test_explicit_retrieval_text_field_does_not_require_default_comparable_field
     pairs = retrieve.forward([{"id": "a"}, {"id": "b"}])
 
     assert [(row.left_id, row.right_id) for row in pairs.rows] == [("a", "b")]
+
+
+def test_retrieve_compare_returns_false_when_source_score_is_below_threshold() -> None:
+    recipe = Retrieve(
+        embedder=_FixedEmbedder([[1.0, 0.0], [-1.0, 0.0]]),
+        schema=CompanySchema,
+        threshold=0.5,
+    )
+
+    verdict = recipe.compare(RECORDS[0], RECORDS[1])
+
+    assert verdict.match is False
+    assert verdict.score == 0.0
+
+
+def test_retrieve_preserves_input_anchor_for_downstream_topk() -> None:
+    retrieve = RetrieveOp(
+        _FixedEmbedder(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.9, -0.1],
+            ]
+        ),
+        schema=CompanySchema,
+        k=2,
+    )
+    records = [
+        {"id": "z", "name": "Zed"},
+        {"id": "a", "name": "Alpha"},
+        {"id": "b", "name": "Beta"},
+    ]
+
+    candidates = retrieve.forward(records)
+    selected = TopKSelect[CompanySchema](1).forward(candidates)
+
+    assert any(row.left_id == "z" for row in candidates.rows)
+    assert sum("z" in (row.left_id, row.right_id) for row in selected.rows) == 1
