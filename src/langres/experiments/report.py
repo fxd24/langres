@@ -6,10 +6,11 @@ import statistics
 from collections import defaultdict
 from typing import Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from langres.experiments.identity import compute_evaluation_identity
 from langres.experiments.measurements import FunnelFacts, StageMeasurement, TokenUsage
-from langres.experiments.protocol import EvaluationProtocol
+from langres.experiments.protocol import EvaluationProtocol, FrozenDict, freeze_mapping
 from langres.experiments.statistics import SplitInstability, split_instability
 
 RunStatus = Literal["running", "completed", "failed", "budget_exceeded", "missing"]
@@ -23,7 +24,7 @@ class IncompatibleProtocolError(ValueError):
 class ExperimentRun(BaseModel):
     """One immutable matrix cell, including failures and explicit missing cells."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     recipe_id: str
     evaluation_id: str
@@ -49,6 +50,11 @@ class ExperimentRun(BaseModel):
     error_type: str | None = None
     error_message: str | None = None
 
+    @field_validator("metrics", mode="after")
+    @classmethod
+    def _freeze_metrics(cls, value: dict[str, float | None]) -> FrozenDict:
+        return freeze_mapping(value)
+
     def fact(self, name: str) -> float | None:
         """Resolve a quality metric or standard resource/performance fact."""
         if name in self.metrics:
@@ -59,26 +65,45 @@ class ExperimentRun(BaseModel):
         return None
 
 
+class MetricConfidenceInterval(BaseModel):
+    """Availability state for a statistically valid metric interval."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    method: str
+    status: Literal["available", "unavailable", "insufficient"]
+    lower: float | None = None
+    upper: float | None = None
+    confidence_level: float | None = None
+    samples: int | None = None
+    reason: str | None = None
+
+
 class AggregateRow(BaseModel):
     """Aggregate with explicit completion/failure/missing denominators."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     architecture: str
     benchmark_id: str
+    split_id: str
+    cohort_id: str
     metric: str
-    mean: float | None
+    aggregation: Literal["mean", "median"]
+    value: float | None
     standard_deviation: float | None
     completed: int
+    observed: int
     failed: int
     missing: int
     total: int
+    confidence_interval: MetricConfidenceInterval
 
 
 class CohortView(BaseModel):
     """Rows that may be compared for performance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     evaluation_id: str
     cohort_id: str
@@ -88,7 +113,7 @@ class CohortView(BaseModel):
 class ReportConstraints(BaseModel):
     """Optional hard filters applied before ranking or Pareto analysis."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     max_p95_latency_seconds: float | None = Field(default=None, ge=0.0)
     max_wall_seconds: float | None = Field(default=None, ge=0.0)
@@ -97,28 +122,63 @@ class ReportConstraints(BaseModel):
     max_loaded_memory_bytes: int | None = Field(default=None, ge=0)
     minimum_metrics: dict[str, float] = Field(default_factory=dict)
 
+    @field_validator("minimum_metrics", mode="after")
+    @classmethod
+    def _freeze_minimum_metrics(cls, value: dict[str, float]) -> FrozenDict:
+        return freeze_mapping(value)
+
 
 class ExperimentReport(BaseModel):
     """All planned cells and derived views; failed/missing rows are never imputed."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     version: Literal[1] = 1
-    evaluation_id: str
+    evaluation_id: str = ""
     protocol: EvaluationProtocol
     runs: tuple[ExperimentRun, ...]
     reproduction_artifact: str | None = None
 
     @model_validator(mode="after")
     def _validate_evaluation(self) -> "ExperimentReport":
-        incompatible = {
-            run.evaluation_id for run in self.runs if run.evaluation_id != self.evaluation_id
-        }
-        if incompatible:
+        derived_id = compute_evaluation_identity(self.protocol).evaluation_id
+        if self.evaluation_id and self.evaluation_id != derived_id:
             raise ValueError(
-                "all report rows must share evaluation_id; separate incompatible protocols "
-                f"into their own reports: {sorted(incompatible)}"
+                f"evaluation_id {self.evaluation_id!r} does not match protocol-derived "
+                f"evaluation_id {derived_id!r}"
             )
+        object.__setattr__(self, "evaluation_id", derived_id)
+        for index, run in enumerate(self.runs):
+            if run.evaluation_id != derived_id:
+                raise ValueError(
+                    f"runs[{index}].evaluation_id does not match protocol-derived "
+                    f"evaluation_id {derived_id!r}"
+                )
+            if run.benchmark_id not in self.protocol.benchmark_ids:
+                raise ValueError(
+                    f"runs[{index}].benchmark_id={run.benchmark_id!r} is not in protocol "
+                    f"benchmark_ids={self.protocol.benchmark_ids!r}"
+                )
+            if run.split_id not in self.protocol.split_ids:
+                raise ValueError(
+                    f"runs[{index}].split_id={run.split_id!r} is not in protocol "
+                    f"split_ids={self.protocol.split_ids!r}"
+                )
+            if run.split_seed not in self.protocol.split_seeds:
+                raise ValueError(
+                    f"runs[{index}].split_seed={run.split_seed!r} is not in protocol "
+                    f"split_seeds={self.protocol.split_seeds!r}"
+                )
+            if run.repeat_index >= self.protocol.stochastic_repeats:
+                raise ValueError(
+                    f"runs[{index}].repeat_index={run.repeat_index} exceeds protocol "
+                    f"stochastic_repeats={self.protocol.stochastic_repeats}"
+                )
+            if run.cohort_id != self.protocol.hardware_cohort:
+                raise ValueError(
+                    f"runs[{index}].cohort_id={run.cohort_id!r} does not match protocol "
+                    f"hardware_cohort={self.protocol.hardware_cohort!r}"
+                )
         return self
 
     @property
@@ -138,11 +198,11 @@ class ExperimentReport(BaseModel):
         )
 
     def aggregate(self, metric: str) -> tuple[AggregateRow, ...]:
-        grouped: dict[tuple[str, str], list[ExperimentRun]] = defaultdict(list)
+        grouped: dict[tuple[str, str, str, str], list[ExperimentRun]] = defaultdict(list)
         for run in self.runs:
-            grouped[(run.architecture, run.benchmark_id)].append(run)
+            grouped[(run.architecture, run.benchmark_id, run.split_id, run.cohort_id)].append(run)
         output: list[AggregateRow] = []
-        for (architecture, benchmark_id), rows in sorted(grouped.items()):
+        for (architecture, benchmark_id, split_id, cohort_id), rows in sorted(grouped.items()):
             values = [
                 value
                 for run in rows
@@ -150,19 +210,49 @@ class ExperimentReport(BaseModel):
                 for value in [run.metrics.get(metric)]
                 if value is not None
             ]
+            completed = sum(run.status == "completed" for run in rows)
             failed = sum(run.status in {"failed", "budget_exceeded"} for run in rows)
             missing = sum(run.status in {"missing", "running"} for run in rows)
+            aggregate_value: float | None = None
+            if values:
+                aggregate_value = (
+                    statistics.fmean(values)
+                    if self.protocol.aggregation == "mean"
+                    else statistics.median(values)
+                )
+            if self.protocol.confidence_interval_method == "none":
+                interval = MetricConfidenceInterval(
+                    method="none",
+                    status="unavailable",
+                    reason="confidence intervals are disabled by the evaluation protocol",
+                )
+            else:
+                interval = MetricConfidenceInterval(
+                    method=self.protocol.confidence_interval_method,
+                    status="unavailable",
+                    confidence_level=self.protocol.confidence_level,
+                    samples=self.protocol.bootstrap_samples,
+                    reason=(
+                        "paired entity/cluster observations are unavailable on summary rows; "
+                        "attach paired fixed-test-set inputs before computing this interval"
+                    ),
+                )
             output.append(
                 AggregateRow(
                     architecture=architecture,
                     benchmark_id=benchmark_id,
+                    split_id=split_id,
+                    cohort_id=cohort_id,
                     metric=metric,
-                    mean=statistics.fmean(values) if values else None,
+                    aggregation=self.protocol.aggregation,
+                    value=aggregate_value,
                     standard_deviation=statistics.stdev(values) if len(values) > 1 else None,
-                    completed=len(values),
+                    completed=completed,
+                    observed=len(values),
                     failed=failed,
                     missing=missing,
                     total=len(rows),
+                    confidence_interval=interval,
                 )
             )
         return tuple(output)
@@ -203,12 +293,40 @@ class ExperimentReport(BaseModel):
         """Return the non-dominated completed rows within exactly one cohort."""
         if not objectives:
             raise ValueError("pareto requires at least one objective")
+        invalid_directions = {
+            name: direction
+            for name, direction in objectives.items()
+            if direction not in {"min", "max"}
+        }
+        if invalid_directions:
+            raise ValueError(
+                f"Pareto objective direction must be 'min' or 'max'; got {invalid_directions!r}"
+            )
+        standard_facts = {
+            "wall_seconds",
+            "p95_latency_seconds",
+            "usd",
+            "model_size_bytes",
+            "loaded_memory_bytes",
+        }
+        available_names = standard_facts | {metric for run in self.runs for metric in run.metrics}
+        unknown = sorted(set(objectives) - available_names)
+        if unknown:
+            raise ValueError(
+                f"unknown Pareto objective(s) {unknown}; available objectives are "
+                f"{sorted(available_names)}"
+            )
         cohort_ids = {run.cohort_id for run in self.runs if run.status == "completed"}
         if cohort_id is None and len(cohort_ids) > 1:
             raise IncompatibleProtocolError(
                 "Pareto comparison spans multiple hardware cohorts; pass cohort_id explicitly"
             )
         selected_cohort = cohort_id or (next(iter(cohort_ids)) if cohort_ids else None)
+        if cohort_id is not None and cohort_id not in cohort_ids:
+            raise IncompatibleProtocolError(
+                f"cohort_id {cohort_id!r} is not present; available cohorts are "
+                f"{sorted(cohort_ids)}"
+            )
         candidates = [
             run
             for run in self.runs

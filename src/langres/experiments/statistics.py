@@ -5,14 +5,17 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from langres.experiments.protocol import FrozenDict, freeze_mapping
 
 
 class PairedScore(BaseModel):
     """Two architecture scores on one fixed-test-set entity."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     entity_id: str
     baseline: float | None
@@ -23,30 +26,39 @@ class PairedScore(BaseModel):
 class BootstrapInterval(BaseModel):
     """Paired candidate-minus-baseline uncertainty over cluster/entity units."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     observed_difference: float
-    lower: float
-    upper: float
+    lower: float | None
+    upper: float | None
     confidence_level: float
-    standard_error: float
+    standard_error: float | None
     n_entities: int
     n_clusters: int
     samples: int
     unit: str = "cluster"
+    status: Literal["available", "insufficient"]
+    reason: str | None = None
 
 
 class SplitInstability(BaseModel):
     """Sensitivity across split seeds, intentionally not a population CI."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     values: dict[str, float]
     mean: float
-    standard_deviation: float
+    standard_deviation: float | None
     minimum: float
     maximum: float
-    range: float
+    range: float | None
+    status: Literal["available", "insufficient"]
+    reason: str | None = None
+
+    @field_validator("values", mode="after")
+    @classmethod
+    def _freeze_values(cls, value: dict[str, float]) -> FrozenDict:
+        return freeze_mapping(value)
 
 
 def _percentile(values: list[float], probability: float) -> float:
@@ -70,8 +82,8 @@ def paired_entity_bootstrap(
     seed: int = 0,
 ) -> BootstrapInterval:
     """Bootstrap paired entity scores by cluster, never by dependent pair rows."""
-    if samples < 1:
-        raise ValueError("samples must be positive")
+    if samples < 100:
+        raise ValueError("paired bootstrap requires at least 100 samples")
     if not 0.0 < confidence_level < 1.0:
         raise ValueError("confidence_level must be between 0 and 1")
     if not observations:
@@ -97,6 +109,21 @@ def paired_entity_bootstrap(
         all_differences.append(difference)
 
     cluster_ids = tuple(by_cluster)
+    observed_difference = statistics.fmean(all_differences)
+    if len(cluster_ids) < 2:
+        return BootstrapInterval(
+            observed_difference=observed_difference,
+            lower=None,
+            upper=None,
+            confidence_level=confidence_level,
+            standard_error=None,
+            n_entities=len(observations),
+            n_clusters=len(cluster_ids),
+            samples=samples,
+            status="insufficient",
+            reason="paired bootstrap requires at least two independent cluster/entity units",
+        )
+
     rng = random.Random(seed)
     bootstrap_differences: list[float] = []
     for _ in range(samples):
@@ -110,7 +137,7 @@ def paired_entity_bootstrap(
         statistics.stdev(bootstrap_differences) if len(bootstrap_differences) > 1 else 0.0
     )
     return BootstrapInterval(
-        observed_difference=statistics.fmean(all_differences),
+        observed_difference=observed_difference,
         lower=_percentile(bootstrap_differences, alpha),
         upper=_percentile(bootstrap_differences, 1.0 - alpha),
         confidence_level=confidence_level,
@@ -118,6 +145,7 @@ def paired_entity_bootstrap(
         n_entities=len(observations),
         n_clusters=len(cluster_ids),
         samples=samples,
+        status="available",
     )
 
 
@@ -128,11 +156,14 @@ def split_instability(values: dict[str, float]) -> SplitInstability:
     observed = list(values.values())
     minimum = min(observed)
     maximum = max(observed)
+    sufficient = len(observed) > 1
     return SplitInstability(
         values=dict(values),
         mean=statistics.fmean(observed),
-        standard_deviation=statistics.stdev(observed) if len(observed) > 1 else 0.0,
+        standard_deviation=statistics.stdev(observed) if sufficient else None,
         minimum=minimum,
         maximum=maximum,
-        range=maximum - minimum,
+        range=maximum - minimum if sufficient else None,
+        status="available" if sufficient else "insufficient",
+        reason=None if sufficient else "split instability requires at least two split seeds",
     )

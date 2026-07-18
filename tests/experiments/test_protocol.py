@@ -32,9 +32,10 @@ def test_ordinary_protocol_may_omit_budget() -> None:
     assert protocol.budget_usd is None
 
 
-def test_official_profile_requires_positive_budget_cap() -> None:
+def test_official_zero_cost_protocol_may_be_uncapped_but_requires_dataset_provenance() -> None:
     kwargs = {
         "benchmark_ids": ("a",),
+        "dataset_fingerprints": {"a": "sha256:a"},
         "split_ids": ("fixed",),
         "fixed_test_set_id": "a:test:v1",
         "split_seeds": (0,),
@@ -45,10 +46,44 @@ def test_official_profile_requires_positive_budget_cap() -> None:
         "publication_profile": "official",
     }
 
-    with pytest.raises(ValidationError, match="budget_usd"):
-        EvaluationProtocol(**kwargs)
+    assert EvaluationProtocol(**kwargs).budget_usd is None
 
+
+def test_official_paid_proof_requires_exact_twenty_dollar_cap() -> None:
+    kwargs = {
+        "benchmark_ids": ("a",),
+        "dataset_revisions": {"a": "revision-a"},
+        "split_ids": ("fixed",),
+        "fixed_test_set_id": "a:test:v1",
+        "split_seeds": (0,),
+        "threshold_split_id": "validation",
+        "test_split_id": "test",
+        "hardware_cohort": "cpu-local",
+        "benchmark_version": "1",
+        "publication_profile": "official",
+        "paid_proof": True,
+    }
+
+    with pytest.raises(ValidationError, match="exactly USD 20"):
+        EvaluationProtocol(**kwargs, budget_usd=19.0)
     assert EvaluationProtocol(**kwargs, budget_usd=20.0).budget_usd == 20.0
+
+
+def test_official_protocol_requires_data_and_test_set_identity() -> None:
+    common = {
+        "benchmark_ids": ("a",),
+        "split_ids": ("fixed",),
+        "split_seeds": (0,),
+        "threshold_split_id": "validation",
+        "test_split_id": "test",
+        "hardware_cohort": "cpu-local",
+        "benchmark_version": "1",
+        "publication_profile": "official",
+    }
+    with pytest.raises(ValidationError, match="dataset fingerprint or revision"):
+        EvaluationProtocol(**common, fixed_test_set_id="composite:test")
+    with pytest.raises(ValidationError, match="test-set identity"):
+        EvaluationProtocol(**common, dataset_fingerprints={"a": "sha256:a"})
 
 
 def test_threshold_and_test_splits_must_be_distinct() -> None:
@@ -80,9 +115,27 @@ def test_unknown_protocol_version_is_rejected() -> None:
         )
 
 
+def test_ci_protocol_requires_enough_bootstrap_samples() -> None:
+    with pytest.raises(ValidationError, match="at least 100"):
+        EvaluationProtocol(
+            benchmark_ids=("a",),
+            split_ids=("fixed",),
+            fixed_test_set_id="a:test:v1",
+            split_seeds=(0,),
+            threshold_split_id="validation",
+            test_split_id="test",
+            hardware_cohort="cpu-local",
+            benchmark_version="1",
+            confidence_interval_method="paired_entity_bootstrap",
+            bootstrap_samples=20,
+        )
+
+
 def test_official_proof_expands_to_exactly_18_cells_before_retries() -> None:
     protocol = EvaluationProtocol.official_proof(
         benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
         split_seed=11,
     )
 
@@ -104,3 +157,4 @@ def test_official_proof_expands_to_exactly_18_cells_before_retries() -> None:
     }
     assert protocol.budget_usd == 20.0
     assert protocol.publication_profile == "official"
+    assert protocol.paid_proof is True

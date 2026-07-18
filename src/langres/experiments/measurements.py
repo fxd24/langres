@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from langres.core.usage import LLMUsage
+from langres.experiments.protocol import FrozenDict, freeze_mapping
 
 JsonScalar = str | int | float | bool | None
 ProviderUsage = dict[str, dict[str, JsonScalar]]
@@ -16,7 +17,7 @@ ProviderUsage = dict[str, dict[str, JsonScalar]]
 class TokenUsage(BaseModel):
     """Inclusive token totals plus optional subsets; unknown is ``None``."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -24,6 +25,11 @@ class TokenUsage(BaseModel):
     cache_creation_input_tokens: int | None = Field(default=None, ge=0)
     reasoning_output_tokens: int | None = Field(default=None, ge=0)
     provider_usage: ProviderUsage = Field(default_factory=dict)
+
+    @field_validator("provider_usage", mode="after")
+    @classmethod
+    def _freeze_provider_usage(cls, value: ProviderUsage) -> FrozenDict:
+        return freeze_mapping(value)
 
     @model_validator(mode="after")
     def _validate_subsets(self) -> "TokenUsage":
@@ -62,7 +68,7 @@ class TokenUsage(BaseModel):
 class EmbeddingFacts(BaseModel):
     """Optional size and representation facts exposed by an embedder."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     dimensions: int | None = Field(default=None, ge=1)
     dtype: str | None = None
@@ -89,7 +95,7 @@ class EmbeddingFacts(BaseModel):
 class RuntimeFacts(BaseModel):
     """Hardware/runtime cohort facts attached to performance measurements."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     hardware_cohort: str = Field(min_length=1)
     host: str | None = None
@@ -107,11 +113,16 @@ class RuntimeFacts(BaseModel):
     batch_size: int | None = Field(default=None, ge=1)
     worker_count: int | None = Field(default=None, ge=1)
 
+    @field_validator("library_versions", mode="after")
+    @classmethod
+    def _freeze_library_versions(cls, value: dict[str, str]) -> FrozenDict:
+        return freeze_mapping(value)
+
 
 class PriceEstimate(BaseModel):
     """A cost derived from immutable usage and pricing facts."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     amount: float | None = Field(default=None, ge=0.0)
     currency: str
@@ -122,7 +133,7 @@ class PriceEstimate(BaseModel):
 class PriceSnapshot(BaseModel):
     """Rates actually used, retained so tokens can be repriced later."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     provider: str
     model: str
@@ -134,6 +145,9 @@ class PriceSnapshot(BaseModel):
     cache_read_input_usd_per_token: float | None = Field(default=None, ge=0.0)
     cache_creation_input_usd_per_token: float | None = Field(default=None, ge=0.0)
     request_usd: float | None = Field(default=None, ge=0.0)
+    cache_rate_policy: Literal["specialized_required", "base_rate_fallback"] = (
+        "specialized_required"
+    )
     source: Literal["provider", "user", "catalog"]
     source_reference: str | None = None
 
@@ -196,7 +210,13 @@ class PriceSnapshot(BaseModel):
         token_field: str,
     ) -> tuple[float, list[str]]:
         if specialized_rate is None:
-            return amount, []
+            if tokens in (None, 0):
+                if tokens is None and self.cache_rate_policy == "specialized_required":
+                    return amount, [token_field]
+                return amount, []
+            if self.cache_rate_policy == "base_rate_fallback":
+                return amount, []
+            return amount, [token_field.replace("_tokens", "_usd_per_token")]
         if tokens is None:
             return amount, [token_field]
         if self.input_usd_per_token is None:  # handled by caller
@@ -207,7 +227,7 @@ class PriceSnapshot(BaseModel):
 class StageMeasurement(BaseModel):
     """One stage's Tier-0 facts plus optional capability extensions."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     version: Literal[1] = 1
     stage_id: str = Field(min_length=1)
@@ -238,7 +258,7 @@ class StageMeasurement(BaseModel):
 class FunnelFacts(BaseModel):
     """Counts through the ER funnel; unsupported facts stay ``None``."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     possible_pairs: int | None = Field(default=None, ge=0)
     retrieved_pairs: int | None = Field(default=None, ge=0)

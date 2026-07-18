@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 AggregationRule = Literal["mean", "median"]
 ConfidenceIntervalMethod = Literal["paired_entity_bootstrap", "none"]
@@ -18,6 +19,53 @@ OFFICIAL_TOPOLOGIES = (
     "CustomTopology",
 )
 STOCHASTIC_TOPOLOGIES = frozenset({"RetrieveLLM", "RetrieveRerankLLM"})
+OFFICIAL_PAID_PROOF_BUDGET_USD = 20.0
+MIN_BOOTSTRAP_SAMPLES = 100
+
+
+class FrozenDict(dict[str, Any]):
+    """A JSON-serializable dict whose complete nested value tree is immutable."""
+
+    @staticmethod
+    def _immutable(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise TypeError("experiment identity mappings are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+    def popitem(self) -> tuple[str, Any]:
+        self._raise_immutable()
+
+    def __ior__(self, value: Any) -> Self:  # type: ignore[override,misc]
+        del value
+        self._raise_immutable()
+
+    @staticmethod
+    def _raise_immutable() -> Never:
+        raise TypeError("experiment identity mappings are immutable")
+
+
+def deep_freeze(value: Any) -> Any:
+    """Recursively freeze JSON-shaped values while preserving stable serialization."""
+    if isinstance(value, Mapping):
+        return FrozenDict({str(key): deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(deep_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(deep_freeze(item) for item in value)
+    return value
+
+
+def freeze_mapping(value: Mapping[str, Any]) -> FrozenDict:
+    """Pydantic field helper for deep immutable, JSON-stable mappings."""
+    frozen = deep_freeze(value)
+    assert isinstance(frozen, FrozenDict)
+    return frozen
 
 
 class EvaluationProtocol(BaseModel):
@@ -25,18 +73,20 @@ class EvaluationProtocol(BaseModel):
 
     The protocol owns split, repeat, threshold, metric, confidence-interval,
     and cohort policy. Runtime orchestration must not duplicate those knobs.
-    Ordinary exploratory runs may be uncapped; the guarded ``official`` profile
-    requires a positive spend cap before any work starts.
+    Ordinary and zero-cost official runs may be uncapped. Official publication
+    requires pinned data/test identity; the separate paid-proof policy requires
+    its exact USD 20 cap before work starts.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     version: Literal[1] = 1
     benchmark_ids: tuple[str, ...] = Field(min_length=1)
     dataset_fingerprints: dict[str, str] = Field(default_factory=dict)
     dataset_revisions: dict[str, str] = Field(default_factory=dict)
     split_ids: tuple[str, ...] = Field(min_length=1)
-    fixed_test_set_id: str = Field(min_length=1)
+    fixed_test_set_id: str | None = Field(default=None, min_length=1)
+    test_set_identities: dict[str, str] = Field(default_factory=dict)
     split_seeds: tuple[int, ...] = Field(min_length=1)
     deterministic_resources: dict[str, Any] = Field(default_factory=dict)
     stochastic_repeats: int = Field(default=1, ge=1)
@@ -52,7 +102,19 @@ class EvaluationProtocol(BaseModel):
     hardware_cohort: str = Field(min_length=1)
     benchmark_version: str = Field(min_length=1)
     publication_profile: PublicationProfile = "exploratory"
+    paid_proof: bool = False
     budget_usd: float | None = Field(default=None, gt=0.0)
+
+    @field_validator(
+        "dataset_fingerprints",
+        "dataset_revisions",
+        "test_set_identities",
+        "deterministic_resources",
+        mode="after",
+    )
+    @classmethod
+    def _freeze_mappings(cls, value: dict[str, Any]) -> FrozenDict:
+        return freeze_mapping(value)
 
     @model_validator(mode="after")
     def _validate_protocol(self) -> "EvaluationProtocol":
@@ -70,8 +132,41 @@ class EvaluationProtocol(BaseModel):
             raise ValueError("split_seeds must be unique")
         if not self.pair_metrics and not self.cluster_metrics:
             raise ValueError("at least one pair or cluster metric is required")
-        if self.publication_profile == "official" and self.budget_usd is None:
-            raise ValueError("official publication_profile requires a positive budget_usd cap")
+        if (
+            self.confidence_interval_method == "paired_entity_bootstrap"
+            and self.bootstrap_samples < MIN_BOOTSTRAP_SAMPLES
+        ):
+            raise ValueError(
+                "paired_entity_bootstrap requires at least "
+                f"{MIN_BOOTSTRAP_SAMPLES} bootstrap samples"
+            )
+        if self.paid_proof:
+            if self.publication_profile != "official":
+                raise ValueError("paid_proof requires publication_profile='official'")
+            if self.budget_usd != OFFICIAL_PAID_PROOF_BUDGET_USD:
+                raise ValueError("official paid proof requires a budget cap of exactly USD 20")
+        if self.publication_profile == "official":
+            missing_data = [
+                benchmark
+                for benchmark in self.benchmark_ids
+                if benchmark not in self.dataset_fingerprints
+                and benchmark not in self.dataset_revisions
+            ]
+            if missing_data:
+                raise ValueError(
+                    "official publication requires a dataset fingerprint or revision for "
+                    f"every benchmark; missing {missing_data}"
+                )
+            per_dataset_test_ids = all(
+                benchmark in self.test_set_identities for benchmark in self.benchmark_ids
+            )
+            if self.fixed_test_set_id is None and not per_dataset_test_ids:
+                raise ValueError(
+                    "official publication requires a composite fixed_test_set_id or a "
+                    "test-set identity for every benchmark"
+                )
+        elif self.fixed_test_set_id is None and not self.test_set_identities:
+            raise ValueError("provide fixed_test_set_id or per-dataset test_set_identities")
         return self
 
     @classmethod
@@ -97,14 +192,21 @@ class EvaluationProtocol(BaseModel):
         cls,
         *,
         benchmark_ids: tuple[str, str],
+        dataset_fingerprints: Mapping[str, str] | None = None,
+        dataset_revisions: Mapping[str, str] | None = None,
+        fixed_test_set_id: str | None = None,
+        test_set_identities: Mapping[str, str] | None = None,
         split_seed: int = 0,
-        budget_usd: float = 20.0,
+        budget_usd: float = OFFICIAL_PAID_PROOF_BUDGET_USD,
     ) -> "EvaluationProtocol":
         """The guarded two-dataset protocol underlying the exact 18-cell proof."""
         return cls(
             benchmark_ids=benchmark_ids,
+            dataset_fingerprints=dict(dataset_fingerprints or {}),
+            dataset_revisions=dict(dataset_revisions or {}),
             split_ids=("official",),
-            fixed_test_set_id="official-proof:test:v1",
+            fixed_test_set_id=fixed_test_set_id,
+            test_set_identities=dict(test_set_identities or {}),
             split_seeds=(split_seed,),
             stochastic_repeats=3,
             threshold_split_id="validation",
@@ -112,6 +214,7 @@ class EvaluationProtocol(BaseModel):
             hardware_cohort="official-declared",
             benchmark_version="1",
             publication_profile="official",
+            paid_proof=True,
             budget_usd=budget_usd,
         )
 
@@ -119,7 +222,7 @@ class EvaluationProtocol(BaseModel):
         """Canonical statistical question; execution-budget policy is excluded."""
         return self.model_dump(
             mode="json",
-            exclude={"budget_usd", "publication_profile"},
+            exclude={"budget_usd", "publication_profile", "paid_proof"},
         )
 
 

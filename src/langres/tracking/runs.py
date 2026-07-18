@@ -535,14 +535,16 @@ def capture_run(
     *,
     store: str | Path | RunStore | None = None,
     tracker: ExperimentTracker = NoOpTracker(),
+    recipe_id: str | None = None,
     evaluation_id: str | None = None,
     cache_id: str | None = None,
     protocol: Mapping[str, Any] | None = None,
 ) -> Iterator[_RunHandle]:
     """Capture one run: identity, a ``running`` marker, and a terminal record.
 
-    Computes ``recipe_id`` + ``attempt_id``; if ``store`` resolves, appends a
-    ``status="running"`` line first (a crash then leaves a visible gap); sets
+    Uses the supplied experiment ``recipe_id`` or computes the legacy
+    :func:`compute_recipe_id`, then mints ``attempt_id``; if ``store`` resolves,
+    appends a ``status="running"`` line first (a crash then leaves a visible gap); sets
     the :data:`current_run` contextvar (set/reset token, so a nested capture
     restores the parent on exit); then, *inside* the protected block, starts the
     tracker and yields a :class:`_RunHandle`. Starting the tracker sits inside
@@ -554,16 +556,16 @@ def capture_run(
     the terminal line, and finishes the tracker. ``store=None`` writes NOTHING.
     """
     resolved_store = resolve_store(store)
-    recipe_id = compute_recipe_id(context)
+    resolved_recipe_id = recipe_id or compute_recipe_id(context)
     started_at = datetime.now(UTC).isoformat()
-    attempt_id = f"{recipe_id}-{started_at}"
+    attempt_id = f"{resolved_recipe_id}-{started_at}"
     started_perf = time.perf_counter()
 
     if resolved_store is not None:
         resolved_store.append(
             RunRecord(
                 attempt_id=attempt_id,
-                recipe_id=recipe_id,
+                recipe_id=resolved_recipe_id,
                 context=context,
                 evaluation_id=evaluation_id,
                 cache_id=cache_id,
@@ -572,7 +574,7 @@ def capture_run(
                 status="running",
             )
         )
-    handle = _RunHandle(attempt_id, recipe_id, tracker)
+    handle = _RunHandle(attempt_id, resolved_recipe_id, tracker)
     token = current_run.set(attempt_id)
     error_type: str | None = None
     error_message: str | None = None
@@ -597,7 +599,7 @@ def capture_run(
             resolved_store.append(
                 RunRecord(
                     attempt_id=attempt_id,
-                    recipe_id=recipe_id,
+                    recipe_id=resolved_recipe_id,
                     context=context,
                     evaluation_id=evaluation_id,
                     cache_id=cache_id,

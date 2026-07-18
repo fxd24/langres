@@ -95,6 +95,32 @@ def test_repricing_preserves_unknown_instead_of_manufacturing_zero() -> None:
     assert "input_tokens" in estimate.missing
 
 
+def test_cache_tokens_need_specialized_rate_unless_fallback_is_explicit() -> None:
+    usage = TokenUsage(
+        input_tokens=100,
+        output_tokens=0,
+        cache_read_input_tokens=25,
+        cache_creation_input_tokens=0,
+    )
+    strict = PriceSnapshot(
+        provider="provider",
+        model="model",
+        captured_at="2026-07-18T12:00:00Z",
+        input_usd_per_token=0.001,
+        output_usd_per_token=0.002,
+        source="provider",
+    )
+    fallback = strict.model_copy(update={"cache_rate_policy": "base_rate_fallback"})
+
+    strict_estimate = strict.reprice(usage, requests=0)
+    fallback_estimate = fallback.reprice(usage, requests=0)
+
+    assert strict_estimate.amount is None
+    assert "cache_read_input_usd_per_token" in strict_estimate.missing
+    assert fallback_estimate.complete is True
+    assert fallback_estimate.amount == pytest.approx(0.1)
+
+
 def test_embedding_runtime_stage_and_funnel_facts_round_trip() -> None:
     embedding = EmbeddingFacts(
         dimensions=384,

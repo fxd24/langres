@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from langres.experiments import compute_recipe_identity
 from langres.tracking.runs import RunContext, RunRecord, RunStore, capture_run
 
 
@@ -27,9 +28,11 @@ def test_capture_run_persists_experiment_identity_and_measurements(tmp_path: Pat
     path = tmp_path / "runs.jsonl"
     context = RunContext(experiment="research", dataset_name="dataset", budget_usd=None)
 
+    experiment_recipe_id = compute_recipe_identity(context).recipe_id
     with capture_run(
         context,
         store=path,
+        recipe_id=experiment_recipe_id,
         evaluation_id="evaluation",
         cache_id="cache",
         protocol={"version": 1},
@@ -37,6 +40,7 @@ def test_capture_run_persists_experiment_identity_and_measurements(tmp_path: Pat
         handle.record_measurements([{"stage_id": "retrieve", "wall_seconds": 0.1}])
 
     [record] = RunStore(path).read()
+    assert record.recipe_id == experiment_recipe_id
     assert record.evaluation_id == "evaluation"
     assert record.cache_id == "cache"
     assert record.protocol == {"version": 1}
