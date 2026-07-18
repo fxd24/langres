@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from langres.core.model_ref import ModelRef
 
@@ -93,9 +93,20 @@ class TransformersBackend:
     #: the two-way yes/no subspace this backend can attribute mass to is as wide.
     _TOP_LOGPROBS = 20
 
-    def __init__(self, model_ref: ModelRef, *, max_new_tokens: int = 8):
+    def __init__(
+        self,
+        model_ref: ModelRef,
+        *,
+        max_new_tokens: int = 8,
+        device: str | None = None,
+        dtype: Literal["float16", "float32", "bfloat16"] | None = None,
+        local_files_only: bool = False,
+    ) -> None:
         self._ref = model_ref
         self._max_new_tokens = max_new_tokens
+        self._device = device
+        self._dtype = dtype
+        self._local_files_only = local_files_only
         self._model: Any = None
         self._tokenizer: Any = None
         # Generation on one shared model is serialized: the async path runs
@@ -110,8 +121,18 @@ class TransformersBackend:
         # Lazy, first-use only: torch/transformers must never import at module load.
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(self._ref.base)
-        model = AutoModelForCausalLM.from_pretrained(self._ref.base)
+        load_kwargs: dict[str, Any] = {
+            "revision": self._ref.revision,
+            "local_files_only": self._local_files_only,
+            "trust_remote_code": False,
+        }
+        tokenizer = AutoTokenizer.from_pretrained(self._ref.base, **load_kwargs)
+        model_kwargs = dict(load_kwargs)
+        if self._dtype is not None:
+            import torch
+
+            model_kwargs["torch_dtype"] = getattr(torch, self._dtype)
+        model = AutoModelForCausalLM.from_pretrained(self._ref.base, **model_kwargs)
         if self._ref.adapter is not None:
             try:
                 from peft import PeftModel
@@ -121,6 +142,8 @@ class TransformersBackend:
                     "Install it with `pip install langres[finetune]` (or `pip install peft`)."
                 ) from exc
             model = PeftModel.from_pretrained(model, self._ref.adapter)
+        if self._device is not None:
+            model = model.to(self._device)
         model.eval()
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token

@@ -41,19 +41,52 @@ Example (with caching):
     embeddings = cached_embedder.encode(texts)
 """
 
+from __future__ import annotations
+
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Literal, Protocol
 
 import numpy as np
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 
-from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
+from langres.core.model_ref import (
+    DEFAULT_EMBEDDING_MODEL,
+    IN_PROCESS_KINDS,
+    ModelRef,
+    UnsupportedBackboneError,
+    normalize_model_ref,
+    to_config,
+)
 from langres.core.registry import register
 
 logger = logging.getLogger(__name__)
+
+EmbeddingDType = Literal["float16", "float32", "bfloat16"]
+EmbeddingBackend = Literal["torch", "onnx", "openvino"]
+EmbeddingModelConfig = str | dict[str, str]
+_PATH_PREFIXES = ("./", "../", "/", "~")
+
+
+def _normalize_embedding_ref(model: str | dict[str, str] | ModelRef) -> ModelRef:
+    """Normalize an in-process embedding ref without general API-id inference."""
+    if isinstance(model, str):
+        kind = "local" if model.startswith(_PATH_PREFIXES) else "hf"
+        ref = normalize_model_ref({"base": model, "kind": kind})
+    else:
+        ref = normalize_model_ref(model)
+    if ref.kind not in IN_PROCESS_KINDS:
+        raise UnsupportedBackboneError(
+            "SentenceTransformerEmbedder requires kind='hf' or kind='local'; "
+            f"got kind={ref.kind!r}."
+        )
+    if ref.adapter is not None:
+        raise UnsupportedBackboneError(
+            "SentenceTransformerEmbedder does not assemble PEFT adapters. "
+            "Pass a merged embedding checkpoint instead."
+        )
+    return ref
 
 
 class SentenceTransformerEmbedderConfig(BaseModel):
@@ -65,9 +98,14 @@ class SentenceTransformerEmbedderConfig(BaseModel):
     """
 
     model_name: str = DEFAULT_EMBEDDING_MODEL
+    model_ref: EmbeddingModelConfig | None = None
     batch_size: int = 32
     show_progress_bar: bool = False
     normalize_embeddings: bool = True
+    device: str | None = None
+    dtype: EmbeddingDType | None = None
+    backend: EmbeddingBackend = "torch"
+    local_files_only: bool = False
 
 
 class FakeEmbedderConfig(BaseModel):
@@ -326,11 +364,16 @@ class SentenceTransformerEmbedder:
 
     def __init__(
         self,
-        model_name: str = DEFAULT_EMBEDDING_MODEL,
+        model_name: str | dict[str, str] | ModelRef = DEFAULT_EMBEDDING_MODEL,
         batch_size: int = 32,
         show_progress_bar: bool = False,
         normalize_embeddings: bool = True,
-    ):
+        *,
+        device: str | None = None,
+        dtype: EmbeddingDType | None = None,
+        backend: EmbeddingBackend = "torch",
+        local_files_only: bool = False,
+    ) -> None:
         """Initialize SentenceTransformerEmbedder.
 
         Args:
@@ -350,13 +393,18 @@ class SentenceTransformerEmbedder:
             Device selection (CPU/CUDA/MPS) is automatic. sentence-transformers
             will use GPU if available.
         """
-        self.model_name = model_name
+        self.model_ref = _normalize_embedding_ref(model_name)
+        self.model_name = self.model_ref.base
         self.batch_size = batch_size
         self.show_progress_bar = show_progress_bar
         self.normalize_embeddings = normalize_embeddings
-        self._model: SentenceTransformer | None = None
+        self.device = device
+        self.dtype = dtype
+        self.backend = backend
+        self.local_files_only = local_files_only
+        self._model: Any = None
 
-    def _get_model(self) -> SentenceTransformer:
+    def _get_model(self) -> Any:
         """Get or load the sentence-transformers model.
 
         Returns:
@@ -367,8 +415,23 @@ class SentenceTransformerEmbedder:
             after the first call for reuse.
         """
         if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
             logger.info("Loading sentence-transformers model: %s", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
+            model_kwargs: dict[str, Any] = {}
+            if self.dtype is not None:
+                import torch
+
+                model_kwargs["torch_dtype"] = getattr(torch, self.dtype)
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                trust_remote_code=False,
+                revision=self.model_ref.revision,
+                local_files_only=self.local_files_only,
+                model_kwargs=model_kwargs,
+                backend=self.backend,
+            )
         return self._model
 
     def config(self) -> SentenceTransformerEmbedderConfig:
@@ -379,9 +442,14 @@ class SentenceTransformerEmbedder:
         """
         return SentenceTransformerEmbedderConfig(
             model_name=self.model_name,
+            model_ref=to_config(self.model_ref),
             batch_size=self.batch_size,
             show_progress_bar=self.show_progress_bar,
             normalize_embeddings=self.normalize_embeddings,
+            device=self.device,
+            dtype=self.dtype,
+            backend=self.backend,
+            local_files_only=self.local_files_only,
         )
 
     @classmethod
@@ -394,10 +462,14 @@ class SentenceTransformerEmbedder:
         ``encode()`` call.
         """
         return cls(
-            model_name=config.model_name,
+            model_name=config.model_ref or config.model_name,
             batch_size=config.batch_size,
             show_progress_bar=config.show_progress_bar,
             normalize_embeddings=config.normalize_embeddings,
+            device=config.device,
+            dtype=config.dtype,
+            backend=config.backend,
+            local_files_only=config.local_files_only,
         )
 
     def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:
@@ -451,10 +523,7 @@ class SentenceTransformerEmbedder:
         )
 
         # Ensure numpy array (sentence-transformers should return this, but be explicit)
-        if not isinstance(embeddings, np.ndarray):
-            embeddings = np.array(embeddings, dtype=np.float32)
-
-        return embeddings
+        return np.asarray(embeddings, dtype=np.float32)
 
     @property
     def embedding_dim(self) -> int:
@@ -470,7 +539,7 @@ class SentenceTransformerEmbedder:
         model = self._get_model()
         dim = model.get_sentence_embedding_dimension()
         assert dim is not None, "Model returned None for embedding dimension"
-        return dim
+        return int(dim)
 
 
 @register("fake_embedder")
