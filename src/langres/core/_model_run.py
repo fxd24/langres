@@ -101,7 +101,7 @@ from langres.core.op_adapters import (
     ComparatorScore,
     MatcherScore,
 )
-from langres.core.pairs import Pairs
+from langres.core.pairs import PairRow, Pairs
 from langres.core.registry import UnknownOpType, op_serializer_for_type
 from langres.core.results import DedupeResult, LinkVerdict
 from langres.core.serialization import OpSpec
@@ -898,6 +898,7 @@ class ModelRun(ModelState):
         observer_errors: list[ExecutionObserverError] = []
         clusters: list[set[str]] = []
         checkpoint: ExecutionCheckpoint | None = None
+        accounting_rows: tuple[PairRow[Any], ...] = ()
 
         for step, stage in zip(plan.steps[start_index:], stages[start_index:], strict=True):
             if (
@@ -941,6 +942,11 @@ class ModelRun(ModelState):
                     assert pairs is not None
                     pairs = stage.forward(pairs)
                     output_count = len(pairs.rows)
+                    if step.spec.role == "parse":
+                        # Parse strips raw generation content while retaining
+                        # usage/cost provenance. Capture it before a later
+                        # Select filters non-matches and abstentions out.
+                        accounting_rows = tuple(pairs.rows)
                 elif isinstance(stage, ClusterStage):
                     assert pairs is not None
                     clusters = stage.forward(pairs)
@@ -981,6 +987,7 @@ class ModelRun(ModelState):
             events=tuple(events),
             observer_errors=tuple(observer_errors),
             checkpoint=checkpoint,
+            accounting_rows=accounting_rows,
         )
 
     def _closure_clusterer(self) -> Clusterer:

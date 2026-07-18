@@ -81,7 +81,11 @@ complete over-budget estimate still fails preflight. Tuning and evaluation
 measurements, calls, tokens, and known costs are aggregated in the final row;
 unknown cost remains `None`, never a fabricated zero. Budget overruns persist
 recoverable partial generation measurements, tokens, judgements, measured
-spend, and the cap flag, even though the exception still stops that cell. Resume
+spend, and the cap flag, even though the exception still stops that cell.
+Generation accounting reads sanitized post-parse rows captured before threshold
+selection, so rejected matches and abstentions remain billable without retaining
+raw model output. Price snapshots match exact resource/model identities; a
+shorter overlapping model name cannot steal another model's tariff. Resume
 accepts a completed attempt only when both its evaluation identity and complete
 protocol snapshot match. Architecture `variant_id` participates in recipe
 identity and resume selection, so two variants sharing a display name cannot

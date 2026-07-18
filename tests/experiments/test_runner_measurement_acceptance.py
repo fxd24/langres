@@ -148,6 +148,7 @@ class _CostedLLM:
         *,
         cost_usd: float | None,
         requires_cost_accounting: bool,
+        content: str = "MATCH",
     ) -> None:
         self.model_ref = ModelRef(
             base="test/accounting-model",
@@ -156,6 +157,7 @@ class _CostedLLM:
         self.runtime_config = LLMRuntimeConfig(batch_size=1, device="cpu")
         self.requires_cost_accounting = requires_cost_accounting
         self.cost_usd = cost_usd
+        self.content = content
 
     def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
         return GenerationBatch(
@@ -163,7 +165,7 @@ class _CostedLLM:
                 GenerationEnvelope.from_content(
                     request_id=request.request_id,
                     model_ref=self.model_ref,
-                    content="MATCH",
+                    content=self.content,
                     usage=GenerationUsage(
                         input_tokens=2,
                         output_tokens=1,
@@ -430,6 +432,112 @@ def test_unknown_paid_cost_remains_none_for_an_uncapped_run(tmp_path: Path) -> N
         measurement.operation_kind == "generate" and measurement.observed_usd is None
         for measurement in run.measurements
     )
+
+
+def test_no_checkpoint_accounting_keeps_filtered_generation_rows(tmp_path: Path) -> None:
+    llm = _CostedLLM(
+        cost_usd=0.25,
+        requires_cost_accounting=True,
+        content="NO_MATCH",
+    )
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.5,
+                )
+            ],
+            protocol=_protocol(),
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+            budget_usd=1.0,
+        )
+        .run()
+        .runs
+    )
+
+    assert run.status == "completed"
+    assert run.token_usage is not None
+    assert run.token_usage.input_tokens == 4
+    generation = [
+        measurement for measurement in run.measurements if measurement.operation_kind == "generate"
+    ]
+    assert [measurement.observed_usd for measurement in generation] == [0.25, 0.25]
+
+
+def test_price_snapshot_uses_exact_model_identity_not_substring_order(
+    tmp_path: Path,
+) -> None:
+    llm = _CostedLLM(cost_usd=0.0, requires_cost_accounting=True)
+    captured_at = datetime(2026, 7, 18, tzinfo=UTC)
+    wrong = PriceSnapshot(
+        provider="test",
+        model="accounting",
+        captured_at=captured_at,
+        input_usd_per_token=10.0,
+        output_usd_per_token=10.0,
+        source="user",
+    )
+    exact = PriceSnapshot(
+        provider="test",
+        model="accounting-model",
+        captured_at=captured_at,
+        input_usd_per_token=1.0,
+        output_usd_per_token=1.0,
+        source="user",
+    )
+
+    def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
+        return RetrieveLLM(
+            embedder=FakeEmbedder(dimension=8),
+            llm=llm,
+            schema=_MeasurementRecord,
+            retrieve_k=1,
+            llm_k=1,
+            threshold=threshold,
+            monitor=monitor,
+        )
+
+    [run] = (
+        Experiment(
+            architectures=[
+                ArchitectureFactory(
+                    name="RetrieveLLM",
+                    factory=build,
+                    estimated_usd=0.0,
+                )
+            ],
+            protocol=_protocol(),
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+            price_snapshots={
+                "test/accounting": wrong,
+                "test/accounting-model": exact,
+            },
+        )
+        .run()
+        .runs
+    )
+
+    generation = [
+        measurement for measurement in run.measurements if measurement.operation_kind == "generate"
+    ]
+    assert all(measurement.price == exact for measurement in generation)
+    assert [measurement.derived_usd for measurement in generation] == [3.0, 3.0]
 
 
 def test_resume_rehydrates_all_durable_typed_report_facts(tmp_path: Path) -> None:

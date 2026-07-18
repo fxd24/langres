@@ -365,6 +365,7 @@ class RetrieveLLM(_ResearchRecipe):
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
+        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
         self.threshold = threshold
@@ -419,6 +420,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
+        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
         self.threshold = threshold
