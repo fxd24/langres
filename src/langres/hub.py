@@ -32,6 +32,7 @@ from langres._pretrained_artifact import (
     read_manifest,
     render_model_card,
     validate_bundle,
+    validate_remote_manifest_inventory,
     validate_remote_inventory,
 )
 from langres.core.resolver import ERModel
@@ -427,6 +428,7 @@ def _remote_from_pretrained(
     inventory = {item.path: item.size for item in remote.files}
     if len(inventory) != len(remote.files):
         raise PretrainedArtifactError("remote repository metadata contains duplicate paths")
+    validate_remote_manifest_inventory(inventory)
     with tempfile.TemporaryDirectory(prefix="langres-hub-") as temp:
         temp_root = Path(temp)
         bootstrap = temp_root / "bootstrap"

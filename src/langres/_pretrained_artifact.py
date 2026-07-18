@@ -661,10 +661,33 @@ def validate_remote_inventory(
             raise PretrainedArtifactError(f"remote metadata has unknown size for {item.path!r}")
         if remote_size != item.size:
             raise PretrainedArtifactError(f"remote metadata size mismatch for {item.path!r}")
+    metadata_limits = {
+        manifest.resolver_path: MAX_RESOLVER_BYTES,
+        manifest.model_card_path: MAX_CARD_BYTES,
+    }
+    if manifest.measurement_summary_path is not None:
+        metadata_limits[manifest.measurement_summary_path] = MAX_SUMMARY_BYTES
+    for relative, limit in metadata_limits.items():
+        remote_size = inventory[relative]
+        if remote_size is not None and remote_size > limit:
+            raise PretrainedArtifactError(
+                f"remote metadata file {relative!r} exceeds {limit} bytes"
+            )
     manifest_size = inventory[BUNDLE_MANIFEST]
     if manifest_size is None or manifest_size > MAX_MANIFEST_BYTES:
         raise PretrainedArtifactError("remote bundle manifest size is unknown or oversized")
     return tuple(sorted(expected))
+
+
+def validate_remote_manifest_inventory(inventory: Mapping[str, int | None]) -> None:
+    """Bound the bootstrap manifest before asking a Hub client to download it."""
+    if BUNDLE_MANIFEST not in inventory:
+        raise PretrainedArtifactError(
+            f"remote artifact inventory mismatch: missing={[BUNDLE_MANIFEST]}"
+        )
+    manifest_size = inventory[BUNDLE_MANIFEST]
+    if manifest_size is None or manifest_size > MAX_MANIFEST_BYTES:
+        raise PretrainedArtifactError("remote bundle manifest size is unknown or oversized")
 
 
 def copy_allowlisted_files(

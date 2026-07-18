@@ -155,6 +155,19 @@ def test_oversized_manifest_is_rejected(model: ERModel, tmp_path: Path) -> None:
         from_pretrained(bundle)
 
 
+def test_oversized_remote_manifest_is_rejected_before_download(
+    model: ERModel, tmp_path: Path
+) -> None:
+    remote = tmp_path / "remote"
+    transport = FakeHubTransport(remote)
+    push_to_hub(model, "acme/model", transport=transport)
+    (remote / BUNDLE_MANIFEST).write_bytes(b" " * (MAX_MANIFEST_BYTES + 1))
+
+    with pytest.raises(PretrainedArtifactError, match="manifest size"):
+        from_pretrained("acme/model", transport=transport)
+    assert transport.download_calls == []
+
+
 def test_oversized_resolver_is_rejected_before_parsing(model: ERModel, tmp_path: Path) -> None:
     bundle = save_pretrained(model, tmp_path / "bundle")
     content = b" " * (MAX_RESOLVER_BYTES + 1)
@@ -170,6 +183,29 @@ def test_oversized_resolver_is_rejected_before_parsing(model: ERModel, tmp_path:
 
     with pytest.raises(PretrainedArtifactError, match="metadata file.*exceeds"):
         from_pretrained(bundle)
+
+
+def test_oversized_remote_metadata_is_rejected_before_full_download(
+    model: ERModel, tmp_path: Path
+) -> None:
+    remote = tmp_path / "remote"
+    transport = FakeHubTransport(remote)
+    push_to_hub(model, "acme/model", transport=transport)
+    content = b" " * (MAX_RESOLVER_BYTES + 1)
+    (remote / "resolver.json").write_bytes(content)
+    manifest = json.loads((remote / BUNDLE_MANIFEST).read_text())
+    import hashlib
+
+    for item in manifest["files"]:
+        if item["path"] == "resolver.json":
+            item["size"] = len(content)
+            item["sha256"] = hashlib.sha256(content).hexdigest()
+    (remote / BUNDLE_MANIFEST).write_text(json.dumps(manifest))
+
+    with pytest.raises(PretrainedArtifactError, match="resolver.json.*exceeds"):
+        from_pretrained("acme/model", transport=transport)
+    assert len(transport.download_calls) == 1
+    assert transport.download_calls[0][2] == (BUNDLE_MANIFEST,)
 
 
 def test_unknown_component_fails_preflight_before_model_load(

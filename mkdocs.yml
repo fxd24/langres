@@ -99,6 +99,7 @@ nav:
   - Tutorial - Your Own CSV: TUTORIAL_YOUR_OWN_CSV.md
   - Technical Overview: TECHNICAL_OVERVIEW.md
   - Experiments: EXPERIMENTS.md
+  - Hugging Face: HUGGING_FACE.md
   - Benchmarks: BENCHMARKS.md
   - Adding a Method: ADDING_A_METHOD.md
   - Use Cases: USE_CASES.md
