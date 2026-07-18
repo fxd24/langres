@@ -23,7 +23,7 @@ from langres.core.resolver import ERModel
 from langres.hub import from_pretrained, save_pretrained
 from langres.resources import Generate, Parse, TransformersLLM
 
-from .conftest import Entity
+from .conftest import Entity, FakeHubTransport
 
 
 def test_save_pretrained_preserves_resolver_bytes_and_loads(model: ERModel, tmp_path: Path) -> None:
@@ -48,6 +48,25 @@ def test_save_pretrained_preserves_resolver_bytes_and_loads(model: ERModel, tmp_
 def test_method_shims_match_free_functions(model: ERModel, tmp_path: Path) -> None:
     bundle = model.save_pretrained(tmp_path / "bundle")
     loaded = ERModel.from_pretrained(bundle)
+    assert loaded.config_dict() == model.config_dict()
+
+
+def test_unregistered_subclass_from_pretrained_preserves_requested_class(
+    tmp_path: Path,
+) -> None:
+    class ResearchResolver(ERModel):
+        pass
+
+    model = ResearchResolver.from_schema(Entity)
+    transport = FakeHubTransport(tmp_path / "remote")
+    model.push_to_hub("acme/research-resolver", transport=transport)
+
+    loaded = ResearchResolver.from_pretrained(
+        "acme/research-resolver",
+        transport=transport,
+    )
+
+    assert type(loaded) is ResearchResolver
     assert loaded.config_dict() == model.config_dict()
 
 
