@@ -251,7 +251,7 @@ def test_zero_network_five_topology_two_dataset_matrix_replays_expensive_stages_
     )
     monkeypatch.setattr(
         "langres.experiments.runner.detect_source_state",
-        lambda: SourceState(
+        lambda **_kwargs: SourceState(
             git_sha="a" * 40,
             lockfile_hash="lock",
             environment_hash="environment",

@@ -767,12 +767,15 @@ class ModelRun(ModelState):
         a carrier, abort a stage, or otherwise alter inference.
         """
         if self._ops is not None:
+            stages = self._execution_stages()
+            source = cast(Source[Any], stages[0])
+            source.prepare(records)
             _schema, normalized = normalize_records(records, self._chain_source_schema())
         else:
             normalized = self._prepare(records)
+            stages = self._execution_stages()
         check_no_duplicate_ids([record["id"] for record in normalized])
 
-        stages = self._execution_stages()
         plan = self.execution_plan()
         if (checkpoint_cache_id is None) != (input_fingerprint is None):
             raise ValueError("checkpoint_cache_id and input_fingerprint must be provided together")
@@ -785,6 +788,7 @@ class ModelRun(ModelState):
             observer=observer,
             checkpoint_cache_id=checkpoint_cache_id,
             input_fingerprint=input_fingerprint,
+            prepared_source=source if self._ops is not None else None,
         )
 
     def execute_from(
@@ -857,6 +861,7 @@ class ModelRun(ModelState):
         observer: ExecutionObserver | None,
         checkpoint_cache_id: str | None,
         input_fingerprint: str | None,
+        prepared_source: Source[Any] | None = None,
     ) -> ExecutionResult:
         """Run all or a suffix of the one established stage driver."""
         events: list[ExecutionEvent] = []
@@ -898,7 +903,8 @@ class ModelRun(ModelState):
             started = perf_counter()
             try:
                 if isinstance(stage, Source):
-                    stage.prepare(normalized)
+                    if stage is not prepared_source:
+                        stage.prepare(normalized)
                     pairs = stage.forward(normalized)
                     output_count = len(pairs.rows)
                 elif isinstance(stage, Op):

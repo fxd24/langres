@@ -154,7 +154,7 @@ def _offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("langres.experiments.runner.get_benchmark", lambda _name: _Benchmark())
     monkeypatch.setattr(
         "langres.experiments.runner.detect_source_state",
-        lambda: SourceState(
+        lambda **_kwargs: SourceState(
             git_sha="a" * 40,
             lockfile_hash="lock",
             environment_hash="environment",

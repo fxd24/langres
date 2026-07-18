@@ -17,6 +17,7 @@ from langres.core.op import (
     ExecutionCheckpoint,
     ExecutionEvent,
     Score,
+    Source,
     Stage,
     ThresholdSelect,
     TopKSelect,
@@ -307,6 +308,48 @@ def test_execution_plan_and_execute_do_not_require_artifact_serialization() -> N
     assert plan.steps[1].spec.role == "score"
     assert result.plan == plan
     assert score.calls == 1
+
+
+def test_execute_prepares_a_deferred_source_before_building_the_plan() -> None:
+    class DeferredSource(Source[ChainCo]):
+        def __init__(self) -> None:
+            self._schema: type[BaseModel] | None = None
+            self.prepare_calls = 0
+
+        @property
+        def schema(self) -> type[BaseModel] | None:
+            return self._schema
+
+        @property
+        def is_bound(self) -> bool:
+            return self._schema is not None
+
+        def prepare(self, records: list[Any]) -> None:
+            self.prepare_calls += 1
+            if records:
+                self._schema = ChainCo
+
+        def forward(self, records: list[Any]) -> Pairs[ChainCo]:
+            assert self._schema is ChainCo
+            blocker = AllPairsBlocker(schema=ChainCo)
+            return Pairs.from_candidates(list(blocker.stream(records)))
+
+    source = DeferredSource()
+    model = ERModel.from_topology(
+        ops=[
+            source,
+            _CountingScore(0.9),
+            ThresholdSelect(0.5),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+
+    assert model.execution_plan().steps == ()
+    result = model.execute(RECORDS)
+
+    assert result.plan.is_bound is True
+    assert len(result.plan.steps) == 4
+    assert source.prepare_calls == 1
 
 
 def test_execution_plan_resource_refs_name_actual_models() -> None:
