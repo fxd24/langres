@@ -68,6 +68,10 @@ _RESOURCE_COMPONENTS: dict[str, tuple[str, str]] = {
     "dspy_judge": ("model", "llm"),
     "select_judge": ("model", "llm"),
 }
+_OPTIONAL_COMPONENT_EXTRAS: dict[str, str] = {
+    "calibrator": "trained",
+    "random_forest": "trained",
+}
 _HF_MODEL_NAME_COMPONENTS = frozenset(
     {
         "fastembed_sparse_embedder",
@@ -76,6 +80,12 @@ _HF_MODEL_NAME_COMPONENTS = frozenset(
 )
 _INPROCESS_LLM_COMPONENTS = frozenset({"llm_judge", "resource_transformers_llm"})
 _HF_REPO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+_CREDENTIAL_KEY = re.compile(
+    r"(?:^|_)(?:api_key|access_token|auth|authorization|bearer|credential|"
+    r"credentials|authentication|cookie|openai_key|password|private_key|secret|"
+    r"set_cookie|signature|sig|subscription_key|token)(?:$|_)",
+    re.IGNORECASE,
+)
 
 
 class PretrainedArtifactError(ValueError):
@@ -408,6 +418,12 @@ def validate_bundle(root: Path) -> PretrainedManifest:
     resolver_manifest = ArtifactManifest.model_validate_json(
         (root / manifest.resolver_path).read_bytes()
     )
+    credential_paths = credential_config_paths(resolver_manifest)
+    if credential_paths:
+        raise PretrainedArtifactError(
+            "resolver.json contains credential-bearing transport configuration that cannot "
+            "be loaded from a pretrained artifact. Fields: " + ", ".join(credential_paths[:10])
+        )
     actual_refs, actual_extras = resource_facts(resolver_manifest)
     if actual_refs != manifest.model_refs or actual_extras != manifest.required_extras:
         raise PretrainedArtifactError("outer resource identity does not match resolver.json")
@@ -477,6 +493,35 @@ def sensitive_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, ..
     return tuple(sorted(set(found)))
 
 
+def credential_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, ...]:
+    """Find credentials embedded in serialized LiteLLM transport options."""
+    found: list[str] = []
+
+    def visit(value: object, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                key_text = str(key)
+                child = f"{path}.{key_text}"
+                normalized_key = re.sub(r"[^a-z0-9]+", "_", key_text.lower()).strip("_")
+                if (
+                    _CREDENTIAL_KEY.search(normalized_key) is not None
+                    and nested is not None
+                    and nested != ""
+                ):
+                    found.append(child)
+                visit(nested, child)
+        elif isinstance(value, (list, tuple)):
+            for index, nested in enumerate(value):
+                visit(nested, f"{path}[{index}]")
+
+    for index, spec in enumerate(component_specs(resolver_manifest)):
+        for field in ("provider", "extra_body"):
+            value = spec.config.get(field)
+            if value is not None:
+                visit(value, f"component[{index}].{spec.type_name}.{field}")
+    return tuple(sorted(set(found)))
+
+
 def resource_facts(
     resolver_manifest: ArtifactManifest,
 ) -> tuple[tuple[ModelRef, ...], tuple[str, ...]]:
@@ -486,6 +531,9 @@ def resource_facts(
     refs: list[ModelRef] = []
     extras: set[str] = set()
     for spec in expanded:
+        optional_extra = _OPTIONAL_COMPONENT_EXTRAS.get(spec.type_name)
+        if optional_extra is not None:
+            extras.add(optional_extra)
         metadata = _RESOURCE_COMPONENTS.get(spec.type_name)
         if metadata is None:
             if spec.type_name.startswith("resource_") or {
@@ -531,6 +579,13 @@ def build_manifest(
 ) -> PretrainedManifest:
     resolver = ArtifactManifest.model_validate_json((root / RESOLVER_MANIFEST).read_text())
     model_refs, extras = resource_facts(resolver)
+    credential_paths = credential_config_paths(resolver)
+    if credential_paths:
+        raise ArtifactEligibilityError(
+            "resolver.json contains credential-bearing transport configuration that cannot "
+            "be published. Remove these fields and inject credentials at runtime instead. "
+            "Fields: " + ", ".join(credential_paths[:10])
+        )
     sensitive_paths = sensitive_config_paths(resolver)
     if sensitive_paths and not allow_sensitive_config:
         raise ArtifactEligibilityError(

@@ -91,8 +91,9 @@ class ModelPersistence(ModelState):
         transport: object | None = None,
     ) -> Any:
         """Load a local or immutable Hub bundle through the safe outer manifest."""
-        from_pretrained = _hub_callable("from_pretrained")
+        from_pretrained = _hub_callable("_from_pretrained_as")
         model = from_pretrained(
+            cls,
             repo_or_path,
             revision=revision,
             token=token,

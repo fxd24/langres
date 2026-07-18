@@ -403,10 +403,15 @@ def save_pretrained(
     return destination
 
 
-def _load_local(path: Path, *, source: ArtifactSource) -> ERModel:
+def _load_local(
+    path: Path,
+    *,
+    source: ArtifactSource,
+    model_cls: type[ERModel],
+) -> ERModel:
     manifest = validate_bundle(path)
     preflight_resolver_manifest(path / manifest.resolver_path)
-    model = ERModel.load(path)
+    model = model_cls.load(path)
     model.pretrained_source_ = source
     return model
 
@@ -417,6 +422,7 @@ def _remote_from_pretrained(
     revision: str | None,
     token: str | None,
     transport: HubTransport,
+    model_cls: type[ERModel],
 ) -> ERModel:
     remote = transport.resolve(repo_id, revision=revision, token=token)
     source = ArtifactSource(
@@ -460,17 +466,19 @@ def _remote_from_pretrained(
         return _load_local(
             clean,
             source=source,
+            model_cls=model_cls,
         )
 
 
-def from_pretrained(
+def _from_pretrained_as(
+    model_cls: type[ERModel],
     repo_or_path: str | Path,
     *,
     revision: str | None = None,
     token: str | None = None,
     transport: HubTransport | None = None,
 ) -> ERModel:
-    """Load a validated local bundle or an immutable allowlisted Hub snapshot."""
+    """Load a bundle through the class that owns the persistence method."""
     candidate = Path(repo_or_path).expanduser()
     if candidate.exists():
         if candidate.is_symlink():
@@ -480,6 +488,7 @@ def from_pretrained(
         return _load_local(
             candidate.absolute(),
             source=ArtifactSource(kind="local", location=str(candidate.absolute())),
+            model_cls=model_cls,
         )
     if isinstance(repo_or_path, Path):
         raise FileNotFoundError(f"local pretrained artifact does not exist: {candidate}")
@@ -494,6 +503,24 @@ def from_pretrained(
         revision=revision,
         token=token,
         transport=resolved_transport,
+        model_cls=model_cls,
+    )
+
+
+def from_pretrained(
+    repo_or_path: str | Path,
+    *,
+    revision: str | None = None,
+    token: str | None = None,
+    transport: HubTransport | None = None,
+) -> ERModel:
+    """Load a validated local bundle or an immutable allowlisted Hub snapshot."""
+    return _from_pretrained_as(
+        ERModel,
+        repo_or_path,
+        revision=revision,
+        token=token,
+        transport=transport,
     )
 
 
