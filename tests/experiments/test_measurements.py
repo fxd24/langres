@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from langres.core.usage import LLMUsage
+from langres.experiments import (
+    EmbeddingFacts,
+    FunnelFacts,
+    PriceSnapshot,
+    RuntimeFacts,
+    StageMeasurement,
+    TokenUsage,
+)
+
+
+def test_token_usage_preserves_unknown_as_none_and_measured_zero_as_zero() -> None:
+    unknown = TokenUsage()
+    measured = TokenUsage(input_tokens=0, output_tokens=0)
+
+    assert unknown.input_tokens is None
+    assert unknown.output_tokens is None
+    assert measured.input_tokens == 0
+    assert measured.output_tokens == 0
+
+
+def test_llm_usage_migrates_losslessly() -> None:
+    old = LLMUsage(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_input_tokens=30,
+        cache_creation_input_tokens=10,
+        reasoning_tokens=5,
+        provider="openrouter",
+        model="provider/model",
+    )
+
+    usage = TokenUsage.from_llm_usage(old)
+
+    assert usage.input_tokens == 100
+    assert usage.reasoning_output_tokens == 5
+    assert usage.provider_usage == {
+        "langres": {"provider": "openrouter", "model": "provider/model"}
+    }
+
+
+def test_token_subsets_cannot_exceed_inclusive_totals() -> None:
+    with pytest.raises(ValidationError, match="input_tokens"):
+        TokenUsage(input_tokens=10, cache_read_input_tokens=11)
+
+    with pytest.raises(ValidationError, match="output_tokens"):
+        TokenUsage(output_tokens=2, reasoning_output_tokens=3)
+
+
+def test_price_snapshot_reprices_without_inference() -> None:
+    price = PriceSnapshot(
+        provider="provider",
+        model="model",
+        captured_at="2026-07-18T12:00:00Z",
+        input_usd_per_token=0.001,
+        output_usd_per_token=0.002,
+        cache_read_input_usd_per_token=0.0001,
+        request_usd=0.01,
+        source="user",
+    )
+    usage = TokenUsage(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_input_tokens=30,
+        cache_creation_input_tokens=0,
+    )
+
+    estimate = price.reprice(usage, requests=2)
+
+    assert estimate.complete is True
+    # input_tokens is inclusive of cache reads, so the cache rate replaces
+    # (rather than adds to) the base input rate for those 30 tokens.
+    assert estimate.amount == pytest.approx(0.133)
+    assert estimate.currency == "USD"
+
+
+def test_repricing_preserves_unknown_instead_of_manufacturing_zero() -> None:
+    price = PriceSnapshot(
+        provider="provider",
+        model="model",
+        captured_at="2026-07-18T12:00:00Z",
+        input_usd_per_token=0.001,
+        source="provider",
+    )
+
+    estimate = price.reprice(TokenUsage(), requests=None)
+
+    assert estimate.amount is None
+    assert estimate.complete is False
+    assert "input_tokens" in estimate.missing
+
+
+def test_embedding_runtime_stage_and_funnel_facts_round_trip() -> None:
+    embedding = EmbeddingFacts(
+        dimensions=384,
+        dtype="float32",
+        vectors_produced=10,
+        bytes_per_vector=1536,
+        total_vector_bytes=15360,
+    )
+    runtime = RuntimeFacts(
+        hardware_cohort="m2-cpu",
+        device="cpu",
+        dtype="float32",
+        batch_size=16,
+    )
+    stage = StageMeasurement(
+        stage_id="retrieve",
+        operation_kind="score",
+        wall_seconds=0.5,
+        items_in=10,
+        pairs_out=20,
+        throughput_per_second=40.0,
+        embedding=embedding,
+        runtime=runtime,
+        cache_hit=False,
+    )
+    funnel = FunnelFacts(possible_pairs=45, retrieved_pairs=20, llm_pairs=0)
+
+    assert StageMeasurement.model_validate_json(stage.model_dump_json()) == stage
+    assert funnel.llm_pairs == 0
+    assert funnel.reranker_pairs is None

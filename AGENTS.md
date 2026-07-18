@@ -72,6 +72,7 @@ langres/
 │   │   ├── objective.py / search_space.py / factory.py / loop.py  # the keep-if-better scorer, the config grid, config→blocker (HEAVY), the propose→run→evaluate→keep driver
 │   │   └── blocker_optimizer.py  # BlockerOptimizer (Optuna study; optuna is dev-only — lazy-import only)
 │   ├── tracking/       # observability, NOT ER modelling — beside core (one-way dep; the langres.core facade re-exports these for back-compat): runs.py (RunContext/RunStore + capture_run), judgement_log.py (JudgementLog/LoggingMatcher), factories.py (create_*_tracker), trackers/ (ExperimentTracker + lazy Mlflow/Wandb/Trackio adapters)
+│   ├── experiments/    # import-light research contracts: versioned protocol, recipe/evaluation/cache/attempt identities, measurements/repricing, paired statistics, immutable reports; extends tracking runs rather than creating another store
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   ├── curation/       # human-in-the-loop labelling + gold-set cold-start (the dissolved langres.bootstrap). core/{review,harvest,anchor_store,canonicalizer}.py are TEMPORARY W2-sweep back-compat shims re-exporting from here
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)

@@ -173,6 +173,12 @@ class RunRecord(BaseModel):
     context: RunContext
     v: int = 1
 
+    # -- Experiment protocol identity (optional for v1/back-compat records) --
+    evaluation_id: str | None = None
+    cache_id: str | None = None
+    protocol: dict[str, Any] | None = None
+    measurements: list[dict[str, Any]] | None = None
+
     # -- Timing (never hashed) --
     started_at: str
     finished_at: str | None = None
@@ -483,6 +489,7 @@ class _RunHandle:
         self._status_override: RunStatus | None = None
         self._spend_usd: float = 0.0
         self._budget_exceeded: bool = False
+        self._measurements: list[dict[str, Any]] | None = None
 
     def log_metrics(
         self,
@@ -517,6 +524,10 @@ class _RunHandle:
         self._spend_usd = spend_usd
         self._budget_exceeded = budget_exceeded
 
+    def record_measurements(self, measurements: Iterable[Mapping[str, Any]]) -> None:
+        """Attach import-neutral serialized stage measurements to the terminal record."""
+        self._measurements = [dict(measurement) for measurement in measurements]
+
 
 @contextmanager
 def capture_run(
@@ -524,6 +535,9 @@ def capture_run(
     *,
     store: str | Path | RunStore | None = None,
     tracker: ExperimentTracker = NoOpTracker(),
+    evaluation_id: str | None = None,
+    cache_id: str | None = None,
+    protocol: Mapping[str, Any] | None = None,
 ) -> Iterator[_RunHandle]:
     """Capture one run: identity, a ``running`` marker, and a terminal record.
 
@@ -551,6 +565,9 @@ def capture_run(
                 attempt_id=attempt_id,
                 recipe_id=recipe_id,
                 context=context,
+                evaluation_id=evaluation_id,
+                cache_id=cache_id,
+                protocol=dict(protocol) if protocol is not None else None,
                 started_at=started_at,
                 status="running",
             )
@@ -582,6 +599,10 @@ def capture_run(
                     attempt_id=attempt_id,
                     recipe_id=recipe_id,
                     context=context,
+                    evaluation_id=evaluation_id,
+                    cache_id=cache_id,
+                    protocol=dict(protocol) if protocol is not None else None,
+                    measurements=handle._measurements,
                     started_at=started_at,
                     finished_at=finished_at,
                     duration_seconds=duration_seconds,

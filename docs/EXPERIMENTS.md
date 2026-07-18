@@ -253,10 +253,13 @@ runs = RunStore("runs/langres_runs.jsonl").read()            # list[RunRecord]
   **status** (`running` / `completed` / `failed` / `budget_exceeded` — `running` is
   written at *start*, so a crashed run leaves a visible lone line).
 
-**The API.** `capture_run(context, *, store=None, tracker=NoOpTracker())` computes
-the identity, writes the `running` line, yields a handle (`log_metrics` /
-`record_cost` / `log_artifact` / `set_status`), then finalizes the terminal record
-on exit. `store` accepts a path or a `RunStore`; **`store=None` writes nothing**.
+**The API.** `capture_run(context, *, store=None, tracker=NoOpTracker(),
+evaluation_id=None, cache_id=None, protocol=None)` computes the identity, writes
+the `running` line, yields a handle (`log_metrics` / `record_cost` /
+`record_measurements` / `log_artifact` / `set_status`), then finalizes the
+terminal record on exit. The experiment fields are optional, so existing
+callers and old JSONL rows remain valid. `store` accepts a path or a `RunStore`;
+**`store=None` writes nothing**.
 `RunStore.read()` collapses each attempt's `running`+terminal lines
 **last-wins-by-`attempt_id`** and takes an `fcntl.flock` per append, so several
 agents can write one file safely. Pass `tracker=` (an `ExperimentTracker`) to *also*
@@ -293,6 +296,52 @@ Runnable, zero-spend end to end: **`examples/research/experiment_tracking_demo.p
 captures a two-threshold sweep, reads it back, and prints the two-run metric diff
 plus the agent two-liner. Run it:
 `uv run python examples/research/experiment_tracking_demo.py`.
+
+## Versioned experiment contracts
+
+`langres.experiments` is the import-light contract used by the next
+architecture-neutral runner. It does not replace `RunStore`; its identities and
+measurements attach to the existing `RunContext` / `RunRecord` lifecycle.
+
+```python
+from langres.experiments import (
+    EvaluationProtocol,
+    ExperimentReport,
+    TokenUsage,
+    compute_evaluation_identity,
+)
+
+protocol = EvaluationProtocol.smoke(seed=0)
+evaluation = compute_evaluation_identity(protocol)
+```
+
+The four identities answer different questions:
+
+- `recipe_id`: same logical architecture, data, split, and seeds; computed by
+  the existing `compute_recipe_id(RunContext)`.
+- `evaluation_id`: same protocol, metrics, fixed test set, and hardware cohort.
+- `cache_id`: same immutable stage output, including source state, resource
+  revisions, runtime-affecting configuration, and input fingerprint.
+- `attempt_id`: one concrete execution, still minted by `capture_run`.
+
+Deterministic cache keys exclude seeds and attempts. Seeded keys require their
+seed. Stochastic keys require repeat and attempt identity and cannot substitute
+for an independent repeat. Clean committed source can support an official cache
+claim; dirty exploratory source includes its tree/diff hash.
+
+Measurements keep unknown facts as `None`; measured zero remains `0`.
+`PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
+inference. `ExperimentReport` retains completed, failed, budget-exceeded, and
+missing cells, separates incompatible performance cohorts, and offers aggregate,
+constraint, Pareto, markdown, and split-seed-instability views. The package's
+`paired_entity_bootstrap()` computes fixed-test-set uncertainty over paired
+cluster/entity units rather than dependent pair rows.
+
+Ordinary protocols may omit `budget_usd`. The guarded `official` publication
+profile requires a positive cap. `EvaluationProtocol.official_proof(...)`
+expands the fixed five-topology, two-dataset acceptance matrix to exactly 18
+cells before retries: one deterministic attempt per cell and three attempts for
+the two LLM topologies.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)
 
