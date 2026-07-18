@@ -309,3 +309,40 @@ def test_pareto_excludes_incomplete_variants_by_default_and_exposes_denominators
     assert partial_front.failed == 1
     assert partial_front.missing == 0
     assert partial_front.total == 2
+
+
+def test_pareto_counts_omitted_planned_seed_repeat_cells_as_missing() -> None:
+    protocol = _protocol().model_copy(update={"split_seeds": (1, 2), "stochastic_repeats": 3})
+    evaluation_id = compute_evaluation_identity(protocol).evaluation_id
+    report = ExperimentReport(
+        protocol=protocol,
+        runs=(
+            _run(
+                "RetrieveLLM",
+                variant_id="llm-a",
+                evaluation_id=evaluation_id,
+                split_seed=1,
+                repeat_index=0,
+                pair_f1=1.0,
+            ),
+        ),
+    )
+
+    assert report.pareto({"pair_f1": "max"}) == ()
+    [partial] = report.pareto({"pair_f1": "max"}, include_incomplete=True)
+    assert partial.completed == 1
+    assert partial.observed == 1
+    assert partial.missing == 5
+    assert partial.total == 6
+
+
+def test_pareto_requires_a_declared_split_even_when_an_entire_split_is_omitted() -> None:
+    protocol = _protocol().model_copy(update={"split_ids": ("fixed", "omitted")})
+    evaluation_id = compute_evaluation_identity(protocol).evaluation_id
+    report = ExperimentReport(
+        protocol=protocol,
+        runs=(_run("Retrieve", evaluation_id=evaluation_id, pair_f1=0.9),),
+    )
+
+    with pytest.raises(IncompatibleProtocolError, match="multiple split_id"):
+        report.pareto({"pair_f1": "max"})

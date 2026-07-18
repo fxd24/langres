@@ -332,7 +332,8 @@ The four identities answer different questions:
   header/config spelling (`X-API-Key`, `openai-key`,
   `Ocp-Apim-Subscription-Key`, underscores, and similar forms), including
   camel-case forms (`apiKey`, `accessToken`, `clientSecret`, `privateKey`) and
-  headers represented as key/value tuple sequences.
+  headers represented as key/value tuple sequences. Cookie, `Set-Cookie`, and
+  `Authentication` header forms are credentials too and are always redacted.
   Endpoint identity retains only an explicit allowlist of routing query
   parameters, so signed-URL credentials/signatures are never hashed or
   serialized.
@@ -347,9 +348,10 @@ resources additionally require a content digest. Dirty exploratory source
 includes its tree/diff hash. Identity/protocol mappings accept JSON-shaped
 values only; unordered sets are rejected instead of depending on process hash
 order. Non-finite numbers are rejected recursively and canonical identity JSON
-uses strict JSON (`NaN`/infinity are never hashed). Default mapping fields are
-frozen too; omitting a mapping never leaves a mutable default inside a frozen
-protocol/resource/run object.
+uses strict JSON (`NaN`/infinity are never hashed), including `Decimal` and
+non-builtin real-number values. Default mapping fields are frozen too; omitting
+a mapping never leaves a mutable default inside a frozen
+protocol/resource/run/measurement object.
 
 Measurements keep unknown facts as `None`; measured zero remains `0`.
 `PriceSnapshot.reprice()` derives cost from stored token facts without rerunning
@@ -368,6 +370,9 @@ per-variant architecture aggregates inside one explicitly selected
 benchmark/split/hardware slice, never raw repeats or mixed datasets. Incomplete
 variants are excluded by default; the explicit `include_incomplete=True` view
 retains completion/observation/failure/missing/total denominators. Aggregate
+completeness is checked against the protocol's planned split seeds and
+stochastic repeat count, so an omitted row counts as missing even when no
+explicit `status="missing"` record arrived. Aggregate
 confidence intervals explicitly say `unavailable` until paired entity/cluster
 observations exist; summary rows are never treated as independent bootstrap
 samples. The package's
@@ -388,7 +393,11 @@ two-dataset acceptance matrix to exactly 18 cells before retries only when
 deterministic attempt per cell and three attempts for the two LLM topologies.
 `capture_run` deep-snapshots protocol and measurement mappings once, reuses the
 protocol snapshot for running and terminal records, and persists immutable
-JSON-shaped values so caller mutation cannot rewrite recorded provenance.
+JSON-shaped values so caller mutation cannot rewrite recorded provenance. It
+also validates and freezes one `RunContext` snapshot before computing
+`recipe_id`; running and terminal records share that exact context object, so
+mutating a caller-owned config or seed mapping cannot drift identity after the
+run starts.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)
 

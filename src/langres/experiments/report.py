@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from langres.experiments.identity import compute_evaluation_identity
 from langres.experiments.measurements import FunnelFacts, StageMeasurement, TokenUsage
 from langres.experiments.protocol import EvaluationProtocol, FrozenDict, freeze_mapping
+from langres.experiments.protocol import STOCHASTIC_TOPOLOGIES
 from langres.experiments.statistics import SplitInstability, split_instability
 
 RunStatus = Literal["running", "completed", "failed", "budget_exceeded", "missing"]
@@ -142,7 +143,7 @@ class ParetoRow(BaseModel):
 class ReportConstraints(BaseModel):
     """Optional hard filters applied before ranking or Pareto analysis."""
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     max_p95_latency_seconds: float | None = Field(default=None, ge=0.0)
     max_wall_seconds: float | None = Field(default=None, ge=0.0)
@@ -396,9 +397,9 @@ class ExperimentReport(BaseModel):
             and (selected_cohort is None or run.cohort_id == selected_cohort)
         ]
         selected_benchmark = self._select_pareto_slice(
-            completed,
             field="benchmark_id",
             requested=benchmark_id,
+            planned=self.protocol.benchmark_ids,
         )
         completed = [
             run
@@ -406,9 +407,9 @@ class ExperimentReport(BaseModel):
             if selected_benchmark is None or run.benchmark_id == selected_benchmark
         ]
         selected_split = self._select_pareto_slice(
-            completed,
             field="split_id",
             requested=split_id,
+            planned=self.protocol.split_ids,
         )
         completed = [
             run for run in completed if selected_split is None or run.split_id == selected_split
@@ -441,7 +442,20 @@ class ExperimentReport(BaseModel):
         for (architecture, variant_id), rows in sorted(grouped.items()):
             completed_rows = [run for run in rows if run.status == "completed"]
             failed = sum(run.status in {"failed", "budget_exceeded"} for run in rows)
-            missing = sum(run.status in {"missing", "running"} for run in rows)
+            planned_repeats = (
+                self.protocol.stochastic_repeats
+                if architecture in STOCHASTIC_TOPOLOGIES
+                or any(run.repeat_index > 0 for run in rows)
+                else 1
+            )
+            expected_cells = {
+                (split_seed, repeat_index)
+                for split_seed in self.protocol.split_seeds
+                for repeat_index in range(planned_repeats)
+            }
+            present_cells = {(run.split_seed, run.repeat_index) for run in rows}
+            implied_missing = len(expected_cells - present_cells)
+            missing = sum(run.status in {"missing", "running"} for run in rows) + implied_missing
             aggregated: dict[str, float] = {}
             observed = len(completed_rows)
             for name in sorted(required_names):
@@ -469,7 +483,7 @@ class ExperimentReport(BaseModel):
                     observed=observed,
                     failed=failed,
                     missing=missing,
-                    total=len(rows),
+                    total=len(rows) + implied_missing,
                 )
                 complete = (
                     candidate.completed == candidate.total
@@ -511,12 +525,12 @@ class ExperimentReport(BaseModel):
 
     @staticmethod
     def _select_pareto_slice(
-        runs: list[ExperimentRun],
         *,
         field: Literal["benchmark_id", "split_id"],
         requested: str | None,
+        planned: tuple[str, ...],
     ) -> str | None:
-        available = {getattr(run, field) for run in runs}
+        available = set(planned)
         if requested is not None:
             if requested not in available:
                 raise IncompatibleProtocolError(

@@ -39,6 +39,8 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from decimal import Decimal
+from numbers import Real
 from pathlib import Path
 from typing import Any, Literal, Never, Self
 
@@ -124,7 +126,7 @@ class RunContext(BaseModel):
     code/env fields are provenance only (see :data:`_RECIPE_FIELDS`).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     # -- Identity / organization (NOT hashed) --
     experiment: str
@@ -158,6 +160,21 @@ class RunContext(BaseModel):
     # -- Seeds (hashed): named union of every source; the split seed lives in
     #    ``seeds["split"]`` (no duplicate scalar). --
     seeds: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("resolver_config", mode="after")
+    @classmethod
+    def _freeze_resolver_config(
+        cls,
+        value: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        return _snapshot_mapping(value)
+
+    @field_validator("seeds", mode="after")
+    @classmethod
+    def _freeze_seeds(cls, value: dict[str, int]) -> dict[str, int]:
+        snapshot = _snapshot_mapping(value)
+        assert snapshot is not None
+        return snapshot
 
 
 class _FrozenSnapshotDict(dict[str, Any]):
@@ -194,7 +211,9 @@ def _deep_snapshot(value: Any) -> Any:
         return tuple(_deep_snapshot(item) for item in value)
     if isinstance(value, (set, frozenset)):
         raise ValueError("run snapshots must contain JSON values; sets are not supported")
-    if isinstance(value, float) and not math.isfinite(value):
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise ValueError("run snapshots must contain finite numeric values")
+    if isinstance(value, Real) and not math.isfinite(value):
         raise ValueError("run snapshots must contain finite numeric values")
     return value
 
@@ -290,6 +309,10 @@ def _json_default(obj: Any) -> Any:
         return sorted(obj, key=str)
     if isinstance(obj, BaseModel):
         return obj.model_dump(mode="json")
+    if isinstance(obj, Decimal):
+        if not obj.is_finite():
+            raise ValueError("fingerprint values must be finite")
+        return str(obj)
     if isinstance(obj, Path):
         return str(obj)
     raise TypeError(f"cannot canonicalize {type(obj).__name__} for a fingerprint")
@@ -636,14 +659,15 @@ def capture_run(
     the terminal line, and finishes the tracker. ``store=None`` writes NOTHING.
     """
     resolved_store = resolve_store(store)
-    resolved_recipe_id = recipe_id or compute_recipe_id(context)
+    context_snapshot = RunContext.model_validate(context.model_dump(mode="python"))
+    resolved_recipe_id = recipe_id or compute_recipe_id(context_snapshot)
     started_at = datetime.now(UTC).isoformat()
     attempt_id = f"{resolved_recipe_id}-{started_at}"
     started_perf = time.perf_counter()
     running_record = RunRecord(
         attempt_id=attempt_id,
         recipe_id=resolved_recipe_id,
-        context=context,
+        context=context_snapshot,
         evaluation_id=evaluation_id,
         cache_id=cache_id,
         protocol=dict(protocol) if protocol is not None else None,
@@ -658,7 +682,7 @@ def capture_run(
     error_type: str | None = None
     error_message: str | None = None
     try:
-        tracker.start_run(context, run_name=context.experiment)
+        tracker.start_run(context_snapshot, run_name=context_snapshot.experiment)
         yield handle
     except BaseException as exc:
         error_type = type(exc).__name__

@@ -7,8 +7,11 @@ from langres.experiments import (
     EvaluationProtocol,
     ExperimentReport,
     ExperimentRun,
+    ReportConstraints,
     ResourceSlotIdentity,
+    RuntimeFacts,
     SourceState,
+    TokenUsage,
     compute_evaluation_identity,
 )
 
@@ -104,3 +107,16 @@ def test_default_experiment_run_metrics_mapping_is_immutable() -> None:
 
     with pytest.raises(TypeError, match="immutable"):
         run.metrics["pair_f1"] = 1.0
+
+
+def test_all_default_experiment_mappings_are_immutable() -> None:
+    usage = TokenUsage()
+    runtime = RuntimeFacts(hardware_cohort="cpu")
+    constraints = ReportConstraints()
+
+    with pytest.raises(TypeError, match="immutable"):
+        usage.provider_usage["provider"] = {}
+    with pytest.raises(TypeError, match="immutable"):
+        runtime.library_versions["numpy"] = "2"
+    with pytest.raises(TypeError, match="immutable"):
+        constraints.minimum_metrics["pair_f1"] = 0.9

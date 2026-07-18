@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -32,7 +33,8 @@ _EXPERIMENT_RECIPE_FIELDS = (
 )
 _SECRET_KEY = re.compile(
     r"(?:^|_)(?:api_key|access_token|auth|authorization|bearer|credential|"
-    r"openai_key|password|private_key|secret|signature|sig|subscription_key|token)(?:$|_)",
+    r"authentication|cookie|openai_key|password|private_key|secret|set_cookie|"
+    r"signature|sig|subscription_key|token)(?:$|_)",
     re.IGNORECASE,
 )
 _SAFE_ENDPOINT_QUERY_KEYS = frozenset(
@@ -71,6 +73,10 @@ def _canonical_json(value: Any) -> str:
 def _json_default(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("experiment identity values must be finite")
+        return str(value)
     if isinstance(value, (set, frozenset)):
         raise TypeError(
             "sets are not valid JSON identity values; use a deterministically ordered list"

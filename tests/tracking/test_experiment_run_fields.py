@@ -7,7 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from langres.experiments import compute_recipe_identity
-from langres.tracking.runs import RunContext, RunRecord, RunStore, capture_run
+from langres.tracking.runs import (
+    RunContext,
+    RunRecord,
+    RunStore,
+    capture_run,
+    compute_recipe_id,
+)
 
 
 def test_legacy_run_record_without_experiment_fields_still_loads() -> None:
@@ -98,6 +104,41 @@ def test_capture_run_reuses_the_same_validated_protocol_snapshot_object(
 
     assert len(records) == 2
     assert records[0].protocol is records[1].protocol
+
+
+def test_capture_run_snapshots_context_before_recipe_identity_and_reuses_it(
+    tmp_path: Path,
+) -> None:
+    records: list[RunRecord] = []
+
+    class RecordingStore(RunStore):
+        def append(self, record: RunRecord) -> None:
+            records.append(record)
+
+    mutable_config = {"pipeline": {"thresholds": [0.4, 0.6]}}
+    mutable_seeds = {"split": 7}
+    unsafe_context = RunContext.model_construct(
+        experiment="research",
+        dataset_name="dataset",
+        resolver_config=mutable_config,
+        seeds=mutable_seeds,
+    )
+    store = RecordingStore(tmp_path / "unused.jsonl")
+
+    with capture_run(unsafe_context, store=store):
+        mutable_config["pipeline"]["thresholds"].append(0.9)
+        mutable_seeds["split"] = 99
+
+    assert len(records) == 2
+    running, terminal = records
+    assert running.context is terminal.context
+    assert running.recipe_id == compute_recipe_id(running.context)
+    assert running.context.resolver_config == {"pipeline": {"thresholds": (0.4, 0.6)}}
+    assert running.context.seeds == {"split": 7}
+    with pytest.raises(TypeError, match="immutable"):
+        running.context.resolver_config["pipeline"]["thresholds"] = (1.0,)  # type: ignore[index]
+    with pytest.raises(TypeError, match="immutable"):
+        running.context.seeds["split"] = 9
 
 
 @pytest.mark.parametrize("field", ["protocol", "measurements"])

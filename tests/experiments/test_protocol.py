@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -257,6 +260,24 @@ def test_protocol_mappings_recursively_reject_non_finite_values(non_finite: floa
             fixed_test_set_id="a:test:v1",
             split_seeds=(0,),
             deterministic_resources={"runtime": {"temperature": non_finite}},
+            threshold_split_id="validation",
+            test_split_id="test",
+            hardware_cohort="cpu-local",
+            benchmark_version="1",
+        )
+
+
+@pytest.mark.parametrize("non_finite", [Decimal("NaN"), Decimal("Infinity"), np.float32("nan")])
+def test_protocol_mappings_reject_non_finite_non_float_numeric_types(
+    non_finite: object,
+) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        EvaluationProtocol(
+            benchmark_ids=("a",),
+            split_ids=("fixed",),
+            fixed_test_set_id="a:test:v1",
+            split_seeds=(0,),
+            deterministic_resources={"runtime": {"value": non_finite}},
             threshold_split_id="validation",
             test_split_id="test",
             hardware_cohort="cpu-local",

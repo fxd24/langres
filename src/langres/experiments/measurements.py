@@ -17,7 +17,7 @@ ProviderUsage = dict[str, dict[str, JsonScalar]]
 class TokenUsage(BaseModel):
     """Inclusive token totals plus optional subsets; unknown is ``None``."""
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -95,7 +95,7 @@ class EmbeddingFacts(BaseModel):
 class RuntimeFacts(BaseModel):
     """Hardware/runtime cohort facts attached to performance measurements."""
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False, validate_default=True)
 
     hardware_cohort: str = Field(min_length=1)
     host: str | None = None

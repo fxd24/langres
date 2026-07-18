@@ -388,6 +388,30 @@ def test_camel_case_credential_keys_are_normalized_before_redaction() -> None:
     assert "secret" not in str(slot.model_dump(mode="json"))
 
 
+def test_cookie_and_authentication_headers_are_redacted_in_mappings_and_pairs() -> None:
+    slot = ResourceSlotIdentity(
+        slot="llm",
+        base="served/model",
+        kind="endpoint",
+        provider="provider",
+        endpoint="https://host.example/v1",
+        runtime_config={
+            "Cookie": "session=secret",
+            "headers": [
+                ("Set-Cookie", "session=secret"),
+                ("Authentication", "secret"),
+            ],
+        },
+    )
+
+    assert slot.runtime_config["Cookie"] == "<redacted>"
+    assert slot.runtime_config["headers"] == (
+        ("Set-Cookie", "<redacted>"),
+        ("Authentication", "<redacted>"),
+    )
+    assert "session" not in str(slot.model_dump(mode="json"))
+
+
 def test_default_resource_runtime_mapping_is_immutable() -> None:
     slot = ResourceSlotIdentity(slot="embedder", base="org/model", kind="hf")
     with pytest.raises(TypeError, match="immutable"):
@@ -494,13 +518,20 @@ def test_identity_mappings_recursively_reject_non_finite_numbers(non_finite: flo
     with pytest.raises(ValidationError, match="finite"):
         _cache_input(operation_identity={"type": "Rerank", "nested": {"value": non_finite}})
 
-    context = RunContext(
+    with pytest.raises(ValidationError, match="finite"):
+        RunContext(
+            experiment="race",
+            dataset_name="dataset",
+            resolver_config={"nested": {"value": non_finite}},
+        )
+
+    unsafe_context = RunContext.model_construct(
         experiment="race",
         dataset_name="dataset",
         resolver_config={"nested": {"value": non_finite}},
     )
     with pytest.raises(ValueError, match="Out of range float values"):
-        compute_recipe_identity(context)
+        compute_recipe_identity(unsafe_context)
 
 
 def test_attempt_identity_reads_the_existing_run_record() -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from decimal import Decimal
+from numbers import Real
 from typing import Any, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -59,7 +61,9 @@ def deep_freeze(value: Any) -> Any:
         return tuple(deep_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
         raise ValueError("sets are not valid JSON protocol values; use an ordered list")
-    if isinstance(value, float) and not math.isfinite(value):
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise ValueError("experiment identity values must be finite")
+    if isinstance(value, Real) and not math.isfinite(value):
         raise ValueError("experiment identity values must be finite")
     return value
 
