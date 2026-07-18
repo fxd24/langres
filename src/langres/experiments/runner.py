@@ -79,9 +79,7 @@ class _PublicationSafeTracker:
         try:
             getattr(self._tracker, method)(*args, **kwargs)
         except Exception as exc:
-            self.errors.append(
-                f"{method} failed with {type(exc).__name__}; publication incomplete"
-            )
+            self.errors.append(f"{method} failed with {type(exc).__name__}; publication incomplete")
 
     def start_run(self, context: RunContext, *, run_name: str | None = None) -> None:
         self._call("start_run", context, run_name=run_name)
@@ -89,9 +87,7 @@ class _PublicationSafeTracker:
     def log_params(self, params: Mapping[str, Any]) -> None:
         self._call("log_params", params)
 
-    def log_metrics(
-        self, metrics: Mapping[str, float], *, step: int | None = None
-    ) -> None:
+    def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
         self._call("log_metrics", metrics, step=step)
 
     def log_artifact(self, key: str, value: str) -> None:
@@ -212,10 +208,10 @@ class Experiment:
             expand_official_proof_matrix(protocol)
             expected = {cell.topology for cell in expand_official_proof_matrix(protocol)}
             actual = {architecture.name for architecture in architectures}
-            if actual != expected:
+            if actual != expected or len(architectures) != len(expected):
                 raise ExperimentConfigurationError(
                     "official paid proof requires exactly the four named recipes "
-                    "plus CustomTopology"
+                    "plus CustomTopology, with no duplicate factories"
                 )
         allowed_splits = {"train", "test"}
         if protocol.paid_proof:
@@ -251,9 +247,7 @@ class Experiment:
         )
         self.budget_usd = budget_usd if budget_usd is not None else protocol.budget_usd
         self._monitor = SpendMonitor(
-            budget_usd=(
-                self.budget_usd if self.budget_usd is not None else float("inf")
-            )
+            budget_usd=(self.budget_usd if self.budget_usd is not None else float("inf"))
         )
         self.resume = resume
         self.fail_fast = fail_fast
@@ -287,9 +281,7 @@ class Experiment:
                     }
                     if self.protocol.paid_proof:
                         split_data["official"] = (test_records, test_clusters)
-                    for repeat_index in range(
-                        self.protocol.repeats_for(architecture.name)
-                    ):
+                    for repeat_index in range(self.protocol.repeats_for(architecture.name)):
                         for split_id in self.protocol.split_ids:
                             records, truth = split_data[split_id]
                             try:
@@ -341,11 +333,13 @@ class Experiment:
                 "split_id": split_id,
                 "repeat_index": str(repeat_index),
                 "threshold_split_id": "train",
-                "evaluation_split_id": (
-                    "test" if split_id == "official" else split_id
-                ),
+                "evaluation_split_id": ("test" if split_id == "official" else split_id),
             },
-            resolver_config={"execution_plan": dict(plan)},
+            resolver_config={
+                "architecture": architecture.name,
+                "variant_id": architecture.variant_id,
+                "execution_plan": dict(plan),
+            },
             budget_usd=self.budget_usd,
             method=architecture.name,
             dataset_name=benchmark_id,
@@ -370,9 +364,20 @@ class Experiment:
         evaluation_id: str,
         source: Any,
     ) -> ExperimentRun:
-        initial = architecture.build(
-            self.protocol.threshold_grid[0], self._monitor
-        )
+        try:
+            initial = architecture.build(self.protocol.threshold_grid[0], self._monitor)
+        except Exception as exc:
+            self._capture_initialization_failure(
+                architecture,
+                benchmark_id=benchmark_id,
+                dataset_fingerprint_value=dataset_fingerprint_value,
+                seed=seed,
+                repeat_index=repeat_index,
+                split_id=split_id,
+                evaluation_id=evaluation_id,
+                error=exc,
+            )
+            raise
         plan = initial.execution_plan()
         context = self._context(
             architecture,
@@ -384,14 +389,16 @@ class Experiment:
             plan=plan.model_dump(mode="json"),
         )
         recipe_id = compute_recipe_identity(context).recipe_id
-        existing = self._completed(recipe_id, evaluation_id=evaluation_id)
+        existing = self._completed(
+            recipe_id,
+            evaluation_id=evaluation_id,
+            variant_id=architecture.variant_id,
+        )
         if self.resume and existing is not None:
             return self._from_record(existing, architecture, evaluation_id)
         parent = self._latest(recipe_id)
         if parent is not None:
-            context = context.model_copy(
-                update={"parent_run_id": parent.attempt_id}
-            )
+            context = context.model_copy(update={"parent_run_id": parent.attempt_id})
         attempt_id = mint_attempt_id(recipe_id)
         input_fp = ordered_input_fingerprint(records)
         cache_id = self._cache_id(
@@ -454,12 +461,9 @@ class Experiment:
                 measurements = _measurements(result, cache_hit=cache_hit)
                 numeric = flatten_numeric({"quality": quality})
                 numeric["selected_threshold"] = selected_threshold
-                handle.log_metrics(
-                    numeric, headline_metric=quality.get("pair_f1")
-                )
+                handle.log_metrics(numeric, headline_metric=quality.get("pair_f1"))
                 handle.record_measurements(
-                    measurement.model_dump(mode="json")
-                    for measurement in measurements
+                    measurement.model_dump(mode="json") for measurement in measurements
                 )
                 handle.record_cost(self._monitor.spent - starting_spend)
             except BudgetExceeded:
@@ -531,9 +535,7 @@ class Experiment:
                     input_fingerprint=input_fp,
                 )
             else:
-                result = model.execute(
-                    [record.model_dump() for record in records]
-                )
+                result = model.execute([record.model_dump() for record in records])
             evaluated = evaluate_execution_result(
                 result, records, truth_clusters, threshold=threshold
             )
@@ -568,9 +570,7 @@ class Experiment:
                     stage_id="no-replay-boundary",
                     execution_plan_id=plan_id,
                     operation_identity={"plan": plan_payload},
-                    resource_slots=_resource_slots(
-                        plan, boundary_index=len(plan.steps)
-                    ),
+                    resource_slots=_resource_slots(plan, boundary_index=len(plan.steps)),
                     source=source,
                     semantics=architecture.cache_semantics,
                     input_fingerprint=input_fingerprint,
@@ -592,10 +592,7 @@ class Experiment:
                 stage_id=plan.replay_boundary,
                 execution_plan_id=plan.replay_prefix_id,
                 operation_identity={
-                    "steps": [
-                        step.model_dump(mode="json")
-                        for step in plan.steps[:boundary_index]
-                    ]
+                    "steps": [step.model_dump(mode="json") for step in plan.steps[:boundary_index]]
                 },
                 resource_slots=_resource_slots(plan, boundary_index=boundary_index),
                 source=source,
@@ -633,10 +630,10 @@ class Experiment:
         )
         if checkpoint is not None:
             replayed = model.execute_from(
-                    checkpoint,
-                    cache_id=cache_id,
-                    input_fingerprint=input_fingerprint,
-                )
+                checkpoint,
+                cache_id=cache_id,
+                input_fingerprint=input_fingerprint,
+            )
             return replayed.model_copy(update={"checkpoint": checkpoint}), True
         result = model.execute(
             record_dicts,
@@ -653,6 +650,7 @@ class Experiment:
         recipe_id: str,
         *,
         evaluation_id: str,
+        variant_id: str,
     ) -> RunRecord | None:
         if self.store is None:
             return None
@@ -661,6 +659,7 @@ class Experiment:
                 record.recipe_id != recipe_id
                 or record.status != "completed"
                 or record.evaluation_id != evaluation_id
+                or record.context.tags.get("variant_id") != variant_id
             ):
                 continue
             try:
@@ -670,6 +669,45 @@ class Experiment:
             if stored_protocol == self.protocol:
                 return record
         return None
+
+    def _capture_initialization_failure(
+        self,
+        architecture: ArchitectureFactory,
+        *,
+        benchmark_id: str,
+        dataset_fingerprint_value: str,
+        seed: int,
+        repeat_index: int,
+        split_id: str,
+        evaluation_id: str,
+        error: Exception,
+    ) -> None:
+        """Persist a factory failure before a runnable plan exists."""
+        context = self._context(
+            architecture,
+            benchmark_id=benchmark_id,
+            fingerprint=dataset_fingerprint_value,
+            split_id=split_id,
+            seed=seed,
+            repeat_index=repeat_index,
+            plan={"status": "architecture-initialization-failed"},
+        )
+        recipe_id = compute_recipe_identity(context).recipe_id
+        parent = self._latest(recipe_id)
+        if parent is not None:
+            context = context.model_copy(update={"parent_run_id": parent.attempt_id})
+        attempt_id = mint_attempt_id(recipe_id)
+        with capture_run(
+            context,
+            store=self.store,
+            tracker=_PublicationSafeTracker(self.tracker),
+            recipe_id=recipe_id,
+            evaluation_id=evaluation_id,
+            protocol=self.protocol.model_dump(mode="json"),
+            attempt_id=attempt_id,
+            suppress_error_details=True,
+        ):
+            raise error
 
     def _latest(
         self,
@@ -683,8 +721,7 @@ class Experiment:
             (
                 record
                 for record in reversed(self.store.read())
-                if record.recipe_id == recipe_id
-                and (status is None or record.status == status)
+                if record.recipe_id == recipe_id and (status is None or record.status == status)
             ),
             None,
         )
@@ -751,9 +788,7 @@ class Experiment:
             repeat_index=repeat_index,
             status="budget_exceeded" if budget_exceeded else "failed",
             cohort_id=self.protocol.hardware_cohort,
-            error_type=(
-                "BudgetExceeded" if budget_exceeded else "ExperimentCellError"
-            ),
+            error_type=("BudgetExceeded" if budget_exceeded else "ExperimentCellError"),
             error_message="cell failed; exception details suppressed",
         )
 

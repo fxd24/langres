@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
@@ -12,6 +12,7 @@ from langres.core.op import Score, ThresholdSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage
 from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel
+from langres.core.registry import register_op
 from langres.core.spend import SpendMonitor
 from langres.experiments.identity import SourceState
 from langres.experiments.protocol import EvaluationProtocol
@@ -54,28 +55,52 @@ class _Benchmark:
         return corpus[:2], corpus[2:], gold_clusters[:1], gold_clusters[1:]
 
 
+class _CountingScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    score: float
+
+
+@register_op("test_experiment_runner_counting_score")
 class _CountingScore(Score[Any]):
-    def __init__(self, counter: list[int]) -> None:
+    config_model: ClassVar[type[BaseModel]] = _CountingScoreConfig
+
+    def __init__(self, counter: list[int], score: float = 0.9) -> None:
         super().__init__(scope="pair", out_space="heuristic")
         self.counter = counter
+        self.score = score
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {"score": self.score}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> _CountingScore:
+        return cls([0], float(config["score"]))
 
     def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
         self.counter[0] += 1
         return Pairs(
             store=pairs.store,
             rows=[
-                row.model_copy(update={"score": 0.9, "score_type": "heuristic"})
+                row.model_copy(update={"score": self.score, "score_type": "heuristic"})
                 for row in pairs.rows
             ],
         )
 
 
-def _factory(counter: list[int], name: str = "Custom") -> ArchitectureFactory:
+def _factory(
+    counter: list[int],
+    name: str = "Custom",
+    *,
+    score: float = 0.9,
+    variant_id: str = "default",
+) -> ArchitectureFactory:
     def build(threshold: float, monitor: SpendMonitor) -> ERModel:
         return ERModel.from_topology(
             ops=[
                 BlockerSource(AllPairsBlocker(schema=_Record)),
-                _CountingScore(counter),
+                _CountingScore(counter, score),
                 ThresholdSelect(threshold),
                 ClustererStage(Clusterer(threshold=0.0)),
             ],
@@ -83,7 +108,7 @@ def _factory(counter: list[int], name: str = "Custom") -> ArchitectureFactory:
             monitor=monitor,
         )
 
-    return ArchitectureFactory(name=name, factory=build)
+    return ArchitectureFactory(name=name, variant_id=variant_id, factory=build)
 
 
 def _protocol(
@@ -178,9 +203,7 @@ def test_resume_requires_the_exact_evaluation_protocol(tmp_path: Path) -> None:
         cache_dir=tmp_path / "cache-first",
     ).run()
 
-    changed_protocol = first_protocol.model_copy(
-        update={"threshold_grid": (0.5, 0.95, 0.99)}
-    )
+    changed_protocol = first_protocol.model_copy(update={"threshold_grid": (0.5, 0.95, 0.99)})
     second = Experiment(
         architectures=[_factory(counter)],
         protocol=changed_protocol,
@@ -192,6 +215,52 @@ def test_resume_requires_the_exact_evaluation_protocol(tmp_path: Path) -> None:
     assert first.evaluation_id != second.evaluation_id
     assert second.runs[0].warnings == ()
     assert len(RunStore(store).read()) == 2
+
+
+def test_variant_id_is_part_of_recipe_identity_and_resume_selection(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "runs.jsonl"
+    report = Experiment(
+        architectures=[
+            _factory([0], name="Shared", score=0.9, variant_id="high"),
+            _factory([0], name="Shared", score=0.1, variant_id="low"),
+        ],
+        protocol=_protocol(),
+        store=store,
+        cache_dir=tmp_path / "cache",
+    ).run()
+
+    assert [run.variant_id for run in report.runs] == ["high", "low"]
+    assert report.runs[0].recipe_id != report.runs[1].recipe_id
+    assert report.runs[0].metrics["bcubed_f1"] != report.runs[1].metrics["bcubed_f1"]
+    assert all(not run.warnings for run in report.runs)
+    assert len(RunStore(store).read()) == 2
+
+
+def test_official_proof_rejects_duplicate_named_factories() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+    factories = [
+        _factory([0], name=name)
+        for name in (
+            "Retrieve",
+            "RetrieveRerank",
+            "RetrieveLLM",
+            "RetrieveRerankLLM",
+            "CustomTopology",
+            "CustomTopology",
+        )
+    ]
+
+    with pytest.raises(
+        ExperimentConfigurationError,
+        match="no duplicate factories",
+    ):
+        Experiment(architectures=factories, protocol=protocol)
 
 
 def test_tracker_failure_keeps_local_run_complete_and_numeric_only(tmp_path: Path) -> None:
@@ -230,24 +299,24 @@ def test_tracker_failure_keeps_local_run_complete_and_numeric_only(tmp_path: Pat
             return self
 
     tracker = BrokenTracker()
-    [run] = Experiment(
-        architectures=[_factory([0])],
-        protocol=_protocol(),
-        tracker=tracker,
-        store=tmp_path / "runs.jsonl",
-        cache_dir=tmp_path / "cache",
-    ).run().runs
+    [run] = (
+        Experiment(
+            architectures=[_factory([0])],
+            protocol=_protocol(),
+            tracker=tracker,
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+        )
+        .run()
+        .runs
+    )
 
     assert run.status == "completed"
-    assert run.warnings == (
-        "log_metrics failed with RuntimeError; publication incomplete",
-    )
+    assert run.warnings == ("log_metrics failed with RuntimeError; publication incomplete",)
     assert RunStore(tmp_path / "runs.jsonl").read()[0].status == "completed"
     assert tracker.metrics
     assert all(
-        isinstance(value, float)
-        for metrics in tracker.metrics
-        for value in metrics.values()
+        isinstance(value, float) for metrics in tracker.metrics for value in metrics.values()
     )
 
 
@@ -267,6 +336,32 @@ def test_failure_continues_to_independent_architecture(tmp_path: Path) -> None:
 
     assert [run.status for run in report.runs] == ["failed", "completed"]
     assert report.runs[0].error_message == "cell failed; exception details suppressed"
+    assert [record.status for record in RunStore(tmp_path / "runs.jsonl").read()] == [
+        "failed",
+        "completed",
+    ]
+
+
+def test_factory_failure_attempts_are_durable_and_parent_linked(tmp_path: Path) -> None:
+    def broken(_threshold: float, _monitor: SpendMonitor) -> ERModel:
+        raise RuntimeError("Authorization: Bearer provider-secret")
+
+    kwargs = {
+        "architectures": [ArchitectureFactory(name="Broken", factory=broken)],
+        "protocol": _protocol(),
+        "store": tmp_path / "runs.jsonl",
+        "cache_dir": tmp_path / "cache",
+    }
+
+    assert Experiment(**kwargs).run().runs[0].status == "failed"
+    assert Experiment(**kwargs).run().runs[0].status == "failed"
+
+    first, second = RunStore(tmp_path / "runs.jsonl").read()
+    assert first.status == second.status == "failed"
+    assert first.attempt_id != second.attempt_id
+    assert second.context.parent_run_id == first.attempt_id
+    assert first.error_message is not None
+    assert "provider-secret" not in first.error_message
 
 
 def test_current_registry_does_not_mislabel_train_as_validation() -> None:
@@ -338,18 +433,21 @@ def test_budget_overrun_is_durable_in_the_run_store(tmp_path: Path) -> None:
                 ThresholdSelect(threshold),
                 ClustererStage(Clusterer(threshold=0.0)),
             ],
-            replay_boundary=2,
             monitor=monitor,
         )
 
     store = RunStore(tmp_path / "runs.jsonl")
-    [run] = Experiment(
-        architectures=[ArchitectureFactory(name="Budgeted", factory=build)],
-        protocol=_protocol(),
-        budget_usd=0.1,
-        store=store,
-        cache_dir=tmp_path / "cache",
-    ).run().runs
+    [run] = (
+        Experiment(
+            architectures=[ArchitectureFactory(name="Budgeted", factory=build)],
+            protocol=_protocol(),
+            budget_usd=0.1,
+            store=store,
+            cache_dir=tmp_path / "cache",
+        )
+        .run()
+        .runs
+    )
 
     [record] = store.read()
     assert run.status == "budget_exceeded"
@@ -377,7 +475,6 @@ def test_failed_cell_resume_mints_new_attempt_parent_and_stochastic_cache(
                 ThresholdSelect(threshold),
                 ClustererStage(Clusterer(threshold=0.0)),
             ],
-            replay_boundary=2,
             monitor=monitor,
         )
 

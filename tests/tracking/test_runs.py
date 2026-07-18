@@ -649,9 +649,7 @@ class TestCaptureRun:
         # contextvar still reset after an exception.
         assert current_run.get() is None
 
-    def test_status_override_survives_a_reraised_budget_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_status_override_survives_a_reraised_budget_error(self, tmp_path: Path) -> None:
         path = tmp_path / "runs.jsonl"
         with pytest.raises(RuntimeError, match="budget"):
             with capture_run(_context(), store=RunStore(path)) as handle:
@@ -668,13 +666,18 @@ class TestCaptureRun:
         path = tmp_path / "runs.jsonl"
         with pytest.raises(RuntimeError, match="super-secret"):
             with capture_run(_context(), store=RunStore(path)):
-                raise RuntimeError("provider failed api_key=super-secret token: abc123")
+                raise RuntimeError(
+                    "provider failed api_key=super-secret token: abc123 "
+                    "Authorization: Bearer bearer-secret"
+                )
 
         record = RunStore(path).read()[0]
         assert record.error_message is not None
         assert "super-secret" not in record.error_message
         assert "abc123" not in record.error_message
-        assert record.error_message.count("<redacted>") == 2
+        assert "bearer-secret" not in record.error_message
+        assert "Bearer" not in record.error_message
+        assert record.error_message.count("<redacted>") == 3
 
     def test_tracker_start_run_failure_writes_failed_record_and_resets_contextvar(
         self, tmp_path: Path

@@ -64,6 +64,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
+from langres.core._artifacts import op_spec
 from langres.core._model_state import ModelState
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
@@ -683,19 +684,23 @@ class ModelRun(ModelState):
         return plan.model_copy(
             update={
                 "replay_prefix_id": self._prefix_plan_id(
-                    plan, self._replay_boundary_index
+                    plan,
+                    self._replay_boundary_index,
+                    stages,
                 )
             }
         )
 
     @staticmethod
-    def _prefix_plan_id(plan: ExecutionPlan, boundary_index: int) -> str:
+    def _prefix_plan_id(
+        plan: ExecutionPlan,
+        boundary_index: int,
+        stages: Sequence[Stage],
+    ) -> str:
         """Hash the immutable expensive prefix, excluding tunable suffix params."""
         payload = {
             "schema_name": plan.schema_name,
-            "steps": [
-                step.model_dump(mode="json") for step in plan.steps[:boundary_index]
-            ],
+            "steps": [op_spec(stage).model_dump(mode="json") for stage in stages[:boundary_index]],
             "boundary_index": boundary_index,
             "boundary_role": plan.steps[boundary_index].spec.role,
         }
@@ -715,8 +720,7 @@ class ModelRun(ModelState):
         if duplicates:
             preview = ", ".join(repr(pair) for pair in sorted(duplicates)[:3])
             raise ValueError(
-                "execution checkpoint requires unique ordered pair ids; "
-                f"duplicate pairs: {preview}"
+                f"execution checkpoint requires unique ordered pair ids; duplicate pairs: {preview}"
             )
 
     @staticmethod
@@ -771,9 +775,7 @@ class ModelRun(ModelState):
         stages = self._execution_stages()
         plan = self.execution_plan()
         if (checkpoint_cache_id is None) != (input_fingerprint is None):
-            raise ValueError(
-                "checkpoint_cache_id and input_fingerprint must be provided together"
-            )
+            raise ValueError("checkpoint_cache_id and input_fingerprint must be provided together")
         return self._execute_plan(
             normalized,
             stages=stages,
@@ -798,8 +800,9 @@ class ModelRun(ModelState):
         boundary_index = self._replay_boundary_index
         if boundary_index is None:
             raise ValueError("this execution plan does not declare a replay boundary")
+        stages = self._execution_stages()
         expected = {
-            "prefix_plan_id": self._prefix_plan_id(plan, boundary_index),
+            "prefix_plan_id": self._prefix_plan_id(plan, boundary_index, stages),
             "cache_id": cache_id,
             "boundary_index": boundary_index,
             "input_fingerprint": input_fingerprint,
@@ -810,9 +813,7 @@ class ModelRun(ModelState):
             "boundary_index": checkpoint.boundary_index,
             "input_fingerprint": checkpoint.input_fingerprint,
         }
-        mismatches = [
-            name for name, value in expected.items() if actual[name] != value
-        ]
+        mismatches = [name for name, value in expected.items() if actual[name] != value]
         if mismatches:
             raise ValueError(
                 "checkpoint identity does not match this execution request; "
@@ -831,10 +832,7 @@ class ModelRun(ModelState):
         else:  # pragma: no cover - classic plans cannot declare a boundary
             schema = cast(type[Any], self.schema)
             normalized = self._prepare(list(checkpoint.records))
-        store = {
-            record["id"]: schema.model_validate(record)
-            for record in normalized
-        }
+        store = {record["id"]: schema.model_validate(record) for record in normalized}
         pairs = Pairs(store=store, rows=list(checkpoint.rows))
         self._check_unique_pairs(pairs)
         return self._execute_plan(
@@ -866,9 +864,7 @@ class ModelRun(ModelState):
         clusters: list[set[str]] = []
         checkpoint: ExecutionCheckpoint | None = None
 
-        for step, stage in zip(
-            plan.steps[start_index:], stages[start_index:], strict=True
-        ):
+        for step, stage in zip(plan.steps[start_index:], stages[start_index:], strict=True):
             if (
                 self._replay_boundary_index == step.index
                 and checkpoint_cache_id is not None
@@ -877,7 +873,7 @@ class ModelRun(ModelState):
                 assert pairs is not None
                 self._check_unique_pairs(pairs)
                 checkpoint = ExecutionCheckpoint(
-                    prefix_plan_id=self._prefix_plan_id(plan, step.index),
+                    prefix_plan_id=self._prefix_plan_id(plan, step.index, stages),
                     cache_id=checkpoint_cache_id,
                     boundary_index=step.index,
                     boundary_stage_id=step.stage_id,

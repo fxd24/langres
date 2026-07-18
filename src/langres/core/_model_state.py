@@ -20,6 +20,7 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel
 
+from langres.core._artifacts import op_spec
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
@@ -458,6 +459,15 @@ class ModelState:
                     "ClusterStage stages; later scoring or spending would be "
                     f"re-executed during threshold replay: {unsafe_suffix!r}"
                 )
+            for index, stage in enumerate(chain[:replay_boundary]):
+                try:
+                    op_spec(stage)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "replay_boundary requires every prefix stage to have a "
+                        "registered, stable output identity; "
+                        f"stage {index} ({type(stage).__name__}) is opaque: {exc}"
+                    ) from None
         model = cls.__new__(cls)
         model._init_state(budget_usd=budget_usd)
         if monitor is not None:

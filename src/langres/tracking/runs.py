@@ -480,11 +480,15 @@ _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(api[_-]?key|authorization|bearer|cookie|password|secret|token)"
     r"(\s*[:=]\s*)([^\s,;]+)"
 )
+_AUTHORIZATION_HEADER = re.compile(
+    r"(?i)(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?([^\s,;]+)"
+)
 
 
 def _sanitize_error_message(message: str) -> str:
     """Bound persisted errors and redact common credential assignments."""
-    sanitized = _SECRET_ASSIGNMENT.sub(r"\1\2<redacted>", message)
+    sanitized = _AUTHORIZATION_HEADER.sub(r"\1<redacted>", message)
+    sanitized = _SECRET_ASSIGNMENT.sub(r"\1\2<redacted>", sanitized)
     return sanitized[:_MAX_ERROR_MESSAGE_LEN]
 
 
@@ -735,9 +739,7 @@ def capture_run(
         duration_seconds = time.perf_counter() - started_perf
         if error_type is not None:
             final_status: RunStatus = (
-                "budget_exceeded"
-                if handle._status_override == "budget_exceeded"
-                else "failed"
+                "budget_exceeded" if handle._status_override == "budget_exceeded" else "failed"
             )
         else:
             final_status = handle._status_override or "completed"

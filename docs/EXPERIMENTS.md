@@ -51,7 +51,10 @@ An official publication protocol may use the matrix label `"official"`, but its
 Replay is explicit, not inferred. `replay_boundary` points at the tunable
 `Select`; execution checkpoints immediately before it. Every later stage must
 be another `Select` or the terminal `ClusterStage`, so replay cannot silently
-rerun or rebill a downstream scorer. The local
+rerun or rebill a downstream scorer. Every prefix stage must also have a
+registered `OpSpec`: the replay identity hashes the complete serialized stage
+configuration, and an opaque custom stage is rejected instead of risking reuse
+after an output-affecting configuration change. The local
 `StageArtifactStore` commits those checkpoints atomically and immutably, checks
 their payload hash and full plan/cache/input identity on load, and quarantines a
 corrupt entry before recomputation. Input fingerprints preserve row order, and
@@ -62,12 +65,19 @@ optional `budget_usd` covers all model instances built during threshold replay.
 Budget overruns are persisted as `status="budget_exceeded"` with their measured
 spend and cap flag, even though the exception still stops that cell. Resume
 accepts a completed attempt only when both its evaluation identity and complete
-protocol snapshot match; a resumed row rehydrates its stored cost and stage
-measurements rather than fabricating a cheaper report.
+protocol snapshot match. Architecture `variant_id` participates in recipe
+identity and resume selection, so two variants sharing a display name cannot
+reuse each other's attempt. A resumed row rehydrates its stored cost and stage
+measurements rather than fabricating a cheaper report. Factory failures that
+happen before an execution plan exists are still persisted as failed, linked
+attempts.
 The exact paid official proof remains separately guarded by
 `EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
-USD 20). Tracker publication is optional plumbing: a tracker failure leaves the
-local completed attempt intact and marks publication incomplete in run warnings.
+USD 20); it requires exactly one factory for each named topology. Tracker
+publication is optional plumbing: a tracker failure leaves the local completed
+attempt intact and marks publication incomplete in run warnings. Persisted
+failure text redacts complete authorization header values, including bearer
+tokens.
 
 This is the getting-started for **experimenting on entity-resolution scorers** in
 langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything below
