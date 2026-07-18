@@ -231,9 +231,10 @@ See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda p
 
 ### Explicit topology authoring and execution
 
-Advanced users can compose `Source -> Score/Select -> ClusterStage` directly
+Advanced users can compose `Source -> Score/Select -> Cluster` directly
 with `ERModel.from_topology(ops=[...])`. The public authoring contracts live at
-`langres.core`: `Op`, `Score`, `Select`, `Source`, `ClusterStage`,
+`langres.core`: `Op`, `Score`, `Select`, `Source`, `ClusterStage` (the
+implementation class for the conceptual `Cluster` operation),
 `ThresholdSelect`, `TopKSelect`, `Sequential`, `Feasible`, and the optional
 `SpendMonitorBindable` capability for a `Spending` Op.
 
