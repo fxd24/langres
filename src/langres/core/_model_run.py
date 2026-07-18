@@ -497,7 +497,7 @@ class ModelRun(ModelState):
         :meth:`_scored_pairs`'s output), so the cut thresholds the CALIBRATED
         score, exactly as the clusterer did.
         """
-        selected = ThresholdSelect(self.clusterer.threshold).forward(scored_pairs)
+        selected: Pairs[Any] = ThresholdSelect(self.clusterer.threshold).forward(scored_pairs)
         return ClustererStage(self._closure_clusterer()).forward(selected)
 
     def resolve(self, records: list[Any]) -> list[set[str]]:
