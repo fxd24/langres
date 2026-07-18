@@ -40,6 +40,9 @@ from __future__ import annotations
 
 import warnings
 
+from langres.core.models import PairwiseJudgement
+from langres.core.results import DedupeResult
+
 from tests.parity._cascade_fixture import (
     CASCADE_BAND,
     CASCADE_THRESHOLD,
@@ -52,7 +55,9 @@ from tests.parity._cascade_fixture import (
 from tests.parity._golden import canonical_clusters, check_golden
 
 
-def _run_all() -> tuple[list[dict[str, object]], object, object, object]:
+def _run_all() -> tuple[
+    list[dict[str, object]], list[PairwiseJudgement], list[set[str]], DedupeResult
+]:
     """Run predict/resolve/dedupe once on one model; return (pairs, judgements, clusters, result).
 
     The cascade emits a one-time ``UserWarning`` for its ``sim_cos`` student
@@ -66,7 +71,7 @@ def _run_all() -> tuple[list[dict[str, object]], object, object, object]:
         judgements = model.predict(RECORDS)
         clusters = model.resolve(RECORDS)
         result = model.dedupe(RECORDS)
-    pairs = [
+    pairs: list[dict[str, object]] = [
         {
             "left_id": judgement.left_id,
             "right_id": judgement.right_id,
@@ -95,10 +100,10 @@ def test_mixed_family_cascade_parity() -> None:
         "pairs": pairs,
         "resolve_clusters": canonical_clusters(clusters),
         "dedupe": {
-            "architecture": result.architecture,  # type: ignore[attr-defined]
-            "backbone": result.backbone,  # type: ignore[attr-defined]
-            "score_type": result.score_type,  # type: ignore[attr-defined]
-            "threshold": result.threshold,  # type: ignore[attr-defined]
+            "architecture": result.architecture,
+            "backbone": result.backbone,
+            "score_type": result.score_type,
+            "threshold": result.threshold,
             "clusters": canonical_clusters(result),
         },
     }
@@ -154,7 +159,7 @@ def test_stream_is_genuinely_mixed_family() -> None:
     # dedupe reports the FIRST scored row's own family, honestly (the r01/r02
     # student pair leads the AllPairsBlocker order): a mixed stream is not
     # mislabelled as a single global type.
-    assert result.score_type == "sim_cos"  # type: ignore[attr-defined]
+    assert result.score_type == "sim_cos"
 
 
 def test_escalation_is_lazy_only_in_band_pairs_escalate() -> None:
