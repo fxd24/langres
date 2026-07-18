@@ -16,20 +16,38 @@ that only under ``TYPE_CHECKING`` -- it is in no cycle at all, and a *transport*
 module (``clients.openrouter``) no longer owns a *policy* primitive that core
 depends on.
 
-``clients.openrouter`` re-exports both names, so the long-standing
+``clients.openrouter`` re-exports the original budget names, so the long-standing
 ``from langres.clients.openrouter import BudgetExceeded, SpendMonitor`` keeps
 working unchanged; ``langres.BudgetExceeded`` is unaffected.
+
+An unmeasured paid call permanently poisons a finite monitor through
+``mark_unknown``. This is intentionally separate from the numeric tally:
+unknown cannot honestly be represented as zero or as a guessed amount.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langres.core.models import PairwiseJudgement
 
 logger = logging.getLogger(__name__)
+
+
+class UnknownSpendError(RuntimeError):
+    """Raised when a finite ledger can no longer account for paid work.
+
+    Once marked unknown, a monitor stays poisoned for its lifetime. Continuing
+    from a caught error would otherwise let every later paid call masquerade as
+    free. Matcher wrappers populate ``partial_judgements`` when applicable.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)
+        self.partial_judgements: list[PairwiseJudgement] = []
 
 
 class BudgetExceeded(RuntimeError):
@@ -74,6 +92,7 @@ class SpendMonitor:
         self._budget_usd = budget_usd
         self._warn_frac = warn_frac
         self._spent = 0.0
+        self._unknown_reason: str | None = None
 
     def add(self, cost_usd: float) -> None:
         """Accumulate ``cost_usd`` into the running total."""
@@ -94,12 +113,25 @@ class SpendMonitor:
         """Budget left before the cap (USD); negative once over budget."""
         return self._budget_usd - self._spent
 
+    @property
+    def cost_is_unknown(self) -> bool:
+        """Whether an already-made paid call left this ledger unaccountable."""
+        return self._unknown_reason is not None
+
+    def mark_unknown(self, reason: str) -> None:
+        """Permanently poison a finite ledger after unmeasured paid work."""
+        if math.isfinite(self._budget_usd) and self._unknown_reason is None:
+            self._unknown_reason = reason
+
     def check(self) -> None:
         """Warn past the warn threshold; raise :class:`BudgetExceeded` past the budget.
 
         Raises:
             BudgetExceeded: If cumulative spend exceeds ``budget_usd``.
+            UnknownSpendError: If paid work occurred without a measurable cost.
         """
+        if self._unknown_reason is not None:
+            raise UnknownSpendError(self._unknown_reason)
         if self._spent > self._budget_usd:
             raise BudgetExceeded(f"spend ${self._spent:.4f} exceeds budget ${self._budget_usd:.2f}")
         if self._spent >= self._warn_frac * self._budget_usd:

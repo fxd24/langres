@@ -96,7 +96,13 @@ request ids are rejected before any provider call, and measured envelope costs
 are added to that ledger. Once bound, `Generate` invokes the resource one request
 at a time and checks the ledger between calls, preserving the framework-wide
 budget guarantee: the configured budget plus the cost of at most one further
-paid call.
+paid call. A finite-budget API/endpoint run also fails closed after the first
+successful response whose cost is unknown. The typed
+`UnknownGenerationCostError.outputs` retains that response for logging or
+explicit recovery, but the operation never treats it as `$0` or starts a second
+call. The shared ledger is permanently marked unknown, so catching the exception
+cannot resume paid work through the same budget. Direct unbound resource use and
+explicitly uncapped runs remain nonfatal.
 
 `GenerationUsage` records input/output totals plus cache-read, cache-creation,
 and reasoning subsets. Providers do not expose every field, so an absent count
@@ -110,6 +116,15 @@ provider request id, and whether cost came from real provider billing or an
 estimate. Provider billing is preferred over a price-table estimate. Pricing is
 post-call observability: if estimation fails after generation succeeds, langres
 keeps the generated result and records cost as unknown.
+
+OpenRouter `LiteLLM` calls always request provider usage accounting with
+`extra_body={"usage": {"include": true}}`. Existing `extra_body` keys are
+preserved, and an explicit `provider=` routing block wins over an inherited
+provider block so benchmark routing is reproducible. When a tracking run is
+active, the outbound LiteLLM metadata includes its attempt id and the generation
+request id. Provider routing and extra-body construction specs accept strict
+JSON objects only, so malformed or executable artifact values fail during
+construction rather than reaching a provider.
 
 ## API and local LLMs
 
@@ -139,4 +154,19 @@ remain runtime callables and are not silently serialized.
 
 `LLMMatcherAdapter` exposes `LLM + Generate + Parse` through the existing
 `Matcher.forward()` contract so legacy resolver construction remains usable
-during the additive migration.
+during the additive migration. It yields one judgement after each provider call
+so an outer `SpendCappedMatcher` can enforce the ledger before pulling the next
+candidate. The adapter also propagates the resource's
+`requires_cost_accounting` capability: a paid resource whose cost is unknown
+poisons the outer finite ledger after that first successful call. This capability
+comes from the resource, not model-id syntax, because LiteLLM provider ids and
+Hugging Face ids can have the same slash-delimited shape.
+
+### Topology merge checkpoint
+
+`Rerank`, `Generate`, and `Parse` already expose safe named-callable configs and
+round-trip constructors. Their `OpSerializer` registrations intentionally land
+only after this resource branch is merged with the topology branch that defines
+that registry; adding a parallel registry here would create two persistence
+contracts. The merged follow-up must register these three adapters against the
+existing topology seam and add a full topology save/load test.

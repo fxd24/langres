@@ -48,11 +48,12 @@ ONE ledger across several wrappers (what ``Resolver`` does, so its cap survives
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from langres.core.inspection import _ensure_inspectable
 from langres.core.matcher import Matcher
-from langres.core.spend import BudgetExceeded, SpendMonitor
+from langres.core.spend import BudgetExceeded, SpendMonitor, UnknownSpendError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -162,6 +163,17 @@ class SpendCappedMatcher(Matcher[Any]):
         for judgement in judgements:
             produced.append(judgement)
             cost = judgement.provenance.get("cost_usd", 0.0)
+            cost_required = judgement.provenance.get("cost_required") is True
+            if cost is None and cost_required and math.isfinite(self._monitor.budget_usd):
+                self._monitor.mark_unknown(
+                    "A paid matcher call succeeded, but its cost is unknown. "
+                    "The finite spend ledger is permanently blocked."
+                )
+                try:
+                    self._monitor.check()
+                except UnknownSpendError as exc:
+                    exc.partial_judgements = list(produced)
+                    raise
             self._monitor.add(float(cost) if cost is not None else 0.0)
             try:
                 self._monitor.check()

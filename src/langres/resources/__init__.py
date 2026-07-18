@@ -22,6 +22,7 @@ from langres.resources.base import (
     RerankerRuntimeConfig,
     ResourceRuntimeConfig,
     SentenceTransformerRuntimeConfig,
+    UnknownGenerationCostError,
 )
 from langres.resources.fakes import FakeEmbedder, FakeLLM, FakeReranker
 from langres.resources.llm import LiteLLM, TransformersLLM, llm_from_model_ref
@@ -68,6 +69,7 @@ __all__ = [
     "SentenceTransformer",
     "SentenceTransformerRuntimeConfig",
     "TransformersLLM",
+    "UnknownGenerationCostError",
     "llm_from_model_ref",
     "parse_binary_response",
     "parse_score_response",

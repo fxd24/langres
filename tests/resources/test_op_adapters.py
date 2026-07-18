@@ -9,7 +9,8 @@ from langres.core.model_ref import ModelRef
 from langres.core.models import CompanySchema, ERCandidate
 from langres.core.op import Score, ThresholdSelect, TopKSelect
 from langres.core.pairs import Pairs
-from langres.core.spend import BudgetExceeded, SpendMonitor
+from langres.core.spend import BudgetExceeded, SpendMonitor, UnknownSpendError
+from langres.core.spend_cap import SpendCappedMatcher
 from langres.resources import (
     FakeLLM,
     FakeReranker,
@@ -17,10 +18,12 @@ from langres.resources import (
     GenerationBatch,
     GenerationEnvelope,
     LLMMatcherAdapter,
+    LiteLLM,
     Parse,
     ParsedGeneration,
     Rerank,
     RerankBatch,
+    UnknownGenerationCostError,
     parse_binary_response,
     parse_score_response,
 )
@@ -249,6 +252,61 @@ def test_llm_matcher_adapter_preserves_the_legacy_matcher_contract() -> None:
     assert all(judgement.score_type == "prob_llm" for judgement in judgements)
 
 
+def test_llm_matcher_adapter_yields_between_provider_calls_for_outer_cap() -> None:
+    class _CostedLLM(FakeLLM):
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            batch = super().generate(requests)
+            return batch.model_copy(
+                update={
+                    "outputs": tuple(
+                        output.model_copy(update={"cost_usd": 0.6, "cost_basis": "real"})
+                        for output in batch.outputs
+                    )
+                }
+            )
+
+    resource = _CostedLLM(default_response="MATCH")
+    matcher = SpendCappedMatcher(
+        LLMMatcherAdapter[CompanySchema](resource),
+        budget_usd=0.5,
+    )
+
+    with pytest.raises(BudgetExceeded) as exc_info:
+        list(matcher.forward(iter(_pairs().to_candidates())))
+
+    assert resource.calls == 1
+    assert len(exc_info.value.partial_judgements) == 1
+
+
+def test_llm_matcher_adapter_unknown_paid_cost_poison_outer_cap() -> None:
+    class _UnknownPaidLLM(FakeLLM):
+        requires_cost_accounting = True
+        calls = 0
+
+        def generate(self, requests):
+            self.calls += 1
+            return super().generate(requests)
+
+    resource = _UnknownPaidLLM(default_response="MATCH")
+    matcher = SpendCappedMatcher(
+        LLMMatcherAdapter[CompanySchema](resource),
+        budget_usd=0.0,
+    )
+
+    with pytest.raises(UnknownSpendError) as exc_info:
+        list(matcher.forward(iter(_pairs().to_candidates())))
+
+    assert resource.calls == 1
+    assert len(exc_info.value.partial_judgements) == 1
+    assert exc_info.value.partial_judgements[0].provenance["cost_usd"] is None
+    with pytest.raises(UnknownSpendError):
+        list(matcher.forward(iter(_pairs().to_candidates())))
+    assert resource.calls == 1
+
+
 def test_generate_binds_one_spend_monitor_and_tallies_envelope_costs() -> None:
     class _CostedLLM(FakeLLM):
         def generate(self, requests):
@@ -308,3 +366,85 @@ def test_generate_bound_budget_limits_overshoot_to_one_paid_call() -> None:
 
     assert resource.calls == 1
     assert monitor.spent == pytest.approx(0.6)
+
+
+def test_generate_finite_api_budget_stops_after_unknown_cost_and_retains_output() -> None:
+    class _UnknownCostAPI(FakeLLM):
+        requires_cost_accounting = True
+        calls = 0
+
+        def __init__(self) -> None:
+            super().__init__(default_response="MATCH")
+            self.model_ref = ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api")
+
+        def generate(self, requests):
+            self.calls += 1
+            return super().generate(requests)
+
+    resource = _UnknownCostAPI()
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(SpendMonitor(budget_usd=0.5))
+
+    with pytest.raises(UnknownGenerationCostError) as exc_info:
+        operation.forward(_pairs())
+
+    assert resource.calls == 1
+    assert len(exc_info.value.outputs) == 1
+    assert exc_info.value.outputs[0].content == "MATCH"
+    assert exc_info.value.outputs[0].cost_usd is None
+    assert operation.spend_monitor is not None
+    assert operation.spend_monitor.spent == 0.0
+    assert operation.spend_monitor.cost_is_unknown is True
+    with pytest.raises(UnknownSpendError):
+        operation.forward(_pairs())
+    assert resource.calls == 1
+
+
+def test_generate_unknown_api_cost_is_nonfatal_when_unbound_or_uncapped() -> None:
+    class _UnknownCostAPI(FakeLLM):
+        def __init__(self) -> None:
+            super().__init__(default_response="MATCH")
+            self.model_ref = ModelRef(base="served-model", kind="endpoint", api_base="local")
+
+    resource = _UnknownCostAPI()
+    assert len(Generate[CompanySchema](resource).forward(_pairs()).rows) == 2
+
+    uncapped = Generate[CompanySchema](resource).bind_spend_monitor(
+        SpendMonitor(budget_usd=float("inf"))
+    )
+    assert len(uncapped.forward(_pairs()).rows) == 2
+    assert uncapped.spend_monitor is not None
+    assert uncapped.spend_monitor.spent == 0.0
+
+
+def test_generate_treats_litellm_hf_ref_as_paid_transport_capability() -> None:
+    class _Client:
+        calls = 0
+
+        def completion(self, **kwargs):
+            self.calls += 1
+            return type(
+                "_Response",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "_Choice",
+                            (),
+                            {"message": type("_Message", (), {"content": "MATCH"})()},
+                        )()
+                    ],
+                    "usage": None,
+                },
+            )()
+
+        def completion_cost(self, completion_response):
+            raise RuntimeError("unknown price")
+
+    client = _Client()
+    resource = LiteLLM(ModelRef(base="provider/model", kind="hf"), client=client)
+    operation = Generate[CompanySchema](resource).bind_spend_monitor(SpendMonitor(budget_usd=1.0))
+
+    with pytest.raises(UnknownGenerationCostError):
+        operation.forward(_pairs())
+
+    assert client.calls == 1

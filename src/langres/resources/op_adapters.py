@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Iterator
 from typing import Any, Generic, Literal, TypeVar
@@ -23,6 +24,7 @@ from langres.resources.base import (
     LLM,
     RerankRequest,
     Reranker,
+    UnknownGenerationCostError,
     require_unique_ids,
 )
 
@@ -32,6 +34,7 @@ RequestBuilder = Callable[[PairRow[Any]], GenerationRequest]
 GenerationParser = Callable[[str], "ParsedGeneration"]
 
 GENERATION_ENVELOPE_KEY = "_langres_generation"
+GENERATION_COST_REQUIRED_KEY = "_langres_generation_cost_required"
 GENERATION_SUMMARY_KEY = "generation"
 
 _SCORE_RE = re.compile(r"(?im)^\s*score\s*:\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*$")
@@ -92,6 +95,14 @@ def _default_generation_request(row: PairRow[Any]) -> GenerationRequest:
         "Answer MATCH or NO_MATCH."
     )
     return GenerationRequest.user(_pair_id(row), prompt)
+
+
+def _requires_cost_accounting(resource: LLM) -> bool:
+    """Resolve paid-transport risk from an explicit resource capability first."""
+    declared = getattr(resource, "requires_cost_accounting", None)
+    if declared is not None:
+        return bool(declared)
+    return resource.model_ref.kind in {"api", "endpoint"}
 
 
 PAIR_SERIALIZERS: dict[str, PairSerializer] = {"json": _serialize_record}
@@ -306,6 +317,7 @@ class Generate(Op[SchemaT], Spending, Generic[SchemaT]):
         for row, envelope in zip(pairs.rows, outputs, strict=True):
             provenance = dict(row.provenance)
             provenance[GENERATION_ENVELOPE_KEY] = envelope
+            provenance[GENERATION_COST_REQUIRED_KEY] = _requires_cost_accounting(self.resource)
             rows.append(row.model_copy(update={"provenance": provenance}))
         return Pairs(store=pairs.store, rows=rows)
 
@@ -319,9 +331,28 @@ class Generate(Op[SchemaT], Spending, Generic[SchemaT]):
         for request in requests:
             self._spend_monitor.check()
             batch = self.resource.generate([request])
-            self._spend_monitor.add(sum(output.cost_usd or 0.0 for output in batch.outputs))
+            validated = self._validated_outputs([request], batch)
+            unknown_cost = any(output.cost_usd is None for output in validated)
+            finite_budget = math.isfinite(self._spend_monitor.budget_usd)
+            paid_transport = _requires_cost_accounting(self.resource)
+            if unknown_cost and finite_budget and paid_transport:
+                self._spend_monitor.mark_unknown(
+                    "Generation succeeded, but provider cost is unknown. The "
+                    "finite spend ledger is permanently blocked."
+                )
+                raise UnknownGenerationCostError(
+                    "Generation succeeded, but provider cost is unknown. A finite "
+                    "budget cannot safely continue because unknown spend must not "
+                    "be counted as $0. The successful output is available on "
+                    "exception.outputs.",
+                    outputs=validated,
+                )
+            measured_costs = [
+                output.cost_usd for output in validated if output.cost_usd is not None
+            ]
+            self._spend_monitor.add(sum(measured_costs))
             self._spend_monitor.check()
-            outputs.extend(self._validated_outputs([request], batch))
+            outputs.extend(validated)
         return outputs
 
     def _validated_outputs(
@@ -419,7 +450,10 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
 
             provenance = dict(row.provenance)
             provenance.pop(GENERATION_ENVELOPE_KEY, None)
+            cost_required = provenance.pop(GENERATION_COST_REQUIRED_KEY, False) is True
             provenance[GENERATION_SUMMARY_KEY] = envelope.model_dump(mode="json")
+            provenance["cost_required"] = cost_required
+            provenance["cost_usd"] = envelope.cost_usd
             provenance["parse_error"] = parse_error
             if envelope.usage is not None:
                 provenance["usage"] = envelope.usage.model_dump(mode="json")
@@ -428,7 +462,6 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
                 if envelope.usage.output_tokens is not None:
                     provenance["completion_tokens"] = envelope.usage.output_tokens
             if envelope.cost_usd is not None:
-                provenance["cost_usd"] = envelope.cost_usd
                 provenance["cost_is_real"] = envelope.cost_basis == "real"
             rows.append(
                 row.model_copy(
@@ -463,8 +496,8 @@ class LLMMatcherAdapter(Matcher[SchemaT], Generic[SchemaT]):
         self.model = resource.model_ref.base
 
     def forward(self, candidates: Iterator[ERCandidate[SchemaT]]) -> Iterator[PairwiseJudgement]:
-        """Materialize candidates through resource Ops and yield judgements."""
-        pairs = Pairs.from_candidates(list(candidates))
-        parsed = self._parse.forward(self._generate.forward(pairs))
-        for row in parsed.rows:
-            yield row.to_judgement()
+        """Generate, parse, and yield each candidate before pulling the next one."""
+        for candidate in candidates:
+            pairs = Pairs.from_candidates([candidate])
+            parsed = self._parse.forward(self._generate.forward(pairs))
+            yield parsed.rows[0].to_judgement()

@@ -7,9 +7,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from langres.core.model_ref import ModelRef
 from langres.core.model_ref import UnsupportedBackboneError
+from langres.tracking.runs import current_run
 from langres.resources import (
     CrossEncoderReranker,
     GenerationRequest,
@@ -287,6 +289,73 @@ def test_litellm_prefers_real_billing_and_preserves_serving_provenance() -> None
     assert output.usage.model == "openai/gpt-4o-mini-2024-07-18"
 
 
+def test_litellm_openrouter_requests_usage_and_preserves_routing_extras() -> None:
+    calls: list[dict[str, Any]] = []
+    supplied_extra_body = {
+        "usage": {"custom": "keep"},
+        "custom": {"nested": True},
+        "provider": {"order": ["Old"]},
+    }
+
+    class _Client:
+        def completion(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="MATCH"))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, cost=0.01),
+            )
+
+    token = current_run.set("recipe-attempt-1")
+    try:
+        LiteLLM(
+            ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+            client=_Client(),
+            extra_body=supplied_extra_body,
+            provider={"only": ["DeepInfra"]},
+        ).generate([GenerationRequest.user("pair-1", "same?")])
+    finally:
+        current_run.reset(token)
+
+    assert calls[0]["extra_body"] == {
+        "usage": {"custom": "keep", "include": True},
+        "custom": {"nested": True},
+        "provider": {"only": ["DeepInfra"]},
+    }
+    assert calls[0]["metadata"] == {
+        "langres_attempt_id": "recipe-attempt-1",
+        "request_id": "pair-1",
+        "decision_step": "llm_generation",
+    }
+    assert supplied_extra_body == {
+        "usage": {"custom": "keep"},
+        "custom": {"nested": True},
+        "provider": {"order": ["Old"]},
+    }
+
+
+def test_litellm_openrouter_usage_request_survives_without_other_extras() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Client:
+        def completion(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="MATCH"))],
+                usage=None,
+            )
+
+        def completion_cost(self, completion_response: Any) -> float:
+            return 0.0
+
+    LiteLLM(
+        ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+        client=_Client(),
+    ).generate([GenerationRequest.user("pair-1", "same?")])
+
+    assert calls[0]["extra_body"] == {"usage": {"include": True}}
+    assert "metadata" not in calls[0]
+
+
 def test_litellm_rejects_duplicate_request_ids_before_paid_call() -> None:
     class _Client:
         calls = 0
@@ -424,6 +493,32 @@ def test_builtin_resources_have_safe_weightless_persistence_specs(
     assert rebuilt.runtime_config == resource.runtime_config
     assert getattr(rebuilt, "_client", None) is None
     assert getattr(rebuilt, "_model", None) is None
+
+
+def test_litellm_weightless_spec_preserves_openrouter_routing() -> None:
+    resource = LiteLLM(
+        ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+        provider={"only": ["DeepInfra"]},
+        extra_body={"transforms": ["middle-out"]},
+    )
+
+    rebuilt = rebuild_component(component_spec(resource, slot="resource"))
+
+    assert rebuilt.config == resource.config
+
+
+def test_litellm_rejects_non_object_or_non_json_persisted_options() -> None:
+    resource = LiteLLM(ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"))
+    malformed = dict(resource.config)
+    malformed["provider"] = ["not", "an", "object"]
+
+    with pytest.raises(ValidationError):
+        LiteLLM.from_config(malformed)
+    with pytest.raises(ValidationError):
+        LiteLLM(
+            ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+            extra_body={"unsafe": object()},
+        )
 
 
 @pytest.mark.integration

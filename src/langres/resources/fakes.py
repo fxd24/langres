@@ -89,6 +89,8 @@ class FakeReranker:
 class FakeLLM:
     """Deterministic local response table implementing the LLM protocol."""
 
+    requires_cost_accounting = False
+
     def __init__(
         self,
         responses: dict[str, str] | None = None,

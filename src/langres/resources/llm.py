@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
+from copy import deepcopy
 from typing import Any, ClassVar, Literal
+
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from langres.clients.openrouter import parse_openrouter_billing
 from langres.core.model_ref import (
@@ -29,6 +32,15 @@ from langres.resources.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _LiteLLMOptions(BaseModel):
+    """Strict JSON-only options safe to persist and replay."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    provider: dict[str, JsonValue] | None = None
+    extra_body: dict[str, JsonValue] | None = None
 
 
 def _content(response: Any) -> str:
@@ -59,6 +71,7 @@ class LiteLLM:
     """Lazy LiteLLM-backed generation resource for API/endpoint refs."""
 
     type_name: ClassVar[str] = "resource_litellm"
+    requires_cost_accounting: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -66,6 +79,8 @@ class LiteLLM:
         *,
         runtime_config: LLMRuntimeConfig | None = None,
         client: Any = None,
+        provider: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         ref = require_litellm_routable(normalize_model_ref(model), slot="LiteLLM")
         if ref.kind == "hf" and ref.revision is not None:
@@ -74,8 +89,11 @@ class LiteLLM:
                 "for a pinned in-process Hub model, or serve that revision and pass "
                 "an API/endpoint ModelRef whose version is part of its model id."
             )
+        options = _LiteLLMOptions(provider=provider, extra_body=extra_body)
         self.model_ref = ref
         self.runtime_config = runtime_config or LLMRuntimeConfig()
+        self.provider = deepcopy(options.provider)
+        self.extra_body = deepcopy(options.extra_body)
         self._client = client
 
     def _get_client(self) -> Any:
@@ -91,6 +109,8 @@ class LiteLLM:
         return {
             "model": to_config(self.model_ref),
             "runtime_config": self.runtime_config.model_dump(mode="json"),
+            "provider": deepcopy(self.provider),
+            "extra_body": deepcopy(self.extra_body),
         }
 
     @classmethod
@@ -99,7 +119,39 @@ class LiteLLM:
         return cls(
             config["model"],  # type: ignore[arg-type]
             runtime_config=LLMRuntimeConfig.model_validate(config["runtime_config"]),
+            provider=config.get("provider"),  # type: ignore[arg-type]
+            extra_body=config.get("extra_body"),  # type: ignore[arg-type]
         )
+
+    def _completion_extras(self, request: GenerationRequest) -> dict[str, Any]:
+        """Return merged OpenRouter accounting/routing and run-correlation args."""
+        extras: dict[str, Any] = {}
+        extra_body = deepcopy(self.extra_body)
+        if self.model_ref.base.startswith("openrouter/"):
+            extra_body = extra_body or {}
+            supplied_usage = extra_body.get("usage")
+            usage = dict(supplied_usage) if isinstance(supplied_usage, dict) else {}
+            usage["include"] = True
+            extra_body["usage"] = usage
+            if self.provider is not None:
+                extra_body["provider"] = deepcopy(self.provider)
+        if extra_body is not None:
+            extras["extra_body"] = extra_body
+
+        # Reuse the tracking ContextVar seam used by the legacy LLMMatcher.
+        # LiteLLMResource accepts only LiteLLM-shaped clients, unlike the legacy
+        # matcher's broader direct-OpenAI injection seam, so metadata is valid
+        # for injected test/router clients too.
+        from langres.tracking.runs import current_run
+
+        attempt_id = current_run.get()
+        if attempt_id is not None:
+            extras["metadata"] = {
+                "langres_attempt_id": attempt_id,
+                "request_id": request.request_id,
+                "decision_step": "llm_generation",
+            }
+        return extras
 
     def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
         """Generate in request order and retain raw content only locally."""
@@ -123,6 +175,7 @@ class LiteLLM:
                 kwargs["timeout"] = self.runtime_config.timeout_seconds
             if self.runtime_config.seed is not None:
                 kwargs["seed"] = self.runtime_config.seed
+            kwargs.update(self._completion_extras(request))
             response = client.completion(**kwargs)
             try:
                 real_cost, provider = parse_openrouter_billing(response)
@@ -189,6 +242,7 @@ class TransformersLLM:
     """Lazy local/Hugging Face causal-LM generation resource."""
 
     type_name: ClassVar[str] = "resource_transformers_llm"
+    requires_cost_accounting: ClassVar[bool] = False
 
     def __init__(
         self,

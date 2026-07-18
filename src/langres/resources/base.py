@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from langres.core.model_ref import ModelRef
+from langres.core.spend import UnknownSpendError
 
 RuntimeDType = Literal["float16", "float32", "bfloat16"]
 
@@ -346,6 +347,20 @@ class GenerationEnvelope(BaseModel):
         return envelope
 
 
+class UnknownGenerationCostError(UnknownSpendError):
+    """A paid generation succeeded but its cost could not be measured.
+
+    Finite budgets cannot safely continue after this condition: treating an
+    unknown observation as ``$0`` would make the cap fictional. ``outputs``
+    retains the already-paid-for successful response so callers can log,
+    inspect, or explicitly recover it without repeating the provider call.
+    """
+
+    def __init__(self, message: str, *, outputs: Sequence[GenerationEnvelope]) -> None:
+        super().__init__(message)
+        self.outputs = tuple(outputs)
+
+
 class GenerationBatch(BaseModel):
     """Ordered generation envelopes from one LLM invocation batch."""
 
@@ -408,6 +423,11 @@ class Reranker(Protocol):
 @runtime_checkable
 class LLM(Protocol):
     """A resource that generates responses plus token/serving facts."""
+
+    @property
+    def requires_cost_accounting(self) -> bool:
+        """Whether successful calls must report cost under a finite budget."""
+        ...  # pragma: no cover
 
     @property
     def model_ref(self) -> ModelRef:
