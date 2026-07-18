@@ -289,6 +289,32 @@ class Score(Op[SchemaT]):
         self.out_space: OutSpace = out_space
 
 
+class Spending:
+    """Marker a :class:`Score` sets to DECLARE it may bill (call a paid model).
+
+    This is an **allowlist for money**, read by the explicit-chain door
+    (``ERModel.from_topology`` → ``_secure_chain_scores``): a ``Spending`` Score
+    MUST be capped through the model's ``SpendMonitor`` or the door rejects the
+    chain; a non-``Spending`` Score is trusted free and passes. ``MatcherScore``
+    and ``GroupwiseMatcherScore`` are ``Spending`` (they hold a paid ``Matcher``);
+    ``ComparatorScore`` (string features) and any free scalarizer are not.
+
+    Why a declared marker and not attribute-sniffing: the door used to look for a
+    ``.matcher`` attribute, which is a *denylist* — it rots open. A custom Score
+    that bills via a differently-named attribute, or by calling an LLM inside its
+    own ``forward()``, slipped through uncapped. Declaring intent flips it to
+    fail-safe: an undeclared paid Score is refused billing by omission.
+
+    **Residual limit, stated honestly:** the door cannot introspect an arbitrary
+    ``forward()`` body, so it cannot *force* a ``Spending`` Score it does not know
+    how to wrap (anything other than a ``MatcherScore``) onto the ledger — it can
+    only reject it. A custom paid Score MUST both set ``Spending`` AND route its
+    paid work through a model-monitor ``SpendCappedMatcher`` (i.e. be a
+    ``MatcherScore``, or pre-cap its matcher with the model's monitor). A Score
+    that bills without declaring ``Spending`` is the author's own bug.
+    """
+
+
 class Select(Op[SchemaT]):
     """The select role: "same scores, fewer rows".
 

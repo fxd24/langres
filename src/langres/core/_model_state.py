@@ -34,6 +34,7 @@ from langres.core.op import (
     Score,
     Sequential,
     Source,
+    Spending,
     Stage,
     ThresholdSelect,
 )
@@ -346,20 +347,27 @@ class ModelState:
         :class:`~langres.core.op.ClusterStage` so ``resolve``/``dedupe`` have a
         phase-1 exit.
 
-        **The spend cap is ENFORCED here, not merely documented.** Every
-        :class:`~langres.core.op_adapters.MatcherScore` in the chain is auto-wrapped
-        so its matcher bills through this model's shared
+        **The spend cap is ENFORCED here, not merely documented**, via an
+        allowlist keyed on the :class:`~langres.core.op.Spending` marker (a Score
+        DECLARES it may bill). Every ``Spending``
+        :class:`~langres.core.op_adapters.MatcherScore` is auto-wrapped so its
+        matcher bills through this model's shared
         :class:`~langres.core.spend.SpendMonitor` (the classic four-slot path does
-        the same at scoring time). A caller who already wrapped their matcher in a
-        :class:`~langres.core.spend_cap.SpendCappedMatcher` is left alone (no
-        double-wrap). This closes the off-ledger hole the ``.module.forward``
-        AST-ban cannot see: a paid explicit-chain Score can no longer bill past
-        ``budget_usd`` (the option-a money guarantee -- budget + at most one further
-        call -- holds on every explicit-chain ``resolve``). See
-        :meth:`_secure_chain_scores`. **Deferred, with no money hole:** the
-        per-call ``JudgementLog`` (``dedupe(log=)``) is NOT threaded into an
-        explicit chain's Scores (its Ops are fixed pre-built objects); only the LOG
-        is deferred -- the cap is not.
+        the same at scoring time); a matcher a caller already wrapped is left alone
+        **only if** its ``SpendCappedMatcher`` shares this model's monitor -- a
+        foreign monitor is rejected, since it would bill a different budget and
+        "one model ledger" would be false. A ``Spending`` Score the door cannot
+        wrap (anything other than a ``MatcherScore``) is rejected rather than run
+        off-ledger; a non-``Spending`` Score (a free ``ComparatorScore``, any
+        Select) passes untouched. This closes the off-ledger hole the
+        ``.module.forward`` AST-ban cannot see: a paid explicit-chain Score can no
+        longer bill past ``budget_usd`` (the option-a money guarantee -- budget +
+        at most one further call -- holds on every explicit-chain ``resolve``). See
+        :meth:`_secure_chain_scores`, whose docstring states the residual limit (a
+        custom Score that bills without declaring ``Spending`` is the author's own
+        bug). **Deferred, with no money hole:** the per-call ``JudgementLog``
+        (``dedupe(log=)``) is NOT threaded into an explicit chain's Scores (its Ops
+        are fixed pre-built objects); only the LOG is deferred -- the cap is not.
 
         **A terminal ``Finalize`` is rejected** (deferred, same pattern as the
         calibrator reject): the explicit exit runs the ClusterStage and stops, so a
@@ -373,13 +381,14 @@ class ModelState:
 
         Args:
             ops: The explicit chain, in pipeline order (a Source, zero+ Ops
-                including Selects, one terminal ClusterStage). Each
+                including Selects, one terminal ClusterStage). Each ``Spending``
                 ``MatcherScore``'s matcher is auto-capped through this model's
-                ledger; a paid ``Score`` that is *not* a ``MatcherScore`` (e.g. a
-                ``GroupwiseMatcherScore``, which this door cannot auto-cap) must
-                already wrap its matcher in a
-                :class:`~langres.core.spend_cap.SpendCappedMatcher`, else it is
-                rejected rather than allowed to bill off-ledger.
+                ledger (or verified to already share it). A ``Spending`` Score the
+                door cannot wrap (e.g. a ``GroupwiseMatcherScore``), or a
+                ``MatcherScore`` subclass the door cannot faithfully rebuild, is
+                rejected rather than allowed to bill off-ledger; the caller pre-caps
+                its matcher through the model monitor instead. Free
+                (non-``Spending``) Scores pass untouched.
             budget_usd: Spend cap for this instance's lifetime (see
                 :meth:`__init__`). Mutually exclusive with ``monitor``.
             monitor: An existing :class:`~langres.core.spend.SpendMonitor` to adopt
@@ -443,48 +452,86 @@ class ModelState:
         return model
 
     def _secure_chain_scores(self, chain: list[Stage]) -> list[Stage]:
-        """Auto-cap the chain's paid Scores through this model's :class:`SpendMonitor`.
+        """Guarantee every paid Score in the chain bills through THIS model's ledger.
 
         The classic four-slot path wraps its matcher in a
-        :class:`~langres.core.spend_cap.SpendCappedMatcher` at scoring time; an
-        explicit chain must get the SAME guarantee or a paid Score bills off-ledger
-        (the ``.module.forward`` AST-ban only catches the literal slot call). So for
-        every :class:`~langres.core.op_adapters.MatcherScore` whose matcher is not
-        already spend-capped, rebuild it around
-        ``SpendCappedMatcher(matcher, monitor=self._spend_monitor)`` -- a Score whose
-        matcher a caller already capped is left untouched (``isinstance`` guard, no
-        double-wrap). A *paid* Score this door cannot auto-cap -- any other ``Score``
-        that still carries a raw ``Matcher`` (e.g. a ``GroupwiseMatcherScore``, whose
-        ``forward_groups`` bypasses the cap's per-judgement metering) -- is rejected
-        rather than allowed to run uncapped.
+        :class:`~langres.core.spend_cap.SpendCappedMatcher` sharing one
+        :class:`SpendMonitor` at scoring time; an explicit chain must get the SAME
+        guarantee or a paid Score bills off-ledger (the ``.module.forward`` AST-ban
+        only catches the literal slot call). The rule is an **allowlist** keyed on
+        the :class:`~langres.core.op.Spending` marker -- a declared intent, not
+        attribute-sniffing, which as a denylist rotted open (a custom Score billing
+        via a differently-named attribute slipped through):
+
+        - A non-:class:`~langres.core.op.Spending` stage (a free ``ComparatorScore``,
+          any Select, the Source/ClusterStage) is trusted and passes untouched.
+        - A ``Spending`` :class:`~langres.core.op_adapters.MatcherScore`:
+
+          * matcher already a ``SpendCappedMatcher`` -> it MUST share
+            ``self._spend_monitor`` (identity). Same ledger: left alone. A
+            **foreign** monitor is rejected -- it would bill a different budget, so
+            "one model ledger" would be false and total spend could exceed
+            ``budget_usd``.
+          * matcher raw AND the Score is exactly ``MatcherScore`` -> rebuild it
+            around ``SpendCappedMatcher(matcher, monitor=self._spend_monitor)``.
+          * matcher raw AND the Score is a ``MatcherScore`` *subclass* -> rejected:
+            rebuilding to base ``MatcherScore`` would silently drop the subclass's
+            own state (codex Q3). The author pre-caps its matcher with the model
+            monitor instead.
+
+        - Any OTHER ``Spending`` Score (e.g. a ``GroupwiseMatcherScore``, whose
+          ``forward_groups`` bypasses a ``SpendCappedMatcher``'s per-judgement
+          metering) -> rejected. The door cannot force it onto the ledger, and it
+          will not run an uncapped paid Score.
+
+        The residual limit is honest (see :class:`~langres.core.op.Spending`): a
+        custom Score that bills WITHOUT declaring ``Spending`` is the author's own
+        bug -- the door cannot introspect an arbitrary ``forward()`` body.
 
         Returns:
-            A new chain list with the same wiring, every ``MatcherScore`` capped.
+            A new chain list, same wiring, every ``Spending`` Score capped through
+            ``self._spend_monitor`` (or the whole chain rejected).
         """
         secured: list[Stage] = []
         for stage in chain:
-            if isinstance(stage, MatcherScore):
-                if isinstance(stage.matcher, SpendCappedMatcher):
-                    secured.append(stage)  # caller already capped it -- leave alone
-                else:
-                    secured.append(
-                        MatcherScore(
-                            SpendCappedMatcher(stage.matcher, monitor=self._spend_monitor),
-                            out_space=stage.out_space,
-                        )
-                    )
+            if not isinstance(stage, Spending):
+                secured.append(stage)  # free (or a boundary stage) -- trust and pass
                 continue
-            if isinstance(stage, Score):
-                held = getattr(stage, "matcher", None)
-                if isinstance(held, Matcher) and not isinstance(held, SpendCappedMatcher):
+            if not isinstance(stage, MatcherScore):
+                raise ValueError(
+                    f"from_topology() cannot cap a {type(stage).__name__}: it declares Spending "
+                    "(it may bill a paid model) but is not a MatcherScore, so this door cannot "
+                    "route its billing through the model ledger (a SpendCappedMatcher meters "
+                    "Matcher.forward, not e.g. GroupwiseMatcher.forward_groups). It refuses to run "
+                    "an uncapped paid Score off-ledger. Fix: express the scoring as a MatcherScore, "
+                    "or cap its paid work through a model-monitor SpendCappedMatcher yourself."
+                )
+            matcher = stage.matcher
+            if isinstance(matcher, SpendCappedMatcher):
+                if matcher.monitor is not self._spend_monitor:
                     raise ValueError(
-                        f"from_topology() cannot enforce the spend cap on a "
-                        f"{type(stage).__name__}: only a MatcherScore is auto-capped, and this "
-                        "door refuses to run an uncapped paid Score off-ledger. Fix: wrap its "
-                        "matcher in SpendCappedMatcher(matcher, monitor=...) yourself, or express "
-                        "the scoring as a MatcherScore."
+                        "from_topology() got a pre-capped MatcherScore whose SpendCappedMatcher "
+                        "uses a monitor other than this model's ledger, so its spend would never "
+                        "count against the model budget ('one model ledger' would be false). Fix: "
+                        "pass that monitor as from_topology(monitor=...), or hand a raw matcher and "
+                        "let the door cap it."
                     )
-            secured.append(stage)
+                secured.append(stage)  # same ledger -- leave the caller's object alone
+            elif type(stage) is MatcherScore:
+                secured.append(
+                    MatcherScore(
+                        SpendCappedMatcher(matcher, monitor=self._spend_monitor),
+                        out_space=stage.out_space,
+                    )
+                )
+            else:
+                raise ValueError(
+                    f"from_topology() cannot faithfully spend-cap a MatcherScore subclass "
+                    f"({type(stage).__name__}): rebuilding it as a base MatcherScore to inject the "
+                    "cap would silently drop the subclass's own state. Fix: pre-cap its matcher "
+                    "with SpendCappedMatcher(matcher, monitor=...) sharing the model monitor "
+                    "(pass that monitor as from_topology(monitor=...))."
+                )
         return secured
 
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:

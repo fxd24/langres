@@ -52,7 +52,15 @@ from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.groups import derive_groups_from_pairs
 from langres.core.matcher import GroupwiseMatcher, Matcher
-from langres.core.op import ClusterStage, Finalize, OutSpace, Records, Score, Source
+from langres.core.op import (
+    ClusterStage,
+    Finalize,
+    OutSpace,
+    Records,
+    Score,
+    Source,
+    Spending,
+)
 from langres.core.pairs import PairRow, Pairs
 
 if TYPE_CHECKING:
@@ -182,8 +190,11 @@ class ComparatorScore(Score[SchemaT], Generic[SchemaT]):
         return Pairs(store=pairs.store, rows=rows)
 
 
-class MatcherScore(Score[SchemaT], Generic[SchemaT]):
+class MatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
     """:class:`~langres.core.op.Score` adapter over a legacy pairwise :class:`~langres.core.matcher.Matcher`.
+
+    ``Spending`` (declares it may bill): the wrapped ``Matcher`` can be a paid LLM,
+    so the explicit-chain door caps it through the model's ``SpendMonitor``.
 
     Bridges ``matcher.forward(Iterator[ERCandidate]) -> Iterator[PairwiseJudgement]``:
     the incoming ``Pairs`` is projected to candidates
@@ -227,8 +238,13 @@ class MatcherScore(Score[SchemaT], Generic[SchemaT]):
         return _rescore(pairs, judgements)
 
 
-class GroupwiseMatcherScore(Score[SchemaT], Generic[SchemaT]):
+class GroupwiseMatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
     """:class:`~langres.core.op.Score` adapter over a :class:`~langres.core.matcher.GroupwiseMatcher`.
+
+    ``Spending`` (declares it may bill): its ``GroupwiseMatcher`` can be a paid
+    set-wise LLM. The explicit-chain door cannot auto-cap it (a
+    ``SpendCappedMatcher`` meters ``forward``, not the ``forward_groups`` this
+    adapter calls), so ``from_topology`` rejects it rather than run it off-ledger.
 
     A group-scope ``Score`` (``scope="group"``, ``out_space="prob_group_llm"``):
     it derives per-anchor groups from the ``Pairs``'s candidates
