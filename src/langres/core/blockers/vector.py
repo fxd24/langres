@@ -24,6 +24,7 @@ from langres.core.blockers.all_pairs import (
 from langres.core.groups import ERCandidateGroup
 from langres.core.indexes.vector_index import VectorIndex
 from langres.core.models import ERCandidate
+from langres.core.named_callable import resolve_named
 from langres.core.registry import (
     UnknownComponentType,
     get_component,
@@ -82,6 +83,43 @@ def _index_config_dict(index: object) -> dict[str, object]:
     if isinstance(raw, BaseModel):
         return raw.model_dump()
     return dict(raw)
+
+
+def concat_comparable_fields(entity: Any) -> str:
+    """Blocking text = every comparable string field, space-joined.
+
+    The serializable, *named* replacement for the multi-field extractor closure
+    the embedding architectures (e.g.
+    :class:`~langres.architectures.vector_llm_cascade.VectorLLMCascade`) used to
+    build inline. A closure cannot round-trip through JSON config -- this can,
+    because it is referenced by name (see :data:`TEXT_FIELD_EXTRACTORS`).
+
+    It reproduces that closure **byte-for-byte**: the field set is
+    ``StringComparator.from_schema(...).feature_specs`` (the ``str | None`` fields
+    except ``id``, in schema-declaration order), each present (truthy) field's
+    value is ``str()``-cast, falsy values are skipped, and the parts are joined
+    with a single space. Because a named module-level function cannot close over a
+    per-schema field list, it derives the field set from ``type(entity)`` at call
+    time -- identical to the closure whenever the blocker's ``schema_factory``
+    builds ``schema`` instances, which it does (see
+    :func:`~langres.core.blockers.all_pairs.schema_to_factory`).
+    """
+    from langres.core.comparators import StringComparator
+
+    field_names = [spec.name for spec in StringComparator.from_schema(type(entity)).feature_specs]
+    parts = [str(getattr(entity, name)) for name in field_names if getattr(entity, name, None)]
+    return " ".join(parts)
+
+
+#: Named ``text_field_extractor`` registry -- the same serialization contract as
+#: ``llm_judge.RESPONSE_PARSERS`` / ``RECORD_SERIALIZERS`` (both resolved by the
+#: shared :func:`~langres.core.named_callable.resolve_named`): a name here is
+#: accepted as ``VectorBlocker(text_field_extractor="concat_comparable_fields")``
+#: and, unlike a bare closure, round-trips in :attr:`VectorBlocker.config`. Add an
+#: entry to make a multi-field extractor name-selectable and serializable.
+TEXT_FIELD_EXTRACTORS: dict[str, Callable[[Any], str]] = {
+    "concat_comparable_fields": concat_comparable_fields,
+}
 
 
 @register("vector_blocker")
@@ -212,7 +250,7 @@ class VectorBlocker(Blocker[SchemaT]):
         vector_index: VectorIndex,
         schema_factory: Callable[[dict[str, Any]], SchemaT] | None = None,
         schema: type[SchemaT] | None = None,
-        text_field_extractor: Callable[[SchemaT], str] | None = None,
+        text_field_extractor: Callable[[SchemaT], str] | str | None = None,
         text_field: str | None = None,
         k_neighbors: int = 10,
         query_prompt: str | None = None,
@@ -225,11 +263,17 @@ class VectorBlocker(Blocker[SchemaT]):
         - ``schema=`` + ``text_field=`` (declarative): entities are rebuilt as
           ``schema(**{f: record.get(f) for f in schema.model_fields})`` and text
           is ``getattr(entity, text_field)``. This form is **config-serializable**.
-        - ``schema_factory=`` + ``text_field_extractor=`` (callables): full
-          control, but **not serializable** (callables can't round-trip).
+        - ``schema=`` + ``text_field_extractor="<name>"`` (a registered name, see
+          :data:`TEXT_FIELD_EXTRACTORS` -- e.g. ``"concat_comparable_fields"``):
+          full multi-field extraction that is **still config-serializable**,
+          because the name (not the callable) is what round-trips.
+        - ``schema_factory=`` + ``text_field_extractor=<callable>`` (an
+          unregistered callable): full control, but **not serializable**
+          (a bare callable can't round-trip).
 
         The two styles can be mixed per-axis, but a blocker only serializes if
-        **both** axes are declarative.
+        **both** axes are declarative (a schema type + a ``text_field`` name or a
+        registered ``text_field_extractor`` name).
 
         Args:
             vector_index: Index for ANN search on embeddings. The index owns the
@@ -239,9 +283,13 @@ class VectorBlocker(Blocker[SchemaT]):
                 exclusive with ``schema``.
             schema: Pydantic schema class for declarative reconstruction.
                 Mutually exclusive with ``schema_factory``.
-            text_field_extractor: Callable extracting embed-text from a SchemaT
-                (e.g. ``lambda x: x.name``). Mutually exclusive with
-                ``text_field``.
+            text_field_extractor: Either a registered extractor *name* (see
+                :data:`TEXT_FIELD_EXTRACTORS`, e.g. ``"concat_comparable_fields"``
+                -- serializable) or a callable extracting embed-text from a
+                SchemaT (e.g. ``lambda x: x.name`` -- opaque, not serializable).
+                A registered name (or one of the registered callables) round-trips
+                in :attr:`config`; an unregistered callable does not. Mutually
+                exclusive with ``text_field``.
             text_field: Attribute name to read embed-text from each entity.
                 Mutually exclusive with ``text_field_extractor``.
             k_neighbors: Number of nearest neighbors per entity. Higher = better
@@ -277,15 +325,21 @@ class VectorBlocker(Blocker[SchemaT]):
             assert schema_factory is not None  # narrowed by the guard above
             self.schema_factory = schema_factory
 
-        # Text axis: declarative form records the field name to read.
+        # Text axis: a declarative form records what serializes -- the field NAME
+        # (``text_field``) or the registered extractor NAME
+        # (``text_field_extractor="..."``). A bare callable extractor stays opaque
+        # (it runs, but ``_extractor_name`` is None so ``config`` refuses it).
         self._text_field: str | None = text_field
+        self._extractor_name: str | None = None
         self.text_field_extractor: Callable[[SchemaT], str]
         if text_field is not None:
             field = text_field
             self.text_field_extractor = lambda entity: str(getattr(entity, field))
         else:
             assert text_field_extractor is not None  # narrowed by the guard
-            self.text_field_extractor = text_field_extractor
+            self.text_field_extractor, self._extractor_name = resolve_named(
+                text_field_extractor, TEXT_FIELD_EXTRACTORS, kind="text_field_extractor"
+            )
 
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
@@ -295,7 +349,9 @@ class VectorBlocker(Blocker[SchemaT]):
     def config(self) -> dict[str, object]:
         """Serializable construction config for the registry.
 
-        Returns a mapping with the schema type name, the text field, the
+        Returns a mapping with the schema type name, the text axis (either
+        ``text_field`` -- a field name -- or ``text_field_extractor`` -- a
+        registered extractor name; the unused one is ``None``), the
         ``k_neighbors`` / ``query_prompt`` knobs, and the vector index nested as
         a :class:`~langres.core.serialization.ComponentSpec` (the index's own
         ``type_name`` + ``config``). The index's out-of-band state (e.g. a built
@@ -303,16 +359,22 @@ class VectorBlocker(Blocker[SchemaT]):
         :class:`~langres.core.serialization.SerializableState`, not here.
 
         Raises:
-            ValueError: If the blocker was built with a ``schema_factory`` or a
-                ``text_field_extractor`` (opaque callables). Construct with
-                ``schema=`` and ``text_field=`` to persist.
+            ValueError: If the blocker was built with a ``schema_factory`` or an
+                *unregistered* ``text_field_extractor`` callable (opaque callables
+                can't round-trip). Construct with ``schema=`` and either
+                ``text_field=`` or a registered ``text_field_extractor`` name to
+                persist.
         """
-        if self._schema_type_name is None or self._text_field is None:
+        if self._schema_type_name is None or (
+            self._text_field is None and self._extractor_name is None
+        ):
             raise ValueError(
-                "VectorBlocker built with 'schema_factory' or "
-                "'text_field_extractor' is not serializable (callables cannot "
-                "round-trip through config); construct with schema= and "
-                "text_field= to persist."
+                "VectorBlocker built with 'schema_factory' or an unregistered "
+                "'text_field_extractor' callable is not serializable (callables "
+                "cannot round-trip through config); construct with schema= and "
+                "either text_field='<field>' or a registered text_field_extractor "
+                "name (see TEXT_FIELD_EXTRACTORS, e.g. 'concat_comparable_fields') "
+                "to persist."
             )
 
         index_type = _index_type_name(self.vector_index)
@@ -323,6 +385,7 @@ class VectorBlocker(Blocker[SchemaT]):
         return {
             "schema_type_name": self._schema_type_name,
             "text_field": self._text_field,
+            "text_field_extractor": self._extractor_name,
             "k_neighbors": self.k_neighbors,
             "query_prompt": self.query_prompt,
             "vector_index": index_spec,
@@ -344,7 +407,9 @@ class VectorBlocker(Blocker[SchemaT]):
         Args:
             config: A mapping as produced by :attr:`config` (the
                 ``"vector_index"`` value may be a ``ComponentSpec`` or its
-                ``model_dump()`` dict).
+                ``model_dump()`` dict). Exactly one of ``"text_field"`` /
+                ``"text_field_extractor"`` is non-``None``; a pre-named-extractor
+                artifact carries only ``"text_field"``.
             state_dir: Directory holding the index's persisted state. Required
                 only when the reconstructed index is a ``SerializableState``.
 
@@ -365,10 +430,16 @@ class VectorBlocker(Blocker[SchemaT]):
         if isinstance(index, SerializableState) and state_dir is not None:
             index.load_state(state_dir)
 
+        # Rebuild whichever text axis was declarative. ``.get`` (not ``[]``) for
+        # ``text_field_extractor`` so a pre-named-extractor artifact -- which has
+        # no such key -- loads via ``text_field`` unchanged.
+        text_field = config["text_field"]
+        extractor_name = config.get("text_field_extractor")
         return cls(
             vector_index=index,
             schema=schema,  # type: ignore[arg-type]
-            text_field=str(config["text_field"]),
+            text_field=str(text_field) if text_field is not None else None,
+            text_field_extractor=str(extractor_name) if extractor_name is not None else None,
             k_neighbors=int(config["k_neighbors"]),  # type: ignore[call-overload]
             query_prompt=(
                 str(config["query_prompt"]) if config["query_prompt"] is not None else None
