@@ -32,8 +32,8 @@ ecosystem:
 |---|---|
 | `Retrieve` | Retrieve → threshold → Cluster |
 | `RetrieveRerank` | Retrieve → Rerank → threshold → Cluster |
-| `RetrieveLLM` | Retrieve → top-k → LLM Generate/Parse → Cluster |
-| `RetrieveRerankLLM` | Retrieve → Rerank → top-k → LLM Generate/Parse → Cluster |
+| `RetrieveLLM` | Retrieve → top-k → LLM Generate/Parse → `ThresholdSelect(0.5)` → Cluster |
+| `RetrieveRerankLLM` | Retrieve → Rerank → top-k → LLM Generate/Parse → `ThresholdSelect(0.5)` → Cluster |
 
 Each model slot accepts either a resource object or a model reference. The
 resource name describes what it does, while the following `Select` determines

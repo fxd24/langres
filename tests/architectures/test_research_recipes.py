@@ -28,6 +28,8 @@ from langres.resources import (
     FakeEmbedder,
     FakeLLM,
     FakeReranker,
+    GenerationBatch,
+    GenerationRequest,
     Generate,
     EmbeddingBatch,
     Parse,
@@ -74,6 +76,16 @@ class _RecordingEmbedder(FakeEmbedder):
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         self.texts.append(tuple(texts))
         return super().embed(texts)
+
+
+class _CountingLLM(FakeLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def generate(self, requests: Sequence[GenerationRequest]) -> GenerationBatch:
+        self.calls += len(requests)
+        return super().generate(requests)
 
 
 def _canonical(model: ERModel) -> list[list[str]]:
@@ -422,6 +434,26 @@ def test_retrieve_compare_accepts_the_same_record_on_both_sides() -> None:
 
     assert verdict.match is True
     assert verdict.score == 1.0
+
+
+def test_retrieve_rejects_distinct_records_with_one_id_before_downstream_models() -> None:
+    reranker = FakeReranker()
+    llm = _CountingLLM()
+    recipe = RetrieveRerankLLM(
+        embedder=FakeEmbedder(),
+        reranker=reranker,
+        llm=llm,
+        schema=CompanySchema,
+    )
+
+    with pytest.raises(ValueError, match="duplicate ids"):
+        recipe.compare(
+            {"id": "same", "name": "Alpha"},
+            {"id": "same", "name": "Beta"},
+        )
+
+    assert reranker.calls == 0
+    assert llm.calls == 0
 
 
 def test_llm_recipes_reject_nonpositive_candidate_caps() -> None:
