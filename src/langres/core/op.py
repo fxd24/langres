@@ -84,10 +84,9 @@ OutSpace: TypeAlias = ScoreType | Literal["vector", "unknown"]
 
 _VALID_SCOPES: frozenset[str] = frozenset(get_args(Scope))
 _SCORE_FAMILIES: frozenset[str] = frozenset(get_args(ScoreType))
-#: The scalar-family sentinel: an orderable score whose family is not (yet)
-#: pinned. NOT a vector, so it is admissible upstream of a :class:`Select`.
-_UNKNOWN_OUT_SPACE: str = "unknown"
-_VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector", _UNKNOWN_OUT_SPACE}
+# "unknown" is the scalar-family sentinel: an orderable score whose family is not
+# (yet) pinned. NOT a vector, so it is admissible upstream of a Select.
+_VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector", "unknown"}
 
 #: The heuristics a raw ``Select(CLUSTERING)`` or a :class:`ClusterStage` may
 #: name. Correlation clustering with real weights is not approximable, so there
