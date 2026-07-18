@@ -81,9 +81,7 @@ class _TopKSelectParams(BaseModel):
     k: int
 
 
-def _validate_params_as(
-    model: type[BaseModel], params: dict[str, object]
-) -> dict[str, object]:
+def _validate_params_as(model: type[BaseModel], params: dict[str, object]) -> dict[str, object]:
     """Validate one complete role envelope and return normalized plain data."""
     return model.model_validate(params).model_dump()
 

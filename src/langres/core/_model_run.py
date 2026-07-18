@@ -183,6 +183,36 @@ def _run_stages(records: list[Any], stages: Sequence[Source[Any] | Op[Any]]) -> 
     return pairs
 
 
+def _run_stages_with_last_score_type(
+    records: list[Any],
+    stages: Sequence[Source[Any] | Op[Any]],
+) -> tuple[Pairs[Any], str | None]:
+    """Run a pair pipeline while retaining its last observed score family.
+
+    Selection can legitimately remove every row after scoring. In that case the
+    final carrier cannot describe the score family that produced the negative
+    result, so callers that expose run metadata must retain it before the rows
+    disappear.
+    """
+    source, *body = stages
+    source_stage = cast(Source[Any], source)
+    source_stage.prepare(records)
+    pairs = source_stage.forward(records)
+    score_type = next(
+        (row.score_type for row in pairs.rows if row.score_type is not None),
+        None,
+    )
+    for op in body:
+        pairs = cast(Op[Any], op).forward(pairs)
+        current_score_type = next(
+            (row.score_type for row in pairs.rows if row.score_type is not None),
+            None,
+        )
+        if current_score_type is not None:
+            score_type = current_score_type
+    return pairs, score_type
+
+
 class ModelRun(ModelState):
     """The run path of an ``ERModel``: candidates, scoring, clustering, front door."""
 
@@ -1258,11 +1288,11 @@ class ModelRun(ModelState):
         """
         _schema, normalized = normalize_records(records, self._chain_source_schema())
         check_no_duplicate_ids([record["id"] for record in normalized])
-        pairs = self._scored_pairs(normalized, log=log)
-        clusters = self._cluster(pairs)
-        score_type = next(
-            (row.score_type for row in pairs.rows if row.score_type is not None), None
+        pairs, score_type = _run_stages_with_last_score_type(
+            normalized,
+            [self._chain_source(), *self._explicit_body(log=log)],
         )
+        clusters = self._cluster(pairs)
         return DedupeResult(
             clusters,
             architecture=type(self).__name__,

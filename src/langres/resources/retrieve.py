@@ -105,9 +105,7 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         # equal entities may share the stable id here: distinct records with one
         # id would collapse in the id-keyed store and make downstream resources
         # compare one of them to itself.
-        is_self_compare = (
-            len(entities) == 2 and ids[0] == ids[1] and entities[0] == entities[1]
-        )
+        is_self_compare = len(entities) == 2 and ids[0] == ids[1] and entities[0] == entities[1]
         if not is_self_compare:
             require_unique_ids(ids, field="record ids", operation="Retrieve")
         store = dict(zip(ids, entities, strict=True))
@@ -141,11 +139,7 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
             neighbours = np.argsort(-row, kind="stable")[:limit]
             for neighbour in neighbours:
                 first_id, second_id = ids[index], ids[int(neighbour)]
-                pair = (
-                    (first_id, second_id)
-                    if first_id <= second_id
-                    else (second_id, first_id)
-                )
+                pair = (first_id, second_id) if first_id <= second_id else (second_id, first_id)
                 score = float(np.clip(row[int(neighbour)], 0.0, 1.0))
                 prior = selected.get(pair)
                 selected[pair] = (

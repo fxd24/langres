@@ -14,6 +14,7 @@ import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -68,10 +69,13 @@ _RESOURCE_COMPONENTS: dict[str, tuple[str, str]] = {
     "dspy_judge": ("model", "llm"),
     "select_judge": ("model", "llm"),
 }
-_OPTIONAL_COMPONENT_EXTRAS: dict[str, str] = {
+_COMPONENT_EXTRAS: dict[str, str] = {
     "calibrator": "trained",
+    "faiss_index": "semantic",
     "random_forest": "trained",
+    "vector_blocker": "semantic",
 }
+_LEGACY_MISSING_EXTRA_COMPONENTS = frozenset({"faiss_index", "vector_blocker"})
 _HF_MODEL_NAME_COMPONENTS = frozenset(
     {
         "fastembed_sparse_embedder",
@@ -85,6 +89,27 @@ _CREDENTIAL_KEY = re.compile(
     r"credentials|authentication|cookie|openai_key|password|private_key|secret|"
     r"set_cookie|signature|sig|subscription_key|token)(?:$|_)",
     re.IGNORECASE,
+)
+_COMPACT_CREDENTIAL_KEYS = frozenset(
+    {
+        "accesstoken",
+        "apikey",
+        "authentication",
+        "authorization",
+        "authtoken",
+        "bearer",
+        "cookie",
+        "credential",
+        "credentials",
+        "openaikey",
+        "password",
+        "privatekey",
+        "secret",
+        "setcookie",
+        "signature",
+        "subscriptionkey",
+        "token",
+    }
 )
 
 
@@ -425,7 +450,21 @@ def validate_bundle(root: Path) -> PretrainedManifest:
             "be loaded from a pretrained artifact. Fields: " + ", ".join(credential_paths[:10])
         )
     actual_refs, actual_extras = resource_facts(resolver_manifest)
-    if actual_refs != manifest.model_refs or actual_extras != manifest.required_extras:
+    declared_extras = manifest.required_extras
+    missing_extras = set(actual_extras).difference(declared_extras)
+    legacy_compatible_missing = {
+        _COMPONENT_EXTRAS[spec.type_name]
+        for spec in component_specs(resolver_manifest)
+        if spec.type_name in _LEGACY_MISSING_EXTRA_COMPONENTS
+    }
+    extras_without_compatible_omissions = tuple(
+        extra for extra in actual_extras if extra not in missing_extras
+    )
+    if (
+        actual_refs != manifest.model_refs
+        or not missing_extras.issubset(legacy_compatible_missing)
+        or extras_without_compatible_omissions != declared_extras
+    ):
         raise PretrainedArtifactError("outer resource identity does not match resolver.json")
     actual_sensitive = bool(sensitive_config_paths(resolver_manifest))
     if actual_sensitive != manifest.sensitive_config_included:
@@ -494,31 +533,61 @@ def sensitive_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, ..
 
 
 def credential_config_paths(resolver_manifest: ArtifactManifest) -> tuple[str, ...]:
-    """Find credentials embedded in serialized LiteLLM transport options."""
+    """Find credentials embedded in serialized transport configuration."""
     found: list[str] = []
+
+    def credential_key(value: object) -> bool:
+        key_text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+        normalized = re.sub(r"[^a-z0-9]+", "_", key_text.lower()).strip("_")
+        compact = re.sub(r"[^a-z0-9]+", "", key_text.lower())
+        return _CREDENTIAL_KEY.search(normalized) is not None or compact in _COMPACT_CREDENTIAL_KEYS
 
     def visit(value: object, path: str) -> None:
         if isinstance(value, Mapping):
             for key, nested in value.items():
                 key_text = str(key)
                 child = f"{path}.{key_text}"
-                normalized_key = re.sub(r"[^a-z0-9]+", "_", key_text.lower()).strip("_")
-                if (
-                    _CREDENTIAL_KEY.search(normalized_key) is not None
-                    and nested is not None
-                    and nested != ""
-                ):
+                if credential_key(key_text) and nested is not None and nested != "":
                     found.append(child)
                 visit(nested, child)
         elif isinstance(value, (list, tuple)):
             for index, nested in enumerate(value):
                 visit(nested, f"{path}[{index}]")
 
+    def credential_bearing_url(value: str) -> bool:
+        try:
+            parsed = urlsplit(value)
+            if parsed.username is not None or parsed.password is not None:
+                return True
+            return any(credential_key(key) for key, _ in parse_qsl(parsed.query))
+        except ValueError:
+            # A malformed authority may still contain serialized userinfo. Fail
+            # closed on that recognizable credential shape.
+            return "@" in value.partition("://")[2].partition("/")[0]
+
+    def visit_api_bases(value: object, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                key_text = str(key)
+                child = f"{path}.{key_text}"
+                if (
+                    key_text.lower() == "api_base"
+                    and isinstance(nested, str)
+                    and credential_bearing_url(nested)
+                ):
+                    found.append(child)
+                visit_api_bases(nested, child)
+        elif isinstance(value, (list, tuple)):
+            for index, nested in enumerate(value):
+                visit_api_bases(nested, f"{path}[{index}]")
+
     for index, spec in enumerate(component_specs(resolver_manifest)):
+        component_path = f"component[{index}].{spec.type_name}"
         for field in ("provider", "extra_body"):
             value = spec.config.get(field)
             if value is not None:
-                visit(value, f"component[{index}].{spec.type_name}.{field}")
+                visit(value, f"{component_path}.{field}")
+        visit_api_bases(spec.config, component_path)
     return tuple(sorted(set(found)))
 
 
@@ -531,9 +600,9 @@ def resource_facts(
     refs: list[ModelRef] = []
     extras: set[str] = set()
     for spec in expanded:
-        optional_extra = _OPTIONAL_COMPONENT_EXTRAS.get(spec.type_name)
-        if optional_extra is not None:
-            extras.add(optional_extra)
+        component_extra = _COMPONENT_EXTRAS.get(spec.type_name)
+        if component_extra is not None:
+            extras.add(component_extra)
         metadata = _RESOURCE_COMPONENTS.get(spec.type_name)
         if metadata is None:
             if spec.type_name.startswith("resource_") or {

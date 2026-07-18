@@ -112,8 +112,11 @@ class _ResearchRecipe(ERModel):
         budget_usd: float | None,
         monitor: SpendMonitor | None,
     ) -> None:
-        if budget_usd is not None and monitor is not None:
-            raise ValueError("pass budget_usd= or monitor=, not both")
+        if monitor is not None and budget_usd is not None:
+            raise ValueError(
+                "pass budget_usd= or monitor=, not both: the supplied SpendMonitor already "
+                "carries the shared experiment budget"
+            )
         self._declared_resources = {
             slot: resource.model_ref for slot, resource in resources.items()
         }

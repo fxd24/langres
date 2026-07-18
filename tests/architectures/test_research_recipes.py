@@ -24,6 +24,7 @@ from langres.core.models import CompanySchema
 from langres.core.op import ThresholdSelect, TopKSelect
 from langres.core.op_adapters import ClustererStage
 from langres.core.resolver import ERModel
+from langres.core.spend import SpendMonitor
 from langres.tracking.judgement_log import JudgementLog
 from langres.resources import (
     FakeEmbedder,
@@ -129,6 +130,50 @@ def test_all_four_recipes_run_with_zero_network_resources() -> None:
     assert _canonical(retrieve_rerank) == [["a", "b"]]
     assert _canonical(retrieve_llm) == [["a", "b"]]
     assert _canonical(retrieve_rerank_llm) == [["a", "b"]]
+
+
+def test_all_negative_llm_recipe_preserves_its_score_type() -> None:
+    recipe = RetrieveLLM(
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(
+            responses={
+                '["a","b"]': "NO_MATCH",
+                '["a","c"]': "NO_MATCH",
+                '["b","c"]': "NO_MATCH",
+            }
+        ),
+        schema=CompanySchema,
+        retrieve_k=2,
+        llm_k=2,
+    )
+
+    result = recipe.dedupe(RECORDS)
+
+    assert result == []
+    assert result.score_type == "prob_llm"
+
+
+def test_recipe_adopts_the_experiment_spend_monitor_exactly() -> None:
+    monitor = SpendMonitor(budget_usd=2.0)
+    recipe = RetrieveLLM(
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(responses=LLM_RESPONSES),
+        schema=CompanySchema,
+        monitor=monitor,
+    )
+
+    generate = next(stage for stage in recipe._require_ops() if isinstance(stage, Generate))
+
+    assert recipe._spend_monitor is monitor
+    assert generate.spend_monitor is monitor
+
+    with pytest.raises(ValueError, match="budget_usd= or monitor="):
+        Retrieve(
+            embedder=FakeEmbedder(),
+            schema=CompanySchema,
+            budget_usd=1.0,
+            monitor=monitor,
+        )
 
 
 def test_recipe_resources_are_complete_and_backbone_is_singular_sugar() -> None:
