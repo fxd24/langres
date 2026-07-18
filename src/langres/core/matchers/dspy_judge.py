@@ -517,7 +517,7 @@ class DSPyMatcher(Matcher[SchemaT]):
                     reflection_lm = (
                         dspy.LM(reflection_model) if reflection_model else self._get_lm()
                     )
-                    gepa_budget = (
+                    gepa_budget: dict[str, int | str] = (
                         {"max_metric_calls": max_metric_calls}
                         if max_metric_calls is not None
                         else {"auto": auto}
