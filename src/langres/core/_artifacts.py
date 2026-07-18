@@ -236,7 +236,9 @@ def op_spec(stage: Stage) -> OpSpec:
     """
     role, params, component = _stage_serialization(stage)
     component_spec_obj = (
-        component_spec(component, slot=_ROLE_COMPONENT_SLOT[role]) if component is not None else None
+        component_spec(component, slot=_ROLE_COMPONENT_SLOT[role])
+        if component is not None
+        else None
     )
     return OpSpec(role=role, params=params, component=component_spec_obj)
 

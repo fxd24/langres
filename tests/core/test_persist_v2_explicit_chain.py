@@ -288,7 +288,9 @@ def test_rebuild_op_rejects_unknown_role(tmp_path: Path) -> None:
 
 def test_rebuild_op_rejects_missing_component(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="requires a nested component"):
-        rebuild_op(OpSpec(role="matcher_score", params={"out_space": "prob_llm"}), state_dir=tmp_path)
+        rebuild_op(
+            OpSpec(role="matcher_score", params={"out_space": "prob_llm"}), state_dir=tmp_path
+        )
 
 
 # ----------------------------------------------------------------------------------
@@ -311,6 +313,11 @@ class _MarkerBlocker(Blocker[Any]):
     def stream(self, data: list[Any]) -> Iterator[ERCandidate[Any]]:
         return iter([])  # unused in this save/load-only test
 
+    def inspect_candidates(
+        self, candidates: list[ERCandidate[Any]], entities: list[Any], sample_size: int = 10
+    ) -> Any:
+        raise NotImplementedError  # unused in this save/load-only test
+
     @property
     def config(self) -> dict[str, object]:
         return {}
@@ -320,7 +327,10 @@ class _MarkerBlocker(Blocker[Any]):
         return cls()
 
     def save_state(self, state_dir: Path) -> None:
-        (state_dir / "index.marker").write_text(self._marker)
+        # An empty marker persists NOTHING — mirrors a VectorBlocker whose index
+        # was never built (a SerializableState owner with nothing to write).
+        if self._marker:
+            (state_dir / "index.marker").write_text(self._marker)
 
     def load_state(self, state_dir: Path) -> None:
         self.restored = (state_dir / "index.marker").read_text()
@@ -346,6 +356,27 @@ def test_explicit_sidecar_state_round_trips_by_ordinal(tmp_path: Path) -> None:
     assert isinstance(source, BlockerSource)
     assert isinstance(source.blocker, _MarkerBlocker)
     assert source.blocker.restored == "built-index"  # out-of-band state restored
+
+
+def test_explicit_empty_sidecar_is_dropped(tmp_path: Path) -> None:
+    """A stateful Source that persists NOTHING (e.g. an unbuilt VectorBlocker index)
+    leaves no ``op{i}`` dir behind — the empty sidecar is removed, so load never
+    tries to read a missing state file."""
+    ops: list[Stage] = [
+        BlockerSource(_MarkerBlocker(marker="")),  # writes no state file
+        MatcherScore(CostedNameMatcher(), out_space="prob_llm"),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    ERModel.from_topology(ops=ops).save(tmp_path)
+
+    assert not (tmp_path / "op0").exists()  # empty sidecar dropped
+    loaded = ERModel.load(tmp_path)
+    assert loaded._ops is not None
+    source = loaded._ops[0]
+    assert isinstance(source, BlockerSource)
+    assert isinstance(source.blocker, _MarkerBlocker)
+    assert source.blocker.restored is None  # no state to restore
 
 
 def test_stateless_explicit_chain_writes_no_sidecar(tmp_path: Path) -> None:
