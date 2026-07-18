@@ -195,6 +195,13 @@ def test_official_proof_expands_to_exactly_18_cells_before_retries() -> None:
     assert protocol.budget_usd == 20.0
     assert protocol.publication_profile == "official"
     assert protocol.paid_proof is True
+    assert protocol.architecture_repeats == {
+        "Retrieve": 1,
+        "RetrieveRerank": 1,
+        "RetrieveLLM": 3,
+        "RetrieveRerankLLM": 3,
+        "CustomTopology": 1,
+    }
 
 
 def test_official_proof_expander_rejects_non_paid_official_protocol() -> None:

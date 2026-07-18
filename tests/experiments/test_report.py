@@ -135,7 +135,13 @@ def test_report_derives_identity_and_rejects_spoofed_or_out_of_protocol_rows() -
 
 
 def test_aggregate_honors_median_and_exhaustive_denominators_without_fake_ci() -> None:
-    protocol = _protocol().model_copy(update={"aggregation": "median", "stochastic_repeats": 6})
+    protocol = _protocol().model_copy(
+        update={
+            "aggregation": "median",
+            "stochastic_repeats": 6,
+            "architecture_repeats": {"a": 6},
+        }
+    )
     evaluation_id = compute_evaluation_identity(protocol).evaluation_id
     runs = (
         _run("a", evaluation_id=evaluation_id, repeat_index=0, pair_f1=0.1),
@@ -212,6 +218,7 @@ def test_pareto_aggregates_repeats_and_requires_one_benchmark_split_slice() -> N
         fixed_test_set_id="composite:test",
         split_seeds=(1,),
         stochastic_repeats=2,
+        architecture_repeats={"steady": 2},
         threshold_split_id="validation",
         test_split_id="test",
         hardware_cohort="cpu-a",
@@ -263,7 +270,12 @@ def test_pareto_aggregates_repeats_and_requires_one_benchmark_split_slice() -> N
 
 
 def test_pareto_excludes_incomplete_variants_by_default_and_exposes_denominators() -> None:
-    protocol = _protocol().model_copy(update={"stochastic_repeats": 2})
+    protocol = _protocol().model_copy(
+        update={
+            "stochastic_repeats": 2,
+            "architecture_repeats": {"RetrieveLLM": 2},
+        }
+    )
     evaluation_id = compute_evaluation_identity(protocol).evaluation_id
     report = ExperimentReport(
         protocol=protocol,
@@ -312,7 +324,13 @@ def test_pareto_excludes_incomplete_variants_by_default_and_exposes_denominators
 
 
 def test_pareto_counts_omitted_planned_seed_repeat_cells_as_missing() -> None:
-    protocol = _protocol().model_copy(update={"split_seeds": (1, 2), "stochastic_repeats": 3})
+    protocol = _protocol().model_copy(
+        update={
+            "split_seeds": (1, 2),
+            "stochastic_repeats": 3,
+            "architecture_repeats": {"RetrieveLLM": 3},
+        }
+    )
     evaluation_id = compute_evaluation_identity(protocol).evaluation_id
     report = ExperimentReport(
         protocol=protocol,
@@ -346,3 +364,23 @@ def test_pareto_requires_a_declared_split_even_when_an_entire_split_is_omitted()
 
     with pytest.raises(IncompatibleProtocolError, match="multiple split_id"):
         report.pareto({"pair_f1": "max"})
+
+
+def test_report_rejects_observed_repeat_not_declared_by_protocol() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset", "other"),
+        dataset_fingerprints={"dataset": "sha256:a", "other": "sha256:b"},
+        fixed_test_set_id="composite:test",
+    )
+    evaluation_id = compute_evaluation_identity(protocol).evaluation_id
+    hostile = _run(
+        "Retrieve",
+        evaluation_id=evaluation_id,
+        split_id="official",
+        split_seed=0,
+        repeat_index=1,
+        pair_f1=0.9,
+    )
+
+    with pytest.raises(pydantic.ValidationError, match="not declared"):
+        ExperimentReport(protocol=protocol, runs=(hostile,))

@@ -371,8 +371,10 @@ benchmark/split/hardware slice, never raw repeats or mixed datasets. Incomplete
 variants are excluded by default; the explicit `include_incomplete=True` view
 retains completion/observation/failure/missing/total denominators. Aggregate
 completeness is checked against the protocol's planned split seeds and
-stochastic repeat count, so an omitted row counts as missing even when no
-explicit `status="missing"` record arrived. Aggregate
+immutable `architecture_repeats` mapping, so an omitted row counts as missing
+even when no explicit `status="missing"` record arrived. Undeclared
+architectures safely default to one repeat; observed repeat indexes never
+expand the plan, and an unplanned row is rejected. Aggregate
 confidence intervals explicitly say `unavailable` until paired entity/cluster
 observations exist; summary rows are never treated as independent bootstrap
 samples. The package's
@@ -397,7 +399,8 @@ JSON-shaped values so caller mutation cannot rewrite recorded provenance. It
 also validates and freezes one `RunContext` snapshot before computing
 `recipe_id`; running and terminal records share that exact context object, so
 mutating a caller-owned config or seed mapping cannot drift identity after the
-run starts.
+run starts. Context tags and run artifacts, including their empty defaults and
+terminal artifact updates, use the same deep-immutable snapshot contract.
 
 ## Self-tuning: the autoresearch loop (`langres.optimize`)
 

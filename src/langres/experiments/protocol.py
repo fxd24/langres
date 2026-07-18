@@ -22,6 +22,9 @@ OFFICIAL_TOPOLOGIES = (
     "CustomTopology",
 )
 STOCHASTIC_TOPOLOGIES = frozenset({"RetrieveLLM", "RetrieveRerankLLM"})
+OFFICIAL_ARCHITECTURE_REPEATS = {
+    topology: (3 if topology in STOCHASTIC_TOPOLOGIES else 1) for topology in OFFICIAL_TOPOLOGIES
+}
 OFFICIAL_PAID_PROOF_BUDGET_USD = 20.0
 MIN_BOOTSTRAP_SAMPLES = 100
 
@@ -97,6 +100,7 @@ class EvaluationProtocol(BaseModel):
     split_seeds: tuple[int, ...] = Field(min_length=1)
     deterministic_resources: dict[str, Any] = Field(default_factory=dict)
     stochastic_repeats: int = Field(default=1, ge=1)
+    architecture_repeats: dict[str, int] = Field(default_factory=dict)
     aggregation: AggregationRule = "mean"
     threshold_split_id: str = Field(min_length=1)
     test_split_id: str = Field(min_length=1)
@@ -117,6 +121,7 @@ class EvaluationProtocol(BaseModel):
         "dataset_revisions",
         "test_set_identities",
         "deterministic_resources",
+        "architecture_repeats",
         mode="after",
     )
     @classmethod
@@ -139,6 +144,25 @@ class EvaluationProtocol(BaseModel):
             raise ValueError("split_seeds must be unique")
         if not self.pair_metrics and not self.cluster_metrics:
             raise ValueError("at least one pair or cluster metric is required")
+        invalid_repeats = {
+            architecture: repeats
+            for architecture, repeats in self.architecture_repeats.items()
+            if not architecture or not isinstance(repeats, int) or repeats < 1
+        }
+        if invalid_repeats:
+            raise ValueError(
+                "architecture_repeats requires non-empty names and positive integer "
+                f"counts; got {invalid_repeats!r}"
+            )
+        over_limit = {
+            architecture: repeats
+            for architecture, repeats in self.architecture_repeats.items()
+            if repeats > self.stochastic_repeats
+        }
+        if over_limit:
+            raise ValueError(
+                f"architecture_repeats cannot exceed stochastic_repeats; got {over_limit!r}"
+            )
         if (
             self.confidence_interval_method == "paired_entity_bootstrap"
             and self.bootstrap_samples < MIN_BOOTSTRAP_SAMPLES
@@ -220,6 +244,7 @@ class EvaluationProtocol(BaseModel):
             test_set_identities=dict(test_set_identities or {}),
             split_seeds=(split_seed,),
             stochastic_repeats=3,
+            architecture_repeats=OFFICIAL_ARCHITECTURE_REPEATS,
             threshold_split_id="validation",
             test_split_id="test",
             hardware_cohort="official-declared",
@@ -235,6 +260,10 @@ class EvaluationProtocol(BaseModel):
             mode="json",
             exclude={"budget_usd", "publication_profile", "paid_proof"},
         )
+
+    def repeats_for(self, architecture: str) -> int:
+        """Return the explicitly planned repeat count; undeclared architectures run once."""
+        return int(self.architecture_repeats.get(architecture, 1))
 
 
 class ProofCell(BaseModel):
@@ -270,6 +299,10 @@ def expand_official_proof_matrix(protocol: EvaluationProtocol) -> tuple[ProofCel
         raise ValueError("the official proof matrix requires one split_id and one split seed")
     if protocol.stochastic_repeats != 3:
         raise ValueError("the official proof matrix requires stochastic_repeats=3")
+    if dict(protocol.architecture_repeats) != OFFICIAL_ARCHITECTURE_REPEATS:
+        raise ValueError(
+            "the official proof matrix requires the exact declared architecture repeat plan"
+        )
     missing_data = [
         benchmark_id
         for benchmark_id in protocol.benchmark_ids
@@ -291,7 +324,7 @@ def expand_official_proof_matrix(protocol: EvaluationProtocol) -> tuple[ProofCel
 
     cells: list[ProofCell] = []
     for topology in OFFICIAL_TOPOLOGIES:
-        repeats = protocol.stochastic_repeats if topology in STOCHASTIC_TOPOLOGIES else 1
+        repeats = protocol.repeats_for(topology)
         for benchmark_id in protocol.benchmark_ids:
             for repeat_index in range(repeats):
                 cells.append(

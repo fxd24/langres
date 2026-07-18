@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from langres.experiments.identity import compute_evaluation_identity
 from langres.experiments.measurements import FunnelFacts, StageMeasurement, TokenUsage
 from langres.experiments.protocol import EvaluationProtocol, FrozenDict, freeze_mapping
-from langres.experiments.protocol import STOCHASTIC_TOPOLOGIES
 from langres.experiments.statistics import SplitInstability, split_instability
 
 RunStatus = Literal["running", "completed", "failed", "budget_exceeded", "missing"]
@@ -200,10 +199,11 @@ class ExperimentReport(BaseModel):
                     f"runs[{index}].split_seed={run.split_seed!r} is not in protocol "
                     f"split_seeds={self.protocol.split_seeds!r}"
                 )
-            if run.repeat_index >= self.protocol.stochastic_repeats:
+            planned_repeats = self.protocol.repeats_for(run.architecture)
+            if run.repeat_index >= planned_repeats:
                 raise ValueError(
-                    f"runs[{index}].repeat_index={run.repeat_index} exceeds protocol "
-                    f"stochastic_repeats={self.protocol.stochastic_repeats}"
+                    f"runs[{index}].repeat_index={run.repeat_index} is not declared for "
+                    f"architecture={run.architecture!r}; planned repeats={planned_repeats}"
                 )
             if run.cohort_id != self.protocol.hardware_cohort:
                 raise ValueError(
@@ -442,12 +442,7 @@ class ExperimentReport(BaseModel):
         for (architecture, variant_id), rows in sorted(grouped.items()):
             completed_rows = [run for run in rows if run.status == "completed"]
             failed = sum(run.status in {"failed", "budget_exceeded"} for run in rows)
-            planned_repeats = (
-                self.protocol.stochastic_repeats
-                if architecture in STOCHASTIC_TOPOLOGIES
-                or any(run.repeat_index > 0 for run in rows)
-                else 1
-            )
+            planned_repeats = self.protocol.repeats_for(architecture)
             expected_cells = {
                 (split_seed, repeat_index)
                 for split_seed in self.protocol.split_seeds

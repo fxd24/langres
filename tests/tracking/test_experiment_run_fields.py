@@ -141,6 +141,36 @@ def test_capture_run_snapshots_context_before_recipe_identity_and_reuses_it(
         running.context.seeds["split"] = 9
 
 
+def test_run_context_tags_and_run_record_artifacts_are_deeply_immutable_defaults() -> None:
+    context = RunContext(experiment="research", dataset_name="dataset")
+    record = RunRecord(
+        attempt_id="attempt",
+        recipe_id="recipe",
+        context=context,
+        started_at="2026-07-18T12:00:00+00:00",
+        status="completed",
+    )
+
+    with pytest.raises(TypeError, match="immutable"):
+        context.tags["team"] = "er"
+    with pytest.raises(TypeError, match="immutable"):
+        record.artifacts["report"] = "report.json"
+
+
+def test_capture_run_terminal_artifacts_are_frozen(tmp_path: Path) -> None:
+    path = tmp_path / "runs.jsonl"
+    with capture_run(
+        RunContext(experiment="research", dataset_name="dataset"),
+        store=path,
+    ) as handle:
+        handle.log_artifact("report", "report.json")
+
+    [record] = RunStore(path).read()
+    assert record.artifacts == {"report": "report.json"}
+    with pytest.raises(TypeError, match="immutable"):
+        record.artifacts["report"] = "changed.json"
+
+
 @pytest.mark.parametrize("field", ["protocol", "measurements"])
 def test_run_record_snapshots_reject_non_finite_numbers(field: str) -> None:
     values: dict[str, object] = {

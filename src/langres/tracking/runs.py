@@ -161,6 +161,13 @@ class RunContext(BaseModel):
     #    ``seeds["split"]`` (no duplicate scalar). --
     seeds: dict[str, int] = Field(default_factory=dict)
 
+    @field_validator("tags", mode="after")
+    @classmethod
+    def _freeze_tags(cls, value: dict[str, str]) -> dict[str, str]:
+        snapshot = _snapshot_mapping(value)
+        assert snapshot is not None
+        return snapshot
+
     @field_validator("resolver_config", mode="after")
     @classmethod
     def _freeze_resolver_config(
@@ -246,7 +253,7 @@ class RunRecord(BaseModel):
     ``.model_dump()``) so this module never depends on the result models.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, validate_default=True)
 
     attempt_id: str
     recipe_id: str
@@ -296,6 +303,13 @@ class RunRecord(BaseModel):
         value: tuple[dict[str, Any], ...] | None,
     ) -> tuple[dict[str, Any], ...] | None:
         return _snapshot_measurements(value)
+
+    @field_validator("artifacts", mode="after")
+    @classmethod
+    def _freeze_artifacts(cls, value: dict[str, str]) -> dict[str, str]:
+        snapshot = _snapshot_mapping(value)
+        assert snapshot is not None
+        return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +712,8 @@ def capture_run(
         artifacts = dict(handle._artifacts)
         if tracker.run_url is not None:
             artifacts.setdefault("run_url", tracker.run_url)
+        artifacts_snapshot = _snapshot_mapping(artifacts)
+        assert artifacts_snapshot is not None
         if resolved_store is not None:
             resolved_store.append(
                 running_record.model_copy(
@@ -712,7 +728,7 @@ def capture_run(
                         "spend_usd": handle._spend_usd,
                         "budget_exceeded": handle._budget_exceeded,
                         "trace_id": attempt_id,
-                        "artifacts": artifacts,
+                        "artifacts": artifacts_snapshot,
                         "status": final_status,
                         "error_type": error_type,
                         "error_message": error_message,
