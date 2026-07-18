@@ -51,6 +51,11 @@ model.save_pretrained(
 The outer manifest and generated card then state that prompt-bearing
 configuration is included.
 
+Credentials are never publishable, even with `allow_sensitive_config=True`.
+Keep API keys, authorization headers, tokens, and similar secrets out of
+serialized LiteLLM `provider` / `extra_body` options; inject them through the
+runtime client or environment instead.
+
 Remote operations use the same journey:
 
 ```python
@@ -111,6 +116,8 @@ caches, and tracker credentials are never included. Prompt-bearing resolver
 configuration is included only with `allow_sensitive_config=True` and is
 declared in both manifest and card. Tokens are forwarded to the Hub client for
 the requested operation and are never written to the bundle or model card.
+The outer manifest also records the install extras needed by optional
+components, including `[trained]` for calibrators and random-forest matchers.
 
 Hub artifact revision provenance is separate from resource `ModelRef`
 revisions: `pretrained_source_.resolved_revision` identifies the bundle commit,

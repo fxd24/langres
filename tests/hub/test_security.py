@@ -18,8 +18,13 @@ from langres._pretrained_artifact import (
     sensitive_config_paths,
 )
 from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
+from langres.core.blockers.all_pairs import AllPairsBlocker
+from langres.core.clusterer import Clusterer
+from langres.core.op import ThresholdSelect
+from langres.core.op_adapters import BlockerSource, ClustererStage
 from langres.core.resolver import ERModel
 from langres.hub import from_pretrained, push_to_hub, save_pretrained
+from langres.resources import Generate, LiteLLM, Parse
 
 from .conftest import Entity, FakeHubTransport
 
@@ -95,6 +100,87 @@ def test_prompt_bearing_op_params_require_publication_consent() -> None:
     )
 
     assert sensitive_config_paths(manifest) == ("op[0].custom_prompt_op.prompt_template",)
+
+
+@pytest.mark.parametrize(
+    "transport_options",
+    (
+        {"provider": {"api_key": "sk-private"}},
+        {"extra_body": {"headers": {"Authorization": "Bearer private"}}},
+    ),
+)
+def test_credential_bearing_transport_config_is_never_publishable(
+    transport_options: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=Entity)),
+            Generate(
+                LiteLLM(
+                    {"base": "openai/gpt-5-mini", "kind": "api"},
+                    **transport_options,
+                )
+            ),
+            Parse(),
+            ThresholdSelect(0.5),
+            ClustererStage(Clusterer(threshold=0.5)),
+        ]
+    )
+    destination = tmp_path / "credential-bearing"
+
+    with pytest.raises(ArtifactEligibilityError, match="credential-bearing"):
+        save_pretrained(
+            model,
+            destination,
+            allow_sensitive_config=True,
+        )
+    assert not destination.exists()
+
+
+def test_credential_bearing_transport_config_is_rejected_when_loading(
+    tmp_path: Path,
+) -> None:
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=Entity)),
+            Generate(LiteLLM({"base": "openai/gpt-5-mini", "kind": "api"})),
+            Parse(),
+            ThresholdSelect(0.5),
+            ClustererStage(Clusterer(threshold=0.5)),
+        ]
+    )
+    bundle = save_pretrained(model, tmp_path / "bundle")
+    resolver = json.loads((bundle / "resolver.json").read_text())
+    generate = next(op for op in resolver["ops"] if op["role"] == "generate")
+    generate["component"]["config"]["extra_body"] = {"headers": {"Authorization": "Bearer private"}}
+    (bundle / "resolver.json").write_text(json.dumps(resolver))
+
+    manifest = json.loads((bundle / BUNDLE_MANIFEST).read_text())
+    import hashlib
+
+    content = (bundle / "resolver.json").read_bytes()
+    for item in manifest["files"]:
+        if item["path"] == "resolver.json":
+            item["size"] = len(content)
+            item["sha256"] = hashlib.sha256(content).hexdigest()
+    (bundle / BUNDLE_MANIFEST).write_text(json.dumps(manifest))
+
+    with pytest.raises(PretrainedArtifactError, match="credential-bearing"):
+        from_pretrained(bundle)
+
+
+def test_trained_components_declare_the_trained_extra() -> None:
+    manifest = ArtifactManifest(
+        artifact_version="1",
+        langres_version="0.3.0",
+        components=(
+            ComponentSpec(type_name="calibrator", config={}),
+            ComponentSpec(type_name="random_forest", config={}),
+        ),
+    )
+
+    assert resource_facts(manifest) == ((), ("trained",))
 
 
 def test_unknown_model_name_component_fails_closed() -> None:
