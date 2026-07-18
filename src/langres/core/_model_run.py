@@ -509,9 +509,13 @@ class ModelRun(ModelState):
         threshold, followed by pure-equivalence
         :class:`~langres.core.op_adapters.ClustererStage` clustering over the
         survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
-        Singletons are dropped by the Clusterer (it returns only connected
-        components with an edge), so the result contains only multi-record
-        clusters.
+        The output is whatever the (zeroed) equivalence clusterer returns over
+        the selected edges: the base connected-components
+        :class:`~langres.core.clusterer.Clusterer` emits only multi-record
+        clusters (an isolated record never enters the graph), whereas a pivot
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` can
+        leave a singleton behind -- a record with a qualifying edge whose only
+        neighbours an earlier pivot already claimed.
 
         Args:
             records: Raw records (dicts) in a stable list order.
