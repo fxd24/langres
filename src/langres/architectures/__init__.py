@@ -26,16 +26,15 @@ that is a new architecture wearing a flag. Write the new class.
 
 Why these files repeat each other (and why that is not a bug)
 -------------------------------------------------------------
-**Each architecture is one self-contained, readable file, and DRY is
-deliberately suspended inside this package** -- the policy transformers applies
-to ``modeling_*.py``, for the same reason. An architecture file is meant to be
-*read end to end* by someone deciding whether this is the model they want, and
-then copied as the starting point for their own. A shared ``_build_blocker()``
-helper would save a few lines and cost exactly the property that makes these
-files worth having: you would have to read three files to learn what one model
-does, and a change made for one architecture would silently reshape the others.
-So ``fuzzy_string.py`` and ``vector_llm_cascade.py`` both build their own
-comparator and their own text extractor, on purpose.
+**Topology stays readable in one place, and DRY is deliberately suspended for
+the wiring itself** -- the policy transformers applies to ``modeling_*.py``, for
+the same reason. Standalone architectures have self-contained files; the four
+closely related retrieval recipes are co-located as one readable family, but
+each concrete class still spells out its own ordered operations. A shared
+``_build_pipeline(flags=...)`` helper would save a few lines and hide the
+property that makes these models worth naming: which stages actually run.
+Likewise, ``fuzzy_string.py`` and ``vector_llm_cascade.py`` both build their own
+comparator and text extractor on purpose.
 
 **The anti-DRY licence stops at the package boundary.** It covers *topology* --
 which components this model wires and how. It does **not** cover contracts:
@@ -45,8 +44,42 @@ input normalization (:mod:`langres.core.inputs`), the result types
 to normalize a record identically; that is exactly what a contract is for.
 """
 
+import importlib
+from typing import TYPE_CHECKING, Any
+
 from langres.architectures.fuzzy_string import FuzzyString
 from langres.architectures.reranker import Reranker
 from langres.architectures.vector_llm_cascade import VectorLLMCascade
 
-__all__ = ["FuzzyString", "Reranker", "VectorLLMCascade"]
+if TYPE_CHECKING:
+    from langres.architectures.retrieval import (
+        Retrieve,
+        RetrieveLLM,
+        RetrieveRerank,
+        RetrieveRerankLLM,
+    )
+
+_LAZY_SYMBOLS = {
+    name: "langres.architectures.retrieval"
+    for name in ("Retrieve", "RetrieveLLM", "RetrieveRerank", "RetrieveRerankLLM")
+}
+
+__all__ = [
+    "FuzzyString",
+    "Reranker",
+    "Retrieve",
+    "RetrieveLLM",
+    "RetrieveRerank",
+    "RetrieveRerankLLM",
+    "VectorLLMCascade",
+]
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve research recipes without loading their resource adapters eagerly."""
+    module_name = _LAZY_SYMBOLS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module_name), name)
+    globals()[name] = value
+    return value
