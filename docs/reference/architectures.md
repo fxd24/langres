@@ -1,4 +1,4 @@
-# Architectures
+# Architectures, resources, operations, and recipes
 
 Named ER models. You construct one, then call `.dedupe()` / `.compare()` on it:
 
@@ -13,10 +13,11 @@ VectorLLMCascade(
 ).dedupe(records)                                               # paid, because you named it
 ```
 
-An **architecture** is a *topology* — which components run, in what order. A
-**backbone** is what fills a model slot. Swapping a backbone never mints a new
-architecture: `VectorLLMCascade(llm="a")` and `VectorLLMCascade(llm="b")` are the
-same architecture with different weights behind it.
+An **architecture** is a topology. In the research API, **resources** are the
+model-bearing capabilities, **operations** are the ordered transformations, and
+a **recipe** is a named architecture equipped with resources. Swapping a
+resource or its `ModelRef` creates a configuration variant, not a new
+architecture.
 
 There is no `matcher="auto"`. Nothing here reads your environment to decide what
 to run: `FuzzyString` has no paid slot to fill, and `VectorLLMCascade` only bills
@@ -30,10 +31,10 @@ ecosystem:
 
 | Recipe | Topology |
 |---|---|
-| `Retrieve` | Retrieve → threshold → Cluster |
-| `RetrieveRerank` | Retrieve → Rerank → threshold → Cluster |
-| `RetrieveLLM` | Retrieve → top-k → LLM Generate/Parse → Cluster |
-| `RetrieveRerankLLM` | Retrieve → Rerank → top-k → LLM Generate/Parse → Cluster |
+| `Retrieve` | Retrieve → threshold Select → Cluster |
+| `RetrieveRerank` | Retrieve → Rerank → threshold Select → Cluster |
+| `RetrieveLLM` | Retrieve → top-k Select → Generate → Parse → threshold Select → Cluster |
+| `RetrieveRerankLLM` | Retrieve → Rerank → top-k Select → Generate → Parse → threshold Select → Cluster |
 
 Each model slot accepts either a resource object or a model reference. The
 resource name describes what it does, while the following `Select` determines
@@ -72,6 +73,9 @@ algorithm.
 Advanced users can compose the same `langres.resources.Retrieve`, `Rerank`,
 `Generate`, and `Parse` operations through `ERModel.from_topology()`; the
 experiment path does not dispatch on recipe names.
+
+See [Research vocabulary and legacy migration](research-vocabulary.md) for the
+explicit mapping from Blocker/Matcher/Judge-era terms.
 
 ::: langres.architectures.retrieval
 

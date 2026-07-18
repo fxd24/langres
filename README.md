@@ -12,12 +12,52 @@
 [![prek](https://img.shields.io/badge/prek-enabled-brightgreen)](https://prek.j178.dev/)
 
 **langres** is a composable entity resolution (ER) framework for Python: it
-finds records that refer to the same real-world entity. The matching "brain" —
-a swappable **Matcher**, the component that scores whether two records match —
-sits behind one interface and is tunable with zero labeled data. Its thesis is
-to be the place where any ER method — string similarity, embeddings, an LLM
-judge, a trained classifier — is implemented **once** and stays
-usable/swappable/tunable by anyone.
+finds records that refer to the same real-world entity, and makes ER research
+repeatable. The public research vocabulary has three layers:
+
+- **resources** are model-bearing capabilities: an `Embedder`, `Reranker`, or
+  `LLM`;
+- **operations** transform the record/pair stream: `Retrieve`, `Rerank`,
+  `Select`, `Generate`, `Parse`, and `ClusterStage`;
+- **recipes** are named ordered operation topologies, equipped with resources.
+
+Swap a resource to compare weights or providers. Change the ordered operations
+to compare an architecture. Declare an `EvaluationProtocol` to compare either
+without quietly changing the benchmark, split, seed, metric, or hardware
+cohort.
+
+---
+
+## First experiment: one command, offline, $0
+
+```bash
+uv run python examples/research/first_experiment.py
+```
+
+This runs the real experiment runner over the bundled `tiny_fixture`, using a
+deterministic fake embedder: no key, download, network request, or paid call.
+The returned `ExperimentReport` records the protocol and every completed or
+failed cell. Move outward progressively:
+
+```text
+Retrieve
+  → Retrieve + Rerank
+  → Retrieve + Generate/Parse
+  → Retrieve + Rerank + Generate/Parse
+```
+
+Those are the four built-in research recipes: `Retrieve`, `RetrieveRerank`,
+`RetrieveLLM`, and `RetrieveRerankLLM`. Run all four locally with
+[`examples/research_recipes.py`](examples/research_recipes.py), then expand
+benchmarks, splits, and seeds with
+[`examples/research/experiment_matrix.py`](examples/research/experiment_matrix.py).
+The [generated smoke table](docs/generated/research_smoke_table.md) comes from a
+real local `ExperimentReport`; it proves the contracts compose, not that fake
+resources are competitive.
+
+See [Getting started](docs/GETTING_STARTED.md) for the progressive path,
+[Experiments](docs/EXPERIMENTS.md) for protocol and cohort semantics, and
+[Reproducibility](docs/REPRODUCIBILITY.md) for handoff and publication.
 
 ---
 
@@ -96,6 +136,8 @@ stable enough to build on. For the direction, see
 | Surface | Stability | Notes |
 |---|---|---|
 | `langres.architectures.*` (`FuzzyString`, `VectorLLMCascade`) — `.dedupe()` / `.compare()`, `DedupeResult` / `LinkVerdict` | **stabilizing** | The intended entry point. Signatures may still shift, but this is the layer we're committing to. |
+| `langres.resources.*` + retrieval recipes (`Retrieve*`) | **experimental** | The resource/operation/recipe research vocabulary. Import-light, but still 0.x. |
+| `langres.experiments.*` (`Experiment`, `EvaluationProtocol`, `ExperimentReport`) | **experimental** | Reproducible matrix execution, identity, measurement, cohorts, and reports. |
 | `langres.Resolver` (an alias of `ERModel`: `from_schema`, `resolve`, `assign`, `save`/`load`) | **stabilizing** | The mid-level path for custom pipelines — and the base class every named architecture subclasses. |
 | `langres.core.*` primitives (`Blocker`, `Matcher`, `Comparator`, `Clusterer`, judges, …) | **churning** | Low-level building blocks; internals change frequently. |
 | Everything marked "roadmap" below | **not built** | Named in [docs/ROADMAP.md](docs/ROADMAP.md) / [docs/USE_CASES.md](docs/USE_CASES.md), not importable yet. |
@@ -110,6 +152,8 @@ pip install 'langres[llm]'         # + LLMMatcher / DSPy-compiled judges (litell
 pip install 'langres[semantic]'    # + VectorBlocker / embeddings (sentence-transformers, faiss, torch)
 pip install 'langres[trained]'     # + RandomForestMatcher, derive_threshold (scikit-learn)
 pip install 'langres[eval]'        # + ranking metrics for blocker evaluation (ranx)
+pip install 'langres[trackio]'     # + local-first experiment dashboard
+pip install 'langres[hub]'         # + remote Hugging Face pull/push; local bundles need no extra
 ```
 
 Or from source with [`uv`](https://docs.astral.sh/uv/):

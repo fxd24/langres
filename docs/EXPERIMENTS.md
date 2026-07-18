@@ -1,5 +1,17 @@
 # Running experiments in langres
 
+## Zero-network first run
+
+```bash
+uv run python examples/research/first_experiment.py
+```
+
+This is the smallest real matrix: one `Retrieve` recipe, the bundled
+`tiny_fixture`, its test split, and seed 0. It uses `FakeEmbedder`, writes a
+local run log and stage cache under `runs/first-experiment/`, returns an
+`ExperimentReport`, and enforces `budget_usd=0.0`. No optional tracker, model
+download, API key, or network is involved.
+
 ## Architecture experiment runner
 
 `Experiment` is the architecture-first surface for reproducible benchmark
@@ -85,6 +97,91 @@ same-bytes checkpoint commits are idempotent. Tracker publication is optional
 plumbing: a tracker failure leaves the local completed attempt intact and marks
 publication incomplete in run warnings. Persisted failure text redacts complete
 authorization header values, including bearer tokens.
+
+## Matrices: benchmarks × splits × seeds × repeats
+
+`EvaluationProtocol` declares the statistical question. `Experiment` expands
+it exactly; it does not invent a validation alias or omit failed cells.
+
+```bash
+# Print the 16-cell plan only.
+uv run python examples/research/experiment_matrix.py
+
+# Execute two fake-resource recipes × two bundled benchmarks × train/test × two seeds.
+uv run python examples/research/experiment_matrix.py --execute
+```
+
+Use `architecture_repeats` for stochastic resource repeats. Retry attempts live
+in `RunStore`; they are not additional samples in `ExperimentReport`.
+
+## Compatible cohorts and infrastructure effects
+
+Quality rows are directly comparable only when their `evaluation_id` matches:
+the same datasets and fixed test identity, splits, seeds, threshold policy,
+metrics, and aggregation. Performance rows additionally require the same
+`hardware_cohort` and materially equivalent runtime configuration.
+
+Keep separate cohorts when any of these changes:
+
+- CPU/GPU/accelerator type or count;
+- dtype, quantization, batch size, or worker count;
+- cold versus warm model/cache state;
+- provider, endpoint region, or request concurrency;
+- library/runtime version that changes kernels or execution.
+
+Infrastructure can change wall latency, throughput, loaded memory, and observed
+cost without changing pair or cluster quality. Conversely, quantization or a
+different remote provider may change both. `report.cohorts` groups by
+evaluation and hardware cohort; aggregate and Pareto views do not license
+cross-cohort speed claims. State the cohort next to every performance number.
+
+The generated [fake-resource smoke table](generated/research_smoke_table.md) is
+mechanically produced by
+`examples/research/generate_smoke_table.py` from a real local
+`ExperimentReport`. Its latency is machine-specific and its fake-resource
+quality is only a contract check.
+
+## Reprice stored tokens without repeating inference
+
+Token usage is an immutable measured fact; pricing is a time-stamped
+interpretation. Apply a new `PriceSnapshot` to the stored `TokenUsage`:
+
+```bash
+uv run python examples/research/reprice_tokens.py
+```
+
+`PriceSnapshot.reprice()` returns `complete=False` and names missing rates or
+usage instead of treating unknown facts as zero. Preserve the original price
+snapshot and observed charge alongside any derived estimate.
+
+## Local Trackio reproduction
+
+Install `langres[trackio]`, then mirror a fresh execution to Trackio's local
+SQLite store:
+
+```bash
+uv run python examples/research/trackio_reproduction.py
+```
+
+The script constructs `TrackioTracker(space_id=None)`, so it requires no token
+and makes no Hub request. The `RunStore` and protocol remain the reproduction
+source of truth; Trackio is a view. Setting a Space id is a separate,
+credentialed publication action.
+
+## Guarded official paid proof
+
+Planning is safe and free:
+
+```bash
+uv run python examples/research/official_paid_proof.py
+```
+
+It prints the exact five-topology × two-dataset, 18-cell plan, paid concurrency
+1, and the hard USD 20 cap, then exits before dataset/model loading or network.
+Paid execution is outside CI and requires both `--execute-paid` and the literal
+confirmation phrase printed by the command. The script then resolves dataset
+fingerprints before work and passes the experiment's one shared
+`SpendMonitor` into every operation chain. Never automate the confirmation.
 
 This is the getting-started for **experimenting on entity-resolution scorers** in
 langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything below
@@ -733,6 +830,13 @@ with `examples/data/flywheel/generate_fixtures.py`.
 
 ## See also
 
+- `examples/research/first_experiment.py` — real zero-network first experiment.
+- `examples/research/experiment_matrix.py` — multiple benchmarks, splits, seeds,
+  and recipes.
+- `examples/research/trackio_reproduction.py` — local-only Trackio rerun.
+- `examples/research/reprice_tokens.py` — stored-token repricing.
+- [`docs/REPRODUCIBILITY.md`](REPRODUCIBILITY.md) — identity and publication
+  handoff.
 - [`docs/BENCHMARKS.md`](BENCHMARKS.md) — the benchmark portfolio + registry
   (`list_benchmarks` / `get_benchmark`), and the `evaluate()` bring-your-own-data
   scoring walkthrough.

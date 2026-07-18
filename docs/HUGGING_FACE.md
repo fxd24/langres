@@ -33,6 +33,10 @@ model.save_pretrained(
 reloaded = langres.ERModel.from_pretrained("artifacts/acme-er")
 ```
 
+A complete zero-network local round-trip, plus an explicitly private
+`push_to_hub` path that runs only when `--push-to` is supplied, lives in
+`examples/research/hub_lifecycle.py`.
+
 Prompt-bearing configuration is excluded by default. If the model contains a
 custom/default serialized prompt, inspect `model.config_dict()` and opt in
 explicitly:

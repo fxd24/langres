@@ -4,6 +4,18 @@
 
 ### Research execution foundation
 
+- Added the canonical Resources / Operations / Recipes vocabulary, four named
+  retrieval recipes, an explicit legacy Blocker/Matcher/Judge migration map,
+  and a progressive research documentation path.
+- Added copy-paste, offline examples for embedding separability, all four
+  recipes, the first `Experiment`, benchmark/split/seed matrices, local Trackio
+  reproduction, stored-token repricing, and local/Hub pretrained lifecycle.
+- Added a guarded official proof command: plan-only by default, exact 18 cells,
+  paid concurrency one, hard USD 20 cap, and literal confirmation required
+  before paid execution.
+- Added a mechanically generated fake-resource smoke table backed by a real
+  local `ExperimentReport`; it is explicitly a contract check, not a quality or
+  performance claim.
 - Added lazy `langres.experiments.Experiment` and `ArchitectureFactory`: expand
   architecture × benchmark × real split × seed matrices, tune on train,
   evaluate untouched test data, capture attempts automatically, resume completed
