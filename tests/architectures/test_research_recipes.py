@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from langres.architectures import (
     Retrieve,
     RetrieveLLM,
@@ -44,6 +46,10 @@ LLM_RESPONSES = {
     '["a","c"]': "NO_MATCH",
     '["b","c"]': "NO_MATCH",
 }
+
+
+class _IdentifierOnly(BaseModel):
+    id: str
 
 
 def _canonical(model: ERModel) -> list[list[str]]:
@@ -279,3 +285,16 @@ def test_recipe_infers_schema_on_first_run_and_exposes_resources_before_binding(
     assert recipe.resources == {"embedder": embedder.model_ref}
     assert _canonical(recipe) == [["a", "b", "c"]]
     assert recipe.schema is not None
+
+
+def test_explicit_retrieval_text_field_does_not_require_default_comparable_fields() -> None:
+    retrieve = RetrieveOp(
+        FakeEmbedder(),
+        schema=_IdentifierOnly,
+        text_field="id",
+        k=1,
+    )
+
+    pairs = retrieve.forward([{"id": "a"}, {"id": "b"}])
+
+    assert [(row.left_id, row.right_id) for row in pairs.rows] == [("a", "b")]

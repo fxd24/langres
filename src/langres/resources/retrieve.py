@@ -52,8 +52,10 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         self.k = k
         self.text_field = text_field
         self._factory = schema_to_factory(schema)
-        self._default_fields = tuple(
-            spec.name for spec in StringComparator.from_schema(schema).feature_specs
+        self._default_fields = (
+            ()
+            if text_field is not None
+            else tuple(spec.name for spec in StringComparator.from_schema(schema).feature_specs)
         )
 
     @property
