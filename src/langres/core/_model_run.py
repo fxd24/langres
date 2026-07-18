@@ -57,7 +57,7 @@ mid-pull.
 """
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -65,7 +65,7 @@ from langres.core._model_state import ModelState
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.fit import CalibratorFitMixin
-from langres.core.inputs import check_no_duplicate_ids
+from langres.core.inputs import check_no_duplicate_ids, normalize_records
 from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 from langres.core.models import (
     ERCandidate,
@@ -73,7 +73,7 @@ from langres.core.models import (
     PairwiseJudgement,
     predicted_match,
 )
-from langres.core.op import Score, Source, ThresholdSelect
+from langres.core.op import Op, Score, Source, ThresholdSelect
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -132,25 +132,33 @@ def _coerce_log(log: "JudgementLog | str | Path | None") -> JudgementLog | None:
     return JudgementLog(log)
 
 
-def _run_stages(records: list[Any], stages: list[Source[Any] | Score[Any]]) -> Pairs[Any]:
-    """Fold ``forward`` across ``stages`` to turn ``records`` into a scored ``Pairs``.
+def _run_stages(records: list[Any], stages: Sequence[Source[Any] | Op[Any]]) -> Pairs[Any]:
+    """Fold ``forward`` across ``stages`` to turn ``records`` into a ``Pairs``.
 
-    The generic driver behind :meth:`ModelRun._candidates` and
-    :meth:`ModelRun._scored_pairs`. Both stage lists it is handed --
-    :meth:`ModelRun._stages` (full) and its matcher-free prefix
-    :meth:`ModelRun._block_compare_stages` -- lead with the
-    :class:`~langres.core.op.Source` (records -> pairs) and continue with
-    :class:`~langres.core.op.Score`\\ s (pairs -> pairs), so the fold walks
-    ``Records -> Pairs -> ... -> Pairs``. The two narrowing ``cast``\\ s
-    encode that Source-first shape (which the factories guarantee) precisely --
-    ``Source.forward`` takes records while ``Score.forward`` takes a ``Pairs``, so
-    the heterogeneous first stage cannot share one loosely-typed loop variable
-    with the rest, and the cast is a typed assertion of the shape, not an ``Any``.
+    The generic driver behind :meth:`ModelRun._candidates`,
+    :meth:`ModelRun._scored_pairs` (both derived-slot and explicit-chain). Every
+    stage list it is handed leads with the :class:`~langres.core.op.Source`
+    (records -> pairs) and continues with :class:`~langres.core.op.Op`\\ s
+    (pairs -> pairs), so the fold walks ``Records -> Pairs -> ... -> Pairs``.
+
+    The body element type is :class:`~langres.core.op.Op`, **not** ``Score``: an
+    explicit chain (:meth:`~langres.core._model_state.ModelState.from_topology`)
+    interleaves :class:`~langres.core.op.Select`\\ s among the Scores, and a
+    ``Select`` is an ``Op`` but not a ``Score``. Narrowing the loop element to
+    ``Score`` would exclude them; ``Op`` admits every body stage while keeping the
+    fold precisely typed. The parameter is a covariant ``Sequence`` so the classic
+    factories' ``list[Source | Score]`` still passes (``Score`` is an ``Op``).
+
+    The two narrowing ``cast``\\ s encode the Source-first shape the factories
+    guarantee -- ``Source.forward`` takes records while ``Op.forward`` takes a
+    ``Pairs``, so the heterogeneous first stage cannot share one loosely-typed loop
+    variable with the rest, and the cast is a typed assertion of the shape, not an
+    ``Any``.
     """
-    source, *scores = stages
+    source, *body = stages
     pairs = cast(Source[Any], source).forward(records)
-    for score in scores:
-        pairs = cast(Score[Any], score).forward(pairs)
+    for op in body:
+        pairs = cast(Op[Any], op).forward(pairs)
     return pairs
 
 
@@ -386,7 +394,21 @@ class ModelRun(ModelState):
         clusterer thresholds on a real probability. Pure pass-through otherwise.
         Calibration is a per-score transform applied in the spine, NOT an Op
         adapter (kept here through W3-c).
+
+        **Explicit chain (``_ops`` set).** Folds the chain's Source + body Ops
+        (Scores AND Selects, up to but excluding the terminal ClusterStage --
+        :meth:`_cluster` runs that). This path does NOT call
+        :meth:`_ensure_index_built` (a four-slot convenience), so a
+        ``VectorBlocker``-backed Source must carry a PRE-BUILT index: if its index
+        is missing, ``blocker.stream`` raises loud (``RuntimeError: Index not
+        built``) on the first fold here -- it never silently yields empty
+        candidates. ``from_topology`` documents this; the shipped rerankers source
+        from ``AllPairsBlocker`` (no index). No calibrator either
+        (``from_topology`` rejects one -- a ``CalibratorScore`` Op is a later wave).
+        ``log`` is not threaded into a fixed pre-built chain.
         """
+        if self._ops is not None:
+            return _run_stages(records, [self._chain_source(), *self._chain_body()])
         self._ensure_index_built(records)
         pairs = _run_stages(records, self._stages(log=log))
         if self.calibrator is not None:
@@ -496,7 +518,16 @@ class ModelRun(ModelState):
         ``scored_pairs`` must already be calibrated (callers pass
         :meth:`_scored_pairs`'s output), so the cut thresholds the CALIBRATED
         score, exactly as the clusterer did.
+
+        **Explicit chain (``_ops`` set).** The chain's own terminal ClusterStage
+        IS the exit -- its match cut is already a body ``ThresholdSelect`` and its
+        ``ClustererStage`` already carries the (zeroed) clusterer -- so this runs
+        that ClusterStage on ``scored_pairs`` directly, with **no** extra
+        ThresholdSelect / :meth:`_closure_clusterer` wrap. Adding either would
+        double-cut and silently diverge.
         """
+        if self._ops is not None:
+            return self._chain_cluster_stage().forward(scored_pairs)
         selected: Pairs[Any] = ThresholdSelect(self.clusterer.threshold).forward(scored_pairs)
         return ClustererStage(self._closure_clusterer()).forward(selected)
 
@@ -586,6 +617,11 @@ class ModelRun(ModelState):
                 score_type="none",
                 threshold=None,
             )
+        # Explicit-chain model: no ``module``/``clusterer`` slot to read, so the
+        # front-door reads (threshold/backbone) come from the chain (see
+        # _dedupe_explicit). ``log`` is not threaded into a fixed pre-built chain.
+        if self._ops is not None:
+            return self._dedupe_explicit(records)
         normalized = self._prepare(records)
         check_no_duplicate_ids([record["id"] for record in normalized])
         pairs = self._scored_pairs(normalized, log=_coerce_log(log))
@@ -651,6 +687,12 @@ class ModelRun(ModelState):
                 ``compare`` owes its caller a verdict and will not fabricate one.
             BudgetExceeded: If scoring this pair would cross the spend cap.
         """
+        # Explicit-chain model: fold ONLY the chain's Score ops on the pair (skip
+        # its Selects, so an abstaining pair is not cut before we can raise) and
+        # gate on the chain's terminal ThresholdSelect (see _compare_explicit).
+        # ``log`` is not threaded into a fixed pre-built chain.
+        if self._ops is not None:
+            return self._compare_explicit(left, right)
         normalized = self._prepare([left, right])
         pair = self._pair_candidate(normalized)
         scored = self._matcher_score(log=_coerce_log(log)).forward(pair)
@@ -721,6 +763,120 @@ class ModelRun(ModelState):
             candidate = candidate.model_copy(
                 update={"comparison": self.comparator.compare(left_entity, right_entity)}
             )
+        return Pairs.from_candidates([candidate])
+
+    # ------------------------------------------------------------------
+    # The explicit-chain front door (``_ops`` set) -- the else branch of
+    # dedupe/compare. Split out so the classic ``is None`` bodies above stay
+    # byte-verbatim. Everything here reads the chain, never the four slots.
+    # ------------------------------------------------------------------
+
+    def _dedupe_explicit(self, records: list[dict[str, Any]]) -> DedupeResult:
+        """``dedupe`` over an explicit Op chain.
+
+        Normalizes via the chain's Source schema (the ONE input contract, same as
+        :meth:`_prepare`'s), runs the chain (Source + body Ops via
+        :meth:`_scored_pairs`, then the terminal ClusterStage via :meth:`_cluster`,
+        both dispatched on ``_ops``), and reports the chain's own effective cut
+        (:meth:`_chain_threshold`) and :attr:`backbone` -- there is no single
+        ``clusterer``/``module`` slot. ``score_type`` stays row-derived (the first
+        scored row's own family), exactly as the classic path.
+        """
+        _schema, normalized = normalize_records(records, self._chain_source_schema())
+        check_no_duplicate_ids([record["id"] for record in normalized])
+        pairs = self._scored_pairs(normalized)
+        clusters = self._cluster(pairs)
+        score_type = next(
+            (row.score_type for row in pairs.rows if row.score_type is not None), None
+        )
+        return DedupeResult(
+            clusters,
+            architecture=type(self).__name__,
+            backbone=self.backbone,
+            score_type=score_type if score_type is not None else "unknown",
+            threshold=self._chain_threshold(),
+        )
+
+    def _compare_explicit(self, left: dict[str, Any], right: dict[str, Any]) -> LinkVerdict:
+        """``compare`` over an explicit Op chain.
+
+        Folds ONLY the chain's :class:`~langres.core.op.Score` ops on the single
+        pair (:meth:`~langres.core._model_state.ModelState._chain_body_scores`) --
+        the Selects are deliberately skipped, because a body
+        :class:`~langres.core.op.ThresholdSelect` would drop an abstaining pair
+        before this method can raise :class:`~langres.core.models.MatcherAbstainedError`
+        (the whole reason ``compare`` differs from ``dedupe``). Gates the resulting
+        judgement on the chain's terminal ThresholdSelect threshold.
+        """
+        _schema, normalized = normalize_records([left, right], self._chain_source_schema())
+        pair = self._chain_pair_candidate(normalized)
+        scored = pair
+        for score in self._chain_body_scores():
+            scored = score.forward(scored)
+        scored_rows = [row for row in scored.rows if row.score_type is not None]
+        if not scored_rows:
+            raise RuntimeError(
+                "the explicit chain's Score ops produced no judgement for this pair; every "
+                "candidate must yield exactly one PairwiseJudgement. This indicates a bug in the "
+                "chain's matcher Score."
+            )
+        judgement = scored_rows[0].to_judgement()
+
+        threshold = self._chain_threshold()
+        if threshold is None:
+            raise RuntimeError(
+                "compare() needs a match cut to gate on, but this explicit chain has no terminal "
+                "ThresholdSelect. Fix: add a ThresholdSelect before the ClusterStage, or compare "
+                "via dedupe()."
+            )
+        predicted = predicted_match(judgement, threshold)
+        if predicted is None:
+            raise MatcherAbstainedError(
+                "the explicit chain's matcher abstained (no decision and no score) on this pair, "
+                "so compare() cannot return a verdict. An LLMMatcher abstains when its response "
+                "fails to parse (the default on_parse_error='abstain'); pass "
+                "on_parse_error='raise' to surface the parse failure, or catch "
+                "MatcherAbstainedError."
+            )
+        return LinkVerdict(
+            match=predicted,
+            score=judgement.score,
+            reasoning=judgement.reasoning,
+            architecture=type(self).__name__,
+            backbone=self.backbone,
+            score_type=judgement.score_type,
+            threshold=threshold,
+            judgement=judgement,
+        )
+
+    def _chain_pair_candidate(self, records: list[dict[str, Any]]) -> Pairs[Any]:
+        """The ONE pair for :meth:`_compare_explicit` -- the chain-Source analogue of
+        :meth:`_pair_candidate`.
+
+        Runs the chain's Source and keeps the first blocked pair; builds the pair
+        directly (from the Source's schema) if the Source yields nothing, because
+        blocking must never veto a ``compare`` verdict (see :meth:`compare`). The
+        comparator vector is NOT attached here -- folding the chain's Score ops
+        (which includes any ``ComparatorScore``) attaches it, unlike the slot-based
+        :meth:`_pair_candidate`.
+        """
+        pairs = self._chain_source().forward(records)
+        if pairs.rows:
+            return Pairs(store=pairs.store, rows=pairs.rows[:1])
+
+        from langres.core.blockers.all_pairs import schema_to_factory
+
+        schema = self._chain_source_schema()
+        if schema is None:
+            raise RuntimeError(
+                "the explicit chain's Source yielded no candidate for this pair and exposes no "
+                "schema, so compare() cannot build the pair directly. Use a Source whose blocker "
+                "carries a schema (AllPairsBlocker, VectorBlocker, KeyBlocker), or compare via "
+                "dedupe()."
+            )
+        factory = schema_to_factory(schema)
+        left_entity, right_entity = (factory(record) for record in records)
+        candidate = ERCandidate(left=left_entity, right=right_entity, blocker_name="compare")
         return Pairs.from_candidates([candidate])
 
     def _ensure_index_built(self, records: list[Any]) -> None:
