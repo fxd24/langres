@@ -29,7 +29,7 @@ def build_recipes() -> dict[str, Retrieve | RetrieveRerank | RetrieveLLM | Retri
         "Retrieve": Retrieve(
             embedder=embedder,
             retrieve_k=2,
-            threshold=-1.0,
+            threshold=0.0,
         ),
         "RetrieveRerank": RetrieveRerank(
             embedder=embedder,
