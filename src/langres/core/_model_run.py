@@ -20,8 +20,13 @@ adapters** (:mod:`langres.core.op_adapters`), derived from the four slots
 (:meth:`ModelRun._candidates`); :class:`~langres.core.op_adapters.MatcherScore`
 wraps the spend-capped, optionally-logged matcher (:meth:`ModelRun._matcher_score`
 over :meth:`ModelRun._scorer`) into the scoring half (:meth:`ModelRun._scored_pairs`);
-:class:`~langres.core.op_adapters.ClustererStage` is the exit
-(:meth:`ModelRun.resolve` / :meth:`ModelRun.dedupe`). The one per-call factory
+and the exit (:meth:`ModelRun._cluster`, shared by :meth:`ModelRun.resolve` /
+:meth:`ModelRun.dedupe`) is the two selections ``docs/THEORY.md`` separates -- an
+explicit match cut (:class:`~langres.core.op.ThresholdSelect`, the selection π at
+feasible-class THRESHOLD) THEN
+:class:`~langres.core.op_adapters.ClustererStage` over a threshold-zeroed clone of
+the clusterer (the equivalence π: pure transitive closure / pivot, no internal
+cut). The one per-call factory
 :meth:`ModelRun._stages` assembles the block -> (compare) -> score stages from the
 slots (W3-c), and the generic driver :func:`_run_stages` folds ``forward`` across
 them. The slots stay the source of truth -- the stages are assembled from them
@@ -58,6 +63,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from langres.core._model_state import ModelState
 from langres.core.blockers.composite import CompositeBlocker
+from langres.core.clusterer import Clusterer
 from langres.core.fit import CalibratorFitMixin
 from langres.core.inputs import check_no_duplicate_ids
 from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
@@ -67,7 +73,7 @@ from langres.core.models import (
     PairwiseJudgement,
     predicted_match,
 )
-from langres.core.op import Score, Source
+from langres.core.op import Score, Source, ThresholdSelect
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -451,15 +457,65 @@ class ModelRun(ModelState):
         """
         return list(self._judgements(records))
 
+    def _closure_clusterer(self) -> Clusterer:
+        """A pure-equivalence clone of this model's clusterer, its threshold zeroed.
+
+        Clones the clusterer's OWN class through ``config``/``from_config`` -- NOT
+        the base :class:`~langres.core.clusterer.Clusterer` -- so a
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` stays a
+        *pivot* clusterer rather than being silently downgraded to transitive
+        closure (which would merge pivot-split chains that must stay separate).
+        The threshold is zeroed because the match cut already ran in
+        :meth:`_cluster` (a :class:`~langres.core.op.ThresholdSelect`); this clone
+        does pure equivalence over the survivors and must not re-threshold.
+
+        It is a FRESH instance -- ``self.clusterer`` keeps its real threshold: the
+        ThresholdSelect reads it, and ``dedupe``'s ``DedupeResult`` reports it.
+        """
+        return type(self.clusterer).from_config({**self.clusterer.config, "threshold": 0.0})
+
+    def _cluster(self, scored_pairs: Pairs[Any]) -> list[set[str]]:
+        """The pipeline exit: match cut (Select at THRESHOLD) THEN pure clustering.
+
+        The two selections ``docs/THEORY.md`` separates, made explicit (epic #193,
+        W3-d), shared by :meth:`resolve` and :meth:`dedupe`. The **match cut** is a
+        :class:`~langres.core.op.ThresholdSelect` -- a ``Select`` at feasible-class
+        THRESHOLD (the theory's selection π) keeping exactly the rows whose score
+        clears ``self.clusterer.threshold`` (via
+        :func:`~langres.core.models.predicted_match`: a decider's decision wins, an
+        abstention is dropped). The **clustering** is then a separate equivalence π
+        -- transitive closure, or pivot for a ``CorrelationClusterer`` -- run by a
+        clusterer with NO threshold of its own (:meth:`_closure_clusterer`).
+
+        Byte-identical to the legacy ``ClustererStage(self.clusterer)`` that kept
+        the cut folded inside the clusterer's threshold: ``predicted_match(j, t) is
+        True`` implies ``predicted_match(j, 0.0) is True`` (a decision is
+        threshold-independent; else ``score >= t`` implies ``score >= 0``), so the
+        zeroed clone's own filter is redundant given the ThresholdSelect and the
+        surviving edge set is unchanged -- for transitive closure AND for pivot.
+        ``scored_pairs`` must already be calibrated (callers pass
+        :meth:`_scored_pairs`'s output), so the cut thresholds the CALIBRATED
+        score, exactly as the clusterer did.
+        """
+        selected: Pairs[Any] = ThresholdSelect(self.clusterer.threshold).forward(scored_pairs)
+        return ClustererStage(self._closure_clusterer()).forward(selected)
+
     def resolve(self, records: list[Any]) -> list[set[str]]:
         """Resolve records into entity clusters (sets of IDs).
 
         Orchestrates blocking -> (compare) -> score -> cluster through the Op
-        adapters (:meth:`_scored_pairs` +
-        :class:`~langres.core.op_adapters.ClustererStage`, the pipeline exit that
-        keeps the match cut folded in the ``Clusterer``'s threshold). Singletons
-        are dropped by the Clusterer (it returns only connected components with an
-        edge), so the result contains only multi-record clusters.
+        adapters (:meth:`_scored_pairs`, then :meth:`_cluster` -- the explicit
+        match cut, a :class:`~langres.core.op.ThresholdSelect` at the clusterer's
+        threshold, followed by pure-equivalence
+        :class:`~langres.core.op_adapters.ClustererStage` clustering over the
+        survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
+        The output is whatever the (zeroed) equivalence clusterer returns over
+        the selected edges: the base connected-components
+        :class:`~langres.core.clusterer.Clusterer` emits only multi-record
+        clusters (an isolated record never enters the graph), whereas a pivot
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` can
+        leave a singleton behind -- a record with a qualifying edge whose only
+        neighbours an earlier pivot already claimed.
 
         Args:
             records: Raw records (dicts) in a stable list order.
@@ -467,7 +523,7 @@ class ModelRun(ModelState):
         Returns:
             A list of clusters, each a set of entity IDs.
         """
-        return ClustererStage(self.clusterer).forward(self._scored_pairs(records))
+        return self._cluster(self._scored_pairs(records))
 
     # ------------------------------------------------------------------
     # The front door: dedupe a batch / compare one pair
@@ -533,7 +589,11 @@ class ModelRun(ModelState):
         normalized = self._prepare(records)
         check_no_duplicate_ids([record["id"] for record in normalized])
         pairs = self._scored_pairs(normalized, log=_coerce_log(log))
-        clusters = ClustererStage(self.clusterer).forward(pairs)
+        # The pipeline exit: an explicit match cut (ThresholdSelect at the
+        # clusterer's threshold) THEN pure-equivalence clustering over the
+        # survivors (THEORY.md's Select π vs equivalence π); byte-identical to the
+        # legacy clusterer-owned cut -- see _cluster.
+        clusters = self._cluster(pairs)
         # The scored rows' OWN score_type, not a per-name lookup table: the
         # matcher that ran is the only honest authority on what its scores mean.
         # The first scored row is the first candidate's judgement (one judgement
