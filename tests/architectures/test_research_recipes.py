@@ -24,6 +24,7 @@ from langres.core.models import CompanySchema
 from langres.core.op import ThresholdSelect, TopKSelect
 from langres.core.op_adapters import ClustererStage
 from langres.core.resolver import ERModel
+from langres.tracking.judgement_log import JudgementLog
 from langres.resources import (
     FakeEmbedder,
     FakeLLM,
@@ -472,3 +473,61 @@ def test_llm_recipes_reject_nonpositive_candidate_caps() -> None:
             schema=CompanySchema,
             llm_k=-1,
         )
+
+
+@pytest.mark.parametrize("recipe_type", [Retrieve, RetrieveRerank])
+@pytest.mark.parametrize("threshold", [-0.1, 1.1])
+def test_retrieval_recipes_reject_out_of_range_thresholds(
+    recipe_type: type[Retrieve] | type[RetrieveRerank],
+    threshold: float,
+) -> None:
+    kwargs = {
+        "embedder": FakeEmbedder(),
+        "schema": CompanySchema,
+        "threshold": threshold,
+    }
+    if recipe_type is RetrieveRerank:
+        kwargs["reranker"] = FakeReranker()
+
+    with pytest.raises(ValueError, match="threshold must be between"):
+        recipe_type(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("with_reranker", [False, True])
+def test_llm_recipe_parse_decisions_are_written_to_judgement_log(
+    tmp_path: Path,
+    with_reranker: bool,
+) -> None:
+    log = JudgementLog(tmp_path / "judgements.jsonl")
+    if with_reranker:
+        recipe: RetrieveLLM | RetrieveRerankLLM = RetrieveRerankLLM(
+            embedder=FakeEmbedder(),
+            reranker=FakeReranker(scores=RERANK_SCORES),
+            llm=FakeLLM(responses=LLM_RESPONSES),
+            schema=CompanySchema,
+            retrieve_k=2,
+            llm_k=2,
+        )
+    else:
+        recipe = RetrieveLLM(
+            embedder=FakeEmbedder(),
+            llm=FakeLLM(responses=LLM_RESPONSES),
+            schema=CompanySchema,
+            retrieve_k=2,
+            llm_k=2,
+        )
+
+    recipe.dedupe(RECORDS, log=log)
+
+    rows = log.read()
+    assert len(rows) == 3
+    assert {row["verdict"] for row in rows} == {False, True}
+    assert {row["decision_step"] for row in rows} == {"llm_parse"}
+    assert {row["model"] for row in rows} == {"./fake/llm"}
+    assert all(row["stage_id"] is not None for row in rows)
+
+    compare_log = JudgementLog(tmp_path / "compare.jsonl")
+    verdict = recipe.compare(RECORDS[0], RECORDS[1], log=compare_log)
+    [compare_row] = compare_log.read()
+    assert compare_row["verdict"] is verdict.match
+    assert compare_row["decision_step"] == "llm_parse"
