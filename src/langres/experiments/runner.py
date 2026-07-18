@@ -278,7 +278,10 @@ class Experiment:
     def run(self) -> ExperimentReport:
         """Execute every independent cell, retaining failures and resumable rows."""
         evaluation_id = compute_evaluation_identity(self.protocol).evaluation_id
-        source = detect_source_state()
+        ignored_artifacts: list[Path] = [self.cache.root]
+        if self.store is not None:
+            ignored_artifacts.append(self.store.path)
+        source = detect_source_state(ignored_paths=ignored_artifacts)
         loaded: dict[str, tuple[Benchmark[Any], list[Any], list[set[str]], str]] = {}
         runs: list[ExperimentRun] = []
         for benchmark_id in self.protocol.benchmark_ids:
@@ -347,6 +350,7 @@ class Experiment:
         seed: int,
         repeat_index: int,
         plan: Mapping[str, Any],
+        model_config: Mapping[str, Any] | None = None,
     ) -> RunContext:
         return RunContext(
             experiment=f"{architecture.name}:{benchmark_id}:{split_id}",
@@ -362,6 +366,7 @@ class Experiment:
                 "architecture": architecture.name,
                 "variant_id": architecture.variant_id,
                 "execution_plan": dict(plan),
+                "model_config": dict(model_config) if model_config is not None else None,
             },
             budget_usd=self.budget_usd,
             method=architecture.name,
@@ -402,6 +407,10 @@ class Experiment:
             )
             raise
         plan = initial.execution_plan()
+        try:
+            model_config = initial.config_dict()
+        except (TypeError, ValueError):
+            model_config = None
         context = self._context(
             architecture,
             benchmark_id=benchmark_id,
@@ -410,6 +419,7 @@ class Experiment:
             seed=seed,
             repeat_index=repeat_index,
             plan=plan.model_dump(mode="json"),
+            model_config=model_config,
         )
         recipe_id = compute_recipe_identity(context).recipe_id
         existing = self._completed(
@@ -417,7 +427,7 @@ class Experiment:
             evaluation_id=evaluation_id,
             variant_id=architecture.variant_id,
         )
-        if self.resume and existing is not None:
+        if self.resume and model_config is not None and existing is not None:
             return self._from_record(existing, architecture, evaluation_id)
         parent = self._latest(recipe_id)
         if parent is not None:
@@ -495,6 +505,9 @@ class Experiment:
                     self._monitor.spent - starting_spend,
                     budget_exceeded=True,
                 )
+                raise
+            except Exception:
+                handle.record_cost(self._monitor.spent - starting_spend)
                 raise
         wall = time.perf_counter() - started
         warnings = tuple(dict.fromkeys(safe_tracker.errors))
@@ -801,6 +814,43 @@ class Experiment:
         *,
         budget_exceeded: bool = False,
     ) -> ExperimentRun:
+        persisted = self._latest_cell_attempt(
+            architecture,
+            benchmark_id=benchmark_id,
+            split_id=split_id,
+            seed=seed,
+            repeat_index=repeat_index,
+            evaluation_id=evaluation_id,
+        )
+        if persisted is not None:
+            return ExperimentRun(
+                recipe_id=persisted.recipe_id,
+                evaluation_id=evaluation_id,
+                attempt_id=persisted.attempt_id,
+                cache_id=persisted.cache_id,
+                architecture=architecture.name,
+                variant_id=architecture.variant_id,
+                benchmark_id=benchmark_id,
+                split_id=split_id,
+                threshold_split_id="train",
+                evaluation_split_id="test" if split_id == "official" else split_id,
+                split_seed=seed,
+                repeat_index=repeat_index,
+                status=(
+                    "budget_exceeded"
+                    if persisted.status == "budget_exceeded" or budget_exceeded
+                    else "failed"
+                ),
+                cohort_id=self.protocol.hardware_cohort,
+                measurements=tuple(
+                    StageMeasurement.model_validate(measurement)
+                    for measurement in (persisted.measurements or ())
+                ),
+                wall_seconds=persisted.duration_seconds,
+                usd=persisted.spend_usd,
+                error_type=persisted.error_type,
+                error_message=persisted.error_message,
+            )
         return ExperimentRun(
             recipe_id=(
                 f"failed:{architecture.name}:{architecture.variant_id}:"
@@ -819,6 +869,35 @@ class Experiment:
             cohort_id=self.protocol.hardware_cohort,
             error_type=("BudgetExceeded" if budget_exceeded else "ExperimentCellError"),
             error_message="cell failed; exception details suppressed",
+        )
+
+    def _latest_cell_attempt(
+        self,
+        architecture: ArchitectureFactory,
+        *,
+        benchmark_id: str,
+        split_id: str,
+        seed: int,
+        repeat_index: int,
+        evaluation_id: str,
+    ) -> RunRecord | None:
+        """Return the durable attempt for one failed matrix cell, if present."""
+        if self.store is None:
+            return None
+        return next(
+            (
+                record
+                for record in reversed(self.store.read())
+                if record.evaluation_id == evaluation_id
+                and record.status in {"failed", "budget_exceeded"}
+                and record.context.dataset_name == benchmark_id
+                and record.context.split_id == split_id
+                and record.context.tags.get("architecture") == architecture.name
+                and record.context.tags.get("variant_id") == architecture.variant_id
+                and int(record.context.seeds.get("split", -1)) == seed
+                and int(record.context.seeds.get("repeat", -1)) == repeat_index
+            ),
+            None,
         )
 
 
