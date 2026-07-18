@@ -168,15 +168,11 @@ class Reranker(ERModel):
             # The cheap scalar OVERWRITES the vector score before the Select, so the
             # TopKSelect is over an orderable scalar (Sequential rejects a Select on
             # a vector out_space).
-            MatcherScore(
-                WeightedAverageMatcher(feature_specs=first_pass), out_space="heuristic"
-            ),
+            MatcherScore(WeightedAverageMatcher(feature_specs=first_pass), out_space="heuristic"),
             TopKSelect(k),
             # The Score AFTER the Select -- the reranker. A different feature subset
             # from pass 1, so it genuinely re-ranks the survivors.
-            MatcherScore(
-                WeightedAverageMatcher(feature_specs=full_pass), out_space="heuristic"
-            ),
+            MatcherScore(WeightedAverageMatcher(feature_specs=full_pass), out_space="heuristic"),
             ThresholdSelect(threshold),
             ClustererStage(Clusterer(threshold=0.0)),
         ]
