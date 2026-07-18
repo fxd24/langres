@@ -131,6 +131,27 @@ def test_all_four_recipes_run_with_zero_network_resources() -> None:
     assert _canonical(retrieve_rerank_llm) == [["a", "b"]]
 
 
+def test_all_negative_llm_recipe_preserves_its_score_type() -> None:
+    recipe = RetrieveLLM(
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(
+            responses={
+                '["a","b"]': "NO_MATCH",
+                '["a","c"]': "NO_MATCH",
+                '["b","c"]': "NO_MATCH",
+            }
+        ),
+        schema=CompanySchema,
+        retrieve_k=2,
+        llm_k=2,
+    )
+
+    result = recipe.dedupe(RECORDS)
+
+    assert result == []
+    assert result.score_type == "prob_llm"
+
+
 def test_recipe_resources_are_complete_and_backbone_is_singular_sugar() -> None:
     embedder = FakeEmbedder()
     reranker = FakeReranker()
