@@ -612,7 +612,10 @@ class Experiment:
         )
         return compute_cache_identity(
             CacheIdentityInput(
-                stage_id=plan.replay_boundary,
+                # The checkpoint is the output of the prefix immediately before
+                # the tunable Select. Its identity must not inherit that
+                # downstream stage's threshold-bearing stage_id.
+                stage_id=f"replay-prefix-boundary:{boundary_index}",
                 execution_plan_id=plan.replay_prefix_id,
                 operation_identity={
                     "steps": [step.model_dump(mode="json") for step in plan.steps[:boundary_index]]
@@ -799,7 +802,10 @@ class Experiment:
         budget_exceeded: bool = False,
     ) -> ExperimentRun:
         return ExperimentRun(
-            recipe_id=f"failed:{architecture.name}:{benchmark_id}:{split_id}:{seed}:{repeat_index}",
+            recipe_id=(
+                f"failed:{architecture.name}:{architecture.variant_id}:"
+                f"{benchmark_id}:{split_id}:{seed}:{repeat_index}"
+            ),
             evaluation_id=evaluation_id,
             architecture=architecture.name,
             variant_id=architecture.variant_id,

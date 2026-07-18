@@ -54,7 +54,9 @@ be another `Select` or the terminal `ClusterStage`, so replay cannot silently
 rerun or rebill a downstream scorer. Every prefix stage must also have a
 registered `OpSpec`: the replay identity hashes the complete serialized stage
 configuration, and an opaque custom stage is rejected instead of risking reuse
-after an output-affecting configuration change. The local
+after an output-affecting configuration change. Checkpoint cache identity ends
+at the prefix boundary and is therefore independent of the downstream
+`Select` threshold or threshold-grid ordering. The local
 `StageArtifactStore` commits those checkpoints atomically and immutably, checks
 their payload hash and full plan/cache/input identity on load, and quarantines a
 corrupt entry before recomputation. Input fingerprints preserve row order, and
@@ -70,7 +72,8 @@ identity and resume selection, so two variants sharing a display name cannot
 reuse each other's attempt. A resumed row rehydrates its stored cost and stage
 measurements rather than fabricating a cheaper report. Factory failures that
 happen before an execution plan exists are still persisted as failed, linked
-attempts.
+attempts, and failed report-row identities retain the architecture
+`variant_id`.
 The exact paid official proof remains separately guarded by
 `EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
 USD 20); it requires exactly one factory for each named topology and stochastic

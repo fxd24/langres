@@ -192,6 +192,31 @@ def test_threshold_sweep_scores_each_input_split_once_and_resume_skips_work(
     assert len(RunStore(tmp_path / "runs.jsonl").read()) == 1
 
 
+def test_reordered_threshold_grid_reuses_the_expensive_prefix_cache(
+    tmp_path: Path,
+) -> None:
+    counter = [0]
+    cache_dir = tmp_path / "cache"
+    first_protocol = _protocol()
+
+    Experiment(
+        architectures=[_factory(counter)],
+        protocol=first_protocol,
+        store=tmp_path / "first-runs.jsonl",
+        cache_dir=cache_dir,
+    ).run()
+    assert counter == [2]
+
+    Experiment(
+        architectures=[_factory(counter)],
+        protocol=first_protocol.model_copy(update={"threshold_grid": (0.95, 0.5)}),
+        store=tmp_path / "second-runs.jsonl",
+        cache_dir=cache_dir,
+    ).run()
+
+    assert counter == [2]
+
+
 def test_resume_requires_the_exact_evaluation_protocol(tmp_path: Path) -> None:
     counter = [0]
     store = tmp_path / "runs.jsonl"
@@ -404,6 +429,28 @@ def test_factory_failure_attempts_are_durable_and_parent_linked(tmp_path: Path) 
     assert second.context.parent_run_id == first.attempt_id
     assert first.error_message is not None
     assert "provider-secret" not in first.error_message
+
+
+def test_failed_cells_with_shared_name_keep_variant_specific_recipe_ids(
+    tmp_path: Path,
+) -> None:
+    def broken(_threshold: float, _monitor: SpendMonitor) -> ERModel:
+        raise RuntimeError("factory unavailable")
+
+    report = Experiment(
+        architectures=[
+            ArchitectureFactory(name="Broken", variant_id="one", factory=broken),
+            ArchitectureFactory(name="Broken", variant_id="two", factory=broken),
+        ],
+        protocol=_protocol(),
+        store=tmp_path / "runs.jsonl",
+        cache_dir=tmp_path / "cache",
+    ).run()
+
+    assert [run.status for run in report.runs] == ["failed", "failed"]
+    assert report.runs[0].recipe_id != report.runs[1].recipe_id
+    assert ":one:" in report.runs[0].recipe_id
+    assert ":two:" in report.runs[1].recipe_id
 
 
 def test_current_registry_does_not_mislabel_train_as_validation() -> None:
