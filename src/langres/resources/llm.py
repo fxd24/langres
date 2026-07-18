@@ -37,7 +37,12 @@ logger = logging.getLogger(__name__)
 class _LiteLLMOptions(BaseModel):
     """Strict JSON-only options safe to persist and replay."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        strict=True,
+        allow_inf_nan=False,
+    )
 
     provider: dict[str, JsonValue] | None = None
     extra_body: dict[str, JsonValue] | None = None

@@ -521,6 +521,25 @@ def test_litellm_rejects_non_object_or_non_json_persisted_options() -> None:
         )
 
 
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "options",
+    [
+        lambda value: {"provider": {"routing": {"weight": value}}},
+        lambda value: {"extra_body": {"nested": [{"temperature": value}]}},
+    ],
+)
+def test_litellm_rejects_nested_nonfinite_json_options(
+    nonfinite: float,
+    options: Any,
+) -> None:
+    with pytest.raises(ValidationError):
+        LiteLLM(
+            ModelRef(base="openrouter/openai/gpt-4o-mini", kind="api"),
+            **options(nonfinite),
+        )
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 def test_real_cross_encoder_smoke() -> None:
