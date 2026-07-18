@@ -17,12 +17,22 @@ from typing import cast
 
 import pytest
 
+from collections.abc import Iterator
+from typing import Any
+
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.fit import CalibratorFitMixin
-from langres.core.models import MatcherAbstainedError
-from langres.core.op import Stage, ThresholdSelect
-from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
+from langres.core.groups import ERCandidateGroup
+from langres.core.matcher import GroupwiseMatcher
+from langres.core.models import MatcherAbstainedError, PairwiseJudgement
+from langres.core.op import Clusters, Finalize, Stage, ThresholdSelect
+from langres.core.op_adapters import (
+    BlockerSource,
+    ClustererStage,
+    GroupwiseMatcherScore,
+    MatcherScore,
+)
 from langres.core.resolver import ERModel
 from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher
@@ -37,6 +47,7 @@ from tests.parity._explicit_chain_fixture import (
     build_factory_source_model,
     build_key_source_model,
     build_no_threshold_chain_model,
+    build_precapped_chain_model,
     build_score_after_select_model,
     chain_ops,
 )
@@ -50,6 +61,12 @@ def _canonical(clusters: list[set[str]]) -> list[list[str]]:
     return sorted(sorted(cluster) for cluster in clusters)
 
 
+def _chain_matcher_scores(model: ERModel) -> list[MatcherScore[Any]]:
+    """The MatcherScores stored on the model's explicit chain (post from_topology)."""
+    assert model._ops is not None
+    return [stage for stage in model._ops if isinstance(stage, MatcherScore)]
+
+
 # ----------------------------------------------------------------------
 # resolve / dedupe / compare run correctly through the explicit chain
 # ----------------------------------------------------------------------
@@ -59,6 +76,21 @@ def test_resolve_runs_the_explicit_chain() -> None:
     """resolve() folds Source + body Ops, then the terminal ClusterStage."""
     model, _monitor, _matcher = build_explicit_chain_model()
     assert _canonical(model.resolve(RECORDS)) == [["a1", "a2"]]
+
+
+def test_predict_runs_the_explicit_chain() -> None:
+    """predict() reaches the explicit ``_scored_pairs`` branch (via ``_judgements``).
+
+    On a chain whose cut lives in the ClusterStage (no body ThresholdSelect to
+    prune), predict returns one judgement per candidate -- 6 AllPairs pairs -- and
+    the two Acmes are the matching pair.
+    """
+    model = build_no_threshold_chain_model()
+    judgements = model.predict(RECORDS)
+
+    assert len(judgements) == 6  # 4 records -> 6 AllPairs candidates, all scored
+    a1_a2 = next(j for j in judgements if {j.left_id, j.right_id} == {"a1", "a2"})
+    assert a1_a2.score == 1.0
 
 
 def test_dedupe_reports_chain_threshold_and_backbone() -> None:
@@ -83,10 +115,15 @@ def test_dedupe_backbone_reads_chain_matcher_model() -> None:
     assert model.dedupe(RECORDS).backbone == "fake/model"
 
 
-def test_from_topology_budget_and_uncapped_matcher_backbone() -> None:
-    """The ``budget_usd`` door (no shared ``monitor``) works, and backbone reads a
-    matcher-Score whose matcher is NOT spend-capped (there is no cap to peel)."""
-    raw = CostedNameMatcher(model="raw/model")  # deliberately NOT wrapped in SpendCappedMatcher
+def test_from_topology_caps_a_raw_matcher_via_the_budget_door() -> None:
+    """The ``budget_usd`` door (no shared ``monitor``) auto-caps a RAW matcher-Score.
+
+    The caller passes an UNWRAPPED matcher; ``from_topology`` must wrap it in a
+    ``SpendCappedMatcher`` on this model's ledger, so the stored Score is capped and
+    backbone still peels the cap to report the real model. This is the enforcement
+    the ``.module.forward`` AST-ban cannot see on the explicit path.
+    """
+    raw = CostedNameMatcher(model="raw/model")  # NOT wrapped -- the door must wrap it
     ops: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
         MatcherScore(raw, out_space="prob_llm"),
@@ -94,8 +131,64 @@ def test_from_topology_budget_and_uncapped_matcher_backbone() -> None:
         ClustererStage(Clusterer(threshold=0.0)),
     ]
     model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+
+    # The door enforced the cap: the stored Score now holds a SpendCappedMatcher
+    # wrapping the caller's raw matcher, sharing the model's ledger.
+    (stored,) = _chain_matcher_scores(model)
+    assert isinstance(stored.matcher, SpendCappedMatcher)
+    assert stored.matcher._module is raw
+    assert stored.matcher.monitor is model._spend_monitor
+
     assert _canonical(model.resolve(RECORDS)) == [["a1", "a2"]]
-    assert model.dedupe(RECORDS).backbone == "raw/model"
+    assert model.dedupe(RECORDS).backbone == "raw/model"  # backbone peels the door's cap
+
+
+def test_from_topology_enforces_the_cap_on_a_raw_matcher() -> None:
+    """The money guarantee holds even when the caller forgets to wrap: a chain built
+    with a RAW paid matcher still trips BudgetExceeded (the door capped it)."""
+    from langres.core.spend import BudgetExceeded
+
+    raw = CostedNameMatcher(cost_each=0.6)  # 6 pairs at $0.60 overruns a $1.00 budget
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        MatcherScore(raw, out_space="prob_llm"),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+    with pytest.raises(BudgetExceeded):
+        model.resolve(RECORDS)
+
+
+def test_from_topology_leaves_an_already_capped_matcher_alone() -> None:
+    """A matcher the caller already wrapped is NOT double-wrapped: the stored Score
+    holds the caller's exact SpendCappedMatcher object."""
+    model, monitor, capped = build_precapped_chain_model()
+    (stored,) = _chain_matcher_scores(model)
+    assert stored.matcher is capped
+    assert model._spend_monitor is monitor
+
+
+def test_from_topology_rejects_an_uncappable_paid_score() -> None:
+    """A paid Score the door cannot auto-cap (a GroupwiseMatcherScore, whose
+    ``forward_groups`` bypasses the cap's per-judgement metering) is rejected rather
+    than allowed to bill off-ledger -- unless the caller pre-capped its matcher."""
+
+    class _NullGroupwiseMatcher(GroupwiseMatcher[Any]):
+        def forward_groups(
+            self, groups: Iterator[ERCandidateGroup[Any]]
+        ) -> Iterator[PairwiseJudgement]:
+            return iter(())  # never called: from_topology rejects the chain first
+
+    monitor = SpendMonitor(budget_usd=1.0)
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        GroupwiseMatcherScore(_NullGroupwiseMatcher()),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    with pytest.raises(ValueError, match="cannot enforce the spend cap"):
+        ERModel.from_topology(ops=ops, monitor=monitor)
 
 
 def test_compare_matches_and_nonmatches() -> None:
@@ -131,8 +224,9 @@ def test_spend_monitor_is_the_models_ledger_and_is_hit() -> None:
     """An explicit-chain paid Score routes through the model's shared SpendMonitor.
 
     4 records -> 6 AllPairs candidates at $0.05 -> $0.30 on the SAME ledger the
-    model caps with. Mutation check: drop the SpendCappedMatcher wrap in the
-    fixture and ``spent`` stays 0.
+    model caps with. The fixture passes a RAW matcher, so this also proves
+    ``from_topology`` wired the door's auto-cap onto the model's ledger (no manual
+    wrap in the fixture at all).
     """
     model, monitor, matcher = build_explicit_chain_model(cost_each=0.05)
     model.resolve(RECORDS)
@@ -211,8 +305,7 @@ def test_factory_source_chain_infers_schema() -> None:
 
 def test_from_topology_rejects_a_calibrator() -> None:
     """Calibration is a classic-path-only bespoke transform; an explicit chain rejects it."""
-    monitor = SpendMonitor(budget_usd=1.0)
-    ops, _matcher = chain_ops(monitor)
+    ops, _matcher = chain_ops()
     with pytest.raises(ValueError, match="does not accept a calibrator"):
         ERModel.from_topology(ops=ops, calibrator=cast(CalibratorFitMixin, object()))
 
@@ -220,9 +313,23 @@ def test_from_topology_rejects_a_calibrator() -> None:
 def test_from_topology_rejects_monitor_and_budget_together() -> None:
     """A monitor already carries its budget; passing budget_usd too is ambiguous."""
     monitor = SpendMonitor(budget_usd=1.0)
-    ops, _matcher = chain_ops(monitor)
+    ops, _matcher = chain_ops()
     with pytest.raises(ValueError, match="not both"):
         ERModel.from_topology(ops=ops, monitor=monitor, budget_usd=2.0)
+
+
+def test_from_topology_rejects_a_finalize() -> None:
+    """A terminal Finalize would be silently dropped by the explicit exit (which stops
+    at the ClusterStage), so from_topology rejects it loud (deferred, not silent)."""
+
+    class _IdentityFinalize(Finalize):
+        def forward(self, clusters: Clusters) -> Clusters:
+            return clusters  # never reached: from_topology rejects the chain first
+
+    ops, _matcher = chain_ops()
+    ops.append(_IdentityFinalize())
+    with pytest.raises(ValueError, match="does not run a terminal Finalize"):
+        ERModel.from_topology(ops=ops, budget_usd=1.0)
 
 
 def test_from_topology_requires_a_terminal_cluster_stage() -> None:

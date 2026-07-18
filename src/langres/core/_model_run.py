@@ -397,11 +397,15 @@ class ModelRun(ModelState):
 
         **Explicit chain (``_ops`` set).** Folds the chain's Source + body Ops
         (Scores AND Selects, up to but excluding the terminal ClusterStage --
-        :meth:`_cluster` runs that). No ``_ensure_index_built`` (the chain's
-        ``BlockerSource`` owns only index-free sources this wave; a
-        ``VectorBlocker``-sourced chain would need index wiring, deferred) and no
-        calibrator (``from_topology`` rejects one -- a ``CalibratorScore`` Op is a
-        later wave). ``log`` is not threaded into a fixed pre-built chain.
+        :meth:`_cluster` runs that). This path does NOT call
+        :meth:`_ensure_index_built` (a four-slot convenience), so a
+        ``VectorBlocker``-backed Source must carry a PRE-BUILT index: if its index
+        is missing, ``blocker.stream`` raises loud (``RuntimeError: Index not
+        built``) on the first fold here -- it never silently yields empty
+        candidates. ``from_topology`` documents this; the shipped rerankers source
+        from ``AllPairsBlocker`` (no index). No calibrator either
+        (``from_topology`` rejects one -- a ``CalibratorScore`` Op is a later wave).
+        ``log`` is not threaded into a fixed pre-built chain.
         """
         if self._ops is not None:
             return _run_stages(records, [self._chain_source(), *self._chain_body()])
