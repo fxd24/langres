@@ -36,6 +36,7 @@ later wave, so the edge runs one way, into this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -43,7 +44,7 @@ from typing import Any, Generic, Literal, TypeAlias, TypeVar, get_args
 
 from pydantic import BaseModel
 
-from langres.core.pairs import Pairs
+from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -71,14 +72,22 @@ GoldenRecord: TypeAlias = BaseModel
 Scope: TypeAlias = Literal["pair", "group", "global"]
 
 #: The score family a :class:`Score` produces: one of the frozen
-#: :data:`~langres.core.score_type.ScoreType` families, or ``"vector"`` when it
+#: :data:`~langres.core.score_type.ScoreType` families, ``"vector"`` when it
 #: emits a :class:`~langres.core.feature.ComparisonVector` (the old Comparator
-#: role — a vector score, ``S = R^d``, which is not orderable).
-OutSpace: TypeAlias = ScoreType | Literal["vector"]
+#: role — a vector score, ``S = R^d``, which is not orderable), or ``"unknown"``
+#: — a scalar-family placeholder for a Score that produces an *orderable* scalar
+#: whose exact family is not (yet) pinned. Unlike ``"vector"``, ``"unknown"`` is
+#: a scalar, so a :class:`Select` may follow it (selection is defined on any
+#: scalar order); it is the honest sentinel for "some scalar score" — never a
+#: real :data:`ScoreType` value borrowed as a stand-in.
+OutSpace: TypeAlias = ScoreType | Literal["vector", "unknown"]
 
 _VALID_SCOPES: frozenset[str] = frozenset(get_args(Scope))
 _SCORE_FAMILIES: frozenset[str] = frozenset(get_args(ScoreType))
-_VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector"}
+#: The scalar-family sentinel: an orderable score whose family is not (yet)
+#: pinned. NOT a vector, so it is admissible upstream of a :class:`Select`.
+_UNKNOWN_OUT_SPACE: str = "unknown"
+_VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector", _UNKNOWN_OUT_SPACE}
 
 #: The heuristics a raw ``Select(CLUSTERING)`` or a :class:`ClusterStage` may
 #: name. Correlation clustering with real weights is not approximable, so there
@@ -344,6 +353,78 @@ class Select(Op[SchemaT]):
 
 
 # --------------------------------------------------------------------------------------
+# Concrete Selects — the two exact-feasible selections that need no named heuristic.
+# A blocker's top-k prune and a matcher's threshold gate are the SAME select role at
+# two feasibles; both keep a subset of the incoming rows and touch no score.
+# --------------------------------------------------------------------------------------
+
+
+class ThresholdSelect(Select[SchemaT], Generic[SchemaT]):
+    """:class:`Select` at :attr:`Feasible.THRESHOLD`: keep every row that clears ``threshold``.
+
+    The matcher's match gate, as a first-class selection ``Op`` — no shape rule on
+    the kept answer, just "keep the rows that pay the price". It asks the canonical
+    match rule (:meth:`~langres.core.pairs.PairRow.predicted_match` — a ``decision``
+    wins over the score, an abstention is dropped) rather than testing
+    ``score >= threshold`` by hand, so a decider row and an abstaining row are
+    handled exactly as everywhere else in the library.
+
+    Args:
+        threshold: The price a row's score must clear to be kept.
+    """
+
+    def __init__(self, threshold: float) -> None:
+        super().__init__(feasible=Feasible.THRESHOLD)
+        self.threshold = threshold
+
+    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
+        """Keep the rows whose ``predicted_match(threshold)`` is ``True`` (order preserved).
+
+        An abstaining row (``predicted_match`` returns ``None``) is dropped — it is
+        never graded a confident "no" — and a decider's explicit ``decision`` wins
+        over its score, exactly as :func:`~langres.core.models.predicted_match`.
+        """
+        kept = [row for row in pairs.rows if row.predicted_match(self.threshold) is True]
+        return Pairs(store=pairs.store, rows=kept)
+
+
+class TopKSelect(Select[SchemaT], Generic[SchemaT]):
+    """:class:`Select` at :attr:`Feasible.TOPK`: keep the ``k`` best rows per left id.
+
+    The retrieval / blocking shape, as a first-class selection ``Op`` — each anchor
+    keeps its ``k`` highest-scoring partners. Grouping by ``left_id`` is exactly
+    "at most k per left record" over a blocker's ``i < j`` pair set; ties keep input
+    order, and a row missing a score sorts last (``score`` read as ``-1.0``).
+
+    Args:
+        k: The maximum number of rows to keep per ``left_id``.
+    """
+
+    def __init__(self, k: int) -> None:
+        super().__init__(feasible=Feasible.TOPK)
+        self.k = k
+
+    def forward(self, pairs: Pairs[SchemaT]) -> Pairs[SchemaT]:
+        """Keep at most ``k`` highest-scoring rows per ``left_id`` (input order preserved)."""
+        by_left: dict[str, list[PairRow[SchemaT]]] = defaultdict(list)
+        for row in pairs.rows:
+            by_left[row.left_id].append(row)
+
+        keep: set[tuple[str, str]] = set()
+        for group in by_left.values():
+            ranked = sorted(
+                group,
+                key=lambda row: row.score if row.score is not None else -1.0,
+                reverse=True,
+            )
+            for row in ranked[: self.k]:
+                keep.add((row.left_id, row.right_id))
+
+        kept = [row for row in pairs.rows if (row.left_id, row.right_id) in keep]
+        return Pairs(store=pairs.store, rows=kept)
+
+
+# --------------------------------------------------------------------------------------
 # Boundary stages — the honest source/sink codomains (NOT Op subclasses: their
 # carriers differ from Pairs -> Pairs).
 # --------------------------------------------------------------------------------------
@@ -480,7 +561,9 @@ class Sequential(Generic[SchemaT]):
         2. **Select on a vector space.** A Select positioned to consume rows a
            Score produced with ``out_space == "vector"``. A ``ComparisonVector``
            (``S = R^d``) is not orderable, so selecting on it is a type error; the
-           fix is a scalarizer Score (vector -> scalar) in between.
+           fix is a scalarizer Score (vector -> scalar) in between. Only ``"vector"``
+           is rejected — a Select after any *scalar* family, including the
+           ``"unknown"`` sentinel, is legal (an orderable scalar admits selection).
 
         Raises:
             ValueError: On any wiring fault, with a problem + cause + fix message.
@@ -507,6 +590,10 @@ class Sequential(Generic[SchemaT]):
             if isinstance(stage, Score):
                 current_space = stage.out_space
             elif isinstance(stage, Select):
+                # Only a vector space is rejected: selection is undefined on a
+                # non-orderable ComparisonVector. Every scalar family is fine, and
+                # so is the ``"unknown"`` sentinel — an orderable scalar whose family
+                # is not yet pinned is still orderable, so a Select may follow it.
                 if current_space == "vector":
                     raise ValueError(_select_on_vector_message(index))
 
