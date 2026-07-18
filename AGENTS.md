@@ -82,6 +82,7 @@ langres/
 │   │   └── base.py, miners.py, models.py, labelers.py, bootstrapper.py, report.py, _pairs.py  # gold-set cold-start: Miner/Labeler, HardNegativeMiner, GoldPair/GoldSet, Bootstrapper, BootstrapReport
 │   ├── training/       # fitting/calibrating a matcher (what PRODUCES a tuned model, NOT ER modelling — beside core, like report/): finetune (QLoRA, [finetune] lazy), calibration (derive_threshold/Calibrator, [trained]), fit_report (FitReport), methods_prompt (Bootstrap/MIPRO/GEPA), methods_calibrate (Platt/Isotonic). core → training is non-zero by design (resolver.fit + _exports/_training) — see tests/test_import_tangle.py
 │   ├── methods.py      # method registry / _make_module_builder (benchmark path)
+│   ├── hub.py          # safe save_pretrained/from_pretrained/push_to_hub adapter
 │   ├── clients/        # OpenRouter client, SpendMonitor, pricing
 │   ├── metrics/        # ER metrics + diagnostics (metrics/analysis/debugging/diagnostics) — they SCORE a resolution, not the modelling contract, so beside core; public via langres.eval, back-compat shims at core.metrics/.analysis/.debugging/.diagnostics
 │   ├── benchmarks/     # ER benchmark HARNESS (internal plumbing) — runner.py (run_method(s)→BenchmarkTable) + judge_eval.py (evaluate/evaluate_judge_on_candidates, BudgetedModuleRunner). __init__ exports NOTHING (import-light). Reached ONLY via langres.data.get_benchmark(...) + langres.eval.evaluate(...); depends ONE-WAY on the benchmark SPEC in data/benchmark.py. Old core.benchmark path = TEMPORARY W2-sweep shim
@@ -134,4 +135,5 @@ The `.agent/` folder contains external expert analyses of the langres project:
 - **`docs/USE_CASES.md`** — use-case taxonomy and roadmap (V1 / V1.1 / out-of-scope; streaming, temporal, collective resolution).
 - **`docs/DX_RESOLVER.md`** — before/after of the M0 `Resolver`: the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 - **`docs/EXPERIMENTS.md`** — experimentation DX getting-started: the `run_methods` full-pipeline race vs. `evaluate_judge_on_candidates` (judged-once) for compiled/paid judges; `derive_threshold` to kill magic constants; the `SpendMonitor` budget seam.
+- **`docs/HUGGING_FACE.md`** — validated local/Hub artifact lifecycle, immutable revision pinning, model-card facts, and claim levels.
 - **`CHANGELOG.md`** (repo root) — release history (0.3.0 / 0.2.0); pre-0.2.0 POC milestone history is preserved in git history and `docs/research/`.

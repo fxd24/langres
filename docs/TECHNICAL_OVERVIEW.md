@@ -52,6 +52,11 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   `core.metrics.evaluate_blocking_with_ranking`, imported lazily so the rest of
   `core.metrics` / `core.benchmark` stays importable without it. (There is no
   `pytrec_eval` anywhere in the tree.)
+- **`[hub]`** — huggingface-hub: the optional remote transport used by
+  `ERModel.from_pretrained("organization/repository", ...)` and
+  `ERModel.push_to_hub(...)`.
+  Local `save_pretrained` / `from_pretrained` stays available without this
+  extra.
 
 Hyperparameter search is opt-in too: `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (Optuna)
 tunes *blocker* parameters — see §5. A general `Optimizer` over full pipelines is
@@ -1257,7 +1262,31 @@ nothing; read a trail back with `RunStore(path).read()` (each `RunRecord`'s
 `metrics["accepted"]` is `1.0`/`0.0`, so the incumbent timeline is reconstructable
 from the store alone). `RunStore` is local-only by design; a durable off-laptop
 dashboard is available via `tracker="trackio"` (local-first; an HF Space/Dataset
-sync is a `space_id`/`HF_TOKEN` opt-in) -- models-on-Hub is not built. Still deferred: an Optuna/LLAMBO proposer and the matching vertical
+sync is a `space_id`/`HF_TOKEN` opt-in). A model's state-free configuration and
+bounded result summary can separately be shared through the pretrained Hub
+lifecycle below. Still deferred: an Optuna/LLAMBO proposer and the matching vertical
 (`log_loss` / AUC-PR steering) + fine-tuning. See
 [EXPERIMENTS.md](EXPERIMENTS.md#self-tuning-the-autoresearch-loop-langresoptimize)
 for the worked amazon_google proof and `examples/research/blocking_recall_autoresearch.py`.
+## Pretrained artifact lifecycle
+
+`ERModel.save_pretrained`, `ERModel.from_pretrained`, and
+`ERModel.push_to_hub` delegate lazily to `langres.hub`. They wrap the unchanged
+local `resolver.json` in a strict `langres-artifact.json` envelope containing an
+exact regular-file allowlist, sizes, SHA-256 checksums, resource `ModelRef`
+facts, compatibility metadata, and an optional bounded measurement summary.
+The first artifact version is deliberately state-free: it rejects Resolver
+sidecars because current sidecars can contain corpus rows, compiled prompts, or
+native binary state. In-place overwrite is also refused; publish a new validated
+directory or Hub commit and then switch the reference.
+Prompt-bearing JSON configuration is also excluded by default. Publishing it
+requires an explicit `allow_sensitive_config=True`, after which the manifest and
+model card disclose that prompts are included.
+
+Remote loading resolves the requested Hub revision to an immutable commit SHA
+before downloading the exact manifest-derived allowlist. The snapshot is fully
+validated and its registered component/operation types are preflighted before
+`ERModel.load` reconstructs anything. The loader accepts the same langres minor
+release (patches may differ), ignores repository files outside the manifest
+without downloading them, and never serializes Hub tokens or raw experiment
+data. See `docs/HUGGING_FACE.md`.
