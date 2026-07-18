@@ -66,6 +66,16 @@ class _FixedEmbedder(FakeEmbedder):
         return EmbeddingBatch(vectors=self._vectors, model_ref=self.model_ref)
 
 
+class _RecordingEmbedder(FakeEmbedder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.texts: list[tuple[str, ...]] = []
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        self.texts.append(tuple(texts))
+        return super().embed(texts)
+
+
 def _canonical(model: ERModel) -> list[list[str]]:
     return sorted(sorted(cluster) for cluster in model.dedupe(RECORDS))
 
@@ -203,7 +213,7 @@ def test_same_reranker_instance_conforms_before_different_selects() -> None:
 
 
 def test_recipe_accepts_a_custom_downstream_clusterer() -> None:
-    clusterer = Clusterer(threshold=0.0)
+    clusterer = Clusterer(threshold=0.7)
     recipe = Retrieve(
         embedder=FakeEmbedder(),
         schema=CompanySchema,
@@ -212,7 +222,10 @@ def test_recipe_accepts_a_custom_downstream_clusterer() -> None:
 
     assert recipe._ops is not None
     stage = next(stage for stage in recipe._ops if isinstance(stage, ClustererStage))
-    assert stage.clusterer is clusterer
+    assert type(stage.clusterer) is type(clusterer)
+    assert stage.clusterer is not clusterer
+    assert stage.clusterer.threshold == 0.0
+    assert clusterer.threshold == 0.7
 
 
 def test_production_recipe_topology_round_trips_without_loading_weights(
@@ -301,6 +314,32 @@ def test_recipe_infers_schema_on_first_run_and_exposes_resources_before_binding(
     assert recipe.schema is not None
 
 
+def test_schema_inference_reuses_coerced_records_for_first_dedupe() -> None:
+    embedder = _RecordingEmbedder()
+    recipe = Retrieve(embedder=embedder, retrieve_k=1, threshold=0.0)
+
+    recipe.dedupe(
+        [
+            {"id": "a", "name": 123, "missing": float("nan")},
+            {"id": "b", "name": 124, "missing": float("nan")},
+        ]
+    )
+
+    assert embedder.texts == [("123", "124")]
+
+
+def test_schema_inference_reuses_coerced_records_for_first_compare() -> None:
+    embedder = _RecordingEmbedder()
+    recipe = Retrieve(embedder=embedder, threshold=0.0)
+
+    recipe.compare(
+        {"id": "a", "name": 123, "missing": float("nan")},
+        {"id": "b", "name": 124, "missing": float("nan")},
+    )
+
+    assert embedder.texts == [("123", "124")]
+
+
 def test_explicit_retrieval_text_field_does_not_require_default_comparable_fields() -> None:
     retrieve = RetrieveOp(
         FakeEmbedder(),
@@ -327,29 +366,49 @@ def test_retrieve_compare_returns_false_when_source_score_is_below_threshold() -
     assert verdict.score == 0.0
 
 
-def test_retrieve_preserves_input_anchor_for_downstream_topk() -> None:
+def test_retrieve_preserves_reverse_hit_anchor_for_downstream_topk() -> None:
     retrieve = RetrieveOp(
         _FixedEmbedder(
             [
                 [1.0, 0.0],
-                [0.9, 0.1],
-                [0.9, -0.1],
+                [0.99, 0.1],
+                [0.7, -0.7],
             ]
         ),
         schema=CompanySchema,
-        k=2,
+        k=1,
     )
     records = [
-        {"id": "z", "name": "Zed"},
         {"id": "a", "name": "Alpha"},
         {"id": "b", "name": "Beta"},
+        {"id": "z", "name": "Zed"},
     ]
 
     candidates = retrieve.forward(records)
     selected = TopKSelect[CompanySchema](1).forward(candidates)
 
-    assert any(row.left_id == "z" for row in candidates.rows)
-    assert sum("z" in (row.left_id, row.right_id) for row in selected.rows) == 1
+    assert ("z", "a") in [(row.left_id, row.right_id) for row in candidates.rows]
+    assert ("z", "a") in [(row.left_id, row.right_id) for row in selected.rows]
+
+
+def test_recipe_clusterer_runs_after_the_recipe_cut_without_a_second_threshold() -> None:
+    custom_clusterer = Clusterer(threshold=0.9)
+    recipe = Retrieve(
+        embedder=_FixedEmbedder([[1.0, 0.0], [0.8, 0.6]]),
+        schema=CompanySchema,
+        threshold=0.5,
+        clusterer=custom_clusterer,
+    )
+
+    verdict = recipe.compare(RECORDS[0], RECORDS[1])
+    result = recipe.dedupe(RECORDS[:2])
+    stage = next(stage for stage in recipe._require_ops() if isinstance(stage, ClustererStage))
+
+    assert verdict.match is True
+    assert result == [{"a", "b"}]
+    assert stage.clusterer is not custom_clusterer
+    assert stage.clusterer.threshold == 0.0
+    assert custom_clusterer.threshold == 0.9
 
 
 def test_retrieve_compare_accepts_the_same_record_on_both_sides() -> None:

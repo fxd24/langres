@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, cast
 
@@ -49,7 +50,11 @@ def _llm(value: LLMLike) -> LLM:
 
 
 def _cluster_stage(clusterer: Clusterer | None) -> ClustererStage[Any]:
-    return ClustererStage(clusterer if clusterer is not None else Clusterer(threshold=0.0))
+    if clusterer is None:
+        return ClustererStage(Clusterer(threshold=0.0))
+    threshold_free = copy(clusterer)
+    threshold_free.threshold = 0.0
+    return ClustererStage(threshold_free)
 
 
 class _ResearchRecipe(ERModel):
@@ -94,9 +99,10 @@ class _ResearchRecipe(ERModel):
         log: JudgementLog | str | Path | None = None,
     ) -> DedupeResult:
         """Infer a schema before the base front door chooses its topology path."""
+        prepared = records
         if len(records) >= 2 and self._ops is None:
-            self._prepare(records)
-        return super().dedupe(records, log=log)
+            prepared = self._prepare(records)
+        return super().dedupe(prepared, log=log)
 
     def compare(
         self,
@@ -106,9 +112,10 @@ class _ResearchRecipe(ERModel):
         log: JudgementLog | str | Path | None = None,
     ) -> LinkVerdict:
         """Infer a schema before the base front door chooses its topology path."""
+        prepared = [left, right]
         if self._ops is None:
-            self._prepare([left, right])
-        return super().compare(left, right, log=log)
+            prepared = self._prepare(prepared)
+        return super().compare(prepared[0], prepared[1], log=log)
 
     @property
     def resources(self) -> dict[str, ModelRef]:

@@ -131,7 +131,6 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         similarities = normalized @ normalized.T
         np.fill_diagonal(similarities, -np.inf)
 
-        positions = {entity_id: index for index, entity_id in enumerate(ids)}
         selected: dict[tuple[str, str], tuple[str, str, float]] = {}
         limit = min(self.k, len(entities) - 1)
         for index, row in enumerate(similarities):
@@ -143,15 +142,11 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
                     if first_id <= second_id
                     else (second_id, first_id)
                 )
-                left_id, right_id = sorted(
-                    (first_id, second_id),
-                    key=positions.__getitem__,
-                )
                 score = float(np.clip(row[int(neighbour)], 0.0, 1.0))
                 prior = selected.get(pair)
                 selected[pair] = (
-                    left_id,
-                    right_id,
+                    prior[0] if prior is not None else first_id,
+                    prior[1] if prior is not None else second_id,
                     max(score, prior[2] if prior is not None else 0.0),
                 )
 

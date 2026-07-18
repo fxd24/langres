@@ -65,7 +65,10 @@ hiding two of their resources.
 API, endpoint, Hugging Face, and local LLM references all use the same `llm=`
 slot; `ModelRef.kind` chooses served versus in-process execution. Every recipe
 ends in the existing transitive-closure `Clusterer` by default and accepts a
-custom existing `clusterer=`. This milestone adds no clustering algorithm.
+custom existing `clusterer=`. The recipe's `Select` owns the one match cut, so
+the supplied clusterer's algorithm is reused with a threshold-free copy; the
+caller's clusterer object is not mutated. This milestone adds no clustering
+algorithm.
 Advanced users can compose the same `langres.resources.Retrieve`, `Rerank`,
 `Generate`, and `Parse` operations through `ERModel.from_topology()`; the
 experiment path does not dispatch on recipe names.
