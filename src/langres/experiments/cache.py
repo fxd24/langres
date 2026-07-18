@@ -82,9 +82,25 @@ class StageArtifactStore:
         if duplicates:
             preview = ", ".join(repr(pair) for pair in sorted(duplicates)[:3])
             raise ScoreCacheError(
-                "checkpoint contains duplicate ordered pair ids; refusing cache "
-                f"commit: {preview}"
+                f"checkpoint contains duplicate ordered pair ids; refusing cache commit: {preview}"
             )
+
+    @staticmethod
+    def _matches(
+        entry: Path,
+        *,
+        payload: bytes,
+        manifest: StageArtifactManifest,
+    ) -> bool:
+        """Return whether an existing immutable entry is exactly this commit."""
+        try:
+            existing_payload = (entry / "checkpoint.json").read_bytes()
+            existing_manifest = StageArtifactManifest.model_validate_json(
+                (entry / "manifest.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return False
+        return existing_payload == payload and existing_manifest == manifest
 
     def put(self, checkpoint: ExecutionCheckpoint) -> Path:
         """Atomically commit one checkpoint; never overwrite different bytes."""
@@ -101,19 +117,8 @@ class StageArtifactStore:
             payload_sha256=checksum,
         )
         if entry.exists():
-            try:
-                existing_payload = (entry / "checkpoint.json").read_bytes()
-                existing_manifest = StageArtifactManifest.model_validate_json(
-                    (entry / "manifest.json").read_text(encoding="utf-8")
-                )
-                if (
-                    existing_payload == payload
-                    and existing_manifest.payload_sha256 == checksum
-                ):
-                    return entry
-            except (OSError, ValueError):
-                # A corrupt pre-existing entry is never overwritten implicitly.
-                pass
+            if self._matches(entry, payload=payload, manifest=manifest):
+                return entry
             raise ScoreCacheError(
                 f"immutable cache entry {checkpoint.cache_id!r} already exists "
                 "with different content"
@@ -129,7 +134,21 @@ class StageArtifactStore:
             for path in (payload_path, manifest_path):
                 with path.open("rb") as handle:
                     os.fsync(handle.fileno())
-            os.replace(temporary, entry)
+            try:
+                os.replace(temporary, entry)
+            except OSError as exc:
+                # Another process may have won the directory-rename race after
+                # our initial existence check. Identical immutable bytes make
+                # that a successful idempotent commit, not a failed cell.
+                if self._matches(entry, payload=payload, manifest=manifest):
+                    shutil.rmtree(temporary, ignore_errors=True)
+                    return entry
+                if entry.exists():
+                    raise ScoreCacheError(
+                        f"immutable cache entry {checkpoint.cache_id!r} was "
+                        "concurrently committed with different content"
+                    ) from exc
+                raise
         except BaseException:
             shutil.rmtree(temporary, ignore_errors=True)
             raise

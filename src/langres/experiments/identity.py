@@ -398,28 +398,49 @@ def compute_cache_identity(inputs: CacheIdentityInput) -> CacheIdentity:
     )
 
 
+def _fallback_source_hash() -> str:
+    """Fingerprint installed langres sources when Git provenance is unavailable."""
+    package_root = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256(b"langres-fallback-source-v1")
+    for path in sorted(package_root.rglob("*.py")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(package_root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def detect_source_state(repo_root: str | Path | None = None) -> SourceState:
     """Capture commit, lock, environment, and dirty bytes for cache identity."""
     cwd = Path(repo_root) if repo_root is not None else Path.cwd()
 
-    def run(*args: str) -> bytes:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            capture_output=True,
-            check=False,
-            timeout=5.0,
-        )
-        return result.stdout if result.returncode == 0 else b""
+    def run(*args: str) -> tuple[bool, bytes]:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=cwd,
+                capture_output=True,
+                check=False,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False, b""
+        return result.returncode == 0, result.stdout
 
-    sha = run("rev-parse", "HEAD").decode("utf-8", errors="replace").strip() or None
-    status = run("status", "--porcelain=v1", "--untracked-files=all", "-z")
-    dirty = bool(status)
+    sha_ok, sha_bytes = run("rev-parse", "HEAD")
+    sha = sha_bytes.decode("utf-8", errors="replace").strip() or None
+    status_ok, status = run("status", "--porcelain=v1", "--untracked-files=all", "-z")
+    unknown = not sha_ok or sha is None or not status_ok
+    dirty = unknown or bool(status)
     dirty_tree_hash: str | None = None
-    if dirty:
+    if unknown:
+        dirty_tree_hash = _fallback_source_hash()
+    elif dirty:
         digest = hashlib.sha256()
         digest.update(status)
-        digest.update(run("diff", "--binary", "HEAD"))
+        _, diff = run("diff", "--binary", "HEAD")
+        digest.update(diff)
         entries = status.split(b"\0")
         for entry in entries:
             if not entry.startswith(b"?? "):

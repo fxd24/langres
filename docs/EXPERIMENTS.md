@@ -73,11 +73,15 @@ happen before an execution plan exists are still persisted as failed, linked
 attempts.
 The exact paid official proof remains separately guarded by
 `EvaluationProtocol.official_proof()` (five topologies, two datasets, 18 cells,
-USD 20); it requires exactly one factory for each named topology. Tracker
-publication is optional plumbing: a tracker failure leaves the local completed
-attempt intact and marks publication incomplete in run warnings. Persisted
-failure text redacts complete authorization header values, including bearer
-tokens.
+USD 20); it requires exactly one factory for each named topology and stochastic
+cache semantics for the repeated LLM topologies. Every matrix also rejects
+duplicate `(name, variant_id)` factories before execution. When Git provenance
+cannot be read, cache identity falls back to a hash of the installed langres
+sources and is marked dirty rather than claiming reusable clean code. Concurrent
+same-bytes checkpoint commits are idempotent. Tracker publication is optional
+plumbing: a tracker failure leaves the local completed attempt intact and marks
+publication incomplete in run warnings. Persisted failure text redacts complete
+authorization header values, including bearer tokens.
 
 This is the getting-started for **experimenting on entity-resolution scorers** in
 langres: racing cheap methods, and iterating on a DSPy LLM judge. Everything below

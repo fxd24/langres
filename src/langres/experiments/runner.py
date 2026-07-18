@@ -28,7 +28,11 @@ from langres.experiments.identity import (
     detect_source_state,
 )
 from langres.experiments.measurements import StageMeasurement
-from langres.experiments.protocol import EvaluationProtocol, expand_official_proof_matrix
+from langres.experiments.protocol import (
+    STOCHASTIC_TOPOLOGIES,
+    EvaluationProtocol,
+    expand_official_proof_matrix,
+)
 from langres.experiments.report import ExperimentReport, ExperimentRun
 from langres.tracking.runs import (
     RunContext,
@@ -213,6 +217,25 @@ class Experiment:
                     "official paid proof requires exactly the four named recipes "
                     "plus CustomTopology, with no duplicate factories"
                 )
+            deterministic_repeats = sorted(
+                architecture.name
+                for architecture in architectures
+                if architecture.name in STOCHASTIC_TOPOLOGIES
+                and architecture.cache_semantics != "stochastic"
+            )
+            if deterministic_repeats:
+                raise ExperimentConfigurationError(
+                    "official paid proof requires cache_semantics='stochastic' "
+                    "for repeated LLM topologies; invalid factories: "
+                    f"{deterministic_repeats}"
+                )
+        logical_architectures = [
+            (architecture.name, architecture.variant_id) for architecture in architectures
+        ]
+        if len(logical_architectures) != len(set(logical_architectures)):
+            raise ExperimentConfigurationError(
+                "architecture factories must use unique (name, variant_id) pairs"
+            )
         allowed_splits = {"train", "test"}
         if protocol.paid_proof:
             allowed_splits.add("official")

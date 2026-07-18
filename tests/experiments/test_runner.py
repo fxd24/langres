@@ -263,6 +263,48 @@ def test_official_proof_rejects_duplicate_named_factories() -> None:
         Experiment(architectures=factories, protocol=protocol)
 
 
+def test_official_proof_requires_stochastic_llm_cache_semantics() -> None:
+    protocol = EvaluationProtocol.official_proof(
+        benchmark_ids=("dataset-a", "dataset-b"),
+        dataset_fingerprints={"dataset-a": "sha256:a", "dataset-b": "sha256:b"},
+        fixed_test_set_id="composite:test:v1",
+    )
+    factories = [
+        ArchitectureFactory(
+            name=name,
+            factory=_factory([0], name=name).factory,
+            cache_semantics=("stochastic" if name == "RetrieveRerankLLM" else "deterministic"),
+        )
+        for name in (
+            "Retrieve",
+            "RetrieveRerank",
+            "RetrieveLLM",
+            "RetrieveRerankLLM",
+            "CustomTopology",
+        )
+    ]
+
+    with pytest.raises(
+        ExperimentConfigurationError,
+        match="requires cache_semantics='stochastic'",
+    ):
+        Experiment(architectures=factories, protocol=protocol)
+
+
+def test_duplicate_architecture_variant_is_rejected_before_execution() -> None:
+    first = _factory([0], name="Same", variant_id="v1")
+    duplicate = _factory([0], name="Same", variant_id="v1")
+
+    with pytest.raises(
+        ExperimentConfigurationError,
+        match=r"unique \(name, variant_id\)",
+    ):
+        Experiment(
+            architectures=[first, duplicate],
+            protocol=_protocol(),
+        )
+
+
 def test_tracker_failure_keeps_local_run_complete_and_numeric_only(tmp_path: Path) -> None:
     class BrokenTracker:
         name = "broken"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,24 @@ def test_stage_store_round_trips_and_is_idempotently_immutable(tmp_path: Path) -
     changed = checkpoint.model_copy(update={"input_fingerprint": "different"})
     with pytest.raises(ScoreCacheError, match="different content"):
         store.put(changed)
+
+
+def test_concurrent_identical_commit_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = StageArtifactStore(tmp_path)
+    entry = tmp_path / "cache"
+
+    def competing_commit(source: str | Path, destination: str | Path) -> None:
+        shutil.copytree(source, destination)
+        raise FileExistsError("another process committed first")
+
+    monkeypatch.setattr("langres.experiments.cache.os.replace", competing_commit)
+
+    assert store.put(_checkpoint()) == entry
+    assert entry.is_dir()
+    assert not list(tmp_path.glob(".stage-*"))
 
 
 def test_corrupt_and_identity_mismatched_entries_are_quarantined(tmp_path: Path) -> None:
