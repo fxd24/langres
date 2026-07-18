@@ -26,7 +26,7 @@ from langres.core.fit import CalibratorFitMixin
 from langres.core.groups import ERCandidateGroup
 from langres.core.matcher import GroupwiseMatcher
 from langres.core.models import MatcherAbstainedError, PairwiseJudgement
-from langres.core.op import Clusters, Finalize, Score, Spending, Stage, ThresholdSelect
+from langres.core.op import Clusters, Finalize, Op, Score, Spending, Stage, ThresholdSelect
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -232,7 +232,7 @@ def test_from_topology_rejects_a_foreign_monitor_precap() -> None:
         ThresholdSelect(THRESHOLD),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
-    with pytest.raises(ValueError, match="monitor other than this model's ledger"):
+    with pytest.raises(ValueError, match="different SpendMonitor"):
         ERModel.from_topology(ops=ops, monitor=model_ledger)
 
 
@@ -288,11 +288,42 @@ def test_from_topology_admits_a_free_non_spending_custom_score() -> None:
     assert _canonical(model.resolve(RECORDS)) == [["a1", "a2"]]
 
 
-def test_from_topology_rejects_a_raw_matcherscore_subclass() -> None:
-    """A MatcherScore SUBCLASS carrying a raw matcher is rejected: rebuilding it as a
-    base MatcherScore to inject the cap would silently drop the subclass's own state
-    (codex Q3). A pre-capped subclass sharing the model monitor is fine (covered
-    elsewhere); only the raw-matcher rebuild is refused."""
+def test_from_topology_uses_the_generic_monitor_binding_capability() -> None:
+    """A paid non-Matcher Op can bind safely without an executor type branch."""
+
+    class _GenerateLike(Op[Any], Spending):
+        def __init__(self, monitor: SpendMonitor | None = None) -> None:
+            self._monitor = monitor
+
+        @property
+        def spend_monitor(self) -> SpendMonitor | None:
+            return self._monitor
+
+        def bind_spend_monitor(self, monitor: SpendMonitor) -> "_GenerateLike":
+            return _GenerateLike(monitor)
+
+        def forward(self, pairs: Any) -> Any:
+            return pairs
+
+    paid = _GenerateLike()
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        paid,
+        MatcherScore(CostedNameMatcher(), out_space="prob_llm"),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+
+    assert model._ops is not None
+    rebound = model._ops[1]
+    assert isinstance(rebound, _GenerateLike)
+    assert rebound is not paid
+    assert rebound.spend_monitor is model._spend_monitor
+
+
+def test_from_topology_caps_a_raw_matcherscore_subclass_without_losing_state() -> None:
+    """Monitor binding clones the exact subclass and preserves its extra state."""
 
     class _TaggedMatcherScore(MatcherScore[Any]):
         """A MatcherScore subclass with extra state the base rebuild would lose."""
@@ -301,14 +332,26 @@ def test_from_topology_rejects_a_raw_matcherscore_subclass() -> None:
             super().__init__(matcher, out_space=out_space)
             self.tag = tag
 
+    tagged = _TaggedMatcherScore(
+        CostedNameMatcher(),
+        out_space="prob_llm",
+        tag="keep-me",
+    )
     ops: list[Stage] = [
         BlockerSource(AllPairsBlocker(schema=ChainCo)),
-        _TaggedMatcherScore(CostedNameMatcher(), out_space="prob_llm", tag="keep-me"),
+        tagged,
         ThresholdSelect(THRESHOLD),
         ClustererStage(Clusterer(threshold=0.0)),
     ]
-    with pytest.raises(ValueError, match="cannot faithfully spend-cap a MatcherScore subclass"):
-        ERModel.from_topology(ops=ops, budget_usd=1.0)
+    model = ERModel.from_topology(ops=ops, budget_usd=1.0)
+
+    assert model._ops is not None
+    rebound = model._ops[1]
+    assert isinstance(rebound, _TaggedMatcherScore)
+    assert rebound is not tagged
+    assert rebound.tag == "keep-me"
+    assert isinstance(rebound.matcher, SpendCappedMatcher)
+    assert rebound.matcher.monitor is model._spend_monitor
 
 
 def test_compare_matches_and_nonmatches() -> None:

@@ -15,6 +15,7 @@ from langres.core.op import (
     Select,
     Sequential,
     Source,
+    SpendMonitorBindable,
     ThresholdSelect,
     TopKSelect,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "Select",
     "Sequential",
     "Source",
+    "SpendMonitorBindable",
     "ThresholdSelect",
     "TopKSelect",
 ]

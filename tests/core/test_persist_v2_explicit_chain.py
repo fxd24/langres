@@ -293,6 +293,53 @@ def test_rebuild_op_rejects_missing_component(tmp_path: Path) -> None:
         )
 
 
+def test_rebuild_op_rejects_an_unexpected_component_before_lookup(tmp_path: Path) -> None:
+    """Component-free roles reject stray components before resolving their type."""
+    spec = OpSpec(
+        role="threshold_select",
+        params={"threshold": 0.5},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot="module",
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not accept a nested component"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
+def test_rebuild_op_rejects_a_wrong_component_slot_before_lookup(tmp_path: Path) -> None:
+    """The role-to-slot contract is checked before component reconstruction."""
+    spec = OpSpec(
+        role="matcher_score",
+        params={"out_space": "prob_llm"},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot="blocker",
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires component slot 'module'"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
+def test_rebuild_op_rejects_a_missing_component_slot_before_lookup(tmp_path: Path) -> None:
+    spec = OpSpec(
+        role="matcher_score",
+        params={"out_space": "prob_llm"},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot=None,
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires component slot 'module'"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
 # ----------------------------------------------------------------------------------
 # 7. F5: an explicit-chain sidecar (VectorBlocker-style stateful Source) round-trips
 # ----------------------------------------------------------------------------------

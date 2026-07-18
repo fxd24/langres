@@ -229,23 +229,32 @@ See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda p
 Advanced users can compose `Source -> Score/Select -> ClusterStage` directly
 with `ERModel.from_topology(ops=[...])`. The public authoring contracts live at
 `langres.core`: `Op`, `Score`, `Select`, `Source`, `ClusterStage`,
-`ThresholdSelect`, `TopKSelect`, `Sequential`, and `Feasible`.
+`ThresholdSelect`, `TopKSelect`, `Sequential`, `Feasible`, and the optional
+`SpendMonitorBindable` capability for a `Spending` Op.
 
 An explicit model derives `.schema` and `.is_bound` from its Source. Both classic
 and explicit vector retrieval call `Source.prepare(records)` before streaming,
 so a `BlockerSource(VectorBlocker(...))` builds an unbound index, reuses it for
 the same corpus, and rebuilds it for changed input. `dedupe(log=...)` and
 `compare(log=...)` wrap every `MatcherScore` for that call without mutating the
-saved topology. `compare` walks Scores and applicable Selects in order; it no
-longer skips early selection stages.
+saved topology. Multi-stage rows carry a stable `stage_id`, the model identity
+of that scorer, and a binary `verdict` only when its score feeds a
+`ThresholdSelect` directly; retrieval/top-k scores log `verdict=None` instead of
+borrowing the final match threshold. `compare` walks Scores and applicable
+Selects in order, and its `LinkVerdict.backbone` names the scorer that actually
+ran before the deciding Select.
 
 `model.execution_plan()` returns ordered, stable stage ids derived from each
-safe serialized `OpSpec` plus its ordinal. `model.execute(records,
+stage's safe runtime metadata plus its ordinal. Runtime inspection does not
+require artifact registration: runnable custom stages and opaque schema
+factories can be planned and executed, while `save()` remains fail-closed and
+requires registered serializers. `model.execute(records,
 observer=...)` runs that same Op spine and returns selected pairs, clusters, and
 immutable start/finish/failure events. Observers receive counts and durations,
 never records or mutable carriers; their return value is ignored. Callback
-exceptions cannot abort or alter inference and are surfaced explicitly in the
-result's immutable `observer_errors` diagnostics.
+exceptions cannot abort or alter inference and are surfaced as sanitized
+type-only diagnostics; exception messages are suppressed so observer metadata
+cannot leak record or credential content.
 
 A component-free custom `Score` or `Select` can opt into safe persistence:
 

@@ -37,6 +37,7 @@ re-exported from the ``langres.core`` contracts surface. It is mapped to the
 
 from __future__ import annotations
 
+from copy import copy
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -61,6 +62,7 @@ from langres.core.pairs import PairRow, Pairs
 
 if TYPE_CHECKING:
     from langres.core.models import PairwiseJudgement
+    from langres.core.spend import SpendMonitor
     from langres.curation.canonicalizer import Canonicalizer
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -80,22 +82,10 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     declared ``out_space``), so a mixed-family matcher (a cascade) faithfully
     labels each row rather than being flattened to one family.
 
-    A row with no matching judgement is passed through unchanged (a matcher's
-    contract is one judgement per candidate, so this is a defensive no-op).
-
-    Uniqueness assumption: the back-map keys judgements by ``(left_id, right_id)``
-    and assumes each such pair appears **at most once** per ``Pairs`` — the
-    invariant every shipping blocker already satisfies (``AllPairsBlocker`` emits
-    strictly ``i < j``, ``VectorBlocker`` canonicalizes pair order by id, and
-    ``CompositeBlocker`` dedups via frozenset pair-keys). ``Pairs`` does not
-    *enforce* uniqueness, so were a future carrier to hold duplicate
-    ``(left_id, right_id)`` rows, the ``by_pair`` dict would collapse them
-    last-wins and every duplicate row would take the same judgement. A
-    ``Pairs``-level uniqueness invariant is a possible future hardening (noted,
-    not added here — no shipping blocker produces duplicates, so a runtime guard
-    would defend a state that cannot occur). A judgement whose key matches no row
-    is simply dropped (consistent with the one-judgement-per-received-candidate
-    matcher contract).
+    The mapping is a strict bijection. Duplicate input rows, duplicate outputs,
+    missing outputs, and unexpected outputs all raise before any result is
+    returned. Silently passing an unjudged row through would leave an upstream
+    score in place and let a later Select treat it as this matcher's decision.
 
     Args:
         pairs: The incoming scored relation (rows carry the identities to map to).
@@ -104,15 +94,42 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
     Returns:
         A new ``Pairs`` over the *same* store with rescored rows in input order.
     """
-    by_pair: dict[tuple[str, str], PairwiseJudgement] = {
-        (judgement.left_id, judgement.right_id): judgement for judgement in judgements
-    }
+    input_keys = [(row.left_id, row.right_id) for row in pairs.rows]
+    duplicate_inputs = _duplicates(input_keys)
+    if duplicate_inputs:
+        raise ValueError(
+            "MatcherScore cannot rescore duplicate input pairs: "
+            f"{_pair_preview(duplicate_inputs)}. Each pair identity must occur exactly once."
+        )
+
+    materialized = list(judgements)
+    output_keys = [(judgement.left_id, judgement.right_id) for judgement in materialized]
+    duplicate_outputs = _duplicates(output_keys)
+    if duplicate_outputs:
+        raise ValueError(
+            "MatcherScore received duplicate judgements: "
+            f"{_pair_preview(duplicate_outputs)}. A matcher must emit exactly one judgement "
+            "per input pair."
+        )
+
+    input_set = set(input_keys)
+    output_set = set(output_keys)
+    missing = input_set - output_set
+    unexpected = output_set - input_set
+    faults: list[str] = []
+    if missing:
+        faults.append(f"missing judgements for {_pair_preview(missing)}")
+    if unexpected:
+        faults.append(f"unexpected judgements for {_pair_preview(unexpected)}")
+    if faults:
+        raise ValueError(
+            "MatcherScore requires a one-to-one pair/judgement mapping; " + "; ".join(faults) + "."
+        )
+
+    by_pair = dict(zip(output_keys, materialized, strict=True))
     rows: list[PairRow[SchemaT]] = []
     for row in pairs.rows:
-        judgement = by_pair.get((row.left_id, row.right_id))
-        if judgement is None:
-            rows.append(row)
-            continue
+        judgement = by_pair[(row.left_id, row.right_id)]
         rows.append(
             row.model_copy(
                 update={
@@ -128,6 +145,22 @@ def _rescore(pairs: Pairs[SchemaT], judgements: Iterable[PairwiseJudgement]) -> 
             )
         )
     return Pairs(store=pairs.store, rows=rows)
+
+
+def _duplicates(keys: Iterable[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Return identities occurring more than once."""
+    seen: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+    for key in keys:
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    return duplicates
+
+
+def _pair_preview(keys: Iterable[tuple[str, str]]) -> str:
+    """Render a deterministic bounded identity preview for contract errors."""
+    return ", ".join(repr(key) for key in sorted(keys)[:3])
 
 
 class BlockerSource(Source[SchemaT], Generic[SchemaT]):
@@ -267,6 +300,39 @@ class MatcherScore(Score[SchemaT], Spending, Generic[SchemaT]):
         """Score every row through ``matcher.forward`` and map judgements back onto rows."""
         judgements = self.matcher.forward(iter(pairs.to_candidates()))
         return _rescore(pairs, judgements)
+
+    @property
+    def spend_monitor(self) -> SpendMonitor | None:
+        """The wrapped matcher's ledger, or ``None`` before spend binding."""
+        from langres.core.spend_cap import SpendCappedMatcher
+
+        if isinstance(self.matcher, SpendCappedMatcher):
+            return self.matcher.monitor
+        return None
+
+    def with_matcher(self, matcher: Matcher[SchemaT]) -> "MatcherScore[SchemaT]":
+        """Clone this exact adapter class while replacing only its matcher.
+
+        A shallow clone preserves state carried by a ``MatcherScore`` subclass,
+        which is required both for spend binding and per-call logging. Rebuilding
+        a subclass as the base class would silently discard that state.
+        """
+        rebound = copy(self)
+        rebound.matcher = matcher
+        return rebound
+
+    def bind_spend_monitor(self, monitor: SpendMonitor) -> "MatcherScore[SchemaT]":
+        """Return this score metered by ``monitor``, preserving exact subclass state."""
+        from langres.core.spend_cap import SpendCappedMatcher
+
+        if isinstance(self.matcher, SpendCappedMatcher):
+            if self.matcher.monitor is not monitor:
+                raise ValueError(
+                    "MatcherScore is already bound to a different SpendMonitor. "
+                    "Pass that monitor to from_topology(monitor=...), or provide the raw matcher."
+                )
+            return self
+        return self.with_matcher(SpendCappedMatcher(self.matcher, monitor=monitor))
 
 
 class CalibratorScore(Score[SchemaT], Generic[SchemaT]):

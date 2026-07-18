@@ -517,9 +517,11 @@ components, and scan for same-component pairs that were logged as non-matches. *
 implementation traps** — both discovered by reading the source, and either one silently
 invalidates the result:
 
-1. **Do not scan `score < threshold`.** The `JudgementLog` row schema (v3) has **no
+1. **Do not scan `score < threshold`.** The `JudgementLog` row schema (v4) has **no
    `threshold` column** — the threshold is consumed at write time to compute the `verdict`
-   field and is never persisted. Rebuild edges from **`verdict == True`**, which is the
+   field for a score feeding a binary cut directly and is never persisted. Earlier
+   retrieval/reranking stages carry `verdict = null`; exclude them. Rebuild edges from
+   **`verdict == True`**, which is the
    *same* `predicted_match(judgement, threshold)` predicate `Clusterer.cluster()` uses,
    so the reconstruction is exact.
 2. **`predicted_match` gives `decision` precedence over `score`.** For a *decider* judge,

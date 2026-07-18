@@ -229,8 +229,8 @@ def test_matcher_score_over_a_decider_keeps_score_type_and_does_not_fabricate_a_
         assert row.to_judgement().decision == row.decision
 
 
-def test_matcher_score_passes_unjudged_rows_through_unchanged() -> None:
-    """A matcher that yields no judgement for a row leaves that row untouched (defensive)."""
+def test_matcher_score_rejects_a_missing_judgement() -> None:
+    """A matcher must return exactly one judgement for every incoming pair."""
 
     class _SkipFirstMatcher(Matcher[CompanySchema]):
         def forward(
@@ -250,11 +250,74 @@ def test_matcher_score_passes_unjudged_rows_through_unchanged() -> None:
 
     blocker = AllPairsBlocker(schema=CompanySchema)
     pairs = BlockerSource(blocker).forward(_RECORDS)
-    out = MatcherScore(_SkipFirstMatcher(), out_space="heuristic").forward(pairs)
+    with pytest.raises(ValueError, match="missing judgements"):
+        MatcherScore(_SkipFirstMatcher(), out_space="heuristic").forward(pairs)
 
-    assert out.rows[0].score is None  # unjudged row untouched -> stays unscored
-    assert out.rows[0].score_type is None
-    assert all(row.score == 0.8 for row in out.rows[1:])  # the rest were scored
+
+def test_matcher_score_rejects_duplicate_judgements() -> None:
+    """Duplicate output identities are ambiguous even if every input pair appears."""
+
+    class _DuplicateMatcher(Matcher[CompanySchema]):
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            materialized = list(candidates)
+            for candidate in materialized:
+                judgement = PairwiseJudgement(
+                    left_id=str(candidate.left.id),
+                    right_id=str(candidate.right.id),
+                    score=0.8,
+                    score_type="heuristic",
+                    decision_step="duplicate",
+                    provenance={},
+                )
+                yield judgement
+                if candidate is materialized[0]:
+                    yield judgement
+
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    with pytest.raises(ValueError, match="duplicate judgements"):
+        MatcherScore(_DuplicateMatcher(), out_space="heuristic").forward(pairs)
+
+
+def test_matcher_score_rejects_an_unexpected_judgement() -> None:
+    """A matcher cannot introduce a pair it was never asked to score."""
+
+    class _UnexpectedMatcher(Matcher[CompanySchema]):
+        def forward(
+            self, candidates: Iterator[ERCandidate[CompanySchema]]
+        ) -> Iterator[PairwiseJudgement]:
+            for candidate in candidates:
+                yield PairwiseJudgement(
+                    left_id=str(candidate.left.id),
+                    right_id=str(candidate.right.id),
+                    score=0.8,
+                    score_type="heuristic",
+                    decision_step="expected",
+                    provenance={},
+                )
+            yield PairwiseJudgement(
+                left_id="not",
+                right_id="requested",
+                score=0.8,
+                score_type="heuristic",
+                decision_step="unexpected",
+                provenance={},
+            )
+
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    with pytest.raises(ValueError, match="unexpected judgements"):
+        MatcherScore(_UnexpectedMatcher(), out_space="heuristic").forward(pairs)
+
+
+def test_matcher_score_rejects_duplicate_input_pairs() -> None:
+    """The bijection is undefined when the incoming carrier repeats an identity."""
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    duplicate = Pairs(store=pairs.store, rows=[pairs.rows[0], pairs.rows[0]])
+    matcher = Resolver.from_schema(CompanySchema).module
+
+    with pytest.raises(ValueError, match="duplicate input pairs"):
+        MatcherScore(matcher, out_space="unknown").forward(duplicate)
 
 
 # --------------------------------------------------------------------------------------

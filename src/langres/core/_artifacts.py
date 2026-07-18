@@ -423,13 +423,29 @@ def rebuild_op(spec: OpSpec, *, state_dir: Path) -> Stage:
         serializer = get_op_serializer(spec.role)
     except UnknownOpType as exc:
         raise ValueError(f"rebuild_op() got an unknown OpSpec role {spec.role!r}: {exc}") from None
-    component = (
-        rebuild_component(spec.component, state_dir=state_dir)
-        if spec.component is not None
-        else None
-    )
-    if serializer.component_slot is not None and component is None:
-        _require_op_component(spec)
+
+    # Validate the role/component envelope BEFORE looking up or constructing the
+    # nested component. A stray component on a component-free role must not
+    # trigger arbitrary registry work, and a component under the wrong slot must
+    # never be reconstructed and only then rejected.
+    if serializer.component_slot is None:
+        if spec.component is not None:
+            raise ValueError(
+                f"OpSpec role {spec.role!r} does not accept a nested component, but the spec "
+                f"carries {spec.component.type_name!r}. Fix: remove component= from this role."
+            )
+        component = None
+    else:
+        component_spec_obj = _require_op_component(spec)
+        if component_spec_obj.slot != serializer.component_slot:
+            raise ValueError(
+                f"OpSpec role {spec.role!r} requires component slot "
+                f"{serializer.component_slot!r}, but the spec carries "
+                f"{component_spec_obj.slot!r}. Fix: serialize the component under the role's "
+                "declared slot."
+            )
+        component = rebuild_component(component_spec_obj, state_dir=state_dir)
+
     stage = serializer.load(spec.params, component, state_dir)
     if not isinstance(
         stage,

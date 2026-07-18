@@ -58,9 +58,10 @@ mid-pull.
 
 import hashlib
 import json
-from time import perf_counter
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 from langres.core._model_state import ModelState
@@ -68,7 +69,7 @@ from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.fit import CalibratorFitMixin
 from langres.core.inputs import check_no_duplicate_ids, normalize_records
-from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.model_ref import ModelRef, to_config
 from langres.core.models import (
     ERCandidate,
     MatcherAbstainedError,
@@ -89,6 +90,7 @@ from langres.core.op import (
     Source,
     Stage,
     ThresholdSelect,
+    TopKSelect,
 )
 from langres.core.op_adapters import (
     BlockerSource,
@@ -99,7 +101,9 @@ from langres.core.op_adapters import (
 )
 from langres.core.pairs import Pairs
 from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.serialization import OpSpec
 from langres.core.spend_cap import SpendCappedMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 
 if TYPE_CHECKING:
     # [semantic] extra (faiss/sentence-transformers/torch) -- type-only so a
@@ -398,11 +402,9 @@ class ModelRun(ModelState):
         if log is None:
             return body
 
-        threshold = self._chain_threshold()
-        log_threshold = threshold if threshold is not None else 0.5
         wrapped: list[Op[Any]] = []
-        for op in body:
-            if type(op) is not MatcherScore:
+        for body_index, op in enumerate(body):
+            if not isinstance(op, MatcherScore):
                 wrapped.append(op)
                 continue
             matcher = op.matcher
@@ -410,16 +412,33 @@ class ModelRun(ModelState):
             logged = LoggingMatcher(
                 raw,
                 log=log,
-                threshold=log_threshold,
-                model=self.backbone,
+                threshold=self._direct_log_threshold(body, body_index),
+                model=self._stage_resource_ref(op),
+                # The Source is index 0, so body indices begin at one.
+                stage_id=f"{body_index + 1:02d}-matcher_score",
             )
             wrapped.append(
-                MatcherScore(
+                op.with_matcher(
                     SpendCappedMatcher(logged, monitor=self._spend_monitor),
-                    out_space=op.out_space,
                 )
             )
         return wrapped
+
+    @staticmethod
+    def _direct_log_threshold(body: Sequence[Op[Any]], score_index: int) -> float | None:
+        """Return the binary cut applied directly to one score stage.
+
+        A later Score transforms or replaces the numbers, and a non-threshold
+        Select (top-k/link/assignment) is not a binary match verdict. In either
+        case the current stage logs ``verdict=None`` instead of borrowing the
+        pipeline's final threshold.
+        """
+        for downstream in body[score_index + 1 :]:
+            if isinstance(downstream, Score):
+                return None
+            if isinstance(downstream, Select):
+                return downstream.threshold if isinstance(downstream, ThresholdSelect) else None
+        return None
 
     def _scored_pairs(self, records: list[Any], *, log: JudgementLog | None = None) -> Pairs[Any]:
         """Block -> (compare) -> score as an Op chain, then calibrate: the scoring spine.
@@ -513,29 +532,124 @@ class ModelRun(ModelState):
         ]
 
     @staticmethod
-    def _execution_step(stage: Stage, index: int) -> ExecutionStep:
-        """Build a stable step id from the safe stage spec plus its ordinal."""
-        from langres.core._artifacts import op_spec
+    def _execution_spec(stage: Stage) -> OpSpec:
+        """Build safe runtime metadata without requiring artifact serialization.
 
-        spec = op_spec(stage)
+        Execution and inspection accept runnable custom stages and opaque schema
+        factories. Only ``save()`` requires an explicitly registered serializer,
+        so this deliberately does not call ``op_spec(stage)``.
+        """
+        if isinstance(stage, BlockerSource):
+            role = "blocker_source"
+        elif isinstance(stage, ComparatorScore):
+            role = "comparator_score"
+        elif isinstance(stage, MatcherScore):
+            role = "matcher_score"
+        elif isinstance(stage, CalibratorScore):
+            role = "calibrator_score"
+        elif isinstance(stage, ThresholdSelect):
+            role = "threshold_select"
+        elif isinstance(stage, TopKSelect):
+            role = "topk_select"
+        elif isinstance(stage, ClustererStage):
+            role = "clusterer_stage"
+        elif isinstance(stage, Source):
+            role = "source"
+        elif isinstance(stage, Score):
+            role = "score"
+        elif isinstance(stage, Select):
+            role = "select"
+        elif isinstance(stage, ClusterStage):
+            role = "cluster_stage"
+        else:
+            role = "finalize"
+
+        params: dict[str, object] = {"stage_type": type(stage).__name__}
+        if isinstance(stage, Score):
+            params.update(scope=stage.scope, out_space=stage.out_space)
+        if isinstance(stage, Select):
+            params.update(
+                feasible=stage.feasible.name,
+                algorithm=stage.algorithm,
+            )
+            if isinstance(stage, ThresholdSelect):
+                params["threshold"] = stage.threshold
+            elif isinstance(stage, TopKSelect):
+                params["k"] = stage.k
+        if isinstance(stage, ClusterStage):
+            params["algorithm"] = stage.algorithm
+        return OpSpec(role=role, params=params)
+
+    @classmethod
+    def _execution_step(cls, stage: Stage, index: int) -> ExecutionStep:
+        """Build a stable step id from runtime metadata plus its ordinal."""
+        spec = cls._execution_spec(stage)
         canonical = json.dumps(
             spec.model_dump(mode="json"),
             sort_keys=True,
             separators=(",", ":"),
         )
         digest = hashlib.sha256(canonical.encode()).hexdigest()[:12]
-        resource_ref = spec.component.type_name if spec.component is not None else None
         return ExecutionStep(
             stage_id=f"{index:02d}-{spec.role}-{digest}",
             index=index,
             spec=spec,
-            resource_ref=resource_ref,
+            resource_ref=cls._stage_resource_ref(stage),
         )
+
+    @staticmethod
+    def _stage_resource_ref(stage: object) -> str | None:
+        """Return a stable model identity by structural inspection.
+
+        The core does not import resource implementations. It recognizes the
+        shared ``ModelRef`` leaf, legacy ``model``/``model_name`` attributes, and
+        common composition attributes (resource, matcher, vector index,
+        embedder). Unknown weightless stages report ``None``.
+        """
+
+        def visit(value: object, seen: set[int]) -> str | None:
+            identity = id(value)
+            if identity in seen:
+                return None
+            seen.add(identity)
+
+            if isinstance(value, SpendCappedMatcher):
+                return visit(value._module, seen)
+
+            model_ref = getattr(value, "model_ref", None)
+            if isinstance(model_ref, ModelRef):
+                payload = to_config(model_ref)
+                if isinstance(payload, str):
+                    return payload
+                return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+            for name in ("model", "model_name"):
+                candidate = getattr(value, name, None)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
+
+            for name in (
+                "resource",
+                "matcher",
+                "_module",
+                "blocker",
+                "vector_index",
+                "embedder",
+                "embedding_service",
+            ):
+                candidate = getattr(value, name, None)
+                if candidate is not None:
+                    found = visit(candidate, seen)
+                    if found is not None:
+                        return found
+            return None
+
+        return visit(stage, set())
 
     def execution_plan(self) -> ExecutionPlan:
         """Describe this model's runnable topology without reading legacy slots.
 
-        Stage ids are content-derived from each safe serialized Op spec plus its
+        Stage ids are content-derived from safe runtime metadata plus their
         ordinal, never from object identity or ``repr``.
         """
         if not self.is_bound:
@@ -562,11 +676,12 @@ class ModelRun(ModelState):
         try:
             observer(event)
         except Exception as exc:
+            exception_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:80]
             observer_errors.append(
                 ExecutionObserverError(
                     event=event,
-                    exception_type=type(exc).__name__,
-                    message=str(exc),
+                    exception_type=exception_type or "Exception",
+                    message="observer callback raised; exception details suppressed",
                 )
             )
 
@@ -994,6 +1109,7 @@ class ModelRun(ModelState):
         pair = self._chain_pair_candidate(normalized)
         current = pair
         judgement: PairwiseJudgement | None = None
+        backbone: str | None = None
         threshold: float | None = None
         for op in self._explicit_body(log=log):
             if isinstance(op, ThresholdSelect):
@@ -1004,6 +1120,8 @@ class ModelRun(ModelState):
                         "this pair, so compare() cannot return a verdict."
                     )
             current = op.forward(current)
+            if isinstance(op, MatcherScore) or getattr(op, "resource", None) is not None:
+                backbone = self._stage_resource_ref(op)
             scored_rows = [row for row in current.rows if row.score_type is not None]
             if scored_rows:
                 judgement = scored_rows[0].to_judgement()
@@ -1025,6 +1143,7 @@ class ModelRun(ModelState):
                     judgement=judgement,
                     match=False,
                     threshold=effective_threshold,
+                    backbone=backbone,
                 )
 
         if judgement is None:
@@ -1054,6 +1173,7 @@ class ModelRun(ModelState):
             judgement=judgement,
             match=predicted,
             threshold=threshold,
+            backbone=backbone,
         )
 
     def _explicit_verdict(
@@ -1062,6 +1182,7 @@ class ModelRun(ModelState):
         judgement: PairwiseJudgement,
         match: bool,
         threshold: float,
+        backbone: str | None,
     ) -> LinkVerdict:
         """Build explicit-chain compare metadata from one scored judgement."""
         return LinkVerdict(
@@ -1069,7 +1190,7 @@ class ModelRun(ModelState):
             score=judgement.score,
             reasoning=judgement.reasoning,
             architecture=type(self).__name__,
-            backbone=self.backbone,
+            backbone=backbone,
             score_type=judgement.score_type,
             threshold=threshold,
             judgement=judgement,

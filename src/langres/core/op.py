@@ -41,13 +41,16 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, get_args, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeAlias, TypeVar, get_args, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
 from langres.core.serialization import OpSpec
+
+if TYPE_CHECKING:
+    from langres.core.spend import SpendMonitor
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
@@ -360,12 +363,12 @@ class Score(Op[SchemaT]):
 
 
 class Spending:
-    """Marker a :class:`Score` sets to DECLARE it may bill (call a paid model).
+    """Marker an :class:`Op` sets to DECLARE it may bill (call a paid model).
 
     This is an **allowlist for money**, read by the explicit-chain door
-    (``ERModel.from_topology`` → ``_secure_chain_scores``): a ``Spending`` Score
+    (``ERModel.from_topology`` → ``_secure_chain_scores``): a ``Spending`` Op
     MUST be capped through the model's ``SpendMonitor`` or the door rejects the
-    chain; a non-``Spending`` Score is trusted free and passes. ``MatcherScore``
+    chain; a non-``Spending`` Op is trusted free and passes. ``MatcherScore``
     and ``GroupwiseMatcherScore`` are ``Spending`` (they hold a paid ``Matcher``);
     ``ComparatorScore`` (string features) and any free scalarizer are not.
 
@@ -376,12 +379,9 @@ class Spending:
     fail-safe: an undeclared paid Score is refused billing by omission.
 
     **Residual limit, stated honestly:** the door cannot introspect an arbitrary
-    ``forward()`` body, so it cannot *force* a ``Spending`` Score it does not know
-    how to wrap (anything other than a ``MatcherScore``) onto the ledger — it can
-    only reject it. A custom paid Score MUST both set ``Spending`` AND route its
-    paid work through a model-monitor ``SpendCappedMatcher`` (i.e. be a
-    ``MatcherScore``, or pre-cap its matcher with the model's monitor). A Score
-    that bills without declaring ``Spending`` is the author's own bug.
+    ``forward()`` body. A custom paid Op MUST both set ``Spending`` and implement
+    :class:`SpendMonitorBindable`; otherwise it is rejected. An Op that bills
+    without declaring ``Spending`` is the author's own bug.
     """
 
 
@@ -643,6 +643,28 @@ class Finalize(ABC):
 
 #: A stage a :class:`Sequential` may hold, in pipeline order.
 Stage: TypeAlias = Source[Any] | Op[Any] | ClusterStage[Any] | Finalize
+
+
+@runtime_checkable
+class SpendMonitorBindable(Protocol):
+    """Optional capability for a paid stage that can bind to one spend ledger.
+
+    :class:`Spending` declares that a stage may bill; this protocol is the
+    corresponding safe construction seam. The explicit-topology door accepts a
+    spending stage only when it implements this capability and the returned
+    stage reports the model's exact monitor. Pairwise matcher adapters implement
+    it today; resource-backed generation can implement the same seam without
+    teaching the executor a resource-specific class.
+    """
+
+    @property
+    def spend_monitor(self) -> SpendMonitor | None:
+        """The currently bound ledger, or ``None`` while the stage is raw."""
+        ...  # pragma: no cover
+
+    def bind_spend_monitor(self, monitor: SpendMonitor) -> Stage:
+        """Return an equivalent stage whose paid work is metered by ``monitor``."""
+        ...  # pragma: no cover
 
 
 class Sequential(Generic[SchemaT]):
