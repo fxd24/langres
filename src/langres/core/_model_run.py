@@ -1148,6 +1148,11 @@ class ModelRun(ModelState):
                         "compare() needs a match cut to report a verdict, but this explicit "
                         "chain has no ThresholdSelect."
                     )
+                if predicted_match(judgement, effective_threshold) is None:
+                    raise MatcherAbstainedError(
+                        "the explicit chain's matcher abstained (no decision and no score) on "
+                        "this pair, so compare() cannot return a verdict."
+                    )
                 return self._explicit_verdict(
                     judgement=judgement,
                     match=False,

@@ -26,7 +26,16 @@ from langres.core.fit import CalibratorFitMixin
 from langres.core.groups import ERCandidateGroup
 from langres.core.matcher import GroupwiseMatcher
 from langres.core.models import MatcherAbstainedError, PairwiseJudgement
-from langres.core.op import Clusters, Finalize, Op, Score, Spending, Stage, ThresholdSelect
+from langres.core.op import (
+    Clusters,
+    Finalize,
+    Op,
+    Score,
+    Spending,
+    Stage,
+    ThresholdSelect,
+    TopKSelect,
+)
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
@@ -38,6 +47,7 @@ from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher
 
 from tests.parity._explicit_chain_fixture import (
+    AbstainingMatcher,
     RECORDS,
     THRESHOLD,
     ChainCo,
@@ -441,6 +451,21 @@ def test_compare_raises_on_an_abstaining_chain_matcher() -> None:
     """compare() owes a verdict: an abstaining chain matcher raises MatcherAbstainedError
     (the Selects are skipped, so the abstaining pair reaches the gate rather than being cut)."""
     model = build_abstaining_chain_model()
+    with pytest.raises(MatcherAbstainedError):
+        model.compare(_record("a1"), _record("a2"))
+
+
+def test_compare_raises_when_an_early_select_drops_an_abstention() -> None:
+    """An early non-threshold Select cannot turn an abstention into a no-match."""
+    ops: list[Stage] = [
+        BlockerSource(AllPairsBlocker(schema=ChainCo)),
+        MatcherScore(AbstainingMatcher(), out_space="prob_llm"),
+        TopKSelect(k=0),
+        ThresholdSelect(THRESHOLD),
+        ClustererStage(Clusterer(threshold=0.0)),
+    ]
+    model = ERModel.from_topology(ops=ops)
+
     with pytest.raises(MatcherAbstainedError):
         model.compare(_record("a1"), _record("a2"))
 
