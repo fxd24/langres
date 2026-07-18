@@ -50,7 +50,8 @@ configuration is included.
 Credentials are never publishable, even with `allow_sensitive_config=True`.
 Keep API keys, authorization headers, tokens, and similar secrets out of
 serialized LiteLLM `provider` / `extra_body` options; inject them through the
-runtime client or environment instead.
+runtime client or environment instead. Endpoint `api_base` URLs must likewise
+exclude userinfo and credential-bearing query parameters.
 
 Remote operations use the same journey:
 
@@ -114,6 +115,8 @@ declared in both manifest and card. Tokens are forwarded to the Hub client for
 the requested operation and are never written to the bundle or model card.
 The outer manifest also records the install extras needed by optional
 components, including `[trained]` for calibrators and random-forest matchers.
+Vector blockers and FAISS indexes declare `[semantic]` even when their embedder
+does not carry a model reference.
 
 Hub artifact revision provenance is separate from resource `ModelRef`
 revisions: `pretrained_source_.resolved_revision` identifies the bundle commit,
