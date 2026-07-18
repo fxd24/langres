@@ -1162,11 +1162,23 @@ class Experiment:
                 raise
             except ExperimentCellError:
                 safe_tracker.finish(status="failed")
-                handle.record_cost(self._monitor.spent - starting_spend)
+                handle.record_cost(
+                    (
+                        self._monitor.spent - starting_spend
+                        if not self._monitor.cost_is_unknown
+                        else None
+                    )
+                )
                 raise
             except Exception as exc:
                 safe_tracker.finish(status="failed")
-                handle.record_cost(self._monitor.spent - starting_spend)
+                handle.record_cost(
+                    (
+                        self._monitor.spent - starting_spend
+                        if not self._monitor.cost_is_unknown
+                        else None
+                    )
+                )
                 raise self._cell_error(
                     architecture,
                     benchmark_id=benchmark_id,
@@ -1537,7 +1549,11 @@ class Experiment:
                 if isinstance(token_payload, Mapping)
                 else None
             ),
-            usd=(float(facts["usd"]) if isinstance(facts.get("usd"), (int, float)) else None),
+            usd=(
+                float(facts["usd"])
+                if isinstance(facts.get("usd"), (int, float))
+                else record.spend_usd
+            ),
             warnings=(*warnings, "resumed from completed RunStore attempt"),
         )
 
