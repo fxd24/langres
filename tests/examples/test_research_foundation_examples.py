@@ -181,6 +181,7 @@ def test_local_hub_round_trip_needs_no_hub_client(tmp_path: Path) -> None:
     loaded = module.local_round_trip(tmp_path / "bundle")
 
     assert type(loaded).__name__ == "FuzzyString"
+    assert loaded.schema.__name__ == "HubLifecycleCompany"
     assert loaded.clusterer.threshold == 0.7
 
 

@@ -10,14 +10,16 @@ from pydantic import BaseModel
 from langres.architectures import FuzzyString
 
 
-class Company(BaseModel):
+class HubLifecycleCompany(BaseModel):
+    """Example-specific schema name that cannot collide with generic test fixtures."""
+
     id: str
     name: str
 
 
 def local_round_trip(path: Path) -> FuzzyString:
     """Create a validated local bundle and reconstruct its exact architecture."""
-    model = FuzzyString(schema=Company, threshold=0.7)
+    model = FuzzyString(schema=HubLifecycleCompany, threshold=0.7)
     model.save_pretrained(
         path,
         measurement_summary={
@@ -41,10 +43,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     loaded = local_round_trip(args.path)
-    print(
-        f"loaded {type(loaded).__name__} "
-        f"at threshold={loaded.clusterer.threshold}"
-    )
+    print(f"loaded {type(loaded).__name__} at threshold={loaded.clusterer.threshold}")
     if args.push_to:
         result = loaded.push_to_hub(
             args.push_to,
