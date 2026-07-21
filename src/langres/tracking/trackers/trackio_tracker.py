@@ -17,11 +17,13 @@ inside its own function body, so a ``langres[wandb]``-only install (that file's
 existing unconditional ``import wandb``) never needs ``trackio`` importable, and
 vice versa.
 
-Local-first by design: with no ``space_id`` configured, ``trackio.init`` writes
-to a local SQLite store only -- no credentials, no network, no HF account. A
-``space_id`` opts into syncing the run to a Hugging Face Space (and optionally a
-persistent Dataset via ``dataset_id`` -- verified against the installed trackio
-0.20.2 API; NOT ``bucket_id``, an unconfirmed name floated before installing).
+Local-first by design: ``local_only=True`` guarantees that ``trackio.init``
+writes to a local SQLite store only -- no credentials, no network, no HF
+account -- even when Settings or environment variables name a Space. Without
+that override, an explicit or Settings-derived ``space_id`` opts into syncing
+the run to a Hugging Face Space (and optionally a persistent Dataset via
+``dataset_id`` -- verified against the installed trackio 0.20.2 API; NOT
+``bucket_id``, an unconfirmed name floated before installing).
 Since HF Space sync requires a *write* token, :func:`_require_hf_token` fails
 fast with an actionable :class:`ValueError` naming exactly what to set --
 mirroring :func:`~langres.tracking.factories.create_wandb_tracker`'s missing-cred
@@ -131,6 +133,7 @@ class TrackioTracker:
         project: str | None = None,
         space_id: str | None = None,
         dataset_id: str | None = None,
+        local_only: bool = False,
         config: Mapping[str, Any] | None = None,
     ) -> None:
         """Configure the adapter; ``trackio.init`` is deferred to :meth:`start_run`.
@@ -143,34 +146,44 @@ class TrackioTracker:
             project: The trackio project name. ``None`` -> the run's
                 ``context.experiment`` at :meth:`start_run` time.
             space_id: HF Space to sync to (``"user/space"``), e.g. for durable
-                off-laptop persistence. ``None`` (the default) -> a pure local
-                run: no credentials, no network. Overrides
-                ``settings.trackio_space_id`` when given.
+                off-laptop persistence. ``None`` inherits
+                ``settings.trackio_space_id`` unless ``local_only=True``.
             dataset_id: HF Dataset to additionally sync metrics to (requires
                 ``space_id``). Overrides ``settings.trackio_dataset_id``.
+            local_only: Force ``space_id`` and ``dataset_id`` to stay unset,
+                suppressing Settings and environment fallbacks. Cannot be
+                combined with explicit ``space_id`` or ``dataset_id`` values.
             config: Extra config merged with the flattened
                 :class:`~langres.tracking.runs.RunContext` at :meth:`start_run`.
         """
+        if local_only and (space_id is not None or dataset_id is not None):
+            raise ValueError("local_only=True cannot be combined with space_id or dataset_id")
         self._settings = settings
         self._project = project
         self._space_id = space_id
         self._dataset_id = dataset_id
+        self._local_only = local_only
         self._extra_config = dict(config) if config is not None else {}
         self._run: Any = None
 
     def start_run(self, context: RunContext, *, run_name: str | None = None) -> None:
         """Open a trackio run, seeding its config from the flattened ``context``.
 
-        Resolves ``space_id``/``dataset_id`` (constructor arg, else
+        With ``local_only=True``, suppresses all Settings fallbacks. Otherwise,
+        resolves ``space_id``/``dataset_id`` (constructor arg, else
         ``settings``), guards HF credentials when ``space_id`` is set (see
         :func:`_require_hf_token`), and defaults ``project`` to
         ``context.experiment``.
         """
         settings = self._settings or Settings()
-        space_id = self._space_id if self._space_id is not None else settings.trackio_space_id
-        dataset_id = (
-            self._dataset_id if self._dataset_id is not None else settings.trackio_dataset_id
-        )
+        if self._local_only:
+            space_id = None
+            dataset_id = None
+        else:
+            space_id = self._space_id if self._space_id is not None else settings.trackio_space_id
+            dataset_id = (
+                self._dataset_id if self._dataset_id is not None else settings.trackio_dataset_id
+            )
         if dataset_id is not None and space_id is None:
             # trackio.init raises the same condition itself, but only after other
             # setup -- fail fast here so the misconfiguration names its own fix.

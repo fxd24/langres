@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pydantic import BaseModel, Field
 
 from langres.core.models import PairwiseJudgement
+from langres.core.op import ExecutionResult
 from langres.core.resolver import Resolver
 from langres.core.usage import CostBasis, CostTrack, LLMUsage
 from langres.data.benchmark import (
@@ -106,6 +107,20 @@ class MethodResult(BaseModel):
     pipeline: PipelineTrack
     cost: CostTrack = Field(default_factory=CostTrack)
     latency: LatencyTrack
+
+
+class ExecutionEvaluation(BaseModel):
+    """Slot-neutral quality facts computed from a public execution result."""
+
+    pair_precision: float
+    pair_recall: float
+    pair_f1: float
+    bcubed_precision: float
+    bcubed_recall: float
+    bcubed_f1: float
+    cluster_pairwise_f1: float
+    delta_above_floor: float
+    sanity_floor_f1: float
 
 
 #: Ranking metrics :meth:`BenchmarkTable.best` / :meth:`~BenchmarkTable.rank`
@@ -279,6 +294,35 @@ def evaluate_resolver_bcubed(
     all_ids = [r.id for r in test_records]
     predicted = resolver.resolve(record_dicts)
     return _pipeline_track(predicted, all_ids, test_truth_clusters)
+
+
+def evaluate_execution_result(
+    result: ExecutionResult,
+    records: Sequence[_Resolvable],
+    truth_clusters: list[set[str]],
+    *,
+    threshold: float,
+) -> ExecutionEvaluation:
+    """Evaluate the public execution carrier without reading resolver slots."""
+    gold_pairs = gold_pairs_from_clusters(truth_clusters)
+    judgements = [row.to_judgement() for row in result.pairs.rows if row.score_type is not None]
+    pair = classify_pairs(judgements, gold_pairs, threshold)
+    pipeline = _pipeline_track(
+        [set(cluster) for cluster in result.clusters],
+        [record.id for record in records],
+        truth_clusters,
+    )
+    return ExecutionEvaluation(
+        pair_precision=pair.precision,
+        pair_recall=pair.recall,
+        pair_f1=pair.f1,
+        bcubed_precision=pipeline.bcubed_p,
+        bcubed_recall=pipeline.bcubed_r,
+        bcubed_f1=pipeline.bcubed_f1,
+        cluster_pairwise_f1=pipeline.cluster_pairwise_f1,
+        delta_above_floor=pipeline.delta_above_floor,
+        sanity_floor_f1=pipeline.sanity_floor_f1,
+    )
 
 
 def tune_threshold_on_train(

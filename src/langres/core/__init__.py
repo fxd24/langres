@@ -64,6 +64,7 @@ from langres.core._exports._flywheel import *  # noqa: F403
 from langres.core._exports._matchers import *  # noqa: F403
 from langres.core._exports._methods import *  # noqa: F403
 from langres.core._exports._models import *  # noqa: F403
+from langres.core._exports._ops import *  # noqa: F403
 from langres.core._exports._resolver import *  # noqa: F403
 from langres.core._exports._tracking import *  # noqa: F403
 from langres.core._exports._training import *  # noqa: F403

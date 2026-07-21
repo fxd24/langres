@@ -118,7 +118,7 @@ class TestJudgementLogAppend:
         log = JudgementLog(tmp_path / "log.jsonl")
         log.append(_judgement(), verdict=True)
         row = log.read()[0]
-        assert row["v"] == 3
+        assert row["v"] == 4
 
     def test_append_records_decision_confidence_and_source_from_judgement(
         self, tmp_path: Path

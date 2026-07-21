@@ -56,41 +56,62 @@ matcher (not the raw one), so draining its rescored rows still trips the cap
 mid-pull.
 """
 
-import logging
+import hashlib
+import json
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
+from langres.core._artifacts import op_spec
 from langres.core._model_state import ModelState
 from langres.core.blockers.composite import CompositeBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.fit import CalibratorFitMixin
 from langres.core.inputs import check_no_duplicate_ids, normalize_records
-from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
+from langres.core.model_ref import ModelRef, to_config
 from langres.core.models import (
     ERCandidate,
     MatcherAbstainedError,
     PairwiseJudgement,
     predicted_match,
 )
-from langres.core.op import Op, Score, Source, ThresholdSelect
+from langres.core.op import (
+    ClusterStage,
+    ExecutionCheckpoint,
+    ExecutionEvent,
+    ExecutionObserver,
+    ExecutionObserverError,
+    ExecutionPlan,
+    ExecutionResult,
+    ExecutionStep,
+    Op,
+    Score,
+    Select,
+    Source,
+    Stage,
+    ThresholdSelect,
+    TopKSelect,
+)
 from langres.core.op_adapters import (
     BlockerSource,
+    CalibratorScore,
     ClustererStage,
     ComparatorScore,
     MatcherScore,
 )
 from langres.core.pairs import PairRow, Pairs
+from langres.core.registry import UnknownOpType, op_serializer_for_type
 from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.serialization import OpSpec
 from langres.core.spend_cap import SpendCappedMatcher
+from langres.tracking.judgement_log import JudgementLog, LoggingMatcher
 
 if TYPE_CHECKING:
-    # [semantic] extra (faiss/sentence-transformers/torch) -- imported lazily
-    # inside _ensure_index_built (W0.4) so a core-only `import langres` never
-    # pulls faiss/torch in for a model that never uses a VectorBlocker.
+    # [semantic] extra (faiss/sentence-transformers/torch) -- type-only so a
+    # core-only `import langres` never pulls the optional stack.
     from langres.core.blockers.vector import VectorBlocker
-
-logger = logging.getLogger(__name__)
 
 
 def iter_vector_blockers(blocker: object) -> "Iterator[VectorBlocker[Any]]":
@@ -105,13 +126,11 @@ def iter_vector_blockers(blocker: object) -> "Iterator[VectorBlocker[Any]]":
     ``GLinkerAdapter``) contribute nothing.
 
     Checks ``type_name`` rather than ``isinstance(blocker, VectorBlocker)``
-    deliberately (W0.4, mirrors :meth:`ModelRun._ensure_index_built`'s own
-    docstring): this walks the blocker tree on every ``resolve()``/
-    ``predict()`` call, so an ``isinstance`` check would need ``VectorBlocker``
-    imported unconditionally, pulling faiss/sentence-transformers (the
-    ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
-    pipeline. ``CompositeBlocker`` itself has no heavy dependency, so it's
-    safe to ``isinstance``-check directly.
+    deliberately: callers outside the execution spine still use this helper,
+    and importing ``VectorBlocker`` here would pull faiss/sentence-transformers
+    (the ``[semantic]`` extra) into a plain
+    ``AllPairsBlocker``/``KeyBlocker`` pipeline. ``CompositeBlocker`` itself has
+    no heavy dependency, so it is safe to ``isinstance``-check directly.
     """
     if getattr(blocker, "type_name", None) == "vector_blocker":
         yield cast("VectorBlocker[Any]", blocker)
@@ -156,10 +175,42 @@ def _run_stages(records: list[Any], stages: Sequence[Source[Any] | Op[Any]]) -> 
     ``Any``.
     """
     source, *body = stages
-    pairs = cast(Source[Any], source).forward(records)
+    source_stage = cast(Source[Any], source)
+    source_stage.prepare(records)
+    pairs = source_stage.forward(records)
     for op in body:
         pairs = cast(Op[Any], op).forward(pairs)
     return pairs
+
+
+def _run_stages_with_last_score_type(
+    records: list[Any],
+    stages: Sequence[Source[Any] | Op[Any]],
+) -> tuple[Pairs[Any], str | None]:
+    """Run a pair pipeline while retaining its last observed score family.
+
+    Selection can legitimately remove every row after scoring. In that case the
+    final carrier cannot describe the score family that produced the negative
+    result, so callers that expose run metadata must retain it before the rows
+    disappear.
+    """
+    source, *body = stages
+    source_stage = cast(Source[Any], source)
+    source_stage.prepare(records)
+    pairs = source_stage.forward(records)
+    score_type = next(
+        (row.score_type for row in pairs.rows if row.score_type is not None),
+        None,
+    )
+    for op in body:
+        pairs = cast(Op[Any], op).forward(pairs)
+        current_score_type = next(
+            (row.score_type for row in pairs.rows if row.score_type is not None),
+            None,
+        )
+        if current_score_type is not None:
+            score_type = current_score_type
+    return pairs, score_type
 
 
 class ModelRun(ModelState):
@@ -195,11 +246,10 @@ class ModelRun(ModelState):
         blocker/comparator slots ALONE -- no matcher, no clusterer -- so
         blocking-only callers (``candidates`` on the hot fit/eval paths, and a
         future retrieval-only topology the four-slot core forbids) neither build
-        nor require a scoring slot. The index side-effect is deliberately NOT
-        absorbed by the source adapter -- :meth:`_ensure_index_built` still runs
-        here first, before the source streams.
+        nor require a scoring slot. ``_run_stages`` calls the Source's
+        ``prepare`` lifecycle before streaming, so vector indexes build or reuse
+        themselves consistently on classic and explicit paths.
         """
-        self._ensure_index_built(records)
         return _run_stages(records, self._block_compare_stages())
 
     def candidates(self, records: list[Any]) -> list[ERCandidate[Any]]:
@@ -368,7 +418,61 @@ class ModelRun(ModelState):
         """
         stages = self._block_compare_stages()
         stages.append(self._matcher_score(log=log))
+        if self.calibrator is not None:
+            stages.append(CalibratorScore(self.calibrator))
         return stages
+
+    def _explicit_body(self, *, log: JudgementLog | None = None) -> list[Op[Any]]:
+        """Build the explicit body for one call, adding logging without mutation.
+
+        Explicit Ops are durable topology objects. A per-call ``JudgementLog``
+        therefore wraps each base ``MatcherScore`` in a fresh
+        ``SpendCappedMatcher(LoggingMatcher(raw))`` sharing the model ledger,
+        rather than replacing the stored stage. Every matcher Score is logged;
+        component-free custom Scores continue unchanged.
+        """
+        body = self._chain_body()
+        if log is None:
+            return body
+
+        wrapped: list[Op[Any]] = []
+        for body_index, op in enumerate(body):
+            if not isinstance(op, MatcherScore):
+                wrapped.append(op)
+                continue
+            matcher = op.matcher
+            raw = matcher._module if isinstance(matcher, SpendCappedMatcher) else matcher
+            logged = LoggingMatcher(
+                raw,
+                log=log,
+                threshold=self._direct_log_threshold(body, body_index),
+                model=self._stage_resource_ref(op),
+                # The Source is index 0, so body indices begin at one. Reuse the
+                # public plan helper so the log join key is byte-identical.
+                stage_id=self._execution_step(op, body_index + 1).stage_id,
+            )
+            wrapped.append(
+                op.with_matcher(
+                    SpendCappedMatcher(logged, monitor=self._spend_monitor),
+                )
+            )
+        return wrapped
+
+    @staticmethod
+    def _direct_log_threshold(body: Sequence[Op[Any]], score_index: int) -> float | None:
+        """Return the binary cut applied directly to one score stage.
+
+        A later Score transforms or replaces the numbers, and a non-threshold
+        Select (top-k/link/assignment) is not a binary match verdict. In either
+        case the current stage logs ``verdict=None`` instead of borrowing the
+        pipeline's final threshold.
+        """
+        for downstream in body[score_index + 1 :]:
+            if isinstance(downstream, Score):
+                return None
+            if isinstance(downstream, Select):
+                return downstream.threshold if isinstance(downstream, ThresholdSelect) else None
+        return None
 
     def _scored_pairs(self, records: list[Any], *, log: JudgementLog | None = None) -> Pairs[Any]:
         """Block -> (compare) -> score as an Op chain, then calibrate: the scoring spine.
@@ -379,9 +483,9 @@ class ModelRun(ModelState):
         :class:`~langres.core.op_adapters.MatcherScore` (:meth:`_matcher_score`) --
         so the topology is one explicit chain of ``forward`` calls over the single
         ``Pairs`` carrier, built from one factory rather than scattered inline.
-        The index side-effect is not in the source adapter, so
-        :meth:`_ensure_index_built` runs here first (as it did via
-        :meth:`_candidates`). Scoring runs through :meth:`_scorer`, so this model's
+        ``_run_stages`` calls the Source's ``prepare`` lifecycle before
+        ``forward`` so classic and explicit vector retrieval build/reuse indexes
+        identically. Scoring runs through :meth:`_scorer`, so this model's
         spend cap (``budget_usd=``) and its ledger are shared across every
         :meth:`resolve`/:meth:`predict`/:meth:`dedupe` call on this instance -- two
         successive resolves cannot each spend a full budget, and a matcher that
@@ -390,30 +494,19 @@ class ModelRun(ModelState):
 
         When :attr:`calibrator` is set (by ``fit(method=Platt()/Isotonic())``),
         every scored ranking row's raw ``score`` is mapped to a calibrated
-        probability (:meth:`_apply_calibrator_to_pairs`) before clustering, so the
-        clusterer thresholds on a real probability. Pure pass-through otherwise.
-        Calibration is a per-score transform applied in the spine, NOT an Op
-        adapter (kept here through W3-c).
+        probability via ``CalibratorScore`` before clustering, so the clusterer
+        thresholds on a real probability. Pure pass-through otherwise.
 
         **Explicit chain (``_ops`` set).** Folds the chain's Source + body Ops
         (Scores AND Selects, up to but excluding the terminal ClusterStage --
-        :meth:`_cluster` runs that). This path does NOT call
-        :meth:`_ensure_index_built` (a four-slot convenience), so a
-        ``VectorBlocker``-backed Source must carry a PRE-BUILT index: if its index
-        is missing, ``blocker.stream`` raises loud (``RuntimeError: Index not
-        built``) on the first fold here -- it never silently yields empty
-        candidates. ``from_topology`` documents this; the shipped rerankers source
-        from ``AllPairsBlocker`` (no index). No calibrator either
-        (``from_topology`` rejects one -- a ``CalibratorScore`` Op is a later wave).
-        ``log`` is not threaded into a fixed pre-built chain.
+        :meth:`_cluster` runs that). Its Source is prepared before streaming, and
+        per-call logging wraps each base ``MatcherScore`` without mutating the
+        stored Ops. The legacy ``calibrator=`` slot is not accepted for explicit
+        topology; score mapping belongs in the declared body as a Score.
         """
         if self._ops is not None:
-            return _run_stages(records, [self._chain_source(), *self._chain_body()])
-        self._ensure_index_built(records)
-        pairs = _run_stages(records, self._stages(log=log))
-        if self.calibrator is not None:
-            pairs = self._apply_calibrator_to_pairs(pairs, self.calibrator)
-        return pairs
+            return _run_stages(records, [self._chain_source(), *self._explicit_body(log=log)])
+        return _run_stages(records, self._stages(log=log))
 
     def _judgements(
         self, records: list[Any], *, log: JudgementLog | None = None
@@ -448,28 +541,7 @@ class ModelRun(ModelState):
         auditability -- byte-identical to what the old ``_apply_calibrator``
         produced on the judgement stream (which only ever saw scored rows).
         """
-        rows: list[PairRow[Any]] = []
-        for row in pairs.rows:
-            if row.score_type is None or row.score is None:
-                rows.append(row)
-                continue
-            calibrated = calibrator.transform([row.score])[0]
-            rows.append(
-                row.model_copy(
-                    update={
-                        "score": calibrated,
-                        "score_type": "calibrated_prob",
-                        "provenance": {
-                            **row.provenance,
-                            "calibration": {
-                                "method": getattr(calibrator, "method", None),
-                                "raw_score": row.score,
-                            },
-                        },
-                    }
-                )
-            )
-        return Pairs(store=pairs.store, rows=rows)
+        return CalibratorScore(calibrator).forward(pairs)
 
     def predict(self, records: list[Any]) -> list[PairwiseJudgement]:
         """Return the scored pairwise judgements before clustering.
@@ -478,6 +550,445 @@ class ModelRun(ModelState):
         committing to a clustering threshold.
         """
         return list(self._judgements(records))
+
+    def _execution_stages(self) -> list[Stage]:
+        """Return the full source-to-clusters topology for public execution."""
+        if self._ops is not None:
+            return [
+                self._chain_source(),
+                *self._explicit_body(),
+                self._chain_cluster_stage(),
+            ]
+        return [
+            *self._stages(),
+            ThresholdSelect(self.clusterer.threshold),
+            ClustererStage(self._closure_clusterer()),
+        ]
+
+    @staticmethod
+    def _execution_spec(stage: Stage) -> OpSpec:
+        """Build safe runtime metadata without requiring artifact serialization.
+
+        Execution and inspection accept runnable custom stages and opaque schema
+        factories. Only ``save()`` requires an explicitly registered serializer,
+        so this deliberately does not call ``op_spec(stage)``.
+        """
+        try:
+            registered_role = op_serializer_for_type(type(stage)).role
+        except UnknownOpType:
+            registered_role = None
+
+        if registered_role is not None:
+            role = registered_role
+        elif isinstance(stage, BlockerSource):
+            role = "blocker_source"
+        elif isinstance(stage, ComparatorScore):
+            role = "comparator_score"
+        elif isinstance(stage, MatcherScore):
+            role = "matcher_score"
+        elif isinstance(stage, CalibratorScore):
+            role = "calibrator_score"
+        elif isinstance(stage, ThresholdSelect):
+            role = "threshold_select"
+        elif isinstance(stage, TopKSelect):
+            role = "topk_select"
+        elif isinstance(stage, ClustererStage):
+            role = "clusterer_stage"
+        elif isinstance(stage, Source):
+            role = "source"
+        elif isinstance(stage, Score):
+            role = "score"
+        elif isinstance(stage, Select):
+            role = "select"
+        elif isinstance(stage, ClusterStage):
+            role = "cluster_stage"
+        else:
+            role = "finalize"
+
+        params: dict[str, object] = {"stage_type": type(stage).__name__}
+        if isinstance(stage, Score):
+            params.update(scope=stage.scope, out_space=stage.out_space)
+        if isinstance(stage, Select):
+            params.update(
+                feasible=stage.feasible.name,
+                algorithm=stage.algorithm,
+            )
+            if isinstance(stage, ThresholdSelect):
+                params["threshold"] = stage.threshold
+            elif isinstance(stage, TopKSelect):
+                params["k"] = stage.k
+        if isinstance(stage, ClusterStage):
+            params["algorithm"] = stage.algorithm
+        return OpSpec(role=role, params=params)
+
+    @classmethod
+    def _execution_step(cls, stage: Stage, index: int) -> ExecutionStep:
+        """Build a stable step id from runtime metadata plus its ordinal."""
+        spec = cls._execution_spec(stage)
+        canonical = json.dumps(
+            spec.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode()).hexdigest()[:12]
+        return ExecutionStep(
+            stage_id=f"{index:02d}-{spec.role}-{digest}",
+            index=index,
+            spec=spec,
+            resource_ref=cls._stage_resource_ref(stage),
+        )
+
+    @staticmethod
+    def _stage_resource_ref(stage: object) -> str | None:
+        """Return a stable model identity by structural inspection.
+
+        The core does not import resource implementations. It recognizes the
+        shared ``ModelRef`` leaf, legacy ``model``/``model_name`` attributes, and
+        common composition attributes (resource, matcher, vector index,
+        embedder). Unknown weightless stages report ``None``.
+        """
+
+        def visit(value: object, seen: set[int]) -> str | None:
+            identity = id(value)
+            if identity in seen:
+                return None
+            seen.add(identity)
+
+            if isinstance(value, SpendCappedMatcher):
+                return visit(value._module, seen)
+
+            model_ref = getattr(value, "model_ref", None)
+            if isinstance(model_ref, ModelRef):
+                payload = to_config(model_ref)
+                if isinstance(payload, str):
+                    return payload
+                return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+            for name in ("model", "model_name"):
+                candidate = getattr(value, name, None)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
+
+            for name in (
+                "resource",
+                "matcher",
+                "_module",
+                "blocker",
+                "vector_index",
+                "embedder",
+                "embedding_service",
+            ):
+                candidate = getattr(value, name, None)
+                if candidate is not None:
+                    found = visit(candidate, seen)
+                    if found is not None:
+                        return found
+            return None
+
+        return visit(stage, set())
+
+    def execution_plan(self) -> ExecutionPlan:
+        """Describe this model's runnable topology without reading legacy slots.
+
+        Stage ids are content-derived from safe runtime metadata plus their
+        ordinal, never from object identity or ``repr``.
+        """
+        if not self.is_bound:
+            return ExecutionPlan(schema_name=None, is_bound=False, steps=())
+        stages = self._execution_stages()
+        schema = self.schema
+        steps = tuple(self._execution_step(stage, index) for index, stage in enumerate(stages))
+        replay_boundary = (
+            steps[self._replay_boundary_index].stage_id
+            if self._replay_boundary_index is not None
+            else None
+        )
+        plan = ExecutionPlan(
+            schema_name=schema.__name__ if schema is not None else None,
+            is_bound=self.is_bound,
+            steps=steps,
+            replay_boundary=replay_boundary,
+        )
+        if self._replay_boundary_index is None:
+            return plan
+        return plan.model_copy(
+            update={
+                "replay_prefix_id": self._prefix_plan_id(
+                    plan,
+                    self._replay_boundary_index,
+                    stages,
+                )
+            }
+        )
+
+    @staticmethod
+    def _prefix_plan_id(
+        plan: ExecutionPlan,
+        boundary_index: int,
+        stages: Sequence[Stage],
+    ) -> str:
+        """Hash the immutable expensive prefix, excluding tunable suffix params."""
+        payload = {
+            "schema_name": plan.schema_name,
+            "steps": [op_spec(stage).model_dump(mode="json") for stage in stages[:boundary_index]],
+            "boundary_index": boundary_index,
+            "boundary_role": plan.steps[boundary_index].spec.role,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _check_unique_pairs(pairs: Pairs[Any]) -> None:
+        """Reject ambiguous pair identities before replay or cache commit."""
+        seen: set[tuple[str, str]] = set()
+        duplicates: set[tuple[str, str]] = set()
+        for row in pairs.rows:
+            key = (row.left_id, row.right_id)
+            if key in seen:
+                duplicates.add(key)
+            seen.add(key)
+        if duplicates:
+            preview = ", ".join(repr(pair) for pair in sorted(duplicates)[:3])
+            raise ValueError(
+                f"execution checkpoint requires unique ordered pair ids; duplicate pairs: {preview}"
+            )
+
+    @staticmethod
+    def _safe_exception_type(exc: Exception) -> str:
+        """Return a bounded identifier safe to expose in observer metadata."""
+        exception_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:80]
+        return exception_type or "Exception"
+
+    @staticmethod
+    def _emit_execution_event(
+        event: ExecutionEvent,
+        events: list[ExecutionEvent],
+        observer: ExecutionObserver | None,
+        observer_errors: list[ExecutionObserverError],
+    ) -> None:
+        """Record/publish metadata without letting observers alter inference."""
+        events.append(event)
+        if observer is None:
+            return
+        try:
+            observer(event)
+        except Exception as exc:
+            observer_errors.append(
+                ExecutionObserverError(
+                    event=event,
+                    exception_type=ModelRun._safe_exception_type(exc),
+                    message="observer callback raised; exception details suppressed",
+                )
+            )
+
+    def execute(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        observer: ExecutionObserver | None = None,
+        checkpoint_cache_id: str | None = None,
+        input_fingerprint: str | None = None,
+    ) -> ExecutionResult:
+        """Run the existing Op spine and return its slot-neutral intermediates.
+
+        The observer receives immutable metadata only; its return value is
+        ignored and callback exceptions are isolated in
+        :attr:`ExecutionResult.observer_errors`, so observability cannot replace
+        a carrier, abort a stage, or otherwise alter inference.
+        """
+        if self._ops is not None:
+            stages = self._execution_stages()
+            source = cast(Source[Any], stages[0])
+            source.prepare(records)
+            _schema, normalized = normalize_records(records, self._chain_source_schema())
+        else:
+            normalized = self._prepare(records)
+            stages = self._execution_stages()
+        check_no_duplicate_ids([record["id"] for record in normalized])
+
+        plan = self.execution_plan()
+        if (checkpoint_cache_id is None) != (input_fingerprint is None):
+            raise ValueError("checkpoint_cache_id and input_fingerprint must be provided together")
+        return self._execute_plan(
+            normalized,
+            stages=stages,
+            plan=plan,
+            start_index=0,
+            pairs=None,
+            observer=observer,
+            checkpoint_cache_id=checkpoint_cache_id,
+            input_fingerprint=input_fingerprint,
+            prepared_source=source if self._ops is not None else None,
+        )
+
+    def execute_from(
+        self,
+        checkpoint: ExecutionCheckpoint,
+        *,
+        cache_id: str,
+        input_fingerprint: str,
+        observer: ExecutionObserver | None = None,
+    ) -> ExecutionResult:
+        """Resume the same execution driver from a validated replay checkpoint."""
+        plan = self.execution_plan()
+        boundary_index = self._replay_boundary_index
+        if boundary_index is None:
+            raise ValueError("this execution plan does not declare a replay boundary")
+        stages = self._execution_stages()
+        expected = {
+            "prefix_plan_id": self._prefix_plan_id(plan, boundary_index, stages),
+            "cache_id": cache_id,
+            "boundary_index": boundary_index,
+            "input_fingerprint": input_fingerprint,
+        }
+        actual = {
+            "prefix_plan_id": checkpoint.prefix_plan_id,
+            "cache_id": checkpoint.cache_id,
+            "boundary_index": checkpoint.boundary_index,
+            "input_fingerprint": checkpoint.input_fingerprint,
+        }
+        mismatches = [name for name, value in expected.items() if actual[name] != value]
+        if mismatches:
+            raise ValueError(
+                "checkpoint identity does not match this execution request; "
+                f"different fields: {', '.join(mismatches)}"
+            )
+        if checkpoint.boundary_stage_id != plan.steps[boundary_index].stage_id:
+            # A threshold is the one supported tunable suffix parameter, so its
+            # content-derived stage id may differ while the role/index remain
+            # fixed. Any non-threshold boundary must match exactly.
+            if plan.steps[boundary_index].spec.role != "threshold_select":
+                raise ValueError("checkpoint boundary stage identity does not match")
+        if self._ops is not None:
+            schema, normalized = normalize_records(
+                list(checkpoint.records), self._chain_source_schema()
+            )
+        else:  # pragma: no cover - classic plans cannot declare a boundary
+            schema = cast(type[Any], self.schema)
+            normalized = self._prepare(list(checkpoint.records))
+        store = {record["id"]: schema.model_validate(record) for record in normalized}
+        pairs = Pairs(store=store, rows=list(checkpoint.rows))
+        self._check_unique_pairs(pairs)
+        return self._execute_plan(
+            normalized,
+            stages=self._execution_stages(),
+            plan=plan,
+            start_index=boundary_index,
+            pairs=pairs,
+            observer=observer,
+            checkpoint_cache_id=None,
+            input_fingerprint=None,
+        )
+
+    def _execute_plan(
+        self,
+        normalized: list[Any],
+        *,
+        stages: Sequence[Stage],
+        plan: ExecutionPlan,
+        start_index: int,
+        pairs: Pairs[Any] | None,
+        observer: ExecutionObserver | None,
+        checkpoint_cache_id: str | None,
+        input_fingerprint: str | None,
+        prepared_source: Source[Any] | None = None,
+    ) -> ExecutionResult:
+        """Run all or a suffix of the one established stage driver."""
+        events: list[ExecutionEvent] = []
+        observer_errors: list[ExecutionObserverError] = []
+        clusters: list[set[str]] = []
+        checkpoint: ExecutionCheckpoint | None = None
+        accounting_rows: tuple[PairRow[Any], ...] = ()
+
+        for step, stage in zip(plan.steps[start_index:], stages[start_index:], strict=True):
+            if (
+                self._replay_boundary_index == step.index
+                and checkpoint_cache_id is not None
+                and input_fingerprint is not None
+            ):
+                assert pairs is not None
+                self._check_unique_pairs(pairs)
+                checkpoint = ExecutionCheckpoint(
+                    prefix_plan_id=self._prefix_plan_id(plan, step.index, stages),
+                    cache_id=checkpoint_cache_id,
+                    boundary_index=step.index,
+                    boundary_stage_id=step.stage_id,
+                    input_fingerprint=input_fingerprint,
+                    records=tuple(
+                        record.model_dump(mode="json")
+                        if hasattr(record, "model_dump")
+                        else dict(record)
+                        for record in normalized
+                    ),
+                    rows=tuple(pairs.rows),
+                )
+            input_count = len(normalized) if pairs is None else len(pairs.rows)
+            start = ExecutionEvent(
+                kind="start",
+                stage_id=step.stage_id,
+                index=step.index,
+                role=step.spec.role,
+                input_count=input_count,
+            )
+            self._emit_execution_event(start, events, observer, observer_errors)
+            started = perf_counter()
+            try:
+                if isinstance(stage, Source):
+                    if stage is not prepared_source:
+                        stage.prepare(normalized)
+                    pairs = stage.forward(normalized)
+                    output_count = len(pairs.rows)
+                elif isinstance(stage, Op):
+                    assert pairs is not None
+                    pairs = stage.forward(pairs)
+                    output_count = len(pairs.rows)
+                    if step.spec.role == "parse":
+                        # Parse strips raw generation content while retaining
+                        # usage/cost provenance. Capture it before a later
+                        # Select filters non-matches and abstentions out.
+                        accounting_rows = tuple(pairs.rows)
+                elif isinstance(stage, ClusterStage):
+                    assert pairs is not None
+                    clusters = stage.forward(pairs)
+                    output_count = len(clusters)
+                else:  # pragma: no cover - from_topology rejects Finalize
+                    raise TypeError(f"execute() cannot run {type(stage).__name__}")
+            except Exception as exc:
+                failure = ExecutionEvent(
+                    kind="failure",
+                    stage_id=step.stage_id,
+                    index=step.index,
+                    role=step.spec.role,
+                    input_count=input_count,
+                    duration_seconds=perf_counter() - started,
+                    error=(
+                        f"{self._safe_exception_type(exc)}: stage execution failed; "
+                        "exception details suppressed"
+                    ),
+                )
+                self._emit_execution_event(failure, events, observer, observer_errors)
+                raise
+            finish = ExecutionEvent(
+                kind="finish",
+                stage_id=step.stage_id,
+                index=step.index,
+                role=step.spec.role,
+                input_count=input_count,
+                output_count=output_count,
+                duration_seconds=perf_counter() - started,
+            )
+            self._emit_execution_event(finish, events, observer, observer_errors)
+
+        assert pairs is not None
+        return ExecutionResult(
+            plan=plan,
+            pairs=pairs,
+            clusters=tuple(frozenset(cluster) for cluster in clusters),
+            events=tuple(events),
+            observer_errors=tuple(observer_errors),
+            checkpoint=checkpoint,
+            accounting_rows=accounting_rows,
+        )
 
     def _closure_clusterer(self) -> Clusterer:
         """A pure-equivalence clone of this model's clusterer, its threshold zeroed.
@@ -619,9 +1130,9 @@ class ModelRun(ModelState):
             )
         # Explicit-chain model: no ``module``/``clusterer`` slot to read, so the
         # front-door reads (threshold/backbone) come from the chain (see
-        # _dedupe_explicit). ``log`` is not threaded into a fixed pre-built chain.
+        # _dedupe_explicit).
         if self._ops is not None:
-            return self._dedupe_explicit(records)
+            return self._dedupe_explicit(records, log=_coerce_log(log))
         normalized = self._prepare(records)
         check_no_duplicate_ids([record["id"] for record in normalized])
         pairs = self._scored_pairs(normalized, log=_coerce_log(log))
@@ -687,12 +1198,10 @@ class ModelRun(ModelState):
                 ``compare`` owes its caller a verdict and will not fabricate one.
             BudgetExceeded: If scoring this pair would cross the spend cap.
         """
-        # Explicit-chain model: fold ONLY the chain's Score ops on the pair (skip
-        # its Selects, so an abstaining pair is not cut before we can raise) and
-        # gate on the chain's terminal ThresholdSelect (see _compare_explicit).
-        # ``log`` is not threaded into a fixed pre-built chain.
+        # Explicit-chain model: run applicable body Ops on the named pair and
+        # preserve compare's explicit abstention error (see _compare_explicit).
         if self._ops is not None:
-            return self._compare_explicit(left, right)
+            return self._compare_explicit(left, right, log=_coerce_log(log))
         normalized = self._prepare([left, right])
         pair = self._pair_candidate(normalized)
         scored = self._matcher_score(log=_coerce_log(log)).forward(pair)
@@ -771,7 +1280,9 @@ class ModelRun(ModelState):
     # byte-verbatim. Everything here reads the chain, never the four slots.
     # ------------------------------------------------------------------
 
-    def _dedupe_explicit(self, records: list[dict[str, Any]]) -> DedupeResult:
+    def _dedupe_explicit(
+        self, records: list[dict[str, Any]], *, log: JudgementLog | None = None
+    ) -> DedupeResult:
         """``dedupe`` over an explicit Op chain.
 
         Normalizes via the chain's Source schema (the ONE input contract, same as
@@ -784,11 +1295,11 @@ class ModelRun(ModelState):
         """
         _schema, normalized = normalize_records(records, self._chain_source_schema())
         check_no_duplicate_ids([record["id"] for record in normalized])
-        pairs = self._scored_pairs(normalized)
-        clusters = self._cluster(pairs)
-        score_type = next(
-            (row.score_type for row in pairs.rows if row.score_type is not None), None
+        pairs, score_type = _run_stages_with_last_score_type(
+            normalized,
+            [self._chain_source(), *self._explicit_body(log=log)],
         )
+        clusters = self._cluster(pairs)
         return DedupeResult(
             clusters,
             architecture=type(self).__name__,
@@ -797,30 +1308,77 @@ class ModelRun(ModelState):
             threshold=self._chain_threshold(),
         )
 
-    def _compare_explicit(self, left: dict[str, Any], right: dict[str, Any]) -> LinkVerdict:
+    def _compare_explicit(
+        self,
+        left: dict[str, Any],
+        right: dict[str, Any],
+        *,
+        log: JudgementLog | None = None,
+    ) -> LinkVerdict:
         """``compare`` over an explicit Op chain.
 
-        Folds ONLY the chain's :class:`~langres.core.op.Score` ops on the single
-        pair (:meth:`~langres.core._model_state.ModelState._chain_body_scores`) --
-        the Selects are deliberately skipped, because a body
-        :class:`~langres.core.op.ThresholdSelect` would drop an abstaining pair
-        before this method can raise :class:`~langres.core.models.MatcherAbstainedError`
-        (the whole reason ``compare`` differs from ``dedupe``). Gates the resulting
-        judgement on the chain's terminal ThresholdSelect threshold.
+        Runs Scores and applicable Selects in their declared order. A Select
+        that drops the single row returns a negative verdict from the last
+        judgement; an abstention is still surfaced before a ThresholdSelect can
+        turn it into an indistinguishable empty relation.
         """
         _schema, normalized = normalize_records([left, right], self._chain_source_schema())
         pair = self._chain_pair_candidate(normalized)
-        scored = pair
-        for score in self._chain_body_scores():
-            scored = score.forward(scored)
-        scored_rows = [row for row in scored.rows if row.score_type is not None]
-        if not scored_rows:
+        current = pair
+        source_scored_rows = [row for row in pair.rows if row.score_type is not None]
+        judgement: PairwiseJudgement | None = (
+            source_scored_rows[0].to_judgement() if source_scored_rows else None
+        )
+        backbone: str | None = (
+            self._stage_resource_ref(self._chain_source()) if judgement is not None else None
+        )
+        threshold: float | None = None
+        for op in self._explicit_body(log=log):
+            if isinstance(op, ThresholdSelect):
+                threshold = op.threshold
+                if judgement is not None and predicted_match(judgement, threshold) is None:
+                    raise MatcherAbstainedError(
+                        "the explicit chain's matcher abstained (no decision and no score) on "
+                        "this pair, so compare() cannot return a verdict."
+                    )
+            current = op.forward(current)
+            if isinstance(op, MatcherScore) or getattr(op, "resource", None) is not None:
+                backbone = self._stage_resource_ref(op)
+            scored_rows = [row for row in current.rows if row.score_type is not None]
+            if scored_rows:
+                judgement = scored_rows[0].to_judgement()
+            if isinstance(op, Select) and not current.rows:
+                if judgement is None:
+                    raise RuntimeError(
+                        "the explicit chain selected this pair before any Score produced a "
+                        "judgement; compare() cannot explain that selection."
+                    )
+                effective_threshold = (
+                    threshold if threshold is not None else self._chain_threshold()
+                )
+                if effective_threshold is None:
+                    raise RuntimeError(
+                        "compare() needs a match cut to report a verdict, but this explicit "
+                        "chain has no ThresholdSelect."
+                    )
+                if predicted_match(judgement, effective_threshold) is None:
+                    raise MatcherAbstainedError(
+                        "the explicit chain's matcher abstained (no decision and no score) on "
+                        "this pair, so compare() cannot return a verdict."
+                    )
+                return self._explicit_verdict(
+                    judgement=judgement,
+                    match=False,
+                    threshold=effective_threshold,
+                    backbone=backbone,
+                )
+
+        if judgement is None:
             raise RuntimeError(
                 "the explicit chain's Score ops produced no judgement for this pair; every "
                 "candidate must yield exactly one PairwiseJudgement. This indicates a bug in the "
                 "chain's matcher Score."
             )
-        judgement = scored_rows[0].to_judgement()
 
         threshold = self._chain_threshold()
         if threshold is None:
@@ -838,12 +1396,28 @@ class ModelRun(ModelState):
                 "on_parse_error='raise' to surface the parse failure, or catch "
                 "MatcherAbstainedError."
             )
-        return LinkVerdict(
+        return self._explicit_verdict(
+            judgement=judgement,
             match=predicted,
+            threshold=threshold,
+            backbone=backbone,
+        )
+
+    def _explicit_verdict(
+        self,
+        *,
+        judgement: PairwiseJudgement,
+        match: bool,
+        threshold: float,
+        backbone: str | None,
+    ) -> LinkVerdict:
+        """Build explicit-chain compare metadata from one scored judgement."""
+        return LinkVerdict(
+            match=match,
             score=judgement.score,
             reasoning=judgement.reasoning,
             architecture=type(self).__name__,
-            backbone=self.backbone,
+            backbone=backbone,
             score_type=judgement.score_type,
             threshold=threshold,
             judgement=judgement,
@@ -860,7 +1434,9 @@ class ModelRun(ModelState):
         (which includes any ``ComparatorScore``) attaches it, unlike the slot-based
         :meth:`_pair_candidate`.
         """
-        pairs = self._chain_source().forward(records)
+        source = self._chain_source()
+        source.prepare(records)
+        pairs = source.forward(records)
         if pairs.rows:
             return Pairs(store=pairs.store, rows=pairs.rows[:1])
 
@@ -880,35 +1456,9 @@ class ModelRun(ModelState):
         return Pairs.from_candidates([candidate])
 
     def _ensure_index_built(self, records: list[Any]) -> None:
-        """Build/populate every reachable ``VectorBlocker``'s index from ``records``.
+        """Backward-compatible delegate to the Source-owned prepare lifecycle.
 
-        Embeds the records' text field and creates the index in place for each
-        index-backed blocker discovered via :func:`iter_vector_blockers` --
-        whether ``self.blocker`` is a ``VectorBlocker`` directly, or one is
-        nested (at any depth) inside a ``CompositeBlocker``. A blocker with no
-        index (AllPairs, GLinker, KeyBlocker) contributes nothing. When an
-        index *is* already built (e.g. a freshly loaded FAISS index, or a
-        Resolver reused on the same records), the would-be corpus is compared
-        to the index's stored ``_corpus_texts``: identical -> reuse (never
-        re-embed, so restore + same-records round-trips are cheap); different
-        -> rebuild (so reusing the Resolver on a new record list scores
-        against the right corpus rather than a stale one).
-
-        No ``isinstance(..., VectorBlocker)`` anywhere in this walk (W0.4): see
-        :func:`iter_vector_blockers`'s docstring for why -- this method runs
-        on every ``resolve()``/``predict()`` call regardless of blocker, so an
-        ``isinstance`` check would need ``VectorBlocker`` imported
-        unconditionally, pulling faiss/sentence-transformers (the
-        ``[semantic]`` extra) into a plain ``AllPairsBlocker``/``KeyBlocker``
-        pipeline.
+        New execution paths call :meth:`Source.prepare` through
+        :func:`_run_stages`; this method remains for older internal callers.
         """
-        for vector_blocker in iter_vector_blockers(self.blocker):
-            entities = [vector_blocker.schema_factory(record) for record in records]
-            texts = [vector_blocker.text_field_extractor(entity) for entity in entities]
-
-            index = vector_blocker.vector_index
-            if vector_blocker._index_is_built() and getattr(index, "_corpus_texts", None) == texts:
-                continue  # Same corpus already indexed -> reuse, never re-embed.
-
-            logger.info("Embedding %d records to build the blocker's vector index…", len(texts))
-            index.create_index(texts)
+        BlockerSource(self.blocker).prepare(records)

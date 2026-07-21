@@ -3,7 +3,7 @@
 Each Wave-2 slice of the judgement contract was built and tested in isolation
 (``judgement_log``, ``review``, ``benchmark``, ``llm_judge``). These tests prove
 the slices compose: a binary **decision** judge's output flows
-judge -> ``JudgementLog`` (v3) -> ``read()`` -> ``select_for_review``, the loop
+judge -> ``JudgementLog`` (v4) -> ``read()`` -> ``select_for_review``, the loop
 that *silently no-op'd* on any binary judge before this contract existed
 (``select_for_review`` returned ``[]``, documented as "the loop is exhausted",
 having never started).

@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Research execution foundation
+
+- Added the canonical Resources / Operations / Recipes vocabulary, four named
+  retrieval recipes, an explicit legacy Blocker/Matcher/Judge migration map,
+  and a progressive research documentation path.
+- Added copy-paste, offline examples for embedding separability, all four
+  recipes, the first `Experiment`, benchmark/split/seed matrices, local Trackio
+  reproduction, stored-token repricing, and local/Hub pretrained lifecycle.
+- Added a guarded official proof command: plan-only by default, exact 18 cells,
+  paid concurrency one, a USD 20 stopping threshold, and literal confirmation
+  required before paid execution. Since provider cost is observed after a
+  response, spend can overshoot the threshold by one in-flight call.
+- Added a mechanically generated fake-resource smoke table backed by a real
+  local `ExperimentReport`; it is explicitly a contract check, not a quality or
+  performance claim.
+- Added lazy `langres.experiments.Experiment` and `ArchitectureFactory`: expand
+  architecture × benchmark × real split × seed matrices, tune on train,
+  evaluate untouched test data, capture attempts automatically, resume completed
+  cells, continue independent failures, and publish flattened numeric facts to
+  optional trackers.
+- Added explicit execution replay checkpoints and an immutable atomic,
+  checksummed `StageArtifactStore`. Cache reads validate plan/cache/input
+  identity, preserve row order in input fingerprints, reject duplicate pair
+  identities, and quarantine corrupt entries.
+- Run provenance now detects untracked files explicitly, mints attempt ids
+  before stochastic cache identity, and redacts common credential assignments
+  from persisted error messages.
+- Experiment accounting now aggregates tuning and evaluation calls, tokens,
+  stage facts, and known costs; preserves unknown cost and recoverable
+  budget-exceeded partial outputs; and rehydrates those facts on resume. Paid
+  proof matrices are budget-validated before data or model construction.
+- Reproduction handoffs now include safe local `ERModel` artifacts:
+  `langres experiments reproduce` reconstructs and plan-checks them in a clean
+  process, while `langres experiments verify` remains validation-only.
+
 ### The model is explicit: `ERModel` + named architectures — **breaking**
 
 Nothing in langres named a *whole* ER pipeline. `link()`/`dedupe()` took a

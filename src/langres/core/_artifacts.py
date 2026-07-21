@@ -29,18 +29,93 @@ import inspect
 from pathlib import Path
 from typing import Any, TypeGuard, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from langres.core.op import OutSpace, Stage, ThresholdSelect, TopKSelect
 from langres.core.op_adapters import (
     BlockerSource,
+    CalibratorScore,
     ClustererStage,
     ComparatorScore,
     MatcherScore,
 )
-from langres.core.registry import get_component
+from langres.core.registry import (
+    OpSerializer,
+    UnknownOpType,
+    get_component,
+    get_op_serializer,
+    op_serializer_for_type,
+    register_op_serializer,
+)
 from langres.core.serialization import ComponentSpec, OpSpec, SerializableState
 from langres.core.spend_cap import SpendCappedMatcher
+
+
+class _EmptyOpParams(BaseModel):
+    """No-parameter role envelope; unknown keys are always malformed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _MatcherScoreParams(BaseModel):
+    """Validated matcher-score parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    out_space: OutSpace
+
+
+class _ThresholdSelectParams(BaseModel):
+    """Validated threshold-select parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    threshold: float
+
+
+class _TopKSelectParams(BaseModel):
+    """Validated top-k parameter envelope."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    k: int
+
+
+def _validate_params_as(model: type[BaseModel], params: dict[str, object]) -> dict[str, object]:
+    """Validate one complete role envelope and return normalized plain data."""
+    return model.model_validate(params).model_dump()
+
+
+def _validate_empty_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_EmptyOpParams, params)
+
+
+def _validate_matcher_score_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_MatcherScoreParams, params)
+
+
+def _validate_threshold_select_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_ThresholdSelectParams, params)
+
+
+def _validate_topk_select_params(params: dict[str, object]) -> dict[str, object]:
+    return _validate_params_as(_TopKSelectParams, params)
+
+
+def _validated_op_params(serializer: OpSerializer, params: dict[str, object]) -> dict[str, object]:
+    """Fail closed on params before any nested component is reconstructed."""
+    if serializer.validate_params is None:
+        raise ValueError(
+            f"OpSpec role {serializer.role!r} has no registered parameter schema. "
+            "Register a validate_params callable before loading artifacts."
+        )
+    try:
+        return serializer.validate_params(params)
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise ValueError(
+            f"OpSpec role {serializer.role!r} has invalid params; allowed keys and types are "
+            f"defined by its registered serializer: {exc}"
+        ) from None
 
 
 def component_config_dict(obj: object) -> dict[str, object]:
@@ -158,25 +233,169 @@ def rebuild_component(spec: ComponentSpec, state_dir: Path | None = None) -> Any
 # the pure :class:`~langres.core.serialization.OpSpec` data model.
 # ----------------------------------------------------------------------------------
 
-#: role -> the classic slot name stamped on a stage's *nested* ComponentSpec. The
-#: slot is cosmetic in the ops path (``rebuild_op`` rebuilds by role, and
-#: ``rebuild_component`` ignores ``ComponentSpec.slot``), but naming it after the
-#: classic slot keeps the on-disk json legible.
-_ROLE_COMPONENT_SLOT: dict[str, str] = {
-    "blocker_source": "blocker",
-    "comparator_score": "comparator",
-    "matcher_score": "module",
-    "clusterer_stage": "clusterer",
-}
+
+def _dump_blocker_source(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, BlockerSource)
+    return {}, stage.blocker
+
+
+def _load_blocker_source(
+    _params: dict[str, object], component: object | None, _state_dir: Path
+) -> object:
+    if component is None:
+        raise ValueError("OpSpec role 'blocker_source' requires a nested component")
+    return BlockerSource(component)  # type: ignore[arg-type]
+
+
+def _dump_comparator_score(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, ComparatorScore)
+    return {}, stage.comparator
+
+
+def _load_comparator_score(
+    _params: dict[str, object], component: object | None, _state_dir: Path
+) -> object:
+    if component is None:
+        raise ValueError("OpSpec role 'comparator_score' requires a nested component")
+    return ComparatorScore(component)  # type: ignore[arg-type]
+
+
+def _dump_matcher_score(stage: object) -> tuple[dict[str, object], object | None]:
+    assert type(stage) is MatcherScore
+    matcher = stage.matcher
+    inner = matcher._module if isinstance(matcher, SpendCappedMatcher) else matcher
+    return {"out_space": stage.out_space}, inner
+
+
+def _load_matcher_score(
+    params: dict[str, object], component: object | None, _state_dir: Path
+) -> object:
+    if component is None:
+        raise ValueError("OpSpec role 'matcher_score' requires a nested component")
+    return MatcherScore(component, out_space=cast(OutSpace, params["out_space"]))  # type: ignore[arg-type]
+
+
+def _dump_calibrator_score(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, CalibratorScore)
+    return {}, stage.calibrator
+
+
+def _load_calibrator_score(
+    _params: dict[str, object], component: object | None, _state_dir: Path
+) -> object:
+    if component is None:
+        raise ValueError("OpSpec role 'calibrator_score' requires a nested component")
+    return CalibratorScore(component)  # type: ignore[arg-type]
+
+
+def _dump_threshold_select(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, ThresholdSelect)
+    return {"threshold": stage.threshold}, None
+
+
+def _load_threshold_select(
+    params: dict[str, object], _component: object | None, _state_dir: Path
+) -> object:
+    return ThresholdSelect(cast(float, params["threshold"]))
+
+
+def _dump_topk_select(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, TopKSelect)
+    return {"k": stage.k}, None
+
+
+def _load_topk_select(
+    params: dict[str, object], _component: object | None, _state_dir: Path
+) -> object:
+    return TopKSelect(cast(int, params["k"]))
+
+
+def _dump_clusterer_stage(stage: object) -> tuple[dict[str, object], object | None]:
+    assert isinstance(stage, ClustererStage)
+    return {}, stage.clusterer
+
+
+def _load_clusterer_stage(
+    _params: dict[str, object], component: object | None, _state_dir: Path
+) -> object:
+    if component is None:
+        raise ValueError("OpSpec role 'clusterer_stage' requires a nested component")
+    return ClustererStage(component)  # type: ignore[arg-type]
+
+
+def _register_builtin_op_serializers() -> None:
+    """Register the shipped stages through the same table custom Ops use."""
+    serializers = (
+        OpSerializer(
+            "blocker_source",
+            BlockerSource,
+            _dump_blocker_source,
+            _load_blocker_source,
+            component_slot="blocker",
+            validate_params=_validate_empty_params,
+        ),
+        OpSerializer(
+            "comparator_score",
+            ComparatorScore,
+            _dump_comparator_score,
+            _load_comparator_score,
+            component_slot="comparator",
+            validate_params=_validate_empty_params,
+        ),
+        OpSerializer(
+            "matcher_score",
+            MatcherScore,
+            _dump_matcher_score,
+            _load_matcher_score,
+            component_slot="module",
+            validate_params=_validate_matcher_score_params,
+        ),
+        OpSerializer(
+            "calibrator_score",
+            CalibratorScore,
+            _dump_calibrator_score,
+            _load_calibrator_score,
+            component_slot="calibrator",
+            validate_params=_validate_empty_params,
+        ),
+        OpSerializer(
+            "threshold_select",
+            ThresholdSelect,
+            _dump_threshold_select,
+            _load_threshold_select,
+            validate_params=_validate_threshold_select_params,
+        ),
+        OpSerializer(
+            "topk_select",
+            TopKSelect,
+            _dump_topk_select,
+            _load_topk_select,
+            validate_params=_validate_topk_select_params,
+        ),
+        OpSerializer(
+            "clusterer_stage",
+            ClustererStage,
+            _dump_clusterer_stage,
+            _load_clusterer_stage,
+            component_slot="clusterer",
+            validate_params=_validate_empty_params,
+        ),
+    )
+    for serializer in serializers:
+        register_op_serializer(serializer)
+
+
+_register_builtin_op_serializers()
 
 
 def _stage_serialization(stage: Stage) -> tuple[str, dict[str, object], object | None]:
     """The ``(role, params, nested_component)`` an explicit-chain stage serializes to.
 
-    The ONE dispatch shared by :func:`op_spec` (which builds the
-    :class:`~langres.core.serialization.OpSpec`) and :func:`op_state_owner` (which
-    finds the sidecar owner) — so the two can never disagree on which stages are
-    serializable, or on which component a stage carries.
+    The ONE registered dispatch shared by :func:`op_spec` (which builds the
+    :class:`~langres.core.serialization.OpSpec`) and :func:`op_state_owner`
+    (which finds the sidecar owner) — so the two can never disagree on which
+    stages are serializable, or on which component a stage carries. Built-ins
+    and ``@register_op`` custom stages use the same fail-closed table.
 
     A :class:`~langres.core.op_adapters.MatcherScore` is **unwrapped**: its nested
     component is the *raw inner* matcher, never the
@@ -186,37 +405,16 @@ def _stage_serialization(stage: Stage) -> tuple[str, dict[str, object], object |
     monitor on load, so the budget/monitor are deliberately not persisted.
 
     Raises:
-        TypeError: (F3) for a stage this door cannot faithfully round-trip — a
-            ``MatcherScore`` *subclass* (rebuilding it as a base ``MatcherScore``
-            would silently drop the subclass's own state, exactly as
-            ``from_topology`` rejects on re-secure), a ``GroupwiseMatcherScore`` or
-            any other ``Spending`` Score ``from_topology`` also refuses, or a
-            ``Finalize`` (``from_topology`` does not run one). Failing loud at save
-            time beats writing a spec that load cannot rebuild.
+        TypeError: For an exact stage class with no registered serializer.
+            Parent serializers are not inherited, so a subclass cannot silently
+            lose its own state.
     """
-    if isinstance(stage, BlockerSource):
-        return "blocker_source", {}, stage.blocker
-    if isinstance(stage, ComparatorScore):
-        return "comparator_score", {}, stage.comparator
-    # ``type(stage) is MatcherScore`` (not isinstance): a subclass must be rejected
-    # below, since rebuild would drop its extra state (mirrors _secure_chain_scores).
-    if type(stage) is MatcherScore:
-        matcher = stage.matcher
-        inner = matcher._module if isinstance(matcher, SpendCappedMatcher) else matcher
-        return "matcher_score", {"out_space": stage.out_space}, inner
-    if isinstance(stage, ThresholdSelect):
-        return "threshold_select", {"threshold": stage.threshold}, None
-    if isinstance(stage, TopKSelect):
-        return "topk_select", {"k": stage.k}, None
-    if isinstance(stage, ClustererStage):
-        return "clusterer_stage", {}, stage.clusterer
-    raise TypeError(
-        f"op_spec() cannot serialize a {type(stage).__name__}: only BlockerSource, "
-        "ComparatorScore, a base MatcherScore, ThresholdSelect, TopKSelect and ClustererStage "
-        "round-trip. A MatcherScore subclass / GroupwiseMatcherScore / Finalize is rejected "
-        "(from_topology would reject or drop it on re-secure anyway). Fix: express the chain "
-        "with the round-trippable stages, or pre-cap a paid matcher into a base MatcherScore."
-    )
+    try:
+        serializer = op_serializer_for_type(type(stage))
+    except UnknownOpType as exc:
+        raise TypeError(f"op_spec() cannot serialize a {type(stage).__name__}: {exc}") from None
+    params, component = serializer.dump(stage)
+    return serializer.role, params, component
 
 
 def op_spec(stage: Stage) -> OpSpec:
@@ -226,20 +424,24 @@ def op_spec(stage: Stage) -> OpSpec:
     Records the stage's role, its role-specific scalar params, and (for a stage
     that adapts a legacy component) that component as a nested
     :class:`~langres.core.serialization.ComponentSpec` via :func:`component_spec`.
-    A ``MatcherScore``'s matcher is serialized RAW (unwrapped past any spend cap);
-    see :func:`_stage_serialization` for the unwrap and the F3 rejection rules.
+    A ``MatcherScore``'s matcher is serialized RAW (unwrapped past any spend
+    cap). Custom component-free Scores/Selects register their config convention
+    with :func:`langres.core.registry.register_op`.
 
     Raises:
-        TypeError: If ``stage`` is not one of the round-trippable stage types, or
-            its nested component lacks a registry ``type_name`` (both surface the
-            same fail-loud-at-save contract as :func:`component_spec`).
+        TypeError: If the exact stage class has no registered serializer, or its
+            nested component lacks a registry ``type_name``.
     """
     role, params, component = _stage_serialization(stage)
-    component_spec_obj = (
-        component_spec(component, slot=_ROLE_COMPONENT_SLOT[role])
-        if component is not None
-        else None
-    )
+    serializer = get_op_serializer(role)
+    params = _validated_op_params(serializer, params)
+    component_spec_obj = None
+    if component is not None:
+        if serializer.component_slot is None:
+            raise TypeError(
+                f"Op serializer {role!r} returned a nested component but declares no component_slot"
+            )
+        component_spec_obj = component_spec(component, slot=serializer.component_slot)
     return OpSpec(role=role, params=params, component=component_spec_obj)
 
 
@@ -255,8 +457,16 @@ def op_state_owner(stage: Stage) -> SerializableState | None:
     has already validated every stage via :func:`op_spec`, so it never meets an
     unserializable stage.
     """
-    _role, _params, component = _stage_serialization(stage)
-    return state_owner(component) if component is not None else None
+    role, _params, component = _stage_serialization(stage)
+    serializer = get_op_serializer(role)
+    candidate = (
+        serializer.state_owner(stage)
+        if serializer.state_owner is not None
+        else component
+        if component is not None
+        else stage
+    )
+    return state_owner(candidate) if candidate is not None else None
 
 
 def _require_op_component(spec: OpSpec) -> ComponentSpec:
@@ -289,23 +499,56 @@ def rebuild_op(spec: OpSpec, *, state_dir: Path) -> Stage:
         ValueError: If ``spec.role`` is unknown, or a component-bearing role's
             ``component`` is missing (a malformed manifest).
     """
-    if spec.role == "blocker_source":
-        return BlockerSource(rebuild_component(_require_op_component(spec), state_dir=state_dir))
-    if spec.role == "comparator_score":
-        return ComparatorScore(rebuild_component(_require_op_component(spec), state_dir=state_dir))
-    if spec.role == "matcher_score":
-        return MatcherScore(
-            rebuild_component(_require_op_component(spec), state_dir=state_dir),
-            out_space=cast(OutSpace, spec.params["out_space"]),
-        )
-    if spec.role == "threshold_select":
-        return ThresholdSelect(cast(float, spec.params["threshold"]))
-    if spec.role == "topk_select":
-        return TopKSelect(cast(int, spec.params["k"]))
-    if spec.role == "clusterer_stage":
-        return ClustererStage(rebuild_component(_require_op_component(spec), state_dir=state_dir))
-    raise ValueError(
-        f"rebuild_op() got an unknown OpSpec role {spec.role!r}. Known roles: "
-        "blocker_source, comparator_score, matcher_score, threshold_select, topk_select, "
-        "clusterer_stage. The artifact was likely written by a newer langres."
-    )
+    try:
+        serializer = get_op_serializer(spec.role)
+    except UnknownOpType as exc:
+        raise ValueError(f"rebuild_op() got an unknown OpSpec role {spec.role!r}: {exc}") from None
+    params = _validated_op_params(serializer, spec.params)
+
+    # Validate the role/component envelope BEFORE looking up or constructing the
+    # nested component. A stray component on a component-free role must not
+    # trigger arbitrary registry work, and a component under the wrong slot must
+    # never be reconstructed and only then rejected.
+    if serializer.component_slot is None:
+        if spec.component is not None:
+            raise ValueError(
+                f"OpSpec role {spec.role!r} does not accept a nested component, but the spec "
+                f"carries {spec.component.type_name!r}. Fix: remove component= from this role."
+            )
+        component = None
+    else:
+        component_spec_obj = _require_op_component(spec)
+        if component_spec_obj.slot != serializer.component_slot:
+            raise ValueError(
+                f"OpSpec role {spec.role!r} requires component slot "
+                f"{serializer.component_slot!r}, but the spec carries "
+                f"{component_spec_obj.slot!r}. Fix: serialize the component under the role's "
+                "declared slot."
+            )
+        component = rebuild_component(component_spec_obj, state_dir=state_dir)
+
+    stage = serializer.load(params, component, state_dir)
+    if not isinstance(
+        stage,
+        (
+            BlockerSource,
+            CalibratorScore,
+            ComparatorScore,
+            MatcherScore,
+            ThresholdSelect,
+            TopKSelect,
+            ClustererStage,
+        ),
+    ):
+        # Custom stages still have to satisfy the public Stage contract. Importing
+        # every concrete subclass is unnecessary; the four abstract roles cover it.
+        from langres.core.op import ClusterStage, Finalize, Op, Source
+
+        if not isinstance(stage, (Source, Op, ClusterStage, Finalize)):
+            raise TypeError(
+                f"registered Op serializer {spec.role!r} rebuilt {type(stage).__name__}, "
+                "which is not a Source/Op/ClusterStage/Finalize"
+            )
+    if isinstance(stage, SerializableState) and has_state(state_dir):
+        stage.load_state(state_dir)
+    return stage

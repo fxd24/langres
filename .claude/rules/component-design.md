@@ -8,6 +8,21 @@ paths:
 **The layered API, the design principles, and what "lightweight & composable"
 means in practice.** Read before adding or refactoring a component under `src/`.
 
+## Canonical research vocabulary
+
+- **Resource**: a model-bearing capability (`Embedder`, `Reranker`, `LLM`) with
+  a complete `ModelRef`, runtime config, and measured output facts.
+- **Operation**: one ordered carrier transformation (`Retrieve`, `Rerank`,
+  `Select`, `Generate`, `Parse`, `ClusterStage`).
+- **Recipe**: a named readable operation topology equipped with resources.
+- **Architecture**: the general topology concept; changing weights/providers is
+  a resource variant, while changing operation order is a new architecture.
+
+The four-slot Blocker/Comparator/Matcher/Clusterer API remains supported.
+Treat it as compatibility vocabulary, not names to copy into new
+resource-neutral research APIs. The exact migration map lives in
+`docs/reference/research-vocabulary.md`.
+
 ## The Layered API (architectures → ERModel → core)
 
 langres exposes three layers, each a thin shell over the one below. (Note: there
@@ -63,6 +78,23 @@ a model is the user's job, not a heuristic's. The real layering is:)
 
 3. **Low-Level (`langres.core`)**: Composable primitives for custom pipelines.
    - Target: advanced users building bespoke pipelines.
+   - The public topology contracts are `Source`, `Op`, `Score`, `Select`,
+     `ClusterStage`, and `Sequential`. Build non-four-slot pipelines with
+     `ERModel.from_topology(ops=[...])`; inspect them with
+     `execution_plan()` and run observer-instrumented inference with
+     `execute(records, observer=...)`. Do not add a second executor around
+     these contracts. Observers receive immutable metadata only; isolate callback
+     exceptions from inference and report them in `ExecutionResult.observer_errors`.
+   - A custom component-free `Score`/`Select` that must persist uses
+     `@register_op("<role>")` plus `config`/`from_config` and a strict Pydantic
+     `config_model` (`extra="forbid"`, `strict=True`). Registration is
+     exact-class and fail-closed: the complete parameter envelope is validated
+     before construction, and artifacts never name Python modules to import.
+     Stateful resources still use the component registry/sidecar seam.
+   - `Source.prepare(records)` owns input-dependent bind/build work. In
+     particular, `BlockerSource` builds/reuses nested vector indexes for both
+     classic and explicit topologies; do not reintroduce a separate explicit
+     index lifecycle.
    - Real components: `Matcher` (judge), `Blocker` (`AllPairsBlocker`,
      `VectorBlocker`), `Comparator` (`StringComparator`), `Clusterer`, plus
      matchers (`LLMMatcher`, `EmbeddingScoreMatcher`, `WeightedAverageMatcher`,
@@ -118,6 +150,14 @@ a model is the user's job, not a heuristic's. The real layering is:)
    - **Not yet built** (roadmap, don't reference as existing): a general
      `Optimizer` (only `langres.autoresearch.blocker_optimizer.BlockerOptimizer`
      exists).
+   - **Hub transport is not core.** `langres.hub` is an outer adapter around the
+     unchanged `ERModel.save` / `ERModel.load` persistence contract. The pure
+     artifact envelope validates an exact file allowlist and immutable
+     provenance, while `huggingface_hub` is imported lazily only for remote
+     operations. Core may own transport-neutral `ArtifactSource` provenance and
+     its convenience methods may dynamically dispatch to the public adapter,
+     but core has no static Hub dependency and must never execute
+     artifact-controlled Python imports/remote code.
 
 ## Key Design Principles
 
@@ -233,16 +273,17 @@ Extract when you see:
    directly — needs none of this wiring. For `save`/`load`, the component
    config-registry (`core/registry.py:register`) remains a separate, orthogonal
    namespace.
-3. **Composition happens in `ERModel`**, not a `Task` class: a resolve is
-   blocker → (compare) → matcher → clusterer. The named architectures in
-   `langres.architectures` (`FuzzyString`, `VectorLLMCascade`) are the
-   user-facing sugar over it — each fixes its own topology and exposes
+3. **Composition happens in `ERModel`**, not a `Task` class. Classic models
+   derive an operation chain from blocker → comparator → matcher → clusterer;
+   research recipes declare the resource-neutral chain directly. Named
+   architectures in `langres.architectures` fix a readable topology and expose
    `.dedupe()`/`.compare()` as methods.
 
-## Backbones: `ModelRef` is the ONE model-reference concept
+## Resources: `ModelRef` is the ONE model-reference concept
 
-**Architecture = topology** (which components, in what order). **Backbone = what
-fills a model slot.** Swapping a backbone must never mint a new architecture, so
+**Architecture = topology** (which operations, in what order). A **resource**
+fills a model slot. `backbone` is compatibility sugar for a single resource
+slot only. Swapping a resource must never mint a new architecture, so
 a component never invents its own model-reference shape: it takes a
 `langres.core.model_ref.ModelRef` (via `normalize_model_ref`, which accepts a
 plain string, a dict, or a ref).
@@ -250,7 +291,8 @@ plain string, a dict, or a ref).
 `ModelRef` is a stdlib-only leaf (it imports nothing from `langres`), frozen,
 validated in `__post_init__`, and **weightless** — reference strings only, so it
 round-trips as JSON config via `to_config`. Its fields: `base`, `kind`,
-`adapter`, `api_base`, `revision`.
+`adapter`, `adapter_revision`, `api_base`, `revision`. Base and adapter Hub
+artifacts carry independent revision pins.
 
 **`kind` is the discriminator, and routing reads nothing else:**
 

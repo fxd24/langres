@@ -2,18 +2,15 @@
 
 **Composable, optimizable entity resolution for Python.**
 
-langres resolves records that refer to the same real-world entity — deduplicating
-one dataset or linking two — through a layered API: named **architectures**
-(`FuzzyString`, `VectorLLMCascade`) — whole ER pipelines you construct — over
-the declarative **`ERModel`** (aliased as `Resolver`) over low-level
-**`langres.core`** primitives — blockers (pick candidate pairs), matchers
-(score whether a pair matches), clusterers (group the matches) — that you can
-swap, tune, and evaluate independently.
+langres resolves records that refer to the same real-world entity and makes ER
+research repeatable. **Resources** (`Embedder`, `Reranker`, `LLM`) equip ordered
+**operations** (`Retrieve`, `Rerank`, `Select`, `Generate`, `Parse`, cluster);
+named **recipes** provide readable complete topologies. `EvaluationProtocol`
+and `ExperimentReport` keep benchmark, split, seed, measurement, and
+infrastructure cohorts explicit.
 
-```python
-from langres.architectures import FuzzyString
-
-clusters = FuzzyString().dedupe(records)  # $0, offline, no key — you named the model
+```bash
+uv run python examples/research/first_experiment.py  # real runner, local fixture, $0
 ```
 
 Install from PyPI:
@@ -24,16 +21,18 @@ pip install langres
 
 ## Where to go next
 
-- **[Getting Started](GETTING_STARTED.md)** — install, first dedupe, and the
-  review → harvest → calibrate improvement loop.
+- **[Getting Started](GETTING_STARTED.md)** — offline experiment, four recipes,
+  matrix expansion, then the review → harvest → calibrate loop.
 - **[Tutorial: Your Own CSV](TUTORIAL_YOUR_OWN_CSV.md)** — end-to-end walkthrough
   on your own data.
 - **[Technical Overview](TECHNICAL_OVERVIEW.md)** — architecture, data contracts,
   and the component model.
 - **[Benchmarks](BENCHMARKS.md)** — the benchmark portfolio and how to score your
   own data.
-- **[Experiments](EXPERIMENTS.md)** — the experimentation DX: races, judged-once
-  evaluation, threshold calibration.
+- **[Experiments](EXPERIMENTS.md)** — protocols, matrices, cohorts, reports,
+  repricing, Trackio, and guarded paid proof.
+- **[Reproducibility](REPRODUCIBILITY.md)** — identities, clean/dirty claims,
+  local/Trackio/Hub handoff, privacy.
 - **[API Reference](reference/index.md)** — the public surface, generated from
   docstrings.
 

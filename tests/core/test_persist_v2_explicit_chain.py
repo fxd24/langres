@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from langres.core._artifacts import op_spec, rebuild_op
 from langres.core.blocker import Blocker
@@ -24,14 +25,14 @@ from langres.core.clusterer import Clusterer
 from langres.core.groups import ERCandidateGroup
 from langres.core.matcher import GroupwiseMatcher
 from langres.core.models import ERCandidate, PairwiseJudgement
-from langres.core.op import Finalize, Stage, ThresholdSelect
+from langres.core.op import Finalize, Score, Select, Stage, ThresholdSelect
 from langres.core.op_adapters import (
     BlockerSource,
     ClustererStage,
     GroupwiseMatcherScore,
     MatcherScore,
 )
-from langres.core.registry import register
+from langres.core.registry import register, register_op
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult
 from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
@@ -281,6 +282,23 @@ def test_op_spec_rejects_unregistered_inner_matcher() -> None:
 # ----------------------------------------------------------------------------------
 
 
+@register("persist_v2_probe_matcher")
+class _ProbeMatcher(CostedNameMatcher):
+    """Construction probe proving params validation precedes component lookup."""
+
+    type_name: ClassVar[str] = "persist_v2_probe_matcher"
+    rebuilds: ClassVar[int] = 0
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_ProbeMatcher":
+        cls.rebuilds += 1
+        return cls()
+
+
 def test_rebuild_op_rejects_unknown_role(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown OpSpec role"):
         rebuild_op(OpSpec(role="not_a_role"), state_dir=tmp_path)
@@ -291,6 +309,83 @@ def test_rebuild_op_rejects_missing_component(tmp_path: Path) -> None:
         rebuild_op(
             OpSpec(role="matcher_score", params={"out_space": "prob_llm"}), state_dir=tmp_path
         )
+
+
+def test_rebuild_op_rejects_an_unexpected_component_before_lookup(tmp_path: Path) -> None:
+    """Component-free roles reject stray components before resolving their type."""
+    spec = OpSpec(
+        role="threshold_select",
+        params={"threshold": 0.5},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot="module",
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not accept a nested component"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
+def test_rebuild_op_rejects_a_wrong_component_slot_before_lookup(tmp_path: Path) -> None:
+    """The role-to-slot contract is checked before component reconstruction."""
+    spec = OpSpec(
+        role="matcher_score",
+        params={"out_space": "prob_llm"},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot="blocker",
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires component slot 'module'"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
+def test_rebuild_op_rejects_a_missing_component_slot_before_lookup(tmp_path: Path) -> None:
+    spec = OpSpec(
+        role="matcher_score",
+        params={"out_space": "prob_llm"},
+        component=ComponentSpec(
+            type_name="must_not_be_resolved",
+            slot=None,
+            config={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires component slot 'module'"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"out_space": 7},
+        {"out_space": "not_a_score_family"},
+        {"out_space": "prob_llm", "unexpected": "credential-like text"},
+    ],
+)
+def test_rebuild_op_validates_params_before_component_construction(
+    tmp_path: Path,
+    params: dict[str, object],
+) -> None:
+    spec = OpSpec(
+        role="matcher_score",
+        params=params,
+        component=ComponentSpec(
+            type_name="persist_v2_probe_matcher",
+            slot="module",
+            config={},
+        ),
+    )
+    before = _ProbeMatcher.rebuilds
+
+    with pytest.raises(ValueError, match="invalid params"):
+        rebuild_op(spec, state_dir=tmp_path)
+
+    assert _ProbeMatcher.rebuilds == before
 
 
 # ----------------------------------------------------------------------------------
@@ -419,3 +514,115 @@ def test_op_spec_round_trips_every_stage_kind(tmp_path: Path) -> None:
     threshold_stage = rebuilt[3]
     assert isinstance(threshold_stage, ThresholdSelect)
     assert threshold_stage.threshold == THRESHOLD
+
+
+# ----------------------------------------------------------------------------------
+# 9. Registered custom Ops round-trip without adding serializer conditionals
+# ----------------------------------------------------------------------------------
+
+
+class _ConstantScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    score: float
+
+
+@register_op("persist_v2_constant_score")
+class _ConstantScore(Score[Any]):
+    """Small safe custom Score using the public config/from_config convention."""
+
+    config_model: ClassVar[type[BaseModel]] = _ConstantScoreConfig
+
+    def __init__(self, score: float) -> None:
+        super().__init__(scope="pair", out_space="heuristic")
+        self.score = score
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {"score": self.score}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_ConstantScore":
+        return cls(float(config["score"]))
+
+    def forward(self, pairs: Any) -> Any:
+        rows = [
+            row.model_copy(update={"score": self.score, "score_type": "heuristic"})
+            for row in pairs.rows
+        ]
+        return type(pairs)(store=pairs.store, rows=rows)
+
+
+class _FloorSelectConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    floor: float
+
+
+@register_op("persist_v2_floor_select")
+class _FloorSelect(Select[Any]):
+    """Small safe custom Select using the same registered serializer path."""
+
+    config_model: ClassVar[type[BaseModel]] = _FloorSelectConfig
+
+    def __init__(self, floor: float) -> None:
+        from langres.core.op import Feasible
+
+        super().__init__(feasible=Feasible.THRESHOLD)
+        self.floor = floor
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {"floor": self.floor}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "_FloorSelect":
+        return cls(float(config["floor"]))
+
+    def forward(self, pairs: Any) -> Any:
+        rows = [row for row in pairs.rows if row.score is not None and row.score >= self.floor]
+        return type(pairs)(store=pairs.store, rows=rows)
+
+
+def test_registered_custom_score_and_select_round_trip_without_core_branch(
+    tmp_path: Path,
+) -> None:
+    from langres.core.blockers.all_pairs import AllPairsBlocker
+    from langres.core.models import CompanySchema
+
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            _ConstantScore(0.9),
+            _FloorSelect(0.8),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    before = model.dedupe(RECORDS)
+
+    model.save(tmp_path)
+    manifest = ArtifactManifest.model_validate_json((tmp_path / "resolver.json").read_text())
+    assert manifest.ops is not None
+    assert [spec.role for spec in manifest.ops] == [
+        "blocker_source",
+        "persist_v2_constant_score",
+        "persist_v2_floor_select",
+        "clusterer_stage",
+    ]
+
+    loaded = ERModel.load(tmp_path)
+    assert loaded._ops is not None
+    assert isinstance(loaded._ops[1], _ConstantScore)
+    assert isinstance(loaded._ops[2], _FloorSelect)
+    assert loaded.dedupe(RECORDS) == before
+
+
+def test_registered_custom_op_rejects_unknown_params_before_from_config(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid params"):
+        rebuild_op(
+            OpSpec(
+                role="persist_v2_constant_score",
+                params={"score": 0.9, "unexpected": "secret"},
+            ),
+            state_dir=tmp_path,
+        )

@@ -236,3 +236,4 @@ artifacts/
 
 # Transient per-agent git worktrees (orchestration scratch)
 .claude/worktrees/
+.gstack/

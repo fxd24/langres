@@ -26,9 +26,10 @@ notation live in ``docs/THEORY.md``; this is its ASCII realization. Read the
 theory for *why* these are one operation (§2–§8); read this for *what* to build
 against.
 
-**Import discipline.** A strict leaf: it imports only two sibling core leaves
-(:mod:`langres.core.pairs`, :mod:`langres.core.score_type`) plus stdlib /
-pydantic / typing. It imports nothing from ``matcher`` / ``blocker`` /
+**Import discipline.** A strict leaf: it imports only sibling core leaves
+(:mod:`langres.core.pairs`, :mod:`langres.core.score_type`,
+:mod:`langres.core.serialization`) plus stdlib / pydantic / typing. It imports
+nothing from ``matcher`` / ``blocker`` /
 ``comparator`` / ``clusterer`` / ``resolver`` — those adopt *this* contract in a
 later wave, so the edge runs one way, into this module.
 """
@@ -40,12 +41,26 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Literal, TypeAlias, TypeVar, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    get_args,
+    runtime_checkable,
+)
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from langres.core.pairs import PairRow, Pairs
 from langres.core.score_type import ScoreType
+from langres.core.serialization import OpSpec
+
+if TYPE_CHECKING:
+    from langres.core.spend import SpendMonitor
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
@@ -92,6 +107,98 @@ _VALID_OUT_SPACES: frozenset[str] = _SCORE_FAMILIES | {"vector", "unknown"}
 #: name. Correlation clustering with real weights is not approximable, so there
 #: is no exact algorithm to default to — the caller names one.
 _CLUSTERING_ALGORITHMS: frozenset[str] = frozenset({"transitive_closure", "pivot"})
+
+
+class ExecutionStep(BaseModel):
+    """One stable, safely serializable stage in an :class:`ExecutionPlan`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage_id: str
+    index: int
+    spec: OpSpec
+    resource_ref: str | None = None
+
+
+class ExecutionPlan(BaseModel):
+    """Read-only, slot-neutral description of the stages an ER model executes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_name: str | None
+    is_bound: bool
+    steps: tuple[ExecutionStep, ...]
+    replay_boundary: str | None = None
+    replay_prefix_id: str | None = None
+
+
+class ExecutionCheckpoint(BaseModel):
+    """Immutable carrier captured immediately before a declared replay stage.
+
+    Checkpoints deliberately store normalized records and id-referenced rows,
+    not a second execution representation. :meth:`ERModel.execute_from`
+    reconstitutes the established :class:`Pairs` carrier and resumes the same
+    stage driver used by :meth:`ERModel.execute`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    version: Literal[1] = 1
+    prefix_plan_id: str
+    cache_id: str
+    boundary_index: int
+    boundary_stage_id: str
+    input_fingerprint: str
+    records: tuple[dict[str, Any], ...]
+    rows: tuple[PairRow[Any], ...]
+
+
+class ExecutionEvent(BaseModel):
+    """Immutable metadata emitted around one stage execution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["start", "finish", "failure"]
+    stage_id: str
+    index: int
+    role: str
+    input_count: int | None = None
+    output_count: int | None = None
+    duration_seconds: float | None = None
+    error: str | None = None
+
+
+@runtime_checkable
+class ExecutionObserver(Protocol):
+    """Callback receiving immutable metadata events, never inference carriers."""
+
+    def __call__(self, event: ExecutionEvent) -> object:
+        """Observe ``event``; the return value is ignored."""
+        ...  # pragma: no cover
+
+
+class ExecutionObserverError(BaseModel):
+    """One observer failure isolated from inference and reported after the run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event: ExecutionEvent
+    exception_type: str
+    message: str
+
+
+class ExecutionResult(BaseModel):
+    """Selected output plus sanitized pre-selection rows used for accounting."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    plan: ExecutionPlan
+    pairs: Pairs[Any]
+    clusters: tuple[frozenset[str], ...]
+    events: tuple[ExecutionEvent, ...]
+    observer_errors: tuple[ExecutionObserverError, ...] = ()
+    checkpoint: ExecutionCheckpoint | None = None
+    accounting_rows: tuple[PairRow[Any], ...] = ()
 
 
 def _validate_clustering_algorithm(algorithm: str) -> None:
@@ -290,12 +397,12 @@ class Score(Op[SchemaT]):
 
 
 class Spending:
-    """Marker a :class:`Score` sets to DECLARE it may bill (call a paid model).
+    """Marker an :class:`Op` sets to DECLARE it may bill (call a paid model).
 
     This is an **allowlist for money**, read by the explicit-chain door
-    (``ERModel.from_topology`` → ``_secure_chain_scores``): a ``Spending`` Score
+    (``ERModel.from_topology`` → ``_secure_chain_scores``): a ``Spending`` Op
     MUST be capped through the model's ``SpendMonitor`` or the door rejects the
-    chain; a non-``Spending`` Score is trusted free and passes. ``MatcherScore``
+    chain; a non-``Spending`` Op is trusted free and passes. ``MatcherScore``
     and ``GroupwiseMatcherScore`` are ``Spending`` (they hold a paid ``Matcher``);
     ``ComparatorScore`` (string features) and any free scalarizer are not.
 
@@ -306,12 +413,9 @@ class Spending:
     fail-safe: an undeclared paid Score is refused billing by omission.
 
     **Residual limit, stated honestly:** the door cannot introspect an arbitrary
-    ``forward()`` body, so it cannot *force* a ``Spending`` Score it does not know
-    how to wrap (anything other than a ``MatcherScore``) onto the ledger — it can
-    only reject it. A custom paid Score MUST both set ``Spending`` AND route its
-    paid work through a model-monitor ``SpendCappedMatcher`` (i.e. be a
-    ``MatcherScore``, or pre-cap its matcher with the model's monitor). A Score
-    that bills without declaring ``Spending`` is the author's own bug.
+    ``forward()`` body. A custom paid Op MUST both set ``Spending`` and implement
+    :class:`SpendMonitorBindable`; otherwise it is rejected. An Op that bills
+    without declaring ``Spending`` is the author's own bug.
     """
 
 
@@ -459,10 +563,32 @@ class Source(ABC, Generic[SchemaT]):
     """The pipeline entry: records in, pairs out.
 
     A ``Source`` turns :data:`Records` into a
-    :class:`~langres.core.pairs.Pairs` — a blocker's job, plus (in a later wave)
-    ownership of its own index lifecycle (building a vector index moves here). It
-    is not an :class:`Op` because its input carrier is records, not pairs.
+    :class:`~langres.core.pairs.Pairs` and owns any input-dependent preparation,
+    such as building or reusing a vector index. It is not an :class:`Op` because
+    its input carrier is records, not pairs.
     """
+
+    @property
+    def schema(self) -> type[BaseModel] | None:
+        """The input schema when this Source declares one, else ``None``."""
+        return None
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether this Source is ready to execute.
+
+        A schema-less custom Source may still be fully configured, so the
+        conservative default is ``True``. Deferred sources override this.
+        """
+        return True
+
+    def prepare(self, records: Records) -> None:
+        """Bind/build input-dependent state before :meth:`forward`.
+
+        Stateless Sources need no preparation. Index-backed Sources override
+        this explicit lifecycle hook.
+        """
+        return None
 
     @abstractmethod
     def forward(self, records: Records) -> Pairs[SchemaT]:
@@ -551,6 +677,28 @@ class Finalize(ABC):
 
 #: A stage a :class:`Sequential` may hold, in pipeline order.
 Stage: TypeAlias = Source[Any] | Op[Any] | ClusterStage[Any] | Finalize
+
+
+@runtime_checkable
+class SpendMonitorBindable(Protocol):
+    """Optional capability for a paid stage that can bind to one spend ledger.
+
+    :class:`Spending` declares that a stage may bill; this protocol is the
+    corresponding safe construction seam. The explicit-topology door accepts a
+    spending stage only when it implements this capability and the returned
+    stage reports the model's exact monitor. Pairwise matcher adapters implement
+    it today; resource-backed generation can implement the same seam without
+    teaching the executor a resource-specific class.
+    """
+
+    @property
+    def spend_monitor(self) -> SpendMonitor | None:
+        """The currently bound ledger, or ``None`` while the stage is raw."""
+        ...  # pragma: no cover
+
+    def bind_spend_monitor(self, monitor: SpendMonitor) -> Stage:
+        """Return an equivalent stage whose paid work is metered by ``monitor``."""
+        ...  # pragma: no cover
 
 
 class Sequential(Generic[SchemaT]):

@@ -21,10 +21,11 @@ adapters (``op_spec`` / ``rebuild_op``, which reach into those modules) live in
 data contract stays a dependency-free leaf.
 """
 
+import re
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: The **classic four-slot** on-disk layout, frozen at ``"1"``. A classic
 #: (``self._ops is None``) save always stamps this, so its bytes — and the
@@ -38,6 +39,33 @@ CLASSIC_ARTIFACT_VERSION = "1"
 #: (#193, persist v2). The reader accepts any layout in ``[1, ARTIFACT_VERSION]``;
 #: only an explicit-chain (``self._ops is not None``) save stamps ``"2"``.
 ARTIFACT_VERSION = "2"
+
+
+class ArtifactSource(BaseModel):
+    """Runtime provenance for a locally or remotely loaded model artifact.
+
+    This is pure data, not a Hub transport contract. Keeping it beside the
+    existing artifact manifests lets core expose typed provenance without a
+    dependency on ``langres.hub`` or its optional client.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    kind: Literal["local", "hub"]
+    location: str
+    requested_revision: str | None = None
+    resolved_revision: str | None = None
+
+    @model_validator(mode="after")
+    def _hub_is_pinned(self) -> "ArtifactSource":
+        if not self.location.strip():
+            raise ValueError("artifact source location must be non-empty")
+        if self.kind == "hub" and (
+            self.resolved_revision is None
+            or re.fullmatch(r"[0-9a-f]{40}", self.resolved_revision) is None
+        ):
+            raise ValueError("Hub artifact sources require an immutable 40-character commit SHA")
+        return self
 
 
 @runtime_checkable
@@ -105,7 +133,9 @@ class OpSpec(BaseModel):
         role: The stage's role tag, e.g. ``"blocker_source"``,
             ``"comparator_score"``, ``"matcher_score"``, ``"threshold_select"``,
             ``"topk_select"``, ``"clusterer_stage"`` — how ``rebuild_op`` knows
-            which adapter to reconstruct.
+            which already-registered safe serializer to use. Custom roles load
+            only after their exact class was explicitly registered in-process;
+            an artifact never triggers a Python import.
         params: Role-specific scalar parameters (e.g. ``{"threshold": 0.5}`` for a
             ThresholdSelect, ``{"k": 10}`` for a TopKSelect, ``{"out_space":
             "prob_llm"}`` for a MatcherScore). Empty for a role carrying no scalar
@@ -154,6 +184,9 @@ class ArtifactManifest(BaseModel):
             ``None`` for the classic four-slot layout. ``None`` by design so a
             pre-#193 v1 ``resolver.json`` — which has no ``ops`` key — validates to
             ``None`` and reads through the classic ``components`` path unchanged.
+        replay_boundary: Optional index of the explicit chain's tunable
+            :class:`Select`. It is omitted from classic artifacts and ``None``
+            for explicit topologies that do not declare replay safety.
         checksums: Optional sidecar checksum map (filename -> checksum) for
             out-of-band state files written by :class:`SerializableState`
             components. Empty when no component has out-of-band state.
@@ -164,4 +197,5 @@ class ArtifactManifest(BaseModel):
     model_class: str | None = None
     components: list[ComponentSpec] = Field(default_factory=list)
     ops: list[OpSpec] | None = None
+    replay_boundary: int | None = None
     checksums: dict[str, str] = Field(default_factory=dict)

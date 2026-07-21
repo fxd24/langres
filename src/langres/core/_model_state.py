@@ -20,6 +20,7 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel
 
+from langres.core._artifacts import op_spec
 from langres.core.blocker import Blocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
@@ -32,15 +33,17 @@ from langres.core.op import (
     Finalize,
     Op,
     Score,
+    Select,
     Sequential,
     Source,
     Spending,
+    SpendMonitorBindable,
     Stage,
     ThresholdSelect,
 )
-from langres.core.op_adapters import MatcherScore
 from langres.core.spend import SpendMonitor
 from langres.core.spend_cap import SpendCappedMatcher, effective_budget
+from langres.core.serialization import ArtifactSource
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,10 @@ class ModelState:
         # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
         # None until fit() runs (never serialized -- it is a fit-time artifact).
         self.fit_report_: FitReport | None = None
+        # Runtime provenance for models loaded through langres.hub. Kept out of
+        # resolver.json/config identity: the artifact's repository revision is
+        # provenance, while resource ModelRef revisions remain model identity.
+        self.pretrained_source_: ArtifactSource | None = None
         # Slots start empty so a named architecture can defer binding until it
         # knows the schema (see _topology). The base __init__ fills them at once.
         #
@@ -181,6 +188,10 @@ class ModelState:
         # then the terminal ClusterStage (pairs -> clusters) and an optional
         # Finalize. All classic construction doors leave it ``None``.
         self._ops: list[Stage] | None = None
+        # Explicit replay is opt-in and names the Select stage at which cheap
+        # suffix execution may resume. Classic models and unannotated custom
+        # topologies remain benchmarkable without claiming replay safety.
+        self._replay_boundary_index: int | None = None
 
     @property
     def blocker(self) -> Blocker[Any]:
@@ -324,6 +335,7 @@ class ModelState:
         cls,
         *,
         ops: Sequence[Stage],
+        replay_boundary: int | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
         calibrator: CalibratorFitMixin | None = None,
@@ -348,56 +360,45 @@ class ModelState:
         phase-1 exit.
 
         **The spend cap is ENFORCED here, not merely documented**, via an
-        allowlist keyed on the :class:`~langres.core.op.Spending` marker (a Score
-        DECLARES it may bill). Every ``Spending``
-        :class:`~langres.core.op_adapters.MatcherScore` is auto-wrapped so its
-        matcher bills through this model's shared
-        :class:`~langres.core.spend.SpendMonitor` (the classic four-slot path does
-        the same at scoring time); a matcher a caller already wrapped is left alone
-        **only if** its ``SpendCappedMatcher`` shares this model's monitor -- a
-        foreign monitor is rejected, since it would bill a different budget and
-        "one model ledger" would be false. A ``Spending`` Score the door cannot
-        wrap (anything other than a ``MatcherScore``) is rejected rather than run
-        off-ledger; a non-``Spending`` Score (a free ``ComparatorScore``, any
-        Select) passes untouched. This closes the off-ledger hole the
+        allowlist keyed on the :class:`~langres.core.op.Spending` marker (an Op
+        DECLARES it may bill). Every paid stage must also implement
+        :class:`~langres.core.op.SpendMonitorBindable`; the door binds it to this
+        model's shared :class:`~langres.core.spend.SpendMonitor` and verifies the
+        exact ledger identity. ``MatcherScore`` implements that seam today, and
+        preserves exact subclass state while wrapping its matcher. A spending Op
+        without the binding capability is rejected rather than run off-ledger; a
+        non-``Spending`` Op (a free ``ComparatorScore``, any Select) passes
+        untouched. This closes the off-ledger hole the
         ``.module.forward`` AST-ban cannot see: a paid explicit-chain Score can no
         longer bill past ``budget_usd`` (the option-a money guarantee -- budget +
         at most one further call -- holds on every explicit-chain ``resolve``). See
         :meth:`_secure_chain_scores`, whose docstring states the residual limit (a
         custom Score that bills without declaring ``Spending`` is the author's own
-        bug). **Deferred, with no money hole:** the per-call ``JudgementLog``
-        (``dedupe(log=)``) is NOT threaded into an explicit chain's Scores (its Ops
-        are fixed pre-built objects); only the LOG is deferred -- the cap is not.
+        bug). Per-call ``JudgementLog`` wrapping is applied to every base
+        ``MatcherScore`` at execution time without mutating the durable chain.
 
         **A terminal ``Finalize`` is rejected** (deferred, same pattern as the
         calibrator reject): the explicit exit runs the ClusterStage and stops, so a
         ``Finalize`` would be silently dropped. Rejecting it loud beats a silent
-        drop until a later wave executes it. **A ``VectorBlocker`` Source must carry
-        a pre-built index:** the explicit run path does not call
-        ``_ensure_index_built`` (that is a four-slot convenience), so a
-        vector-backed Source with an unbuilt index raises loud from
-        ``blocker.stream`` on the first ``resolve`` -- build the index before
-        passing the blocker (the shipped rerankers use ``AllPairsBlocker``).
+        drop until a later wave executes it. A ``BlockerSource`` builds or reuses
+        any nested ``VectorBlocker`` indexes through ``Source.prepare`` before
+        streaming, the same lifecycle used by the classic path.
 
         Args:
             ops: The explicit chain, in pipeline order (a Source, zero+ Ops
                 including Selects, one terminal ClusterStage). Each ``Spending``
-                ``MatcherScore``'s matcher is auto-capped through this model's
-                ledger (or verified to already share it). A ``Spending`` Score the
-                door cannot wrap (e.g. a ``GroupwiseMatcherScore``), or a
-                ``MatcherScore`` subclass the door cannot faithfully rebuild, is
-                rejected rather than allowed to bill off-ledger; the caller pre-caps
-                its matcher through the model monitor instead. Free
-                (non-``Spending``) Scores pass untouched.
+                stage must implement ``SpendMonitorBindable`` and is bound to
+                this model's ledger. A spending stage without that capability
+                (e.g. ``GroupwiseMatcherScore``) is rejected rather than allowed
+                to bill off-ledger. Free (non-``Spending``) Ops pass untouched.
             budget_usd: Spend cap for this instance's lifetime (see
                 :meth:`__init__`). Mutually exclusive with ``monitor``.
             monitor: An existing :class:`~langres.core.spend.SpendMonitor` to adopt
                 as this model's ledger -- the chain's Scores are capped through it.
                 Mutually exclusive with ``budget_usd``.
-            calibrator: **Rejected.** Calibration is a bespoke per-score transform
-                that only the classic path applies; a ``CalibratorScore`` Op is a
-                later wave, so an explicit chain must express any score mapping as
-                its own Score. Passing one raises.
+            calibrator: **Rejected.** This keyword is a classic-slot convenience;
+                an explicit chain must declare score mapping as a Score in
+                ``ops``. Passing one raises.
 
         Returns:
             A model wired to run ``ops``, ready to ``resolve``/``dedupe``/``compare``.
@@ -405,15 +406,14 @@ class ModelState:
         Raises:
             ValueError: If ``calibrator`` is given, if both ``budget_usd`` and
                 ``monitor`` are given, if the chain is mis-wired, if it carries a
-                ``Finalize`` or an uncapped paid non-``MatcherScore`` Score, or if
+                ``Finalize`` or an unbindable paid Op, or if
                 it does not carry exactly one terminal ClusterStage.
         """
         if calibrator is not None:
             raise ValueError(
-                "from_topology() does not accept a calibrator: calibration is a bespoke "
-                "per-score transform only the classic four-slot path applies (a CalibratorScore "
-                "Op is a later wave). Fix: express any score mapping as a Score in the chain, or "
-                "build the classic path with from_components(...)."
+                "from_topology() does not accept a calibrator= slot. Fix: express score "
+                "mapping as a Score in the explicit chain, or build the classic path with "
+                "from_components(...)."
             )
         if monitor is not None and budget_usd is not None:
             raise ValueError(
@@ -440,6 +440,39 @@ class ModelState:
                 f"resolve()/dedupe() have a phase-1 exit, but the chain has {len(cluster_stages)}. "
                 "Fix: end the chain with exactly one ClusterStage."
             )
+        if replay_boundary is not None:
+            if not 1 <= replay_boundary < len(chain):
+                raise ValueError(
+                    "replay_boundary must be the index of a body Select stage "
+                    "(after Source and before ClusterStage)"
+                )
+            if not isinstance(chain[replay_boundary], Select):
+                raise ValueError(
+                    "replay_boundary must point to a Select stage; only the "
+                    "selection/clustering/evaluation suffix is safe to replay"
+                )
+            unsafe_suffix = [
+                (index, type(stage).__name__)
+                for index, stage in enumerate(
+                    chain[replay_boundary + 1 :], start=replay_boundary + 1
+                )
+                if not isinstance(stage, (Select, ClusterStage))
+            ]
+            if unsafe_suffix:
+                raise ValueError(
+                    "replay_boundary suffix may contain only Select and "
+                    "ClusterStage stages; later scoring or spending would be "
+                    f"re-executed during threshold replay: {unsafe_suffix!r}"
+                )
+            for index, stage in enumerate(chain[:replay_boundary]):
+                try:
+                    op_spec(stage)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "replay_boundary requires every prefix stage to have a "
+                        "registered, stable output identity; "
+                        f"stage {index} ({type(stage).__name__}) is opaque: {exc}"
+                    ) from None
         model = cls.__new__(cls)
         model._init_state(budget_usd=budget_usd)
         if monitor is not None:
@@ -449,6 +482,7 @@ class ModelState:
         # not enforced -- a raw MatcherScore billed off-ledger). Do this AFTER the
         # monitor is finalized so every wrap shares this model's one ledger.
         model._ops = model._secure_chain_scores(chain)
+        model._replay_boundary_index = replay_boundary
         return model
 
     def _secure_chain_scores(self, chain: list[Stage]) -> list[Stage]:
@@ -465,24 +499,16 @@ class ModelState:
 
         - A non-:class:`~langres.core.op.Spending` stage (a free ``ComparatorScore``,
           any Select, the Source/ClusterStage) is trusted and passes untouched.
-        - A ``Spending`` :class:`~langres.core.op_adapters.MatcherScore`:
-
-          * matcher already a ``SpendCappedMatcher`` -> it MUST share
-            ``self._spend_monitor`` (identity). Same ledger: left alone. A
-            **foreign** monitor is rejected -- it would bill a different budget, so
-            "one model ledger" would be false and total spend could exceed
-            ``budget_usd``.
-          * matcher raw AND the Score is exactly ``MatcherScore`` -> rebuild it
-            around ``SpendCappedMatcher(matcher, monitor=self._spend_monitor)``.
-          * matcher raw AND the Score is a ``MatcherScore`` *subclass* -> rejected:
-            rebuilding to base ``MatcherScore`` would silently drop the subclass's
-            own state (codex Q3). The author pre-caps its matcher with the model
-            monitor instead.
-
-        - Any OTHER ``Spending`` Score (e.g. a ``GroupwiseMatcherScore``, whose
-          ``forward_groups`` bypasses a ``SpendCappedMatcher``'s per-judgement
-          metering) -> rejected. The door cannot force it onto the ledger, and it
-          will not run an uncapped paid Score.
+        - A ``Spending`` stage implementing
+          :class:`~langres.core.op.SpendMonitorBindable` is asked to bind to
+          ``self._spend_monitor``. The returned stage must report that exact
+          monitor (identity), otherwise the chain is rejected. ``MatcherScore``
+          implements this by cloning its exact class and replacing only the
+          matcher, so subclass state survives. Resource-backed paid Ops can use
+          the same capability without adding a resource-specific branch here.
+        - Any other ``Spending`` stage (for example ``GroupwiseMatcherScore``,
+          whose ``forward_groups`` bypasses pairwise metering) is rejected. The
+          door cannot force it onto the ledger and will not run it uncapped.
 
         The residual limit is honest (see :class:`~langres.core.op.Spending`): a
         custom Score that bills WITHOUT declaring ``Spending`` is the author's own
@@ -497,42 +523,37 @@ class ModelState:
             if not isinstance(stage, Spending):
                 secured.append(stage)  # free (or a boundary stage) -- trust and pass
                 continue
-            if not isinstance(stage, MatcherScore):
+            if not isinstance(stage, SpendMonitorBindable):
                 raise ValueError(
                     f"from_topology() cannot cap a {type(stage).__name__}: it declares Spending "
-                    "(it may bill a paid model) but is not a MatcherScore, so this door cannot "
-                    "route its billing through the model ledger (a SpendCappedMatcher meters "
-                    "Matcher.forward, not e.g. GroupwiseMatcher.forward_groups -- pre-capping its "
-                    "matcher would NOT help). It refuses to run an uncapped paid Score off-ledger. "
-                    "Fix: express the scoring as a MatcherScore (the only Spending Score this door "
-                    "can route onto the ledger)."
+                    "(it may bill a paid model) but does not implement SpendMonitorBindable, so "
+                    "this door cannot route its billing through the model ledger. It refuses to "
+                    "run an uncapped paid operation off-ledger. Fix: implement spend_monitor + "
+                    "bind_spend_monitor() so the operation can prove it uses the model ledger."
                 )
-            matcher = stage.matcher
-            if isinstance(matcher, SpendCappedMatcher):
-                if matcher.monitor is not self._spend_monitor:
-                    raise ValueError(
-                        "from_topology() got a pre-capped MatcherScore whose SpendCappedMatcher "
-                        "uses a monitor other than this model's ledger, so its spend would never "
-                        "count against the model budget ('one model ledger' would be false). Fix: "
-                        "pass that monitor as from_topology(monitor=...), or hand a raw matcher and "
-                        "let the door cap it."
-                    )
-                secured.append(stage)  # same ledger -- leave the caller's object alone
-            elif type(stage) is MatcherScore:
-                secured.append(
-                    MatcherScore(
-                        SpendCappedMatcher(matcher, monitor=self._spend_monitor),
-                        out_space=stage.out_space,
-                    )
-                )
-            else:
+            try:
+                bound = stage.bind_spend_monitor(self._spend_monitor)
+            except ValueError as exc:
                 raise ValueError(
-                    f"from_topology() cannot faithfully spend-cap a MatcherScore subclass "
-                    f"({type(stage).__name__}): rebuilding it as a base MatcherScore to inject the "
-                    "cap would silently drop the subclass's own state. Fix: pre-cap its matcher "
-                    "with SpendCappedMatcher(matcher, monitor=...) sharing the model monitor "
-                    "(pass that monitor as from_topology(monitor=...))."
+                    f"from_topology() could not bind {type(stage).__name__} to this model's spend "
+                    f"ledger: {exc}"
+                ) from None
+            if not isinstance(bound, Spending) or not isinstance(bound, SpendMonitorBindable):
+                raise TypeError(
+                    f"{type(stage).__name__}.bind_spend_monitor() returned "
+                    f"{type(bound).__name__}, which is not a monitor-bindable Spending stage."
                 )
+            if bound.spend_monitor is not self._spend_monitor:
+                raise ValueError(
+                    f"{type(stage).__name__}.bind_spend_monitor() did not bind the model's exact "
+                    "SpendMonitor, so 'one model ledger' would be false."
+                )
+            if not isinstance(bound, (Source, Op, ClusterStage, Finalize)):
+                raise TypeError(
+                    f"{type(stage).__name__}.bind_spend_monitor() returned "
+                    f"{type(bound).__name__}, which is not a topology Stage."
+                )
+            secured.append(bound)
         return secured
 
     def _topology(self, schema: type[BaseModel]) -> dict[str, Any]:
@@ -561,21 +582,25 @@ class ModelState:
 
     @property
     def is_bound(self) -> bool:
-        """Whether the four slots are filled and this model can run.
+        """Whether this model has a runnable source/topology.
 
-        ``False`` only for a named architecture constructed without a ``schema=``
-        and not yet used -- it binds on its first ``dedupe``/``compare``.
+        Explicit models delegate to their Source; classic models are bound once
+        the blocker slot exists. ``False`` is the deferred named-architecture
+        state before its first ``dedupe``/``compare``.
         """
+        if self._ops is not None:
+            return self._chain_source().is_bound
         return self._blocker is not None
 
     @property
     def schema(self) -> type[BaseModel] | None:
         """The schema this model is bound to, or ``None`` while unbound.
 
-        Derived from the blocker slot rather than stored: keeping it as separate
-        state would be a second source of truth that :meth:`from_components`
-        (which never runs ``__init__``) could not restore.
+        Derived from the explicit Source or classic blocker rather than stored:
+        keeping separate state would create a second source of truth.
         """
+        if self._ops is not None:
+            return self._chain_source().schema
         return None if self._blocker is None else getattr(self._blocker, "schema", None)
 
     @property
@@ -668,14 +693,16 @@ class ModelState:
     def _chain_source_schema(self) -> type[BaseModel] | None:
         """The schema the chain's Source blocks against (for front-door normalization),
         or ``None`` when the Source carries none (an opaque ``schema_factory`` blocker)."""
-        blocker = getattr(self._chain_source(), "blocker", None)
-        if isinstance(blocker, Blocker):
-            return blocker.schema
-        return None
+        return self._chain_source().schema
 
     def _require_bound(self, action: str) -> None:
         """Raise a directed error if this model has no components yet."""
-        if not self.is_bound:
+        if self._ops is not None:
+            raise RuntimeError(
+                f"cannot {action}: this ERModel uses an explicit, slot-neutral Op topology. "
+                "Inspect execution_plan() instead of reading a legacy four-slot property."
+            )
+        if self._blocker is None:
             raise RuntimeError(
                 f"cannot {action}: {type(self).__name__} has not been bound to a schema yet, "
                 "so it has no components. Pass schema=<YourModel> to the constructor, or "

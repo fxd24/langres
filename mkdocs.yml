@@ -90,6 +90,7 @@ not_in_nav: |
   /RESOURCES.md
   /TESTING_AT_ZERO_COST.md
   /THEORY.md
+  /generated/
   /plans/
   /research/
 
@@ -99,8 +100,10 @@ nav:
   - Tutorial - Your Own CSV: TUTORIAL_YOUR_OWN_CSV.md
   - Technical Overview: TECHNICAL_OVERVIEW.md
   - Experiments: EXPERIMENTS.md
+  - Reproducibility: REPRODUCIBILITY.md
+  - Hugging Face: HUGGING_FACE.md
   - Benchmarks: BENCHMARKS.md
-  - Adding a Method: ADDING_A_METHOD.md
+  - Adding a Resource or Architecture: ADDING_A_METHOD.md
   - Use Cases: USE_CASES.md
   - Roadmap: ROADMAP.md
   - Changelog: CHANGELOG.md
@@ -109,6 +112,7 @@ nav:
       - langres (root exports): reference/langres.md
       - langres.eval: reference/eval.md
       - Architectures (FuzzyString, VectorLLMCascade): reference/architectures.md
+      - Research vocabulary and migration: reference/research-vocabulary.md
       - ERModel: reference/resolver.md
       - Blockers: reference/blockers.md
       - Comparators: reference/comparators.md

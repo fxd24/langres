@@ -52,6 +52,11 @@ behind an opt-in extra. Nothing below is auto-orchestrated by a magic
   `core.metrics.evaluate_blocking_with_ranking`, imported lazily so the rest of
   `core.metrics` / `core.benchmark` stays importable without it. (There is no
   `pytrec_eval` anywhere in the tree.)
+- **`[hub]`** — huggingface-hub: the optional remote transport used by
+  `ERModel.from_pretrained("organization/repository", ...)` and
+  `ERModel.push_to_hub(...)`.
+  Local `save_pretrained` / `from_pretrained` stays available without this
+  extra.
 
 Hyperparameter search is opt-in too: `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (Optuna)
 tunes *blocker* parameters — see §5. A general `Optimizer` over full pipelines is
@@ -184,8 +189,9 @@ verdict.backbone       # "openrouter/openai/gpt-4o-mini" (override with model=)
 ### What `save`/`load` records: components *and* class
 
 `resolver.json` is an `ArtifactManifest`: `artifact_version`, `langres_version`,
-the ordered per-slot `components` (each a registry `type_name` + config), any
-sidecar `checksums` — and an optional `model_class`.
+an optional `model_class`, and either the ordered four-slot `components` or the
+ordered explicit-chain `ops`. Stateful components/operations use sidecar
+directories; no pickle or downloaded Python is executed.
 
 `model_class` is the *architecture's* identity: the name a Resolver subclass
 registered with `langres.core.register_model("fuzzy_string")`. `save` stamps it;
@@ -198,10 +204,9 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 - **Absent ⇒ plain `Resolver`** — which is exactly what every pre-0.4 artifact
   is, and what an *unregistered* Resolver subclass still saves as (not an error;
   it degrades to the old behaviour).
-- **`ARTIFACT_VERSION` stays `"1"`.** A bump buys nothing here: the compatible
-  read costs one `if`, whereas `_check_versions` rejects an artifact whose
-  version is older *or* newer, so a bump would break every existing 0.3.0
-  artifact in both directions.
+- **Classic artifacts stay version `"1"`; explicit chains use version `"2"`.**
+  The reader accepts both layouts. A classic model therefore keeps identical
+  bytes and recipe identity as the explicit-chain format evolves additively.
 - Models are their **own registry namespace** (`register_model` / `get_model` /
   `model_type_name`), separate from components and schemas. A component fills a
   slot; a model owns the slots — sharing one namespace would let
@@ -223,6 +228,85 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 Both name-dispatch paths — `from_schema` and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg). (A third path, the deleted verbs' `core.presets.build_judge`, existed before named architectures replaced the verbs and resolved names the same way; naming a model explicitly replaced it, not a better heuristic.)
 
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
+
+### Explicit topology authoring and execution
+
+Advanced users can compose `Source -> Score/Select -> Cluster` directly
+with `ERModel.from_topology(ops=[...])`. The public authoring contracts live at
+`langres.core`: `Op`, `Score`, `Select`, `Source`, `ClusterStage` (the
+implementation class for the conceptual `Cluster` operation),
+`ThresholdSelect`, `TopKSelect`, `Sequential`, `Feasible`, and the optional
+`SpendMonitorBindable` capability for a `Spending` Op.
+
+An explicit model derives `.schema` and `.is_bound` from its Source. Both classic
+and explicit vector retrieval call `Source.prepare(records)` before streaming,
+so a `BlockerSource(VectorBlocker(...))` builds an unbound index, reuses it for
+the same corpus, and rebuilds it for changed input. `dedupe(log=...)` and
+`compare(log=...)` wrap every `MatcherScore` for that call without mutating the
+saved topology. Multi-stage rows carry a stable `stage_id`, the model identity
+of that scorer, and a binary `verdict` only when its score feeds a
+`ThresholdSelect` directly; retrieval/top-k scores log `verdict=None` instead of
+borrowing the final match threshold. The logged `stage_id` is exactly the
+corresponding `execution_plan().steps[*].stage_id`, so logs and plans join
+without a second naming convention. `compare` walks Scores and applicable
+Selects in order, and its `LinkVerdict.backbone` names the scorer that actually
+ran before the deciding Select.
+
+`model.execution_plan()` returns ordered, stable stage ids derived from each
+stage's safe runtime metadata plus its ordinal. Runtime inspection does not
+require artifact registration: runnable custom stages and opaque schema
+factories can be planned and executed, while `save()` remains fail-closed and
+requires registered serializers. `model.execute(records,
+observer=...)` runs that same Op spine and returns selected pairs, clusters, and
+immutable start/finish/failure events. Observers receive counts and durations,
+never records or mutable carriers; their return value is ignored. Callback
+exceptions cannot abort or alter inference and are surfaced as sanitized
+type-only diagnostics; exception messages are suppressed so observer metadata
+cannot leak record or credential content. Stage-failure events follow the same
+rule: observers see only a bounded exception type plus a generic failure
+message, while the original exception is still re-raised to the direct caller.
+
+An explicit topology may opt into one replay boundary with
+`ERModel.from_topology(..., replay_boundary=<select index>)`. `execute()` then
+accepts a cache identity plus ordered-input fingerprint and returns an immutable
+`ExecutionCheckpoint` captured immediately before that `Select`.
+`execute_from(checkpoint, cache_id=..., input_fingerprint=...)` validates the
+expensive-prefix plan identity, boundary, cache identity, input identity, and
+duplicate pair guard before resuming through the same stage driver. It is not a
+second executor and does not claim transparent replay for arbitrary operations.
+
+A component-free custom `Score` or `Select` can opt into safe persistence:
+
+```python
+from pydantic import BaseModel, ConfigDict
+
+from langres.core import Score, register_op
+
+class AcmeScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    weight: float
+
+@register_op("acme_score")
+class AcmeScore(Score):
+    config_model = AcmeScoreConfig
+
+    def forward(self, pairs): ...
+
+    @property
+    def config(self) -> dict[str, object]: ...
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "AcmeScore": ...
+```
+
+The strict, extra-forbidding `config_model` is required. Artifact loading
+validates the complete role-specific parameter envelope before any nested
+component lookup or construction. Built-in roles use the same validator seam,
+so missing, unknown, or wrongly typed parameters fail closed.
+
+Registration is fail-closed and exact-class. Loading an unknown role raises; it
+does not import a module named by the artifact. Subclasses register separately
+so parent serializers cannot silently drop their state.
 
 ## 5. Core API: The Five Pillars (langres.core)
 
@@ -595,7 +679,8 @@ widens to `{"base", "kind", ...}` otherwise. The pinned invariant:
 
 - `InvalidModelRefError` — the ref is malformed (an empty base, an unknown
   `kind`, an adapter on a served kind, `api_base` on a non-endpoint, a `revision`
-  on a non-`hf` ref, a conflicting `api_base`, a non-string `adapter`/`revision`).
+  on a non-`hf` ref, an `adapter_revision` without an adapter, a conflicting
+  `api_base`, or a non-string `adapter`/`adapter_revision`/`revision`).
 - `UnsupportedBackboneError` — the ref is *fine*, but the slot cannot run it:
   a DSPy-backed matcher handed a local dir/adapter (`require_litellm_routable`),
   or a method with no model slot handed any `model=` at all
@@ -1178,7 +1263,31 @@ nothing; read a trail back with `RunStore(path).read()` (each `RunRecord`'s
 `metrics["accepted"]` is `1.0`/`0.0`, so the incumbent timeline is reconstructable
 from the store alone). `RunStore` is local-only by design; a durable off-laptop
 dashboard is available via `tracker="trackio"` (local-first; an HF Space/Dataset
-sync is a `space_id`/`HF_TOKEN` opt-in) -- models-on-Hub is not built. Still deferred: an Optuna/LLAMBO proposer and the matching vertical
+sync is a `space_id`/`HF_TOKEN` opt-in). A model's state-free configuration and
+bounded result summary can separately be shared through the pretrained Hub
+lifecycle below. Still deferred: an Optuna/LLAMBO proposer and the matching vertical
 (`log_loss` / AUC-PR steering) + fine-tuning. See
 [EXPERIMENTS.md](EXPERIMENTS.md#self-tuning-the-autoresearch-loop-langresoptimize)
 for the worked amazon_google proof and `examples/research/blocking_recall_autoresearch.py`.
+## Pretrained artifact lifecycle
+
+`ERModel.save_pretrained`, `ERModel.from_pretrained`, and
+`ERModel.push_to_hub` delegate lazily to `langres.hub`. They wrap the unchanged
+local `resolver.json` in a strict `langres-artifact.json` envelope containing an
+exact regular-file allowlist, sizes, SHA-256 checksums, resource `ModelRef`
+facts, compatibility metadata, and an optional bounded measurement summary.
+The first artifact version is deliberately state-free: it rejects Resolver
+sidecars because current sidecars can contain corpus rows, compiled prompts, or
+native binary state. In-place overwrite is also refused; publish a new validated
+directory or Hub commit and then switch the reference.
+Prompt-bearing JSON configuration is also excluded by default. Publishing it
+requires an explicit `allow_sensitive_config=True`, after which the manifest and
+model card disclose that prompts are included.
+
+Remote loading resolves the requested Hub revision to an immutable commit SHA
+before downloading the exact manifest-derived allowlist. The snapshot is fully
+validated and its registered component/operation types are preflighted before
+`ERModel.load` reconstructs anything. The loader accepts the same langres minor
+release (patches may differ), ignores repository files outside the manifest
+without downloading them, and never serializes Hub tokens or raw experiment
+data. See `docs/HUGGING_FACE.md`.

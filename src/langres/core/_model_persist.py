@@ -12,9 +12,10 @@ no pickle**: every slot is rebuilt from the component registry by its
 ``type_name``.
 """
 
+import importlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 from langres._version import __version__ as LANGRES_VERSION
 from langres.core._artifacts import (
@@ -40,8 +41,78 @@ logger = logging.getLogger(__name__)
 _MANIFEST_FILENAME = "resolver.json"
 
 
+def _hub_callable(name: str) -> Callable[..., Any]:
+    """Resolve one outer Hub adapter function without a core -> Hub import edge."""
+    function = getattr(importlib.import_module("langres.hub"), name, None)
+    if not callable(function):
+        raise RuntimeError(f"langres.hub does not provide callable {name!r}")
+    return cast(Callable[..., Any], function)
+
+
 class ModelPersistence(ModelState):
     """``save`` / ``load`` / ``config_dict`` for an ``ERModel``."""
+
+    def save_pretrained(
+        self,
+        path: str | Path,
+        *,
+        measurement_summary: object | None = None,
+        model_card: object | None = None,
+        claim_level: str = "reference-only",
+        allow_sensitive_config: bool = False,
+        overwrite: bool = False,
+    ) -> Path:
+        """Write a validated shareable bundle using the optional Hub lifecycle.
+
+        Dispatch is resolved only when called, so local Resolver construction
+        and ``import langres`` never import the Hub adapter or optional client.
+        """
+        save_pretrained = _hub_callable("save_pretrained")
+        return cast(
+            Path,
+            save_pretrained(
+                self,
+                path,
+                measurement_summary=measurement_summary,
+                model_card=model_card,
+                claim_level=claim_level,
+                allow_sensitive_config=allow_sensitive_config,
+                overwrite=overwrite,
+            ),
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_or_path: str | Path,
+        *,
+        revision: str | None = None,
+        token: str | None = None,
+        transport: object | None = None,
+    ) -> Any:
+        """Load a local or immutable Hub bundle through the safe outer manifest."""
+        from_pretrained = _hub_callable("_from_pretrained_as")
+        model = from_pretrained(
+            cls,
+            repo_or_path,
+            revision=revision,
+            token=token,
+            transport=transport,
+        )
+        if not isinstance(model, cls):
+            raise TypeError(
+                f"artifact reconstructed {type(model).__name__}, not requested {cls.__name__}"
+            )
+        return model
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        **kwargs: object,
+    ) -> Any:
+        """Build and upload a fresh validated bundle through a lazy Hub transport."""
+        push_to_hub = _hub_callable("push_to_hub")
+        return push_to_hub(self, repo_id, **kwargs)
 
     def _slots(self) -> list[tuple[str, object]]:
         """Ordered (slot_name, component) pairs, skipping absent optional slots.
@@ -96,6 +167,7 @@ class ModelPersistence(ModelState):
                 langres_version=LANGRES_VERSION,
                 model_class=model_class,
                 ops=[op_spec(stage) for stage in self._ops],
+                replay_boundary=self._replay_boundary_index,
             )
         components = [
             component_spec(component, slot=slot_name) for slot_name, component in self._slots()
@@ -146,7 +218,11 @@ class ModelPersistence(ModelState):
         # the byte-identical ``{"components": ...}`` dict it always has, so a classic
         # model's recipe_id never forks (F2 — the crown invariant).
         if self._ops is not None:
-            return {"ops": self._build_manifest().model_dump()["ops"]}
+            manifest = self._build_manifest()
+            snapshot: dict[str, object] = {"ops": manifest.model_dump()["ops"]}
+            if manifest.replay_boundary is not None:
+                snapshot["replay_boundary"] = manifest.replay_boundary
+            return snapshot
         return {"components": self._build_manifest().model_dump()["components"]}
 
     def save(self, path: str | Path) -> None:
@@ -210,7 +286,10 @@ class ModelPersistence(ModelState):
             # resolver.json stays byte-identical to pre-#193 — without this every
             # classic save would gain an ``"ops": null`` line and fork the frozen
             # legacy bytes (F1 / the crown invariant).
-            payload = manifest.model_dump_json(indent=2, exclude={"ops"})
+            payload = manifest.model_dump_json(
+                indent=2,
+                exclude={"ops", "replay_boundary"},
+            )
 
         (out_dir / _MANIFEST_FILENAME).write_text(payload)
         logger.info("Saved Resolver artifact to %s", out_dir)
@@ -257,7 +336,10 @@ class ModelPersistence(ModelState):
                 rebuild_op(spec, state_dir=in_dir / f"op{index}")
                 for index, spec in enumerate(manifest.ops)
             ]
-            return manifest, {"ops": ops}
+            return manifest, {
+                "ops": ops,
+                "replay_boundary": manifest.replay_boundary,
+            }
 
         # Map specs back to slots self-describingly. Each spec written by a
         # current ``save`` carries its ``slot`` name, so a registered subclass
