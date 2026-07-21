@@ -7,7 +7,7 @@ import math
 import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -418,12 +418,16 @@ class Parse(Score[SchemaT], Generic[SchemaT]):
             GENERATION_PARSERS,
             role="Parse",
         )
-        on_parse_error = config.get("on_parse_error")
-        if on_parse_error not in {"abstain", "raise"}:
+        raw_on_parse_error = config.get("on_parse_error")
+        if raw_on_parse_error == "abstain":
+            on_parse_error: Literal["abstain", "raise"] = "abstain"
+        elif raw_on_parse_error == "raise":
+            on_parse_error = "raise"
+        else:
             raise ValueError("Parse config requires on_parse_error='abstain' or 'raise'")
         return cls(
             parser,
-            on_parse_error=cast(Literal["abstain", "raise"], on_parse_error),
+            on_parse_error=on_parse_error,
         )
 
     def _envelope(self, row: PairRow[SchemaT]) -> GenerationEnvelope:
