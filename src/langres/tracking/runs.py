@@ -353,10 +353,45 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"cannot canonicalize {type(obj).__name__} for a fingerprint")
 
 
+def _normalize_fingerprint_value(obj: Any) -> Any:
+    """Recursively normalize unordered fingerprint containers.
+
+    Dataset gold partitions commonly arrive as a list of set-like clusters.
+    The list order is an implementation detail of graph traversal, not dataset
+    content, so normalize that exact shape while preserving order for ordinary
+    JSON lists such as token sequences or ranked values.
+    """
+    if isinstance(obj, BaseModel):
+        return _normalize_fingerprint_value(obj.model_dump(mode="json"))
+    if isinstance(obj, Mapping):
+        return {str(key): _normalize_fingerprint_value(value) for key, value in obj.items()}
+    if isinstance(obj, (set, frozenset)):
+        normalized = [_normalize_fingerprint_value(value) for value in obj]
+        return sorted(normalized, key=_fingerprint_sort_key)
+    if isinstance(obj, list):
+        normalized = [_normalize_fingerprint_value(value) for value in obj]
+        if all(isinstance(value, (set, frozenset)) for value in obj):
+            return sorted(normalized, key=_fingerprint_sort_key)
+        return normalized
+    if isinstance(obj, tuple):
+        return tuple(_normalize_fingerprint_value(value) for value in obj)
+    return obj
+
+
+def _fingerprint_sort_key(obj: Any) -> str:
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_json_default,
+        allow_nan=False,
+    )
+
+
 def _canonical_json(obj: Any) -> str:
     """Order-stable JSON: sorted keys, no whitespace -- the hashing normal form."""
     return json.dumps(
-        obj,
+        _normalize_fingerprint_value(obj),
         sort_keys=True,
         separators=(",", ":"),
         default=_json_default,
