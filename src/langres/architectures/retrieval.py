@@ -267,6 +267,7 @@ class Retrieve(_ResearchRecipe):
         retrieve_k: int = 20,
         threshold: float = 0.5,
         text_field: str | None = None,
+        source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
@@ -275,6 +276,7 @@ class Retrieve(_ResearchRecipe):
         self.retrieve_k = retrieve_k
         self.threshold = threshold
         self.text_field = text_field
+        self.source_field = source_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
             {"embedder": _embedder(embedder)},
@@ -291,6 +293,7 @@ class Retrieve(_ResearchRecipe):
                 schema=schema,
                 k=self.retrieve_k,
                 text_field=self.text_field,
+                source_field=self.source_field,
             ),
             ThresholdSelect(self.threshold),
             _cluster_stage(self.clusterer_override),
@@ -310,6 +313,7 @@ class RetrieveRerank(_ResearchRecipe):
         retrieve_k: int = 20,
         threshold: float = 0.5,
         text_field: str | None = None,
+        source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
@@ -318,6 +322,7 @@ class RetrieveRerank(_ResearchRecipe):
         self.retrieve_k = retrieve_k
         self.threshold = threshold
         self.text_field = text_field
+        self.source_field = source_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
             {
@@ -338,6 +343,7 @@ class RetrieveRerank(_ResearchRecipe):
                 schema=schema,
                 k=self.retrieve_k,
                 text_field=self.text_field,
+                source_field=self.source_field,
             ),
             Rerank(reranker),
             ThresholdSelect(self.threshold),
@@ -359,6 +365,7 @@ class RetrieveLLM(_ResearchRecipe):
         llm_k: int = 5,
         threshold: float = 0.5,
         text_field: str | None = None,
+        source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
@@ -370,6 +377,7 @@ class RetrieveLLM(_ResearchRecipe):
         self.llm_k = llm_k
         self.threshold = threshold
         self.text_field = text_field
+        self.source_field = source_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
             {
@@ -390,6 +398,7 @@ class RetrieveLLM(_ResearchRecipe):
                 schema=schema,
                 k=self.retrieve_k,
                 text_field=self.text_field,
+                source_field=self.source_field,
             ),
             TopKSelect(self.llm_k),
             Generate(llm),
@@ -414,6 +423,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
         llm_k: int = 5,
         threshold: float = 0.5,
         text_field: str | None = None,
+        source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
@@ -425,6 +435,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
         self.llm_k = llm_k
         self.threshold = threshold
         self.text_field = text_field
+        self.source_field = source_field
         self.clusterer_override = clusterer
         self._initialize_recipe(
             {
@@ -447,6 +458,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
                 schema=schema,
                 k=self.retrieve_k,
                 text_field=self.text_field,
+                source_field=self.source_field,
             ),
             Rerank(reranker),
             TopKSelect(self.llm_k),

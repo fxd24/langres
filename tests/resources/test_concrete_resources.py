@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,6 +26,7 @@ from langres.resources import (
     llm_from_model_ref,
 )
 from langres.core._artifacts import component_spec, rebuild_component
+from langres.resources.sentence_transformers import _loaded_model_facts
 
 
 def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() -> None:
@@ -49,6 +51,7 @@ def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() 
         "dtype": "float32",
         "local_files_only": True,
         "normalize_embeddings": False,
+        "quantization": None,
         "show_progress_bar": False,
     }
 
@@ -66,6 +69,41 @@ def test_sentence_transformer_resource_embeds_through_legacy_provider() -> None:
     assert batch.vectors.shape == (2, 3)
     assert batch.facts is not None
     assert batch.facts.dimension == 3
+
+
+def test_sentence_transformer_measures_loaded_parameters_and_local_artifact(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "weights.bin").write_bytes(b"123456")
+
+    class _Tensor:
+        def __init__(self, count: int, scalar_bytes: int) -> None:
+            self._count = count
+            self._scalar_bytes = scalar_bytes
+
+        def numel(self) -> int:
+            return self._count
+
+        def element_size(self) -> int:
+            return self._scalar_bytes
+
+    class _Model:
+        def parameters(self) -> tuple[_Tensor, ...]:
+            return (_Tensor(10, 4), _Tensor(5, 2))
+
+        def buffers(self) -> tuple[_Tensor, ...]:
+            return (_Tensor(3, 4),)
+
+    facts = _loaded_model_facts(
+        _Model(),
+        ModelRef(base=str(tmp_path), kind="local"),
+    )
+
+    assert facts == {
+        "parameter_count": 15,
+        "artifact_bytes": 6,
+        "loaded_memory_bytes": 62,
+    }
 
 
 def test_sentence_transformer_rejects_wrong_embedding_cardinality() -> None:

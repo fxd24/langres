@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import platform
@@ -220,8 +221,20 @@ def _runtime_facts(
     *,
     cohort: str,
     config: Mapping[str, Any] | None,
+    resource_slot: str,
 ) -> RuntimeFacts:
     values = config or {}
+    packages = {
+        "embedder": ("numpy", "qdrant-client", "sentence-transformers", "torch", "transformers"),
+        "reranker": ("numpy", "sentence-transformers", "torch", "transformers"),
+        "llm": ("litellm", "torch", "transformers"),
+    }.get(resource_slot, ())
+    versions: dict[str, str] = {}
+    for package in packages:
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            continue
     return RuntimeFacts(
         hardware_cohort=cohort,
         host=platform.node() or None,
@@ -229,6 +242,7 @@ def _runtime_facts(
         python_version=platform.python_version(),
         langres_version=__version__,
         cpu=platform.processor() or platform.machine() or None,
+        library_versions=versions,
         device=values.get("device") if isinstance(values.get("device"), str) else None,
         dtype=values.get("dtype") if isinstance(values.get("dtype"), str) else None,
         quantization=(
@@ -371,11 +385,29 @@ def _embedding_facts(
         return EmbeddingFacts(
             dimensions=dimensions,
             dtype=dtype_name,
+            quantization=(
+                facts.get("quantization") if isinstance(facts.get("quantization"), str) else None
+            ),
             vectors_produced=vectors_produced,
             bytes_per_vector=bytes_per_vector,
             total_vector_bytes=(
                 vectors_produced * bytes_per_vector
                 if vectors_produced is not None and bytes_per_vector is not None
+                else None
+            ),
+            parameter_count=(
+                facts.get("parameter_count")
+                if isinstance(facts.get("parameter_count"), int)
+                else None
+            ),
+            artifact_bytes=(
+                facts.get("artifact_bytes")
+                if isinstance(facts.get("artifact_bytes"), int)
+                else None
+            ),
+            loaded_memory_bytes=(
+                facts.get("loaded_memory_bytes")
+                if isinstance(facts.get("loaded_memory_bytes"), int)
                 else None
             ),
         )
@@ -419,7 +451,7 @@ def _measurements(
     for event in result.events:
         if event.kind != "finish" or event.duration_seconds is None:
             continue
-        count = event.output_count
+        count = event.input_count
         throughput = (
             count / event.duration_seconds
             if count is not None and event.duration_seconds > 0
@@ -447,6 +479,7 @@ def _measurements(
                 pairs_in=event.input_count if event.index > 0 else None,
                 pairs_out=event.output_count if event.role != "clusterer_stage" else None,
                 throughput_per_second=throughput,
+                throughput_unit="records" if event.role == "retrieve" else "pairs",
                 cache_hit=cache_hit if first_finished else None,
                 resource_slot=slot,
                 resource_id=step.resource_ref,
@@ -460,6 +493,7 @@ def _measurements(
                     _runtime_facts(
                         cohort=hardware_cohort,
                         config=resource_runtime.get(slot, {}),
+                        resource_slot=slot,
                     )
                     if slot is not None
                     else None
@@ -472,6 +506,23 @@ def _measurements(
         )
         first_finished = False
     return tuple(output)
+
+
+def _tracker_stage_measurements(
+    measurements: Sequence[StageMeasurement],
+) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+    """Give repeated stage facts stable, collision-free tracker metric paths."""
+    output: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for measurement in measurements:
+        phase = measurement.phase or "unknown"
+        key = (phase, measurement.operation_kind)
+        occurrence = counts.get(key, 0)
+        counts[key] = occurrence + 1
+        output.setdefault(phase, {}).setdefault(measurement.operation_kind, {})[str(occurrence)] = (
+            measurement.model_dump(mode="json")
+        )
+    return output
 
 
 def _funnel(result: ExecutionResult, *, record_count: int) -> FunnelFacts:
@@ -559,6 +610,7 @@ def _partial_generation_facts(
                 runtime=_runtime_facts(
                     cohort=hardware_cohort,
                     config=resource_runtime.get("llm", {}),
+                    resource_slot="llm",
                 ),
                 observed_usd=cost,
                 external_calls=len(outputs),
@@ -1160,9 +1212,22 @@ class Experiment:
                             token_usage.model_dump(mode="json") if token_usage is not None else {}
                         ),
                         "usd": observed_usd,
+                        "stages": _tracker_stage_measurements(measurements),
                     }
                 )
                 numeric["selected_threshold"] = selected_threshold
+                safe_tracker.log_params(
+                    {
+                        "stage_runtime": {
+                            f"{measurement.phase or 'unknown'}.{measurement.operation_kind}.{index}": (
+                                measurement.runtime.model_dump(mode="json")
+                                if measurement.runtime is not None
+                                else {}
+                            )
+                            for index, measurement in enumerate(measurements)
+                        }
+                    }
+                )
                 handle.log_metrics(numeric, headline_metric=quality.get("pair_f1"))
                 handle.record_measurements(
                     measurement.model_dump(mode="json") for measurement in measurements
@@ -1327,7 +1392,7 @@ class Experiment:
         attempt_id: str,
     ) -> _TuningOutcome:
         best_threshold = self.protocol.threshold_grid[0]
-        best_f1 = -1.0
+        best_pair_f1 = -1.0
         first = architecture.build(best_threshold, self._monitor)
         input_fp = ordered_input_fingerprint(records)
         cache_id = self._cache_id(
@@ -1360,8 +1425,12 @@ class Experiment:
             evaluated = evaluate_execution_result(
                 result, records, truth_clusters, threshold=threshold
             )
-            if evaluated.bcubed_f1 > best_f1:
-                best_f1 = evaluated.bcubed_f1
+            # The tunable Select is the pair-decision boundary. Optimize the
+            # scorer-isolating pair F1 on TRAIN; B-Cubed remains a reported
+            # downstream clustering metric and must not reward an all-singleton
+            # result simply because singleton-heavy data has a high floor.
+            if evaluated.pair_f1 > best_pair_f1:
+                best_pair_f1 = evaluated.pair_f1
                 best_threshold = threshold
         return _TuningOutcome(
             threshold=best_threshold,

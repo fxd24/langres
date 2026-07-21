@@ -23,6 +23,7 @@ from langres.experiments.identity import SourceState
 from langres.resources import (
     FakeEmbedder,
     EmbeddingBatch,
+    EmbeddingFacts,
     GenerationBatch,
     GenerationEnvelope,
     GenerationRequest,
@@ -125,7 +126,11 @@ class _MeasuredEmbedder:
 
     def __init__(self) -> None:
         self.model_ref = ModelRef(base="./measured/embedder", kind="local")
-        self.runtime_config = ResourceRuntimeConfig(batch_size=1024, device="cpu")
+        self.runtime_config = ResourceRuntimeConfig(
+            batch_size=1024,
+            device="cpu",
+            quantization="int8",
+        )
         self._delegate = FakeEmbedder(dimension=8)
 
     @property
@@ -139,7 +144,20 @@ class _MeasuredEmbedder:
 
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         batch = self._delegate.embed(texts)
-        return batch.model_copy(update={"model_ref": self.model_ref})
+        return batch.model_copy(
+            update={
+                "model_ref": self.model_ref,
+                "facts": EmbeddingFacts(
+                    dimension=8,
+                    dtype="float32",
+                    normalized=True,
+                    quantization="int8",
+                    parameter_count=123,
+                    artifact_bytes=456,
+                    loaded_memory_bytes=789,
+                ),
+            }
+        )
 
 
 class _CostedLLM:
@@ -269,7 +287,7 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
 
     def build(threshold: float, monitor: SpendMonitor) -> RetrieveLLM:
         return RetrieveLLM(
-            embedder=FakeEmbedder(dimension=8),
+            embedder=_MeasuredEmbedder(),
             llm=llm,
             schema=_MeasurementRecord,
             retrieve_k=1,
@@ -318,17 +336,28 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
 
     retrieve = next(item for item in run.measurements if item.operation_kind == "retrieve")
     assert retrieve.resource_slot == "embedder"
-    assert retrieve.resource_id is not None and "fake/embedder" in retrieve.resource_id
+    assert retrieve.resource_id is not None and "measured/embedder" in retrieve.resource_id
     assert retrieve.embedding is not None
     assert retrieve.embedding.dimensions == 8
     assert retrieve.embedding.vectors_produced == 2
     assert retrieve.embedding.bytes_per_vector == 32
     assert retrieve.embedding.total_vector_bytes == 64
+    assert retrieve.embedding.quantization == "int8"
+    assert retrieve.embedding.parameter_count == 123
+    assert retrieve.embedding.artifact_bytes == 456
+    assert retrieve.embedding.loaded_memory_bytes == 789
     assert retrieve.runtime is not None
     assert retrieve.runtime.hardware_cohort == "measurement-cpu"
     assert retrieve.runtime.python_version is not None
     assert retrieve.runtime.device == "cpu"
     assert retrieve.runtime.batch_size == 1024
+    assert retrieve.runtime.quantization == "int8"
+    assert "numpy" in retrieve.runtime.library_versions
+    assert "qdrant-client" in retrieve.runtime.library_versions
+    assert retrieve.throughput_unit == "records"
+    assert retrieve.throughput_per_second == pytest.approx(
+        retrieve.items_in / retrieve.wall_seconds
+    )
 
     generate = next(item for item in run.measurements if item.operation_kind == "generate")
     assert generate.resource_slot == "llm"
@@ -342,6 +371,7 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
     assert generate.runtime is not None
     assert generate.runtime.dtype == "float32"
     assert generate.runtime.batch_size == 1
+    assert generate.throughput_unit == "pairs"
 
     [record] = store.read()
     assert record.measurements is not None
@@ -350,6 +380,11 @@ def test_runner_populates_persists_and_publishes_tier_zero_measurement_facts(
     assert "funnel.llm_pairs" in flattened
     assert "token_usage.input_tokens" in flattened
     assert "usd" in flattened
+    assert any(key.startswith("stages.evaluation.retrieve.0.wall_seconds") for key in flattened)
+    assert any(
+        key.startswith("stages.evaluation.retrieve.0.embedding.parameter_count")
+        for key in flattened
+    )
 
 
 def test_tuning_and_evaluation_usage_cost_and_stage_facts_are_aggregated(

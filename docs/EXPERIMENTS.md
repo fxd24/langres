@@ -67,6 +67,10 @@ Python.
 The current benchmark registry exposes an actual `train`/`test` split. The
 runner therefore requires `threshold_split_id="train"` and never relabels that
 data as validation. Thresholds are selected on train; test remains untouched.
+The selected recipe cut maximizes **pair F1** on train. B-Cubed is still
+reported for the resulting clusters, but it is not used to tune a matcher cut:
+on singleton-heavy data its high all-singleton floor can otherwise select a
+threshold that predicts no true pairs.
 An official publication protocol may use the matrix label `"official"`, but its
 `ExperimentRun.evaluation_split_id` still records `"test"`.
 
@@ -157,6 +161,16 @@ different remote provider may change both. `report.cohorts` groups by
 evaluation and hardware cohort; aggregate and Pareto views do not license
 cross-cohort speed claims. State the cohort next to every performance number.
 
+Each stage records its input-based throughput together with an explicit unit:
+`records` for `Retrieve`, `pairs` for downstream operations. The runner never
+labels output-pair production as generic throughput. Embedder measurements carry
+dimension, dtype, declared quantization, vector bytes, and—when the loaded
+backend exposes them—parameter count, loaded tensor bytes, and cached/local
+artifact bytes. Runtime facts include the installed model/vector library
+versions. Per-item p50/p95 fields stay `None` when only a batch duration exists;
+no percentile is manufactured from one aggregate timer. These numeric stage
+facts are persisted in `RunStore` and published to Trackio under `stages.*`.
+
 The generated [fake-resource smoke table](generated/research_smoke_table.md) is
 mechanically produced by
 `examples/research/generate_smoke_table.py` from a real local
@@ -188,8 +202,9 @@ uv run python examples/research/trackio_reproduction.py
 The script constructs `TrackioTracker(local_only=True)`, which suppresses
 Settings and environment Space fallbacks, so it requires no token and makes no
 Hub request. The `RunStore` and protocol remain the reproduction source of
-truth; Trackio is a view. Setting a Space id is a separate, credentialed
-publication action.
+truth; Trackio is a view. Quality, funnel, token/cost, and numeric stage
+measurements are mirrored into that view; runtime/library strings are logged as
+parameters. Setting a Space id is a separate, credentialed publication action.
 
 ## Guarded official paid proof
 

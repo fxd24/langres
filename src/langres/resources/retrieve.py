@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from langres.core.blockers.all_pairs import register_schema_idempotent, schema_to_factory
 from langres.core.comparators import StringComparator
+from langres.core.indexes.qdrant_dense_index import QdrantDenseIndex
 from langres.core.model_ref import to_config
 from langres.core.op import Records, Source
 from langres.core.pairs import PairRow, Pairs
@@ -39,6 +40,7 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         schema: type[SchemaT],
         k: int = 20,
         text_field: str | None = None,
+        source_field: str | None = None,
     ) -> None:
         if k <= 0:
             raise ValueError("Retrieve.k must be positive")
@@ -46,11 +48,17 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
             raise ValueError(
                 f"Retrieve text_field {text_field!r} is not declared by {schema.__name__}"
             )
+        if source_field is not None and source_field not in schema.model_fields:
+            raise ValueError(
+                f"Retrieve source_field {source_field!r} is not declared by {schema.__name__}"
+            )
         self.resource = resource
         self._schema = schema
         self._schema_name = register_schema_idempotent(schema)
         self.k = k
         self.text_field = text_field
+        self.source_field = source_field
+        self._index = QdrantDenseIndex()
         self._factory = schema_to_factory(schema)
         self._default_fields = (
             ()
@@ -70,6 +78,7 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
             "schema_name": self._schema_name,
             "k": self.k,
             "text_field": self.text_field,
+            "source_field": self.source_field,
         }
 
     @classmethod
@@ -81,11 +90,13 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
         """Rebuild around a validated Embedder resource."""
         schema = get_schema(str(config["schema_name"]))
         text_field = config["text_field"]
+        source_field = config.get("source_field")
         return Retrieve(
             resource,
             schema=schema,
             k=int(config["k"]),  # type: ignore[call-overload]
             text_field=str(text_field) if text_field is not None else None,
+            source_field=str(source_field) if source_field is not None else None,
         )
 
     def _text(self, entity: SchemaT) -> str:
@@ -123,24 +134,21 @@ class Retrieve(Source[SchemaT], Generic[SchemaT]):
                 "Embedder must return one 2D vector row per retrieval record; "
                 f"got shape {vectors.shape} for {len(entities)} records"
             )
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        normalized = np.divide(
-            vectors,
-            norms,
-            out=np.zeros_like(vectors),
-            where=norms != 0,
+        groups = (
+            [str(getattr(entity, self.source_field)) for entity in entities]
+            if self.source_field is not None
+            else None
         )
-        similarities = normalized @ normalized.T
-        np.fill_diagonal(similarities, -np.inf)
+        similarities, neighbours = self._index.search_all(vectors, k=self.k, groups=groups)
 
         selected: dict[tuple[str, str], tuple[str, str, float]] = {}
-        limit = min(self.k, len(entities) - 1)
         for index, row in enumerate(similarities):
-            neighbours = np.argsort(-row, kind="stable")[:limit]
-            for neighbour in neighbours:
+            for column, neighbour in enumerate(neighbours[index]):
+                if neighbour < 0:
+                    continue
                 first_id, second_id = ids[index], ids[int(neighbour)]
                 pair = (first_id, second_id) if first_id <= second_id else (second_id, first_id)
-                score = float(np.clip(row[int(neighbour)], 0.0, 1.0))
+                score = float(np.clip(row[column], 0.0, 1.0))
                 prior = selected.get(pair)
                 selected[pair] = (
                     prior[0] if prior is not None else first_id,
@@ -178,6 +186,7 @@ class _RetrieveParams(BaseModel):
     schema_name: str = Field(min_length=1)
     k: int = Field(gt=0)
     text_field: str | None = None
+    source_field: str | None = None
 
 
 def _dump_retrieve(stage: object) -> tuple[dict[str, object], object | None]:

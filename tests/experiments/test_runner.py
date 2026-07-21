@@ -193,6 +193,36 @@ def test_threshold_sweep_scores_each_input_split_once_and_resume_skips_work(
     assert len(RunStore(tmp_path / "runs.jsonl").read()) == 1
 
 
+def test_threshold_tuning_optimizes_train_pair_f1_not_bcubed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langres.benchmarks.runner import evaluate_execution_result as evaluate
+
+    def divergent_metrics(*args: Any, threshold: float, **kwargs: Any) -> Any:
+        measured = evaluate(*args, threshold=threshold, **kwargs)
+        return measured.model_copy(
+            update={
+                "pair_f1": 1.0 if threshold == 0.5 else 0.0,
+                "bcubed_f1": 0.0 if threshold == 0.5 else 1.0,
+            }
+        )
+
+    monkeypatch.setattr(
+        "langres.experiments.runner.evaluate_execution_result",
+        divergent_metrics,
+    )
+
+    report = Experiment(
+        architectures=[_factory([0])],
+        protocol=_protocol(),
+        store=tmp_path / "runs.jsonl",
+        cache_dir=tmp_path / "cache",
+    ).run()
+
+    assert report.runs[0].selected_threshold == 0.5
+
+
 def test_reordered_threshold_grid_reuses_the_expensive_prefix_cache(
     tmp_path: Path,
 ) -> None:

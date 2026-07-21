@@ -170,6 +170,7 @@ def test_embedding_runtime_stage_and_funnel_facts_round_trip() -> None:
         items_in=10,
         pairs_out=20,
         throughput_per_second=40.0,
+        throughput_unit="pairs",
         embedding=embedding,
         runtime=runtime,
         cache_hit=False,
@@ -177,5 +178,6 @@ def test_embedding_runtime_stage_and_funnel_facts_round_trip() -> None:
     funnel = FunnelFacts(possible_pairs=45, retrieved_pairs=20, llm_pairs=0)
 
     assert StageMeasurement.model_validate_json(stage.model_dump_json()) == stage
+    assert stage.throughput_unit == "pairs"
     assert funnel.llm_pairs == 0
     assert funnel.reranker_pairs is None

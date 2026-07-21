@@ -83,6 +83,7 @@ class ResourceRuntimeConfig(BaseModel):
     batch_size: int = Field(default=32, ge=1)
     device: str | None = None
     dtype: RuntimeDType | None = None
+    quantization: str | None = Field(default=None, min_length=1)
     local_files_only: bool = False
 
 
@@ -119,6 +120,10 @@ class EmbeddingFacts(BaseModel):
     dimension: int = Field(ge=1)
     dtype: str
     normalized: bool | None = None
+    quantization: str | None = None
+    parameter_count: int | None = Field(default=None, ge=0)
+    artifact_bytes: int | None = Field(default=None, ge=0)
+    loaded_memory_bytes: int | None = Field(default=None, ge=0)
 
 
 class EmbeddingBatch(BaseModel):
