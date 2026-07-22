@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import types
@@ -480,6 +481,35 @@ class TestDatasetFingerprint:
         gold_a = {frozenset({"1", "2"}), frozenset({"3", "4"})}
         gold_b = {frozenset({"3", "4"}), frozenset({"1", "2"})}
         assert dataset_fingerprint([], gold_a) == dataset_fingerprint([], gold_b)
+
+    def test_nested_gold_cluster_order_is_irrelevant(self) -> None:
+        clusters_a = [{"1", "2"}, {"3"}, {"4", "5"}]
+        clusters_b = [{"4", "5"}, {"1", "2"}, {"3"}]
+        pairs = {frozenset({"1", "2"}), frozenset({"4", "5"})}
+
+        assert dataset_fingerprint([], [clusters_a, pairs]) == dataset_fingerprint(
+            [], [clusters_b, pairs]
+        )
+
+    def test_nested_gold_fingerprint_is_stable_across_hash_seeds(self) -> None:
+        script = """
+from langres.tracking.runs import dataset_fingerprint
+clusters = list({frozenset({'1', '2'}), frozenset({'3'}), frozenset({'4', '5'})})
+pairs = {frozenset({'1', '2'}), frozenset({'4', '5'})}
+print(dataset_fingerprint([], [clusters, pairs]))
+"""
+        fingerprints = {
+            subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            ).stdout.strip()
+            for seed in (1, 2, 3, 4)
+        }
+
+        assert len(fingerprints) == 1
 
     def test_handles_mapping_gold(self) -> None:
         # a mapping is normalized to its sorted items, deterministically.

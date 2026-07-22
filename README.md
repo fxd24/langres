@@ -55,6 +55,10 @@ The [generated smoke table](docs/generated/research_smoke_table.md) comes from a
 real local `ExperimentReport`; it proves the contracts compose, not that fake
 resources are competitive.
 
+Research retrieval uses Qdrant over the embedder's output. For cross-source
+linkage, pass `source_field="source"` so same-source records are excluded before
+top-k; omit it for single-source deduplication.
+
 See [Getting started](docs/GETTING_STARTED.md) for the progressive path,
 [Experiments](docs/EXPERIMENTS.md) for protocol and cohort semantics, and
 [Reproducibility](docs/REPRODUCIBILITY.md) for handoff and publication.

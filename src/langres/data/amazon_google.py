@@ -34,21 +34,23 @@ it (it also conforms to ``langres.methods.BlockingBenchmark`` by exposing its
 ``schema`` + pinned blocking config), mirroring ``FodorsZagatBenchmark``.
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Iterable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, computed_field
 
 from langres.data.benchmark import Benchmark, gold_pairs_from_clusters
 from langres.core.blockers.all_pairs import register_schema_idempotent
-from langres.core.blockers.vector import VectorBlocker
-from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.models import ERCandidate
 from langres.data import _benchmark_utils as _bu
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from langres.core.blockers.vector import VectorBlocker
 
 __all__ = [
     "ACHIEVED_PC_AT_DEFAULT_K",
@@ -297,6 +299,10 @@ def build_product_blocker(
     Returns:
         A :class:`VectorBlocker` over ``ProductSchema.embed_text``.
     """
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
     return VectorBlocker(
         vector_index=FAISSIndex(
             embedder=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),

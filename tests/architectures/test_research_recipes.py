@@ -60,6 +60,12 @@ class _IdentifierOnly(BaseModel):
     id: str
 
 
+class _SourcedCompany(BaseModel):
+    id: str
+    name: str
+    source: str
+
+
 class _FixedEmbedder(FakeEmbedder):
     def __init__(self, vectors: list[list[float]]) -> None:
         super().__init__(dimension=len(vectors[0]))
@@ -428,6 +434,58 @@ def test_explicit_retrieval_text_field_does_not_require_default_comparable_field
     pairs = retrieve.forward([{"id": "a"}, {"id": "b"}])
 
     assert [(row.left_id, row.right_id) for row in pairs.rows] == [("a", "b")]
+
+
+def test_retrieve_filters_same_source_before_top_k() -> None:
+    retrieve = RetrieveOp(
+        _FixedEmbedder(
+            [
+                [1.0, 0.0],
+                [0.999, 0.001],
+                [0.8, 0.6],
+                [0.0, 1.0],
+            ]
+        ),
+        schema=_SourcedCompany,
+        k=1,
+        source_field="source",
+    )
+
+    pairs = retrieve.forward(
+        [
+            {"id": "a1", "name": "Alpha", "source": "a"},
+            {"id": "a2", "name": "Alpha 2", "source": "a"},
+            {"id": "b1", "name": "Beta", "source": "b"},
+            {"id": "b2", "name": "Beta 2", "source": "b"},
+        ]
+    )
+
+    ids = {(row.left_id, row.right_id) for row in pairs.rows}
+    assert ("a1", "b1") in ids
+    assert all(pairs.store[left].source != pairs.store[right].source for left, right in ids)
+
+
+def test_retrieve_source_field_round_trips_in_topology(tmp_path: Path) -> None:
+    recipe = Retrieve(
+        embedder=ModelRef(base="org/embedder", kind="hf", revision="embed-sha"),
+        schema=_SourcedCompany,
+        source_field="source",
+    )
+
+    recipe.save(tmp_path)
+    loaded = ERModel.load(tmp_path)
+    operation = next(stage for stage in loaded._require_ops() if isinstance(stage, RetrieveOp))
+
+    assert operation.source_field == "source"
+
+
+def test_retrieve_rejects_unknown_source_field() -> None:
+    with pytest.raises(ValueError, match="source_field"):
+        RetrieveOp(
+            FakeEmbedder(),
+            schema=CompanySchema,
+            source_field="source",
+        )
 
 
 def test_retrieve_compare_returns_false_when_source_score_is_below_threshold() -> None:

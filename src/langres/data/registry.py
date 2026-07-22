@@ -3,10 +3,9 @@
 A discoverability + serialization seam over the dataset loaders: a static
 ``name -> BenchmarkEntry`` manifest of lightweight *metadata* (task, domain,
 loadable, and where the loader lives) with **no loader import at module scope**.
-This is deliberate — every dataset loader eagerly pulls the ``[semantic]`` stack
-(``VectorBlocker`` / ``SentenceTransformer`` / ``FAISS``), so auto-importing all
-loaders would break a core-only install and ``tests/test_import_budget.py``, and
-one failing loader would take down the whole registry.
+This keeps discovery core-only. Individual linkage loaders also defer their
+legacy vector-blocker factory until it is called, so loading/splitting benchmark
+records does not import a vector backend.
 
 Therefore:
 

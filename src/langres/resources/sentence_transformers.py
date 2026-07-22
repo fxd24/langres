@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -28,6 +29,51 @@ def _torch_dtype(name: str | None) -> Any:
     import torch
 
     return getattr(torch, name)
+
+
+def _directory_bytes(path: Path) -> int:
+    """Measure regular files below ``path``, following snapshot symlinks."""
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _local_artifact_bytes(model_ref: ModelRef) -> int | None:
+    """Measure a local path or an already-cached Hub snapshot without networking."""
+    local = Path(model_ref.base).expanduser()
+    if local.exists():
+        return _directory_bytes(local) if local.is_dir() else local.stat().st_size
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(
+            repo_id=model_ref.base,
+            revision=model_ref.revision,
+            local_files_only=True,
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    return _directory_bytes(Path(snapshot))
+
+
+def _loaded_model_facts(model: Any, model_ref: ModelRef) -> dict[str, int | None]:
+    """Best-effort parameter, resident tensor, and cached artifact sizes."""
+    try:
+        parameters = tuple(model.parameters())
+    except (AttributeError, TypeError):
+        parameters = ()
+    try:
+        buffers = tuple(model.buffers())
+    except (AttributeError, TypeError):
+        buffers = ()
+    parameter_count = sum(int(parameter.numel()) for parameter in parameters) or None
+    loaded_memory = (
+        sum(int(tensor.numel()) * int(tensor.element_size()) for tensor in (*parameters, *buffers))
+        or None
+    )
+    return {
+        "parameter_count": parameter_count,
+        "artifact_bytes": _local_artifact_bytes(model_ref),
+        "loaded_memory_bytes": loaded_memory,
+    }
 
 
 @register("resource_sentence_transformer")
@@ -68,6 +114,16 @@ class SentenceTransformer:
                 "SentenceTransformer requires one vector per input text; "
                 f"got {len(vectors)} vectors for {len(texts)} texts."
             )
+        loaded_model = getattr(self._embedder, "_model", None)
+        model_facts = (
+            _loaded_model_facts(loaded_model, self.model_ref)
+            if loaded_model is not None
+            else {
+                "parameter_count": None,
+                "artifact_bytes": None,
+                "loaded_memory_bytes": None,
+            }
+        )
         return EmbeddingBatch(
             vectors=vectors,
             model_ref=self.model_ref,
@@ -75,6 +131,8 @@ class SentenceTransformer:
                 dimension=int(vectors.shape[1]),
                 dtype=str(vectors.dtype),
                 normalized=self.runtime_config.normalize_embeddings,
+                quantization=self.runtime_config.quantization,
+                **model_facts,
             ),
         )
 

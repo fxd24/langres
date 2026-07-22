@@ -304,6 +304,29 @@ def test_log_params_stringifies_and_skips_empty(
     assert fake.params == {"blocking_k": "5", "flag": "True"}
 
 
+def test_log_params_flattens_nested_stage_runtime(
+    mlflow_env: tuple[ModuleType, _FakeMlflow],
+) -> None:
+    module, fake = mlflow_env
+    tracker = module.MlflowTracker(_settings())
+
+    tracker.log_params(
+        {
+            "stage_runtime": {
+                "evaluation.rerank.0": {
+                    "device": "cpu",
+                    "library_versions": {"torch": "2.12.1"},
+                }
+            }
+        }
+    )
+
+    assert fake.params == {
+        "stage_runtime.evaluation.rerank.0.device": "cpu",
+        "stage_runtime.evaluation.rerank.0.library_versions.torch": "2.12.1",
+    }
+
+
 def test_log_metrics_forwards_with_step(
     mlflow_env: tuple[ModuleType, _FakeMlflow],
 ) -> None:
@@ -547,6 +570,16 @@ def test_real_mlflow_sequence_field_yields_safe_param_keys(tmp_path: Any) -> Non
     )
     try:
         tracker.start_run(context)  # real mlflow validates every key -> must not raise
+        tracker.log_params(
+            {
+                "stage_runtime": {
+                    "evaluation.rerank.0": {
+                        "device": "cpu",
+                        "library_versions": {"torch": "2.12.1"},
+                    }
+                }
+            }
+        )
         run_id = tracker.native.info.run_id
         tracker.finish(status="completed")
 
@@ -554,6 +587,8 @@ def test_real_mlflow_sequence_field_yields_safe_param_keys(tmp_path: Any) -> Non
         assert params["cascade_band.0"] == "0.3"
         assert params["cascade_band.1"] == "0.7"
         assert params["resolver_config.blocker.bands.0"] == "0.1"
+        assert params["stage_runtime.evaluation.rerank.0.device"] == "cpu"
+        assert params["stage_runtime.evaluation.rerank.0.library_versions.torch"] == "2.12.1"
         assert not any("[" in key or "]" in key for key in params)
     finally:
         _drain_active_mlflow_runs()

@@ -241,6 +241,7 @@ class StageMeasurement(BaseModel):
     pairs_in: int | None = Field(default=None, ge=0)
     pairs_out: int | None = Field(default=None, ge=0)
     throughput_per_second: float | None = Field(default=None, ge=0.0)
+    throughput_unit: Literal["records", "pairs"] | None = None
     p50_item_latency_seconds: float | None = Field(default=None, ge=0.0)
     p95_item_latency_seconds: float | None = Field(default=None, ge=0.0)
     temperature: Literal["cold", "warm"] | None = None

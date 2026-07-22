@@ -26,3 +26,8 @@ reading older docs, code, and artifacts:
 There is still no `matcher="auto"` and no module-level `langres.dedupe` or
 `langres.link`. Construct a recipe/architecture explicitly, or build an
 `ERModel.from_topology(ops=[...])`.
+
+The research `Retrieve` operation keeps the `Embedder` as the model-bearing
+resource and delegates vector storage/search to Qdrant. In a linkage recipe,
+`source_field="source"` excludes same-source records inside the Qdrant query,
+before top-k; in a deduplication recipe the option is omitted.

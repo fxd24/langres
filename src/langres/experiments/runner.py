@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import platform
@@ -16,9 +17,10 @@ from langres._version import __version__
 from langres.benchmarks.runner import evaluate_execution_result
 from langres.core.op import ExecutionEvent, ExecutionResult
 from langres.core.model_ref import normalize_model_ref
+from langres.core.pairs import PairRow
 from langres.core.resolver import ERModel
 from langres.core.spend import BudgetExceeded, SpendMonitor
-from langres.data.benchmark import Benchmark
+from langres.data.benchmark import Benchmark, gold_pairs_from_clusters
 from langres.data.registry import get_benchmark
 from langres.experiments.cache import StageArtifactStore, ordered_input_fingerprint
 from langres.experiments.identity import (
@@ -76,6 +78,88 @@ class ExperimentCellError(RuntimeError):
 class _TuningOutcome:
     threshold: float
     executions: tuple[tuple[ExecutionResult, bool], ...]
+    strategy: Literal["grid", "observed_breakpoint"]
+    scored_pair_count: int
+    score_breakpoint_count: int
+    score_min: float | None
+    score_max: float | None
+
+
+@dataclass(frozen=True)
+class _ObservedThreshold:
+    threshold: float
+    pair_f1: float
+    scored_pair_count: int
+    score_breakpoint_count: int
+    score_min: float
+    score_max: float
+
+
+def _best_observed_pair_threshold(
+    rows: Sequence[PairRow[Any]],
+    truth_clusters: list[set[str]],
+) -> _ObservedThreshold | None:
+    """Find the exact best pair-F1 cut from scored rows in O(n log n)."""
+    gold_pairs = gold_pairs_from_clusters(truth_clusters)
+    fixed_matches: set[frozenset[str]] = set()
+    pair_scores: dict[frozenset[str], float] = {}
+    for row in rows:
+        if row.score_type is None:
+            continue
+        pair = frozenset((row.left_id, row.right_id))
+        if row.decision is True:
+            fixed_matches.add(pair)
+        elif row.decision is None and row.score is not None:
+            pair_scores[pair] = max(pair_scores.get(pair, -1.0), row.score)
+
+    for pair in fixed_matches:
+        pair_scores.pop(pair, None)
+    if not pair_scores:
+        return None
+
+    ranked = sorted(pair_scores.items(), key=lambda item: item[1], reverse=True)
+    score_min = ranked[-1][1]
+    score_max = ranked[0][1]
+    best_threshold = 1.0
+    best_pair_f1 = -1.0
+    predicted = set(fixed_matches)
+    true_positives = len(predicted & gold_pairs)
+
+    # A threshold of 1.0 is a valid fixed-decision-only baseline only when no
+    # observed score equals 1.0 (score comparison is inclusive).
+    if score_max < 1.0:
+        best_pair_f1 = (
+            2 * true_positives / (len(predicted) + len(gold_pairs))
+            if predicted or gold_pairs
+            else 0.0
+        )
+
+    index = 0
+    while index < len(ranked):
+        threshold = ranked[index][1]
+        while index < len(ranked) and ranked[index][1] == threshold:
+            pair = ranked[index][0]
+            predicted.add(pair)
+            if pair in gold_pairs:
+                true_positives += 1
+            index += 1
+        pair_f1 = (
+            2 * true_positives / (len(predicted) + len(gold_pairs))
+            if predicted or gold_pairs
+            else 0.0
+        )
+        if pair_f1 > best_pair_f1:
+            best_pair_f1 = pair_f1
+            best_threshold = threshold
+
+    return _ObservedThreshold(
+        threshold=best_threshold,
+        pair_f1=best_pair_f1,
+        scored_pair_count=len(pair_scores),
+        score_breakpoint_count=len({score for _, score in ranked}),
+        score_min=score_min,
+        score_max=score_max,
+    )
 
 
 @dataclass(frozen=True)
@@ -220,8 +304,20 @@ def _runtime_facts(
     *,
     cohort: str,
     config: Mapping[str, Any] | None,
+    resource_slot: str,
 ) -> RuntimeFacts:
     values = config or {}
+    packages = {
+        "embedder": ("numpy", "qdrant-client", "sentence-transformers", "torch", "transformers"),
+        "reranker": ("numpy", "sentence-transformers", "torch", "transformers"),
+        "llm": ("litellm", "torch", "transformers"),
+    }.get(resource_slot, ())
+    versions: dict[str, str] = {}
+    for package in packages:
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            continue
     return RuntimeFacts(
         hardware_cohort=cohort,
         host=platform.node() or None,
@@ -229,6 +325,7 @@ def _runtime_facts(
         python_version=platform.python_version(),
         langres_version=__version__,
         cpu=platform.processor() or platform.machine() or None,
+        library_versions=versions,
         device=values.get("device") if isinstance(values.get("device"), str) else None,
         dtype=values.get("dtype") if isinstance(values.get("dtype"), str) else None,
         quantization=(
@@ -371,11 +468,29 @@ def _embedding_facts(
         return EmbeddingFacts(
             dimensions=dimensions,
             dtype=dtype_name,
+            quantization=(
+                facts.get("quantization") if isinstance(facts.get("quantization"), str) else None
+            ),
             vectors_produced=vectors_produced,
             bytes_per_vector=bytes_per_vector,
             total_vector_bytes=(
                 vectors_produced * bytes_per_vector
                 if vectors_produced is not None and bytes_per_vector is not None
+                else None
+            ),
+            parameter_count=(
+                facts.get("parameter_count")
+                if isinstance(facts.get("parameter_count"), int)
+                else None
+            ),
+            artifact_bytes=(
+                facts.get("artifact_bytes")
+                if isinstance(facts.get("artifact_bytes"), int)
+                else None
+            ),
+            loaded_memory_bytes=(
+                facts.get("loaded_memory_bytes")
+                if isinstance(facts.get("loaded_memory_bytes"), int)
                 else None
             ),
         )
@@ -419,7 +534,7 @@ def _measurements(
     for event in result.events:
         if event.kind != "finish" or event.duration_seconds is None:
             continue
-        count = event.output_count
+        count = event.input_count
         throughput = (
             count / event.duration_seconds
             if count is not None and event.duration_seconds > 0
@@ -447,6 +562,7 @@ def _measurements(
                 pairs_in=event.input_count if event.index > 0 else None,
                 pairs_out=event.output_count if event.role != "clusterer_stage" else None,
                 throughput_per_second=throughput,
+                throughput_unit="records" if event.role == "retrieve" else "pairs",
                 cache_hit=cache_hit if first_finished else None,
                 resource_slot=slot,
                 resource_id=step.resource_ref,
@@ -460,6 +576,7 @@ def _measurements(
                     _runtime_facts(
                         cohort=hardware_cohort,
                         config=resource_runtime.get(slot, {}),
+                        resource_slot=slot,
                     )
                     if slot is not None
                     else None
@@ -472,6 +589,23 @@ def _measurements(
         )
         first_finished = False
     return tuple(output)
+
+
+def _tracker_stage_measurements(
+    measurements: Sequence[StageMeasurement],
+) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+    """Give repeated stage facts stable, collision-free tracker metric paths."""
+    output: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for measurement in measurements:
+        phase = measurement.phase or "unknown"
+        key = (phase, measurement.operation_kind)
+        occurrence = counts.get(key, 0)
+        counts[key] = occurrence + 1
+        output.setdefault(phase, {}).setdefault(measurement.operation_kind, {})[str(occurrence)] = (
+            measurement.model_dump(mode="json")
+        )
+    return output
 
 
 def _funnel(result: ExecutionResult, *, record_count: int) -> FunnelFacts:
@@ -559,6 +693,7 @@ def _partial_generation_facts(
                 runtime=_runtime_facts(
                     cohort=hardware_cohort,
                     config=resource_runtime.get("llm", {}),
+                    resource_slot="llm",
                 ),
                 observed_usd=cost,
                 external_calls=len(outputs),
@@ -1105,6 +1240,11 @@ class Experiment:
                         "seed": seed,
                         "repeat_index": repeat_index,
                         "selected_threshold": selected_threshold,
+                        "threshold_strategy": tuning.strategy,
+                        "threshold_scored_pair_count": tuning.scored_pair_count,
+                        "threshold_score_breakpoint_count": tuning.score_breakpoint_count,
+                        "threshold_score_min": tuning.score_min,
+                        "threshold_score_max": tuning.score_max,
                     }
                 )
                 result, cache_hit = self._execute_cached(
@@ -1160,9 +1300,22 @@ class Experiment:
                             token_usage.model_dump(mode="json") if token_usage is not None else {}
                         ),
                         "usd": observed_usd,
+                        "stages": _tracker_stage_measurements(measurements),
                     }
                 )
                 numeric["selected_threshold"] = selected_threshold
+                safe_tracker.log_params(
+                    {
+                        "stage_runtime": {
+                            f"{measurement.phase or 'unknown'}.{measurement.operation_kind}.{index}": (
+                                measurement.runtime.model_dump(mode="json")
+                                if measurement.runtime is not None
+                                else {}
+                            )
+                            for index, measurement in enumerate(measurements)
+                        }
+                    }
+                )
                 handle.log_metrics(numeric, headline_metric=quality.get("pair_f1"))
                 handle.record_measurements(
                     measurement.model_dump(mode="json") for measurement in measurements
@@ -1327,7 +1480,8 @@ class Experiment:
         attempt_id: str,
     ) -> _TuningOutcome:
         best_threshold = self.protocol.threshold_grid[0]
-        best_f1 = -1.0
+        best_pair_f1 = -1.0
+        strategy: Literal["grid", "observed_breakpoint"] = "grid"
         first = architecture.build(best_threshold, self._monitor)
         input_fp = ordered_input_fingerprint(records)
         cache_id = self._cache_id(
@@ -1360,12 +1514,39 @@ class Experiment:
             evaluated = evaluate_execution_result(
                 result, records, truth_clusters, threshold=threshold
             )
-            if evaluated.bcubed_f1 > best_f1:
-                best_f1 = evaluated.bcubed_f1
+            # The tunable Select is the pair-decision boundary. Optimize the
+            # scorer-isolating pair F1 on TRAIN; B-Cubed remains a reported
+            # downstream clustering metric and must not reward an all-singleton
+            # result simply because singleton-heavy data has a high floor.
+            if evaluated.pair_f1 > best_pair_f1:
+                best_pair_f1 = evaluated.pair_f1
                 best_threshold = threshold
+
+        checkpoint = first_result.checkpoint
+        observed = (
+            _best_observed_pair_threshold(checkpoint.rows, truth_clusters)
+            if checkpoint is not None
+            else None
+        )
+        if observed is not None and checkpoint is not None and observed.pair_f1 > best_pair_f1:
+            best_threshold = observed.threshold
+            strategy = "observed_breakpoint"
+            if best_threshold not in self.protocol.threshold_grid:
+                model = architecture.build(best_threshold, self._monitor)
+                result = model.execute_from(
+                    checkpoint,
+                    cache_id=cache_id,
+                    input_fingerprint=input_fp,
+                )
+                executions.append((result, True))
         return _TuningOutcome(
             threshold=best_threshold,
             executions=tuple(executions),
+            strategy=strategy,
+            scored_pair_count=observed.scored_pair_count if observed is not None else 0,
+            score_breakpoint_count=(observed.score_breakpoint_count if observed is not None else 0),
+            score_min=observed.score_min if observed is not None else None,
+            score_max=observed.score_max if observed is not None else None,
         )
 
     def _cache_id(

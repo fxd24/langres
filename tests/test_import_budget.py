@@ -107,6 +107,44 @@ def test_experiment_contracts_keep_runner_and_heavy_backends_lazy() -> None:
     )
 
 
+def test_linkage_dataset_loader_does_not_import_a_vector_backend() -> None:
+    script = (
+        "import sys; import langres.data.amazon_google; "
+        "heavy = ['faiss', 'torch', 'sentence_transformers', 'qdrant_client']; "
+        "leaked = [name for name in heavy if name in sys.modules]; "
+        "assert not leaked, leaked"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_research_retrieve_qdrant_path_does_not_import_faiss() -> None:
+    script = (
+        "import sys; "
+        "from langres.architectures import Retrieve; "
+        "from langres.core.models import CompanySchema; "
+        "from langres.resources import FakeEmbedder; "
+        "model = Retrieve(embedder=FakeEmbedder(), schema=CompanySchema, retrieve_k=1); "
+        "model.dedupe([{'id': 'a', 'name': 'A'}, {'id': 'b', 'name': 'B'}]); "
+        "assert 'qdrant_client' in sys.modules; "
+        "assert 'faiss' not in sys.modules"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 # The autoresearch facade (``langres.optimize`` / ``langres.score_blocking``,
 # PR P-C) is eager-exported from ``langres/__init__.py`` -- so a bare
 # ``import langres`` must expose both as callables WHILE staying import-light:

@@ -10,9 +10,11 @@ therefore filters candidate pairs to cross-source ones before measuring recall
 (intra-source pairs are noise for this task; see DESIGN-REVIEW B2).
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -23,12 +25,9 @@ from langres.data.benchmark import (
 )
 from langres.core.blocker import Blocker
 from langres.core.blockers.all_pairs import register_schema_idempotent
-from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
-from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.indexes.vector_index import FAISSIndex
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.metrics import evaluate_blocking
 from langres.core.models import ERCandidate
@@ -36,6 +35,9 @@ from langres.core.resolver import Resolver
 from langres.data import _benchmark_utils as _bu
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from langres.core.blockers.vector import VectorBlocker
 
 # ``complete_partition`` is re-exported above (it moved to the dataset-agnostic
 # ``langres.core.benchmark`` harness); importers that still do
@@ -258,6 +260,10 @@ def build_restaurant_blocker(
     Returns:
         A :class:`VectorBlocker` over ``RestaurantSchema.embed_text``.
     """
+    from langres.core.blockers.vector import VectorBlocker
+    from langres.core.embeddings import SentenceTransformerEmbedder
+    from langres.core.indexes.vector_index import FAISSIndex
+
     return VectorBlocker(
         vector_index=FAISSIndex(
             embedder=SentenceTransformerEmbedder("all-MiniLM-L6-v2"),
