@@ -67,10 +67,16 @@ Python.
 The current benchmark registry exposes an actual `train`/`test` split. The
 runner therefore requires `threshold_split_id="train"` and never relabels that
 data as validation. Thresholds are selected on train; test remains untouched.
-The selected recipe cut maximizes **pair F1** on train. B-Cubed is still
-reported for the resulting clusters, but it is not used to tune a matcher cut:
-on singleton-heavy data its high all-singleton floor can otherwise select a
-threshold that predicts no true pairs.
+The selected recipe cut maximizes **pair F1** on train. The declared threshold
+grid remains the baseline and fallback. When the replay checkpoint exposes
+scored rows, the runner also checks every observed score breakpoint in one
+sorted pass, so a narrow reranker score distribution cannot hide the useful cut
+between two grid values. This does not rerun or rebill the embedder/reranker.
+The selected threshold, strategy, score range, scored-pair count, and breakpoint
+count are logged as run parameters. B-Cubed is still reported for the resulting
+clusters, but it is not used to tune a matcher cut: on singleton-heavy data its
+high all-singleton floor can otherwise select a threshold that predicts no true
+pairs.
 An official publication protocol may use the matrix label `"official"`, but its
 `ExperimentRun.evaluation_split_id` still records `"test"`.
 

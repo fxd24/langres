@@ -60,7 +60,9 @@ zero-configuration local mode; the adapter is also verified against a real
 Qdrant server with Testcontainers. For two-source linkage, pass
 `source_field="source"`: Qdrant applies that exclusion inside each nearest-
 neighbour query, before `retrieve_k` is consumed. Omit it for ordinary
-single-source deduplication.
+single-source deduplication. An explicitly named collection that already exists
+is never deleted: an injected client must use a fresh collection name for each
+index instance. Install `langres[semantic]` to enable the Qdrant adapter.
 
 Recipes infer a schema from records on their first `.dedupe()` or `.compare()`
 call. Pass `schema=YourPydanticModel` explicitly when saving an artifact; an
@@ -75,9 +77,13 @@ a matrix charges the same cumulative ledger; the two arguments are mutually
 exclusive.
 
 When `Experiment` sweeps this decision threshold, it selects the value with the
-highest pair F1 on the declared training split. B-Cubed remains a downstream
-clustering report metric; it is not the threshold objective, because a
-singleton-heavy dataset can otherwise reward predicting no matching pairs.
+highest pair F1 on the declared training split. The declared grid is the
+baseline/fallback; replayable scored rows also contribute their exact observed
+score breakpoints in one sorted pass, without rerunning model inference. The
+threshold strategy and observed score range/counts are logged with the run.
+B-Cubed remains a downstream clustering report metric; it is not the threshold
+objective, because a singleton-heavy dataset can otherwise reward predicting no
+matching pairs.
 
 `architecture.resources` returns every slot as `dict[str, ModelRef]`.
 `architecture.backbone` remains compatibility sugar only for `Retrieve`, the

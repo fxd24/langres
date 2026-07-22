@@ -90,6 +90,86 @@ class _CountingScore(Score[Any]):
         )
 
 
+class _SaturatedScoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+@register_op("test_experiment_runner_saturated_score")
+class _SaturatedScore(Score[Any]):
+    """Give the true same-name pair a score inside a deliberately missed gap."""
+
+    config_model: ClassVar[type[BaseModel]] = _SaturatedScoreConfig
+
+    def __init__(self) -> None:
+        super().__init__(scope="pair", out_space="heuristic")
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> _SaturatedScore:
+        del config
+        return cls()
+
+    def forward(self, pairs: Pairs[Any]) -> Pairs[Any]:
+        return Pairs(
+            store=pairs.store,
+            rows=[
+                row.model_copy(
+                    update={
+                        "score": 0.9982 if row.left.name == row.right.name else 0.997,
+                        "score_type": "heuristic",
+                    }
+                )
+                for row in pairs.rows
+            ],
+        )
+
+
+class _SaturatedBenchmark:
+    name = "saturated"
+    threshold_grid = (0.995, 0.999)
+
+    def load(self) -> tuple[list[_Record], list[set[str]], set[frozenset[str]]]:
+        records = [
+            _Record(id="a1", name="A"),
+            _Record(id="a2", name="A"),
+            _Record(id="b", name="B"),
+            _Record(id="c", name="C"),
+            _Record(id="d1", name="D"),
+            _Record(id="d2", name="D"),
+        ]
+        clusters = [{"a1", "a2"}, {"b"}, {"c"}, {"d1", "d2"}]
+        return records, clusters, {frozenset(cluster) for cluster in clusters}
+
+    def split(
+        self,
+        corpus: list[_Record],
+        gold_clusters: list[set[str]],
+        *,
+        seed: int,
+    ) -> tuple[list[_Record], list[_Record], list[set[str]], list[set[str]]]:
+        del seed
+        return corpus[:4], corpus[4:], gold_clusters[:3], gold_clusters[3:]
+
+
+def _saturated_factory() -> ArchitectureFactory:
+    def build(threshold: float, monitor: SpendMonitor) -> ERModel:
+        return ERModel.from_topology(
+            ops=[
+                BlockerSource(AllPairsBlocker(schema=_Record)),
+                _SaturatedScore(),
+                ThresholdSelect(threshold),
+                ClustererStage(Clusterer(threshold=0.0)),
+            ],
+            replay_boundary=2,
+            monitor=monitor,
+        )
+
+    return ArchitectureFactory(name="Saturated", factory=build)
+
+
 def _factory(
     counter: list[int],
     name: str = "Custom",
@@ -223,6 +303,31 @@ def test_threshold_tuning_optimizes_train_pair_f1_not_bcubed(
     assert report.runs[0].selected_threshold == 0.5
 
 
+def test_threshold_tuning_checks_observed_score_breakpoints_between_grid_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "langres.experiments.runner.get_benchmark",
+        lambda _name: _SaturatedBenchmark(),
+    )
+    protocol = _protocol().model_copy(update={"threshold_grid": (0.995, 0.999)})
+
+    [run] = (
+        Experiment(
+            architectures=[_saturated_factory()],
+            protocol=protocol,
+            store=tmp_path / "runs.jsonl",
+            cache_dir=tmp_path / "cache",
+        )
+        .run()
+        .runs
+    )
+
+    assert run.selected_threshold == pytest.approx(0.9982)
+    assert run.metrics["pair_f1"] == 1.0
+
+
 def test_reordered_threshold_grid_reuses_the_expensive_prefix_cache(
     tmp_path: Path,
 ) -> None:
@@ -289,7 +394,8 @@ def test_variant_id_is_part_of_recipe_identity_and_resume_selection(
 
     assert [run.variant_id for run in report.runs] == ["high", "low"]
     assert report.runs[0].recipe_id != report.runs[1].recipe_id
-    assert report.runs[0].metrics["bcubed_f1"] != report.runs[1].metrics["bcubed_f1"]
+    assert report.runs[0].selected_threshold == 0.5
+    assert report.runs[1].selected_threshold == 0.1
     assert all(not run.warnings for run in report.runs)
     assert len(RunStore(store).read()) == 2
 
@@ -314,7 +420,8 @@ def test_serialized_model_config_invalidates_resume_identity(tmp_path: Path) -> 
     assert high_counter == [2]
     assert low_counter == [2]
     assert first.runs[0].recipe_id != second.runs[0].recipe_id
-    assert first.runs[0].metrics["bcubed_f1"] != second.runs[0].metrics["bcubed_f1"]
+    assert first.runs[0].selected_threshold == 0.5
+    assert second.runs[0].selected_threshold == 0.1
     assert len(RunStore(store).read()) == 2
 
 

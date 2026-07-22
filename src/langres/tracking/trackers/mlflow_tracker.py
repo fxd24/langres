@@ -159,14 +159,15 @@ class MlflowTracker:
         self.set_tags(tags)
 
     def log_params(self, params: Mapping[str, Any]) -> None:
-        """Log flat params (keys sanitized MLflow-safe, values stringified).
+        """Flatten and log params (keys sanitized, values stringified).
 
         Keys pass through :func:`_sanitize_key` -- MLflow param names allow only a
         restricted charset, so any out-of-charset character (e.g. from a sequence
         or a config key) is coerced to ``_`` rather than crashing the run.
         """
-        if params:
-            mlflow.log_params({_sanitize_key(key): str(value) for key, value in params.items()})
+        flattened = _flatten(params)
+        if flattened:
+            mlflow.log_params({_sanitize_key(key): value for key, value in flattened.items()})
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int | None = None) -> None:
         """Stream numeric metrics, optionally at a training ``step``."""

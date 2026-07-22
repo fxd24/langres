@@ -17,9 +17,10 @@ from langres._version import __version__
 from langres.benchmarks.runner import evaluate_execution_result
 from langres.core.op import ExecutionEvent, ExecutionResult
 from langres.core.model_ref import normalize_model_ref
+from langres.core.pairs import PairRow
 from langres.core.resolver import ERModel
 from langres.core.spend import BudgetExceeded, SpendMonitor
-from langres.data.benchmark import Benchmark
+from langres.data.benchmark import Benchmark, gold_pairs_from_clusters
 from langres.data.registry import get_benchmark
 from langres.experiments.cache import StageArtifactStore, ordered_input_fingerprint
 from langres.experiments.identity import (
@@ -77,6 +78,88 @@ class ExperimentCellError(RuntimeError):
 class _TuningOutcome:
     threshold: float
     executions: tuple[tuple[ExecutionResult, bool], ...]
+    strategy: Literal["grid", "observed_breakpoint"]
+    scored_pair_count: int
+    score_breakpoint_count: int
+    score_min: float | None
+    score_max: float | None
+
+
+@dataclass(frozen=True)
+class _ObservedThreshold:
+    threshold: float
+    pair_f1: float
+    scored_pair_count: int
+    score_breakpoint_count: int
+    score_min: float
+    score_max: float
+
+
+def _best_observed_pair_threshold(
+    rows: Sequence[PairRow[Any]],
+    truth_clusters: list[set[str]],
+) -> _ObservedThreshold | None:
+    """Find the exact best pair-F1 cut from scored rows in O(n log n)."""
+    gold_pairs = gold_pairs_from_clusters(truth_clusters)
+    fixed_matches: set[frozenset[str]] = set()
+    pair_scores: dict[frozenset[str], float] = {}
+    for row in rows:
+        if row.score_type is None:
+            continue
+        pair = frozenset((row.left_id, row.right_id))
+        if row.decision is True:
+            fixed_matches.add(pair)
+        elif row.decision is None and row.score is not None:
+            pair_scores[pair] = max(pair_scores.get(pair, -1.0), row.score)
+
+    for pair in fixed_matches:
+        pair_scores.pop(pair, None)
+    if not pair_scores:
+        return None
+
+    ranked = sorted(pair_scores.items(), key=lambda item: item[1], reverse=True)
+    score_min = ranked[-1][1]
+    score_max = ranked[0][1]
+    best_threshold = 1.0
+    best_pair_f1 = -1.0
+    predicted = set(fixed_matches)
+    true_positives = len(predicted & gold_pairs)
+
+    # A threshold of 1.0 is a valid fixed-decision-only baseline only when no
+    # observed score equals 1.0 (score comparison is inclusive).
+    if score_max < 1.0:
+        best_pair_f1 = (
+            2 * true_positives / (len(predicted) + len(gold_pairs))
+            if predicted or gold_pairs
+            else 0.0
+        )
+
+    index = 0
+    while index < len(ranked):
+        threshold = ranked[index][1]
+        while index < len(ranked) and ranked[index][1] == threshold:
+            pair = ranked[index][0]
+            predicted.add(pair)
+            if pair in gold_pairs:
+                true_positives += 1
+            index += 1
+        pair_f1 = (
+            2 * true_positives / (len(predicted) + len(gold_pairs))
+            if predicted or gold_pairs
+            else 0.0
+        )
+        if pair_f1 > best_pair_f1:
+            best_pair_f1 = pair_f1
+            best_threshold = threshold
+
+    return _ObservedThreshold(
+        threshold=best_threshold,
+        pair_f1=best_pair_f1,
+        scored_pair_count=len(pair_scores),
+        score_breakpoint_count=len({score for _, score in ranked}),
+        score_min=score_min,
+        score_max=score_max,
+    )
 
 
 @dataclass(frozen=True)
@@ -1157,6 +1240,11 @@ class Experiment:
                         "seed": seed,
                         "repeat_index": repeat_index,
                         "selected_threshold": selected_threshold,
+                        "threshold_strategy": tuning.strategy,
+                        "threshold_scored_pair_count": tuning.scored_pair_count,
+                        "threshold_score_breakpoint_count": tuning.score_breakpoint_count,
+                        "threshold_score_min": tuning.score_min,
+                        "threshold_score_max": tuning.score_max,
                     }
                 )
                 result, cache_hit = self._execute_cached(
@@ -1393,6 +1481,7 @@ class Experiment:
     ) -> _TuningOutcome:
         best_threshold = self.protocol.threshold_grid[0]
         best_pair_f1 = -1.0
+        strategy: Literal["grid", "observed_breakpoint"] = "grid"
         first = architecture.build(best_threshold, self._monitor)
         input_fp = ordered_input_fingerprint(records)
         cache_id = self._cache_id(
@@ -1432,9 +1521,32 @@ class Experiment:
             if evaluated.pair_f1 > best_pair_f1:
                 best_pair_f1 = evaluated.pair_f1
                 best_threshold = threshold
+
+        checkpoint = first_result.checkpoint
+        observed = (
+            _best_observed_pair_threshold(checkpoint.rows, truth_clusters)
+            if checkpoint is not None
+            else None
+        )
+        if observed is not None and checkpoint is not None and observed.pair_f1 > best_pair_f1:
+            best_threshold = observed.threshold
+            strategy = "observed_breakpoint"
+            if best_threshold not in self.protocol.threshold_grid:
+                model = architecture.build(best_threshold, self._monitor)
+                result = model.execute_from(
+                    checkpoint,
+                    cache_id=cache_id,
+                    input_fingerprint=input_fp,
+                )
+                executions.append((result, True))
         return _TuningOutcome(
             threshold=best_threshold,
             executions=tuple(executions),
+            strategy=strategy,
+            scored_pair_count=observed.scored_pair_count if observed is not None else 0,
+            score_breakpoint_count=(observed.score_breakpoint_count if observed is not None else 0),
+            score_min=observed.score_min if observed is not None else None,
+            score_max=observed.score_max if observed is not None else None,
         )
 
     def _cache_id(

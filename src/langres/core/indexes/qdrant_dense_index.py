@@ -7,6 +7,10 @@ from uuid import uuid4
 
 import numpy as np
 
+_MISSING_QDRANT_MESSAGE = (
+    "Qdrant retrieval requires the semantic extra: pip install langres[semantic]"
+)
+
 
 class QdrantDenseIndex:
     """Index precomputed dense vectors without owning the embedding model.
@@ -25,12 +29,16 @@ class QdrantDenseIndex:
     ) -> None:
         self._client = client
         self.collection_name = collection_name or f"langres_retrieve_{uuid4().hex}"
+        self._owns_collection = False
 
     @property
     def client(self) -> Any:
         """Create the optional Qdrant client only when retrieval actually runs."""
         if self._client is None:
-            from qdrant_client import QdrantClient
+            try:
+                from qdrant_client import QdrantClient
+            except ImportError as exc:
+                raise ImportError(_MISSING_QDRANT_MESSAGE) from exc
 
             self._client = QdrantClient(":memory:")
         return self._client
@@ -67,24 +75,33 @@ class QdrantDenseIndex:
                 np.empty((len(matrix), 0), dtype=np.int64),
             )
 
-        from qdrant_client.models import (
-            Distance,
-            FieldCondition,
-            Filter,
-            HasIdCondition,
-            MatchValue,
-            PointStruct,
-            QueryRequest,
-            VectorParams,
-        )
+        try:
+            from qdrant_client.models import (
+                Distance,
+                FieldCondition,
+                Filter,
+                HasIdCondition,
+                MatchValue,
+                PointStruct,
+                QueryRequest,
+                VectorParams,
+            )
+        except ImportError as exc:
+            raise ImportError(_MISSING_QDRANT_MESSAGE) from exc
 
         client = self.client
         if client.collection_exists(self.collection_name):
+            if not self._owns_collection:
+                raise ValueError(
+                    f"Qdrant collection {self.collection_name!r} already exists; "
+                    "refusing to delete a collection this index did not create"
+                )
             client.delete_collection(self.collection_name)
         client.create_collection(
             collection_name=self.collection_name,
             vectors_config=VectorParams(size=matrix.shape[1], distance=Distance.COSINE),
         )
+        self._owns_collection = True
         client.upsert(
             collection_name=self.collection_name,
             points=[
