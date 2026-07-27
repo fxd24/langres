@@ -88,7 +88,17 @@ DEFAULT_CACHE_DIR = REPO_ROOT / "tmp" / "embedder_ladder_cache"
 #: recipe this sweep did not use.
 INSTRUCTION = "Find the duplicate product or business record for: "
 
-PROMPT_ARMS: dict[str, str | None] = {"none": None, "instruct": INSTRUCTION}
+#: Arm name -> ``(document_prompt, query_prompt)``.
+#:
+#: A pair, not a single string, because the recipe that matters is **asymmetric**.
+#: EmbeddingGemma's model card prefixes documents with ``"title: none | text: "``
+#: and queries with ``"task: search result | query: "``; prefixing queries against
+#: *bare* documents — which is what ``instruct`` does — is a structurally
+#: different configuration, not the documented one with different wording.
+PROMPT_ARMS: dict[str, tuple[str | None, str | None]] = {
+    "none": (None, None),
+    "instruct": (None, INSTRUCTION),
+}
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,13 @@ class ModelSpec:
     dtype: str | None = None
     #: Smaller batches for models whose activations dominate memory.
     batch_size: int | None = None
+    #: ``(document_prefix, query_prefix)`` from the checkpoint's OWN
+    #: ``config_sentence_transformers.json`` — the recipe a user following the
+    #: model card would actually run. Set ONLY for checkpoints trained with a
+    #: query-side instruction: for every other model the generic ``instruct`` arm
+    #: already answers the question, and a second flavour of the same negative is
+    #: not worth the queue time.
+    documented_arm: tuple[str | None, str] | None = None
 
 
 #: Listed in roughly ascending expected size so a truncated sweep still covers
@@ -134,10 +151,26 @@ MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("intfloat/e5-base-v2"),
     ModelSpec("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True),
     ModelSpec("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True),
-    ModelSpec("google/embeddinggemma-300m"),
+    # Prefixes read from the checkpoint's own config_sentence_transformers.json
+    # (Retrieval-document / Retrieval-query), not from memory or a model card.
+    ModelSpec(
+        "google/embeddinggemma-300m",
+        documented_arm=("title: none | text: ", "task: search result | query: "),
+    ),
     ModelSpec("BAAI/bge-large-en-v1.5"),
     ModelSpec("mixedbread-ai/mxbai-embed-large-v1"),
-    ModelSpec("Qwen/Qwen3-Embedding-0.6B"),
+    # Qwen3's own recipe is query-side only (its "document" prompt is ""), and
+    # its query instruction is about retrieving WEB SEARCH PASSAGES, not matching
+    # entities -- so this arm measures "the documented recipe applied outside its
+    # stated domain", which is what a user following the model card would get.
+    ModelSpec(
+        "Qwen/Qwen3-Embedding-0.6B",
+        documented_arm=(
+            None,
+            "Instruct: Given a web search query, retrieve relevant passages that "
+            "answer the query\nQuery:",
+        ),
+    ),
     ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8),
     ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4),
 )
@@ -306,6 +339,22 @@ def _gold_pair_set(gold_clusters: Sequence[set[str]]) -> set[frozenset[str]]:
     return {
         frozenset(pair) for cluster in gold_clusters for pair in combinations(sorted(cluster), 2)
     }
+
+
+def arms_for(
+    spec: ModelSpec, base_arms: dict[str, tuple[str | None, str | None]]
+) -> dict[str, tuple[str | None, str | None]]:
+    """The prompt arms to measure for ``spec``.
+
+    Adds a ``documented`` arm only for checkpoints that ship a query-side
+    instruction recipe. The distinction the third arm buys: ``instruct`` answers
+    "does *any* instruction help", while ``documented`` answers "should I follow
+    the model card" — and only the second is the configuration a real user ends
+    up running, so it is the one a shipping default should be chosen on.
+    """
+    if spec.documented_arm is None:
+        return dict(base_arms)
+    return {**base_arms, "documented": spec.documented_arm}
 
 
 def _reachable_ceiling(corpus: Sequence[Any], gold_pairs: set[frozenset[str]]) -> float:
@@ -555,7 +604,7 @@ def evaluate_model_on_benchmark(
     benchmark: str,
     *,
     k_values: Sequence[int],
-    prompt_arms: dict[str, str | None],
+    prompt_arms: dict[str, tuple[str | None, str | None]],
     cache_dir: Path,
     device: str | None,
     batch_size: int,
@@ -596,20 +645,11 @@ def evaluate_model_on_benchmark(
 
         base, embedder = _build_embedder(spec, cache_dir, device, batch_size)
 
-        started = time.perf_counter()
-        index = FAISSIndex(embedder=embedder, metric="cosine")
-        index.create_index(texts)
-        index_build_seconds = time.perf_counter() - started
-        # How many texts this build actually encoded. The embedder is disk-cached
-        # and freshly constructed per cell, so `misses` counts exactly the texts
-        # that went through the model. Zero means the seconds above are a SQLite
-        # read, not an encode, and must not be quoted as an encoding cost.
-        index_build_encoded = int(embedder.cache_info()["misses"])
-
+        # Force the load HERE, before any arm runs, so a checkpoint that cannot
+        # load at all is one failure row rather than one per arm.
         parameter_count = base.parameter_count
         embedding_dim = base.embedding_dim
         prompts = _registered_prompts(base)
-        doc_vectors = embedder.encode(texts)
     except Exception as exc:  # noqa: BLE001 - a failure IS a result, never a skip
         logger.exception("model %s failed on %s", spec.name, benchmark)
         return (
@@ -627,9 +667,66 @@ def evaluate_model_on_benchmark(
             {},
         )
 
-    for arm, prompt in prompt_arms.items():
-        query_vectors = embedder.encode(texts, prompt=prompt) if prompt else doc_vectors
-        auc = separability_auc(doc_vectors, query_vectors, ids, gold_pairs)
+    #: ``document_prompt -> (index, corpus vectors, build seconds, texts encoded)``.
+    #: Keyed by the document-side prefix because arms that share one share the
+    #: index: only the arms that actually change the corpus pay to rebuild it.
+    built: dict[str | None, tuple[Any, np.ndarray, float, int]] = {}
+
+    def index_for(document_prompt: str | None) -> tuple[Any, np.ndarray, float, int]:
+        """Build (or reuse) the corpus index under one document-side prefix.
+
+        The prefix is applied by plain string concatenation rather than
+        sentence-transformers' ``prompt=`` because ``FAISSIndex.create_index``
+        takes no prompt at all — the document-side gap this run reports. The two
+        are equivalent for the checkpoints measured here, verified rather than
+        assumed: sentence-transformers applies a prompt as ``prompt + text``
+        (``sentence_transformers/base/model.py:560``) and only excludes its tokens
+        from pooling when ``include_prompt=False``
+        (``sentence_transformers/sentence_transformer/modules/pooling.py:125``),
+        which both documented checkpoints ship as ``true``. A checkpoint shipping
+        ``include_prompt=false`` would NOT be equivalent and must not be added to
+        ``documented_arm`` without changing this.
+        """
+        if document_prompt not in built:
+            doc_texts = [document_prompt + text for text in texts] if document_prompt else texts
+            # `misses` is cumulative over the embedder, so the delta — not the
+            # total — is what this build encoded. Zero means the seconds below are
+            # a SQLite read, not an encode, and must not be quoted as an encoding
+            # cost.
+            before = int(embedder.cache_info()["misses"])
+            started = time.perf_counter()
+            index = FAISSIndex(embedder=embedder, metric="cosine")
+            index.create_index(doc_texts)
+            seconds = time.perf_counter() - started
+            encoded = int(embedder.cache_info()["misses"]) - before
+            built[document_prompt] = (index, embedder.encode(doc_texts), seconds, encoded)
+        return built[document_prompt]
+
+    for arm, (document_prompt, query_prompt) in prompt_arms.items():
+        try:
+            index, doc_vectors, index_build_seconds, index_build_encoded = index_for(
+                document_prompt
+            )
+            # `prompt=None` is a cache hit on the corpus encode whenever the arm
+            # leaves the document side bare, so this is one line, not a branch.
+            query_vectors = embedder.encode(texts, prompt=query_prompt)
+            auc = separability_auc(doc_vectors, query_vectors, ids, gold_pairs)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("model %s failed on %s arm=%s", spec.name, benchmark, arm)
+            rows.append(
+                LadderRow(
+                    model=spec.name,
+                    benchmark=benchmark,
+                    prompt_arm=arm,
+                    k=0,
+                    status="failed",
+                    parameter_count=parameter_count,
+                    dtype=spec.dtype,
+                    metric_revision=METRIC_REVISION,
+                    error=f"{type(exc).__name__}: {exc}"[:400],
+                )
+            )
+            continue
 
         for k in k_values:
             try:
@@ -638,7 +735,7 @@ def evaluate_model_on_benchmark(
                     schema=schema,
                     text_field_extractor="concat_comparable_fields",
                     k_neighbors=k,
-                    query_prompt=prompt,
+                    query_prompt=query_prompt,
                 )
                 search_started = time.perf_counter()
                 candidates = list(blocker.stream(records))
@@ -1135,9 +1232,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                 if plain.separability_auc is None or prompted.separability_auc is None
                 else prompted.separability_auc - plain.separability_auc
             )
-            per_record = (
-                "n/a" if prompted.prompt_delta is None else f"{prompted.prompt_delta:+.4f}"
-            )
+            per_record = "n/a" if prompted.prompt_delta is None else f"{prompted.prompt_delta:+.4f}"
             out.append(
                 f"| `{model}` | {benchmark} | {_fmt(plain.candidate_recall)} | "
                 f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | {per_record} | "
@@ -1231,7 +1326,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--models", nargs="*", default=[m.name for m in MODELS])
     parser.add_argument("--benchmarks", nargs="*", default=list(BENCHMARKS))
     parser.add_argument("--k", nargs="*", type=int, default=list(K_VALUES))
-    parser.add_argument("--prompts", nargs="*", default=list(PROMPT_ARMS))
+    # The base arms only: the third `documented` arm is a property of the
+    # checkpoint (`ModelSpec.documented_arm`), not a thing to ask for by name.
+    parser.add_argument(
+        "--prompts", nargs="*", choices=list(PROMPT_ARMS), default=list(PROMPT_ARMS)
+    )
     parser.add_argument("--rows", type=Path, default=DEFAULT_ROWS_PATH)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE_PATH)
@@ -1270,7 +1369,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 spec,
                 benchmark,
                 k_values=args.k,
-                prompt_arms=arms,
+                prompt_arms=arms_for(spec, arms),
                 cache_dir=args.cache_dir,
                 device=args.device,
                 batch_size=args.batch_size,
