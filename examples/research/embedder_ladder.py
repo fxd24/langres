@@ -638,6 +638,16 @@ def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_
     # The cache namespace carries the dtype: half-precision vectors are DIFFERENT
     # vectors, and reusing a float32 cache entry for a float16 run would silently
     # publish a number the run never computed.
+    #
+    # It does NOT carry a Hub revision, and that is a known sharp edge. If a
+    # checkpoint is re-uploaded under the same name, this namespace still hits:
+    # the run reads the NEW checkpoint's parameter_count/embedding_dim while
+    # reusing the OLD checkpoint's vectors, and the row it publishes mixes the
+    # two with nothing to reveal it. Delete a model's namespace before
+    # re-measuring after an upstream re-upload. Adding the revision here would
+    # invalidate every cached vector and force a full re-measure of the ladder,
+    # so it is deliberately deferred until the hazard actually bites -- the
+    # report says the same thing in "How to reproduce these numbers".
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
     return base, DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
 
@@ -1264,15 +1274,33 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "```\n"
     )
     out.append(
-        f"\n$0 and offline — no API key, no network at measure time. Metric revision "
+        f"\n**$0 — no paid API and no key.** Not offline, though: the first run of a "
+        "checkpoint downloads it from the Hugging Face Hub "
+        "(`SentenceTransformerEmbedder` leaves `local_files_only` false), and `uv run` "
+        "may resolve dependencies. With networking disabled and a cold cache the "
+        "script records failure rows rather than reproducing this table. Once the "
+        "checkpoints and the embedding cache are warm, a re-render is genuinely "
+        "offline. Metric revision "
         f"**{METRIC_REVISION}**; `k` values `{measured_ks}`; benchmarks "
         + ", ".join(f"`{b}`" for b in benchmarks)
         + ". Every row records its own `model`, `benchmark`, `k`, `prompt_arm`, "
         "`metric_revision`, `parameter_count` and `embedding_dim`, so a table cell "
-        "can always be traced to the row that produced it. Checkpoints resolve to "
-        "whatever the Hub serves for that name — the rows pin `parameter_count` and "
-        "`embedding_dim`, **not** a Hub revision, so a re-run after an upstream "
-        "re-upload can legitimately differ.\n"
+        "can always be traced to the row that produced it.\n"
+    )
+    out.append(
+        "\n> **Checkpoints are pinned by name only, and that has a sharp edge.** The "
+        "rows record `parameter_count` and `embedding_dim`, **not** a Hub revision, "
+        "and the embedding cache is namespaced on model name + dtype "
+        "(`embedder_ladder.py::_build_embedder`) — also not a revision. So if an "
+        "upstream checkpoint is re-uploaded under the same name and the cache is "
+        "warm, a re-run reads the **new** checkpoint's metadata while reusing the "
+        "**old** checkpoint's vectors, and publishes a row that mixes the two. That "
+        "is worse than a legitimately different number, because nothing in the row "
+        "reveals it. **After any upstream re-upload, delete that model's cache "
+        "namespace before re-measuring.** The namespace deliberately still omits the "
+        "revision: adding it would invalidate every cached vector and force a full "
+        "re-measure of the whole ladder, for a hazard that has not occurred — but it "
+        "is the right fix the first time it does.\n"
     )
     out.append(
         "\nRequires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS "
