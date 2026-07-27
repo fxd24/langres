@@ -71,7 +71,7 @@ langres/
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
-│   │   ├── module.py, modules/, judges/  # Module (judge) ABC + LLMJudge, CascadeJudge, etc.
+│   │   ├── matcher.py, matchers/   # Matcher ABC + LLMMatcher, CascadeChainMatcher, etc. (the files are matchers/*_judge.py; the CLASSES are all *Matcher)
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
 │   │   ├── calibration.py, finetune.py, fit_report.py, methods_prompt.py, methods_calibrate.py  # W2 back-compat shims → langres.training.* (real modules moved; marked `# TEMPORARY: deleted by the W2 sweep`)
@@ -85,6 +85,7 @@ langres/
 │   ├── tracking/       # observability, NOT ER modelling — beside core (one-way dep; the langres.core facade re-exports these for back-compat): runs.py (RunContext/RunStore + capture_run), judgement_log.py (JudgementLog/LoggingMatcher), factories.py (create_*_tracker), trackers/ (ExperimentTracker + lazy Mlflow/Wandb/Trackio adapters)
 │   ├── experiments/    # import-light research contracts + lazy Experiment runner: protocol/identities, immutable StageArtifactStore, score-once replay, measurements/statistics/reports; extends tracking runs rather than creating another store/executor
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
+│   ├── plotting/       # OPTIONAL matplotlib charts over a BlockerEvaluationReport: plot_score_distribution / plot_rank_distribution / plot_recall_curve / plot_evaluation_summary. __init__ exports NOTHING (import-light) — reach them via `from langres.plotting.blockers import ...`. matplotlib is imported INSIDE each function and is NOT declared in pyproject.toml at all (no extra, not even the dev group), so callers must install it themselves; contrast report/, which renders at $0 with stdlib-only inline SVG
 │   ├── curation/       # human-in-the-loop labelling + gold-set cold-start (the dissolved langres.bootstrap). core/{review,harvest,anchor_store,canonicalizer}.py are TEMPORARY W2-sweep back-compat shims re-exporting from here
 │   │   ├── review.py       # select_for_review + ReviewQueue (pick the uncertain margin)
 │   │   ├── harvest.py      # Correction/CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs, align_pairs

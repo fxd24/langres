@@ -9,15 +9,29 @@ named **recipes** provide readable complete topologies. `EvaluationProtocol`
 and `ExperimentReport` keep benchmark, split, seed, measurement, and
 infrastructure cohorts explicit.
 
-```bash
-uv run python examples/research/first_experiment.py  # real runner, local fixture, $0
-```
-
 Install from PyPI:
 
 ```bash
 pip install langres
 ```
+
+The core install needs no extras, no API key and no network. From a git
+checkout, the $0 offline quickstart is one command:
+
+```bash
+git clone https://github.com/fxd24/langres.git && cd langres && uv sync
+uv run python examples/quickstart_models.py  # FuzzyString dedupe, real clusters, $0
+```
+
+!!! note "The example scripts need a git checkout"
+
+    `examples/` is not part of the published wheel, so every `examples/...`
+    path in these docs assumes a clone. The research runner
+    (`examples/research/first_experiment.py`) additionally needs the
+    `[semantic]` extra, because research `Retrieve` builds a Qdrant index. It
+    executes the real runner over a bundled fixture with a deterministic
+    **fake** embedder — proof that the contracts compose, not a quality
+    result.
 
 ## Where to go next
 

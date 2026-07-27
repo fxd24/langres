@@ -99,6 +99,7 @@ nav:
   - Getting Started: GETTING_STARTED.md
   - Tutorial - Your Own CSV: TUTORIAL_YOUR_OWN_CSV.md
   - Technical Overview: TECHNICAL_OVERVIEW.md
+  - Model Resources: RESOURCE_API.md
   - Experiments: EXPERIMENTS.md
   - Reproducibility: REPRODUCIBILITY.md
   - Hugging Face: HUGGING_FACE.md

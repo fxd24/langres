@@ -9,14 +9,14 @@ This document catalogs external resources that inform langres's design, architec
 ### PyTorch
 
 - **URL**: <https://pytorch.org/>
-- **What we learn**: Modular, composable primitives that can be combined flexibly. The `nn.Matcher` abstraction for stateful components with `forward()` methods. Clear separation between high-level (`torch.nn`) and low-level (`torch.Tensor`) APIs.
-- **Applied in langres**: Our `Matcher` abstraction mirrors PyTorch's design. The two-layer API (tasks vs. core) follows PyTorch's philosophy of simple primitives + convenient wrappers.
+- **What we learn**: Modular, composable primitives that can be combined flexibly. The `nn.Module` abstraction for stateful components with `forward()` methods. Clear separation between high-level (`torch.nn`) and low-level (`torch.Tensor`) APIs.
+- **Applied in langres**: Our `Matcher` abstraction mirrors PyTorch's design. The three-layer API (named `architectures` → `ERModel`/`Resolver` → `langres.core` primitives) follows PyTorch's philosophy of simple primitives + convenient wrappers.
 
 ### PyTorch Lightning
 
 - **URL**: <https://lightning.ai/>
 - **What we learn**: Separation of research/model code from engineering concerns (logging, checkpointing, distributed training). Structured training loops with clear hooks. The "organized PyTorch" philosophy.
-- **Applied in langres**: Inspires our separation of matching logic (Flows) from optimization/execution concerns (Tasks, Optimizer). The `.compile()` method concept for optimization.
+- **Applied in langres**: Inspires our separation of matching logic (the `langres.core` primitives an `ERModel` composes) from the fitting/optimization concerns that live beside it (`langres.training`, `langres.autoresearch`). The `.compile()` method concept survives as `ERModel.fit(method=...)`.
 
 ### FastAPI
 
@@ -34,7 +34,7 @@ This document catalogs external resources that inform langres's design, architec
 
 - **URL**: <https://github.com/stanfordnlp/dspy>
 - **What we learn**: Declarative prompt programming with automatic optimization. Separation of program logic from prompt engineering. Compiler-based approach to LLM systems.
-- **Applied in langres**: Core dependency for LLM-based matchers (Approach 3). The `Optimizer` component will use DSPy for prompt optimization. Inspires our "compile-then-run" workflow.
+- **Applied in langres**: Backs the DSPy-compiled matchers (`DSPyMatcher`) and the prompt-optimize methods `Bootstrap` / `MIPRO` / `GEPA` in `langres.training.methods_prompt`. Ships in the optional `[llm]` extra, not in core `dependencies`, and imports lazily. Inspires our "compile-then-run" workflow.
 
 ---
 
@@ -189,13 +189,13 @@ This document catalogs external resources that inform langres's design, architec
 
 - **URL**: <https://www.sbert.net/>
 - **What we learn**: Efficient semantic similarity with embeddings. Pre-trained models for various domains. FAISS/Annoy integration for approximate nearest neighbors.
-- **Applied in langres**: Core dependency for semantic blocking (Approach 2). Vector index integration for candidate generation.
+- **Applied in langres**: Backs semantic blocking (Approach 2) and vector index integration for candidate generation. Ships in the optional `[semantic]` extra, not in core `dependencies`, and imports lazily.
 
 ### Optuna
 
 - **URL**: <https://optuna.org/>
 - **What we learn**: Automated hyperparameter optimization. Pruning unpromising trials. Distributed optimization support.
-- **Applied in langres**: Core dependency for `Optimizer`. Hyperparameter tuning for matchers, blocking thresholds, clustering parameters.
+- **Applied in langres**: Backs `langres.autoresearch.blocker_optimizer.BlockerOptimizer` (blocking-parameter search). A **dev-only** dependency (`[dependency-groups] dev`) — not core `dependencies` and not reachable through any `pip install langres[...]` extra — and imported lazily. There is no general `Optimizer` component; the blocking search is the vertical that ships.
 
 ### NetworkX
 
