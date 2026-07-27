@@ -95,9 +95,12 @@ LARGE_COMPONENT = 10
 LEXICAL_GAP_COVERAGE = 0.5
 
 #: Below this share of gold pairs being cross-source, a cross-source pipeline is
-#: chasing a recall ceiling it cannot reach, and every recall/PC/F1 number on the
-#: set is bounded by the labeling rather than by the method. 0.95 -- i.e. flag it
-#: as soon as more than one gold pair in twenty is structurally unreachable.
+#: chasing a recall ceiling it cannot reach: recall and Pair Completeness are
+#: bounded by the labeling rather than by the method. F1 is bounded too, but at a
+#: HIGHER number -- with perfect precision, ``r`` caps F1 at ``2r/(1+r)``, so a
+#: 0.8396 recall ceiling still permits F1 0.9128. Do not read this value as an F1
+#: bound. 0.95 -- i.e. flag it as soon as more than one gold pair in twenty is
+#: structurally unreachable.
 CAPPED_RECALL_CEILING = 0.95
 
 #: Repo root, resolved from this file, so the script runs from any cwd.
@@ -395,8 +398,13 @@ def cross_source_ceiling(corpus: Sequence[Any], gold_clusters: Sequence[set[str]
     never emit a pair whose two records come from the same side. Any gold cluster
     spanning 3+ records emits such pairs, and every one of them is unreachable --
     a **recall ceiling below 1.0 that no blocker, however good, can lift**. It
-    bounds every recall/PC/F1 number measured on the dataset, so it belongs
-    beside the saturation verdict rather than being rediscovered per experiment.
+    caps recall and Pair Completeness directly, so it belongs beside the
+    saturation verdict rather than being rediscovered per experiment.
+
+    **It is not an F1 ceiling.** F1 is bounded too, but higher: with perfect
+    precision and recall capped at ``r``, F1 reaches ``2r/(1+r)`` -- so
+    ``amazon_google``'s 0.8396 still permits F1 0.9128. Reading this number as an
+    F1 bound would mark achievable scores impossible.
 
     This is the same phenomenon as ``dblp_scholar``'s 37-record component (§5),
     measured portfolio-wide: there it is severe enough (0.3977) to have been

@@ -72,8 +72,12 @@ marked because everything else in this table is a rendering of
   B-records, so it can never emit a pair whose two records come from the same
   side; any gold cluster spanning 3+ records emits exactly such pairs, and every
   one of them is **unreachable by any blocker, however good**. This is a hard cap
-  on every recall / Pair-Completeness / F1 number measured on the dataset, and it
-  is a property of the *labeling*, not of the method. Four of the nine loadable
+  on recall and Pair Completeness, and it is a property of the *labeling*, not of
+  the method. It caps F1 too, but **at a higher number, not at this one**: with
+  perfect precision and recall capped at `r`, F1 reaches `2r/(1+r)`, so
+  `amazon_google`'s 0.8396 still permits an F1 of 0.9128. Read this column as a
+  recall/PC ceiling; treating it as an F1 bound would mark achievable scores
+  impossible. Four of the nine loadable
   benchmarks are capped: `amazon_google` at 0.8396, `wdc_computers` 0.9001,
   `walmart_amazon` 0.8837, and `dblp_scholar` at **0.3977**. A "0.84 recall" on
   `amazon_google` is therefore a **perfect** score, not an 84% one — see §8.
@@ -222,6 +226,22 @@ converted into the unit that bounds a result.
 reachable**. Reporting it against a 1.0 target invents a 16-point gap that no
 amount of engineering can close, and any optimizer maximizing recall there will
 spend its whole budget chasing it. The ceiling belongs beside the score.
+
+**It bounds F1 too, but not at this number.** Recall and Pair Completeness are
+capped at `r` directly; F1 is capped at `2r/(1+r)`, which is strictly higher for
+every `r < 1`. Carrying the recall ceiling over to F1 unchanged would mark
+reachable scores impossible — the opposite error to the one this section fixes:
+
+| benchmark | recall/PC ceiling `r` | F1 ceiling `2r/(1+r)` |
+|---|---|---|
+| `amazon_google` | 0.8396 | 0.9128 |
+| `walmart_amazon` | 0.8837 | 0.9383 |
+| `wdc_computers` | 0.9001 | 0.9474 |
+| `abt_buy` | 0.9847 | 0.9923 |
+| `dblp_scholar` | 0.3977 | 0.5691 |
+
+So `amazon_google`'s published 0.756 Ditto F1 sits under a 0.9128 ceiling, not a
+0.8396 one — there is real headroom, just less than 1.0 of it.
 
 This also flags a live claim in shipped source: `src/langres/optimize.py:135-139`
 asserts that all gold matches are inter-source. On four of the nine loadable

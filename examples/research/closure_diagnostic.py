@@ -598,12 +598,17 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         )
 
     # 4. Instrument check B -- the reconstruction reproduces dedupe()'s clusters.
-    replayed = Clusterer(threshold=threshold).cluster(judgements)
+    # Rebuilt by a LOCAL union-find over the logged verdicts, not by replaying
+    # Clusterer: replaying the implementation under test cannot observe that
+    # implementation drifting (see _components_from_verdicts). This is the only
+    # one of the three gates that is independent of core.clusterer.
+    replayed = _components_from_verdicts(judged_rows)
     if not _same_partition(replayed, clusters):
         raise RuntimeError(
             f"{name}: the reconstruction does NOT reproduce dedupe()'s clusters "
-            f"({len(replayed)} replayed vs {len(clusters)} actual). The harness is "
-            "measuring something other than the pipeline; refusing to report a number."
+            f"({len(replayed)} replayed vs {len(clusters)} actual). Either the log "
+            "lost edges or Clusterer no longer merges on predicted_match; the harness "
+            "is measuring something other than the pipeline, so it refuses to report."
         )
     reconstruction_exact = True
 
@@ -680,6 +685,56 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         correlation=correlation,
         sweep=sweep,
     )
+
+
+def _components_from_verdicts(rows: list[dict[str, Any]]) -> list[set[str]]:
+    """Connected components of the ``verdict is True`` edges, by local union-find.
+
+    Deliberately **not** ``Clusterer.cluster()``. Instrument check B compares this
+    against the partition ``dedupe()`` actually returned, and *a check that replays
+    the implementation under test cannot observe that implementation drifting*: if
+    ``Clusterer`` ever merged on ``score >= threshold`` instead of
+    ``predicted_match``, a ``Clusterer``-based replay would move in lockstep with
+    the thing it is checking and stay green, while ``verdict_agreement`` (which
+    validates the *log*, not the merge) and the sweep (same clusterer again) would
+    also stay green -- three gates, one blind spot, and every count below silently
+    describing a different predicate from the one that built the clusters.
+
+    This path reads only the logged verdicts and closes them transitively itself,
+    so it moves independently of ``core.clusterer`` and the comparison has a way
+    to fail.
+
+    Matches ``Clusterer``'s output convention exactly: a node enters the graph only
+    via an accepted edge, so every component returned has size >= 2 and records
+    with no accepted edge are absent rather than emitted as singletons.
+
+    Args:
+        rows: Judged log rows (``verdict`` not ``None``).
+
+    Returns:
+        The transitive closure of the accepted edges, as a list of id sets.
+    """
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        root = node
+        while parent[root] != root:
+            root = parent[root]
+        while parent[node] != root:  # path compression
+            parent[node], node = root, parent[node]
+        return root
+
+    for row in rows:
+        if row["verdict"] is True:
+            left, right = find(row["left_id"]), find(row["right_id"])
+            if left != right:
+                parent[right] = left
+
+    components: dict[str, set[str]] = {}
+    for node in list(parent):
+        components.setdefault(find(node), set()).add(node)
+    return list(components.values())
 
 
 def _same_partition(left: list[set[str]], right: list[set[str]]) -> bool:
