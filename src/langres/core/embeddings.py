@@ -660,6 +660,24 @@ class SentenceTransformerEmbedder:
         assert dim is not None, "Model returned None for embedding dimension"
         return int(dim)
 
+    @property
+    def parameter_count(self) -> int:
+        """Total parameters of the **loaded** model — measured, never tabulated.
+
+        Comparing embedders at "the same size" needs a real number: a
+        hand-maintained name→size table drifts the moment a checkpoint is
+        revised, and a size *label* ("small"/"base"/"large") is a marketing
+        word, not a measurement. This reads the weights that were actually
+        loaded, so it cannot disagree with the model that produced the vectors.
+
+        Returns:
+            ``sum(p.numel() for p in model.parameters())``.
+
+        Note:
+            Triggers model loading if not already loaded.
+        """
+        return sum(int(parameter.numel()) for parameter in self._get_model().parameters())
+
 
 @register("fake_embedder")
 class FakeEmbedder:
