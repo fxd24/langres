@@ -531,8 +531,13 @@ def print_comparison_table(
     ]
 
     # Header
-    print(f"{'Metric':<25} {'FAISS':>15} {'Hybrid':>15} {'Jina CE':>15} {'Best':>15}")
+    print(f"{'Metric':<25} {'FAISS':>15} {'Hybrid*':>15} {'Jina CE':>15} {'Best':>15}")
     print("-" * 120)
+    # The regime belongs beside the numbers, not only in the saved JSON. Without
+    # it, a reader of stdout attributes the hybrid column to the instruction --
+    # under a banner that says the run uses instruction prompts.
+    print("* Hybrid is UNPROMPTED (search_all cannot apply a query prompt);")
+    print("  FAISS and Jina CE are prompted. 'Hybrid vs' deltas mix index + prompt regime.")
 
     for label, key, unit in metrics:
         # Handle section headers
@@ -791,7 +796,11 @@ def main() -> None:
     """Run blocking evaluation comparing FAISS vs Qdrant hybrid vs Jina CrossEncoder."""
     print("=" * 120)
     print("BLOCKING EVALUATION: FAISS vs Qdrant Hybrid vs Jina CrossEncoder")
-    print("With DiskCachedEmbedder and Instruction Prompts")
+    print("With DiskCachedEmbedder and Instruction Prompts on 2 of 3 arms")
+    print(f"  prompted:   FAISS, Jina CrossEncoder  ({EMBEDDING_INSTRUCTION!r})")
+    print("  UNPROMPTED: Qdrant Hybrid -- search_all() serves queries from vectors")
+    print("              cached at create_index() time, so a prompt cannot reach")
+    print("              the encoder. Deltas against it mix index + prompt regime.")
     print("=" * 120)
     print(f"\nDataset: Funder organization names")
     print(f"Dense model: {DENSE_MODEL}")
@@ -860,7 +869,7 @@ def main() -> None:
     )
 
     qdrant_hybrid_results = evaluate_blocking_recall(
-        qdrant_hybrid_blocker, entities, gold_pairs, gold_clusters, "Qdrant Hybrid"
+        qdrant_hybrid_blocker, entities, gold_pairs, gold_clusters, HYBRID_ARM_LABEL
     )
 
     # Log cache performance after second evaluation

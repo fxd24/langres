@@ -498,7 +498,13 @@ class FakeHybridVectorIndex:
 
         Args:
             k: Number of neighbors per corpus item.
-            query_prompt: Optional instruction prompt (ignored by fake implementation).
+            query_prompt: Must be ``None``. Mirrors
+                :meth:`QdrantHybridIndex.search_all`, which **raises** rather than
+                discard a prompt it cannot apply.
+
+        Raises:
+            RuntimeError: If called before ``create_index()``.
+            NotImplementedError: If ``query_prompt`` is not ``None``.
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -506,6 +512,18 @@ class FakeHybridVectorIndex:
         """
         if self._n_samples is None:
             raise RuntimeError("Index not built. Call create_index() first.")
+        if query_prompt is not None:
+            # A fake that ACCEPTS what the real index REJECTS is worse than no
+            # fake: a VectorBlocker(query_prompt=...) test passes here and then
+            # fails on QdrantHybridIndex, so the double hides exactly the
+            # prompt-discard defect this pair of raises exists to surface.
+            raise NotImplementedError(
+                "FakeHybridVectorIndex.search_all() rejects query_prompt to match "
+                "QdrantHybridIndex.search_all(), which cannot apply one: it serves "
+                "queries from the dense vectors cached at create_index() time. A "
+                "fake that silently accepted it would let a test pass on the double "
+                "and fail on the real index."
+            )
 
         # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
         indices = np.zeros((self._n_samples, k), dtype=np.int64)

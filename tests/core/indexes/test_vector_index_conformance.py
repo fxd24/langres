@@ -38,36 +38,50 @@ def _accepted_types(func: object, parameter: str) -> set[object]:
     return set(args) if args else {annotation}
 
 
-#: ``(class, does its ``search`` accept everything the protocol's does?)``.
-#: ``QdrantHybridIndex`` is ``False`` **on purpose**: a hybrid index cannot serve
-#: a pure-vector query because the sparse side must encode the text. The entry
-#: records a real capability difference, and the class docstring says the same.
-#: If someone widens it to conform, this test fails and sends them to that
-#: docstring — which is the only way the prose and the code stay in agreement.
-SEARCH_CONFORMANCE: tuple[tuple[type, bool], ...] = (
-    (FAISSIndex, True),
-    (FakeVectorIndex, True),
-    (QdrantHybridIndex, False),
-    (FakeHybridVectorIndex, False),
-    (QdrantHybridRerankingIndex, False),
-    (FakeHybridRerankingVectorIndex, False),
+#: Text-only ``query_texts``: what the hybrid indexes accept. Both forms matter —
+#: their docstrings promise a single query *and* a batch.
+TEXT_ONLY: frozenset[object] = frozenset({str, list[str]})
+
+#: The protocol's full set: text, batch, or pre-computed vectors.
+TEXT_OR_VECTORS: frozenset[object] = frozenset({str, list[str], np.ndarray})
+
+#: ``(class, the EXACT set its ``search`` accepts)``.
+#:
+#: Deliberately the exact set and not a "conforms?" boolean. A boolean only asks
+#: "is this a superset of the protocol", so narrowing ``str | list[str]`` down to
+#: bare ``str`` — dropping batch queries — would keep a boolean green while the
+#: class docstring still promised both forms. The failure this file exists to
+#: catch is precisely a docstring that outlives the signature under it.
+#:
+#: The hybrid entries are ``TEXT_ONLY`` **on purpose**: a hybrid index cannot
+#: serve a pure-vector query, because the sparse side must encode the text. That
+#: is a real capability difference and each class docstring says so; if one is
+#: ever widened to conform, this fails and sends the author to that docstring.
+SEARCH_QUERY_TYPES: tuple[tuple[type, frozenset[object]], ...] = (
+    (FAISSIndex, TEXT_OR_VECTORS),
+    (FakeVectorIndex, TEXT_OR_VECTORS),
+    (QdrantHybridIndex, TEXT_ONLY),
+    (FakeHybridVectorIndex, TEXT_ONLY),
+    (QdrantHybridRerankingIndex, TEXT_ONLY),
+    (FakeHybridRerankingVectorIndex, TEXT_ONLY),
 )
 
 
-@pytest.mark.parametrize(("index_cls", "conforms"), SEARCH_CONFORMANCE)
-def test_search_query_texts_conformance(index_cls: type, conforms: bool) -> None:
+@pytest.mark.parametrize(("index_cls", "expected"), SEARCH_QUERY_TYPES)
+def test_search_query_texts_conformance(index_cls: type, expected: frozenset[object]) -> None:
     """Each index accepts exactly the ``query_texts`` its docstring claims."""
     protocol_types = _accepted_types(VectorIndex.search, "query_texts")
     actual_types = _accepted_types(index_cls.search, "query_texts")
 
-    assert protocol_types >= actual_types, (
+    assert actual_types == set(expected), (
+        f"{index_cls.__name__}.search accepts {sorted(map(str, actual_types))}, "
+        f"expected {sorted(map(str, expected))}. If this is intentional, update the "
+        "class docstring and SEARCH_QUERY_TYPES together — and the mypy assertion in "
+        "langres/core/indexes/__init__.py, which pins the same fact for the checker."
+    )
+    assert actual_types <= protocol_types, (
         f"{index_cls.__name__}.search accepts {actual_types - protocol_types} "
         "which VectorIndex.search does not declare"
-    )
-    assert (actual_types >= protocol_types) is conforms, (
-        f"{index_cls.__name__}.search accepts {sorted(map(str, actual_types))}; "
-        f"VectorIndex.search declares {sorted(map(str, protocol_types))}. "
-        "Conformance changed — update the class docstring and SEARCH_CONFORMANCE together."
     )
 
 

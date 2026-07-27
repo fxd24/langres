@@ -301,9 +301,12 @@ class LadderRow:
     #: a metric CHANGES MEANING, so the report can refuse to print two definitions
     #: in one column. Rows below ``METRIC_REVISION`` are re-run, not re-rendered.
     metric_revision: int = 0
-    #: Mean **per-record** recall difference (instruct minus none) for this model
-    #: on this benchmark, with its paired-bootstrap CI (by gold cluster). Only on
-    #: ``instruct`` rows at ``CI_K``. The point estimate is the same statistic the
+    #: Mean **per-record** recall difference (this row's arm minus ``none``) for
+    #: this model on this benchmark, with its paired-bootstrap CI (by gold
+    #: cluster). Set on prompted rows at ``CI_K`` — ``instruct`` (query side only)
+    #: and ``documented`` (the checkpoint's own document AND query prefixes, so
+    #: the corpus index is rebuilt). The two are not the same experiment; only
+    #: ``instruct`` isolates the query side. The point estimate is the statistic the
     #: interval bounds — deliberately NOT the difference of the two aggregate
     #: recalls, which is a different number (they disagreed by 34% on
     #: walmart_amazon). An interval spanning 0 means the delta is not
@@ -911,9 +914,12 @@ def _attach_intervals(
 
     Two comparisons, both paired per record and resampled by gold cluster:
 
-    - **prompt arm**: instruct minus none, same model, same index. The only thing
-      that differs is the query encoding, so this is as clean a paired test as
-      the harness can make.
+    - **prompt arm**: this arm minus ``none``, same model. What differs depends on
+      the arm and they are NOT the same experiment: ``instruct`` changes the query
+      encoding only, against the same bare-document index; ``documented`` also
+      applies the checkpoint's document prefix, so the corpus vectors are rebuilt
+      and the delta is document-plus-query vs. neither. Both are paired per record
+      the same way; only ``instruct`` is a query-only test.
     - **vs. the shipped default**: this model minus ``REFERENCE_MODEL`` in the
       same arm. Left unset when the reference has not been measured on this
       benchmark — an absent interval is a fact, an invented one is not.
@@ -1241,6 +1247,39 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         f"**{METRIC_REVISION}**; re-running it regenerates this file from "
         "`20260727_embedder_ladder_rows.jsonl`.\n"
     )
+
+    # Provenance, derived from the rows rather than typed. A number whose
+    # producing command is not written down cannot be sourced later, and an
+    # unsourceable number is one that eventually has to be retracted.
+    measured_ks = sorted({row.k for row in ok})
+    out.append("\n## How to reproduce these numbers\n")
+    out.append(
+        "\n```bash\n"
+        "# every model, committing and pushing after each one\n"
+        "bash examples/research/run_ladder.sh\n"
+        "\n# or one model / a subset (space-separated)\n"
+        'LADDER_MODELS="intfloat/e5-base-v2" bash examples/research/run_ladder.sh\n'
+        "\n# render this file from the existing rows, measuring nothing\n"
+        "uv run python examples/research/embedder_ladder.py --render-only\n"
+        "```\n"
+    )
+    out.append(
+        f"\n$0 and offline — no API key, no network at measure time. Metric revision "
+        f"**{METRIC_REVISION}**; `k` values `{measured_ks}`; benchmarks "
+        + ", ".join(f"`{b}`" for b in benchmarks)
+        + ". Every row records its own `model`, `benchmark`, `k`, `prompt_arm`, "
+        "`metric_revision`, `parameter_count` and `embedding_dim`, so a table cell "
+        "can always be traced to the row that produced it. Checkpoints resolve to "
+        "whatever the Hub serves for that name — the rows pin `parameter_count` and "
+        "`embedding_dim`, **not** a Hub revision, so a re-run after an upstream "
+        "re-upload can legitimately differ.\n"
+    )
+    out.append(
+        "\nRequires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS "
+        "(`run_ladder.sh` defaults both when unset): torch, faiss and scikit-learn "
+        "each bundle a `libomp.dylib`, and with two runtimes loaded the sweep "
+        "deadlocks at 0% CPU rather than failing.\n"
+    )
     if stale:
         pending = sorted({row.model for row in stale})
         out.append(
@@ -1523,7 +1562,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out.append(f"\n## Does an instruction prompt help? (k={headline_k})\n")
     out.append(
-        "\nSame model, same `k`, same index — only the query side is re-encoded with "
+        "\n**This paragraph describes the `instruct` arm only.** For it: same model, "
+        "same `k`, same index — only the query side is re-encoded with "
         f"a single fixed instruction (`{INSTRUCTION!r}`). This is deliberately **one** "
         "instruction for every model, so it answers 'does a task instruction on the "
         "query help', not 'is each model at its documented best'. The `own prompt "
@@ -1572,8 +1612,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     )
     out.append(
         "\n**`Δ per-record` is the statistic the interval bounds** — the mean "
-        "per-record recall difference (instruct minus none), resampled by gold "
-        "cluster via `langres.experiments.statistics.paired_entity_bootstrap`; "
+        "per-record recall difference (**this arm** minus `none`), resampled by gold "
+        "cluster via `langres.experiments.statistics.paired_entity_bootstrap`. "
+        "**Which sides moved depends on the arm, and they are not the same "
+        "experiment**: `instruct` re-encodes the *query* side only, against the "
+        "same bare-document index as `none`; `documented` applies the checkpoint's "
+        "own document prefix too, so `build_prompted_index` rebuilds the corpus "
+        "vectors and its Δ is **document-plus-query vs. neither**. Reading a "
+        "`documented` Δ as a query-only effect overstates what the query "
+        "instruction did. It is also the more useful number, because it is the "
+        "configuration the model card actually describes. Resampling is identical "
+        "for both — "
         "never by pair row, because pair rows inside one entity are dependent and "
         "resampling them produces intervals that are far too tight. It is "
         "deliberately **not** the difference of the two aggregate `recall` columns "
