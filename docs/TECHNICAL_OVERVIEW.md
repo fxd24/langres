@@ -1111,14 +1111,65 @@ its pivot order, `CorrelationClusterer` uses the judgement's `score`, falling ba
 to `confidence`, then a unit `1.0` — so a bare "Yes" decision (no score) is still a
 full-strength edge, never a silent zero that would drop the merge.
 
-**Not the default.** Benchmarked head-to-head against the base `Clusterer` on
-Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
-clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
-on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
-see `examples/research/w1_blocking_algebra_output.md` for the full tables and the
-default-flip decision (kept opt-in; recommended for harder/messier
-entity-resolution problems, not flipped globally on a single hard-dataset
-win).
+**Same output shape as the base `Clusterer`.** Every returned cluster holds at
+least two ids. Two situations collapse to that one convention, and both mean
+"this record merged with nothing": a record with no qualifying edge never enters
+the adjacency map (identical to the base `Clusterer`, whose graph an unmerged
+record never enters), and a record *with* a qualifying edge whose neighbours an
+earlier pivot already claimed forms a one-node cluster mid-algorithm, which is
+dropped. That keeps the `dedupe()` contract above — the multi-record clusters,
+singletons left out — true no matter which clusterer you pick, so opting in
+changes your *partition* without changing your output *shape*.
+
+#### How to opt in
+
+Pass it to any architecture's `clusterer=`, or to the `Resolver`'s clusterer slot:
+
+```python
+from langres.architectures import FuzzyString
+from langres.core.clusterers import CorrelationClusterer
+
+result = FuzzyString(threshold=0.55, clusterer=CorrelationClusterer()).dedupe(records)
+```
+
+`clusterer=` selects the **algorithm** only. The clusterer is rebuilt at the
+model's own `threshold`, so a threshold set on the object you pass is ignored and
+`threshold=` remains the single match cut (the value `DedupeResult.threshold`
+reports). Swapping the clusterer does not mint a new architecture — that result
+is still a `FuzzyString`.
+
+**Recommended, and still not the default.** The default is unchanged; that is a
+deliberate product decision, not an absence of evidence. Measured over 9
+benchmarks against the default transitive-closure `Clusterer` on the identical
+judgement set (`docs/research/20260727_closure_diagnostic.md`; the earlier
+2-dataset study is at `examples/research/w1_blocking_algebra_output.md`):
+
+| | result |
+|---|---|
+| BCubed F1 vs closure, over 54 grid points | **higher at 36 of the 45 scored**, tied at 9, lower at **0** |
+| the other 9 grid points | **unscorable** — closure's giant component was too large to score, which is itself the result |
+| judged-and-*rejected* pairs inside an output cluster, tuned point | **3,776 → 676** across the portfolio (a 3.0×–7.4× cut) |
+| worst single benchmark for closure | `amazon_google`: **944** rejected pairs inside its own clusters — **39.8%** of every pair sharing one |
+
+The 3,776 is the **portfolio** total, not one dataset's. The largest effect is
+not at the tuned point at all: one grid step below it closure collapses into a
+giant component (on `walmart_amazon` at t = 0.50, 6,798 of the 7,386-record split
+in a single cluster) while pivot degrades smoothly. **Closure's quality is a
+cliff; pivot's is a slope** — which matters most when the threshold was guessed
+rather than derived from labels.
+
+**What it does not do.** It mitigates *chaining*; it does **not** consume
+negative evidence. Rejected edges are discarded before pivoting, exactly as the
+base `Clusterer` discards them — so a pair your matcher was paid to reject can
+still land inside one cluster, just far less often. Pricing negatives into the
+objective is a different clusterer (`docs/THEORY.md` §7), not this one.
+
+**On the citation.** The pivot order here is *deterministic* (highest incident
+score first, ties by node id), not the uniformly random pivot of
+Ailon–Charikar–Newman. Their 3-approximation bound is a property of that
+randomization and does **not** transfer to this implementation. The determinism
+is deliberate — reproducible without a seed — it is simply not an approximation
+guarantee.
 
 ## 10. Self-tuning: the autoresearch loop (`langres.optimize`)
 

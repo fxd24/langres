@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### The better clusterer is now reachable (`clusterer=` opt-in)
+
+`CorrelationClusterer` measured better than the default transitive-closure
+`Clusterer` across the 9-benchmark portfolio, but **opting into it was
+impossible** on the two architectures the docs sell: neither `FuzzyString` nor
+`VectorLLMCascade` took a `clusterer=`, and the slot was hard-built inside
+`_topology`. The only route was to abandon the named architecture and hand-wire
+a raw `ERModel`.
+
+- **Added `clusterer=` to `FuzzyString` and `VectorLLMCascade`.** It defaults to
+  `None`, which builds exactly the transitive-closure `Clusterer` both already
+  built — **no behaviour change for anyone who does not pass it**, pinned by
+  test. `clusterer=` selects the *algorithm* only: the clusterer is rebuilt at
+  the model's own `threshold`, so `threshold=` stays the single match cut and
+  the object you pass is cloned, never mutated. Swapping it does not mint a new
+  architecture.
+- **`CorrelationClusterer` now drops the one-node clusters its pivot loop could
+  form.** A record with a qualifying edge whose neighbours an earlier pivot had
+  already claimed used to come back as a `{id}` singleton — so opting in changed
+  your output *shape*, not just your partition, contradicting both the
+  documented `dedupe()` contract and the class's own docstring, which already
+  claimed "no singleton clusters". Both clusterers now return multi-record
+  clusters only, with an unmerged record simply absent.
+  This moves **no** measured number: the benchmark harness scores
+  `complete_partition(clusters, all_ids)`, which restores every uncovered id as
+  its own singleton before anything is measured. Verified differentially against
+  the pre-fix loop over a randomized battery, not assumed.
+- **Refreshed stale provenance.** `CorrelationClusterer` said "NOT the default:
+  benchmark before switching" after the benchmark had been run, and
+  `ClusterStage`'s `algorithm="transitive_closure"` default read as a
+  recommendation. Both now carry the measured result and say plainly that the
+  default is not the recommendation. The docstring's Ailon–Charikar–Newman
+  citation is corrected too: this pivot order is *deterministic*, so their
+  3-approximation bound does not transfer to it.
+
+**The default is unchanged, deliberately.** `CorrelationClusterer` is documented
+as the recommended choice with its numbers
+(`docs/research/20260727_closure_diagnostic.md`): higher BCubed F1 at 36 of the
+45 scored grid points, tied at 9, worse at 0, with 9 further points unscorable
+because closure's component was too large to score. It mitigates *chaining*; it
+does **not** consume negative evidence — rejected edges are discarded before
+pivoting, exactly as the base `Clusterer` discards them.
+
 ### Research execution foundation
 
 - Added the canonical Resources / Operations / Recipes vocabulary, four named
