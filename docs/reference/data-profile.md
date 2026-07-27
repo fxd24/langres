@@ -16,7 +16,7 @@ metric family:
 | `LabelStructureSection` | gold cluster-size distribution, singleton rate, positive-pair prevalence + class imbalance |
 | `CorpusFieldSection` | per-field non-null rate, cardinality, value-length distribution (most-missing first) |
 | `SeparabilitySection` | matches-vs-non-matches similarity histogram + AUC for a signal (rapidfuzz string by default, or an embedding cosine) |
-| `VocabularyOverlapSection` | lexical overlap between the two sources of a linkage corpus: token-type Jaccard + overlap coefficient, the occurrence-weighted token coverage per side, and the most-shared tokens |
+| `VocabularyOverlapSection` | lexical overlap between the two sources of a linkage corpus: token-type Jaccard + overlap coefficient, the occurrence-weighted token coverage per side, and the most-shared tokens. Counts each field once: the schema's **computed** fields are excluded, since a derived field like `embed_text` concatenates fields already counted and would double-weight them |
 | `EmbeddingSection` | one precomputed model's L2-norm distribution (provenance, health) |
 | `EmbeddingComparisonSection` | several models' norm distributions as shared-axis small multiples |
 

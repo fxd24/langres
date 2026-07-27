@@ -34,14 +34,14 @@ metric (see §4) — which is exactly why the verdict has to name its metric.
 
 | benchmark | task | wheel-loadable | records | gold pairs | prevalence | max gold cluster | sep AUC | vocab Jaccard | min token coverage | rapidfuzz F1 (lit. split) | published F1 | **saturated** | **structural caveats** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.795 | 0.2018 | 0.893 (Ditto) | **no** | — |
-| `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.793 | 0.2881 | 0.756 (Ditto) | **no** | — |
+| `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.796 | 0.2018 | 0.893 (Ditto) | **no** | — |
+| `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.791 | 0.2881 | 0.756 (Ditto) | **no** | — |
 | `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 0.8905 | ~0.98 | **no** (gap 0.09) | † strictly 1:1 labels |
 | `dblp_scholar` | linkage | no | 66,879 | 13,763 | 6.15e-06 | **37** | 0.993 | **0.061** | 0.651 | 0.6588 | not recorded | **?** | **large-component** |
-| `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.798 | 0.3051 | not recorded | **?** | — |
+| `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.806 | 0.3051 | not recorded | **?** | — |
 | `wdc_computers` | linkage | no | 4,647 | 1,111 | 1.03e-04 | 4 | 0.929 | 0.720 | 0.978 | 0.4447 | not recorded | **?** | — |
-| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.702 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
-| `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.838 | no literature split | not recorded | **?** | **one-to-one by construction** |
+| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.708 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
+| `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.851 | no literature split | not recorded | **?** | **one-to-one by construction** |
 | `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
 | `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | not loadable | † 98.95 (GPT-4o, 0–100) | **?** | external-only (CC-BY-NC) |
 
@@ -205,10 +205,32 @@ reports two numbers that answer different questions:
 
 The two come apart, and the gap is informative: `wdc_computers` has both high
 (J 0.720 / cover 0.978 — the two sides are near lexical twins), while
-`walmart_amazon` has J 0.133 but coverage 0.798 — a shared common core plus two
+`walmart_amazon` has J 0.133 but coverage 0.806 — a shared common core plus two
 large disjoint tails. `tiny_fixture` is the only entry that trips the
 `lexical-gap` rule (0.447), which is fine: it is a 12-record toy, explicitly
 "not a real benchmark" per its own `ATTRIBUTION.md`.
+
+**What the tokenizer counts, and one bug it had.** Cross-model review caught that
+the first cut of this section double-counted the blocking text. A benchmark
+corpus reaches the profiler as `model_dump()`, and pydantic v2 **includes
+computed fields** — every vendored ER schema defines
+`embed_text` as a concatenation of other fields on the same record
+(`AbtBuySchema.embed_text == name + " " + description`). Tokenizing the dump
+as-is therefore counted `name` and `description` twice, over-weighting exactly
+the fields a blocker reads, and disagreeing with the separability signal in the
+column beside it, which iterates `model_fields` and never sees a computed field
+at all. The section now excludes the schema's computed fields.
+
+The correction is small and moves nothing structural — **type Jaccard is
+unaffected** (a derived field's tokens are a subset of the fields it
+concatenates, so the type set is identical), and coverage moved only where
+`embed_text` joins more than one field: `abt_buy` 0.795→0.796, `amazon_google`
+0.793→0.791, `febrl_person` 0.838→0.851, `fodors_zagat` 0.702→0.708,
+`walmart_amazon` 0.798→0.806, with `dblp_acm`, `dblp_scholar`, `wdc_computers`
+and `tiny_fixture` unchanged. No verdict changes. It is recorded here rather than
+quietly fixed because the published numbers moved, and because the failure mode —
+a measurement that silently disagreed with the metric printed next to it — is
+the one this whole document exists to catch.
 
 ---
 
