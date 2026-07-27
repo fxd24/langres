@@ -15,6 +15,18 @@ wrong number on this repo:
   Blocking sets a *ceiling*: a pair the blocker never emits cannot be recovered
   downstream. F1 at some threshold conflates that ceiling with a matcher's
   operating point.
+- **Recall has a ceiling below 1.0 that belongs to the benchmark, not the
+  model.** These are two-source linkage tasks, so the harness keeps only
+  cross-source candidates — and a gold cluster spanning three or more records
+  emits intra-source gold pairs no cross-source candidate set can contain.
+  ``recall_of_reachable`` is the model comparison; raw ``candidate_recall``
+  mixes it with a property of the gold set. See ``_reachable_ceiling``.
+- **Every delta carries a cluster-resampled interval.** Model-vs-model and
+  prompt-arm differences go through
+  ``langres.experiments.statistics.paired_entity_bootstrap``, resampled by gold
+  cluster — never by pair row, which would report intervals far too tight. A
+  headline delta without an interval is how a +0.9pp single-seed result becomes
+  a recommendation.
 - **The prompt axis only became measurable once ``query_prompt`` was fixed.**
   ``FAISSIndex.search_all`` used to hand the cached corpus vectors to
   ``search()``, which never applies a prompt, so prompted and unprompted runs
@@ -33,7 +45,10 @@ Run it (from a git checkout — see the reproducibility note in the report):
 Rows are appended to a tracked JSONL and the markdown report is regenerated
 from it after every model, so a long sweep is durable at each step rather than
 only at the end. Re-running a model **replaces** its rows, so the harness
-reproduces its own committed table instead of appending duplicates.
+reproduces its own committed table instead of appending duplicates. A third
+tracked file holds ``REFERENCE_MODEL``'s per-record recall, which is what lets a
+model measured next week still get a paired interval against the model that
+ships today.
 """
 
 from __future__ import annotations
@@ -823,6 +838,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "four are not. Do not average across benchmarks, and do not read this "
         "benchmark set as a finding — it is a documented prior this sweep "
         "inherited.\n"
+        "- **The claim that started this sweep was not strong enough to act on.** "
+        "A pilot reported `BAAI/bge-small-en-v1.5` at 0.8295 candidate recall "
+        "versus `all-MiniLM-L6-v2` at 0.8201 on `amazon_google` — **+0.9pp, one "
+        "benchmark, one seed, no interval** — alongside '2.5x fewer candidates at "
+        "equal recall'. Those are two different claims: the second is an "
+        "*operating-point* comparison, and `langres.optimize` already hill-climbs "
+        "`k`, so it is a statement about where each model was sampled, not about "
+        "which model is better. This sweep re-measures both across benchmarks and "
+        "attaches an interval to the first. (The pilot numbers above are quoted "
+        "as the motivation, not re-measured here — read this document's own "
+        "tables for the measurement.)\n"
         "- **Reproducible from a git checkout only, not from `pip install langres`.** "
         "The wheel deliberately excludes the `amazon_google`, `abt_buy`, "
         "`walmart_amazon` and `wdc_computers` corpora "
@@ -859,11 +885,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "cheaper ceiling.\n"
     )
     for benchmark in benchmarks:
-        sample = next((r for r in ok if r.benchmark == benchmark), None)
+        # Prefer a row that carries the ceiling: rows measured before the ceiling
+        # existed are still readable, and picking one of those would print "n/a"
+        # for a benchmark that has in fact been measured.
+        sample = next(
+            (r for r in ok if r.benchmark == benchmark and r.reachable_recall_ceiling is not None),
+            next((r for r in ok if r.benchmark == benchmark), None),
+        )
         out.append(f"\n### {benchmark}\n")
         if sample is not None:
             out.append(
-                f"\n{sample.n_records:,} records, {sample.n_gold_pairs:,} gold pairs, "
+                f"\n{_fmt(sample.n_records)} records, {_fmt(sample.n_gold_pairs)} gold pairs, "
                 f"reachable recall ceiling **{_fmt(sample.reachable_recall_ceiling)}** "
                 f"— saturation: {sample.saturation} (imported, see above).\n"
             )
