@@ -180,10 +180,22 @@ class SentenceTransformerEmbedderConfig(BaseModel):
     dtype: EmbeddingDType | None = None
     backend: EmbeddingBackend = "torch"
     local_files_only: bool = False
-    trust_remote_code: bool = False
     truncate_dim: int | None = None
     prompt_name: str | None = None
     prompts: dict[str, str] | None = None
+
+    # NOTE: `trust_remote_code` is deliberately NOT a field here. It is a
+    # constructor argument only, and it does not round-trip. Persisting it would
+    # let a *downloaded* artifact turn on arbitrary code execution: this config
+    # nests inside FAISSIndexConfig.embedder, which nests inside a blocker spec
+    # in `resolver.json`, which `langres.hub.from_pretrained` rebuilds
+    # component-by-component. A third-party artifact carrying
+    # `{"trust_remote_code": true, "model_name": "attacker/repo"}` would then
+    # exec that repo's Python on the first encode(). `docs/HUGGING_FACE.md`
+    # states the invariant plainly ("never enable remote code"), and the sibling
+    # loaders (CrossEncoderReranker, the transformers matcher backend) hardcode
+    # False. Enabling remote code stays an explicit act in the caller's own
+    # source, never something an artifact can ask for.
 
 
 class FakeEmbedderConfig(BaseModel):
@@ -561,7 +573,6 @@ class SentenceTransformerEmbedder:
             dtype=self.dtype,
             backend=self.backend,
             local_files_only=self.local_files_only,
-            trust_remote_code=self.trust_remote_code,
             truncate_dim=self.truncate_dim,
             prompt_name=self.prompt_name,
             prompts=self.prompts,
@@ -575,6 +586,15 @@ class SentenceTransformerEmbedder:
 
         The model stays unloaded (``_model is None``) until the first
         ``encode()`` call.
+
+        Note:
+            ``trust_remote_code`` is **never restored** — it is not part of the
+            config (see the note on
+            :class:`SentenceTransformerEmbedderConfig`). A reloaded embedder for
+            a custom-architecture checkpoint therefore raises on load until the
+            caller re-enables remote code in their own source. That refusal is
+            the point: an artifact must not be able to grant itself code
+            execution.
         """
         return cls(
             model_name=config.model_ref or config.model_name,
@@ -585,7 +605,6 @@ class SentenceTransformerEmbedder:
             dtype=config.dtype,
             backend=config.backend,
             local_files_only=config.local_files_only,
-            trust_remote_code=config.trust_remote_code,
             truncate_dim=config.truncate_dim,
             prompt_name=config.prompt_name,
             prompts=config.prompts,

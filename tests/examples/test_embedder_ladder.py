@@ -1,0 +1,202 @@
+"""Offline behaviour tests for the embedder-ladder harness's measurement rules.
+
+$0 and model-free on purpose: these cover the three places the harness can
+publish a *plausible but wrong* number — the reachable-recall ceiling, the
+direction of the separability score, and the unit a confidence interval is
+resampled over. Each of them was wrong at some point in this harness's history,
+and none of them would have shown up as a crash.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+import numpy as np
+
+ROOT = Path(__file__).parents[2]
+LADDER_PATH = ROOT / "examples" / "research" / "embedder_ladder.py"
+
+
+def _load() -> ModuleType:
+    name = "example_embedder_ladder"
+    sys.path.insert(0, str(LADDER_PATH.parent))
+    try:
+        spec = importlib.util.spec_from_file_location(name, LADDER_PATH)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        # Registered BEFORE exec: `@dataclass` resolves its own module out of
+        # `sys.modules` while processing the class, and an unregistered module
+        # fails there with an opaque AttributeError.
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(LADDER_PATH.parent))
+
+
+LADDER = _load()
+
+
+def _record(record_id: str, source: str) -> SimpleNamespace:
+    return SimpleNamespace(id=record_id, source=source)
+
+
+class TestReachableCeiling:
+    """The cross-source filter is NOT recall-neutral — the correction under test."""
+
+    def test_a_three_record_gold_cluster_puts_a_gold_pair_out_of_reach(self) -> None:
+        # Two of the three are on source "a", so their gold pair is intra-source
+        # and no cross-source candidate set can ever contain it.
+        corpus = [_record("a1", "a"), _record("a2", "a"), _record("b1", "b")]
+        gold_pairs = {
+            frozenset({"a1", "a2"}),
+            frozenset({"a1", "b1"}),
+            frozenset({"a2", "b1"}),
+        }
+        assert LADDER._reachable_ceiling(corpus, gold_pairs) == 2 / 3
+
+    def test_a_purely_one_to_one_gold_set_reaches_everything(self) -> None:
+        corpus = [_record("a1", "a"), _record("b1", "b")]
+        assert LADDER._reachable_ceiling(corpus, {frozenset({"a1", "b1"})}) == 1.0
+
+    def test_no_gold_pairs_is_a_ceiling_of_one_not_a_division_by_zero(self) -> None:
+        assert LADDER._reachable_ceiling([_record("a1", "a")], set()) == 1.0
+
+
+class TestSeparabilityDirection:
+    """A positive must be found whichever side is the query."""
+
+    def test_a_pair_scored_only_in_the_reverse_direction_still_separates(self) -> None:
+        # Positives come out of a sorted() id tuple, so on a source-prefixed
+        # corpus every positive is A-query -> B-document while the sampled
+        # negatives are mixed. Scoring one direction only would compare the two
+        # classes under different direction distributions. Here the positive
+        # scores 0.0 forward and 1.0 backward: a forward-only implementation
+        # returns 0.5 (chance), the symmetric one returns 1.0.
+        ids = ["a1", "a2", "b1", "b2"]
+        documents = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]])
+        queries = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        auc = LADDER.separability_auc(documents, queries, ids, {frozenset({"a1", "b1"})})
+        assert auc == 1.0
+
+    def test_no_gold_pair_in_the_corpus_reports_nothing_rather_than_a_number(self) -> None:
+        vectors = np.eye(3)
+        assert LADDER.separability_auc(vectors, vectors, ["x", "y", "z"], set()) is None
+
+
+class TestPairedInterval:
+    """The interval must resample gold clusters, never the dependent record rows."""
+
+    def test_the_resampled_unit_is_the_cluster_not_the_record(self) -> None:
+        baseline = {f"r{i}": (0.0, f"c{i // 3}") for i in range(6)}
+        candidate = {f"r{i}": (1.0, f"c{i // 3}") for i in range(6)}
+        interval = LADDER.paired_interval(baseline, candidate)
+        assert interval is not None
+        assert interval.n_entities == 6
+        assert interval.n_clusters == 2
+        assert interval.observed_difference == 1.0
+
+    def test_a_single_shared_record_yields_no_interval_rather_than_a_fake_one(self) -> None:
+        assert LADDER.paired_interval({"r0": (0.0, "c0")}, {"r0": (1.0, "c0")}) is None
+
+    def test_only_records_measured_by_both_models_are_compared(self) -> None:
+        baseline = {"r0": (0.0, "c0"), "r1": (0.0, "c1"), "gone": (1.0, "c2")}
+        candidate = {"r0": (1.0, "c0"), "r1": (1.0, "c1")}
+        interval = LADDER.paired_interval(baseline, candidate)
+        assert interval is not None
+        assert interval.n_entities == 2
+
+
+class TestPersistence:
+    def test_rerunning_a_model_replaces_its_rows_instead_of_appending(self) -> None:
+        stale = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.1
+        )
+        other = LADDER.LadderRow(model="other", benchmark="b", prompt_arm="none", k=20, status="ok")
+        fresh = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.9
+        )
+        merged = LADDER.merge_rows([stale, other], [fresh])
+        assert [row.candidate_recall for row in merged if row.model == "m"] == [0.9]
+        assert any(row.model == "other" for row in merged)
+
+    def test_rows_round_trip_through_the_tracked_jsonl(self, tmp_path: Path) -> None:
+        path = tmp_path / "rows.jsonl"
+        row = LADDER.LadderRow(
+            model="m",
+            benchmark="b",
+            prompt_arm="instruct",
+            k=20,
+            status="ok",
+            candidate_recall=0.5,
+            reachable_recall_ceiling=0.8,
+            recall_of_reachable=0.625,
+            index_build_encoded=0,
+        )
+        LADDER.write_rows(path, [row])
+        assert LADDER.read_rows(path) == [row]
+
+    def test_reference_per_record_recall_round_trips(self, tmp_path: Path) -> None:
+        path = tmp_path / "reference.json"
+        store = {"bench|none": {"r0": (0.5, "c0"), "r1": (1.0, "c1")}}
+        LADDER.write_reference(path, store)
+        assert LADDER.read_reference(path) == store
+
+    def test_a_missing_reference_file_is_no_reference_not_a_crash(self, tmp_path: Path) -> None:
+        assert LADDER.read_reference(tmp_path / "absent.json") == {}
+
+
+class TestReport:
+    def test_the_report_flags_a_warm_cache_build_and_an_inconclusive_interval(self) -> None:
+        rows = [
+            LADDER.LadderRow(
+                model="ref",
+                benchmark="bench",
+                prompt_arm=arm,
+                k=20,
+                status="ok",
+                parameter_count=1_000_000,
+                embedding_dim=8,
+                n_records=10,
+                n_gold_pairs=4,
+                candidate_recall=0.5,
+                reachable_recall_ceiling=0.8,
+                recall_of_reachable=0.625,
+                total_candidates=100,
+                candidates_per_unit_recall=200.0,
+                separability_auc=0.99,
+                index_build_seconds=0.2,
+                index_build_encoded=0,
+                prompt_delta_ci_low=-0.01 if arm == "instruct" else None,
+                prompt_delta_ci_high=0.02 if arm == "instruct" else None,
+                saturation="not saturated",
+            )
+            for arm in ("none", "instruct")
+        ]
+        report = LADDER.render_report(rows)
+
+        assert "recall/ceil" in report
+        assert "(spans 0)" in report
+        # `enc` = 0 is what makes the build seconds a cache read, not an encode.
+        assert "| 0.2 | 0 |" in report
+        assert "not saturated" in report
+        # Size is reported as the measured count, never as a t-shirt label.
+        assert "| 1.0M |" in report
+
+    def test_a_failed_model_is_a_row_in_the_report_not_a_silent_gap(self) -> None:
+        rows = [
+            LADDER.LadderRow(
+                model="broken",
+                benchmark="bench",
+                prompt_arm="-",
+                k=0,
+                status="failed",
+                error="OSError: gated repo",
+            )
+        ]
+        report = LADDER.render_report(rows)
+        assert "broken" in report
+        assert "gated repo" in report

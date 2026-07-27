@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
 import pytest
 
 from langres.core.model_ref import ModelRef
@@ -50,26 +51,93 @@ def test_all_four_recipe_examples_run_without_network() -> None:
     assert {"a", "b"} in clusters["RetrieveRerankLLM"]
 
 
-def test_embedding_separability_example_measures_a_margin() -> None:
-    module = _load(
+def _separability_module() -> ModuleType:
+    return _load(
         "example_embedding_separability",
         ROOT / "examples" / "embedding_separability.py",
     )
 
-    class CountingEmbedder(module.FakeEmbedder):
-        def __init__(self) -> None:
-            super().__init__(dimension=32)
-            self.calls = 0
 
-        def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
-            self.calls += 1
-            return super().embed(texts)
+#: Two records per cluster, three clusters, plus two singletons.
+_SEP_IDS = ("a1", "a2", "b1", "b2", "c1", "c2", "d1", "e1")
+_SEP_CLUSTERS = [{"a1", "a2"}, {"b1", "b2"}, {"c1", "c2"}, {"d1"}, {"e1"}]
+_SEP_TEXTS = tuple(record_id[0] for record_id in _SEP_IDS)
 
-    embedder = CountingEmbedder()
-    margin = module.separability_margin(embedder)
 
-    assert margin > 0.0
-    assert embedder.calls == 1
+class _ByClusterEmbedder:
+    """Encodes a record's cluster letter as a one-hot: perfectly separable."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        self.calls.append(list(texts))
+        letters = sorted({text.strip()[-1] for text in texts})
+        vectors = np.zeros((len(texts), len(letters)), dtype=np.float32)
+        for row, text in enumerate(texts):
+            vectors[row, letters.index(text.strip()[-1])] = 1.0
+        return EmbeddingBatch(
+            vectors=vectors, model_ref=ModelRef(base="test/by-cluster", kind="hf")
+        )
+
+
+class _BlindEmbedder:
+    """Maps every record to the same vector: carries no signal at all."""
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        vectors = np.ones((len(texts), 4), dtype=np.float32) / 2.0
+        return EmbeddingBatch(vectors=vectors, model_ref=ModelRef(base="test/blind", kind="hf"))
+
+
+def test_embedding_separability_example_can_tell_a_good_embedder_from_a_blind_one() -> None:
+    """The property the old FakeEmbedder(dimension=32) demo did NOT have.
+
+    That version embedded five hand-written strings with hash-derived
+    pseudo-random vectors and printed a healthy-looking margin regardless of
+    embedder quality — it measured its own hash function. These two embedders
+    must land at opposite ends of the AUC scale, or the example is decorative.
+    """
+    module = _separability_module()
+
+    good_auc, good_margin = module.separability(
+        _ByClusterEmbedder(), _SEP_TEXTS, _SEP_IDS, _SEP_CLUSTERS
+    )
+    blind_auc, blind_margin = module.separability(
+        _BlindEmbedder(), _SEP_TEXTS, _SEP_IDS, _SEP_CLUSTERS
+    )
+
+    assert good_auc == pytest.approx(1.0)
+    assert good_margin > 0.0
+    assert blind_auc == pytest.approx(0.5)
+    assert blind_margin == pytest.approx(0.0)
+
+
+def test_embedding_separability_example_encodes_queries_separately_under_an_instruction() -> None:
+    """An instruction must produce a real second, prefixed encode pass.
+
+    Documents stay generic and only the query side carries the instruction —
+    the asymmetric shape instructional checkpoints document. If the example
+    reused one encode for both sides the instruction would be unobservable,
+    which is exactly the bug this stream fixed in ``FAISSIndex.search_all``.
+    """
+    module = _separability_module()
+    embedder = _ByClusterEmbedder()
+
+    module.separability(embedder, _SEP_TEXTS, _SEP_IDS, _SEP_CLUSTERS, instruction="find: ")
+
+    assert len(embedder.calls) == 2
+    assert embedder.calls[0] == list(_SEP_TEXTS)
+    assert embedder.calls[1] == [f"find: {text}" for text in _SEP_TEXTS]
+
+
+def test_embedding_separability_example_reuses_one_encode_without_an_instruction() -> None:
+    """No instruction, no extra pass — the cheap symmetric default."""
+    module = _separability_module()
+    embedder = _ByClusterEmbedder()
+
+    module.separability(embedder, _SEP_TEXTS, _SEP_IDS, _SEP_CLUSTERS)
+
+    assert len(embedder.calls) == 1
 
 
 def test_first_experiment_and_generated_table_use_real_reports(tmp_path: Path) -> None:

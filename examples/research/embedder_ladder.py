@@ -43,7 +43,7 @@ import json
 import logging
 import random
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +55,12 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROWS_PATH = REPO_ROOT / "docs" / "research" / "20260727_embedder_ladder_rows.jsonl"
 DEFAULT_REPORT_PATH = REPO_ROOT / "docs" / "research" / "20260727_embedder_ladder.md"
+#: Per-record recall of ``REFERENCE_MODEL``, so a model measured in a later run
+#: can still be compared against it. Tracked, because a CI computed in one
+#: process against numbers that died with another process is not reproducible.
+DEFAULT_REFERENCE_PATH = (
+    REPO_ROOT / "docs" / "research" / "20260727_embedder_ladder_reference_recall.json"
+)
 DEFAULT_CACHE_DIR = REPO_ROOT / "tmp" / "embedder_ladder_cache"
 
 #: The one instruction used for every model's query side. Deliberately ONE
@@ -78,6 +84,16 @@ class ModelSpec:
     #: Off unless the model genuinely cannot load otherwise; it runs arbitrary
     #: Python from the model repo.
     trust_remote_code: bool = False
+    #: Load dtype. Default (``None``) is whatever the checkpoint ships, which is
+    #: float32 for most of this list. Set explicitly only where full precision
+    #: does not fit: a multi-billion-parameter embedder in float32 needs ~4 bytes
+    #: per parameter of unified memory before any activations. The value is
+    #: recorded on every row, because half precision is a **different
+    #: measurement**, not a free speedup, and a table that hid it would compare
+    #: models across precisions silently.
+    dtype: str | None = None
+    #: Smaller batches for models whose activations dominate memory.
+    batch_size: int | None = None
 
 
 #: Listed in roughly ascending expected size so a truncated sweep still covers
@@ -96,8 +112,8 @@ MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("BAAI/bge-large-en-v1.5"),
     ModelSpec("mixedbread-ai/mxbai-embed-large-v1"),
     ModelSpec("Qwen/Qwen3-Embedding-0.6B"),
-    ModelSpec("Qwen/Qwen3-Embedding-4B"),
-    ModelSpec("Qwen/Qwen3-Embedding-8B"),
+    ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8),
+    ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4),
 )
 
 MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
@@ -113,11 +129,35 @@ BENCHMARKS: tuple[str, ...] = (
     "walmart_amazon",
 )
 
+#: Saturation verdict per benchmark. **Imported, not measured here** — a separate
+#: portfolio stream measured it, and this harness has no way to observe it (a
+#: single-family ladder cannot tell "all embedders agree" from "the benchmark is
+#: solved"). Carried per row so no reader has to remember which of these numbers
+#: is a finding of this sweep and which is inherited context.
+SATURATION: dict[str, str] = {
+    "fodors_zagat": "saturated (methods span 0.047)",
+    "abt_buy": "not saturated",
+    "amazon_google": "not saturated",
+    "wdc_computers": "not saturated",
+    "walmart_amazon": "not saturated",
+}
+
 K_VALUES: tuple[int, ...] = (5, 10, 20, 50)
 
 #: Negatives sampled per benchmark for the separability AUC (seeded).
 NEGATIVE_SAMPLE = 20_000
 SEED = 0
+
+#: The `k` at which paired confidence intervals are computed and the reference
+#: per-record scores are persisted. One `k` on purpose: the sidecar is a tracked
+#: file, and a CI at every `k` would quadruple it to answer the same question.
+CI_K = 20
+
+#: The baseline every model's delta is measured against: langres's current
+#: `DEFAULT_EMBEDDING_MODEL` (`core/model_ref.py`). A ladder's decision-relevant
+#: question is "is this better than what ships today?", so the default IS the
+#: baseline. This sweep does not change that default.
+REFERENCE_MODEL = "all-MiniLM-L6-v2"
 
 
 @dataclass
@@ -130,20 +170,51 @@ class LadderRow:
     k: int
     status: str
     parameter_count: int | None = None
+    dtype: str | None = None
     embedding_dim: int | None = None
     n_records: int | None = None
     n_gold_pairs: int | None = None
     candidate_recall: float | None = None
+    #: Highest recall this measurement *can* report — see ``_reachable_ceiling``.
+    #: Not a property of the model: it is what the cross-source candidate filter
+    #: makes unreachable in this benchmark's gold set.
+    reachable_recall_ceiling: float | None = None
+    #: ``candidate_recall / reachable_recall_ceiling`` — how much of what is
+    #: reachable the model actually retrieved. This is the model comparison;
+    #: ``candidate_recall`` alone mixes it with a benchmark artefact.
+    recall_of_reachable: float | None = None
     candidate_precision: float | None = None
     reduction_ratio: float | None = None
     total_candidates: int | None = None
     candidates_per_unit_recall: float | None = None
     separability_auc: float | None = None
     index_build_seconds: float | None = None
+    #: Texts actually encoded during the index build (cache misses). ``0`` means
+    #: the build read a warm embedding cache and its seconds are a cache-read
+    #: time, NOT an encode time — the two differ by orders of magnitude.
+    index_build_encoded: int | None = None
     search_seconds: float | None = None
     registered_prompts: list[str] = field(default_factory=list)
+    #: Paired-bootstrap CI (by gold cluster) of this row's per-record recall minus
+    #: the SAME model's unprompted per-record recall. Only on ``instruct`` rows at
+    #: ``CI_K``. An interval spanning 0 means the prompt arm's headline delta is
+    #: not distinguishable from noise on this benchmark.
+    prompt_delta_ci_low: float | None = None
+    prompt_delta_ci_high: float | None = None
+    #: Mean per-record recall difference against ``REFERENCE_MODEL`` in the same
+    #: arm, with its paired-bootstrap CI. Only at ``CI_K``, and never on the
+    #: reference model's own rows. Note this is the mean of per-record deltas, not
+    #: the difference of the two aggregate recalls — the bootstrap resamples the
+    #: per-record units, so the point estimate has to be the same statistic.
+    vs_reference_delta: float | None = None
+    vs_reference_ci_low: float | None = None
+    vs_reference_ci_high: float | None = None
+    #: Number of independent gold clusters the interval above was resampled over.
+    #: The honest denominator: it is NOT the record count, because pair rows
+    #: inside one entity are dependent.
+    ci_clusters: int | None = None
     #: Saturation is measured by a SEPARATE stream; never restate it as measured here.
-    saturation: str = "unknown (stream B)"
+    saturation: str = "not measured here"
     error: str | None = None
 
 
@@ -190,6 +261,33 @@ def _gold_pair_set(gold_clusters: Sequence[set[str]]) -> set[frozenset[str]]:
     }
 
 
+def _reachable_ceiling(corpus: Sequence[Any], gold_pairs: set[frozenset[str]]) -> float:
+    """Fraction of gold pairs a cross-source candidate set can possibly contain.
+
+    On a two-source linkage benchmark this harness drops intra-source candidate
+    pairs (mirroring ``langres.optimize._score_loaded``, so the numbers here and
+    the ones ``optimize()`` reports are the same measurement). **That filter does
+    not leave recall unchanged.** A gold *cluster* with three or more records can
+    put two of them on the same side, and the transitive closure that turns
+    clusters into pairs then emits an intra-source gold pair which no
+    cross-source candidate set can ever contain.
+
+    It is not hypothetical: on ``amazon_google`` this ceiling measures ~0.8396,
+    which is why no model in this sweep reports recall above ~0.84 there — a fact
+    about the gold set, not about embeddings. An earlier version of this comment
+    asserted the opposite ("all gold matches are inter-source"), and the same
+    false claim is still written at ``src/langres/optimize.py:135-139``.
+
+    Returns:
+        ``1.0`` when there is no cross-source filter or no gold pairs.
+    """
+    source = {str(record.id): getattr(record, "source", None) for record in corpus}
+    if not gold_pairs:
+        return 1.0
+    reachable = sum(1 for pair in gold_pairs if len({source.get(rid) for rid in pair}) == 2)
+    return reachable / len(gold_pairs)
+
+
 def separability_auc(
     doc_vectors: np.ndarray,
     query_vectors: np.ndarray,
@@ -203,12 +301,24 @@ def separability_auc(
     Blocker-independent on purpose: candidate recall depends on ``k``, so it
     measures a *chosen operating point*. This measures the embedding's ability
     to rank a true pair above a false one at all, which is what actually differs
-    between models. Scored asymmetrically the same way search is —
-    ``dot(query_vector[a], doc_vector[b])`` — so the prompt arm is reflected.
+    between models.
+
+    **Both directions are scored and the maximum taken**, which is what the
+    blocker effectively does — every record is a query once, so a pair is
+    retrieved if *either* direction ranks it. That symmetry is load-bearing under
+    a prompt, not cosmetic. Gold pairs come out of a ``sorted()`` id tuple, and
+    every cross-source loader here prefixes ids by source (``a``/``b``,
+    ``a``/``g``), so sorting makes **every positive** an A-query→B-document pair;
+    the uniformly sampled negatives are ~25% each of A→B, B→A, A→A, B→B. Scoring
+    one direction only would therefore compare the two classes under different
+    direction distributions the moment ``query_vectors is not doc_vectors`` —
+    i.e. in the prompted arm exactly, which is the arm whose delta gets
+    published as "does an instruction help".
 
     Negatives are a seeded uniform sample of non-gold pairs (the full set is
     quadratic and hugely imbalanced), so this is an AUC over a *sample*, not the
-    population.
+    population — and a uniformly random pair is trivially dissimilar, which is
+    why every usable model scores near the ceiling here.
 
     Returns:
         The AUC, or ``None`` when either class is empty.
@@ -243,9 +353,11 @@ def separability_auc(
         return None
 
     def scores(pairs: list[tuple[int, int]]) -> np.ndarray:
-        left = query_vectors[[i for i, _ in pairs]]
-        right = doc_vectors[[j for _, j in pairs]]
-        return np.einsum("ij,ij->i", left, right)
+        first = [i for i, _ in pairs]
+        second = [j for _, j in pairs]
+        forward = np.einsum("ij,ij->i", query_vectors[first], doc_vectors[second])
+        backward = np.einsum("ij,ij->i", query_vectors[second], doc_vectors[first])
+        return np.asarray(np.maximum(forward, backward))
 
     labels = [True] * len(positives) + [False] * len(negatives)
     values = np.concatenate([scores(positives), scores(negatives)])
@@ -281,6 +393,64 @@ def per_record_recall(
     return scores
 
 
+#: ``{record_id: (per-record recall, gold cluster id)}`` for one measured cell.
+RecallByRecord = dict[str, tuple[float, str]]
+
+
+def paired_interval(baseline: RecallByRecord, candidate: RecallByRecord) -> Any | None:
+    """Cluster-resampled CI for ``candidate - baseline`` per-record recall.
+
+    Delegates to ``langres.experiments.statistics.paired_entity_bootstrap``
+    rather than rolling a bootstrap here — that function exists precisely because
+    resampling *pair rows* (which are dependent inside one entity) yields
+    intervals that are far too tight, and a second implementation is a second
+    chance to reintroduce the bug it was written to prevent.
+
+    Returns:
+        A ``BootstrapInterval``, or ``None`` when the two cells share fewer than
+        two records (nothing to resample).
+    """
+    from langres.experiments.statistics import PairedScore, paired_entity_bootstrap
+
+    shared = sorted(set(baseline) & set(candidate))
+    if len(shared) < 2:
+        return None
+    observations = tuple(
+        PairedScore(
+            entity_id=record_id,
+            baseline=baseline[record_id][0],
+            candidate=candidate[record_id][0],
+            cluster_id=candidate[record_id][1],
+        )
+        for record_id in shared
+    )
+    return paired_entity_bootstrap(observations, seed=SEED)
+
+
+def read_reference(path: Path) -> dict[str, RecallByRecord]:
+    """Load the reference model's per-record recall, keyed ``benchmark|arm``."""
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text())
+    return {
+        key: {record_id: (float(value[0]), str(value[1])) for record_id, value in cell.items()}
+        for key, cell in raw.items()
+    }
+
+
+def write_reference(path: Path, store: dict[str, RecallByRecord]) -> None:
+    """Persist the reference per-record recall, sorted so the file diffs readably."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        key: {
+            record_id: [round(score, 6), cluster]
+            for record_id, (score, cluster) in sorted(cell.items())
+        }
+        for key, cell in sorted(store.items())
+    }
+    path.write_text(json.dumps(payload, indent=0, sort_keys=True) + "\n")
+
+
 def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_size: int) -> Any:
     """A disk-cached embedder for ``spec``.
 
@@ -292,11 +462,15 @@ def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_
 
     base = SentenceTransformerEmbedder(
         spec.name,
-        batch_size=batch_size,
+        batch_size=spec.batch_size or batch_size,
         device=device,
         trust_remote_code=spec.trust_remote_code,
+        dtype=spec.dtype,  # type: ignore[arg-type]
     )
-    namespace = spec.name.replace("/", "__")
+    # The cache namespace carries the dtype: half-precision vectors are DIFFERENT
+    # vectors, and reusing a float32 cache entry for a float16 run would silently
+    # publish a number the run never computed.
+    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
     return base, DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
 
 
@@ -325,11 +499,30 @@ def evaluate_model_on_benchmark(
     cache_dir: Path,
     device: str | None,
     batch_size: int,
-) -> Iterator[LadderRow]:
-    """Yield one row per (prompt arm, k), or a single failure row."""
+    reference: dict[str, RecallByRecord] | None = None,
+) -> tuple[list[LadderRow], dict[str, RecallByRecord]]:
+    """Measure one model on one benchmark.
+
+    Args:
+        reference: ``REFERENCE_MODEL``'s per-record recall keyed
+            ``"{benchmark}|{arm}"``, used to attach a paired CI at ``CI_K``.
+            Missing keys simply leave the CI unset — a delta without an interval
+            is honest, a fabricated interval is not.
+
+    Returns:
+        ``(rows, reference_updates)``. The second element is non-empty only when
+        ``spec`` **is** the reference model, in which case it carries the cells a
+        later run needs to compare against.
+    """
     from langres.core.blockers.vector import VectorBlocker
     from langres.core.indexes.vector_index import FAISSIndex
     from langres.metrics.metrics import evaluate_blocking
+
+    rows: list[LadderRow] = []
+    reference_updates: dict[str, RecallByRecord] = {}
+    reference = reference or {}
+    #: Per-record recall at CI_K, per arm — the input to both paired intervals.
+    per_arm_recall: dict[str, RecallByRecord] = {}
 
     try:
         corpus, gold_clusters, _ = _load_benchmark(benchmark)
@@ -337,6 +530,7 @@ def evaluate_model_on_benchmark(
         ids = [str(record.id) for record in corpus]
         gold_pairs = _gold_pair_set(gold_clusters)
         sizes = _source_sizes(corpus)
+        ceiling = _reachable_ceiling(corpus, gold_pairs) if sizes is not None else 1.0
         schema = type(corpus[0])
         records = [record.model_dump() for record in corpus]
 
@@ -346,6 +540,11 @@ def evaluate_model_on_benchmark(
         index = FAISSIndex(embedder=embedder, metric="cosine")
         index.create_index(texts)
         index_build_seconds = time.perf_counter() - started
+        # How many texts this build actually encoded. The embedder is disk-cached
+        # and freshly constructed per cell, so `misses` counts exactly the texts
+        # that went through the model. Zero means the seconds above are a SQLite
+        # read, not an encode, and must not be quoted as an encoding cost.
+        index_build_encoded = int(embedder.cache_info()["misses"])
 
         parameter_count = base.parameter_count
         embedding_dim = base.embedding_dim
@@ -353,15 +552,19 @@ def evaluate_model_on_benchmark(
         doc_vectors = embedder.encode(texts)
     except Exception as exc:  # noqa: BLE001 - a failure IS a result, never a skip
         logger.exception("model %s failed on %s", spec.name, benchmark)
-        yield LadderRow(
-            model=spec.name,
-            benchmark=benchmark,
-            prompt_arm="-",
-            k=0,
-            status="failed",
-            error=f"{type(exc).__name__}: {exc}"[:400],
+        return (
+            [
+                LadderRow(
+                    model=spec.name,
+                    benchmark=benchmark,
+                    prompt_arm="-",
+                    k=0,
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}"[:400],
+                )
+            ],
+            {},
         )
-        return
 
     for arm, prompt in prompt_arms.items():
         query_vectors = embedder.encode(texts, prompt=prompt) if prompt else doc_vectors
@@ -381,10 +584,14 @@ def evaluate_model_on_benchmark(
                 search_seconds = time.perf_counter() - search_started
 
                 if sizes is not None:
-                    # Cross-source linkage: all gold matches are inter-source, so
-                    # dropping intra-source pairs leaves recall unchanged while
-                    # making the reduction ratio use |A|*|B|. Mirrors
-                    # langres.optimize._score_loaded.
+                    # Cross-source linkage: keep only inter-source candidates so
+                    # the reduction ratio uses |A|*|B|. Mirrors
+                    # langres.optimize._score_loaded, deliberately — the point is
+                    # that these numbers ARE what optimize() would report.
+                    # This filter is NOT recall-neutral: gold clusters spanning
+                    # three or more records emit intra-source gold pairs that no
+                    # cross-source candidate set can contain. See
+                    # `_reachable_ceiling`, reported on every row.
                     candidates = [c for c in candidates if c.left.source != c.right.source]
                     stats = evaluate_blocking(
                         candidates, gold_clusters, n_left=sizes[0], n_right=sizes[1]
@@ -393,39 +600,108 @@ def evaluate_model_on_benchmark(
                     stats = evaluate_blocking(candidates, gold_clusters, num_records=len(corpus))
 
                 recall = stats.candidate_recall
-                yield LadderRow(
-                    model=spec.name,
-                    benchmark=benchmark,
-                    prompt_arm=arm,
-                    k=k,
-                    status="ok",
-                    parameter_count=parameter_count,
-                    embedding_dim=embedding_dim,
-                    n_records=len(corpus),
-                    n_gold_pairs=len(gold_pairs),
-                    candidate_recall=recall,
-                    candidate_precision=stats.candidate_precision,
-                    reduction_ratio=stats.reduction_ratio,
-                    total_candidates=stats.total_candidates,
-                    candidates_per_unit_recall=(
-                        stats.total_candidates / recall if recall > 0 else None
-                    ),
-                    separability_auc=auc,
-                    index_build_seconds=index_build_seconds,
-                    search_seconds=search_seconds,
-                    registered_prompts=prompts,
+                if k == CI_K:
+                    candidate_pairs = {
+                        frozenset({str(c.left.id), str(c.right.id)}) for c in candidates
+                    }
+                    per_arm_recall[arm] = per_record_recall(candidate_pairs, gold_clusters)
+                rows.append(
+                    LadderRow(
+                        model=spec.name,
+                        benchmark=benchmark,
+                        prompt_arm=arm,
+                        k=k,
+                        status="ok",
+                        parameter_count=parameter_count,
+                        dtype=spec.dtype,
+                        embedding_dim=embedding_dim,
+                        n_records=len(corpus),
+                        n_gold_pairs=len(gold_pairs),
+                        candidate_recall=recall,
+                        reachable_recall_ceiling=ceiling,
+                        recall_of_reachable=(recall / ceiling if ceiling > 0 else None),
+                        candidate_precision=stats.candidate_precision,
+                        reduction_ratio=stats.reduction_ratio,
+                        total_candidates=stats.total_candidates,
+                        candidates_per_unit_recall=(
+                            stats.total_candidates / recall if recall > 0 else None
+                        ),
+                        separability_auc=auc,
+                        index_build_seconds=index_build_seconds,
+                        index_build_encoded=index_build_encoded,
+                        search_seconds=search_seconds,
+                        registered_prompts=prompts,
+                        saturation=SATURATION.get(benchmark, "not measured here"),
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("model %s failed on %s k=%s", spec.name, benchmark, k)
-                yield LadderRow(
-                    model=spec.name,
-                    benchmark=benchmark,
-                    prompt_arm=arm,
-                    k=k,
-                    status="failed",
-                    parameter_count=parameter_count,
-                    error=f"{type(exc).__name__}: {exc}"[:400],
+                rows.append(
+                    LadderRow(
+                        model=spec.name,
+                        benchmark=benchmark,
+                        prompt_arm=arm,
+                        k=k,
+                        status="failed",
+                        parameter_count=parameter_count,
+                        dtype=spec.dtype,
+                        error=f"{type(exc).__name__}: {exc}"[:400],
+                    )
                 )
+
+    _attach_intervals(
+        rows,
+        spec=spec,
+        benchmark=benchmark,
+        per_arm_recall=per_arm_recall,
+        reference=reference,
+    )
+    if spec.name == REFERENCE_MODEL:
+        reference_updates = {f"{benchmark}|{arm}": cell for arm, cell in per_arm_recall.items()}
+    return rows, reference_updates
+
+
+def _attach_intervals(
+    rows: list[LadderRow],
+    *,
+    spec: ModelSpec,
+    benchmark: str,
+    per_arm_recall: dict[str, RecallByRecord],
+    reference: dict[str, RecallByRecord],
+) -> None:
+    """Fill in the paired confidence intervals on the ``CI_K`` rows, in place.
+
+    Two comparisons, both paired per record and resampled by gold cluster:
+
+    - **prompt arm**: instruct minus none, same model, same index. The only thing
+      that differs is the query encoding, so this is as clean a paired test as
+      the harness can make.
+    - **vs. the shipped default**: this model minus ``REFERENCE_MODEL`` in the
+      same arm. Left unset when the reference has not been measured on this
+      benchmark — an absent interval is a fact, an invented one is not.
+    """
+    baseline_arm = per_arm_recall.get("none")
+    for row in rows:
+        if row.k != CI_K or row.status != "ok":
+            continue
+        current = per_arm_recall.get(row.prompt_arm)
+        if current is None:
+            continue
+
+        if row.prompt_arm != "none" and baseline_arm is not None:
+            interval = paired_interval(baseline_arm, current)
+            if interval is not None and interval.status == "available":
+                row.prompt_delta_ci_low = interval.lower
+                row.prompt_delta_ci_high = interval.upper
+
+        reference_cell = reference.get(f"{benchmark}|{row.prompt_arm}")
+        if spec.name != REFERENCE_MODEL and reference_cell:
+            interval = paired_interval(reference_cell, current)
+            if interval is not None:
+                row.vs_reference_delta = interval.observed_difference
+                row.vs_reference_ci_low = interval.lower
+                row.vs_reference_ci_high = interval.upper
+                row.ci_clusters = interval.n_clusters
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +747,14 @@ def _millions(count: int | None) -> str:
     return "n/a" if count is None else f"{count / 1e6:,.1f}M"
 
 
+def _ci(low: float | None, high: float | None) -> str:
+    """Render an interval, marking the ones that contain 0 as inconclusive."""
+    if low is None or high is None:
+        return "n/a"
+    spans_zero = " (spans 0)" if low <= 0.0 <= high else ""
+    return f"[{low:+.4f}, {high:+.4f}]{spans_zero}"
+
+
 def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     """Render the markdown report from measured rows only."""
     ok = [row for row in rows if row.status == "ok"]
@@ -503,12 +787,42 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "bigger `k`. Read it against `cands/recall` (candidates per unit recall) — "
         "the cost of that ceiling — and note that `langres.optimize` already "
         "hill-climbs `k`, so an operating-point win is not the same as a model win.\n"
-        "- **Saturation is not measured here.** The `saturation` column is carried as "
-        "`unknown (stream B)` on every row: a parallel stream measures which of these "
-        "benchmarks are saturated, and a ladder measured on a saturated benchmark "
-        "measures the benchmark. Do not average across benchmarks whose saturation "
-        "status is unknown, and do not read this benchmark set as a finding — it is a "
-        "documented prior this sweep inherited.\n"
+        "- **`recall` cannot reach 1.0 on these benchmarks, and that is not the "
+        "model's fault.** Every benchmark here is a two-source *linkage* task, so "
+        "the harness keeps only cross-source candidate pairs (mirroring "
+        "`langres.optimize._score_loaded`). A gold cluster spanning three or more "
+        "records emits intra-source gold pairs that no cross-source candidate set "
+        "can contain. `ceiling` is that structural limit and `recall/ceil` is the "
+        "share of what was reachable — **`recall/ceil` is the model comparison**; "
+        "raw `recall` mixes it with a property of the gold set. (An earlier version "
+        "of this harness asserted the filter was recall-neutral. It is not: on "
+        "`amazon_google` the ceiling is ~0.84. The same false claim is still "
+        "written in `src/langres/optimize.py:135-139` — reported, not silently "
+        "edited, since that file is outside this change's scope.)\n"
+        "- **This says nothing about deduplication.** All five benchmarks are "
+        "cross-source linkage; the registry contains no single-source dedup "
+        "benchmark. A within-source blocking ladder is unmeasured here.\n"
+        "- **`index build (s)` is only an encoding cost when `enc` is non-zero.** "
+        "The harness embeds through a disk cache, so a re-run reads SQLite instead "
+        "of the model and the same column then measures a cache read — orders of "
+        "magnitude faster. `enc` is the number of texts that actually went through "
+        "the model during that build.\n"
+        "- **The separability AUC sits near its ceiling and that compresses it.** "
+        f"Negatives are a seeded *uniform* sample of up to {NEGATIVE_SAMPLE:,} non-gold "
+        "pairs, and a uniformly random pair of records is trivially dissimilar — so "
+        "every usable model scores ~0.99 and small AUC gaps are not proportional to "
+        "the recall gaps beside them. It is a floor check ('does this model separate "
+        "at all'), not a fine-grained ranking. A hard-negative-mined variant would "
+        "discriminate better and is not measured here.\n"
+        "- **Saturation is not measured here — it is imported.** A ladder measured "
+        "on a saturated benchmark measures the benchmark, so every row carries a "
+        "`saturation` verdict from a *separate* portfolio stream. This harness "
+        "cannot produce that verdict: a one-family ladder cannot distinguish 'all "
+        "embedders agree' from 'the task is solved'. `fodors_zagat` is saturated "
+        "(the floor, kept as a never-regress check, not as evidence); the other "
+        "four are not. Do not average across benchmarks, and do not read this "
+        "benchmark set as a finding — it is a documented prior this sweep "
+        "inherited.\n"
         "- **Reproducible from a git checkout only, not from `pip install langres`.** "
         "The wheel deliberately excludes the `amazon_google`, `abt_buy`, "
         "`walmart_amazon` and `wdc_computers` corpora "
@@ -518,7 +832,15 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     )
 
     out.append("\n## Models that were measured\n")
-    out.append("\n| model | parameters | dim | own prompt names |\n|---|---:|---:|---|\n")
+    out.append(
+        "\n`dtype` is the load precision. It is shown because half precision is a "
+        "**different measurement**, not a free speedup: a row measured in float16 is "
+        "not directly comparable to a float32 row, and only the models that do not "
+        "fit in unified memory at full precision were loaded that way.\n"
+    )
+    out.append(
+        "\n| model | parameters | dtype | dim | own prompt names |\n|---|---:|---|---:|---|\n"
+    )
     for model in models:
         sample = next((row for row in ok if row.model == model), None)
         if sample is None:
@@ -526,6 +848,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         prompts = ", ".join(sample.registered_prompts) or "—"
         out.append(
             f"| `{model}` | {_millions(sample.parameter_count)} | "
+            f"{sample.dtype or 'default (fp32)'} | "
             f"{sample.embedding_dim} | {prompts} |\n"
         )
 
@@ -536,11 +859,19 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "cheaper ceiling.\n"
     )
     for benchmark in benchmarks:
+        sample = next((r for r in ok if r.benchmark == benchmark), None)
         out.append(f"\n### {benchmark}\n")
+        if sample is not None:
+            out.append(
+                f"\n{sample.n_records:,} records, {sample.n_gold_pairs:,} gold pairs, "
+                f"reachable recall ceiling **{_fmt(sample.reachable_recall_ceiling)}** "
+                f"— saturation: {sample.saturation} (imported, see above).\n"
+            )
         out.append(
-            "\n| model | parameters | recall | sep. AUC | candidates | cands/recall | index build (s) | saturation |\n"
+            "\n| model | parameters | recall | recall/ceil | sep. AUC | candidates | "
+            "cands/recall | index build (s) | enc |\n"
         )
-        out.append("|---|---:|---:|---:|---:|---:|---:|---|\n")
+        out.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
         for model in models:
             row = next(
                 (
@@ -558,13 +889,16 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                     (r for r in failures if r.model == model and r.benchmark == benchmark), None
                 )
                 if failed is not None:
-                    out.append(f"| `{model}` | — | **failed** | — | — | — | — | {failed.error} |\n")
+                    out.append(
+                        f"| `{model}` | — | **failed** | — | — | — | — | — | {failed.error} |\n"
+                    )
                 continue
             out.append(
                 f"| `{model}` | {_millions(row.parameter_count)} | "
-                f"{_fmt(row.candidate_recall)} | {_fmt(row.separability_auc)} | "
+                f"{_fmt(row.candidate_recall)} | {_fmt(row.recall_of_reachable)} | "
+                f"{_fmt(row.separability_auc)} | "
                 f"{_fmt(row.total_candidates)} | {_fmt(row.candidates_per_unit_recall, 0)} | "
-                f"{_fmt(row.index_build_seconds, 1)} | {row.saturation} |\n"
+                f"{_fmt(row.index_build_seconds, 1)} | {_fmt(row.index_build_encoded)} |\n"
             )
 
     out.append(f"\n## Does an instruction prompt help? (k={headline_k})\n")
@@ -577,9 +911,18 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "did not use.\n"
     )
     out.append(
-        "\n| model | benchmark | recall (none) | recall (instruct) | Δ recall | AUC (none) | AUC (instruct) | Δ AUC |\n"
+        "\n`95% CI` is a paired bootstrap of the **per-record** recall difference "
+        "(instruct minus none), resampled by gold cluster via "
+        "`langres.experiments.statistics.paired_entity_bootstrap` — never by pair "
+        "row, because pair rows inside one entity are dependent and resampling them "
+        "produces intervals that are far too tight. **An interval spanning 0 means "
+        "the Δ beside it is not distinguishable from noise.**\n"
     )
-    out.append("|---|---|---:|---:|---:|---:|---:|---:|\n")
+    out.append(
+        "\n| model | benchmark | recall (none) | recall (instruct) | Δ recall | "
+        "95% CI | AUC (none) | AUC (instruct) | Δ AUC |\n"
+    )
+    out.append("|---|---|---:|---:|---:|---|---:|---:|---:|\n")
     for model in models:
         for benchmark in benchmarks:
             plain = next(
@@ -615,8 +958,49 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             out.append(
                 f"| `{model}` | {benchmark} | {_fmt(plain.candidate_recall)} | "
                 f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | "
+                f"{_ci(prompted.prompt_delta_ci_low, prompted.prompt_delta_ci_high)} | "
                 f"{_fmt(plain.separability_auc)} | {_fmt(prompted.separability_auc)} | "
                 f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
+            )
+
+    out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
+    out.append(
+        f"\nEvery model against `{REFERENCE_MODEL}` — langres's current "
+        "`DEFAULT_EMBEDDING_MODEL` — on the same records, paired per record and "
+        "resampled by gold cluster. **Δ is the mean per-record recall difference**, "
+        "not the difference of the two aggregate recalls above: the bootstrap "
+        "resamples per-record units, so the point estimate has to be the same "
+        "statistic the interval is built from. `clusters` is the number of "
+        "independent units resampled — the honest denominator, and much smaller "
+        "than the record count.\n"
+        "\n**This sweep does not change the default.** A CI spanning 0 is not "
+        "evidence of a better default; it is evidence the measurement cannot tell "
+        "them apart on that benchmark.\n"
+    )
+    out.append("\n| model | benchmark | Δ per-record recall | 95% CI | clusters |\n")
+    out.append("|---|---|---:|---|---:|\n")
+    for model in models:
+        if model == REFERENCE_MODEL:
+            continue
+        for benchmark in benchmarks:
+            row = next(
+                (
+                    r
+                    for r in ok
+                    if r.model == model
+                    and r.benchmark == benchmark
+                    and r.k == headline_k
+                    and r.prompt_arm == "none"
+                    and r.vs_reference_delta is not None
+                ),
+                None,
+            )
+            if row is None:
+                continue
+            out.append(
+                f"| `{model}` | {benchmark} | {row.vs_reference_delta:+.4f} | "
+                f"{_ci(row.vs_reference_ci_low, row.vs_reference_ci_high)} | "
+                f"{_fmt(row.ci_clusters)} |\n"
             )
 
     out.append("\n## The recall/cost frontier (every k)\n")
@@ -657,33 +1041,54 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--prompts", nargs="*", default=list(PROMPT_ARMS))
     parser.add_argument("--rows", type=Path, default=DEFAULT_ROWS_PATH)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
+    parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE_PATH)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--device", default=None, help="torch device, e.g. mps / cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--headline-k", type=int, default=20)
+    parser.add_argument(
+        "--render-only",
+        action="store_true",
+        help="Regenerate the report from the recorded rows without measuring anything.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.render_only:
+        rows = read_rows(args.rows)
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(render_report(rows, headline_k=args.headline_k))
+        logger.info("rendered %d rows to %s", len(rows), args.report)
+        return
+
     arms = {name: PROMPT_ARMS[name] for name in args.prompts}
 
     for model_name in args.models:
         spec = MODELS_BY_NAME.get(model_name) or ModelSpec(model_name)
+        # Re-read per model: the reference model may have been measured earlier in
+        # THIS sweep, and a stale in-memory copy would silently skip its CIs.
+        reference = read_reference(args.reference)
         fresh: list[LadderRow] = []
+        reference_updates: dict[str, RecallByRecord] = {}
         for benchmark in args.benchmarks:
             logger.info("=== %s on %s ===", spec.name, benchmark)
-            fresh.extend(
-                evaluate_model_on_benchmark(
-                    spec,
-                    benchmark,
-                    k_values=args.k,
-                    prompt_arms=arms,
-                    cache_dir=args.cache_dir,
-                    device=args.device,
-                    batch_size=args.batch_size,
-                )
+            rows, updates = evaluate_model_on_benchmark(
+                spec,
+                benchmark,
+                k_values=args.k,
+                prompt_arms=arms,
+                cache_dir=args.cache_dir,
+                device=args.device,
+                batch_size=args.batch_size,
+                reference=reference,
             )
+            fresh.extend(rows)
+            reference_updates.update(updates)
         # Persist after EVERY model: a long sweep must be durable at each step,
         # not only at the end.
+        if reference_updates:
+            write_reference(args.reference, {**reference, **reference_updates})
         merged = merge_rows(read_rows(args.rows), fresh)
         write_rows(args.rows, merged)
         args.report.parent.mkdir(parents=True, exist_ok=True)

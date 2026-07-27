@@ -53,7 +53,6 @@ def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() 
         "normalize_embeddings": False,
         "quantization": None,
         "show_progress_bar": False,
-        "trust_remote_code": False,
         "truncate_dim": None,
         "prompt_name": None,
         "prompts": None,
@@ -61,21 +60,22 @@ def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() 
 
 
 def test_sentence_transformer_runtime_config_threads_prompt_and_load_knobs() -> None:
-    """The instruction/Matryoshka/remote-code knobs reach the underlying embedder.
+    """The instruction/Matryoshka knobs reach the underlying embedder.
 
     Without these an instructional checkpoint (EmbeddingGemma, E5, BGE,
     Qwen3-Embedding) can only be embedded prompt-less — which measures the wrong
-    thing — and a custom-architecture checkpoint cannot be loaded at all.
+    thing.
     """
     runtime = SentenceTransformerRuntimeConfig(
-        trust_remote_code=True,
         truncate_dim=256,
         prompt_name="query",
         prompts={"query": "task: search result | query: "},
         device="mps",
         batch_size=64,
     )
-    resource = SentenceTransformer("org/instructional-embedder", runtime_config=runtime)
+    resource = SentenceTransformer(
+        "org/instructional-embedder", runtime_config=runtime, trust_remote_code=True
+    )
 
     embedder = resource._embedder
     assert embedder.trust_remote_code is True
@@ -86,6 +86,28 @@ def test_sentence_transformer_runtime_config_threads_prompt_and_load_knobs() -> 
     assert embedder.batch_size == 64
     # Still weightless: threading knobs must not trigger a download.
     assert embedder._model is None
+
+
+def test_trust_remote_code_never_round_trips_through_a_saved_artifact() -> None:
+    """A downloaded artifact must not be able to ask for arbitrary code execution.
+
+    ``trust_remote_code`` makes ``sentence-transformers`` import and run Python
+    from the model repo. A saved ``resolver.json`` names an embedder config, and
+    ``langres.hub.from_pretrained`` loads artifacts written by someone else — so a
+    persisted ``trust_remote_code: true`` would be remote-code execution requested
+    *by the artifact*, not by the caller. It is therefore a constructor argument
+    only, and rebuilding from config always lands on ``False``.
+    """
+    resource = SentenceTransformer("org/custom-architecture", trust_remote_code=True)
+    assert resource.trust_remote_code is True
+    assert "trust_remote_code" not in resource.config["runtime_config"]  # type: ignore[operator]
+
+    rebuilt = SentenceTransformer.from_config(resource.config)
+    assert rebuilt.trust_remote_code is False
+    assert rebuilt._embedder.trust_remote_code is False
+
+    with pytest.raises(ValidationError):
+        SentenceTransformerRuntimeConfig(trust_remote_code=True)  # type: ignore[call-arg]
 
 
 def test_sentence_transformer_prompt_knobs_round_trip_through_config() -> None:

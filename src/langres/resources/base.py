@@ -101,11 +101,6 @@ class SentenceTransformerRuntimeConfig(ResourceRuntimeConfig):
     backend: Literal["torch", "onnx", "openvino"] = "torch"
     normalize_embeddings: bool = True
     show_progress_bar: bool = False
-    #: Run the checkpoint's own modelling code from the Hub. Off by default and
-    #: it stays that way -- it executes arbitrary Python from the model repo, so
-    #: it is the caller's explicit per-model decision. Required by e.g.
-    #: ``nomic-ai/nomic-embed-text-v1.5`` and ``Alibaba-NLP/gte-base-en-v1.5``.
-    trust_remote_code: bool = False
     #: Truncate output vectors to this many dimensions (Matryoshka checkpoints
     #: are trained so a prefix stays usable). ``None`` = the full dimension.
     truncate_dim: int | None = Field(default=None, ge=1)
@@ -113,6 +108,12 @@ class SentenceTransformerRuntimeConfig(ResourceRuntimeConfig):
     prompt_name: str | None = Field(default=None, min_length=1)
     #: Extra ``{name: prefix}`` prompts registered on the loaded model.
     prompts: dict[str, str] | None = None
+
+    # NOTE: `trust_remote_code` is deliberately absent. See the note on
+    # `langres.core.embeddings.SentenceTransformerEmbedderConfig`: a runtime
+    # config is serialized into artifacts, and an artifact that can request
+    # remote code execution is an artifact that can run attacker Python on the
+    # first embed(). It is a constructor-only argument on `SentenceTransformer`.
 
 
 class RerankerRuntimeConfig(ResourceRuntimeConfig):
