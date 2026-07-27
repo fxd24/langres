@@ -20,11 +20,15 @@ proved end-to-end on the $0 ``FuzzyString``.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
+from pydantic import BaseModel
 
 from langres.architectures import FuzzyString, VectorLLMCascade
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
+from langres.core.resolver import ERModel
 
 # The classic over-merge chain. MEASURED scores from FuzzyString's own
 # comparator, not guessed: 1-2 = 0.8889, 2-3 = 0.5714, 1-3 = 0.5000. So at
@@ -164,3 +168,52 @@ def test_an_out_of_range_threshold_still_raises() -> None:
 
     with pytest.raises(ValueError, match="threshold"):
         model.dedupe(_CHAIN)
+
+
+# ---------------------------------------------------------------------------
+# The opt-in survives save/load
+# ---------------------------------------------------------------------------
+
+
+class _Company(BaseModel):
+    """An importable schema -- an inferred one cannot be reloaded in a fresh process."""
+
+    id: str
+    name: str
+
+
+def test_the_opted_in_clusterer_survives_save_and_load(tmp_path: pathlib.Path) -> None:
+    """Otherwise the opt-in silently reverts to closure on reload.
+
+    ``CorrelationClusterer`` is registered under its own ``type_name`` and shares
+    the base ``config``/``from_config``, so the slot round-trips -- but a
+    persisted model quietly downgrading to transitive closure is exactly the kind
+    of failure that shows up as an unexplained quality drop, so it is asserted
+    rather than assumed.
+    """
+    original = FuzzyString(threshold=0.62, schema=_Company, clusterer=CorrelationClusterer())
+    original.save(tmp_path / "m")
+
+    loaded = ERModel.load(tmp_path / "m")
+
+    assert type(loaded) is FuzzyString
+    assert type(loaded.clusterer) is CorrelationClusterer
+    assert loaded.clusterer.threshold == 0.62
+    assert loaded.config_dict() == original.config_dict()
+
+    # And it still RUNS. ``load`` goes through ``from_components``, which never
+    # calls ``__init__`` -- so a reloaded model has no ``clusterer_override``
+    # attribute at all. This asserts nothing on the inference path reaches for
+    # it (the same hazard ``VectorLLMCascade.backbone`` documents for ``llm``).
+    assert loaded.dedupe(_CHAIN) is not None
+
+
+def test_the_default_still_round_trips_as_the_base_clusterer(tmp_path: pathlib.Path) -> None:
+    """The negative half: no opt-in, no CorrelationClusterer anywhere in the artifact."""
+    original = FuzzyString(threshold=0.62, schema=_Company)
+    original.save(tmp_path / "m")
+
+    loaded = ERModel.load(tmp_path / "m")
+
+    assert type(loaded.clusterer) is Clusterer
+    assert "correlation" not in (tmp_path / "m" / "resolver.json").read_text()
