@@ -482,7 +482,16 @@ def build_clean_install(workdir: Path, *, repo_root: Path = REPO_ROOT) -> tuple[
     subprocess.run(
         ["uv", "build", "--out-dir", str(dist)], cwd=repo_root, check=True, capture_output=True
     )
-    (wheel,) = dist.glob("*.whl")
+    # Name the build failure instead of letting it surface as a tuple-unpack
+    # ValueError: `wheel` decides both what gets installed AND whether the
+    # examples rule applies, so an ambiguous build must not be guessed at.
+    wheels = sorted(dist.glob("*.whl"))
+    if len(wheels) != 1:
+        raise DirectiveError(
+            f"`uv build` produced {len(wheels)} wheels in {dist}, expected exactly 1: "
+            f"{[w.name for w in wheels]}"
+        )
+    wheel = wheels[0]
     venv = workdir / "venv"
     subprocess.run(["uv", "venv", str(venv)], cwd=repo_root, check=True, capture_output=True)
     interpreter = venv / "bin" / "python"
@@ -624,6 +633,12 @@ def main(argv: list[str] | None = None) -> int:
             with zipfile.ZipFile(wheel) as zf:
                 examples_shipped = any(n.startswith("examples/") for n in zf.namelist())
         else:
+            # No wheel to read, so we cannot KNOW whether examples ship -- and
+            # the only honest default for an unknown is the strict one. False
+            # can produce a spurious failure on a dev's own checkout; True would
+            # let a real `examples/` reference through unseen. This gate exists
+            # because a check that passes when it cannot observe is worthless,
+            # so the unknown fails closed. (CI never takes this branch.)
             interpreter = Path(args.interpreter)
             examples_shipped = False
         snippets = collect()

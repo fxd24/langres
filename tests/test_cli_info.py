@@ -32,9 +32,11 @@ from langres import __version__
 from langres.cli import (
     _EXTRA_PROOF_IMPORTS,
     _EXTRAS_NOT_REPORTED,
+    _KEYS_NOT_PAID_PATH,
     _PAID_PATH_KEYS,
     main,
 )
+from langres.clients.settings import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,6 +166,31 @@ def test_every_declared_extra_is_either_probed_or_deliberately_exempt() -> None:
     assert not reported - declared, (
         f"`langres info` reports extra(s) {sorted(reported - declared)} that pyproject does "
         "not declare -- they can never resolve."
+    )
+
+
+def test_every_settings_credential_is_either_reported_or_deliberately_exempt() -> None:
+    """A new key on `Settings` must be classified, not silently unreported.
+
+    This is the same shape as the extras test above, for the same reason:
+    `_PAID_PATH_KEYS` is a hand-written list, and a hand-written list of
+    credentials silently omitted Azure -- so an Azure user with a working key
+    read "not set" on every line. Deriving the expectation from `Settings`
+    instead of from the list means the omission fails a test rather than
+    shipping a misleading diagnostic.
+    """
+    declared = {name for name in Settings.model_fields if name.endswith("_key")}
+    reported = {field for _, field in _PAID_PATH_KEYS}
+
+    unclassified = declared - reported - set(_KEYS_NOT_PAID_PATH)
+    assert not unclassified, (
+        f"`Settings` declares credential(s) {sorted(unclassified)} that `langres info` neither "
+        "reports nor exempts. Add them to _PAID_PATH_KEYS if they can make an inference call "
+        "cost money, or to _KEYS_NOT_PAID_PATH with a reason if they cannot."
+    )
+    assert not reported - declared, (
+        f"`langres info` reports credential(s) {sorted(reported - declared)} that `Settings` does "
+        "not declare -- they would always read 'not set'."
     )
 
 

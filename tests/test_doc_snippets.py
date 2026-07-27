@@ -332,6 +332,20 @@ def clean_install(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_clean_install(tmp_path_factory.mktemp("docs-gate-proof"))[0]
 
 
+def test_an_ambiguous_build_is_named_not_guessed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0 or 2 wheels must say so, because `wheel` decides what the gate tests.
+
+    The wheel is both what gets installed and how `examples_shipped` is
+    computed, so picking one arbitrarily would silently test the wrong artifact.
+    Stub the build out entirely to leave `dist/` empty.
+    """
+    monkeypatch.setattr("doc_snippets.subprocess.run", lambda *a, **k: None)
+    with pytest.raises(DirectiveError, match="produced 0 wheels"):
+        build_clean_install(tmp_path)
+
+
 def test_semantic_only_snippet_turns_the_gate_red(
     clean_install: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

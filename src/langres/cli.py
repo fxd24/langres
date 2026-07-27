@@ -114,10 +114,27 @@ _EXTRAS_NOT_REPORTED: dict[str, str] = {
 #: pasted bug report. The two halves are paired here rather than in two
 #: hand-synced lists, where adding a key to one and not the other would raise a
 #: KeyError inside the one command that must never crash.
+#: Credentials that can make an inference call cost money, as
+#: ``(env var, Settings field)``. Reporting a subset is worse than useless: an
+#: Azure user with a working key would read "not set" on every line and
+#: conclude they have no paid path configured.
 _PAID_PATH_KEYS: tuple[tuple[str, str], ...] = (
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
+    ("AZURE_API_KEY", "azure_api_key"),
 )
+
+#: `Settings` credentials deliberately absent from the paid-path report, with
+#: the reason. These buy a *service*, not inference tokens, so listing them
+#: under "paid path" would blur the one question that section answers: can a
+#: `dedupe()` call spend money? A new key on `Settings` must land in one of
+#: these two tables -- `tests/test_cli_info.py` fails until it does.
+_KEYS_NOT_PAID_PATH: dict[str, str] = {
+    "wandb_api_key": "experiment-tracking backend, bills no inference",
+    "langfuse_public_key": "tracing backend, bills no inference",
+    "langfuse_secret_key": "tracing backend, bills no inference",
+    "qdrant_api_key": "vector-store service, bills no inference",
+}
 
 
 def main(
