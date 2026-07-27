@@ -1221,6 +1221,13 @@ class ERModel(ModelRun, ModelPersistence):
         metrics: PairMetrics | None = None
         if aligned.valid.candidates:
             judgements = list(self._scorer().forward(iter(aligned.valid.candidates)))
+            if derive_threshold:
+                # A derived cut sits on the CUT's scale, which a fitted calibrator
+                # moves (see :meth:`_cut_scale_scores`). Grading raw scores against
+                # it would compare two different scales and report a number that
+                # looks fine and means nothing. Only rescaled when something was
+                # derived, so the non-deriving path stays byte-identical.
+                judgements = self._on_cut_scale(judgements)
             gold_pairs = {
                 frozenset({str(c.left.id), str(c.right.id)})
                 for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
@@ -1312,6 +1319,20 @@ class ERModel(ModelRun, ModelPersistence):
         for index, value in zip(scored, mapped, strict=True):
             scores[index] = value
         return scores
+
+    def _on_cut_scale(self, judgements: Sequence[PairwiseJudgement]) -> list[PairwiseJudgement]:
+        """Copies of ``judgements`` with their scores moved onto the match cut's scale.
+
+        The judgement-shaped counterpart of :meth:`_cut_scale_scores`, for the
+        graders (:func:`~langres.core.metrics.classify_pairs`) that want objects
+        rather than a score list. Pure copies -- the caller's judgements are not
+        mutated.
+        """
+        scores = self._cut_scale_scores(list(judgements))
+        return [
+            judgement.model_copy(update={"score": score})
+            for judgement, score in zip(judgements, scores, strict=True)
+        ]
 
     def _apply_derived_threshold(
         self, labeled: Sequence[LabeledPair], *, held_out: bool

@@ -38,7 +38,7 @@ from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.op import ThresholdSelect, TopKSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
 from langres.core.resolver import ERModel, Resolver
-from langres.curation.harvest import LabeledPair, align_pairs
+from langres.curation.harvest import LabeledPair, align_pairs, warn_if_silver_only
 from langres.training.methods_calibrate import Platt
 
 # Ten disconnected groups. Each is one entity-disjoint component: a twin pair
@@ -367,6 +367,42 @@ def test_set_match_threshold_refuses_an_unbound_model() -> None:
         model._set_match_threshold(0.7)
 
 
+def test_set_match_threshold_refuses_a_chain_with_no_threshold_select() -> None:
+    """Same guard on the other seam: an Op chain with no cut has nowhere to write."""
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            MatcherScore(_matcher(), out_space="heuristic"),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    assert model._threshold_seam() is None
+    assert model._match_threshold() is None
+    with pytest.raises(RuntimeError, match="contains no ThresholdSelect"):
+        model._set_match_threshold(0.7)
+
+
+def test_set_match_threshold_writes_the_last_threshold_select() -> None:
+    """Reader and writer agree on WHICH select owns the cut when a chain has two."""
+    first, last = ThresholdSelect(0.1), ThresholdSelect(0.2)
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            MatcherScore(_matcher(), out_space="heuristic"),
+            first,
+            last,
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    assert model._match_threshold() == 0.2
+
+    model._set_match_threshold(0.75)
+
+    assert last.threshold == 0.75
+    assert first.threshold == 0.1
+    assert model._match_threshold() == 0.75
+
+
 # --- Which matchers may fit a threshold -------------------------------------
 
 
@@ -470,6 +506,21 @@ def test_gold_labels_do_not_trigger_the_silver_warning() -> None:
         _classic().fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
 
 
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        pytest.param("corrections.jsonl", id="path-str"),
+        pytest.param(Path("corrections.jsonl"), id="path-object"),
+        pytest.param([], id="empty"),
+    ],
+)
+def test_silver_guard_ignores_inputs_that_carry_no_source(supplied: Any) -> None:
+    """Only ``LabeledPair`` carries ``source``; a file or a Correction has no silver case."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warn_if_silver_only(supplied)
+
+
 def test_missing_sklearn_raises_a_directed_error_and_never_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -532,6 +583,28 @@ def test_cut_scale_scores_passes_through_without_a_calibrator() -> None:
 def test_cut_scale_scores_keeps_missing_judgements_as_none() -> None:
     """A candidate the matcher returned nothing for stays ``None``, never a fake 0.0."""
     assert _classic()._cut_scale_scores([None]) == [None]
+
+
+def test_held_out_metrics_are_graded_on_the_same_scale_as_the_derived_cut() -> None:
+    """A calibrator moves the scale; the cut and the grader must move together.
+
+    Grading raw scores against a cut derived on calibrated ones compares two
+    different scales and reports a number that looks fine and means nothing.
+    """
+    pytest.importorskip("sklearn", reason="requires the [trained] extra")
+    records, pairs = _dataset()
+    model = _classic()
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, method=Platt())
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+
+    assert model.fit_report_ is not None and model.fit_report_.metrics is not None
+    assert model.fit_report_.metrics.threshold == pytest.approx(model.clusterer.threshold)
+
+    raw = list(model._scorer().forward(iter(model.candidates(records))))
+    rescaled = model._on_cut_scale(raw)
+    # Copies, on the calibrated scale -- the caller's judgements are untouched.
+    assert [j.score for j in rescaled] != [j.score for j in raw]
+    assert [j.left_id for j in rescaled] == [j.left_id for j in raw]
 
 
 # --- Persistence: what survives, and what does not ---------------------------
