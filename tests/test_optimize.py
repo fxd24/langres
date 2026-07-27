@@ -176,9 +176,7 @@ def test_an_unprompted_config_keeps_its_historical_recipe_id() -> None:
     with_key = _canonical_config(
         {"blocker": "vector", "embedding_model": "m", "k_neighbors": 5, "query_prompt": None}
     )
-    without_key = _canonical_config(
-        {"blocker": "vector", "embedding_model": "m", "k_neighbors": 5}
-    )
+    without_key = _canonical_config({"blocker": "vector", "embedding_model": "m", "k_neighbors": 5})
     assert with_key == without_key
 
     # A real prompt IS recipe-relevant and must survive.

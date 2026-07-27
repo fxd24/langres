@@ -127,9 +127,7 @@ def test_vector_config_consumes_the_query_prompt_axis() -> None:
 
 def test_vector_config_without_a_query_prompt_key_still_builds() -> None:
     """Configs written before the axis existed must keep working (absent = None)."""
-    blocker = build_blocker_from_config(
-        _vector_config(), schema=CompanySchema, index=_fake_index()
-    )
+    blocker = build_blocker_from_config(_vector_config(), schema=CompanySchema, index=_fake_index())
 
     assert blocker.query_prompt is None
 

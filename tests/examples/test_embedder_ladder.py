@@ -321,7 +321,9 @@ class TestReport:
         # Two definitions of the same metric must never share a column.
         rows = [
             _cell("current", "none"),
-            _cell("legacy", "none", metric_revision=LADDER.METRIC_REVISION - 1, separability_auc=0.5),
+            _cell(
+                "legacy", "none", metric_revision=LADDER.METRIC_REVISION - 1, separability_auc=0.5
+            ),
         ]
         report = LADDER.render_report(rows)
         assert "legacy" in report.split("## Models that were measured")[0]
