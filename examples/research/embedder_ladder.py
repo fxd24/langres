@@ -526,14 +526,17 @@ def paired_interval(baseline: RecallByRecord, candidate: RecallByRecord) -> Any 
 def _reference_key(benchmark: str, arm: str) -> str:
     """Sidecar key for one reference cell.
 
-    ``REFERENCE_MODEL`` and ``CI_K`` are in the key, not just in the filename:
-    both are one-line constants, and if either changed while the file stayed put,
-    ``read_reference`` would return the old contents as the baseline and every
-    ``vs_reference_*`` would silently become a comparison against a different
-    model — or a different ``k`` — with no error and no visible change in the
-    report.
+    ``REFERENCE_MODEL``, ``CI_K`` and ``METRIC_REVISION`` are in the key, not just
+    in the filename: each is a one-line constant, and if any changed while the
+    file stayed put, ``read_reference`` would return the old contents as the
+    baseline and every ``vs_reference_*`` would silently become a comparison
+    against a different model, a different ``k``, or a different *definition of
+    recall* — with no error and no visible change in the report. The metric
+    revision is the one that bites hardest: the rows measured under it are
+    excluded from every table, but the per-record sidecar they produced is not a
+    table and would be read straight back in. (Found by cross-model review.)
     """
-    return f"{REFERENCE_MODEL}|k{CI_K}|{benchmark}|{arm}"
+    return f"{REFERENCE_MODEL}|k{CI_K}|rev{METRIC_REVISION}|{benchmark}|{arm}"
 
 
 def read_reference(path: Path) -> dict[str, RecallByRecord]:
@@ -900,10 +903,16 @@ def write_rows(path: Path, rows: Sequence[LadderRow]) -> None:
 
 
 def merge_rows(existing: Sequence[LadderRow], fresh: Sequence[LadderRow]) -> list[LadderRow]:
-    """Replace a model's rows rather than appending duplicates.
+    """Replace the re-measured cells rather than appending duplicates.
 
-    A re-run must reproduce the committed table, not grow it — so any
-    ``(model, benchmark)`` present in ``fresh`` is dropped from ``existing``.
+    A re-run must reproduce the committed table, not grow it — so every
+    ``(model, benchmark, arm, k)`` cell present in ``fresh`` replaces its
+    predecessor, and a **failure row** (``k == 0``) additionally voids what it
+    stands for: ``prompt_arm == "-"`` means the model never loaded, so the whole
+    ``(model, benchmark)`` cell is gone; a named arm voids that arm alone.
+    Without the second rule a failed re-run would leave the previous run's
+    successful rows sitting beside the new failure, and the report would print
+    both.
 
     Re-measuring ``REFERENCE_MODEL`` additionally **clears every other model's
     ``vs_reference_*``** on the benchmarks it touched. Those numbers were
@@ -912,8 +921,25 @@ def merge_rows(existing: Sequence[LadderRow], fresh: Sequence[LadderRow]) -> lis
     would have looked wrong. Clearing makes the gap visible until those models
     are re-run.
     """
-    replaced = {(row.model, row.benchmark) for row in fresh}
-    kept = [row for row in existing if (row.model, row.benchmark) not in replaced]
+    # Replace the exact CELLS that were re-measured, not every row of the
+    # ``(model, benchmark)`` pair. `--k` and `--prompts` make a partial re-run a
+    # normal thing to do, and coarser keying silently deleted the arms and
+    # operating points that run did not touch: the file shrank, the report
+    # rendered, and only the "what did not run" section would ever have said so.
+    # (Found by cross-model review, which re-ran one arm and watched the others
+    # disappear.)
+    replaced = {(row.model, row.benchmark, row.prompt_arm, row.k) for row in fresh}
+    void_cells = {(r.model, r.benchmark) for r in fresh if r.k == 0 and r.prompt_arm == "-"}
+    void_arms = {
+        (r.model, r.benchmark, r.prompt_arm) for r in fresh if r.k == 0 and r.prompt_arm != "-"
+    }
+    kept = [
+        row
+        for row in existing
+        if (row.model, row.benchmark) not in void_cells
+        and (row.model, row.benchmark, row.prompt_arm) not in void_arms
+        and (row.model, row.benchmark, row.prompt_arm, row.k) not in replaced
+    ]
 
     refreshed_benchmarks = {row.benchmark for row in fresh if row.model == REFERENCE_MODEL}
     for row in kept:
@@ -1073,9 +1099,9 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "share of what was reachable — **`recall/ceil` is the model comparison**; "
         "raw `recall` mixes it with a property of the gold set. (An earlier version "
         "of this harness asserted the filter was recall-neutral. It is not: on "
-        "`amazon_google` the ceiling is ~0.84. The same false claim is still "
-        "written in `src/langres/optimize.py:135-139` — reported, not silently "
-        "edited, since that file is outside this change's scope.)\n"
+        "`amazon_google` the ceiling is ~0.84. `langres.optimize._score_loaded` "
+        "carried the same false claim in its docstring and this change corrects "
+        "it there too, since `optimize()` reports the same capped recall.)\n"
         "- **This says nothing about deduplication.** All five benchmarks are "
         "cross-source linkage; the registry contains no single-source dedup "
         "benchmark. A within-source blocking ladder is unmeasured here.\n"
@@ -1430,37 +1456,63 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     )
     measured = {row.model for row in ok}
     stale_models = {row.model for row in stale}
+    failed_models = {row.model for row in failures}
     never = [spec for spec in MODELS if spec.name not in measured]
     if never:
         out.append(
             f"\n**{len(never)} of the {len(MODELS)} models in the ladder have no usable "
-            f"row at metric revision {METRIC_REVISION}.** They are not absent because "
-            "they failed — they were never reached, so this table cannot speak about "
-            "them at all.\n"
+            f"row at metric revision {METRIC_REVISION}.** The `state` column says why "
+            "for each — this table cannot speak about any of them.\n"
         )
         out.append("\n| model | state |\n|---|---|\n")
         for spec in never:
-            state = (
-                "measured under an older metric revision — re-run to publish"
-                if spec.name in stale_models
-                else "not run"
-            )
+            if spec.name in failed_models:
+                # A model whose only rows are failures did NOT go unmeasured. It
+                # was tried and it broke; saying "not run" would file a reported
+                # failure under "never reached".
+                state = "**failed** — see Failures below"
+            elif spec.name in stale_models:
+                state = "measured under an older metric revision — re-run to publish"
+            else:
+                state = "not run"
             out.append(f"| `{spec.name}` | {state} |\n")
 
+    # The grid, cell by cell — NOT "does each benchmark appear somewhere" and
+    # "does each arm appear somewhere" separately. Those marginals are both
+    # satisfied by a grid with a hole in it, and cross-model review demonstrated
+    # exactly that: one missing (benchmark x arm) cell while the report declared
+    # every model, benchmark and arm measured.
     gaps: list[str] = []
     for spec in MODELS:
         if spec.name not in measured:
             continue
-        rows_for = [row for row in ok if row.model == spec.name]
-        missing_benchmarks = [b for b in BENCHMARKS if b not in {r.benchmark for r in rows_for}]
-        seen_arms = {r.prompt_arm for r in rows_for}
-        missing_arms = [a for a in arms_for(spec, PROMPT_ARMS) if a not in seen_arms]
-        if missing_benchmarks or missing_arms:
+        cells = {
+            (row.benchmark, row.prompt_arm, row.k) for row in ok if row.model == spec.name
+        }
+        missing = [
+            (benchmark, arm, k)
+            for benchmark in BENCHMARKS
+            for arm in arms_for(spec, PROMPT_ARMS)
+            for k in K_VALUES
+            if (benchmark, arm, k) not in cells
+        ]
+        if missing:
+            # Collapse to the coarsest true statement so the table stays readable:
+            # a whole missing benchmark is one line, not len(arms) * len(k) lines.
+            whole_benchmarks = sorted(
+                {b for b, _, _ in missing}
+                - {row.benchmark for row in ok if row.model == spec.name}
+            )
+            rest = [cell for cell in missing if cell[0] not in whole_benchmarks]
             parts = []
-            if missing_benchmarks:
-                parts.append("benchmarks " + ", ".join(f"`{b}`" for b in missing_benchmarks))
-            if missing_arms:
-                parts.append("prompt arms " + ", ".join(f"`{a}`" for a in missing_arms))
+            if whole_benchmarks:
+                parts.append("benchmarks " + ", ".join(f"`{b}`" for b in whole_benchmarks))
+            if rest:
+                parts.append(
+                    "cells "
+                    + ", ".join(f"`{b}`/`{arm}`/k={k}" for b, arm, k in sorted(rest)[:12])
+                    + (f" (+{len(rest) - 12} more)" if len(rest) > 12 else "")
+                )
             gaps.append(f"| `{spec.name}` | {'; '.join(parts)} |\n")
     if gaps:
         out.append(
@@ -1469,7 +1521,32 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         )
         out.append("\n| model | missing |\n|---|---|\n")
         out.extend(gaps)
-    if not never and not gaps:
+
+    # A checkpoint that ships its own query-side prefix but was measured without a
+    # `documented` arm. Derived from `registered_prompts`, measured off the loaded
+    # model — so it cannot go stale the way a hand-kept list of instruction-trained
+    # families does. `ModelSpec.documented_arm` is only ever set from a checkpoint
+    # config that was actually read, so the ones nobody has downloaded yet show up
+    # here the moment they are measured.
+    undocumented = sorted(
+        {
+            row.model
+            for row in ok
+            if any(name in ("query", "Retrieval-query") for name in row.registered_prompts)
+            and "documented" not in {r.prompt_arm for r in ok if r.model == row.model}
+        }
+    )
+    if undocumented:
+        out.append(
+            "\nMeasured checkpoints that register their own query-side prefix but were "
+            "measured without a `documented` arm — the generic `instruct` arm is not "
+            "their documented recipe, so this sweep does not show them at their "
+            "documented best: "
+            + ", ".join(f"`{name}`" for name in undocumented)
+            + ".\n"
+        )
+
+    if not never and not gaps and not undocumented:
         out.append("\nEvery model, benchmark and prompt arm in the ladder was measured.\n")
 
     out.append("\n## Failures (reported, not skipped)\n")

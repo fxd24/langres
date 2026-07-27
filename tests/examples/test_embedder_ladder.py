@@ -167,6 +167,60 @@ class TestPersistence:
         assert [row.candidate_recall for row in merged if row.model == "m"] == [0.9]
         assert any(row.model == "other" for row in merged)
 
+    def test_a_partial_rerun_keeps_the_cells_it_did_not_measure(self) -> None:
+        """`--k` / `--prompts` make partial re-runs normal; they must not delete.
+
+        Keyed on `(model, benchmark)` the re-run of one arm wiped every other arm
+        and every other k for that benchmark. The file shrank and the report
+        rendered. Found by cross-model review.
+        """
+        other_arm = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="instruct", k=20, status="ok", candidate_recall=0.5
+        )
+        other_k = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=50, status="ok", candidate_recall=0.7
+        )
+        fresh = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.9
+        )
+        merged = LADDER.merge_rows([other_arm, other_k], [fresh])
+
+        assert {(r.prompt_arm, r.k) for r in merged} == {("instruct", 20), ("none", 50), ("none", 20)}
+
+    def test_a_failed_rerun_removes_the_rows_it_invalidates(self) -> None:
+        """A load failure must not leave the previous run's numbers beside it."""
+        stale = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.9
+        )
+        failure = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="-", k=0, status="failed", error="OSError: gone"
+        )
+        merged = LADDER.merge_rows([stale], [failure])
+
+        assert [row.status for row in merged] == ["failed"]
+
+    def test_an_arm_that_fails_voids_only_that_arm(self) -> None:
+        kept = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.9
+        )
+        doomed = LADDER.LadderRow(
+            model="m", benchmark="b", prompt_arm="documented", k=20, status="ok", candidate_recall=0.4
+        )
+        failure = LADDER.LadderRow(
+            model="m",
+            benchmark="b",
+            prompt_arm="documented",
+            k=0,
+            status="failed",
+            error="ValueError: bad prompt",
+        )
+        merged = LADDER.merge_rows([kept, doomed], [failure])
+
+        assert {(r.prompt_arm, r.status) for r in merged} == {
+            ("none", "ok"),
+            ("documented", "failed"),
+        }
+
     def test_remeasuring_the_reference_clears_deltas_it_no_longer_backs(self) -> None:
         # Those deltas were computed against per-record scores the sidecar has
         # just overwritten. Keeping them publishes a comparison the file can no
@@ -259,6 +313,17 @@ def _cell(model: str, arm: str, **overrides: object) -> object:
     )
     defaults.update(overrides)
     return LADDER.LadderRow(**defaults)
+
+
+def _full_grid() -> list[object]:
+    """Every model x benchmark x arm x k cell the ladder declares."""
+    return [
+        _cell(spec.name, arm, benchmark=benchmark, k=k)
+        for spec in LADDER.MODELS
+        for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+        for benchmark in LADDER.BENCHMARKS
+        for k in LADDER.K_VALUES
+    ]
 
 
 class TestReport:
@@ -476,11 +541,40 @@ class TestReport:
         assert "`instruct`" in section
 
     def test_a_complete_sweep_says_so_instead_of_printing_an_empty_gap_table(self) -> None:
+        section = LADDER.render_report(_full_grid()).split("## What did not run")[1]
+        assert "Every model, benchmark and prompt arm in the ladder was measured." in section
+
+    def test_one_missing_grid_cell_is_not_called_a_complete_sweep(self) -> None:
+        """Marginals lie: every benchmark and every arm can appear with a hole left."""
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        hole = (spec.name, "amazon_google", "documented", LADDER.CI_K)
         rows = [
-            _cell(spec.name, arm, benchmark=benchmark)
-            for spec in LADDER.MODELS
-            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
-            for benchmark in LADDER.BENCHMARKS
+            row
+            for row in _full_grid()
+            if (row.model, row.benchmark, row.prompt_arm, row.k) != hole
         ]
         section = LADDER.render_report(rows).split("## What did not run")[1]
-        assert "Every model, benchmark and prompt arm in the ladder was measured." in section
+
+        assert "Every model, benchmark and prompt arm in the ladder was measured." not in section
+        assert "`amazon_google`/`documented`/k=20" in section
+
+    def test_a_model_whose_only_rows_failed_is_not_filed_as_never_run(self) -> None:
+        """"Failed" and "never reached" are different facts about a model."""
+        broken = LADDER.MODELS[1].name
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            LADDER.LadderRow(
+                model=broken,
+                benchmark="abt_buy",
+                prompt_arm="-",
+                k=0,
+                status="failed",
+                metric_revision=LADDER.METRIC_REVISION,
+                error="OSError: gated repo",
+            ),
+        ]
+        section = LADDER.render_report(rows).split("## What did not run")[1]
+        row = next(line for line in section.splitlines() if f"`{broken}`" in line)
+
+        assert "**failed**" in row
+        assert "not run" not in row

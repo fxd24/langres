@@ -16,7 +16,7 @@ slot at all**, which is a property of the class rather than a promise about a
 string. `FuzzyString` cannot make a paid call for the same reason `2 + 2`
 cannot -- there is nothing in it that could.
 
-It is now an **allow list over the langres symbols a snippet calls**, for a
+It is now an **allow list over the symbols a snippet imports and calls**, for a
 reason worth writing down. The guard used to say "the first block must construct
 `FuzzyString`", which silently bundled two different invariants: *this block
 cannot spend* and *this block is the FuzzyString demo*. They came apart the
@@ -25,18 +25,25 @@ re-coupling them is the one this repo keeps hitting -- a check that stops
 observing the thing it exists to catch. So: the money guard applies to whatever
 block gets executed, and the FuzzyString rot guard finds its block by content.
 
-Two properties of the allow list, deliberate:
+Four properties of the allow list, each deliberate:
 
-- It is an **allow** list (rots closed): an unknown langres symbol fails the
-  guard rather than passing it. Only names proven incapable of spending are on
-  it, each with its reason.
-- It requires the called langres symbols to be a **subset**, not merely to
-  intersect. The old intersection form would have passed a snippet that
-  constructed `FuzzyString` *and* `VectorLLMCascade`.
+- It is an **allow** list (rots closed): an unknown symbol fails the guard rather
+  than passing it. Only names proven incapable of spending are on it, with the
+  reason written beside them.
+- It gates the **imported modules** too, not just langres symbols. A guard that
+  only inspected langres calls would wave through `from litellm import
+  completion` sitting beside an allowed one.
+- Allowed symbols are **fully qualified** and resolved through the import
+  statement, so `import VectorLLMCascade as FuzzyString` cannot launder a paid
+  class into an allow-listed name. That bypass was real: cross-model review ran
+  it against the alias-keyed version of this guard and it passed.
+- It requires the called symbols to be a **subset**, not merely to intersect. The
+  original intersection form would have passed a snippet constructing
+  `FuzzyString` *and* `VectorLLMCascade`.
 
-Non-langres calls are ignored: builtins and the stdlib have no billing path into
-this library. `import langres.x` style is rejected outright, because the calls it
-enables are attribute calls that the bare-name check cannot see.
+Builtins are ignored -- they are not imported, so they cannot be a network
+client. `import x` style is rejected outright, because the calls it enables are
+attribute calls that the bare-name check cannot see.
 """
 
 from __future__ import annotations
@@ -51,11 +58,25 @@ _GUIDE = Path(__file__).resolve().parents[2] / "docs" / "GETTING_STARTED.md"
 
 _FIRST_PYTHON_BLOCK = re.compile(r"```python\n(.*?)```", re.DOTALL)
 
-#: langres symbols a snippet may call under `exec`, and why each cannot bill:
-#: `FuzzyString` has no paid model slot (rapidfuzz only); `get_benchmark` reads a
-#: labeled dataset that ships inside the wheel. `VectorLLMCascade` is deliberately
-#: absent -- it takes an `llm=` and would bill.
-_ZERO_SPEND_SYMBOLS = frozenset({"FuzzyString", "get_benchmark"})
+#: Top-level modules a snippet may import from at all. `itertools` is stdlib and
+#: has no network; `langres` is the library under test and is narrowed further by
+#: `_ZERO_SPEND_SYMBOLS` below. Everything else fails closed -- an `openai` or
+#: `litellm` import bills whether or not the langres call beside it is allowed.
+_ZERO_SPEND_MODULES = frozenset({"itertools", "langres"})
+
+#: Fully-qualified symbols a snippet may CALL under `exec`, and why each cannot
+#: bill: `FuzzyString` has no paid model slot (rapidfuzz only); `get_benchmark`
+#: reads a labeled dataset that ships inside the wheel. `VectorLLMCascade` is
+#: deliberately absent -- it takes an `llm=` and would bill.
+#:
+#: Qualified, not bare: the guard resolves each called name back to the symbol it
+#: was imported as, so an alias cannot launder a paid class into this list.
+_ZERO_SPEND_SYMBOLS = frozenset(
+    {
+        "langres.architectures.FuzzyString",
+        "langres.data.get_benchmark",
+    }
+)
 
 
 def _first_python_snippet() -> str:
@@ -97,31 +118,51 @@ def _constructed_names(snippet: str) -> set[str]:
     }
 
 
-def _langres_names(snippet: str) -> set[str]:
-    """Names the snippet imports FROM langres -- the only ones that could spend."""
+def _imported_symbols(snippet: str) -> dict[str, str]:
+    """``local name -> "module.Symbol"`` for every ``from X import Y [as Z]``.
+
+    The value is the **imported** symbol, never the local alias. Keying the money
+    guard on the alias is a hole a doc author can walk through by accident:
+    ``from langres.architectures import VectorLLMCascade as FuzzyString`` calls a
+    paid architecture under an allow-listed name. (Found by cross-model review,
+    which executed that exact snippet against the alias-keyed version of this
+    guard and watched it pass.)
+    """
     return {
-        alias.asname or alias.name
+        alias.asname or alias.name: f"{node.module}.{alias.name}"
         for node in ast.walk(ast.parse(snippet))
-        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "langres"
+        if isinstance(node, ast.ImportFrom) and node.module
         for alias in node.names
     }
 
 
 def _assert_cannot_spend(snippet: str) -> None:
     """Refuse to execute a doc snippet that could make a paid call."""
-    assert not any(
-        alias.name.split(".")[0] == "langres"
+    assert not [
+        alias.name
         for node in ast.walk(ast.parse(snippet))
         if isinstance(node, ast.Import)
         for alias in node.names
-    ), (
-        "A snippet this test executes uses `import langres...`, whose calls are "
-        "attribute calls the bare-name money guard below cannot see. Use "
-        "`from langres... import ...` so the guard can read what is called."
+    ], (
+        "A snippet this test executes uses `import x`, whose calls are attribute "
+        "calls the bare-name money guard below cannot see. Use `from x import y` "
+        "so the guard can read what is called."
     )
-    called = _constructed_names(snippet) & _langres_names(snippet)
+
+    imported = _imported_symbols(snippet)
+    roots = {name.split(".")[0] for name in imported.values()}
+    assert roots <= _ZERO_SPEND_MODULES, (
+        f"This test runs the snippet verbatim and must never make a paid call. It "
+        f"imports from {sorted(roots - _ZERO_SPEND_MODULES)}, which is not on the "
+        f"zero-spend module allow list ({', '.join(sorted(_ZERO_SPEND_MODULES))}). "
+        "Anything that can reach a network client belongs off this list -- an "
+        "`openai`/`litellm` import beside an allowed langres call bills just the "
+        "same."
+    )
+
+    called = {imported[name] for name in _constructed_names(snippet) & imported.keys()}
     assert called, (
-        "A snippet this test executes calls no langres symbol at all, so there is "
+        "A snippet this test executes calls no imported symbol at all, so there is "
         "nothing for the money guard to check -- it is documenting something other "
         f"than this library. It calls: {sorted(_constructed_names(snippet)) or 'nothing'}."
     )
@@ -164,7 +205,26 @@ def test_the_money_guard_rejects_a_paid_snippet() -> None:
     with pytest.raises(AssertionError, match="VectorLLMCascade"):
         _assert_cannot_spend(paid)
 
-    # ...and an `import langres` form, whose attribute calls it cannot inspect.
+    # ...the same paid class wearing an allow-listed name. Cross-model review
+    # executed exactly this against the alias-keyed guard and watched it PASS.
+    aliased = (
+        "from langres.architectures import VectorLLMCascade as FuzzyString\n"
+        'FuzzyString(llm="openrouter/openai/gpt-4o-mini").dedupe([])\n'
+    )
+    with pytest.raises(AssertionError, match="VectorLLMCascade"):
+        _assert_cannot_spend(aliased)
+
+    # ...a paid client smuggled in beside a genuinely free langres call.
+    smuggled = (
+        "from langres.data import get_benchmark\n"
+        "from litellm import completion\n"
+        'get_benchmark("fodors_zagat")\n'
+        'completion(model="gpt-4o", messages=[])\n'
+    )
+    with pytest.raises(AssertionError, match="litellm"):
+        _assert_cannot_spend(smuggled)
+
+    # ...and an `import x` form, whose attribute calls it cannot inspect.
     with pytest.raises(AssertionError, match="attribute calls"):
         _assert_cannot_spend("import langres.architectures\nlangres.architectures.FuzzyString()\n")
 

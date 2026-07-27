@@ -108,6 +108,24 @@ class TestUnhonouredConfigGuard:
         with pytest.raises(UnhonouredModelConfigError, match="model_type"):
             embedder.encode(["Apple Inc."])
 
+    @pytest.mark.slow
+    def test_guard_still_fires_on_the_SECOND_load_attempt(self, monkeypatch):
+        """A guard that only holds once is not a guard.
+
+        ``_get_model`` used to assign ``self._model`` before validating it, so the
+        raise left the rejected model on the instance and the next call took the
+        cached branch and returned it. Found by cross-model review.
+        """
+        monkeypatch.setattr(
+            embeddings_module, "SEMANTIC_CONFIG_KEYS", {"model_type": "a newer transformers"}
+        )
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+
+        for _ in range(2):
+            with pytest.raises(UnhonouredModelConfigError, match="model_type"):
+                embedder.encode(["Apple Inc."])
+        assert embedder._model is None
+
 
 def test_registered_under_sentence_transformer_embedder_via_lazy_lookup() -> None:
     """``get_component(...)`` lazily imports+registers the class.

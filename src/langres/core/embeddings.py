@@ -553,7 +553,13 @@ class SentenceTransformerEmbedder:
                 import torch
 
                 model_kwargs["torch_dtype"] = getattr(torch, self.dtype)
-            self._model = SentenceTransformer(
+            # Validate a LOCAL before publishing it to `self._model`. Assigning
+            # first would make the guard fail OPEN on the second call: the raise
+            # leaves a loaded model on the instance, and the next `_get_model()`
+            # takes the `is not None` branch and returns the very model the guard
+            # rejected. A guard that only holds on the first attempt is not a
+            # guard.
+            model = SentenceTransformer(
                 self.model_name,
                 device=self.device,
                 trust_remote_code=self.trust_remote_code,
@@ -565,7 +571,8 @@ class SentenceTransformerEmbedder:
                 prompts=self.prompts,
                 default_prompt_name=self.prompt_name,
             )
-            _require_honoured_config_keys(self._model, self.model_name)
+            _require_honoured_config_keys(model, self.model_name)
+            self._model = model
         return self._model
 
     def config(self) -> SentenceTransformerEmbedderConfig:
