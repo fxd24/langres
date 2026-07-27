@@ -426,6 +426,55 @@ threshold = derive_threshold(scores, labels, method="youden")   # or "percentile
 band and report on **held-out test** so the threshold isn't tuned on the pairs it's
 measured on — see `examples/research/m4_calibration.py` for the honest held-out version.
 
+### …or let `fit()` do it: `fit(derive_threshold=True)`
+
+The snippet above is the primitive. If your labels are id-keyed, the model can
+derive and apply the cut itself, holding out for you:
+
+```python
+resolver.fit(records, pairs=labeled_pairs, split=0.3, seed=0, derive_threshold=True)
+
+print(resolver.fit_report_.to_markdown())
+# - Threshold: 0.8824 (derived from 0.5000 by youden on 18 labeled pairs,
+#                      held-out, applied to the clusterer)
+```
+
+It is **opt-in**: the default leaves the constructed threshold alone, which is the
+right no-data fallback. What it changes is that a user who *does* have labels no
+longer resolves at a constant nobody measured.
+
+Four things worth knowing:
+
+- **It needs `pairs=`, not `labels=`.** `pairs=` is what carries the
+  entity-disjoint `split=`. With a split, the cut is derived on `train` and the
+  report's P/R/F1 grade it on `valid`, which the cut never saw. Without one the
+  cut is still derived — and the report says `IN-SAMPLE`, and computes no
+  metrics at all, because an in-sample number here would only flatter the cut.
+- **It fits matchers that have no fit hook.** `WeightedAverageMatcher`,
+  `RapidfuzzMatcher` and the LLM judges have nothing to train, so
+  `fit(pairs=...)` refuses them — but their *threshold* is a real fittable
+  parameter, and those are exactly the pipelines with nothing else to fit.
+- **It knows where your model keeps its cut.** A classic four-slot model writes
+  `clusterer.threshold`; a research recipe / `from_topology` chain has no
+  clusterer at all and writes its terminal `ThresholdSelect`.
+  `fit_report_.threshold_fit.applied_to` says which.
+- **Youden's J is symmetric in cost; ER usually is not.** It maximizes
+  `tpr - fpr`, weighting a false merge exactly as badly as a false split. In
+  entity resolution a false merge propagates through transitive closure and can
+  poison a whole cluster, while a false split leaves two records that can still
+  be merged later. If that asymmetry matters to you, treat the derived cut as a
+  starting point and move it **up**, or call `derive_threshold` yourself with
+  `method="percentile"`.
+
+Needs the `[trained]` extra (scikit-learn). On a core-only install it raises a
+directed `ImportError` rather than quietly keeping the default — identical code
+must not produce a different threshold depending on which extras are installed.
+
+The derived threshold survives `save`/`load`; its **provenance does not**
+(`fit_report_` is a fit-time artifact and is never serialized). Keep
+`fit_report_.model_dump_json()` beside the artifact if you need to show where the
+number came from.
+
 ## Budget monitoring (`SpendMonitor`, ≤ $5)
 
 ```python
