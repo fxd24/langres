@@ -15,9 +15,26 @@ Install from PyPI:
 pip install langres
 ```
 
-The core install needs no extras, no API key and no network. From a git
-checkout, the $0 offline quickstart is one command:
+The core install needs no extras, no API key and no network — that is the
+whole offline quickstart:
 
+```python
+from langres.architectures import FuzzyString
+
+records = [
+    {"id": "1", "name": "Acme Corporation", "city": "New York"},
+    {"id": "2", "name": "Acme Corp", "city": "New York"},
+    {"id": "3", "name": "Unrelated Bakery", "city": "Miami"},
+]
+
+print(FuzzyString(threshold=0.6).dedupe(records))
+# DedupeResult([{'1', '2'}], architecture='FuzzyString', backbone=None,
+#              score_type='heuristic', threshold=0.6)
+```
+
+From a git checkout the same walkthrough is a runnable script:
+
+<!-- docs-gate: requires-repo -->
 ```bash
 git clone https://github.com/fxd24/langres.git && cd langres && uv sync
 uv run python examples/quickstart_models.py  # FuzzyString dedupe, real clusters, $0

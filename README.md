@@ -31,23 +31,45 @@ cohort.
 ## First run: one command, offline, $0
 
 ```bash
+pip install langres
+```
+
+That is the whole install for the offline path — **core only**, no extras, no
+API key, no network, no paid call:
+
+```python
+from langres.architectures import FuzzyString
+
+records = [
+    {"id": "1", "name": "Acme Corporation", "city": "New York"},
+    {"id": "2", "name": "Acme Corp", "city": "New York"},
+    {"id": "3", "name": "Unrelated Bakery", "city": "Miami"},
+]
+
+print(FuzzyString(threshold=0.6).dedupe(records))
+# DedupeResult([{'1', '2'}], architecture='FuzzyString', backbone=None,
+#              score_type='heuristic', threshold=0.6)
+```
+
+The result names the model that produced it, so you never have to remember
+which one ran or what its scores meant. From a git checkout the same
+walkthrough is a runnable script — CI runs it on a bare `uv sync` to keep it
+honest:
+
+<!-- docs-gate: requires-repo -->
+```bash
 git clone https://github.com/fxd24/langres.git && cd langres && uv sync
 uv run python examples/quickstart_models.py
 ```
 
-That is the **core-only** path — no extras, no API key, no network, no paid
-call. It dedupes a five-record sample with `FuzzyString` and prints the real
-clusters, then names the architecture, backbone and score type that produced
-them. CI runs exactly this script on a bare `uv sync` to keep it honest.
-
-Installing from PyPI instead? The same few lines are inline under
-**Quickstart** below — `examples/` is not part of the wheel, so every script
-path in this README assumes a git checkout.
+`examples/` is not part of the published wheel, so every script path in this
+README assumes a git checkout.
 
 ### The research path
 
 The resources/operations/recipes vocabulary has its own runner:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/research/first_experiment.py   # git checkout + [semantic]
 ```
@@ -134,6 +156,7 @@ baselines and **$0 plumbing**. Run the loop's core offline for free — dedupe �
 log → review → harvest → tuned threshold → tearsheet (a one-page HTML quality
 report):
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/flywheel_min.py
 ```
@@ -232,6 +255,7 @@ if verdict:                            # LinkVerdict is truthy iff it's a match
 spends money because you named it, never because a heuristic sniffed an
 environment variable for a key:
 
+<!-- docs-gate: requires-network -->
 ```python
 from langres.architectures import VectorLLMCascade
 
@@ -336,10 +360,13 @@ diagram, the most-confident errors — and reports **what those judgements cost
 to produce** right next to the quality numbers (side by side, on purpose:
 there is no blended "cost-per-precision" metric to hide behind):
 
+<!-- docs-gate: illustrative -->
 ```python
 from pathlib import Path
 from langres.report.eval_report import EvalReport
 
+# judgements / gold_pairs / costs are yours; the quickstart script linked
+# below builds all three end to end, offline, and runs in CI.
 report = EvalReport.from_judgements(judgements, gold_pairs, threshold=0.6, costs=costs)
 print(report.summary)             # P/R/F1, ROC-AUC, calibration in one line
 print(report.total_cost_usd)      # what producing those judgements cost
