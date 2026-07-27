@@ -39,6 +39,8 @@ class SearchSpace:
         metric: FAISS distance metrics (``"L2"`` / ``"cosine"``).
         text_field: Record attribute names holding each record's blocking text.
             Dataset-specific — override the default to match your schema's field.
+        k_neighbors: Nearest-neighbour counts to sweep. The **innermost** axis of
+            :meth:`configs` (see its ordering contract).
         query_prompt: Instruction prefixes to try on the **query** side, with
             ``None`` meaning "no instruction" (the symmetric default). Instructional
             embedders (EmbeddingGemma / E5 / BGE / Qwen3-Embedding) are trained to
@@ -46,18 +48,24 @@ class SearchSpace:
             no-op-but-costly one for models that ignore prompts. Documents stay
             generic either way; a prompt costs one extra encode pass over the
             corpus per search, which is why it is not free to leave on.
-            **Outer to** ``k_neighbors`` so the index is still built once per
-            index-defining group (the prompt affects queries, not the index).
-        k_neighbors: Nearest-neighbour counts to sweep. The **innermost** axis of
-            :meth:`configs` (see its ordering contract).
+            In :meth:`configs` this axis varies **outside** ``k_neighbors`` so the
+            index is still built once per index-defining group (the prompt affects
+            queries, not the index) — the *field* order below is unrelated to that.
     """
 
     blocker: tuple[str, ...] = ("vector",)
     embedding_model: tuple[str, ...] = ("all-MiniLM-L6-v2",)
     metric: tuple[str, ...] = ("cosine",)
     text_field: tuple[str, ...] = ("name",)
-    query_prompt: tuple[str | None, ...] = (None,)
     k_neighbors: tuple[int, ...] = (5, 10, 20)
+    # LAST on purpose. A new field in a non-terminal position silently re-binds
+    # every positional caller: `SearchSpace(("vector",), ("m",), ("cosine",),
+    # ("name",), (5, 10, 20))` would hand that k tuple to `query_prompt`, which
+    # __post_init__ accepts (it only checks emptiness) and which surfaces much
+    # later as `encode(prompt=5)`. Field order is independent of the
+    # itertools.product order in configs(), so the innermost-k contract is
+    # unaffected by keeping this last.
+    query_prompt: tuple[str | None, ...] = (None,)
 
     def __post_init__(self) -> None:
         # Fail loud: an empty axis would silently collapse the whole product to

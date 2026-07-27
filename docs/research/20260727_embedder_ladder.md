@@ -36,11 +36,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.9349 | 0.9494 | 0.9941 | 11,204 | 11985 | 11.8 | 2,173 |
-| `BAAI/bge-small-en-v1.5` | 33.4M | 0.9674 | n/a | 0.9976 | 11,072 | 11445 | 8.2 | n/a |
+| `BAAI/bge-small-en-v1.5` | 33.4M | 0.9674 | 0.9825 | 0.9976 | 11,072 | 11445 | 9.4 | 2,173 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.9531 | 0.9679 | 0.9960 | 11,678 | 12253 | 21.7 | 2,173 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.9713 | n/a | 0.9971 | 10,241 | 10544 | 15.5 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.9674 | n/a | 0.9977 | 8,799 | 9095 | 13.8 | n/a |
-| `all-mpnet-base-v2` | 109.5M | 0.9368 | n/a | 0.9941 | 10,897 | 11632 | 20.0 | n/a |
+| `all-mpnet-base-v2` | 109.5M | 0.9368 | 0.9514 | 0.9941 | 10,897 | 11632 | 26.1 | 2,173 |
 
 ### amazon_google
 
@@ -49,11 +49,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.8266 | 0.9846 | 0.9989 | 23,024 | 27853 | 17.2 | 4,589 |
-| `BAAI/bge-small-en-v1.5` | 33.4M | 0.8345 | n/a | 0.9989 | 22,470 | 26925 | 9.9 | n/a |
+| `BAAI/bge-small-en-v1.5` | 33.4M | 0.8345 | 0.9940 | 0.9989 | 22,470 | 26925 | 16.9 | 4,589 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.8288 | 0.9871 | 0.9987 | 22,790 | 27498 | 18.2 | 4,589 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.8317 | n/a | 0.9985 | 22,960 | 27608 | 14.3 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.8324 | n/a | 0.9993 | 21,433 | 25749 | 14.6 | n/a |
-| `all-mpnet-base-v2` | 109.5M | 0.8108 | n/a | 0.9972 | 22,886 | 28227 | 19.7 | n/a |
+| `all-mpnet-base-v2` | 109.5M | 0.8108 | 0.9657 | 0.9972 | 22,886 | 28227 | 24.5 | 4,589 |
 
 ### fodors_zagat
 
@@ -62,11 +62,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 1.0000 | 1.0000 | 0.9997 | 4,880 | 4880 | 20.5 | 864 |
-| `BAAI/bge-small-en-v1.5` | 33.4M | 1.0000 | n/a | 1.0000 | 4,795 | 4795 | 6.1 | n/a |
+| `BAAI/bge-small-en-v1.5` | 33.4M | 1.0000 | 1.0000 | 1.0000 | 4,795 | 4795 | 7.1 | 864 |
 | `all-MiniLM-L12-v2` | 33.4M | 1.0000 | 1.0000 | 0.9997 | 4,704 | 4704 | 12.5 | 864 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 1.0000 | n/a | 1.0000 | 4,505 | 4505 | 8.2 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 1.0000 | n/a | 1.0000 | 4,431 | 4431 | 56.6 | n/a |
-| `all-mpnet-base-v2` | 109.5M | 1.0000 | n/a | 0.9996 | 5,162 | 5162 | 8.5 | n/a |
+| `all-mpnet-base-v2` | 109.5M | 1.0000 | 1.0000 | 0.9996 | 5,162 | 5162 | 10.8 | 864 |
 
 ### walmart_amazon
 
@@ -75,11 +75,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.8654 | 0.9793 | 0.9997 | 46,435 | 53658 | 50.8 | 24,628 |
-| `BAAI/bge-small-en-v1.5` | 33.4M | 0.8782 | n/a | 0.9999 | 46,337 | 52763 | 50.2 | n/a |
+| `BAAI/bge-small-en-v1.5` | 33.4M | 0.8782 | 0.9938 | 0.9999 | 46,337 | 52763 | 93.5 | 24,628 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.8645 | 0.9782 | 0.9996 | 45,469 | 52598 | 70.4 | 24,628 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.8755 | n/a | 0.9998 | 43,963 | 50217 | 147.2 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.8810 | n/a | 0.9999 | 46,493 | 52776 | 72.8 | n/a |
-| `all-mpnet-base-v2` | 109.5M | 0.8498 | n/a | 0.9994 | 46,448 | 54656 | 137.0 | n/a |
+| `all-mpnet-base-v2` | 109.5M | 0.8498 | 0.9617 | 0.9994 | 46,448 | 54656 | 173.5 | 24,628 |
 
 ### wdc_computers
 
@@ -88,11 +88,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.5770 | 0.6410 | 0.9724 | 32,369 | 56103 | 14.8 | 4,647 |
-| `BAAI/bge-small-en-v1.5` | 33.4M | 0.5725 | n/a | 0.9712 | 32,566 | 56888 | 11.1 | n/a |
+| `BAAI/bge-small-en-v1.5` | 33.4M | 0.5725 | 0.6360 | 0.9712 | 32,566 | 56888 | 21.3 | 4,647 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.5446 | 0.6050 | 0.9650 | 32,679 | 60011 | 24.6 | 4,647 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.6103 | n/a | 0.9794 | 32,347 | 53005 | 16.6 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.7264 | n/a | 0.9861 | 31,840 | 43834 | 18.1 | n/a |
-| `all-mpnet-base-v2` | 109.5M | 0.5311 | n/a | 0.9694 | 32,880 | 61915 | 25.7 | n/a |
+| `all-mpnet-base-v2` | 109.5M | 0.5311 | 0.5900 | 0.9694 | 32,880 | 61915 | 36.2 | 4,647 |
 
 ## Does an instruction prompt help? (k=20)
 
@@ -107,11 +107,11 @@ Same model, same `k`, same index — only the query side is re-encoded with a si
 | `all-MiniLM-L6-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9997 | 0.9991 | -0.0006 |
 | `all-MiniLM-L6-v2` | walmart_amazon | 0.8654 | 0.8599 | -0.0055 | [-0.0167, -0.0006] | 0.9997 | 0.9994 | -0.0002 |
 | `all-MiniLM-L6-v2` | wdc_computers | 0.5770 | 0.6238 | +0.0468 | [+0.0260, +0.0708] | 0.9724 | 0.9675 | -0.0049 |
-| `BAAI/bge-small-en-v1.5` | abt_buy | 0.9674 | 0.9693 | +0.0019 | n/a | 0.9976 | 0.9983 | +0.0006 |
-| `BAAI/bge-small-en-v1.5` | amazon_google | 0.8345 | 0.8194 | -0.0151 | n/a | 0.9989 | 0.9974 | -0.0016 |
-| `BAAI/bge-small-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 0.9999 | -0.0001 |
-| `BAAI/bge-small-en-v1.5` | walmart_amazon | 0.8782 | 0.8773 | -0.0009 | n/a | 0.9999 | 0.9996 | -0.0003 |
-| `BAAI/bge-small-en-v1.5` | wdc_computers | 0.5725 | 0.5788 | +0.0063 | n/a | 0.9712 | 0.9452 | -0.0261 |
+| `BAAI/bge-small-en-v1.5` | abt_buy | 0.9674 | 0.9693 | +0.0019 | [-0.0020, +0.0059] (spans 0) | 0.9976 | 0.9979 | +0.0002 |
+| `BAAI/bge-small-en-v1.5` | amazon_google | 0.8345 | 0.8194 | -0.0151 | [-0.0244, -0.0089] | 0.9989 | 0.9975 | -0.0015 |
+| `BAAI/bge-small-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 1.0000 | 0.9999 | -0.0000 |
+| `BAAI/bge-small-en-v1.5` | walmart_amazon | 0.8782 | 0.8773 | -0.0009 | [-0.0067, +0.0044] (spans 0) | 0.9999 | 0.9998 | -0.0001 |
+| `BAAI/bge-small-en-v1.5` | wdc_computers | 0.5725 | 0.5788 | +0.0063 | [-0.0150, +0.0361] (spans 0) | 0.9712 | 0.9548 | -0.0164 |
 | `all-MiniLM-L12-v2` | abt_buy | 0.9531 | 0.9598 | +0.0067 | [-0.0010, +0.0138] (spans 0) | 0.9960 | 0.9960 | -0.0000 |
 | `all-MiniLM-L12-v2` | amazon_google | 0.8288 | 0.8072 | -0.0216 | [-0.0327, -0.0142] | 0.9987 | 0.9971 | -0.0016 |
 | `all-MiniLM-L12-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9997 | 0.9996 | -0.0001 |
@@ -127,11 +127,11 @@ Same model, same `k`, same index — only the query side is re-encoded with a si
 | `intfloat/e5-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 1.0000 | -0.0000 |
 | `intfloat/e5-base-v2` | walmart_amazon | 0.8810 | 0.8810 | +0.0000 | n/a | 0.9999 | 0.9999 | -0.0000 |
 | `intfloat/e5-base-v2` | wdc_computers | 0.7264 | 0.7363 | +0.0099 | n/a | 0.9861 | 0.9860 | -0.0001 |
-| `all-mpnet-base-v2` | abt_buy | 0.9368 | 0.9521 | +0.0153 | n/a | 0.9941 | 0.9953 | +0.0012 |
-| `all-mpnet-base-v2` | amazon_google | 0.8108 | 0.7619 | -0.0489 | n/a | 0.9972 | 0.9922 | -0.0050 |
-| `all-mpnet-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 0.9996 | 0.9982 | -0.0014 |
-| `all-mpnet-base-v2` | walmart_amazon | 0.8498 | 0.8434 | -0.0064 | n/a | 0.9994 | 0.9978 | -0.0017 |
-| `all-mpnet-base-v2` | wdc_computers | 0.5311 | 0.4662 | -0.0648 | n/a | 0.9694 | 0.9404 | -0.0290 |
+| `all-mpnet-base-v2` | abt_buy | 0.9368 | 0.9521 | +0.0153 | [+0.0069, +0.0240] | 0.9941 | 0.9949 | +0.0008 |
+| `all-mpnet-base-v2` | amazon_google | 0.8108 | 0.7619 | -0.0489 | [-0.0643, -0.0334] | 0.9972 | 0.9931 | -0.0040 |
+| `all-mpnet-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9996 | 0.9989 | -0.0007 |
+| `all-mpnet-base-v2` | walmart_amazon | 0.8498 | 0.8434 | -0.0064 | [-0.0168, +0.0109] (spans 0) | 0.9994 | 0.9984 | -0.0010 |
+| `all-mpnet-base-v2` | wdc_computers | 0.5311 | 0.4662 | -0.0648 | [-0.1022, -0.0397] | 0.9694 | 0.9468 | -0.0226 |
 
 ## Is it better than what ships today? (k=20, no instruction)
 
@@ -141,11 +141,21 @@ Every model against `all-MiniLM-L6-v2` — langres's current `DEFAULT_EMBEDDING_
 
 | model | benchmark | Δ per-record recall | 95% CI | clusters |
 |---|---|---:|---|---:|
+| `BAAI/bge-small-en-v1.5` | abt_buy | +0.0324 | [+0.0215, +0.0441] | 1,012 |
+| `BAAI/bge-small-en-v1.5` | amazon_google | +0.0060 | [-0.0003, +0.0123] (spans 0) | 995 |
+| `BAAI/bge-small-en-v1.5` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
+| `BAAI/bge-small-en-v1.5` | walmart_amazon | +0.0118 | [+0.0039, +0.0205] | 846 |
+| `BAAI/bge-small-en-v1.5` | wdc_computers | -0.0098 | [-0.0348, +0.0161] (spans 0) | 877 |
 | `all-MiniLM-L12-v2` | abt_buy | +0.0186 | [+0.0088, +0.0285] | 1,012 |
 | `all-MiniLM-L12-v2` | amazon_google | +0.0020 | [-0.0037, +0.0074] (spans 0) | 995 |
 | `all-MiniLM-L12-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
 | `all-MiniLM-L12-v2` | walmart_amazon | -0.0011 | [-0.0077, +0.0055] (spans 0) | 846 |
 | `all-MiniLM-L12-v2` | wdc_computers | -0.0363 | [-0.0590, -0.0132] | 877 |
+| `all-mpnet-base-v2` | abt_buy | +0.0020 | [-0.0108, +0.0137] (spans 0) | 1,012 |
+| `all-mpnet-base-v2` | amazon_google | -0.0186 | [-0.0297, -0.0090] | 995 |
+| `all-mpnet-base-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
+| `all-mpnet-base-v2` | walmart_amazon | -0.0184 | [-0.0315, -0.0069] | 846 |
+| `all-mpnet-base-v2` | wdc_computers | -0.0510 | [-0.0765, -0.0270] | 877 |
 
 ## The recall/cost frontier (every k)
 

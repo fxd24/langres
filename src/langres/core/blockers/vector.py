@@ -343,17 +343,21 @@ class VectorBlocker(Blocker[SchemaT]):
                 so this costs one extra encode pass over the corpus per search.
                 Default: None (symmetric; no re-encode).
 
-                **Honoured by ``FAISSIndex`` only.**
-                :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex`
-                and
+                **How far it reaches depends on the index.**
+                :class:`~langres.core.indexes.vector_index.FAISSIndex` honours it
+                fully — ``search_all`` re-encodes the query side.
                 :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`
-                accept the argument and **discard it**: their ``search_all``
+                honours it at the stage that decides the final order: its dense
+                *prefetch* is short-circuited on cached vectors, but the
+                late-interaction reranking pass encodes queries with the prompt
+                (``reranking_vector_index.py:294``).
+                :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex`
+                accepts the argument and **discards it** — its ``search_all``
                 forwards the cached dense vectors into ``search``, which
-                short-circuits on them exactly the way ``FAISSIndex`` used to.
-                Sweeping this parameter over one of those indexes therefore
-                yields a flat, meaningless result rather than an error. Not fixed
-                here because verifying a Qdrant-backed fix needs a live server;
-                tracked as follow-up work.
+                short-circuits on them exactly the way ``FAISSIndex`` used to, so
+                sweeping this parameter over it yields a flat, meaningless result
+                rather than an error. Not fixed here because verifying a
+                Qdrant-backed fix needs a live server; tracked as follow-up work.
 
         Raises:
             ValueError: If k_neighbors is not positive, or if the schema /

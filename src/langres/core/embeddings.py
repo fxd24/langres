@@ -132,6 +132,12 @@ def _require_honoured_config_keys(model: Any, model_name: str) -> None:
     string parsing or per-model allowlist (both of which rot). It does not prove
     the modelling code honours the key, only that this ``transformers`` knows it.
 
+    **The whole MRO is searched, not just the concrete class.** This guard
+    ``raise``s, so a false positive hard-blocks a model that works — and HF
+    config classes routinely accept a parameter on a base class and pass it up
+    with ``**kwargs``, which would look "undeclared" to a concrete-class-only
+    check.
+
     Args:
         model: A loaded ``sentence_transformers.SentenceTransformer``.
         model_name: The reference being loaded, quoted in the error message.
@@ -143,12 +149,17 @@ def _require_honoured_config_keys(model: Any, model_name: str) -> None:
 
     for module in model.modules():
         config = getattr(module, "config", None)
-        if config is None or not hasattr(type(config), "__init__"):
+        if config is None:
             continue
-        try:
-            declared = inspect.signature(type(config).__init__).parameters
-        except (TypeError, ValueError):  # pragma: no cover - exotic config classes
-            continue
+        declared: set[str] = set()
+        for ancestor in type(config).__mro__:
+            initializer = ancestor.__dict__.get("__init__")
+            if initializer is None:
+                continue
+            try:
+                declared |= set(inspect.signature(initializer).parameters)
+            except (TypeError, ValueError):  # pragma: no cover - exotic config classes
+                continue
         for key, requirement in SEMANTIC_CONFIG_KEYS.items():
             if getattr(config, key, None) and key not in declared:
                 import transformers
@@ -1330,8 +1341,28 @@ class DiskCachedEmbedder:
 
         logger.debug("Initialized SQLite database at %s", self.db_path)
 
+    def _embedder_discriminator(self) -> str:
+        """Settings of the wrapped embedder that change its vectors, as a key part.
+
+        ``(text, prompt)`` alone under-identifies an entry. ``prompt_name`` is
+        applied by sentence-transformers as ``default_prompt_name`` **when
+        ``prompt`` is None** — measured: passing ``prompt=None`` explicitly does
+        *not* suppress a registered default — so two embedders differing only by
+        ``prompt_name`` would hash identically and one would silently serve the
+        other's vectors. ``truncate_dim`` changes the vector's length outright.
+
+        Returns ``""`` when neither is set, so every cache written before these
+        knobs existed still hits. That is deliberate: closing the hazard must not
+        cost a full re-encode for the overwhelmingly common unset case.
+        """
+        prompt_name = getattr(self.embedder, "prompt_name", None)
+        truncate_dim = getattr(self.embedder, "truncate_dim", None)
+        if prompt_name is None and truncate_dim is None:
+            return ""
+        return f"|||NAME|||{prompt_name}|||DIM|||{truncate_dim}"
+
     def _hash_text(self, text: str, prompt: str | None = None) -> str:
-        """Generate cache key from text (and future prompt).
+        """Generate cache key from text, prompt, and the embedder's own settings.
 
         Args:
             text: Text to hash.
@@ -1344,6 +1375,9 @@ class DiskCachedEmbedder:
             Cache key design:
             - Without prompt: hash(text)
             - With prompt: hash(text + "|||PROMPT|||" + prompt)
+            - Plus :meth:`_embedder_discriminator` when the wrapped embedder sets
+              ``prompt_name`` / ``truncate_dim`` (empty otherwise, so existing
+              caches keep hitting).
 
             This ensures same text with different prompts gets different cache entries.
         """
@@ -1352,6 +1386,7 @@ class DiskCachedEmbedder:
         else:
             # Use separator to distinguish text from prompt
             cache_input = f"{text}|||PROMPT|||{prompt}"
+        cache_input += self._embedder_discriminator()
 
         # Use blake2b for fast, collision-resistant hashing
         hasher = hashlib.blake2b()

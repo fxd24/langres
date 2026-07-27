@@ -21,12 +21,14 @@ wrong number on this repo:
   emits intra-source gold pairs no cross-source candidate set can contain.
   ``recall_of_reachable`` is the model comparison; raw ``candidate_recall``
   mixes it with a property of the gold set. See ``_reachable_ceiling``.
-- **Every delta carries a cluster-resampled interval.** Model-vs-model and
-  prompt-arm differences go through
+- **Deltas measured at ``CI_K`` carry a cluster-resampled interval.** Prompt-arm
+  and model-vs-``REFERENCE_MODEL`` differences go through
   ``langres.experiments.statistics.paired_entity_bootstrap``, resampled by gold
   cluster — never by pair row, which would report intervals far too tight. A
   headline delta without an interval is how a +0.9pp single-seed result becomes
-  a recommendation.
+  a recommendation. Where an interval is genuinely unavailable (the reference has
+  not been measured on that benchmark; fewer than two gold clusters) the report
+  prints ``—`` and says so, rather than dropping the row.
 - **The prompt axis only became measurable once ``query_prompt`` was fixed.**
   ``FAISSIndex.search_all`` used to hand the cached corpus vectors to
   ``search()``, which never applies a prompt, so prompted and unprompted runs
@@ -163,6 +165,19 @@ K_VALUES: tuple[int, ...] = (5, 10, 20, 50)
 NEGATIVE_SAMPLE = 20_000
 SEED = 0
 
+#: Bumped whenever a metric here CHANGES MEANING, so a row measured under an
+#: older definition can be recognised instead of quietly sharing a column with a
+#: newer one. This is not versioning for its own sake: rows survive in a tracked
+#: JSONL across code changes, and the one-directional separability score that
+#: `8806cef` replaced systematically depressed the prompted arm — mixing the two
+#: in one `Δ AUC` column reads as a finding about base-size models rather than as
+#: the artefact it is.
+#:
+#: 1 = the first honest revision: reachable-recall ceiling reported, separability
+#: scored in both directions, index-build seconds paired with an encode count,
+#: prompt delta reported as the statistic its interval bounds.
+METRIC_REVISION = 1
+
 #: The `k` at which paired confidence intervals are computed and the reference
 #: per-record scores are persisted. One `k` on purpose: the sidecar is a tracked
 #: file, and a CI at every `k` would quadruple it to answer the same question.
@@ -210,10 +225,18 @@ class LadderRow:
     index_build_encoded: int | None = None
     search_seconds: float | None = None
     registered_prompts: list[str] = field(default_factory=list)
-    #: Paired-bootstrap CI (by gold cluster) of this row's per-record recall minus
-    #: the SAME model's unprompted per-record recall. Only on ``instruct`` rows at
-    #: ``CI_K``. An interval spanning 0 means the prompt arm's headline delta is
-    #: not distinguishable from noise on this benchmark.
+    #: Which revision of the metric definitions produced this row. Bumped whenever
+    #: a metric CHANGES MEANING, so the report can refuse to print two definitions
+    #: in one column. Rows below ``METRIC_REVISION`` are re-run, not re-rendered.
+    metric_revision: int = 0
+    #: Mean **per-record** recall difference (instruct minus none) for this model
+    #: on this benchmark, with its paired-bootstrap CI (by gold cluster). Only on
+    #: ``instruct`` rows at ``CI_K``. The point estimate is the same statistic the
+    #: interval bounds — deliberately NOT the difference of the two aggregate
+    #: recalls, which is a different number (they disagreed by 34% on
+    #: walmart_amazon). An interval spanning 0 means the delta is not
+    #: distinguishable from noise on this benchmark.
+    prompt_delta: float | None = None
     prompt_delta_ci_low: float | None = None
     prompt_delta_ci_high: float | None = None
     #: Mean per-record recall difference against ``REFERENCE_MODEL`` in the same
@@ -442,8 +465,21 @@ def paired_interval(baseline: RecallByRecord, candidate: RecallByRecord) -> Any 
     return paired_entity_bootstrap(observations, seed=SEED)
 
 
+def _reference_key(benchmark: str, arm: str) -> str:
+    """Sidecar key for one reference cell.
+
+    ``REFERENCE_MODEL`` and ``CI_K`` are in the key, not just in the filename:
+    both are one-line constants, and if either changed while the file stayed put,
+    ``read_reference`` would return the old contents as the baseline and every
+    ``vs_reference_*`` would silently become a comparison against a different
+    model — or a different ``k`` — with no error and no visible change in the
+    report.
+    """
+    return f"{REFERENCE_MODEL}|k{CI_K}|{benchmark}|{arm}"
+
+
 def read_reference(path: Path) -> dict[str, RecallByRecord]:
-    """Load the reference model's per-record recall, keyed ``benchmark|arm``."""
+    """Load the reference model's per-record recall, keyed by :func:`_reference_key`."""
     if not path.exists():
         return {}
     raw = json.loads(path.read_text())
@@ -575,6 +611,7 @@ def evaluate_model_on_benchmark(
                     prompt_arm="-",
                     k=0,
                     status="failed",
+                    metric_revision=METRIC_REVISION,
                     error=f"{type(exc).__name__}: {exc}"[:400],
                 )
             ],
@@ -646,6 +683,7 @@ def evaluate_model_on_benchmark(
                         index_build_encoded=index_build_encoded,
                         search_seconds=search_seconds,
                         registered_prompts=prompts,
+                        metric_revision=METRIC_REVISION,
                         saturation=SATURATION.get(benchmark, "not measured here"),
                     )
                 )
@@ -660,6 +698,7 @@ def evaluate_model_on_benchmark(
                         status="failed",
                         parameter_count=parameter_count,
                         dtype=spec.dtype,
+                        metric_revision=METRIC_REVISION,
                         error=f"{type(exc).__name__}: {exc}"[:400],
                     )
                 )
@@ -672,7 +711,9 @@ def evaluate_model_on_benchmark(
         reference=reference,
     )
     if spec.name == REFERENCE_MODEL:
-        reference_updates = {f"{benchmark}|{arm}": cell for arm, cell in per_arm_recall.items()}
+        reference_updates = {
+            _reference_key(benchmark, arm): cell for arm, cell in per_arm_recall.items()
+        }
     return rows, reference_updates
 
 
@@ -694,6 +735,16 @@ def _attach_intervals(
     - **vs. the shipped default**: this model minus ``REFERENCE_MODEL`` in the
       same arm. Left unset when the reference has not been measured on this
       benchmark — an absent interval is a fact, an invented one is not.
+
+    Both paths store ``interval.observed_difference`` as the point estimate, not
+    a difference of aggregates computed elsewhere. That is the whole reason this
+    function writes the delta at all: the bootstrap resamples per-record units,
+    so the number printed beside an interval has to be the number the interval
+    bounds. Both paths also require ``status == "available"`` —
+    ``paired_entity_bootstrap`` returns a real ``observed_difference`` with
+    ``lower=upper=None`` when there are fewer than two clusters, and publishing
+    that delta in a table whose premise is "no delta without an interval" would
+    be the same bug wearing a different hat.
     """
     baseline_arm = per_arm_recall.get("none")
     for row in rows:
@@ -706,13 +757,15 @@ def _attach_intervals(
         if row.prompt_arm != "none" and baseline_arm is not None:
             interval = paired_interval(baseline_arm, current)
             if interval is not None and interval.status == "available":
+                row.prompt_delta = interval.observed_difference
                 row.prompt_delta_ci_low = interval.lower
                 row.prompt_delta_ci_high = interval.upper
+                row.ci_clusters = interval.n_clusters
 
-        reference_cell = reference.get(f"{benchmark}|{row.prompt_arm}")
+        reference_cell = reference.get(_reference_key(benchmark, row.prompt_arm))
         if spec.name != REFERENCE_MODEL and reference_cell:
             interval = paired_interval(reference_cell, current)
-            if interval is not None:
+            if interval is not None and interval.status == "available":
                 row.vs_reference_delta = interval.observed_difference
                 row.vs_reference_ci_low = interval.lower
                 row.vs_reference_ci_high = interval.upper
@@ -745,9 +798,24 @@ def merge_rows(existing: Sequence[LadderRow], fresh: Sequence[LadderRow]) -> lis
 
     A re-run must reproduce the committed table, not grow it — so any
     ``(model, benchmark)`` present in ``fresh`` is dropped from ``existing``.
+
+    Re-measuring ``REFERENCE_MODEL`` additionally **clears every other model's
+    ``vs_reference_*``** on the benchmarks it touched. Those numbers were
+    computed against per-record scores that no longer exist: leaving them would
+    publish a delta against a baseline the file cannot reproduce, and nothing
+    would have looked wrong. Clearing makes the gap visible until those models
+    are re-run.
     """
     replaced = {(row.model, row.benchmark) for row in fresh}
-    return [row for row in existing if (row.model, row.benchmark) not in replaced] + list(fresh)
+    kept = [row for row in existing if (row.model, row.benchmark) not in replaced]
+
+    refreshed_benchmarks = {row.benchmark for row in fresh if row.model == REFERENCE_MODEL}
+    for row in kept:
+        if row.benchmark in refreshed_benchmarks:
+            row.vs_reference_delta = None
+            row.vs_reference_ci_low = None
+            row.vs_reference_ci_high = None
+    return kept + list(fresh)
 
 
 def _fmt(value: float | int | None, digits: int = 4) -> str:
@@ -763,22 +831,41 @@ def _millions(count: int | None) -> str:
 
 
 def _ci(low: float | None, high: float | None) -> str:
-    """Render an interval, marking the ones that contain 0 as inconclusive."""
+    """Render an interval, marking the ones that contain 0 as inconclusive.
+
+    A **degenerate** ``[0, 0]`` is marked ``(exactly 0)``, not ``(spans 0)``:
+    ``low <= 0 <= high`` is true for it, but "not distinguishable from noise" is
+    the wrong reading of a benchmark where every record scored identically in
+    both arms (``fodors_zagat`` — both arms hit recall 1.0 everywhere). That is
+    certainty about a zero effect, which is a result, not an absence of one.
+    """
     if low is None or high is None:
         return "n/a"
+    if low == high == 0.0:
+        return "[+0.0000, +0.0000] (exactly 0)"
     spans_zero = " (spans 0)" if low <= 0.0 <= high else ""
     return f"[{low:+.4f}, {high:+.4f}]{spans_zero}"
 
 
 def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
-    """Render the markdown report from measured rows only."""
-    ok = [row for row in rows if row.status == "ok"]
-    failures = [row for row in rows if row.status == "failed"]
+    """Render the markdown report from rows measured at the CURRENT metric revision.
+
+    Rows below :data:`METRIC_REVISION` are **excluded from every table** and
+    listed separately as needing a re-run. They are not deleted — the JSONL keeps
+    them — but they must not share a column with rows measured under a different
+    definition of the same metric. Publishing both is how "instructions badly
+    hurt separability for the base-size models" gets read off a table where half
+    the rows carry a known one-directional scoring artefact.
+    """
+    stale = [row for row in rows if row.metric_revision < METRIC_REVISION]
+    current = [row for row in rows if row.metric_revision >= METRIC_REVISION]
+    ok = [row for row in current if row.status == "ok"]
+    failures = [row for row in current if row.status == "failed"]
     benchmarks = sorted({row.benchmark for row in ok} | {row.benchmark for row in failures})
     models = sorted(
-        {row.model for row in rows},
+        {row.model for row in current},
         key=lambda name: (
-            min((r.parameter_count or 10**12) for r in rows if r.model == name),
+            min((r.parameter_count or 10**12) for r in current if r.model == name),
             name,
         ),
     )
@@ -787,9 +874,19 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     out.append("# Embedder ladder: which embedding model at which parameter count\n")
     out.append(
         "Generated by `examples/research/embedder_ladder.py`. Every number here is "
-        "measured by that script; re-running it regenerates this file from "
+        "measured by that script at metric revision "
+        f"**{METRIC_REVISION}**; re-running it regenerates this file from "
         "`20260727_embedder_ladder_rows.jsonl`.\n"
     )
+    if stale:
+        pending = sorted({row.model for row in stale})
+        out.append(
+            f"\n> **{len(pending)} model(s) are NOT in the tables below**, because they "
+            "were measured under an older metric definition and would not be the same "
+            "statistic as their neighbours: "
+            + ", ".join(f"`{name}`" for name in pending)
+            + ". Their rows are still in the JSONL. Re-run them to publish them.\n"
+        )
 
     out.append("\n## How to read this (please read before quoting a number)\n")
     out.append(
@@ -849,10 +946,11 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "*operating-point* comparison over a `k` that `langres.optimize` already "
         "searches, so it is a statement about where each model was sampled, not "
         "about which model is better. This sweep re-measures both across "
-        "benchmarks and "
-        "attaches an interval to the first. (The pilot numbers above are quoted "
-        "as the motivation, not re-measured here — read this document's own "
-        "tables for the measurement.)\n"
+        "benchmarks and attaches a cluster-resampled interval to the first — see "
+        "'Is it better than what ships today?' below for whether the gap survives "
+        "it. (The pilot numbers above are quoted as the motivation, not "
+        "re-measured here — read this document's own tables for the "
+        "measurement.)\n"
         "- **Reproducible from a git checkout only, not from `pip install langres`.** "
         "The wheel deliberately excludes the `amazon_google`, `abt_buy`, "
         "`walmart_amazon` and `wdc_computers` corpora "
@@ -947,18 +1045,23 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "did not use.\n"
     )
     out.append(
-        "\n`95% CI` is a paired bootstrap of the **per-record** recall difference "
-        "(instruct minus none), resampled by gold cluster via "
-        "`langres.experiments.statistics.paired_entity_bootstrap` — never by pair "
-        "row, because pair rows inside one entity are dependent and resampling them "
-        "produces intervals that are far too tight. **An interval spanning 0 means "
-        "the Δ beside it is not distinguishable from noise.**\n"
+        "\n**`Δ per-record` is the statistic the interval bounds** — the mean "
+        "per-record recall difference (instruct minus none), resampled by gold "
+        "cluster via `langres.experiments.statistics.paired_entity_bootstrap`; "
+        "never by pair row, because pair rows inside one entity are dependent and "
+        "resampling them produces intervals that are far too tight. It is "
+        "deliberately **not** the difference of the two aggregate `recall` columns "
+        "beside it, which is a different number (they disagreed by 34% on "
+        "`walmart_amazon`); both are shown so the gap is visible rather than "
+        "hidden. **An interval spanning 0 means the delta is not distinguishable "
+        "from noise**; `(exactly 0)` means every record scored identically in both "
+        "arms, which is certainty about a zero effect, not an absence of one.\n"
     )
     out.append(
-        "\n| model | benchmark | recall (none) | recall (instruct) | Δ recall | "
-        "95% CI | AUC (none) | AUC (instruct) | Δ AUC |\n"
+        "\n| model | benchmark | recall (none) | recall (instruct) | Δ aggregate | "
+        "Δ per-record | 95% CI | AUC (none) | AUC (instruct) | Δ AUC |\n"
     )
-    out.append("|---|---|---:|---:|---:|---|---:|---:|---:|\n")
+    out.append("|---|---|---:|---:|---:|---:|---|---:|---:|---:|\n")
     for model in models:
         for benchmark in benchmarks:
             plain = next(
@@ -991,9 +1094,12 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                 if plain.separability_auc is None or prompted.separability_auc is None
                 else prompted.separability_auc - plain.separability_auc
             )
+            per_record = (
+                "n/a" if prompted.prompt_delta is None else f"{prompted.prompt_delta:+.4f}"
+            )
             out.append(
                 f"| `{model}` | {benchmark} | {_fmt(plain.candidate_recall)} | "
-                f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | "
+                f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | {per_record} | "
                 f"{_ci(prompted.prompt_delta_ci_low, prompted.prompt_delta_ci_high)} | "
                 f"{_fmt(plain.separability_auc)} | {_fmt(prompted.separability_auc)} | "
                 f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
@@ -1013,6 +1119,11 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "evidence of a better default; it is evidence the measurement cannot tell "
         "them apart on that benchmark.\n"
     )
+    out.append(
+        "\nA model with no interval is shown with `—` rather than dropped: a "
+        "measured model that vanishes from the decision table is exactly the "
+        "silent skip this harness refuses to do with failures.\n"
+    )
     out.append("\n| model | benchmark | Δ per-record recall | 95% CI | clusters |\n")
     out.append("|---|---|---:|---|---:|\n")
     for model in models:
@@ -1027,11 +1138,16 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                     and r.benchmark == benchmark
                     and r.k == headline_k
                     and r.prompt_arm == "none"
-                    and r.vs_reference_delta is not None
                 ),
                 None,
             )
             if row is None:
+                continue
+            if row.vs_reference_delta is None:
+                out.append(
+                    f"| `{model}` | {benchmark} | — | not measured against the "
+                    f"current `{REFERENCE_MODEL}` reference | — |\n"
+                )
                 continue
             out.append(
                 f"| `{model}` | {benchmark} | {row.vs_reference_delta:+.4f} | "

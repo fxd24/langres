@@ -123,6 +123,40 @@ class TestPersistence:
         assert [row.candidate_recall for row in merged if row.model == "m"] == [0.9]
         assert any(row.model == "other" for row in merged)
 
+    def test_remeasuring_the_reference_clears_deltas_it_no_longer_backs(self) -> None:
+        # Those deltas were computed against per-record scores the sidecar has
+        # just overwritten. Keeping them publishes a comparison the file can no
+        # longer reproduce, and nothing would look wrong.
+        other = LADDER.LadderRow(
+            model="other",
+            benchmark="b",
+            prompt_arm="none",
+            k=20,
+            status="ok",
+            vs_reference_delta=0.05,
+            vs_reference_ci_low=0.01,
+            vs_reference_ci_high=0.09,
+        )
+        untouched = LADDER.LadderRow(
+            model="other",
+            benchmark="elsewhere",
+            prompt_arm="none",
+            k=20,
+            status="ok",
+            vs_reference_delta=0.07,
+        )
+        fresh_reference = LADDER.LadderRow(
+            model=LADDER.REFERENCE_MODEL, benchmark="b", prompt_arm="none", k=20, status="ok"
+        )
+        merged = LADDER.merge_rows([other, untouched], [fresh_reference])
+
+        cleared = next(r for r in merged if r.model == "other" and r.benchmark == "b")
+        assert cleared.vs_reference_delta is None
+        assert cleared.vs_reference_ci_low is None
+        assert cleared.vs_reference_ci_high is None
+        kept = next(r for r in merged if r.benchmark == "elsewhere")
+        assert kept.vs_reference_delta == 0.07
+
     def test_rows_round_trip_through_the_tracked_jsonl(self, tmp_path: Path) -> None:
         path = tmp_path / "rows.jsonl"
         row = LADDER.LadderRow(
@@ -135,46 +169,65 @@ class TestPersistence:
             reachable_recall_ceiling=0.8,
             recall_of_reachable=0.625,
             index_build_encoded=0,
+            metric_revision=LADDER.METRIC_REVISION,
         )
         LADDER.write_rows(path, [row])
         assert LADDER.read_rows(path) == [row]
 
     def test_reference_per_record_recall_round_trips(self, tmp_path: Path) -> None:
         path = tmp_path / "reference.json"
-        store = {"bench|none": {"r0": (0.5, "c0"), "r1": (1.0, "c1")}}
+        store = {LADDER._reference_key("bench", "none"): {"r0": (0.5, "c0"), "r1": (1.0, "c1")}}
         LADDER.write_reference(path, store)
         assert LADDER.read_reference(path) == store
+
+    def test_the_reference_key_names_the_model_and_k_it_was_measured_at(self) -> None:
+        # Both are one-line constants. If either changed while the file stayed
+        # put, an unkeyed sidecar would silently baseline against the wrong model.
+        key = LADDER._reference_key("bench", "none")
+        assert LADDER.REFERENCE_MODEL in key
+        assert f"k{LADDER.CI_K}" in key
 
     def test_a_missing_reference_file_is_no_reference_not_a_crash(self, tmp_path: Path) -> None:
         assert LADDER.read_reference(tmp_path / "absent.json") == {}
 
 
+def _cell(model: str, arm: str, **overrides: object) -> object:
+    defaults: dict[str, object] = dict(
+        model=model,
+        benchmark="bench",
+        prompt_arm=arm,
+        k=20,
+        status="ok",
+        parameter_count=1_000_000,
+        embedding_dim=8,
+        n_records=10,
+        n_gold_pairs=4,
+        candidate_recall=0.5,
+        reachable_recall_ceiling=0.8,
+        recall_of_reachable=0.625,
+        total_candidates=100,
+        candidates_per_unit_recall=200.0,
+        separability_auc=0.99,
+        index_build_seconds=0.2,
+        index_build_encoded=0,
+        metric_revision=LADDER.METRIC_REVISION,
+        saturation="not saturated",
+    )
+    defaults.update(overrides)
+    return LADDER.LadderRow(**defaults)
+
+
 class TestReport:
     def test_the_report_flags_a_warm_cache_build_and_an_inconclusive_interval(self) -> None:
         rows = [
-            LADDER.LadderRow(
-                model="ref",
-                benchmark="bench",
-                prompt_arm=arm,
-                k=20,
-                status="ok",
-                parameter_count=1_000_000,
-                embedding_dim=8,
-                n_records=10,
-                n_gold_pairs=4,
-                candidate_recall=0.5,
-                reachable_recall_ceiling=0.8,
-                recall_of_reachable=0.625,
-                total_candidates=100,
-                candidates_per_unit_recall=200.0,
-                separability_auc=0.99,
-                index_build_seconds=0.2,
-                index_build_encoded=0,
-                prompt_delta_ci_low=-0.01 if arm == "instruct" else None,
-                prompt_delta_ci_high=0.02 if arm == "instruct" else None,
-                saturation="not saturated",
-            )
-            for arm in ("none", "instruct")
+            _cell("ref", "none"),
+            _cell(
+                "ref",
+                "instruct",
+                prompt_delta=0.004,
+                prompt_delta_ci_low=-0.01,
+                prompt_delta_ci_high=0.02,
+            ),
         ]
         report = LADDER.render_report(rows)
 
@@ -186,6 +239,51 @@ class TestReport:
         # Size is reported as the measured count, never as a t-shirt label.
         assert "| 1.0M |" in report
 
+    def test_the_published_prompt_delta_is_the_statistic_its_interval_bounds(self) -> None:
+        # The aggregate difference is 0.0 here while the per-record mean is
+        # +0.0400: printing only the aggregate beside the interval would show a
+        # point estimate outside its own CI.
+        rows = [
+            _cell("ref", "none", candidate_recall=0.5),
+            _cell(
+                "ref",
+                "instruct",
+                candidate_recall=0.5,
+                prompt_delta=0.04,
+                prompt_delta_ci_low=0.01,
+                prompt_delta_ci_high=0.07,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        assert "Δ per-record" in report
+        assert "+0.0400" in report
+        assert "[+0.0100, +0.0700]" in report
+
+    def test_an_exactly_zero_interval_is_not_called_inconclusive(self) -> None:
+        assert LADDER._ci(0.0, 0.0) == "[+0.0000, +0.0000] (exactly 0)"
+        assert "(spans 0)" in LADDER._ci(-0.01, 0.02)
+
+    def test_a_model_without_an_interval_is_shown_not_dropped(self) -> None:
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("uncompared", "none", parameter_count=2_000_000),
+        ]
+        report = LADDER.render_report(rows)
+        section = report.split("## Is it better than what ships today?")[1]
+        assert "uncompared" in section
+        assert "not measured against the current" in section
+
+    def test_rows_from_an_older_metric_revision_are_excluded_and_named(self) -> None:
+        # Two definitions of the same metric must never share a column.
+        rows = [
+            _cell("current", "none"),
+            _cell("legacy", "none", metric_revision=LADDER.METRIC_REVISION - 1, separability_auc=0.5),
+        ]
+        report = LADDER.render_report(rows)
+        assert "legacy" in report.split("## Models that were measured")[0]
+        assert "`legacy`" not in report.split("## Models that were measured")[1]
+        assert "older metric definition" in report
+
     def test_a_failed_model_is_a_row_in_the_report_not_a_silent_gap(self) -> None:
         rows = [
             LADDER.LadderRow(
@@ -194,6 +292,7 @@ class TestReport:
                 prompt_arm="-",
                 k=0,
                 status="failed",
+                metric_revision=LADDER.METRIC_REVISION,
                 error="OSError: gated repo",
             )
         ]

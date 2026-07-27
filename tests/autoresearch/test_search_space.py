@@ -79,6 +79,20 @@ def test_query_prompt_defaults_to_no_instruction() -> None:
     assert {c["query_prompt"] for c in SearchSpace().configs()} == {None}
 
 
+def test_the_new_axis_did_not_re_bind_existing_positional_callers() -> None:
+    """``query_prompt`` must stay the LAST field.
+
+    ``SearchSpace`` is public on the ``langres.optimize`` surface, so a caller
+    may well construct it positionally. Inserting a field before ``k_neighbors``
+    would silently hand that caller's k tuple to ``query_prompt`` —
+    ``__post_init__`` only checks emptiness, so a tuple of ints passes validation
+    and the failure surfaces much later as ``encode(prompt=5)``.
+    """
+    space = SearchSpace(("vector",), ("m",), ("cosine",), ("name",), (5, 10, 20))
+    assert space.k_neighbors == (5, 10, 20)
+    assert space.query_prompt == (None,)
+
+
 def test_query_prompt_multiplies_the_grid() -> None:
     space = SearchSpace(query_prompt=(None, "Find the duplicate record for: "), k_neighbors=(5, 10))
     configs = list(space.configs())
