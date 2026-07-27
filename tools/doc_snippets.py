@@ -33,6 +33,18 @@ list drifts from the docs and the gate then verifies the list.
     from langres.core.indexes import QdrantDenseIndex
     ```
 
+**`illustrative` is the one exemption no evidence can contradict, and it will
+absorb every hard case unless someone is watching.** `requires-extra=` is
+validated against pyproject's real extras. `requires-repo` and
+`requires-network` each name a condition you could go and check. `illustrative`
+asserts "this is not runnable code" -- a claim about intent, which nothing here
+can falsify. That asymmetry is not hypothetical: a block this gate had *watched
+execute* on a bare wheel was later marked `illustrative`, one line below prose
+reading "This cell is copy-paste complete". Prefer the specific reason whenever
+one is true -- a fragment whose binding block needs the network is
+`requires-network`, not `illustrative` -- and read the per-document executed
+ratio that :func:`report` prints, which is what makes the drift visible.
+
 The direction of rot is the whole design. **Default is "execute".** A newly added
 snippet nobody classified is *run*, and fails if it does not work on a bare
 install -- the gate rots **closed** (a new snippet fails until someone looks at
@@ -127,6 +139,12 @@ _FENCE_RE = re.compile(r"^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})(?P<info>.
 #: A fence this parser deliberately does NOT support. Matching it raises rather
 #: than ignoring it: failing closed on a construct we cannot read is the point.
 _UNSUPPORTED_FENCE_RE = re.compile(r"^(?:\s*>[\s>]*|[ \t]{4,})(?:`{3,}|~{3,})")
+#: `mkdocs.yml` enables `pymdownx.snippets`, so `--8<-- "other.md"` pulls fences
+#: this extractor never reads. Documenting that as a known blind spot is weaker
+#: than closing it: the remaining blocks on the page still satisfy the
+#: observability check, so the include is invisible in exactly the way that
+#: reports green. Fail closed instead, consistent with every other unknown here.
+_SNIPPET_INCLUDE_RE = re.compile(r"^\s*(?:-{2,}8<-{2,}|;{0,1}--8<--)")
 #: A repo-relative path under `examples/` -- the directory the wheel does not ship.
 _EXAMPLES_REF_RE = re.compile(r"examples/[\w./-]+\.py")
 
@@ -222,6 +240,15 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
 
         fence = _FENCE_RE.match(line)
         if fence is None:
+            if _SNIPPET_INCLUDE_RE.match(line):
+                raise DirectiveError(
+                    f"{doc}:{index + 1}: this page transcludes another file with "
+                    "pymdownx.snippets (`--8<--`), whose fenced blocks MkDocs renders to "
+                    "readers but this extractor never sees. The other python blocks on the "
+                    "page would still satisfy the observability check, so a broken included "
+                    "example would ship green. Inline the content into this page, or move the "
+                    "include out of the gated documents."
+                )
             if _UNSUPPORTED_FENCE_RE.match(line):
                 raise DirectiveError(
                     f"{doc}:{index + 1}: this fenced block is indented 4+ spaces or nested in "
@@ -375,6 +402,29 @@ def assert_gate_is_observing(snippets: list[Snippet]) -> None:
             "A gate that passes by finding nothing is worse than no gate."
         )
 
+    # Per DOCUMENT, not just overall. A repo-wide count is satisfied by one
+    # healthy page while another erodes to nothing -- which is exactly what
+    # happened: a page went from 2 executed / 13 failing to 1 executed / 17
+    # exempted, reporting ZERO failures while checking less than before. The
+    # repo-wide assertion above stayed comfortably satisfied throughout.
+    #
+    # The floor is deliberately "at least one", not a ratio: a threshold would be
+    # an arbitrary number to argue with, and the real defence is the
+    # executed/total ratio that `report` now prints for every document. This
+    # catches only total collapse; the ratio makes partial erosion visible.
+    for doc in DOC_PATHS:
+        in_doc = [s for s in snippets if s.doc == doc]
+        has_python = any(s.language in EXECUTED_LANGUAGES and s.code.strip() for s in in_doc)
+        if has_python and not any(s in executable for s in in_doc):
+            raise DirectiveError(
+                f"{doc}: every python block on this page is exempted, so the page is "
+                "documented but unchecked. At least one block per page must run on a bare "
+                "install -- that is the claim the page makes to a reader who pip-installed "
+                "langres. Make one cell runnable, or move the page out of DOC_PATHS if it "
+                "is genuinely not about running code. (A page with no python blocks at all "
+                "is unaffected.)"
+            )
+
 
 #: The ONLY variables a snippet's interpreter inherits. An **allow-list**, not a
 #: subtraction of known-bad names: a deny-list of credential suffixes rots open,
@@ -388,12 +438,47 @@ def assert_gate_is_observing(snippets: list[Snippet]) -> None:
 #: snippet import langres from the SOURCE TREE and pass while the wheel is
 #: broken -- the precise way this gate would lie. `PYTHONHOME`/`PYTHONSTARTUP`
 #: are absent for the same reason.
+#:
+#: `PATH` is inherited but **rewritten** -- see :func:`_snippet_path`. Passing it
+#: through untouched was a real hole: CI runs this gate under `uv run`, so `PATH`
+#: begins with the repo's own `.venv/bin`. A snippet that shells out to `python`
+#: or the `langres` console script would have resolved the SOURCE TREE and its
+#: dev dependencies, reached the sentinel, and passed -- while failing for a pip
+#: user. The cleanliness probe only inspects the interpreter we launch directly,
+#: so it could not see that.
 _INHERITED_ENV_VARS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT")
 
 
-def _snippet_env() -> dict[str, str]:
+def _snippet_path(interpreter: Path, *, repo_root: Path = REPO_ROOT) -> str:
+    """`PATH` with the clean venv first and every repo-local directory removed.
+
+    Two moves, because either alone leaks. Putting the venv first makes a bare
+    `python` resolve to the wheel install. Dropping repo-local entries means no
+    *later* entry can serve the source tree either -- notably `.venv/bin`, which
+    `uv run` puts at the front of our own `PATH`.
+    """
+    resolved_repo = repo_root.resolve()
+    kept = [
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if entry and not _is_within(entry, resolved_repo)
+    ]
+    return os.pathsep.join([str(interpreter.parent), *kept])
+
+
+def _is_within(entry: str, root: Path) -> bool:
+    """Is `entry` inside `root`? A malformed PATH entry is treated as suspect."""
+    try:
+        return root in Path(entry).resolve().parents or Path(entry).resolve() == root
+    except OSError:  # pragma: no cover - unresolvable PATH entry
+        return True
+
+
+def _snippet_env(interpreter: Path) -> dict[str, str]:
     """The child environment: no repo on the path, no credentials, nothing else."""
-    return {name: os.environ[name] for name in _INHERITED_ENV_VARS if name in os.environ}
+    env = {name: os.environ[name] for name in _INHERITED_ENV_VARS if name in os.environ}
+    env["PATH"] = _snippet_path(interpreter)
+    return env
 
 
 def check_examples_reference(snippet: Snippet, *, examples_shipped: bool) -> str | None:
@@ -448,7 +533,7 @@ def run_snippet(
             cwd=workdir,
             capture_output=True,
             text=True,
-            env=_snippet_env(),
+            env=_snippet_env(interpreter),
             # Generous on purpose: a doc snippet should be quick, but a cold model
             # download or a slow import must not be reported as a broken snippet.
             timeout=600,
@@ -515,25 +600,34 @@ def _assert_environment_is_really_clean(interpreter: Path, *, repo_root: Path) -
     environment and the job would be green forever with no signal -- a check
     nobody has watched fail. So check it, every run, before running any snippet.
 
-    Two properties, both cheap: langres must resolve *inside the venv*, and a
-    `[semantic]`-only import must fail. The second is the same probe the
-    proof-of-failure test uses, which is what makes it meaningful.
+    Three properties, all cheap: langres must resolve *inside the venv*, a
+    `[semantic]`-only import must fail, and -- the one this probe originally
+    missed -- a *nested* `python` / `langres` must resolve there too. Checking
+    only the interpreter we launch directly left a snippet that shells out
+    running against the repo's own `.venv/bin`, passing on dev dependencies a
+    pip user does not have. A probe that inspects one hop cannot see a two-hop
+    leak, so it now walks `PATH` the way a subprocess would.
     """
     probe = (
-        "import langres, sys, pathlib;"
+        "import langres, sys, pathlib, shutil;"
         "here = pathlib.Path(langres.__file__).resolve();"
         f"venv = pathlib.Path({str(interpreter.parent.parent)!r}).resolve();"
         f"repo = pathlib.Path({str(repo_root)!r}).resolve();"
         "assert venv in here.parents, f'langres resolved OUTSIDE the clean venv: {here}';"
         "assert repo not in here.parents, f'langres resolved from the SOURCE TREE: {here}';"
         "import importlib.util as u;"
-        "assert u.find_spec('faiss') is None, 'the [semantic] extra leaked into the clean venv'"
+        "assert u.find_spec('faiss') is None, 'the [semantic] extra leaked into the clean venv';"
+        # The nested-resolution check: what a snippet's own subprocess would get.
+        "nested = [(n, shutil.which(n)) for n in ('python', 'python3', 'langres')];"
+        "bad = [(n, p) for n, p in nested if p and repo in pathlib.Path(p).resolve().parents];"
+        "assert not bad, f'PATH resolves {bad} inside the SOURCE TREE, so a snippet that "
+        "shells out would run against the repo, not the wheel'"
     )
     proc = subprocess.run(
         [str(interpreter), "-c", probe],
         capture_output=True,
         text=True,
-        env=_snippet_env(),
+        env=_snippet_env(interpreter),
         timeout=120,
     )
     if proc.returncode != 0:
@@ -602,6 +696,23 @@ def report(results: list[SnippetResult]) -> str:
     failures = [r for r in results if r.status == "fail"]
     passed = sum(1 for r in results if r.status == "pass")
     skipped = sum(1 for r in results if r.status == "skip")
+
+    # How much of each page this run actually EXECUTED. Printed always, not only
+    # on failure, because the number that matters is the one nobody asked for:
+    # a page can reach "0 failed" by exempting its way there, and pass/fail/skip
+    # totals render that identical to a page that genuinely works. Measured
+    # once: a page went 2-executed/13-failing -> 1-executed/17-exempted and the
+    # summary line improved. A ratio makes that visible in a diff, with no
+    # threshold to argue about.
+    lines.append("")
+    lines.append("Executed per document (a low ratio means the page is exempted, not proven)")
+    for doc in DOC_PATHS:
+        in_doc = [r for r in results if r.snippet.doc == doc]
+        if not in_doc:
+            continue
+        ran = sum(1 for r in in_doc if r.status in ("pass", "fail"))
+        lines.append(f"  {doc:32s} {ran}/{len(in_doc)} executed")
+
     lines.append("")
     lines.append(f"{passed} passed, {len(failures)} failed, {skipped} skipped")
     for failure in failures:

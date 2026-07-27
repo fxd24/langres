@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -413,11 +414,30 @@ def _info(out_stream: TextIO) -> int:
     for key, field in _PAID_PATH_KEYS:
         present = bool(getattr(settings, field))
         out_stream.write(f"  {key:<20} {'set' if present else 'not set'}\n")
+
+    # langres declares three credentials, but a served model is routed by
+    # litellm, which knows ~146 providers -- so `anthropic/...` bills with
+    # ANTHROPIC_API_KEY, a variable `Settings` never mentions. Listing only the
+    # three would reproduce the Azure bug one provider over: every line reads
+    # "not set" while a real call spends. Enumerating 146 providers would be
+    # noise and would rot, so report what is actually in the environment. Names
+    # only -- never a value.
+    others = sorted(
+        name
+        for name in os.environ
+        if name.endswith("_API_KEY")
+        and os.environ[name]
+        and name not in {key for key, _ in _PAID_PATH_KEYS}
+    )
+    if others:
+        out_stream.write(f"  other provider key(s) present: {', '.join(others)}\n")
+
     out_stream.write(
         "  Read from the environment and from ./.env in the CURRENT directory.\n"
         "  A real LLM call can additionally pick up a .env in a PARENT directory\n"
         "  (litellm runs load_dotenv() on import), so 'not set' here does not\n"
-        "  guarantee a paid call would find no key.\n"
+        "  guarantee a paid call would find no key. Any litellm provider key in\n"
+        "  the environment can bill, not only the ones named above.\n"
     )
     return 0
 

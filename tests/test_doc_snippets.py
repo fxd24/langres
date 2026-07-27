@@ -18,6 +18,7 @@ they inject one and watch it caught, against a real wheel in a real empty venv.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -28,12 +29,14 @@ from doc_snippets import (
     DirectiveError,
     Snippet,
     _snippet_env,
+    _snippet_path,
     assert_gate_is_observing,
     build_clean_install,
     check_examples_reference,
     collect,
     declared_extras,
     extract,
+    report,
     run,
 )
 
@@ -301,13 +304,104 @@ def test_snippet_env_drops_pythonpath(monkeypatch: pytest.MonkeyPatch) -> None:
     wheel was broken -- exactly the failure a clean-install gate exists to catch.
     """
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT / "src"))
-    assert "PYTHONPATH" not in _snippet_env()
+    assert "PYTHONPATH" not in _snippet_env(Path("/nowhere/venv/bin/python"))
 
 
 def test_snippet_env_drops_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """A documentation snippet must never be able to bill anyone."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-should-not-reach-a-snippet")
-    assert "OPENROUTER_API_KEY" not in _snippet_env()
+    assert "OPENROUTER_API_KEY" not in _snippet_env(Path("/nowhere/venv/bin/python"))
+
+
+def test_snippet_path_puts_the_clean_venv_first_and_drops_the_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A snippet that shells out must not reach the repo's own `.venv/bin`.
+
+    CI runs this gate under `uv run`, which puts `<repo>/.venv/bin` at the FRONT
+    of PATH. Inheriting it unchanged meant a snippet calling `python` or the
+    `langres` console script ran against the source tree and its dev
+    dependencies, reached the sentinel, and passed -- while failing for a pip
+    user. The outer interpreter was clean, so the cleanliness probe saw nothing.
+    """
+    interpreter = Path("/tmp/clean-venv/bin/python")
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(REPO_ROOT / ".venv" / "bin"), "/usr/bin", "/bin"])
+    )
+
+    entries = _snippet_path(interpreter).split(os.pathsep)
+
+    assert entries[0] == str(interpreter.parent), "the clean venv must resolve first"
+    assert str(REPO_ROOT / ".venv" / "bin") not in entries, (
+        "the repo's own venv must be unreachable, not merely outranked -- otherwise a "
+        "snippet whose first choice is missing falls through to the source tree"
+    )
+    assert "/usr/bin" in entries, "system tools stay available; only repo-local entries go"
+
+
+def _py(doc: str, code: str, exemption: str | None) -> Snippet:
+    return Snippet(doc=doc, line=1, language="python", code=code, exemption=exemption)
+
+
+def test_a_page_that_exempts_every_python_block_is_an_error() -> None:
+    """The measured regression: 0 failures achieved by checking nothing.
+
+    A page went from 2 executed / 13 failing to 1 executed / 17 exempted and the
+    summary line IMPROVED. The repo-wide "something is executable" assertion
+    stayed satisfied the whole time, because a different page was healthy -- so
+    the floor has to be per document.
+    """
+    snippets = [
+        _py(DOC_PATHS[0], "print('this page still runs')", None),
+        _py(DOC_PATHS[1], "print('exempted')", "illustrative"),
+        _py(DOC_PATHS[1], "print('also exempted')", "requires-network"),
+    ]
+    with pytest.raises(DirectiveError, match="every python block on this page is exempted"):
+        assert_gate_is_observing(snippets)
+
+
+def test_a_page_with_no_python_blocks_at_all_is_not_penalised() -> None:
+    """The floor targets erosion, not a legitimately prose-or-bash page."""
+    snippets = [
+        _py(DOC_PATHS[0], "print('runs')", None),
+        Snippet(doc=DOC_PATHS[1], line=1, language="bash", code="ls", exemption=None),
+    ]
+    assert_gate_is_observing(snippets)  # must not raise
+
+
+def test_report_always_shows_how_much_of_each_page_actually_ran() -> None:
+    """The ratio is the defence against exemption drift, so it prints always.
+
+    pass/fail/skip totals render "0 failed because it works" and "0 failed
+    because nothing ran" identically. This is the line that tells them apart,
+    and it must not be conditional on there being a failure to look at.
+    """
+    results = run(
+        [
+            _py(DOC_PATHS[0], "x = 1", "illustrative"),
+            _py(DOC_PATHS[0], "y = 2", "requires-network"),
+        ],
+        interpreter=Path("/nonexistent/python"),
+        workdir=Path("/tmp"),
+        examples_shipped=False,
+    )
+    text = report(results)
+    assert "0 failed" in text, "precondition: this run has nothing to complain about"
+    assert f"{DOC_PATHS[0]:32s} 0/2 executed" in text
+
+
+def test_a_pymdownx_transclusion_is_refused_rather_than_ignored(tmp_path: Path) -> None:
+    """`--8<--` pulls fences MkDocs renders and this extractor cannot see.
+
+    The other blocks on the page would still satisfy the observability check, so
+    a broken included example ships green -- invisible in precisely the way that
+    reports all-clear. Documenting it as a known blind spot is weaker than
+    closing it.
+    """
+    doc = tmp_path / "page.md"
+    doc.write_text('# Title\n\n--8<-- "shared.md"\n\n```python\nprint(1)\n```\n', encoding="utf-8")
+    with pytest.raises(DirectiveError, match="pymdownx.snippets"):
+        extract(doc, doc="page.md", extras=frozenset())
 
 
 def test_real_docs_directives_all_parse() -> None:
