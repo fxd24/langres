@@ -39,6 +39,7 @@ from langres.core.op import ThresholdSelect, TopKSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
 from langres.core.resolver import ERModel, Resolver
 from langres.curation.harvest import LabeledPair, align_pairs, warn_if_silver_only
+from langres.training.fit_report import FitReport, ThresholdCandidate, ThresholdFit
 from langres.training.methods_calibrate import Platt
 
 # Ten disconnected groups. Each is one entity-disjoint component: a twin pair
@@ -326,6 +327,35 @@ def test_declined_markdown_says_the_candidate_lost() -> None:
     assert "did not beat it on train" in rendered
     assert "Threshold selection (chosen on train)" in rendered
     assert "KEPT" in rendered
+
+
+def test_markdown_renders_a_partial_threshold_fit() -> None:
+    """``FitReport`` is public and loadable, so its renderer must not need every field.
+
+    ``fit()`` always fills both candidates, but a ``ThresholdFit`` is a plain
+    Pydantic model a caller can build or deserialize with an absent incumbent and
+    no selection score. Rendering must degrade to the rows it has rather than
+    raise on the missing ones.
+    """
+    report = FitReport.build(
+        trainable=None,
+        trained=False,
+        n_train=4,
+        threshold=0.9,
+        threshold_fit=ThresholdFit(
+            source="derived",
+            method="youden",
+            n_pairs=4,
+            applied_to="clusterer",
+            selected_on="train",
+            previous=None,
+            candidate=ThresholdCandidate(threshold=0.9, selection_f1=None, held_out_f1=None),
+        ),
+    )
+    rendered = report.to_markdown()
+    assert "- derived 0.9000 — KEPT" in rendered
+    assert "incumbent" not in rendered
+    assert "selection F1" not in rendered
 
 
 def test_selection_never_reads_the_held_out_split() -> None:
