@@ -953,6 +953,11 @@ def _ci(low: float | None, high: float | None) -> str:
     return f"[{low:+.4f}, {high:+.4f}]{spans_zero}"
 
 
+def _excludes_zero(low: float | None, high: float | None) -> bool:
+    """Whether an interval is entirely on one side of 0. Absent bounds are not."""
+    return low is not None and high is not None and not (low <= 0.0 <= high)
+
+
 def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     """Render the markdown report from rows measured at the CURRENT metric revision.
 
@@ -992,6 +997,57 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "statistic as their neighbours: "
             + ", ".join(f"`{name}`" for name in pending)
             + ". Their rows are still in the JSONL. Re-run them to publish them.\n"
+        )
+
+    # The headline is COMPUTED from the rows, not written beside them: a
+    # hand-typed lead paragraph is the first thing to go stale when the table
+    # under it is re-measured.
+    spreads: list[tuple[float, str, tuple[float, LadderRow], tuple[float, LadderRow]]] = []
+    for model in models:
+        scored: list[tuple[float, LadderRow]] = []
+        for row in ok:
+            delta = row.vs_reference_delta
+            if (
+                row.model == model
+                and row.k == headline_k
+                and row.prompt_arm == "none"
+                and delta is not None
+            ):
+                scored.append((delta, row))
+        if len(scored) < 2:
+            continue
+        best = max(scored, key=lambda item: item[0])
+        worst = min(scored, key=lambda item: item[0])
+        spreads.append((best[0] - worst[0], model, best, worst))
+    if spreads:
+        _, model, (high, high_row), (low, low_row) = max(spreads, key=lambda item: item[0])
+        # Only make the strong claim when the measurement actually supports it: a
+        # sign flip whose intervals straddle 0 is noise wearing a headline.
+        flips = (
+            high > 0 > low
+            and _excludes_zero(high_row.vs_reference_ci_low, high_row.vs_reference_ci_high)
+            and _excludes_zero(low_row.vs_reference_ci_low, low_row.vs_reference_ci_high)
+        )
+        out.append("\n## Headline: there is no single winner — the answer is per benchmark\n")
+        out.append(
+            f"\nThe widest disagreement measured here is `{model}` against "
+            f"`{REFERENCE_MODEL}` (langres's current default) at k={headline_k}: "
+            f"**{high:+.4f}** per-record recall on `{high_row.benchmark}` "
+            f"{_ci(high_row.vs_reference_ci_low, high_row.vs_reference_ci_high)} and "
+            f"**{low:+.4f}** on `{low_row.benchmark}` "
+            f"{_ci(low_row.vs_reference_ci_low, low_row.vs_reference_ci_high)}"
+            + (
+                " — the same model, better on one benchmark and **worse** on the "
+                "other, with both intervals clear of zero.\n"
+                if flips
+                else " — the same model, spread across benchmarks.\n"
+            )
+        )
+        out.append(
+            "\nAveraging those into one number would report a middling win or loss "
+            "and hide both. **This document deliberately publishes no cross-benchmark "
+            "mean.** Pick the model against the data you actually have; the "
+            "per-benchmark tables below are the unit of decision.\n"
         )
 
     out.append("\n## How to read this (please read before quoting a number)\n")
@@ -1065,13 +1121,40 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "`BenchmarkDataNotFoundError`.\n"
     )
 
-    out.append(
-        "- **Parameter count is not the axis.** Measured here, not asserted: "
-        "`all-mpnet-base-v2` (109M) is *worse* than `all-MiniLM-L6-v2` (22.7M) on "
-        "`wdc_computers`. A ladder that had assumed bigger-is-better, or that had "
-        "read sizes off a table instead of the loaded model, would have hidden "
-        "that.\n"
+    # Computed from the rows this report actually publishes. It used to name
+    # `all-mpnet-base-v2`, measured under an earlier metric revision — a claim the
+    # reader could not check against any table on the page, because those rows are
+    # excluded. A claim whose evidence is not in the document is not measured here.
+    ref_params = next(
+        (r.parameter_count for r in ok if r.model == REFERENCE_MODEL and r.parameter_count), None
     )
+    inversion: tuple[float, LadderRow] | None = None
+    for row in ok if ref_params else []:
+        assert ref_params is not None
+        if (
+            row.k == headline_k
+            and row.prompt_arm == "none"
+            and row.model != REFERENCE_MODEL
+            and (row.parameter_count or 0) > ref_params
+            and (row.vs_reference_delta or 0.0) < 0.0
+            and _excludes_zero(row.vs_reference_ci_low, row.vs_reference_ci_high)
+        ):
+            ratio = (row.parameter_count or 0) / ref_params
+            if inversion is None or ratio > inversion[0]:
+                inversion = (ratio, row)
+    if inversion is not None:
+        ratio, row = inversion
+        out.append(
+            "- **Parameter count is not the axis.** Measured, not asserted: "
+            f"`{row.model}` carries {ratio:.0f}x the parameters of "
+            f"`{REFERENCE_MODEL}` ({_millions(row.parameter_count)} vs "
+            f"{_millions(ref_params)}) and is **{row.vs_reference_delta:+.4f}** "
+            f"per-record recall on `{row.benchmark}` "
+            f"{_ci(row.vs_reference_ci_low, row.vs_reference_ci_high)} — worse, with "
+            "the interval clear of 0. A ladder that assumed bigger-is-better, or "
+            "that read sizes off a table instead of off the loaded model, would "
+            "have hidden that.\n"
+        )
 
     out.append("\n## Models that were measured\n")
     out.append(
@@ -1157,6 +1240,22 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "query help', not 'is each model at its documented best'. The `own prompt "
         "names` column above shows which models ship a documented recipe this sweep "
         "did not use.\n"
+        "\n**The `instruct` arm prefixes queries against BARE documents**, which is a "
+        "structurally different configuration from the asymmetric recipe an "
+        "instruction-trained checkpoint documents — not the same recipe with "
+        "different wording. `google/embeddinggemma-300m` prefixes documents with "
+        "`'title: none | text: '` and queries with `'task: search result | query: '`; "
+        "running only `instruct` measures half of that. Checkpoints that ship a "
+        "query-side instruction therefore carry a third `documented` arm, read from "
+        "their own `config_sentence_transformers.json` rather than from a model card "
+        "or from memory. Where that arm is missing from the tables it is listed under "
+        "'What did not run'.\n"
+        "\n`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web "
+        "search passages**, and its document side is empty. Applying it to entity "
+        "matching is out of its stated domain — which is precisely what a user "
+        "following the model card would do, so it is worth measuring, but a poor "
+        "result for that arm is a statement about a transplanted instruction, not "
+        "about the model's instruction-following.\n"
     )
     out.append(
         "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
@@ -1195,51 +1294,65 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "from noise**; `(exactly 0)` means every record scored identically in both "
         "arms, which is certainty about a zero effect, not an absence of one.\n"
     )
+    # Every non-baseline arm present in the rows gets a line, rather than only
+    # `instruct`: an arm that was measured and then left out of the one table that
+    # compares arms is the silent skip this harness refuses to do elsewhere.
+    prompted_arms = sorted({row.prompt_arm for row in ok} - {"none"})
     out.append(
-        "\n| model | benchmark | recall (none) | recall (instruct) | Δ aggregate | "
-        "Δ per-record | 95% CI | AUC (none) | AUC (instruct) | Δ AUC |\n"
+        "\n| model | benchmark | arm | recall (none) | recall (arm) | Δ aggregate | "
+        "Δ per-record | 95% CI | AUC (none) | AUC (arm) | Δ AUC |\n"
     )
-    out.append("|---|---|---:|---:|---:|---:|---|---:|---:|---:|\n")
+    out.append("|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|\n")
     for model in models:
         for benchmark in benchmarks:
-            plain = next(
-                (
-                    r
-                    for r in ok
-                    if r.model == model
-                    and r.benchmark == benchmark
-                    and r.k == headline_k
-                    and r.prompt_arm == "none"
-                ),
-                None,
-            )
-            prompted = next(
-                (
-                    r
-                    for r in ok
-                    if r.model == model
-                    and r.benchmark == benchmark
-                    and r.k == headline_k
-                    and r.prompt_arm == "instruct"
-                ),
-                None,
-            )
-            if plain is None or prompted is None:
+            arm_rows = {
+                r.prompt_arm: r
+                for r in ok
+                if r.model == model and r.benchmark == benchmark and r.k == headline_k
+            }
+            plain = arm_rows.get("none")
+            if plain is None:
                 continue
-            d_recall = (prompted.candidate_recall or 0) - (plain.candidate_recall or 0)
-            d_auc = (
-                None
-                if plain.separability_auc is None or prompted.separability_auc is None
-                else prompted.separability_auc - plain.separability_auc
-            )
-            per_record = "n/a" if prompted.prompt_delta is None else f"{prompted.prompt_delta:+.4f}"
-            out.append(
-                f"| `{model}` | {benchmark} | {_fmt(plain.candidate_recall)} | "
-                f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | {per_record} | "
-                f"{_ci(prompted.prompt_delta_ci_low, prompted.prompt_delta_ci_high)} | "
-                f"{_fmt(plain.separability_auc)} | {_fmt(prompted.separability_auc)} | "
-                f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
-            )
+            for arm in prompted_arms:
+                prompted = arm_rows.get(arm)
+                if prompted is None:
+                    continue
+                d_recall = (prompted.candidate_recall or 0) - (plain.candidate_recall or 0)
+                d_auc = (
+                    None
+                    if plain.separability_auc is None or prompted.separability_auc is None
+                    else prompted.separability_auc - plain.separability_auc
+                )
+                per_record = (
+                    "n/a" if prompted.prompt_delta is None else f"{prompted.prompt_delta:+.4f}"
+                )
+                out.append(
+                    f"| `{model}` | {benchmark} | {arm} | {_fmt(plain.candidate_recall)} | "
+                    f"{_fmt(prompted.candidate_recall)} | {d_recall:+.4f} | {per_record} | "
+                    f"{_ci(prompted.prompt_delta_ci_low, prompted.prompt_delta_ci_high)} | "
+                    f"{_fmt(plain.separability_auc)} | {_fmt(prompted.separability_auc)} | "
+                    f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
+                )
+
+    out.append("\n### Finding: langres's blocking path has no document-side prompt\n")
+    out.append(
+        "\nMeasuring the `documented` arm surfaced a gap in the library, not in this "
+        "harness. `VectorBlocker(query_prompt=...)` prefixes the **query** side; the "
+        "index is built by `VectorIndex.create_index(texts)`, whose signature takes "
+        "no prompt at all (`src/langres/core/indexes/vector_index.py`). So the "
+        "asymmetric recipe an instruction-trained checkpoint documents is not "
+        "expressible through the blocking API: a caller can reach it only by "
+        "combining two objects — an embedder constructed with a document "
+        "`prompt_name` and a blocker constructed with a matching `query_prompt` — "
+        "which no documentation describes and nothing checks for agreement.\n"
+        "\nThis harness works around it by prefixing the corpus text itself. That is "
+        "exactly equivalent **for these checkpoints**, verified rather than assumed: "
+        "sentence-transformers applies a prompt as `prompt + text`, and excludes its "
+        "tokens from pooling only when the checkpoint sets `include_prompt=false`, "
+        "which neither of these does. A checkpoint that did set it would need the "
+        "real API. **The gap is reported, not fixed here** — closing it changes a "
+        "core contract and belongs in its own change.\n"
+    )
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
     out.append(
@@ -1308,6 +1421,56 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             f"{_fmt(row.candidate_recall)} | {_fmt(row.total_candidates)} | "
             f"{_fmt(row.candidates_per_unit_recall, 0)} |\n"
         )
+
+    out.append("\n## What did not run (and why)\n")
+    out.append(
+        "\nDerived from the recorded rows, not written by hand — a hand-kept list of "
+        "gaps is exactly the thing that goes stale and turns a partial sweep into a "
+        "table that reads as complete.\n"
+    )
+    measured = {row.model for row in ok}
+    stale_models = {row.model for row in stale}
+    never = [spec for spec in MODELS if spec.name not in measured]
+    if never:
+        out.append(
+            f"\n**{len(never)} of the {len(MODELS)} models in the ladder have no usable "
+            f"row at metric revision {METRIC_REVISION}.** They are not absent because "
+            "they failed — they were never reached, so this table cannot speak about "
+            "them at all.\n"
+        )
+        out.append("\n| model | state |\n|---|---|\n")
+        for spec in never:
+            state = (
+                "measured under an older metric revision — re-run to publish"
+                if spec.name in stale_models
+                else "not run"
+            )
+            out.append(f"| `{spec.name}` | {state} |\n")
+
+    gaps: list[str] = []
+    for spec in MODELS:
+        if spec.name not in measured:
+            continue
+        rows_for = [row for row in ok if row.model == spec.name]
+        missing_benchmarks = [b for b in BENCHMARKS if b not in {r.benchmark for r in rows_for}]
+        seen_arms = {r.prompt_arm for r in rows_for}
+        missing_arms = [a for a in arms_for(spec, PROMPT_ARMS) if a not in seen_arms]
+        if missing_benchmarks or missing_arms:
+            parts = []
+            if missing_benchmarks:
+                parts.append("benchmarks " + ", ".join(f"`{b}`" for b in missing_benchmarks))
+            if missing_arms:
+                parts.append("prompt arms " + ", ".join(f"`{a}`" for a in missing_arms))
+            gaps.append(f"| `{spec.name}` | {'; '.join(parts)} |\n")
+    if gaps:
+        out.append(
+            "\nMeasured models with an incomplete grid — a blank cell in the tables "
+            "above is one of these, never a silent failure:\n"
+        )
+        out.append("\n| model | missing |\n|---|---|\n")
+        out.extend(gaps)
+    if not never and not gaps:
+        out.append("\nEvery model, benchmark and prompt arm in the ladder was measured.\n")
 
     out.append("\n## Failures (reported, not skipped)\n")
     if failures:

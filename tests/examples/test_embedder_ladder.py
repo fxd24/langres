@@ -345,3 +345,142 @@ class TestReport:
         report = LADDER.render_report(rows)
         assert "broken" in report
         assert "gated repo" in report
+
+    def test_every_measured_arm_reaches_the_prompt_table(self) -> None:
+        """A measured arm missing from the arm table is a silent skip."""
+        rows = [
+            _cell("m", "none"),
+            _cell("m", "instruct", prompt_delta=-0.01),
+            _cell("m", "documented", prompt_delta=0.02, candidate_recall=0.6),
+        ]
+        section = LADDER.render_report(rows).split("## Does an instruction prompt help?")[1]
+        assert "| documented |" in section
+        assert "| instruct |" in section
+        assert "+0.0200" in section
+
+    def test_the_bigger_is_not_better_claim_cites_a_row_the_report_publishes(self) -> None:
+        """The claim must come from the tables, not from an excluded measurement."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", parameter_count=20_000_000),
+            _cell(
+                "big-and-worse",
+                "none",
+                parameter_count=200_000_000,
+                vs_reference_delta=-0.03,
+                vs_reference_ci_low=-0.04,
+                vs_reference_ci_high=-0.02,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        assert "Parameter count is not the axis" in report
+        assert "10x the parameters" in report
+        assert "200.0M" in report
+
+    def test_no_bigger_is_not_better_claim_without_a_conclusive_row(self) -> None:
+        """A delta whose interval straddles 0 does not establish the claim."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", parameter_count=20_000_000),
+            _cell(
+                "big-and-unclear",
+                "none",
+                parameter_count=200_000_000,
+                vs_reference_delta=-0.03,
+                vs_reference_ci_low=-0.09,
+                vs_reference_ci_high=0.02,
+            ),
+        ]
+        assert "Parameter count is not the axis" not in LADDER.render_report(rows)
+
+    def test_the_headline_is_computed_from_the_rows_and_refuses_to_average(self) -> None:
+        """A model that wins one benchmark and loses another must not be summarised."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="wins"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="loses"),
+            _cell(
+                "contender",
+                "none",
+                benchmark="wins",
+                parameter_count=2_000_000,
+                vs_reference_delta=0.2,
+                vs_reference_ci_low=0.18,
+                vs_reference_ci_high=0.23,
+            ),
+            _cell(
+                "contender",
+                "none",
+                benchmark="loses",
+                parameter_count=2_000_000,
+                vs_reference_delta=-0.03,
+                vs_reference_ci_low=-0.04,
+                vs_reference_ci_high=-0.02,
+            ),
+        ]
+        headline = LADDER.render_report(rows).split("## Headline")[1].split("## How to read")[0]
+
+        assert "+0.2000" in headline
+        assert "-0.0300" in headline
+        assert "worse" in headline
+        assert "publishes no cross-benchmark mean" in headline
+        # An interval clear of zero must not be labelled inconclusive here.
+        assert "(spans 0)" not in headline
+
+    def test_the_headline_does_not_call_a_noisy_sign_flip_a_disagreement(self) -> None:
+        """Same signs, but both intervals straddle 0 -- that is not evidence."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            _cell(
+                "contender",
+                "none",
+                benchmark="a",
+                parameter_count=2_000_000,
+                vs_reference_delta=0.2,
+                vs_reference_ci_low=-0.05,
+                vs_reference_ci_high=0.4,
+            ),
+            _cell(
+                "contender",
+                "none",
+                benchmark="b",
+                parameter_count=2_000_000,
+                vs_reference_delta=-0.03,
+                vs_reference_ci_low=-0.2,
+                vs_reference_ci_high=0.1,
+            ),
+        ]
+        headline = LADDER.render_report(rows).split("## Headline")[1].split("## How to read")[0]
+
+        assert "worse" not in headline
+        assert "spread across benchmarks" in headline
+
+    def test_a_single_benchmark_model_gets_no_headline_claim(self) -> None:
+        """One benchmark is not a spread -- there is nothing to disagree with."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("contender", "none", parameter_count=2_000_000, vs_reference_delta=0.2),
+        ]
+        assert "## Headline" not in LADDER.render_report(rows)
+
+    def test_a_model_that_never_ran_is_named_not_quietly_absent(self) -> None:
+        """A partial sweep must not render as a complete one."""
+        report = LADDER.render_report([_cell(LADDER.REFERENCE_MODEL, "none")])
+        section = report.split("## What did not run")[1]
+
+        # Every other model in the ladder is missing from this one-row sweep.
+        for spec in LADDER.MODELS:
+            if spec.name != LADDER.REFERENCE_MODEL:
+                assert f"`{spec.name}`" in section
+        assert "not run" in section
+        # ...and the model that DID run is listed with the grid it is missing,
+        # rather than reading as fully measured on one benchmark and one arm.
+        assert "`instruct`" in section
+
+    def test_a_complete_sweep_says_so_instead_of_printing_an_empty_gap_table(self) -> None:
+        rows = [
+            _cell(spec.name, arm, benchmark=benchmark)
+            for spec in LADDER.MODELS
+            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+            for benchmark in LADDER.BENCHMARKS
+        ]
+        section = LADDER.render_report(rows).split("## What did not run")[1]
+        assert "Every model, benchmark and prompt arm in the ladder was measured." in section
