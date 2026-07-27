@@ -716,7 +716,11 @@ def save_results(
                     "reranker + prompt regime change (hybrid unprompted, crossencoder prompted)"
                 ),
             },
-            "like_for_like_deltas": ["crossencoder_vs_faiss"],
+            # Deliberately NOT called "like_for_like": this delta matches on the
+            # PROMPT REGIME only (both arms prompted). It still moves the index
+            # backend and adds a reranker, so it is not a clean single-variable
+            # comparison either -- it is only free of the prompt confound above.
+            "prompt_regime_matched_deltas": ["crossencoder_vs_faiss"],
             "recall_ranking": recall_ranking,
             "precision_ranking": precision_ranking,
             "speed_ranking": speed_ranking,
