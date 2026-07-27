@@ -369,8 +369,14 @@ should beat one unsupervised combined similarity.
 ## 9. What this changes
 
 - **A model ladder on `amazon_google` / `abt_buy` / `walmart_amazon` /
-  `wdc_computers` is safe from saturation** — none is saturated, none is
-  structurally caveated. There is real headroom to measure.
+  `wdc_computers` is safe from saturation** — none is saturated, so there is real
+  headroom to measure. **Three of the four are structurally caveated, though**:
+  `amazon_google`, `walmart_amazon` and `wdc_computers` all carry `capped-recall`
+  (§5.1), so their recall/PC ceilings are 0.8396 / 0.8837 / 0.9001 and their F1
+  ceilings 0.9128 / 0.9383 / 0.9474 — not 1.0. `abt_buy` is the only one of the
+  four that is effectively uncapped (0.9847). Headroom is real on all four; on
+  three it is bounded well below 1.0, and a ladder that reports against 1.0 will
+  read a labeling artifact as a model plateau.
 - **…but on three of those four, blocking recall is the binding ceiling**, not
   the model: pinned Pair-Completeness is `amazon_google` 0.8388,
   `walmart_amazon` 0.8773, `wdc_computers` 0.7237 — all below the 0.90 gate

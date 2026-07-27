@@ -43,8 +43,12 @@ network (the vocabulary/label/field sections never touch an embedder).
 
 Run::
 
-    uv run python examples/research/portfolio_profile.py
-    uv run python examples/research/portfolio_profile.py --only fodors_zagat
+    uv run python examples/research/portfolio_profile.py    # full portfolio -> tracked JSON
+
+A narrowed run must name its own ``--out`` -- the write replaces the file wholesale,
+so ``--only`` aimed at the canonical artifact would shrink it to the subset::
+
+    uv run python examples/research/portfolio_profile.py --only fodors_zagat --out tmp/fz.json
 
 ``print`` is allowed in examples (this is an operator tool).
 """
@@ -105,6 +109,11 @@ CAPPED_RECALL_CEILING = 0.95
 
 #: Repo root, resolved from this file, so the script runs from any cwd.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: The tracked full-portfolio artifact. Only a FULL run may write here by default;
+#: ``--only`` must name its own ``--out``, because the write replaces the file
+#: wholesale and a subset run would otherwise silently shrink it.
+CANONICAL_OUT = Path("examples/research/results/portfolio_profile.json")
 
 
 class PublishedResult(BaseModel):
@@ -592,14 +601,32 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("examples/research/results/portfolio_profile.json"),
-        help="where to write the machine-readable profiles (a TRACKED path)",
+        default=None,
+        help=(
+            "where to write the machine-readable profiles (a TRACKED path). "
+            f"Defaults to {CANONICAL_OUT} for a FULL run; REQUIRED with --only, "
+            "which would otherwise replace the full-portfolio artifact with a subset"
+        ),
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    # Same guard as closure_diagnostic: the write replaces the file wholesale, so a
+    # narrowed run pointed at the canonical path silently shrinks the portfolio.
+    if args.out is None and args.only:
+        parser.error(
+            "--only profiles a subset and the write replaces the whole file, which "
+            f"would reduce {CANONICAL_OUT} to just those benchmarks. Pass an explicit "
+            "--out (e.g. --out tmp/portfolio_subset.json), or run the full portfolio."
+        )
+    out: Path = args.out if args.out is not None else CANONICAL_OUT
+
     patterns = wheel_exclusions()
     wanted = set(args.only) if args.only else None
+    if wanted is not None:
+        unknown = sorted(wanted - {entry.name for entry in list_benchmarks()})
+        if unknown:
+            print(f"[warn] --only names no registered benchmark: {', '.join(unknown)}")
     profiles: list[BenchmarkProfile] = []
     for entry in list_benchmarks():
         if wanted is not None and entry.name not in wanted:
@@ -610,15 +637,19 @@ def main() -> None:
             print(f"          NOT PROFILED: {profile.load_error}")
         profiles.append(profile)
 
+    if not profiles:
+        raise SystemExit(
+            f"--only {' '.join(args.only or [])} selected no registered benchmark; "
+            f"refusing to overwrite {out} with []."
+        )
+
     print("\n" + to_markdown(profiles))
     tasks = sorted({p.task for p in profiles})
     print(f"\nregistered tasks: {tasks} ({len(profiles)} entries)")
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps([p.model_dump() for p in profiles], indent=2, sort_keys=True) + "\n"
-    )
-    print(f"wrote {args.out}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps([p.model_dump() for p in profiles], indent=2, sort_keys=True) + "\n")
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":

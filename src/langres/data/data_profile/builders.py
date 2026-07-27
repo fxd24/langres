@@ -692,13 +692,18 @@ def _build_vocabulary_overlap(
     measured beside it, which iterates ``model_fields`` and never sees a computed
     field at all.
     """
-    by_source: dict[str, list[str]] = {}
+    # Grouped by the RAW value, not by ``str(value)``: stringifying first makes the
+    # int 1 and the str "1" the same key, so a genuinely two-source corpus would
+    # collapse to one group and the section would silently vanish -- exactly the
+    # "exactly two distinct values" condition this function documents. Convert only
+    # for the display labels, below.
+    by_source: dict[Any, list[str]] = {}
     exclude = (source_key, *derived_keys)
     for record in records:
         value = record.get(source_key)
         if value is None:
             continue
-        by_source.setdefault(str(value), []).append(
+        by_source.setdefault(value, []).append(
             _embed_text(record, id_key=id_key, text_key=None, exclude=exclude)
         )
     if len(by_source) != 2:
@@ -709,10 +714,18 @@ def _build_vocabulary_overlap(
                 len(by_source),
             )
         return None
-    left_name, right_name = sorted(by_source)
+    # Sorted on the rendered label (raw values may not be mutually comparable --
+    # sorting {1, "a"} raises TypeError), with repr as a stable tie-break so the
+    # ordering is total and deterministic across runs.
+    left_value, right_value = sorted(by_source, key=lambda value: (str(value), repr(value)))
+    left_name, right_name = str(left_value), str(right_value)
+    if left_name == right_name:
+        # Two distinct sources that render identically (1 vs "1"). Keeping both
+        # labels as "1" would make the report unreadable; repr disambiguates them.
+        left_name, right_name = repr(left_value), repr(right_value)
     return profile_vocabulary_overlap(
-        by_source[left_name],
-        by_source[right_name],
+        by_source[left_value],
+        by_source[right_value],
         left_name=left_name,
         right_name=right_name,
     )

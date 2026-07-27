@@ -54,10 +54,15 @@ a figure it cannot vouch for is worse than one that stops:
 
 * ``verdict_agreement`` -- re-deriving ``predicted_match`` from each row's
   ``score``/``decision`` must reproduce the logged ``verdict`` on every row.
-* ``reconstruction_exact`` -- re-clustering the reconstructed judgements with a
-  fresh ``Clusterer`` at the same threshold must reproduce ``dedupe()``'s own
-  output clusters exactly. If it does not, the diagnostic is measuring something
-  other than the pipeline.
+* ``reconstruction_exact`` -- closing the accepted (``verdict is True``) edges
+  transitively with a **local union-find** (``_components_from_verdicts``) must
+  reproduce ``dedupe()``'s own output clusters exactly. If it does not, either the
+  log lost edges or ``Clusterer`` no longer merges on ``predicted_match``.
+  Deliberately NOT a ``Clusterer`` replay: re-running the implementation under
+  test against its own output cannot observe that implementation drifting, and
+  the other two checks are blind to the merge predicate as well (the first
+  validates the *log*; the sweep re-clusters through the same ``Clusterer``).
+  This is the one gate independent of ``core.clusterer``.
 * the **sweep must agree with the tuned point**: the grid sweep re-clusters the
   same judgements, so its entry at the tuned threshold has to equal the tuned
   ``rejected_inside`` exactly. Two independent code paths, one number -- free,
@@ -65,9 +70,14 @@ a figure it cannot vouch for is worse than one that stops:
 
 Run (offline, $0)::
 
-    uv run python examples/research/closure_diagnostic.py --fast
-    uv run python examples/research/closure_diagnostic.py            # full portfolio
-    uv run python examples/research/closure_diagnostic.py --only dblp_scholar
+    uv run python examples/research/closure_diagnostic.py    # full portfolio -> tracked JSON
+
+A narrowed run must name its own ``--out``: the write replaces the file wholesale,
+so pointing ``--fast``/``--only`` at the canonical artifact would shrink the tracked
+nine-benchmark result to the subset. The CLI refuses rather than warning::
+
+    uv run python examples/research/closure_diagnostic.py --fast --out tmp/fast.json
+    uv run python examples/research/closure_diagnostic.py --only dblp_scholar --out tmp/ds.json
 
 ``print`` is allowed in examples (this is an operator tool).
 """
@@ -111,6 +121,11 @@ DEFAULT_METHOD = "rapidfuzz"
 #: Small, in-repo datasets for a quick pass (``--fast``).
 FAST_SUBSET: frozenset[str] = frozenset({"fodors_zagat", "dblp_acm", "tiny_fixture"})
 
+#: The tracked full-portfolio artifact. Only a FULL run may write here by default;
+#: ``--fast``/``--only`` must name their own ``--out``, because the write replaces
+#: the file wholesale and a subset run would otherwise silently shrink it.
+CANONICAL_OUT = Path("examples/research/results/closure_diagnostic.json")
+
 SEED = 0
 
 #: Largest output cluster the BCubed / pairwise metrics will be computed over.
@@ -149,7 +164,17 @@ class ClustererFinding(BaseModel):
 
     Attributes:
         clusterer: ``"closure"`` (transitive closure) or ``"correlation"`` (pivot).
-        n_clusters: Multi-record output clusters (singletons are not emitted).
+        n_clusters: Output clusters, as the clusterer returned them. Records with
+            no accepted edge are absent (neither clusterer emits a cluster per
+            unmatched record), but **size-1 clusters do occur and are counted**:
+            ``Clusterer`` adds an accepted pair as a graph edge, so a self-pair
+            (``left_id == right_id``, which `VectorBlocker` does emit -- 43 of them
+            on ``amazon_google``'s test split) becomes a self-loop and hence a
+            one-node component; ``CorrelationClusterer`` strands a node whose only
+            neighbour an earlier pivot already consumed. Singletons contribute
+            ``C(1, 2) = 0`` to ``n_incluster_pairs``, so they cannot affect
+            ``n_rejected_inside`` or the contamination rate -- they only widen the
+            cluster-count denominators.
         largest_cluster: Size of the biggest output cluster.
         n_incluster_pairs: ``sum(C(size, 2))`` over the output clusters -- every
             pair the clustering asserts is the same entity.
@@ -704,9 +729,14 @@ def _components_from_verdicts(rows: list[dict[str, Any]]) -> list[set[str]]:
     so it moves independently of ``core.clusterer`` and the comparison has a way
     to fail.
 
-    Matches ``Clusterer``'s output convention exactly: a node enters the graph only
-    via an accepted edge, so every component returned has size >= 2 and records
-    with no accepted edge are absent rather than emitted as singletons.
+    Matches ``Clusterer``'s output convention exactly, including its edge cases: a
+    node enters only via an accepted edge, so a record with no accepted pair is
+    absent rather than emitted as a singleton -- but an accepted **self-pair**
+    (``left_id == right_id``) does yield a one-node component, because ``Clusterer``
+    feeds it to ``nx.add_edge(x, x)`` as a self-loop. That is not hypothetical:
+    ``VectorBlocker`` emits 43 accepted self-pairs on ``amazon_google``'s test
+    split. Reproducing it is what keeps this check exact rather than approximately
+    right; a version that dropped singletons would fail on that benchmark alone.
 
     Args:
         rows: Judged log rows (``verdict`` not ``None``).
@@ -759,10 +789,18 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
     if only:
         # A typo'd name would otherwise yield an empty run, an empty table and an
         # empty tracked JSON -- silently overwriting a real result set with [].
+        # A warning did NOT prevent that (it printed, then the run wrote anyway),
+        # so selecting nothing is an error, not a message.
         unknown = sorted(set(only) - {entry.name for entry in list_benchmarks()})
         if unknown:
             print(f"[warn] --only names no registered benchmark: {', '.join(unknown)}")
-        return [name for name in names if name in set(only)]
+        selected = [name for name in names if name in set(only)]
+        if not selected:
+            raise SystemExit(
+                f"--only {' '.join(only)} selected no loadable benchmark; refusing to run. "
+                f"Loadable: {', '.join(names)}"
+            )
+        return selected
     if fast:
         return [name for name in names if name in FAST_SUBSET]
     return names
@@ -821,8 +859,12 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("examples/research/results/closure_diagnostic.json"),
-        help="where to write the machine-readable findings (a TRACKED path)",
+        default=None,
+        help=(
+            "where to write the machine-readable findings (a TRACKED path). "
+            f"Defaults to {CANONICAL_OUT} for a FULL run; REQUIRED with --fast/--only, "
+            "which would otherwise replace the full-portfolio artifact with a subset"
+        ),
     )
     parser.add_argument(
         "--log-dir",
@@ -832,6 +874,19 @@ def main() -> None:
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    # A narrowed run must not land on the canonical artifact. --fast/--only measure
+    # a SUBSET, and the final write replaces the file wholesale, so the documented
+    # `--fast` one-liner would silently reduce the tracked 9-benchmark result to 2.
+    # Uncommitted/committed results are equally destroyed; refuse rather than warn.
+    if args.out is None and (args.fast or args.only):
+        parser.error(
+            "--fast/--only measure a subset and the write replaces the whole file, "
+            f"which would reduce {CANONICAL_OUT} to just those benchmarks. "
+            "Pass an explicit --out (e.g. --out tmp/closure_subset.json), or run the "
+            "full portfolio to refresh the canonical artifact."
+        )
+    out: Path = args.out if args.out is not None else CANONICAL_OUT
 
     findings: list[BenchmarkFinding] = []
     failures: list[str] = []
@@ -860,7 +915,7 @@ def main() -> None:
         # Persist after EVERY benchmark, not once at the end: the large datasets
         # take minutes, and a crash or a kill on the last one must not throw away
         # the ones already measured.
-        write_findings(findings, args.out)
+        write_findings(findings, out)
 
     print("\n" + to_markdown(findings))
     if failures:
@@ -868,11 +923,22 @@ def main() -> None:
         # looks identical to a benchmark that was never selected.
         print(f"\nNOT MEASURED ({len(failures)}): {', '.join(failures)}")
     write_findings(findings, args.out)
-    print(f"\nwrote {args.out}")
+    print(f"\nwrote {out}")
 
 
 def write_findings(findings: list[BenchmarkFinding], out: Path) -> None:
-    """Persist the findings measured so far to a tracked JSON path."""
+    """Persist the findings measured so far to a tracked JSON path.
+
+    Refuses to replace a non-empty artifact with an empty one: if every selected
+    benchmark raised, the run has learned nothing, and overwriting a good result
+    set with ``[]`` would destroy it for no gain. Writing an empty file is only
+    allowed when there was nothing there to lose.
+    """
+    if not findings and out.exists() and out.read_text().strip() not in ("", "[]"):
+        raise SystemExit(
+            f"every selected benchmark failed; refusing to overwrite {out} with []. "
+            "The existing results are unchanged -- see the traceback(s) above."
+        )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps([f.model_dump() for f in findings], indent=2, sort_keys=True) + "\n")
 

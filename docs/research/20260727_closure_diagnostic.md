@@ -244,8 +244,11 @@ the more forgiving default for exactly the users least able to tune it.
 
 - **This is not a default change.** Per the brief, the measurement ships alone;
   swapping `Clusterer` for `CorrelationClusterer` is a separate PR with its own
-  blast radius (serialized `resolver.json` manifests name the clusterer class,
-  and pivot clustering is randomized where closure is deterministic).
+  blast radius: serialized `resolver.json` manifests name the clusterer class, so
+  the swap is a persistence-format concern as much as a quality one. (It is *not*
+  a reproducibility concern — the shipped pivot order is deterministic, sorted by
+  `_pivot_priority`; see §3.3. Its docstring's Ailon–Charikar–Newman citation
+  implies a random pivot, but the code does not use one.)
 - It is measured with **one $0 scorer** (`rapidfuzz`) on **one split seed** (0).
   A matcher with a different error profile — in particular a decider LLM, where
   Trap 2 goes live — could move the numbers. It is unlikely to move the
@@ -260,9 +263,14 @@ the more forgiving default for exactly the users least able to tune it.
 ```bash
 # all 9 loadable entries; 639 s of measured compute (dblp_scholar alone is 405 s)
 uv run python examples/research/closure_diagnostic.py
-# fodors_zagat + dblp_acm + tiny_fixture only, 27 s
-uv run python examples/research/closure_diagnostic.py --fast
+# fodors_zagat + dblp_acm + tiny_fixture only, 27 s -- note the REQUIRED --out
+uv run python examples/research/closure_diagnostic.py --fast --out tmp/fast.json
 ```
+
+A narrowed run (`--fast` / `--only`) must name its own `--out`. The final write
+replaces the results file wholesale, so aiming a subset run at the canonical path
+would quietly reduce the tracked nine-benchmark artifact to two or three; the CLI
+now refuses instead of warning.
 
 `$0` throughout. Judgement logs land in `tmp/closure_diagnostic/` (gitignored,
 regenerable, ~600 MB for `dblp_scholar`); the findings land at the tracked
