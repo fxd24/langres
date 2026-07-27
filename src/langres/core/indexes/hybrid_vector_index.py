@@ -40,8 +40,30 @@ class QdrantHybridIndex:
     """Qdrant-backed hybrid index with dense + sparse vectors.
 
     Combines semantic (dense) and keyword (sparse) search using Qdrant's
-    fusion capabilities. Implements VectorIndex protocol for compatibility
-    with existing blockers.
+    fusion capabilities.
+
+    **Partial** ``VectorIndex`` conformance — stated precisely, because this
+    docstring used to claim it outright and that claim was false:
+
+    - ``create_index`` and ``search_all`` match the protocol.
+    - ``search`` does **not**. The protocol accepts
+      ``str | list[str] | np.ndarray``; this class accepts ``str | list[str]``
+      only. A hybrid index cannot serve a pure-vector query, because the sparse
+      side has to encode the *text* — so this is a real capability difference,
+      not an oversight to widen away. A static checker is right to reject
+      assigning this class to a ``VectorIndex``-typed name: a narrower parameter
+      type is not substitutable.
+
+    Practically this is fine, because ``VectorBlocker`` only ever hands it text.
+    The point of writing it down is that the previous blanket claim was checked
+    by nothing; ``tests/core/indexes/test_vector_index_conformance.py`` now
+    compares these signatures against the protocol and fails if either side
+    moves — including if this class is later widened to conform, at which point
+    this paragraph is the thing that is out of date.
+
+    The protocol's ``np.ndarray`` branch is the "pre-computed embeddings" path;
+    this class exposes that capability as the private ``_dense_embeddings``
+    argument on :meth:`search` instead, used by :meth:`search_all`.
 
     The index owns both embedders and manages the complete lifecycle:
     1. create_index(texts) - Preprocessing: embed and upload to Qdrant
