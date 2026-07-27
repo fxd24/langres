@@ -136,7 +136,13 @@ def _dotenv_key_names(path: Path = Path(".env")) -> set[str]:
     so any read failure yields nothing rather than raising.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        # utf-8-sig, not utf-8: a `.env` saved by a Windows editor starts with a
+        # BOM, and under plain utf-8 that BOM sits before the first name so the
+        # line does not match -- hiding the FIRST key in the file. Measured. That
+        # is the expensive direction of wrong for this scan: reporting "no key"
+        # while litellm loads the same file and spends is the exact bug it
+        # exists to prevent. utf-8-sig is identical to utf-8 when no BOM present.
+        text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return set()
     names = {m.group(1) for line in text.splitlines() if (m := _DOTENV_NAME_RE.match(line))}

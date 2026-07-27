@@ -231,6 +231,39 @@ def test_non_inference_keys_are_not_reported_as_a_paid_path(
     assert "WANDB_API_KEY" not in _run_info()
 
 
+@pytest.mark.parametrize(
+    ("label", "line", "expected"),
+    [
+        ("plain", "ANTHROPIC_API_KEY=sekrit", {"ANTHROPIC_API_KEY"}),
+        ("export and spaces", "export  COHERE_API_KEY  =  sekrit", {"COHERE_API_KEY"}),
+        ("value contains =", "MISTRAL_API_KEY=a=b=c", {"MISTRAL_API_KEY"}),
+        ("quoted value", 'GROQ_API_KEY="se=krit"', {"GROQ_API_KEY"}),
+        # A BOM used to hide the FIRST key in the file -- the expensive
+        # direction: "no key" while litellm loads the same file and spends.
+        ("utf-8 BOM", "﻿FIREWORKS_API_KEY=sekrit", {"FIREWORKS_API_KEY"}),
+        ("commented out", "# DEEPSEEK_API_KEY=sekrit", set()),
+    ],
+)
+def test_dotenv_scan_captures_names_and_never_values(
+    tmp_path: Path, label: str, line: str, expected: set[str]
+) -> None:
+    """The name is the report; the value must be uncapturable, not merely unused.
+
+    Adversarial forms, run rather than reasoned about. The regex restricts the
+    capture group to name characters, so no `=`-bearing or quoted value can be
+    reported even when the line is malformed.
+    """
+    env = tmp_path / ".env"
+    env.write_text(line, encoding="utf-8")
+
+    names = _dotenv_key_names(env)
+
+    assert names == expected, label
+    assert not any("sekrit" in name or "=" in name for name in names), (
+        f"{label}: a VALUE reached the reported names"
+    )
+
+
 def test_a_broken_dotenv_does_not_crash_the_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
