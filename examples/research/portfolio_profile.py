@@ -81,7 +81,8 @@ logger = logging.getLogger("portfolio_profile")
 #: saturated. The research agenda's rule, fixed before any number was looked at.
 SATURATION_MARGIN = 0.02
 
-#: A gold set this small cannot separate methods: one pair is worth ~1% of F1.
+#: A gold set this small cannot separate methods: at the ~100-pair sets this rule
+#: is aimed at, one pair is worth ~1% of F1 (``fodors_zagat``: 1/112 = 0.9%).
 TINY_GOLD_PAIRS = 200
 
 #: A gold "entity" this large in a two-source linkage set is a transitive-closure
@@ -135,9 +136,13 @@ PUBLISHED_SOTA: dict[str, PublishedResult] = {
         system="Ditto (Li et al., VLDB 2021)",
         source="data/benchmarks/phase1/PHASE1_RESULTS.md:7 (Ditto F1 column)",
     ),
+    # The cited line reads "reported SOTA pairwise F1 ~0.98" and names NO system,
+    # so neither does this entry -- attributing it would be an invented citation.
+    # The "~" also makes 0.98 an approximation used as an exact comparand; the
+    # verdict survives it comfortably (measured gap 0.0895 vs a 0.02 margin).
     "dblp_acm": PublishedResult(
         f1=0.98,
-        system="reported SOTA (DeepMatcher family)",
+        system="reported SOTA (~0.98; source names no system)",
         source="src/langres/data/datasets/dblp_acm/ATTRIBUTION.md:8",
     ),
     "fodors_zagat": PublishedResult(
@@ -184,7 +189,12 @@ class BenchmarkProfile(BaseModel):
         vocab_min_coverage: The lower of the two occurrence-weighted token
             coverages -- what a string comparator actually experiences.
         rapidfuzz_f1: Honest pair F1 on the dataset's fixed literature test split
-            (threshold derived on train). ``None`` when no fixed split ships.
+            (threshold derived on train). ``None`` when no fixed split ships --
+            or when the measurement failed, which ``saturation_error``
+            distinguishes.
+        saturation_error: The failure, when the measurement raised. ``None``
+            alongside a ``None`` ``rapidfuzz_f1`` means "no fixed split ships",
+            not "we could not tell".
         rapidfuzz_threshold: The threshold that F1 was measured at.
         rapidfuzz_argmax_f1: The leaky argmax-on-test F1, for the honesty delta.
         published_f1: The recorded published number, when there is one.
@@ -218,6 +228,7 @@ class BenchmarkProfile(BaseModel):
     vocab_jaccard: float | None = None
     vocab_min_coverage: float | None = None
     rapidfuzz_f1: float | None = None
+    saturation_error: str | None = None
     rapidfuzz_threshold: float | None = None
     rapidfuzz_argmax_f1: float | None = None
     published_f1: float | None = None
@@ -340,7 +351,16 @@ def structural_caveats(profile: BenchmarkProfile) -> list[str]:
         and profile.n_clusters > 0
     ):
         caveats.append("one-to-one")
-    if profile.max_cluster_size is not None and profile.max_cluster_size >= LARGE_COMPONENT:
+    # Scoped to linkage on purpose: the rule reads a big cluster as a closure
+    # artifact of two-source labeling. In a DEDUP corpus a 10-record entity is
+    # ordinary, so firing there would brand a healthy dataset. No registered entry
+    # is a dedup set today (that is itself a portfolio gap) -- this keeps the rule
+    # honest for the one that eventually is.
+    if (
+        profile.task == "linkage"
+        and profile.max_cluster_size is not None
+        and profile.max_cluster_size >= LARGE_COMPONENT
+    ):
         caveats.append("large-component")
     if profile.vocab_min_coverage is not None and profile.vocab_min_coverage < LEXICAL_GAP_COVERAGE:
         caveats.append("lexical-gap")
@@ -429,6 +449,12 @@ def profile_entry(entry: BenchmarkEntry, patterns: list[str]) -> BenchmarkProfil
         try:
             evaluation = measure_saturation(entry, schema)
         except Exception as exc:  # noqa: BLE001 - a missing split must not kill the row
+            # Recorded, not just logged. Without this a CRASHED measurement and a
+            # dataset that legitimately ships no literature split are the same
+            # blank cell in the published table -- the artifact could not tell
+            # "not applicable" from "broken", which is the reading the annotation
+            # asks a reader to make.
+            profile.saturation_error = f"{type(exc).__name__}: {exc}"
             logger.warning("%s: saturation measurement failed: %s", entry.name, exc)
     if evaluation is not None:
         profile.rapidfuzz_f1 = evaluation.honest.f1

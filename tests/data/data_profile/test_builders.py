@@ -16,6 +16,7 @@ from collections.abc import Hashable
 
 import numpy as np
 import pytest
+from pydantic import BaseModel, computed_field
 
 import langres.data.registry as registry
 from langres.data.benchmark import gold_pairs_from_clusters
@@ -426,9 +427,56 @@ class TestVocabularyOverlapWiring:
         # The source label is a constant per-record token on exactly one side; if
         # it leaked in it would count as that side's own vocabulary and depress
         # the measured coverage.
-        report = from_records(self._TWO_SOURCE)
-        tokens = {row["token"] for row in report["Vocabulary overlap"].rows()}
-        assert "abt" not in tokens and "buy" not in tokens
+        #
+        # Assert on the numbers the leak MOVES, not on the shared-token list: a
+        # label appears on exactly one side by construction, so it can never be
+        # shared -- a `"abt" not in top_shared` assertion passes just as happily
+        # with the exclusion removed and pins nothing.
+        section = from_records(self._TWO_SOURCE)["Vocabulary overlap"]
+        # canon/eos/camera -- 4 and 0.5 if "abt" leaks in.
+        assert section.n_left_types == 3
+        assert section.left_token_coverage == pytest.approx(2 / 3)
+        assert section.n_right_types == 3
+        assert section.right_token_coverage == pytest.approx(2 / 3)
+
+    def test_a_schemas_computed_field_is_excluded_from_the_vocabulary(self) -> None:
+        """A derived field must not double-count the fields it concatenates.
+
+        ``model_dump()`` includes computed fields, and every vendored ER schema's
+        ``embed_text`` is a concatenation of other fields on the same record. Left
+        in, it would double the weight of exactly the text a blocker reads, and
+        disagree with the separability signal beside it (which iterates
+        ``model_fields`` and never sees a computed field).
+        """
+
+        class _Schema(BaseModel):
+            id: str
+            source: str
+            name: str
+
+            @computed_field  # type: ignore[prop-decorator]
+            @property
+            def embed_text(self) -> str:
+                return self.name
+
+        records = [
+            _Schema(id="a1", source="abt", name="Canon EOS camera").model_dump(),
+            _Schema(id="b1", source="buy", name="Canon camera black").model_dump(),
+        ]
+        section = from_records(records, schema=_Schema)["Vocabulary overlap"]
+        # 3 tokens, not 6: "name" counted once, not once per copy.
+        assert section.n_left_tokens == 3
+        assert section.n_right_tokens == 3
+        assert section.left_token_coverage == pytest.approx(2 / 3)
+
+    def test_without_a_schema_a_derived_key_cannot_be_known(self) -> None:
+        """Honest degradation: no schema means no computed-field list to exclude."""
+        records = [
+            {"id": "a1", "source": "abt", "name": "Canon", "embed_text": "Canon"},
+            {"id": "b1", "source": "buy", "name": "Canon", "embed_text": "Canon"},
+        ]
+        section = from_records(records)["Vocabulary overlap"]
+        assert section.n_left_tokens == 2  # the duplicate is visible, not silently dropped
 
     def test_include_can_select_the_new_kind(self) -> None:
         report = from_records(self._TWO_SOURCE, include={"vocabulary_overlap"})

@@ -51,7 +51,10 @@ _DEFAULT_TOP_N = 25
 #: Tokenizer: maximal runs of word characters, Unicode-aware (so accented names
 #: in a person set tokenize as one token, not three). Deliberately the crudest
 #: thing that matches what a string comparator sees -- this section measures the
-#: data, not a tokenization strategy.
+#: data, not a tokenization strategy. The flip side of "maximal run": a
+#: space-free script (CJK) yields one token per run, so a corpus in one would
+#: report near-zero overlap. Read the numbers as whitespace-delimited-language
+#: numbers; a segmenter would be a different measurement, not a better one.
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -168,7 +171,8 @@ class VocabularyOverlapSection(ProfileSection):
             "",
             "### Most-shared tokens",
             "",
-            f"| token | {self.left_name} count | {self.right_name} count |",
+            f"| token | {_report_html._md_cell(self.left_name)} count "
+            f"| {_report_html._md_cell(self.right_name)} count |",
             "|---|---|---|",
         ]
         if self.top_shared:

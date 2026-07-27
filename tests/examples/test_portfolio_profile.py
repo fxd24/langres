@@ -121,6 +121,13 @@ class TestStructuralCaveats:
     def test_large_component_is_flagged(self) -> None:
         assert "large-component" in structural_caveats(_profile(max_cluster_size=LARGE_COMPONENT))
 
+    def test_large_component_does_not_fire_on_a_dedup_corpus(self) -> None:
+        # The rule reads a big cluster as a two-source closure artifact. In a
+        # dedup set a 10-record entity is ordinary, so firing there would brand a
+        # healthy dataset -- and the portfolio's stated next gap IS a dedup set.
+        dedup = _profile(task="dedup", max_cluster_size=LARGE_COMPONENT * 5)
+        assert "large-component" not in structural_caveats(dedup)
+
     def test_lexical_gap_is_flagged(self) -> None:
         assert "lexical-gap" in structural_caveats(_profile(vocab_min_coverage=0.1))
 
@@ -130,14 +137,39 @@ class TestStructuralCaveats:
 
 
 class TestSaturationRule:
-    def test_every_published_number_cites_a_repo_source(self) -> None:
+    def test_every_published_number_is_on_the_line_it_cites(self) -> None:
+        """The citation must SUPPORT the number, not merely name a file that exists.
+
+        Checking only ``path.exists()`` passes for a stale F1 or a drifted line
+        number -- the two ways a citation actually rots. This reads the cited
+        line and looks for the number on it.
+        """
         for name, published in PUBLISHED_SOTA.items():
             assert published.source, name
-            path = REPO_ROOT / published.source.split(":")[0]
+            path_part, _, rest = published.source.partition(":")
+            path = REPO_ROOT / path_part
             assert path.exists(), f"{name}: {published.source} does not exist"
+            lineno = int(rest.split()[0])
+            line = path.read_text().splitlines()[lineno - 1]
+            # Both spellings: "0.893" and a "~0.98"-style approximation.
+            assert f"{published.f1:g}" in line or f"{published.f1:.3f}" in line, (
+                f"{name}: {published.f1} is not on {published.source}: {line!r}"
+            )
 
-    def test_margin_is_the_agenda_rule(self) -> None:
-        assert SATURATION_MARGIN == 0.02
+    def test_the_published_rules_are_pinned_not_merely_referenced(self) -> None:
+        """Every rule that decides a published verdict is pinned to its value.
+
+        Referring to a constant symbolically (``TINY_GOLD_PAIRS - 1``) tests the
+        comparison but not the number, so redefining it would silently rewrite
+        the annotation with a green suite -- exactly what this module's docstring
+        says it is here to prevent.
+        """
+        assert (SATURATION_MARGIN, TINY_GOLD_PAIRS, LARGE_COMPONENT, LEXICAL_GAP_COVERAGE) == (
+            0.02,
+            200,
+            10,
+            0.5,
+        )
 
     def test_verdict_renders_unknown_as_a_question_not_a_no(self) -> None:
         assert _verdict(None) == "?"

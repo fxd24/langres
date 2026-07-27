@@ -11,12 +11,21 @@ This script turns that theoretical objection into a count. For each registered
 benchmark it runs the real front door (``ERModel.dedupe(..., log=)``) at a
 train-tuned threshold, then asks of the resulting clusters: **how many
 same-cluster pairs were judged ``verdict=False``?** It then re-clusters the
-identical judgement set with ``CorrelationClusterer`` (the Ailon-Charikar-Newman
-pivot algorithm, which only merges on a DIRECT edge to a pivot) and reports the
-same count, so the two clusterers are compared on one scoring run.
+identical judgement set with ``CorrelationClusterer`` -- a *pivot* clusterer,
+which only merges on a DIRECT edge to a pivot -- and reports the same count, so
+the two clusterers are compared on one scoring run. Note the shipped pivot order
+is **deterministic** (``sorted`` by highest incident score, ties by node id --
+``core/clusterers/correlation.py:_pivot_priority``), not the uniformly *random*
+pivot of Ailon-Charikar-Newman that the class docstring cites; the 3-approximation
+guarantee is a property of that randomization and does not transfer. For this
+harness that is good news -- the correlation column is exactly reproducible -- but
+the numbers below are not evidence for an approximation bound.
 
-Everything here is **$0**: the ``rapidfuzz`` / ``embedding_cosine`` methods make
-no paid call.
+Everything here is **$0 in spend**: the ``rapidfuzz`` / ``embedding_cosine``
+methods make no paid call. It is *not* dependency-free or offline on a cold
+cache: blocking is always the benchmark's own ``VectorBlocker``
+(``methods.py:build_blocker``), so a run needs the ``[semantic]`` extra and
+downloads ``all-MiniLM-L6-v2`` once.
 
 TWO TRAPS, both verified against the source before this was written. Either one
 silently invalidates the result, and the naive version of this experiment is
@@ -34,18 +43,25 @@ worse than not running it:
    (``langres/core/models.py``). For a *decider* judge ``verdict`` can be ``True``
    while ``score`` is below the threshold, or ``None``. A naive score-vs-threshold
    scan mis-flags exactly those rows -- it manufactures the finding it is looking
-   for. :attr:`BenchmarkFinding.decider_override_rows` counts them, so every run
-   states how many rows the naive scan *would* have got wrong.
+   for. :attr:`BenchmarkFinding.decider_override_rows` counts them in **both**
+   directions (a ``verdict=True`` the scan would miss, and a ``verdict=False``
+   the scan would miss), so every run states how many rows the naive scan would
+   have got wrong.
 
-The instrument checks itself twice per run, and both checks are reported rather
-than assumed:
+The instrument checks itself three times per run, and every check **raises**
+rather than degrading to a plausible-looking number -- a diagnostic that reports
+a figure it cannot vouch for is worse than one that stops:
 
 * ``verdict_agreement`` -- re-deriving ``predicted_match`` from each row's
   ``score``/``decision`` must reproduce the logged ``verdict`` on every row.
 * ``reconstruction_exact`` -- re-clustering the reconstructed judgements with a
   fresh ``Clusterer`` at the same threshold must reproduce ``dedupe()``'s own
   output clusters exactly. If it does not, the diagnostic is measuring something
-  other than the pipeline and says so loudly instead of reporting a number.
+  other than the pipeline.
+* the **sweep must agree with the tuned point**: the grid sweep re-clusters the
+  same judgements, so its entry at the tuned threshold has to equal the tuned
+  ``rejected_inside`` exactly. Two independent code paths, one number -- free,
+  and it catches drift the first two cannot see.
 
 Run (offline, $0)::
 
@@ -260,6 +276,14 @@ def judgements_from_log(rows: list[dict[str, Any]]) -> list[PairwiseJudgement]:
     make the agreement check tautological; deriving the verdict from the
     judgement is the check.
 
+    ``confidence``/``confidence_source`` are carried through even though
+    ``predicted_match`` never reads them: ``CorrelationClusterer`` falls back to
+    ``confidence`` for the edge weight when a decider carries no ``score``
+    (``core/clusterers/correlation.py:_build_adjacency``), and that weight sets
+    the whole pivot order. Dropping them would silently change the correlation
+    partition for any decider matcher while the base-``Clusterer`` reconstruction
+    check still passed.
+
     Args:
         rows: Rows from :meth:`~langres.tracking.judgement_log.JudgementLog.read`.
 
@@ -273,6 +297,8 @@ def judgements_from_log(rows: list[dict[str, Any]]) -> list[PairwiseJudgement]:
             right_id=row["right_id"],
             decision=row["decision"],
             score=row["score"],
+            confidence=row.get("confidence"),
+            confidence_source=row.get("confidence_source") or "none",
             score_type=_PLACEHOLDER_SCORE_TYPE,
             decision_step=row.get("decision_step") or "replayed",
             provenance={},
@@ -440,12 +466,19 @@ def tune_threshold(
 ) -> float:
     """Pick the BCubed-F1-best threshold by re-clustering ONE scoring pass.
 
-    The scorers here (``rapidfuzz`` / ``embedding_cosine``) do not read the
-    clusterer's threshold, so their judgements are identical at every grid point:
-    sweeping by re-clustering a single scored pass is exactly equivalent to
-    ``benchmarks.runner.tune_threshold_on_train`` (which rebuilds a resolver per
-    point) and costs one pass instead of ``len(grid)``. Ties keep the lowest
-    threshold. Run on the TRAIN split only -- the test split is never touched.
+    The reuse is sound *structurally*, not just for these two methods:
+    ``methods.make_resolver_factory`` builds the matcher ONCE outside its
+    ``factory`` closure and threads ``threshold`` into ``Clusterer(...)`` and
+    nowhere else, so no method reachable through it can produce
+    threshold-dependent scores. One pass instead of ``len(grid)``.
+
+    This is **not** identical to ``benchmarks.runner.tune_threshold_on_train``:
+    that one rebuilds a resolver per point, does not disqualify giant clusterings
+    (below), and falls back to the *lowest* threshold rather than the highest. On
+    a corpus where disqualification bites, the two can pick different operating
+    points -- deliberately, since that is the case disqualification exists for.
+    Ties keep the lowest threshold. Run on the TRAIN split only -- the test split
+    is never touched.
 
     Args:
         judgements: Train-split judgements, reconstructed from the log.
@@ -462,7 +495,7 @@ def tune_threshold(
     Returns:
         The best-scoring threshold.
     """
-    best_threshold, best_f1 = grid[-1], -1.0
+    best_threshold, best_f1 = max(grid), -1.0
     for threshold in grid:
         clusters = Clusterer(threshold=threshold).cluster(judgements)
         largest = max((len(cluster) for cluster in clusters), default=0)
@@ -557,24 +590,32 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         if predicted_match(judgement, threshold) is row["verdict"]
     )
     verdict_agreement = agree / len(judgements) if judgements else None
+    if verdict_agreement is not None and verdict_agreement < 1.0:
+        raise RuntimeError(
+            f"{name}: only {agree}/{len(judgements)} rows reproduce their logged "
+            "verdict from their own score/decision -- the reconstruction is not "
+            "predicted_match, so every count below would be about something else."
+        )
 
     # 4. Instrument check B -- the reconstruction reproduces dedupe()'s clusters.
     replayed = Clusterer(threshold=threshold).cluster(judgements)
-    reconstruction_exact = _same_partition(replayed, clusters)
-    if not reconstruction_exact:
-        logger.error(
-            "%s: reconstruction does NOT reproduce dedupe()'s clusters "
-            "(%d replayed vs %d actual) -- the counts below are not the pipeline's.",
-            name,
-            len(replayed),
-            len(clusters),
+    if not _same_partition(replayed, clusters):
+        raise RuntimeError(
+            f"{name}: the reconstruction does NOT reproduce dedupe()'s clusters "
+            f"({len(replayed)} replayed vs {len(clusters)} actual). The harness is "
+            "measuring something other than the pipeline; refusing to report a number."
         )
+    reconstruction_exact = True
 
-    # Trap 2, counted: rows a naive ``score < threshold`` scan would mis-flag.
+    # Trap 2, counted in BOTH directions: rows a naive ``score < threshold`` scan
+    # would mis-flag. A decider can say Yes below (or without) a score, AND No at
+    # or above one -- the scan gets each wrong in the opposite direction, so
+    # counting only the first would understate what the shortcut costs.
     decider_override_rows = sum(
         1
         for row in rows
-        if row["verdict"] is True and (row["score"] is None or row["score"] < threshold)
+        if (row["verdict"] is True and (row["score"] is None or row["score"] < threshold))
+        or (row["verdict"] is False and row["score"] is not None and row["score"] >= threshold)
     )
 
     all_ids = [record.id for record in test]
@@ -595,6 +636,31 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         all_ids=all_ids,
     )
 
+    sweep = sweep_thresholds(
+        judgements,
+        grid=bench.threshold_grid,
+        truth_clusters=test_clusters,
+        all_ids=all_ids,
+    )
+    # 5. Instrument check C -- free, and independent of A and B. ``tune_threshold``
+    # always returns a grid element, and the sweep re-clusters the SAME judgement
+    # set, so the sweep's entry at the tuned threshold must equal the tuned-point
+    # counts exactly. Two code paths, one number: a divergence means one of them
+    # drifted, which neither A nor B can see.
+    at_tuned = next((p for p in sweep if p.threshold == threshold), None)
+    if at_tuned is None:
+        raise RuntimeError(f"{name}: tuned threshold {threshold} is not a grid point")
+    if (at_tuned.closure_rejected_inside, at_tuned.correlation_rejected_inside) != (
+        closure.n_rejected_inside,
+        correlation.n_rejected_inside,
+    ):
+        raise RuntimeError(
+            f"{name}: the sweep disagrees with the tuned point at t={threshold} "
+            f"(closure {at_tuned.closure_rejected_inside} vs "
+            f"{closure.n_rejected_inside}, correlation "
+            f"{at_tuned.correlation_rejected_inside} vs {correlation.n_rejected_inside})"
+        )
+
     verdicts = Counter(row["verdict"] for row in rows)
     return BenchmarkFinding(
         benchmark=name,
@@ -612,12 +678,7 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         seconds=time.monotonic() - started,
         closure=closure,
         correlation=correlation,
-        sweep=sweep_thresholds(
-            judgements,
-            grid=bench.threshold_grid,
-            truth_clusters=test_clusters,
-            all_ids=all_ids,
-        ),
+        sweep=sweep,
     )
 
 
@@ -641,6 +702,11 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
     for name in skipped:
         print(f"[skip] {name}: external-only, not bundled")
     if only:
+        # A typo'd name would otherwise yield an empty run, an empty table and an
+        # empty tracked JSON -- silently overwriting a real result set with [].
+        unknown = sorted(set(only) - {entry.name for entry in list_benchmarks()})
+        if unknown:
+            print(f"[warn] --only names no registered benchmark: {', '.join(unknown)}")
         return [name for name in names if name in set(only)]
     if fast:
         return [name for name in names if name in FAST_SUBSET]
@@ -657,14 +723,16 @@ def worst_sweep_point(finding: BenchmarkFinding) -> SweepPoint | None:
 def to_markdown(findings: list[BenchmarkFinding]) -> str:
     """Render the headline table: (a) and (c) side by side, per benchmark.
 
-    The last three columns are the threshold-fragility view -- the worst grid
-    point, so a ``0`` at the tuned operating point is never read as "closure is
-    safe here" without the evidence that it stays 0 across the grid.
+    The last three columns are the threshold-fragility view -- **closure's** worst
+    grid point, so a ``0`` at the tuned operating point is never read as "closure
+    is safe here" without the evidence that it stays 0 across the grid. The final
+    column is correlation's value *at that same threshold* (the like-for-like
+    comparison), not correlation's own worst point.
     """
     header = (
         "| benchmark | t | judged | rejected | closure: rejected-inside | rate | "
         "corr: rejected-inside | closure BCubed F1 | corr BCubed F1 | "
-        "worst t | worst closure rej-inside | worst corr rej-inside |"
+        "closure worst t | closure rej-inside @ worst | corr rej-inside @ same t |"
     )
     lines = [header, "|" + "---|" * 12]
     for f in findings:
@@ -711,12 +779,19 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     findings: list[BenchmarkFinding] = []
+    failures: list[str] = []
     for name in select_benchmarks(fast=args.fast, only=args.only):
-        print(f"[run] {name}: {args.method} (offline, $0) ...", flush=True)
+        print(f"[run] {name}: {args.method} ($0 spend) ...", flush=True)
         try:
             finding = run_benchmark(name, method=args.method, seed=args.seed, log_dir=args.log_dir)
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
+            # ``exception`` (not ``error``): a benchmark that drops out is absent
+            # from both the table and the tracked JSON, so the traceback in the run
+            # log is the ONLY record of why. A one-line message makes a loader or
+            # instrument-check failure near-undebuggable from the artifact.
+            logger.exception("%s: run_benchmark raised", name)
             print(f"[fail] {name}: {type(exc).__name__}: {exc}", flush=True)
+            failures.append(f"{name} ({type(exc).__name__})")
             continue
         findings.append(finding)
         print(
@@ -733,6 +808,10 @@ def main() -> None:
         write_findings(findings, args.out)
 
     print("\n" + to_markdown(findings))
+    if failures:
+        # Stated next to the table, not only in the log: a missing row otherwise
+        # looks identical to a benchmark that was never selected.
+        print(f"\nNOT MEASURED ({len(failures)}): {', '.join(failures)}")
     write_findings(findings, args.out)
     print(f"\nwrote {args.out}")
 

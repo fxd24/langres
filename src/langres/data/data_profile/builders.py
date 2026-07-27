@@ -409,7 +409,12 @@ def _assemble(
     if fields is not None:
         body.append(fields)
 
-    vocabulary = _build_vocabulary_overlap(records, id_key=id_key, source_key=source_key)
+    vocabulary = _build_vocabulary_overlap(
+        records,
+        id_key=id_key,
+        source_key=source_key,
+        derived_keys=tuple(getattr(schema, "model_computed_fields", ()) or ()),
+    )
     if vocabulary is not None:
         body.append(vocabulary)
 
@@ -666,6 +671,7 @@ def _build_vocabulary_overlap(
     *,
     id_key: str,
     source_key: str,
+    derived_keys: Collection[str] = (),
 ) -> VocabularyOverlapSection | None:
     """Derive the two sides of a linkage corpus from ``source_key`` and profile them.
 
@@ -675,14 +681,25 @@ def _build_vocabulary_overlap(
     dedup corpus, or a multi-source one this pairwise measure does not describe).
     The two sides are ordered by their source label so the report is deterministic
     and ``left``/``right`` mean the same thing across runs.
+
+    ``derived_keys`` are the schema's **computed** fields, and dropping them is
+    load-bearing, not tidiness. ``model_dump()`` includes computed fields, and the
+    ER schemas' ``embed_text`` is a *concatenation of other fields* on the same
+    record (``AbtBuySchema.embed_text == name + " " + description``). Tokenizing
+    the dump as-is would therefore count the blocking text twice, and since token
+    coverage is occurrence-weighted it would silently over-weight exactly the
+    fields a blocker reads. It would also disagree with the separability signal
+    measured beside it, which iterates ``model_fields`` and never sees a computed
+    field at all.
     """
     by_source: dict[str, list[str]] = {}
+    exclude = (source_key, *derived_keys)
     for record in records:
         value = record.get(source_key)
         if value is None:
             continue
         by_source.setdefault(str(value), []).append(
-            _embed_text(record, id_key=id_key, text_key=None, exclude=(source_key,))
+            _embed_text(record, id_key=id_key, text_key=None, exclude=exclude)
         )
     if len(by_source) != 2:
         if by_source:
