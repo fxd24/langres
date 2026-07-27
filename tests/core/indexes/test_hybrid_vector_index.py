@@ -303,6 +303,59 @@ class TestQdrantHybridIndex:
         with pytest.raises(RuntimeError, match="Must call create_index"):
             index.search_all(k=3)
 
+    def test_search_all_refuses_a_query_prompt_it_cannot_apply(self):
+        """A prompt this index cannot honour must raise, never be discarded.
+
+        ``search_all`` answers from the dense vectors cached at ``create_index``
+        time, so a query-side prompt never reaches the encoder. It used to accept
+        and silently drop the argument, which is the worse failure: a sweep over
+        the axis then returns *identical* numbers at every prompt, and identical
+        numbers read as "the prompt does not help". langres published exactly that
+        table once, from the same shape of no-op in ``FAISSIndex.search_all``.
+        """
+        mock_client = MagicMock()
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=FakeEmbedder(embedding_dim=128),
+            sparse_embedder=FakeSparseEmbedder(),
+        )
+        index.create_index(["Apple Inc.", "Microsoft Corp."])
+        mock_client.query_points.reset_mock()
+
+        with pytest.raises(NotImplementedError, match="cannot apply a query_prompt"):
+            index.search_all(k=2, query_prompt="task: search result | query: ")
+
+        # It refused BEFORE querying: a raise that still ran the search would
+        # have billed the work and thrown the answer away.
+        assert mock_client.query_points.call_count == 0
+
+    def test_search_all_still_works_without_a_query_prompt(self):
+        """The guard must not narrow the default path -- None is still served."""
+        mock_client = MagicMock()
+        mock_client.query_points.side_effect = [
+            [
+                ScoredPoint(id=0, version=0, score=1.0, payload={}, vector={}),
+                ScoredPoint(id=1, version=0, score=0.8, payload={}, vector={}),
+            ],
+            [
+                ScoredPoint(id=1, version=0, score=1.0, payload={}, vector={}),
+                ScoredPoint(id=0, version=0, score=0.7, payload={}, vector={}),
+            ],
+        ]
+        index = QdrantHybridIndex(
+            client=mock_client,
+            collection_name="test_collection",
+            dense_embedder=FakeEmbedder(embedding_dim=128),
+            sparse_embedder=FakeSparseEmbedder(),
+        )
+        index.create_index(["Apple Inc.", "Microsoft Corp."])
+
+        distances, indices = index.search_all(k=2, query_prompt=None)
+
+        assert distances.shape == (2, 2)
+        assert indices[0, 0] == 0
+
     def test_fusion_strategy_configurable(self):
         """Test that fusion strategy can be configured (RRF vs DBSF)."""
         # Setup

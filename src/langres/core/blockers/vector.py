@@ -37,6 +37,29 @@ from langres.core.serialization import ComponentSpec, SerializableState
 logger = logging.getLogger(__name__)
 
 
+def _document_prompt_name(vector_index: Any) -> str | None:
+    """The document-side prompt bound to whatever embedder ``vector_index`` owns.
+
+    Duck-typed on purpose. :class:`~langres.core.indexes.vector_index.VectorIndex`
+    is a **structural** protocol with test doubles inside and outside this repo,
+    so this must never require an attribute: every lookup falls back to ``None``,
+    which reads as "cannot tell" and disables the check rather than raising in a
+    constructor.
+
+    Returns:
+        The embedder's ``prompt_name`` (the deliberate document-side opt-in), or
+        ``None`` when there is no embedder, no ``prompt_name``, or the index does
+        not expose one.
+    """
+    embedder = getattr(vector_index, "embedder", None)
+    if embedder is None:
+        # QdrantHybridIndex/QdrantHybridRerankingIndex name theirs differently:
+        # the dense side is the one create_index() encodes documents with.
+        embedder = getattr(vector_index, "dense_embedder", None)
+    name = getattr(embedder, "prompt_name", None)
+    return name if isinstance(name, str) else None
+
+
 def _neighbor_columns(neighbor_row: Any, anchor: int, limit: int) -> list[int]:
     """Columns of one ``search_all`` row that are real neighbours of ``anchor``.
 
@@ -248,6 +271,46 @@ class VectorBlocker(Blocker[SchemaT]):
 
         candidates = list(blocker.stream(entities))
 
+    Example (asymmetric instruction recipe — EmbeddingGemma, E5, BGE, Qwen3):
+        An instruction-trained checkpoint documents **two** prefixes: one for
+        documents and a different one for queries. Both are expressible today,
+        but they live on two different objects, so it is easy to set one and not
+        the other:
+
+        - the **document** side is bound to the embedder as ``prompt_name`` (with
+          ``prompts`` when the mapping is not already in the checkpoint's
+          ``config_sentence_transformers.json``). ``create_index`` encodes every
+          corpus text through that embedder, and sentence-transformers resolves
+          an ``encode(prompt=None)`` call back to the bound default — so the
+          documents carry the prefix without ``create_index`` taking one.
+        - the **query** side is ``VectorBlocker(query_prompt=...)``. It is passed
+          explicitly at search time, which takes precedence over the embedder's
+          default — so queries carry the query prefix, not the document one.
+
+        ```
+        embedder = SentenceTransformerEmbedder(
+            "google/embeddinggemma-300m",
+            prompts={
+                "document": "title: none | text: ",
+                "query": "task: search result | query: ",
+            },
+            prompt_name="document",
+        )
+        blocker = VectorBlocker(
+            vector_index=FAISSIndex(embedder),
+            query_prompt="task: search result | query: ",
+            schema=Company,
+            text_field="name",
+        )
+        ```
+
+        Setting ``prompt_name`` and forgetting ``query_prompt`` is **worse than
+        prompting neither side**: ``search_all`` then reuses the
+        document-prompted corpus vectors as the queries, so the queries get the
+        *document* prefix. This constructor logs a warning for exactly that
+        combination. Measured evidence for whether the recipe helps at all is in
+        ``docs/research/20260727_embedder_ladder.md``.
+
     Example (testing with fakes):
         from langres.core.indexes.vector_index import FakeVectorIndex
 
@@ -343,6 +406,9 @@ class VectorBlocker(Blocker[SchemaT]):
                 so this costs one extra encode pass over the corpus per search.
                 Default: None (symmetric; no re-encode).
 
+                **This is only half of an asymmetric recipe** — see the class
+                docstring for the other half and the full worked example.
+
                 **How far it reaches depends on the index.**
                 :class:`~langres.core.indexes.vector_index.FAISSIndex` honours it
                 fully — ``search_all`` re-encodes the query side.
@@ -352,12 +418,13 @@ class VectorBlocker(Blocker[SchemaT]):
                 late-interaction reranking pass encodes queries with the prompt
                 (``reranking_vector_index.py:294``).
                 :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex`
-                accepts the argument and **discards it** — its ``search_all``
-                forwards the cached dense vectors into ``search``, which
-                short-circuits on them exactly the way ``FAISSIndex`` used to, so
-                sweeping this parameter over it yields a flat, meaningless result
-                rather than an error. Not fixed here because verifying a
-                Qdrant-backed fix needs a live server; tracked as follow-up work.
+                **raises** ``NotImplementedError`` from ``search_all`` rather than
+                serving a query-prompted search it cannot perform: it answers from
+                the dense vectors cached at index-build time, so the prompt can
+                never reach the encoder. It previously accepted and discarded the
+                argument, which made a sweep over this axis return identical
+                numbers at every setting — a flat result that reads as "the prompt
+                does not help".
 
         Raises:
             ValueError: If k_neighbors is not positive, or if the schema /
@@ -406,6 +473,23 @@ class VectorBlocker(Blocker[SchemaT]):
         self.vector_index = vector_index
         self.k_neighbors = k_neighbors
         self.query_prompt = query_prompt
+
+        # Coherence between the two halves of an asymmetric recipe. The two
+        # prompts live on two different objects and nothing else connects them,
+        # so a half-configured recipe is silent -- and one direction of it is
+        # actively wrong, not merely incomplete. See the class docstring.
+        document_prompt = _document_prompt_name(vector_index)
+        if document_prompt is not None and query_prompt is None:
+            logger.warning(
+                "VectorBlocker: the index's embedder binds a document-side prompt "
+                "(prompt_name=%r) but this blocker sets no query_prompt. search_all() "
+                "then reuses the DOCUMENT-prompted corpus vectors as queries, so the "
+                "queries carry the document prefix -- which is not what an asymmetric "
+                "checkpoint documents, and is worse than prompting neither side. Pass "
+                "the checkpoint's query prefix as query_prompt=..., or drop prompt_name "
+                "from the embedder to run both sides bare.",
+                document_prompt,
+            )
 
     @property
     def config(self) -> dict[str, object]:
