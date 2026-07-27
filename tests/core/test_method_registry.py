@@ -15,6 +15,7 @@ registry now has two name-dispatch callers, not three. The named architectures
 name->builder indirection to keep in sync, because the class IS the identity.
 """
 
+import sys
 from typing import Any
 from unittest.mock import Mock
 
@@ -183,6 +184,45 @@ class TestBuiltinSpecs:
         assert "[trained] extra" in message
         assert "scikit-learn is not installed" in message
         assert "langres[trained]" in message
+
+    @pytest.mark.parametrize(
+        ("method", "judge_module", "extra"),
+        [
+            ("zero_shot_llm", "langres.core.matchers.dspy_judge", "[llm] extra"),
+            ("prompt_llm", "langres.core.matchers.llm_judge", "[llm] extra"),
+            ("select_judge", "langres.core.matchers.select_judge", "[llm] extra"),
+            ("cascade", "langres.core.matchers.cascade", "[llm] extra"),
+            (
+                "random_forest",
+                "langres.core.matchers.random_forest_judge",
+                "[trained] extra",
+            ),
+        ],
+    )
+    def test_every_optional_builder_names_its_extra_when_the_import_fails(
+        self,
+        method: str,
+        judge_module: str,
+        extra: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Each builder's lazy import is wrapped, so a missing extra is actionable.
+
+        CI installs ``--all-extras``, so these branches are unreachable there --
+        every one of them was untested. They are the whole point of the extras
+        split: a user on a bare ``pip install langres`` who names a paid judge must
+        be told which extra to install, not handed a raw ModuleNotFoundError from
+        somewhere inside the judge module.
+
+        ``None`` in ``sys.modules`` is the documented way to make an import of that
+        exact module raise ``ImportError`` without disturbing the real install.
+        """
+        monkeypatch.setitem(sys.modules, judge_module, None)
+        with pytest.raises(ImportError) as exc:
+            get_method(method).build(RegistryCompany)
+        message = str(exc.value)
+        assert extra in message
+        assert "pip install" in message or "langres[" in message
 
     def test_embedding_reports_the_pinned_embedder_as_its_model(self) -> None:
         spec = get_method("embedding")
