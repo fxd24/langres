@@ -86,7 +86,8 @@ for both rows — **only the clusterer differs**, isolating its effect.
 - **The synthetic unit tests** (`tests/core/clusterers/test_correlation_clusterer.py`)
   show the mechanism directly: on a 3-node chain (A-B, B-C, no direct A-C
   edge) the base `Clusterer` merges `{A, B, C}` into one cluster;
-  `CorrelationClusterer` produces `{A, B}, {C}` — while a fully-connected
+  `CorrelationClusterer` produces `{A, B}` (`C` is stranded and, like any
+  unmerged record, absent from the result) — while a fully-connected
   triangle (every pair directly compared and matched) still merges fully
   under both, so C6 is not simply "more conservative everywhere," only where
   the evidence is actually indirect.
