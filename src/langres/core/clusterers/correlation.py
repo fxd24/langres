@@ -19,9 +19,11 @@ same as the base Clusterer.
 
 Measured on the 9-benchmark portfolio in
 ``docs/research/20260727_closure_diagnostic.md`` and **recommended** as a result;
-opt in with ``FuzzyString(clusterer=CorrelationClusterer())`` or any other
-architecture's ``clusterer=``. It is deliberately still not the default. See the
-class docstring for the numbers and for what this does *not* fix.
+opt in with ``FuzzyString(clusterer=CorrelationClusterer())``, or the same
+argument on ``VectorLLMCascade`` / the four retrieval recipes (``Reranker``
+hardcodes its cluster stage and takes no ``clusterer=``). It is deliberately
+still not the default. See the class docstring for the numbers and for what this
+does *not* fix.
 """
 
 from collections.abc import Iterator
@@ -61,7 +63,12 @@ class CorrelationClusterer(Clusterer):
       7,386-record split in one cluster) while pivot degrades smoothly. Closure's
       quality is a cliff; pivot's is a slope.
 
-    Opt in by passing it to any architecture's ``clusterer=``::
+    Opt in via the ``clusterer=`` argument of the architectures that expose one --
+    :class:`~langres.architectures.fuzzy_string.FuzzyString`,
+    :class:`~langres.architectures.vector_llm_cascade.VectorLLMCascade`, and the
+    four retrieval recipes. (:class:`~langres.architectures.reranker.Reranker`
+    does **not**: it hardcodes its cluster stage.) Or set the ``clusterer`` slot
+    on a :class:`~langres.core.resolver.ERModel` directly::
 
         FuzzyString(clusterer=CorrelationClusterer())
 

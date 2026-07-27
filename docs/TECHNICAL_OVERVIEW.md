@@ -1123,7 +1123,11 @@ changes your *partition* without changing your output *shape*.
 
 #### How to opt in
 
-Pass it to any architecture's `clusterer=`, or to the `Resolver`'s clusterer slot:
+Pass it to the `clusterer=` of an architecture that exposes one — `FuzzyString`,
+`VectorLLMCascade`, and the four retrieval recipes (`Retrieve`, `RetrieveLLM`,
+`RetrieveRerank`, `RetrieveRerankLLM`) — or set the `clusterer` slot on a
+`Resolver`/`ERModel` directly. **`Reranker` is the exception**: it hardcodes its
+cluster stage, so passing `clusterer=` there is a `TypeError`, not an opt-in.
 
 ```python
 from langres.architectures import FuzzyString
