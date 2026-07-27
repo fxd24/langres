@@ -753,64 +753,43 @@ class TestCaptureRun:
 
 
 # ---------------------------------------------------------------------------
-# A persisted run snapshot is immutable and JSON-safe.
+# A run snapshot is immutable and JSON-safe.
 #
-# A RunRecord is the durable record of what ran. If a caller could mutate its
-# snapshot after the fact, the persisted line and the in-memory object would
-# disagree; if a snapshot could hold a set or a NaN, the record would not
-# round-trip through JSON at all. Both are enforced at validation time.
+# A RunContext is the recipe half of the durable record of what ran, and
+# `compute_recipe_id` content-addresses it. If a caller could mutate a snapshot
+# after the id was computed, the id would no longer describe the object; if a
+# snapshot could hold a set or a NaN, the record would not round-trip through
+# JSON at all. Both are enforced at validation time.
 # ---------------------------------------------------------------------------
-
-
-def _minimal_record_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "attempt_id": "recipe-time",
-        "recipe_id": "recipe",
-        "context": {"experiment": "snapshot", "dataset_name": "dataset"},
-        "started_at": "2026-07-18T12:00:00+00:00",
-        "status": "completed",
-    }
-    payload.update(overrides)
-    return payload
 
 
 class TestRunSnapshotsAreImmutable:
     def test_popitem_is_refused(self) -> None:
-        record = pydantic.TypeAdapter(RunRecord).validate_python(
-            _minimal_record_payload(tags={"stage": "eval"})
-        )
+        context = _context(tags={"stage": "eval"})
         with pytest.raises(TypeError, match="run snapshots are immutable"):
-            record.tags.popitem()
+            context.tags.popitem()
 
     def test_in_place_union_is_refused(self) -> None:
-        record = pydantic.TypeAdapter(RunRecord).validate_python(
-            _minimal_record_payload(tags={"stage": "eval"})
-        )
+        context = _context(tags={"stage": "eval"})
         with pytest.raises(TypeError, match="run snapshots are immutable"):
-            record.tags |= {"stage": "smuggled"}
+            context.tags |= {"stage": "smuggled"}
 
     def test_nested_mappings_are_frozen_too(self) -> None:
         """Freezing only the top level would leave the interesting part mutable."""
-        record = pydantic.TypeAdapter(RunRecord).validate_python(
-            _minimal_record_payload(resolver_config={"matcher": {"threshold": 0.5}})
-        )
-        assert record.resolver_config is not None
+        context = _context(resolver_config={"matcher": {"threshold": 0.5}})
+        assert context.resolver_config is not None
         with pytest.raises(TypeError, match="run snapshots are immutable"):
-            record.resolver_config["matcher"]["threshold"] = 0.9
+            context.resolver_config["matcher"]["threshold"] = 0.9
 
 
 class TestRunSnapshotsMustBeJsonValues:
     def test_a_set_is_refused(self) -> None:
         with pytest.raises(pydantic.ValidationError, match="sets are not supported"):
-            pydantic.TypeAdapter(RunRecord).validate_python(
-                _minimal_record_payload(resolver_config={"kinds": {"a", "b"}})
-            )
+            _context(resolver_config={"kinds": {"a", "b"}})
 
     def test_a_non_finite_decimal_is_refused(self) -> None:
         with pytest.raises(pydantic.ValidationError, match="finite numeric values"):
-            pydantic.TypeAdapter(RunRecord).validate_python(
-                _minimal_record_payload(resolver_config={"cost": decimal.Decimal("NaN")})
-            )
+            _context(resolver_config={"cost": decimal.Decimal("NaN")})
 
 
 class TestDatasetFingerprintCanonicalization:
