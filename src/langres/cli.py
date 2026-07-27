@@ -145,7 +145,26 @@ def _dotenv_key_names(path: Path = Path(".env")) -> set[str]:
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return set()
-    names = {m.group(1) for line in text.splitlines() if (m := _DOTENV_NAME_RE.match(line))}
+    # Quote state is tracked across lines because a multiline quoted value is ONE
+    # binding, and its interior is secret content. Matching every physical line
+    # independently meant a value containing a line like `x_API_KEY=...` had that
+    # fragment reported as a "name" -- printing part of a secret from the command
+    # whose first property is that it never prints one. Over-reporting a name
+    # looked harmless until the name could be *derived from the value*.
+    names: set[str] = set()
+    quote: str | None = None
+    for line in text.splitlines():
+        if quote is not None:
+            if quote in line:  # the value ends here; the rest of the file is bindings again
+                quote = None
+            continue
+        match = _DOTENV_NAME_RE.match(line)
+        if match is None:
+            continue
+        names.add(match.group(1))
+        value = line[match.end() :].lstrip()
+        if value[:1] in ("'", '"') and value[0] not in value[1:]:
+            quote = value[0]  # opens here, closes on a later line
     return {name for name in names if name.endswith("_API_KEY")}
 
 

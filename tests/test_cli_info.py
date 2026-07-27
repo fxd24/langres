@@ -264,6 +264,49 @@ def test_dotenv_scan_captures_names_and_never_values(
     )
 
 
+@pytest.mark.parametrize(
+    ("label", "text", "expected"),
+    [
+        (
+            "double-quoted multiline",
+            'OTHER_SECRET="header\nleaked_secret_API_KEY=ignored\nfooter"\nREAL_API_KEY=x\n',
+            {"REAL_API_KEY"},
+        ),
+        (
+            "single-quoted multiline",
+            "A_SECRET='x\nsneaky_API_KEY=y\nz'\nGOOD_API_KEY=1\n",
+            {"GOOD_API_KEY"},
+        ),
+        # The quote closes on its own line, so the NEXT line is a real binding
+        # and must still be seen -- the fix must not over-swallow.
+        (
+            "quote closed same line",
+            'A_API_KEY="one line"\nB_API_KEY=2\n',
+            {"A_API_KEY", "B_API_KEY"},
+        ),
+    ],
+)
+def test_a_multiline_value_cannot_smuggle_its_content_out_as_a_name(
+    tmp_path: Path, label: str, text: str, expected: set[str]
+) -> None:
+    """A quoted multiline value is ONE binding, and its interior is secret content.
+
+    Matching each physical line independently reported `leaked_secret_API_KEY`
+    -- a fragment of the value -- as a key name. "Over-reporting a name is the
+    safe direction" held only while names could not be *derived from values*;
+    once they can, it is this command printing part of a secret.
+    """
+    env = tmp_path / ".env"
+    env.write_text(text, encoding="utf-8")
+
+    names = _dotenv_key_names(env)
+
+    assert names == expected, label
+    assert not any("leaked" in n or "sneaky" in n for n in names), (
+        f"{label}: value content was reported as a key name"
+    )
+
+
 def test_a_broken_dotenv_does_not_crash_the_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

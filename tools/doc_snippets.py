@@ -155,6 +155,26 @@ _UNSUPPORTED_FENCE_RE = re.compile(r"^(?:\s*>[\s>]*|[ \t]{4,})(?:`{3,}|~{3,})")
 #: observability check, so the include is invisible in exactly the way that
 #: reports green. Fail closed instead, consistent with every other unknown here.
 _SNIPPET_INCLUDE_RE = re.compile(r"^\s*(?:-{2,}8<-{2,}|;{0,1}--8<--)")
+
+#: One import proving each optional extra is present. The clean venv must have
+#: NONE of them: `pip install langres` installs only the core dependencies, so
+#: any of these resolving means the environment under test is not the one being
+#: advertised. Checking a single module (faiss) let a venv carrying
+#: `[llm]`/`[trained]`/`[eval]` pass the cleanliness assertion unchallenged.
+_EXTRA_PROOF_MODULES = frozenset(
+    {
+        "faiss",
+        "sentence_transformers",
+        "qdrant_client",
+        "torch",
+        "litellm",
+        "dspy",
+        "sklearn",
+        "ranx",
+        "peft",
+        "trl",
+    }
+)
 #: A repo-relative path under `examples/` -- the directory the wheel does not ship.
 _EXAMPLES_REF_RE = re.compile(r"examples/[\w./-]+\.py")
 
@@ -648,7 +668,14 @@ def _assert_environment_is_really_clean(interpreter: Path, *, repo_root: Path) -
         "assert venv in here.parents, f'langres resolved OUTSIDE the clean venv: {here}';"
         "assert repo not in here.parents, f'langres resolved from the SOURCE TREE: {here}';"
         "import importlib.util as u;"
-        "assert u.find_spec('faiss') is None, 'the [semantic] extra leaked into the clean venv';"
+        # Every extra, not just faiss. Probing one module let an ordinary
+        # external venv installed with [llm]/[trained]/[eval] satisfy the whole
+        # assertion -- a "clean install" report from an environment carrying the
+        # dependencies whose absence is the entire thing being tested.
+        f"extras = {sorted(_EXTRA_PROOF_MODULES)!r};"
+        "present = [m for m in extras if u.find_spec(m) is not None];"
+        "assert not present, f'optional extras {present} are installed, so this is not "
+        "the extras-free environment a `pip install langres` user gets';"
         # The nested-resolution check: what a snippet's own subprocess would get.
         "nested = [(n, shutil.which(n)) for n in ('python', 'python3', 'langres')];"
         "bad = [(n, p) for n, p in nested if p and repo in pathlib.Path(p).resolve().parents];"
