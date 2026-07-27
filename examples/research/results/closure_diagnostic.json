@@ -106,7 +106,7 @@
     "n_rejected": 8796,
     "n_test_records": 647,
     "reconstruction_exact": true,
-    "seconds": 48.62467604095582,
+    "seconds": 38.423072124947794,
     "sweep": [
       {
         "closure_bcubed_f1": 0.006035115129228593,
@@ -356,14 +356,14 @@
     "n_rejected": 47978,
     "n_test_records": 1374,
     "reconstruction_exact": true,
-    "seconds": 73.62293608300388,
+    "seconds": 57.03662795794662,
     "sweep": [
       {
-        "closure_bcubed_f1": 0.0023427455835436303,
+        "closure_bcubed_f1": 0.002342745583543629,
         "closure_clusters": 1,
         "closure_largest": 1374,
         "closure_rejected_inside": 16920,
-        "correlation_bcubed_f1": 0.16557655532644205,
+        "correlation_bcubed_f1": 0.16557655532644203,
         "correlation_clusters": 116,
         "correlation_largest": 80,
         "correlation_rejected_inside": 1037,
@@ -375,7 +375,7 @@
         "closure_clusters": 2,
         "closure_largest": 1367,
         "closure_rejected_inside": 22977,
-        "correlation_bcubed_f1": 0.21582114870126257,
+        "correlation_bcubed_f1": 0.2158211487012625,
         "correlation_clusters": 155,
         "correlation_largest": 98,
         "correlation_rejected_inside": 415,
@@ -399,7 +399,7 @@
         "closure_clusters": 44,
         "closure_largest": 1097,
         "closure_rejected_inside": 22818,
-        "correlation_bcubed_f1": 0.42543071411598476,
+        "correlation_bcubed_f1": 0.42543071411598465,
         "correlation_clusters": 274,
         "correlation_largest": 65,
         "correlation_rejected_inside": 542,
@@ -541,7 +541,7 @@
     "n_rejected": 4534,
     "n_test_records": 1473,
     "reconstruction_exact": true,
-    "seconds": 29.70211883302545,
+    "seconds": 23.18139879096998,
     "sweep": [
       {
         "closure_bcubed_f1": 0.003936420729360889,
@@ -556,7 +556,7 @@
         "threshold": 0.3
       },
       {
-        "closure_bcubed_f1": 0.012019476412606128,
+        "closure_bcubed_f1": 0.012019476412606124,
         "closure_clusters": 3,
         "closure_largest": 1466,
         "closure_rejected_inside": 1228,
@@ -801,7 +801,7 @@
     "n_rejected": 728899,
     "n_test_records": 20091,
     "reconstruction_exact": true,
-    "seconds": 1530.5761391669512,
+    "seconds": 431.4057439999888,
     "sweep": [
       {
         "closure_bcubed_f1": null,
@@ -926,7 +926,7 @@
     "n_rejected": 4031,
     "n_test_records": 300,
     "reconstruction_exact": true,
-    "seconds": 34.093376541975886,
+    "seconds": 8.887573749991134,
     "sweep": [
       {
         "closure_bcubed_f1": 0.013245033112582731,
@@ -1051,14 +1051,14 @@
     "n_rejected": 988,
     "n_test_records": 258,
     "reconstruction_exact": true,
-    "seconds": 17.85737354203593,
+    "seconds": 6.830480707983952,
     "sweep": [
       {
         "closure_bcubed_f1": 0.009687836383207766,
         "closure_clusters": 1,
         "closure_largest": 258,
         "closure_rejected_inside": 74,
-        "correlation_bcubed_f1": 0.49254446396618123,
+        "correlation_bcubed_f1": 0.4925444639661812,
         "correlation_clusters": 76,
         "correlation_largest": 14,
         "correlation_rejected_inside": 3,
@@ -1066,7 +1066,7 @@
         "threshold": 0.3
       },
       {
-        "closure_bcubed_f1": 0.0837515732554345,
+        "closure_bcubed_f1": 0.08375157325543449,
         "closure_clusters": 2,
         "closure_largest": 239,
         "closure_rejected_inside": 175,
@@ -1090,7 +1090,7 @@
         "threshold": 0.5
       },
       {
-        "closure_bcubed_f1": 0.6945256613800561,
+        "closure_bcubed_f1": 0.694525661380056,
         "closure_clusters": 31,
         "closure_largest": 36,
         "closure_rejected_inside": 114,
@@ -1176,7 +1176,7 @@
     "n_rejected": 2,
     "n_test_records": 3,
     "reconstruction_exact": true,
-    "seconds": 7.46777624997776,
+    "seconds": 6.436832125007641,
     "sweep": [
       {
         "closure_bcubed_f1": 0.7142857142857143,
@@ -1456,7 +1456,7 @@
     "n_rejected": 256390,
     "n_test_records": 7386,
     "reconstruction_exact": true,
-    "seconds": 305.3618231249857,
+    "seconds": 157.7116105420282,
     "sweep": [
       {
         "closure_bcubed_f1": null,
@@ -1676,10 +1676,10 @@
     "n_rejected": 46482,
     "n_test_records": 1390,
     "reconstruction_exact": true,
-    "seconds": 58.331907707965,
+    "seconds": 27.790120624995325,
     "sweep": [
       {
-        "closure_bcubed_f1": 0.0021156624163842356,
+        "closure_bcubed_f1": 0.0021156624163842347,
         "closure_clusters": 1,
         "closure_largest": 1390,
         "closure_rejected_inside": 8732,
