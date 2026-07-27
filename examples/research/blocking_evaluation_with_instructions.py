@@ -170,19 +170,18 @@ def setup_faiss_blocker(
     """
     logger.info("Setting up FAISS blocker (dense-only with instructions)...")
 
-    # FAISS index with cosine similarity and instruction prompts
-    faiss_index = FAISSIndex(
-        embedder=dense_embedder,
-        metric="cosine",
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
-    )
+    # FAISS index with cosine similarity.
+    faiss_index = FAISSIndex(embedder=dense_embedder, metric="cosine")
 
-    # VectorBlocker with FAISS
+    # VectorBlocker with FAISS. `query_prompt` belongs HERE, not on the index:
+    # no VectorIndex constructor has ever accepted it, so this script raised
+    # TypeError on its first setup call until that was corrected.
     blocker = VectorBlocker(
         schema_factory=lambda x: OrganizationSchema(**x),
         text_field_extractor=lambda x: x.name,
         vector_index=faiss_index,
         k_neighbors=K_NEIGHBORS,
+        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     logger.info(f"FAISS blocker ready (k={K_NEIGHBORS}, metric=cosine, with instructions)")
@@ -207,7 +206,15 @@ def setup_qdrant_hybrid_blocker(
     # Sparse embedder (BM25)
     sparse_embedder = FastEmbedSparseEmbedder(model_name=SPARSE_MODEL)
 
-    # Qdrant hybrid index with RRF fusion and instruction prompts
+    # Qdrant hybrid index with RRF fusion.
+    #
+    # **This arm carries NO query-side instruction, and that is deliberate.**
+    # `VectorBlocker.stream` reaches this index through `search_all`, which
+    # answers from the dense vectors cached at `create_index` time -- the prompt
+    # can never reach the encoder. It used to be accepted and silently discarded,
+    # which is how an un-instructed arm ends up published in an "with
+    # instructions" comparison; `QdrantHybridIndex.search_all` now raises rather
+    # than pretend. Read this row as the hybrid baseline, not as hybrid+instruct.
     qdrant_index = QdrantHybridIndex(
         client=qdrant_client,
         collection_name="funder_names_hybrid_instructions_eval",
@@ -215,7 +222,6 @@ def setup_qdrant_hybrid_blocker(
         sparse_embedder=sparse_embedder,
         fusion="RRF",  # Reciprocal Rank Fusion
         prefetch_limit=PREFETCH_LIMIT,
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     # VectorBlocker with Qdrant hybrid
@@ -272,7 +278,6 @@ def evaluate_crossencoder_blocking(
         sparse_embedder=sparse_embedder,
         fusion="RRF",  # Reciprocal Rank Fusion
         prefetch_limit=CROSSENCODER_PREFETCH,  # Fetch MORE for client-side reranking
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     # Build index
@@ -291,8 +296,12 @@ def evaluate_crossencoder_blocking(
         query_text = entity["name"]
         query_id = entity["id"]
 
-        # Get top-N candidates from hybrid search
-        distances, indices = qdrant_index.search(query_text, k=CROSSENCODER_PREFETCH)
+        # Get top-N candidates from hybrid search. Unlike `search_all`, `search`
+        # encodes the queries it is handed, so the instruction DOES reach the
+        # dense embedder here (`hybrid_vector_index.py`, `search`).
+        distances, indices = qdrant_index.search(
+            query_text, k=CROSSENCODER_PREFETCH, query_prompt=EMBEDDING_INSTRUCTION
+        )
 
         # Collect candidate texts (skip self-matches)
         for idx in indices:
