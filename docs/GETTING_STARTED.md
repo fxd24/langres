@@ -35,20 +35,31 @@ uv run python examples/research_recipes.py
 ```
 
 Before selecting an embedding model, measure whether it separates labeled
-matches from non-matches. This runs from an installed `langres[semantic]` — no
-checkout needed:
+matches from non-matches. Start from a labeled benchmark — `fodors_zagat` ships
+in the wheel, so this needs no extras and no checkout:
+
+```python
+from itertools import combinations
+
+from langres.data import get_benchmark
+
+corpus, gold_clusters, _ = get_benchmark("fodors_zagat").load()
+gold_pairs = {
+    frozenset(pair)
+    for cluster in gold_clusters
+    for pair in combinations(sorted(cluster), 2)
+}
+print(f"{len(corpus)} records, {len(gold_pairs)} gold pairs to separate")
+```
+
+Embedding those records needs the `[semantic]` extra:
 
 <!-- docs-gate: requires-extra=semantic -->
 ```python
-from langres.data import get_benchmark
-from langres.core.blockers.vector import concat_comparable_fields
-from langres.metrics.metrics import roc_auc_score
 from langres.resources import SentenceTransformer
 
-corpus, gold_clusters, _ = get_benchmark("fodors_zagat").load()
-vectors = SentenceTransformer("all-MiniLM-L6-v2").embed(
-    [concat_comparable_fields(record) for record in corpus]
-).vectors
+texts = [" ".join(filter(None, (record.name, record.addr))) for record in corpus]
+vectors = SentenceTransformer("all-MiniLM-L6-v2").embed(texts).vectors
 # Score gold pairs against sampled non-gold pairs and read the ROC-AUC.
 ```
 
@@ -262,7 +273,7 @@ it records every judge call (ids, score, verdict, model, cost) to a JSONL file
 with **zero overhead when omitted**. Every architecture's `.dedupe()`/`.compare()`
 takes it. This is the flywheel *inlet*:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-network -->
 ```python
 result = model.dedupe(records, log="judgements.jsonl")
 # FuzzyString(threshold=0.6).dedupe(records, log="judgements.jsonl") is the $0 version
@@ -279,7 +290,6 @@ small random **audit** slice for unbiased trust measurement), and
 `ReviewQueue.write` snapshots it. This cell is copy-paste complete — it writes
 `queue.jsonl` and prints the exact next command:
 
-<!-- docs-gate: illustrative -->
 ```python
 from langres import JudgementLog, select_for_review, ReviewQueue
 
@@ -296,7 +306,7 @@ round-trip** — `langres export-csv` writes the queued pairs to a plain `.csv`
 file you can open in any spreadsheet; fill the `label` column with `y`/`n`,
 and `langres import-csv` reads the answers back:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run langres export-csv queue.jsonl to_label.csv   # fill the 'label' column (y/n)
 uv run langres import-csv to_label.csv queue.jsonl   # -> corrections.jsonl
@@ -314,7 +324,7 @@ resumes. (`uv run langres --version` reports your build.) Depth:
 with the human corrections (**gold** — overrides), keyed order-independently by
 pair. `derive_threshold_from_pairs` then reads a data-driven cut off the result:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres.core.harvest import (
     CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs,
@@ -341,7 +351,7 @@ a `RandomForestMatcher` — a **trainable judge**, the loop's $0 stand-in for th
 cheaper model — on the harvested labels, then calibrates *its own* threshold on
 *its own* scores:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.training.calibration import derive_threshold
@@ -382,7 +392,7 @@ probabilities). A hand-built matcher like this is exactly what the mid-level
 custom composition (this cascade wraps the `RandomForestMatcher` step 5
 trained, not `VectorLLMCascade`'s own embedding student) goes here instead:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres import Resolver
 from langres.core.matchers.cascade_judge import CascadeMatcher
@@ -406,7 +416,7 @@ Freeze the configured pipeline — schema, blocker, matcher (including a fitted
 CascadeMatcher student), threshold — into a reusable artifact. Every `ERModel`
 (a named architecture or the `resolver` from step 6) has `.save`/`.load`:
 
-<!-- docs-gate: illustrative -->
+<!-- docs-gate: requires-extra=trained -->
 ```python
 resolver.save("artifacts/contacts_v1")            # resolver.json + per-child sidecars
 reloaded = Resolver.load("artifacts/contacts_v1") # fitted student round-trips, no pickle

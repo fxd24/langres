@@ -38,8 +38,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `all-MiniLM-L6-v2` | 22.7M | 0.9349 | 0.9494 | 0.9941 | 11,204 | 11985 | 11.8 | 2,173 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.9674 | 0.9825 | 0.9976 | 11,072 | 11445 | 9.4 | 2,173 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.9531 | 0.9679 | 0.9960 | 11,678 | 12253 | 21.7 | 2,173 |
-| `BAAI/bge-base-en-v1.5` | 109.5M | 0.9713 | n/a | 0.9971 | 10,241 | 10544 | 15.5 | n/a |
-| `intfloat/e5-base-v2` | 109.5M | 0.9674 | n/a | 0.9977 | 8,799 | 9095 | 13.8 | n/a |
+| `BAAI/bge-base-en-v1.5` | 109.5M | 0.9713 | 0.9864 | 0.9971 | 10,241 | 10544 | 26.9 | 2,173 |
+| `intfloat/e5-base-v2` | 109.5M | 0.9674 | 0.9825 | 0.9977 | 8,799 | 9095 | 50.1 | 2,173 |
 | `all-mpnet-base-v2` | 109.5M | 0.9368 | 0.9514 | 0.9941 | 10,897 | 11632 | 26.1 | 2,173 |
 
 ### amazon_google
@@ -51,8 +51,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `all-MiniLM-L6-v2` | 22.7M | 0.8266 | 0.9846 | 0.9989 | 23,024 | 27853 | 17.2 | 4,589 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.8345 | 0.9940 | 0.9989 | 22,470 | 26925 | 16.9 | 4,589 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.8288 | 0.9871 | 0.9987 | 22,790 | 27498 | 18.2 | 4,589 |
-| `BAAI/bge-base-en-v1.5` | 109.5M | 0.8317 | n/a | 0.9985 | 22,960 | 27608 | 14.3 | n/a |
-| `intfloat/e5-base-v2` | 109.5M | 0.8324 | n/a | 0.9993 | 21,433 | 25749 | 14.6 | n/a |
+| `BAAI/bge-base-en-v1.5` | 109.5M | 0.8317 | 0.9906 | 0.9985 | 22,960 | 27608 | 28.3 | 4,589 |
+| `intfloat/e5-base-v2` | 109.5M | 0.8324 | 0.9914 | 0.9993 | 21,433 | 25749 | 29.1 | 4,589 |
 | `all-mpnet-base-v2` | 109.5M | 0.8108 | 0.9657 | 0.9972 | 22,886 | 28227 | 24.5 | 4,589 |
 
 ### fodors_zagat
@@ -64,8 +64,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `all-MiniLM-L6-v2` | 22.7M | 1.0000 | 1.0000 | 0.9997 | 4,880 | 4880 | 20.5 | 864 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 1.0000 | 1.0000 | 1.0000 | 4,795 | 4795 | 7.1 | 864 |
 | `all-MiniLM-L12-v2` | 33.4M | 1.0000 | 1.0000 | 0.9997 | 4,704 | 4704 | 12.5 | 864 |
-| `BAAI/bge-base-en-v1.5` | 109.5M | 1.0000 | n/a | 1.0000 | 4,505 | 4505 | 8.2 | n/a |
-| `intfloat/e5-base-v2` | 109.5M | 1.0000 | n/a | 1.0000 | 4,431 | 4431 | 56.6 | n/a |
+| `BAAI/bge-base-en-v1.5` | 109.5M | 1.0000 | 1.0000 | 1.0000 | 4,505 | 4505 | 27.5 | 864 |
+| `intfloat/e5-base-v2` | 109.5M | 1.0000 | 1.0000 | 1.0000 | 4,431 | 4431 | 11.4 | 864 |
 | `all-mpnet-base-v2` | 109.5M | 1.0000 | 1.0000 | 0.9996 | 5,162 | 5162 | 10.8 | 864 |
 
 ### walmart_amazon
@@ -77,8 +77,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `all-MiniLM-L6-v2` | 22.7M | 0.8654 | 0.9793 | 0.9997 | 46,435 | 53658 | 50.8 | 24,628 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.8782 | 0.9938 | 0.9999 | 46,337 | 52763 | 93.5 | 24,628 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.8645 | 0.9782 | 0.9996 | 45,469 | 52598 | 70.4 | 24,628 |
-| `BAAI/bge-base-en-v1.5` | 109.5M | 0.8755 | n/a | 0.9998 | 43,963 | 50217 | 147.2 | n/a |
-| `intfloat/e5-base-v2` | 109.5M | 0.8810 | n/a | 0.9999 | 46,493 | 52776 | 72.8 | n/a |
+| `BAAI/bge-base-en-v1.5` | 109.5M | 0.8755 | 0.9907 | 0.9998 | 43,963 | 50217 | 159.2 | 24,628 |
+| `intfloat/e5-base-v2` | 109.5M | 0.8810 | 0.9969 | 0.9999 | 46,493 | 52776 | 292.6 | 24,628 |
 | `all-mpnet-base-v2` | 109.5M | 0.8498 | 0.9617 | 0.9994 | 46,448 | 54656 | 173.5 | 24,628 |
 
 ### wdc_computers
@@ -90,8 +90,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `all-MiniLM-L6-v2` | 22.7M | 0.5770 | 0.6410 | 0.9724 | 32,369 | 56103 | 14.8 | 4,647 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.5725 | 0.6360 | 0.9712 | 32,566 | 56888 | 21.3 | 4,647 |
 | `all-MiniLM-L12-v2` | 33.4M | 0.5446 | 0.6050 | 0.9650 | 32,679 | 60011 | 24.6 | 4,647 |
-| `BAAI/bge-base-en-v1.5` | 109.5M | 0.6103 | n/a | 0.9794 | 32,347 | 53005 | 16.6 | n/a |
-| `intfloat/e5-base-v2` | 109.5M | 0.7264 | n/a | 0.9861 | 31,840 | 43834 | 18.1 | n/a |
+| `BAAI/bge-base-en-v1.5` | 109.5M | 0.6103 | 0.6780 | 0.9794 | 32,347 | 53005 | 35.2 | 4,647 |
+| `intfloat/e5-base-v2` | 109.5M | 0.7264 | 0.8070 | 0.9861 | 31,840 | 43834 | 47.1 | 4,647 |
 | `all-mpnet-base-v2` | 109.5M | 0.5311 | 0.5900 | 0.9694 | 32,880 | 61915 | 36.2 | 4,647 |
 
 ## Does an instruction prompt help? (k=20)
@@ -117,16 +117,16 @@ Same model, same `k`, same index — only the query side is re-encoded with a si
 | `all-MiniLM-L12-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9997 | 0.9996 | -0.0001 |
 | `all-MiniLM-L12-v2` | walmart_amazon | 0.8645 | 0.8645 | +0.0000 | [-0.0100, +0.0050] (spans 0) | 0.9996 | 0.9994 | -0.0002 |
 | `all-MiniLM-L12-v2` | wdc_computers | 0.5446 | 0.5698 | +0.0252 | [+0.0029, +0.0505] | 0.9650 | 0.9569 | -0.0081 |
-| `BAAI/bge-base-en-v1.5` | abt_buy | 0.9713 | 0.9741 | +0.0029 | n/a | 0.9971 | 0.9973 | +0.0002 |
-| `BAAI/bge-base-en-v1.5` | amazon_google | 0.8317 | 0.8180 | -0.0137 | n/a | 0.9985 | 0.9963 | -0.0023 |
-| `BAAI/bge-base-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 0.9999 | -0.0001 |
-| `BAAI/bge-base-en-v1.5` | walmart_amazon | 0.8755 | 0.8764 | +0.0009 | n/a | 0.9998 | 0.9994 | -0.0004 |
-| `BAAI/bge-base-en-v1.5` | wdc_computers | 0.6103 | 0.6553 | +0.0450 | n/a | 0.9794 | 0.9657 | -0.0137 |
-| `intfloat/e5-base-v2` | abt_buy | 0.9674 | 0.9703 | +0.0029 | n/a | 0.9977 | 0.9982 | +0.0004 |
-| `intfloat/e5-base-v2` | amazon_google | 0.8324 | 0.8338 | +0.0014 | n/a | 0.9993 | 0.9988 | -0.0005 |
-| `intfloat/e5-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 1.0000 | -0.0000 |
-| `intfloat/e5-base-v2` | walmart_amazon | 0.8810 | 0.8810 | +0.0000 | n/a | 0.9999 | 0.9999 | -0.0000 |
-| `intfloat/e5-base-v2` | wdc_computers | 0.7264 | 0.7363 | +0.0099 | n/a | 0.9861 | 0.9860 | -0.0001 |
+| `BAAI/bge-base-en-v1.5` | abt_buy | 0.9713 | 0.9741 | +0.0029 | [-0.0020, +0.0073] (spans 0) | 0.9971 | 0.9972 | +0.0001 |
+| `BAAI/bge-base-en-v1.5` | amazon_google | 0.8317 | 0.8180 | -0.0137 | [-0.0211, -0.0049] | 0.9985 | 0.9972 | -0.0014 |
+| `BAAI/bge-base-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 1.0000 | 0.9999 | -0.0000 |
+| `BAAI/bge-base-en-v1.5` | walmart_amazon | 0.8755 | 0.8764 | +0.0009 | [-0.0039, +0.0050] (spans 0) | 0.9998 | 0.9997 | -0.0001 |
+| `BAAI/bge-base-en-v1.5` | wdc_computers | 0.6103 | 0.6553 | +0.0450 | [+0.0302, +0.0792] | 0.9794 | 0.9688 | -0.0105 |
+| `intfloat/e5-base-v2` | abt_buy | 0.9674 | 0.9703 | +0.0029 | [-0.0010, +0.0078] (spans 0) | 0.9977 | 0.9979 | +0.0002 |
+| `intfloat/e5-base-v2` | amazon_google | 0.8324 | 0.8338 | +0.0014 | [-0.0033, +0.0049] (spans 0) | 0.9993 | 0.9992 | -0.0001 |
+| `intfloat/e5-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 1.0000 | 1.0000 | +0.0000 |
+| `intfloat/e5-base-v2` | walmart_amazon | 0.8810 | 0.8810 | +0.0000 | [-0.0033, +0.0033] (spans 0) | 0.9999 | 0.9999 | -0.0000 |
+| `intfloat/e5-base-v2` | wdc_computers | 0.7264 | 0.7363 | +0.0099 | [-0.0043, +0.0276] (spans 0) | 0.9861 | 0.9864 | +0.0003 |
 | `all-mpnet-base-v2` | abt_buy | 0.9368 | 0.9521 | +0.0153 | [+0.0069, +0.0240] | 0.9941 | 0.9949 | +0.0008 |
 | `all-mpnet-base-v2` | amazon_google | 0.8108 | 0.7619 | -0.0489 | [-0.0643, -0.0334] | 0.9972 | 0.9931 | -0.0040 |
 | `all-mpnet-base-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9996 | 0.9989 | -0.0007 |
@@ -151,6 +151,16 @@ Every model against `all-MiniLM-L6-v2` — langres's current `DEFAULT_EMBEDDING_
 | `all-MiniLM-L12-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
 | `all-MiniLM-L12-v2` | walmart_amazon | -0.0011 | [-0.0077, +0.0055] (spans 0) | 846 |
 | `all-MiniLM-L12-v2` | wdc_computers | -0.0363 | [-0.0590, -0.0132] | 877 |
+| `BAAI/bge-base-en-v1.5` | abt_buy | +0.0368 | [+0.0254, +0.0486] | 1,012 |
+| `BAAI/bge-base-en-v1.5` | amazon_google | +0.0032 | [-0.0030, +0.0095] (spans 0) | 995 |
+| `BAAI/bge-base-en-v1.5` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
+| `BAAI/bge-base-en-v1.5` | walmart_amazon | +0.0098 | [+0.0020, +0.0178] | 846 |
+| `BAAI/bge-base-en-v1.5` | wdc_computers | +0.0313 | [+0.0067, +0.0563] | 877 |
+| `intfloat/e5-base-v2` | abt_buy | +0.0324 | [+0.0215, +0.0440] | 1,012 |
+| `intfloat/e5-base-v2` | amazon_google | +0.0056 | [-0.0002, +0.0114] (spans 0) | 995 |
+| `intfloat/e5-base-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
+| `intfloat/e5-base-v2` | walmart_amazon | +0.0159 | [+0.0078, +0.0240] | 846 |
+| `intfloat/e5-base-v2` | wdc_computers | +0.1528 | [+0.1261, +0.1794] | 877 |
 | `all-mpnet-base-v2` | abt_buy | +0.0020 | [-0.0108, +0.0137] (spans 0) | 1,012 |
 | `all-mpnet-base-v2` | amazon_google | -0.0186 | [-0.0297, -0.0090] | 995 |
 | `all-mpnet-base-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
