@@ -13,6 +13,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import numpy as np
 
@@ -298,7 +299,7 @@ class TestPersistence:
         assert LADDER.read_reference(tmp_path / "absent.json") == {}
 
 
-def _cell(model: str, arm: str, **overrides: object) -> object:
+def _cell(model: str, arm: str, **overrides: object) -> Any:
     defaults: dict[str, object] = dict(
         model=model,
         benchmark="bench",
@@ -324,7 +325,7 @@ def _cell(model: str, arm: str, **overrides: object) -> object:
     return LADDER.LadderRow(**defaults)
 
 
-def _full_grid() -> list[object]:
+def _full_grid() -> list[Any]:
     """Every model x benchmark x arm x k cell the ladder declares."""
     return [
         _cell(spec.name, arm, benchmark=benchmark, k=k)
