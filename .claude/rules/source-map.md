@@ -69,6 +69,21 @@ langres/
 │   │   ├── analysis.py     # evaluate_blocker_detailed, extract_false_positives/missed_matches
 │   │   ├── debugging.py    # PipelineDebugger + Candidate/Score/Cluster stats
 │   │   └── diagnostics.py  # FalsePositiveExample / MissedMatchExample / DiagnosticExamples
+│   ├── resources/      # reusable model RESOURCES + their additive Op adapters. A resource owns model identity and runtime config; it does NOT own its position in a topology (an embedder can retrieve or rerank) — that is the Op's job. Importing the package does not load torch/litellm: contracts + fakes are eager, production impls lazy
+│   │   ├── base.py         # the import-light contracts (Embedder / Reranker / LLM) + batch carriers; ResourceRuntimeConfig
+│   │   ├── op_adapters.py  # adapters lifting a resource onto the existing `Pairs -> Pairs` Op algebra (Retrieve / Rerank / Generate / Parse). ADDITIVE — the algebra is unchanged
+│   │   ├── sentence_transformers.py  # the production SentenceTransformer embedder ([semantic])
+│   │   ├── llm.py          # LiteLLM-backed LLM + LLMMatcherAdapter ([llm])
+│   │   ├── retrieve.py, _model_ref.py
+│   │   └── fakes.py        # FakeEmbedder / FakeReranker / FakeLLM — deterministic, $0, no network. Most examples use these, which is why an example can look green while proving nothing
+│   ├── experiments/    # reproducible experiment MATRICES over the execution spine (architecture-first). Import-light contracts
+│   │   ├── runner.py       # the architecture-first experiment matrix (the big one — ~2k lines)
+│   │   ├── protocol.py     # EvaluationProtocol: versioned statistical protocol + deterministic proof-matrix expansion
+│   │   ├── statistics.py   # paired_entity_bootstrap — bootstraps by CLUSTER, never by dependent pair rows (the trap it exists to avoid) + split_instability
+│   │   ├── identity.py, cache.py     # AttemptIdentity / CacheIdentity — what makes a cell re-runnable
+│   │   ├── measurements.py, report.py, reproduction.py
+│   ├── plotting/       # visualization utilities; __init__ exports NOTHING (import-light, like autoresearch/)
+│   │   └── blockers.py     # blocker evaluation visualizations
 │   ├── report/         # the shared $0 rendering seam (presentation, NOT modelling — so it sits beside core, not in it)
 │   │   ├── _svg.py         # pure-stdlib inline-SVG chart primitives (line_chart/bar_chart); imports nothing from langres
 │   │   ├── _report_html.py # shared HTML scaffold: document()/section()/_num/_histogram/safe_auc

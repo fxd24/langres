@@ -52,9 +52,11 @@ anything in the package.
 src/langres/
 ├── architectures/  # named ER pipelines (FuzzyString $0/offline, VectorLLMCascade paid)
 ├── core/           # the primitives + ERModel/Resolver: blocker, comparator, module/judges, clusterer, spend cap, registries
+├── resources/      # reusable model resources (Embedder/Reranker/LLM) + their additive Op adapters
+├── experiments/    # reproducible experiment matrices: Experiment, EvaluationProtocol, ExperimentReport
 ├── curation/       # human-in-the-loop labelling + gold-set cold-start
 ├── training/       # what PRODUCES a tuned matcher (finetune, calibration, prompt-optimize methods)
-├── tracking/  metrics/  report/   # observability, scoring, $0 rendering — beside core, not in it (one-way deps)
+├── tracking/  metrics/  report/  plotting/  # observability, scoring, $0 rendering — beside core, not in it (one-way deps)
 ├── autoresearch/ + optimize.py    # the blocking-search engine + its import-light facade
 ├── benchmarks/  eval.py  data/    # the benchmark harness, the eval facade, the dataset registry
 └── clients/  cli.py  methods.py  _exports/
