@@ -1,0 +1,104 @@
+[
+  {
+    "benchmark": "fodors_zagat",
+    "closure": {
+      "bcubed_f1": 0.9784941284826157,
+      "by_cluster_size": [
+        [
+          2,
+          26,
+          0
+        ]
+      ],
+      "clusterer": "closure",
+      "incluster_contamination": 0.0,
+      "largest_cluster": 2,
+      "n_clusters": 26,
+      "n_incluster_pairs": 26,
+      "n_rejected_inside": 0,
+      "pairwise_f1": 0.8135593220338984,
+      "rejected_inside_rate": 0.0
+    },
+    "correlation": {
+      "bcubed_f1": 0.9784941284826157,
+      "by_cluster_size": [
+        [
+          2,
+          26,
+          0
+        ]
+      ],
+      "clusterer": "correlation",
+      "incluster_contamination": 0.0,
+      "largest_cluster": 2,
+      "n_clusters": 26,
+      "n_incluster_pairs": 26,
+      "n_rejected_inside": 0,
+      "pairwise_f1": 0.8135593220338984,
+      "rejected_inside_rate": 0.0
+    },
+    "decider_override_rows": 0,
+    "method": "rapidfuzz",
+    "n_abstained": 0,
+    "n_accepted": 35,
+    "n_judged": 1023,
+    "n_logged": 1023,
+    "n_rejected": 988,
+    "n_test_records": 258,
+    "reconstruction_exact": true,
+    "seconds": 8.072934458963573,
+    "threshold": 0.8,
+    "verdict_agreement": 1.0
+  },
+  {
+    "benchmark": "tiny_fixture",
+    "closure": {
+      "bcubed_f1": 1.0,
+      "by_cluster_size": [
+        [
+          2,
+          1,
+          0
+        ]
+      ],
+      "clusterer": "closure",
+      "incluster_contamination": 0.0,
+      "largest_cluster": 2,
+      "n_clusters": 1,
+      "n_incluster_pairs": 1,
+      "n_rejected_inside": 0,
+      "pairwise_f1": 1.0,
+      "rejected_inside_rate": 0.0
+    },
+    "correlation": {
+      "bcubed_f1": 1.0,
+      "by_cluster_size": [
+        [
+          2,
+          1,
+          0
+        ]
+      ],
+      "clusterer": "correlation",
+      "incluster_contamination": 0.0,
+      "largest_cluster": 2,
+      "n_clusters": 1,
+      "n_incluster_pairs": 1,
+      "n_rejected_inside": 0,
+      "pairwise_f1": 1.0,
+      "rejected_inside_rate": 0.0
+    },
+    "decider_override_rows": 0,
+    "method": "rapidfuzz",
+    "n_abstained": 0,
+    "n_accepted": 1,
+    "n_judged": 3,
+    "n_logged": 3,
+    "n_rejected": 2,
+    "n_test_records": 3,
+    "reconstruction_exact": true,
+    "seconds": 6.04091325000627,
+    "threshold": 0.4,
+    "verdict_agreement": 1.0
+  }
+]

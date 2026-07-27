@@ -148,6 +148,46 @@ class ClustererFinding(BaseModel):
     pairwise_f1: float
 
 
+class SweepPoint(BaseModel):
+    """The diagnostic at one threshold, for both clusterers.
+
+    The tuned operating point alone is not enough to answer B1. ``THEORY.md`` §7.1
+    sharpens the objection to closure into **threshold-fragility**, not badness:
+    Hassanzadeh et al.'s partitioning collapses from F1 0.850 at t=0.4 to 0.177 at
+    t=0.2, merging 500 true clusters into 51. A single well-tuned threshold can
+    therefore report ``rejected_inside = 0`` while the pipeline sits one grid step
+    away from a cliff -- and a cluster of size 2 has exactly one in-cluster pair,
+    which was by construction accepted, so ``0`` is *forced* there rather than
+    measured. Sweeping the benchmark's own threshold grid over the SAME judgements
+    (the $0 scorers do not read the clusterer's threshold, so no re-scoring is
+    needed) shows whether the zero is robust or an artifact of the operating point.
+
+    Attributes:
+        threshold: The grid point.
+        n_rejected: Judgements with ``predicted_match(j, t) is False`` at this t.
+        closure_clusters: Multi-record clusters under transitive closure.
+        closure_largest: Largest closure cluster.
+        closure_rejected_inside: **(a)** under closure at this t.
+        closure_bcubed_f1: Closure BCubed F1 at this t.
+        correlation_clusters: Multi-record clusters under the pivot algorithm.
+        correlation_largest: Largest pivot cluster.
+        correlation_rejected_inside: **(c)** -- the same count once negatives are
+            priced.
+        correlation_bcubed_f1: Pivot BCubed F1 at this t.
+    """
+
+    threshold: float
+    n_rejected: int
+    closure_clusters: int
+    closure_largest: int
+    closure_rejected_inside: int
+    closure_bcubed_f1: float
+    correlation_clusters: int
+    correlation_largest: int
+    correlation_rejected_inside: int
+    correlation_bcubed_f1: float
+
+
 class BenchmarkFinding(BaseModel):
     """The full diagnostic for one benchmark: both clusterers over one scoring run.
 
@@ -170,8 +210,10 @@ class BenchmarkFinding(BaseModel):
             ``dedupe()``'s own clusters. Must be ``True`` for the numbers to mean
             anything.
         seconds: Wall-clock for this benchmark.
-        closure: The default transitive-closure finding.
+        closure: The default transitive-closure finding, at ``threshold``.
         correlation: The pivot-algorithm finding over the identical judgements.
+        sweep: The same diagnostic across the benchmark's whole threshold grid --
+            the threshold-fragility view (see :class:`SweepPoint`).
     """
 
     benchmark: str
@@ -189,6 +231,7 @@ class BenchmarkFinding(BaseModel):
     seconds: float
     closure: ClustererFinding
     correlation: ClustererFinding
+    sweep: list[SweepPoint]
 
 
 def judgements_from_log(rows: list[dict[str, Any]]) -> list[PairwiseJudgement]:
@@ -299,6 +342,63 @@ def diagnose(
         bcubed_f1=metrics["bcubed"]["f1"],
         pairwise_f1=metrics["pairwise"]["f1"],
     )
+
+
+def sweep_thresholds(
+    judgements: list[PairwiseJudgement],
+    *,
+    grid: tuple[float, ...],
+    truth_clusters: list[set[str]],
+    all_ids: list[str],
+) -> list[SweepPoint]:
+    """Run the diagnostic at every grid point, for both clusterers.
+
+    Costs no extra scoring: the $0 scorers ignore the clusterer's threshold, so
+    one judgement set serves the whole grid. See :class:`SweepPoint` for why a
+    single operating point is not enough to answer B1.
+
+    Args:
+        judgements: The scored judgements (test split).
+        grid: The benchmark's own threshold grid.
+        truth_clusters: Gold partition for the split.
+        all_ids: Every record id in the split.
+
+    Returns:
+        One :class:`SweepPoint` per grid point, in grid order.
+    """
+    points: list[SweepPoint] = []
+    for threshold in grid:
+        closure = diagnose(
+            "closure",
+            Clusterer(threshold=threshold).cluster(judgements),
+            judgements,
+            threshold=threshold,
+            truth_clusters=truth_clusters,
+            all_ids=all_ids,
+        )
+        correlation = diagnose(
+            "correlation",
+            CorrelationClusterer(threshold=threshold).cluster(judgements),
+            judgements,
+            threshold=threshold,
+            truth_clusters=truth_clusters,
+            all_ids=all_ids,
+        )
+        points.append(
+            SweepPoint(
+                threshold=threshold,
+                n_rejected=sum(1 for j in judgements if predicted_match(j, threshold) is False),
+                closure_clusters=closure.n_clusters,
+                closure_largest=closure.largest_cluster,
+                closure_rejected_inside=closure.n_rejected_inside,
+                closure_bcubed_f1=closure.bcubed_f1,
+                correlation_clusters=correlation.n_clusters,
+                correlation_largest=correlation.largest_cluster,
+                correlation_rejected_inside=correlation.n_rejected_inside,
+                correlation_bcubed_f1=correlation.bcubed_f1,
+            )
+        )
+    return points
 
 
 def tune_threshold(
@@ -461,6 +561,12 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
         seconds=time.monotonic() - started,
         closure=closure,
         correlation=correlation,
+        sweep=sweep_thresholds(
+            judgements,
+            grid=bench.threshold_grid,
+            truth_clusters=test_clusters,
+            all_ids=all_ids,
+        ),
     )
 
 
@@ -490,21 +596,38 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
     return names
 
 
+def worst_sweep_point(finding: BenchmarkFinding) -> SweepPoint | None:
+    """The grid point where closure discards the most evidence (ties: lowest t)."""
+    if not finding.sweep:
+        return None
+    return max(finding.sweep, key=lambda p: (p.closure_rejected_inside, -p.threshold))
+
+
 def to_markdown(findings: list[BenchmarkFinding]) -> str:
-    """Render the headline table: (a) and (c) side by side, per benchmark."""
+    """Render the headline table: (a) and (c) side by side, per benchmark.
+
+    The last three columns are the threshold-fragility view -- the worst grid
+    point, so a ``0`` at the tuned operating point is never read as "closure is
+    safe here" without the evidence that it stays 0 across the grid.
+    """
     header = (
         "| benchmark | t | judged | rejected | closure: rejected-inside | rate | "
-        "corr: rejected-inside | closure BCubed F1 | corr BCubed F1 |"
+        "corr: rejected-inside | closure BCubed F1 | corr BCubed F1 | "
+        "worst t | worst closure rej-inside | worst corr rej-inside |"
     )
-    lines = [header, "|---|---|---|---|---|---|---|---|---|"]
+    lines = [header, "|" + "---|" * 12]
     for f in findings:
         rate = f.closure.rejected_inside_rate
+        worst = worst_sweep_point(f)
         lines.append(
             f"| {f.benchmark} | {f.threshold:.2f} | {f.n_judged:,} | {f.n_rejected:,} | "
             f"{f.closure.n_rejected_inside:,} | "
             f"{'n/a' if rate is None else f'{rate:.4f}'} | "
             f"{f.correlation.n_rejected_inside:,} | "
-            f"{f.closure.bcubed_f1:.4f} | {f.correlation.bcubed_f1:.4f} |"
+            f"{f.closure.bcubed_f1:.4f} | {f.correlation.bcubed_f1:.4f} | "
+            f"{'n/a' if worst is None else f'{worst.threshold:.2f}'} | "
+            f"{'n/a' if worst is None else f'{worst.closure_rejected_inside:,}'} | "
+            f"{'n/a' if worst is None else f'{worst.correlation_rejected_inside:,}'} |"
         )
     return "\n".join(lines)
 
