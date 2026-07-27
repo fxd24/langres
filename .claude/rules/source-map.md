@@ -30,7 +30,7 @@ langres/
 │   ├── benchmarks/     # ER benchmark HARNESS — race methods into a table / score a judge on a fixed candidate set. Internal plumbing: users reach it ONLY via a dataset from `langres.data.get_benchmark(...)` + `langres.eval.evaluate(...)` / `candidates_for(...)`; __init__ exports nothing (import-light, like autoresearch/)
 │   │   ├── runner.py       # run_method / run_methods -> BenchmarkTable; tracks, resolver-bcubed, tune_threshold, cost helpers
 │   │   └── judge_eval.py   # JudgePairEval, evaluate / evaluate_judge_on_candidates (scorer-isolating, spend-capped), BudgetedModuleRunner
-│   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
+│   ├── cli.py          # langres CLI, 6 subcommands (verified from add_parser, not from docs): review / export-csv / import-csv (labeling loop) + experiments / reproduce / verify (research)
 │   ├── _exports/       # per-domain fragments composing the ROOT __all__ + lazy maps (add a root export HERE, not in __init__.py)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── _exports/       # same, for langres.core (add a core export HERE, not in core/__init__.py)
