@@ -128,6 +128,28 @@ class ModelSpec:
     #: already answers the question, and a second flavour of the same negative is
     #: not worth the queue time.
     documented_arm: tuple[str | None, str] | None = None
+    #: The licence identifier **the checkpoint itself declares**, read from its
+    #: own model card (the ``license:`` key in the README front matter, which is
+    #: what the Hub API's ``cardData.license`` summarises). Not remembered, not
+    #: inferred from the publisher: this repo has already been wrong twice in
+    #: opposite directions about a dataset licence it did not read.
+    #:
+    #: It is a first-class field rather than a footnote because langres is
+    #: Apache-2.0, so a ladder that ranks checkpoints without stating whether the
+    #: winner may be shipped as a default is ranking on the wrong axis.
+    license: str = "unknown"
+
+
+#: Licences that are OSI-approved, so a langres default carrying one adds no
+#: use restriction on top of Apache-2.0. Deliberately an ALLOW list: an unknown
+#: or new licence must read as "not clearly OSI" and require a human to look,
+#: rather than passing by absence from a deny list.
+OSI_APPROVED_LICENSES: frozenset[str] = frozenset({"apache-2.0", "mit", "bsd-3-clause"})
+
+
+def _is_osi(spec: ModelSpec) -> bool:
+    """Whether ``spec``'s declared licence is on the OSI allow list."""
+    return spec.license in OSI_APPROVED_LICENSES
 
 
 #: Listed in roughly ascending expected size so a truncated sweep still covers
@@ -142,23 +164,30 @@ class ModelSpec:
 #: instruction-following at all. When time is short, run
 #: ``google/embeddinggemma-300m`` and a ``Qwen/Qwen3-Embedding-*`` tier before
 #: finishing the ladder — they are the ones that make the axis mean anything.
+#:
+#: Every ``license=`` below was read from that checkpoint's own model card on
+#: 2026-07-27 (README front matter / Hub ``cardData.license``). Exactly one is
+#: not OSI: ``google/embeddinggemma-300m`` ships under the **Gemma Terms of
+#: Use**, which carries a prohibited-use policy that survives redistribution —
+#: a use restriction Apache-2.0 does not have.
 MODELS: tuple[ModelSpec, ...] = (
-    ModelSpec("all-MiniLM-L6-v2"),
-    ModelSpec("all-MiniLM-L12-v2"),
-    ModelSpec("BAAI/bge-small-en-v1.5"),
-    ModelSpec("all-mpnet-base-v2"),
-    ModelSpec("BAAI/bge-base-en-v1.5"),
-    ModelSpec("intfloat/e5-base-v2"),
-    ModelSpec("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True),
-    ModelSpec("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True),
+    ModelSpec("all-MiniLM-L6-v2", license="apache-2.0"),
+    ModelSpec("all-MiniLM-L12-v2", license="apache-2.0"),
+    ModelSpec("BAAI/bge-small-en-v1.5", license="mit"),
+    ModelSpec("all-mpnet-base-v2", license="apache-2.0"),
+    ModelSpec("BAAI/bge-base-en-v1.5", license="mit"),
+    ModelSpec("intfloat/e5-base-v2", license="mit"),
+    ModelSpec("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, license="apache-2.0"),
+    ModelSpec("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True, license="apache-2.0"),
     # Prefixes read from the checkpoint's own config_sentence_transformers.json
     # (Retrieval-document / Retrieval-query), not from memory or a model card.
     ModelSpec(
         "google/embeddinggemma-300m",
         documented_arm=("title: none | text: ", "task: search result | query: "),
+        license="gemma",
     ),
-    ModelSpec("BAAI/bge-large-en-v1.5"),
-    ModelSpec("mixedbread-ai/mxbai-embed-large-v1"),
+    ModelSpec("BAAI/bge-large-en-v1.5", license="mit"),
+    ModelSpec("mixedbread-ai/mxbai-embed-large-v1", license="apache-2.0"),
     # Qwen3's own recipe is query-side only (its "document" prompt is ""), and
     # its query instruction is about retrieving WEB SEARCH PASSAGES, not matching
     # entities -- so this arm measures "the documented recipe applied outside its
@@ -170,9 +199,10 @@ MODELS: tuple[ModelSpec, ...] = (
             "Instruct: Given a web search query, retrieve relevant passages that "
             "answer the query\nQuery:",
         ),
+        license="apache-2.0",
     ),
-    ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8),
-    ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4),
+    ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8, license="apache-2.0"),
+    ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4, license="apache-2.0"),
 )
 
 MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
@@ -1027,6 +1057,163 @@ def _excludes_zero(low: float | None, high: float | None) -> bool:
     return low is not None and high is not None and not (low <= 0.0 <= high)
 
 
+def _render_recommendation(
+    ok: Sequence[LadderRow],
+    models: Sequence[str],
+    benchmarks: Sequence[str],
+    headline_k: int,
+) -> list[str]:
+    """The recommendation, split by licence and derived entirely from the rows.
+
+    Two separate questions, deliberately not merged into one ranking:
+
+    1. **What is the best model measured here?** Answered by the table above,
+       which does not care about licences.
+    2. **What may langres ship as a default?** langres is Apache-2.0, so a
+       checkpoint under a use-restricted licence can be a *documented opt-in*
+       with its terms stated, but not a silent default. That is a licence fact,
+       not a measurement, so the two are reported side by side rather than
+       collapsed into a single "winner".
+
+    Nothing here is hand-written except the licence identifiers on
+    :data:`MODELS`, which were read from the model cards. The winners, the
+    counts, and the coverage denominator all come from ``ok``.
+    """
+
+    def wins(model: str) -> list[LadderRow]:
+        """Benchmarks where ``model`` beats the reference with the CI clear of 0."""
+        found = []
+        for benchmark in benchmarks:
+            row = next(
+                (
+                    r
+                    for r in ok
+                    if r.model == model
+                    and r.benchmark == benchmark
+                    and r.k == headline_k
+                    and r.prompt_arm == "none"
+                    and r.vs_reference_delta is not None
+                    and r.vs_reference_delta > 0
+                    and _excludes_zero(r.vs_reference_ci_low, r.vs_reference_ci_high)
+                ),
+                None,
+            )
+            if row is not None:
+                found.append(row)
+        return found
+
+    measured = sorted({row.model for row in ok})
+    candidates = [name for name in models if name != REFERENCE_MODEL and name in measured]
+    osi = [name for name in candidates if _is_osi(MODELS_BY_NAME.get(name) or ModelSpec(name))]
+    restricted = [name for name in candidates if name not in osi]
+
+    out: list[str] = []
+    out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
+    out.append(
+        f"\n**{len(measured)} of the {len(MODELS)} models in the ladder have a row at "
+        f"metric revision {METRIC_REVISION}.** Everything below is a statement about "
+        "those and only those; the rest are named under 'What did not run'. A "
+        "recommendation drawn from a partial field is still a recommendation, but it "
+        "is not a survey — do not read the absence of a model here as evidence "
+        "against it.\n"
+        "\n**This document does not change `DEFAULT_EMBEDDING_MODEL`.** It states what "
+        "was measured and what the licences are; the default is a human decision.\n"
+    )
+
+    out.append("\n### The OSI-licensed field — the only candidates for a default\n")
+    out.append(
+        f"\nlangres ships under Apache-2.0. A default that carries a use-restricted "
+        f"licence pushes that restriction onto every user who never chose it, so the "
+        f"candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed "
+        f"models — including the incumbent, `{REFERENCE_MODEL}` "
+        f"({(MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)).license}).\n"
+    )
+    if not osi:
+        out.append(
+            "\n**No OSI-licensed challenger has a row at this metric revision**, so "
+            "this sweep has nothing to say about replacing the default. That is a gap "
+            "in the measurement, not a verdict on the incumbent.\n"
+        )
+    else:
+        out.append(
+            "\n| model | licence | benchmarks beaten (CI clear of 0) | best Δ | on |\n"
+        )
+        out.append("|---|---|---:|---:|---|\n")
+        for name in osi:
+            spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            won = wins(name)
+            if won:
+                best = max(won, key=lambda r: r.vs_reference_delta or 0.0)
+                out.append(
+                    f"| `{name}` | {spec.license} | {len(won)} of {len(benchmarks)} | "
+                    f"{best.vs_reference_delta:+.4f} | {best.benchmark} |\n"
+                )
+            else:
+                out.append(
+                    f"| `{name}` | {spec.license} | 0 of {len(benchmarks)} | — | — |\n"
+                )
+        # Rank on wins first, then on the largest single win, then on the name so
+        # the file is byte-stable across re-renders. A tie broken by name alone
+        # would silently promote a model for being alphabetically early.
+        ranked = [
+            (
+                len(wins(name)),
+                max((r.vs_reference_delta or 0.0) for r in wins(name)) if wins(name) else 0.0,
+                name,
+            )
+            for name in osi
+        ]
+        best_count, _best_delta, best_name = max(ranked)
+        if best_count == 0:
+            out.append(
+                f"\n**No OSI-licensed model beats `{REFERENCE_MODEL}` on any benchmark "
+                "with an interval clear of zero.** The measured recommendation is "
+                "therefore to **keep the current default** — not because the "
+                "challengers are bad, but because on this evidence the measurement "
+                "cannot tell them apart, and 'indistinguishable' is not a reason to "
+                "move.\n"
+            )
+        else:
+            out.append(
+                f"\n**Best OSI-licensed candidate: `{best_name}`**, ahead of "
+                f"`{REFERENCE_MODEL}` on {best_count} of {len(benchmarks)} benchmarks "
+                "with the interval clear of zero. Read it against the same model's "
+                "row in the table above before adopting it: a win on some benchmarks "
+                "and a loss on others is the normal shape here, and this column counts "
+                "only the wins.\n"
+            )
+
+    out.append("\n### Use-restricted checkpoints — documented opt-in, never a silent default\n")
+    if not restricted:
+        out.append(
+            "\nNo measured model carries a non-OSI licence, so this section has no "
+            "entries at this metric revision.\n"
+        )
+    else:
+        for name in restricted:
+            spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            won = wins(name)
+            summary = (
+                ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
+                if won
+                else "no benchmark, with an interval clear of zero"
+            )
+            out.append(
+                f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
+                f"Measured ahead of `{REFERENCE_MODEL}` on: {summary}. Recommended as a "
+                "**documented opt-in**: a user who names it accepts its terms; a user "
+                "who names nothing must not be given them. Anyone shipping it must read "
+                "the checkpoint's own licence — in Gemma's case a prohibited-use policy "
+                "that survives redistribution, which Apache-2.0 does not impose.\n"
+                f"\n  ```python\n"
+                f"  # opt in explicitly, having read the licence\n"
+                f'  SentenceTransformerEmbedder("{name}")\n'
+                f"  ```\n"
+            )
+
+    return out
+
+
 def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     """Render the markdown report from rows measured at the CURRENT metric revision.
 
@@ -1544,6 +1731,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                 f"{_ci(row.vs_reference_ci_low, row.vs_reference_ci_high)} | "
                 f"{_fmt(row.ci_clusters)} |\n"
             )
+
+    out.extend(_render_recommendation(ok, models, benchmarks, headline_k))
 
     out.append("\n## The recall/cost frontier (every k)\n")
     out.append(
