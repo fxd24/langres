@@ -1486,9 +1486,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     for spec in MODELS:
         if spec.name not in measured:
             continue
-        cells = {
-            (row.benchmark, row.prompt_arm, row.k) for row in ok if row.model == spec.name
-        }
+        cells = {(row.benchmark, row.prompt_arm, row.k) for row in ok if row.model == spec.name}
         missing = [
             (benchmark, arm, k)
             for benchmark in BENCHMARKS
@@ -1500,8 +1498,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             # Collapse to the coarsest true statement so the table stays readable:
             # a whole missing benchmark is one line, not len(arms) * len(k) lines.
             whole_benchmarks = sorted(
-                {b for b, _, _ in missing}
-                - {row.benchmark for row in ok if row.model == spec.name}
+                {b for b, _, _ in missing} - {row.benchmark for row in ok if row.model == spec.name}
             )
             rest = [cell for cell in missing if cell[0] not in whole_benchmarks]
             parts = []
@@ -1541,9 +1538,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "\nMeasured checkpoints that register their own query-side prefix but were "
             "measured without a `documented` arm — the generic `instruct` arm is not "
             "their documented recipe, so this sweep does not show them at their "
-            "documented best: "
-            + ", ".join(f"`{name}`" for name in undocumented)
-            + ".\n"
+            "documented best: " + ", ".join(f"`{name}`" for name in undocumented) + ".\n"
         )
 
     if not never and not gaps and not undocumented:

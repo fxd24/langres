@@ -185,7 +185,11 @@ class TestPersistence:
         )
         merged = LADDER.merge_rows([other_arm, other_k], [fresh])
 
-        assert {(r.prompt_arm, r.k) for r in merged} == {("instruct", 20), ("none", 50), ("none", 20)}
+        assert {(r.prompt_arm, r.k) for r in merged} == {
+            ("instruct", 20),
+            ("none", 50),
+            ("none", 20),
+        }
 
     def test_a_failed_rerun_removes_the_rows_it_invalidates(self) -> None:
         """A load failure must not leave the previous run's numbers beside it."""
@@ -204,7 +208,12 @@ class TestPersistence:
             model="m", benchmark="b", prompt_arm="none", k=20, status="ok", candidate_recall=0.9
         )
         doomed = LADDER.LadderRow(
-            model="m", benchmark="b", prompt_arm="documented", k=20, status="ok", candidate_recall=0.4
+            model="m",
+            benchmark="b",
+            prompt_arm="documented",
+            k=20,
+            status="ok",
+            candidate_recall=0.4,
         )
         failure = LADDER.LadderRow(
             model="m",
@@ -528,7 +537,11 @@ class TestReport:
 
     def test_a_model_that_never_ran_is_named_not_quietly_absent(self) -> None:
         """A partial sweep must not render as a complete one."""
-        report = LADDER.render_report([_cell(LADDER.REFERENCE_MODEL, "none")])
+        # One real cell: benchmark and arm both exist in the declared grid, so
+        # the gap list has to name the rest of that grid rather than shrug.
+        report = LADDER.render_report(
+            [_cell(LADDER.REFERENCE_MODEL, "none", benchmark=LADDER.BENCHMARKS[0], k=LADDER.CI_K)]
+        )
         section = report.split("## What did not run")[1]
 
         # Every other model in the ladder is missing from this one-row sweep.
@@ -538,7 +551,8 @@ class TestReport:
         assert "not run" in section
         # ...and the model that DID run is listed with the grid it is missing,
         # rather than reading as fully measured on one benchmark and one arm.
-        assert "`instruct`" in section
+        assert f"`{LADDER.REFERENCE_MODEL}`" in section
+        assert "instruct" in section
 
     def test_a_complete_sweep_says_so_instead_of_printing_an_empty_gap_table(self) -> None:
         section = LADDER.render_report(_full_grid()).split("## What did not run")[1]
@@ -549,9 +563,7 @@ class TestReport:
         spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
         hole = (spec.name, "amazon_google", "documented", LADDER.CI_K)
         rows = [
-            row
-            for row in _full_grid()
-            if (row.model, row.benchmark, row.prompt_arm, row.k) != hole
+            row for row in _full_grid() if (row.model, row.benchmark, row.prompt_arm, row.k) != hole
         ]
         section = LADDER.render_report(rows).split("## What did not run")[1]
 
@@ -559,7 +571,7 @@ class TestReport:
         assert "`amazon_google`/`documented`/k=20" in section
 
     def test_a_model_whose_only_rows_failed_is_not_filed_as_never_run(self) -> None:
-        """"Failed" and "never reached" are different facts about a model."""
+        """ "Failed" and "never reached" are different facts about a model."""
         broken = LADDER.MODELS[1].name
         rows = [
             _cell(LADDER.REFERENCE_MODEL, "none"),

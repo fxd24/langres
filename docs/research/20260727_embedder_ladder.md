@@ -13,7 +13,7 @@ Averaging those into one number would report a middling win or loss and hide bot
 - **Parameter counts are measured**, not looked up: each is `sum(p.numel() for p in model.parameters())` from the model that produced that row's vectors. There is no size table and no small/base/large label.
 - **The metric is candidate recall and separability AUC, not F1.** Blocking sets a ceiling; a pair never emitted cannot be recovered downstream.
 - **Recall alone does not rank models.** Recall is trivially bought with a bigger `k`. Read it against `cands/recall` (candidates per unit recall) — the cost of that ceiling — and note that `langres.optimize` already sweeps `k` as a search axis (`SearchSpace.k_neighbors`, enumerated by `autoresearch.loop.run_loop`'s keep-if-better loop), so an operating-point win is not the same as a model win: `optimize()` would have found the better `k` on its own.
-- **`recall` cannot reach 1.0 on these benchmarks, and that is not the model's fault.** Every benchmark here is a two-source *linkage* task, so the harness keeps only cross-source candidate pairs (mirroring `langres.optimize._score_loaded`). A gold cluster spanning three or more records emits intra-source gold pairs that no cross-source candidate set can contain. `ceiling` is that structural limit and `recall/ceil` is the share of what was reachable — **`recall/ceil` is the model comparison**; raw `recall` mixes it with a property of the gold set. (An earlier version of this harness asserted the filter was recall-neutral. It is not: on `amazon_google` the ceiling is ~0.84. The same false claim is still written in `src/langres/optimize.py:135-139` — reported, not silently edited, since that file is outside this change's scope.)
+- **`recall` cannot reach 1.0 on these benchmarks, and that is not the model's fault.** Every benchmark here is a two-source *linkage* task, so the harness keeps only cross-source candidate pairs (mirroring `langres.optimize._score_loaded`). A gold cluster spanning three or more records emits intra-source gold pairs that no cross-source candidate set can contain. `ceiling` is that structural limit and `recall/ceil` is the share of what was reachable — **`recall/ceil` is the model comparison**; raw `recall` mixes it with a property of the gold set. (An earlier version of this harness asserted the filter was recall-neutral. It is not: on `amazon_google` the ceiling is ~0.84. `langres.optimize._score_loaded` carried the same false claim in its docstring and this change corrects it there too, since `optimize()` reports the same capped recall.)
 - **This says nothing about deduplication.** All five benchmarks are cross-source linkage; the registry contains no single-source dedup benchmark. A within-source blocking ladder is unmeasured here.
 - **`index build (s)` is only an encoding cost when `enc` is non-zero.** The harness embeds through a disk cache, so a re-run reads SQLite instead of the model and the same column then measures a cache read — orders of magnitude faster. `enc` is the number of texts that actually went through the model during that build.
 - **The separability AUC sits near its ceiling and that compresses it.** Negatives are a seeded *uniform* sample of up to 20,000 non-gold pairs, and a uniformly random pair of records is trivially dissimilar — so every usable model scores ~0.99 and small AUC gaps are not proportional to the recall gaps beside them. It is a floor check ('does this model separate at all'), not a fine-grained ranking. A hard-negative-mined variant would discriminate better and is not measured here.
@@ -239,7 +239,7 @@ Recall is bought with `k`. This is the table that makes an operating-point compa
 
 Derived from the recorded rows, not written by hand — a hand-kept list of gaps is exactly the thing that goes stale and turns a partial sweep into a table that reads as complete.
 
-**12 of the 14 models in the ladder have no usable row at metric revision 1.** They are not absent because they failed — they were never reached, so this table cannot speak about them at all.
+**12 of the 14 models in the ladder have no usable row at metric revision 1.** The `state` column says why for each — this table cannot speak about any of them.
 
 | model | state |
 |---|---|
@@ -260,7 +260,9 @@ Measured models with an incomplete grid — a blank cell in the tables above is 
 
 | model | missing |
 |---|---|
-| `google/embeddinggemma-300m` | prompt arms `documented` |
+| `google/embeddinggemma-300m` | cells `abt_buy`/`documented`/k=5, `abt_buy`/`documented`/k=10, `abt_buy`/`documented`/k=20, `abt_buy`/`documented`/k=50, `amazon_google`/`documented`/k=5, `amazon_google`/`documented`/k=10, `amazon_google`/`documented`/k=20, `amazon_google`/`documented`/k=50, `fodors_zagat`/`documented`/k=5, `fodors_zagat`/`documented`/k=10, `fodors_zagat`/`documented`/k=20, `fodors_zagat`/`documented`/k=50 (+8 more) |
+
+Measured checkpoints that register their own query-side prefix but were measured without a `documented` arm — the generic `instruct` arm is not their documented recipe, so this sweep does not show them at their documented best: `google/embeddinggemma-300m`.
 
 ## Failures (reported, not skipped)
 

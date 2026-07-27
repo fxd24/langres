@@ -160,9 +160,16 @@ def _assert_cannot_spend(snippet: str) -> None:
         "same."
     )
 
-    called = {imported[name] for name in _constructed_names(snippet) & imported.keys()}
+    # Only langres symbols are narrowed by name: the module gate above already
+    # proved every other import is a module with no billing path, so pinning each
+    # stdlib helper it calls would be a maintenance tax with no safety in it.
+    called = {
+        imported[name]
+        for name in _constructed_names(snippet) & imported.keys()
+        if imported[name].split(".")[0] == "langres"
+    }
     assert called, (
-        "A snippet this test executes calls no imported symbol at all, so there is "
+        "A snippet this test executes calls no langres symbol at all, so there is "
         "nothing for the money guard to check -- it is documenting something other "
         f"than this library. It calls: {sorted(_constructed_names(snippet)) or 'nothing'}."
     )
