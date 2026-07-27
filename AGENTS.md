@@ -71,7 +71,7 @@ langres/
 │   │   ├── registry.py     # component config-registry (type_name -> class) for save/load
 │   │   ├── blocker.py, blockers/   # AllPairsBlocker, VectorBlocker
 │   │   ├── comparator.py           # StringComparator, ComparisonVector
-│   │   ├── matcher.py, matchers/   # Matcher ABC + LLMMatcher, CascadeChainMatcher, etc. (the files are matchers/*_judge.py; the CLASSES are all *Matcher)
+│   │   ├── matcher.py, matchers/   # Matcher ABC + LLMMatcher, CascadeChainMatcher, etc. Every judge CLASS is now *Matcher, but only 5 of the 12 module names carry the old `_judge` suffix (cascade_judge, dspy_judge, llm_judge, random_forest_judge, select_judge) — the rest are plain (cascade, embedding_score, fellegi_sunter, rapidfuzz, weighted_average, model_ref, transformers_backend). Grep the class, not the filename
 │   │   ├── clusterer.py            # Clusterer (transitive closure)
 │   │   ├── runs.py, judgement_log.py, trackers/  # → back-compat SHIMS; observability moved to langres.tracking (below). `# TEMPORARY: deleted by the W2 sweep`
 │   │   ├── calibration.py, finetune.py, fit_report.py, methods_prompt.py, methods_calibrate.py  # W2 back-compat shims → langres.training.* (real modules moved; marked `# TEMPORARY: deleted by the W2 sweep`)
