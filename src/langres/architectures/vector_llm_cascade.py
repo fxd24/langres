@@ -117,9 +117,10 @@ class VectorLLMCascade(ERModel):
 
             It matters most here, where the judgements were *paid* for: closure
             merges through a chain, so it can seat a pair the LLM was paid to
-            reject inside one output cluster. Pivot cuts that 3.0x-7.4x. It does
-            not eliminate it -- neither clusterer prices rejected edges into its
-            objective (see ``CorrelationClusterer``).
+            reject inside one output cluster. Pivot cuts that 5.6x across the
+            portfolio (3.0x-7.4x per benchmark). It does not eliminate it --
+            neither clusterer prices rejected edges into its objective (see
+            ``CorrelationClusterer``).
 
             This selects the *algorithm* only: the clusterer is rebuilt at this
             model's ``threshold``, so any threshold set on the object you pass is

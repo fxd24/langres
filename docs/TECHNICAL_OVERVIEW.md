@@ -1148,10 +1148,11 @@ judgement set (`docs/research/20260727_closure_diagnostic.md`; the earlier
 |---|---|
 | BCubed F1 vs closure, over 54 grid points | **higher at 36 of the 45 scored**, tied at 9, lower at **0** |
 | the other 9 grid points | **unscorable** — closure's giant component was too large to score, which is itself the result |
-| judged-and-*rejected* pairs inside an output cluster, tuned point | **3,776 → 676** across the portfolio (a 3.0×–7.4× cut) |
-| worst single benchmark for closure | `amazon_google`: **944** rejected pairs inside its own clusters — **39.8%** of every pair sharing one |
+| judged-and-*rejected* pairs inside an output cluster, tuned point | **3,776 → 676** across the portfolio (5.6×; per benchmark, 3.0×–7.4×) |
+| worst single benchmark for closure | `amazon_google` contributes **944** of that 3,776 — and those 944 are **39.8% of every pair sharing one of its own output clusters** (pivot: 128, 14.8%) |
 
-The 3,776 is the **portfolio** total, not one dataset's. The largest effect is
+The 3,776 is the **portfolio** total, not one dataset's; the 39.8% is a rate over
+`amazon_google`'s in-cluster pairs, not a share of the 3,776. The largest effect is
 not at the tuned point at all: one grid step below it closure collapses into a
 giant component (on `walmart_amazon` at t = 0.50, 6,798 of the 7,386-record split
 in a single cluster) while pivot degrades smoothly. **Closure's quality is a

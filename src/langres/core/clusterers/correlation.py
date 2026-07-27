@@ -50,10 +50,12 @@ class CorrelationClusterer(Clusterer):
     * BCubed F1 is **strictly higher at 36 of the 45 scored grid points, tied at
       9, and lower at 0**. Nine further grid points are **unscorable** -- closure's
       giant component was too large to score, which is itself the result.
-    * Judged-and-*rejected* pairs sitting inside an output cluster drop 3.0x-7.4x
-      at the tuned operating point (3,776 -> 676 across the portfolio;
-      ``amazon_google`` alone accounts for 944 of the 3,776, i.e. 39.8% of every
-      pair sharing one of its output clusters).
+    * Judged-and-*rejected* pairs sitting inside an output cluster drop at the
+      tuned operating point: **3,776 -> 676** across the portfolio (5.6x; per
+      benchmark the reduction ranges 3.0x-7.4x). Closure's worst benchmark is
+      ``amazon_google``, which contributes **944** of that 3,776 -- and those 944
+      are **39.8% of every pair sharing one of its output clusters**, not 39.8%
+      of the portfolio total. Pivot brings it to 128 (14.8%).
     * The real gap is off the tuned point: one grid step down, closure collapses
       into a giant component (on ``walmart_amazon`` at t=0.50, 6,798 of the
       7,386-record split in one cluster) while pivot degrades smoothly. Closure's
