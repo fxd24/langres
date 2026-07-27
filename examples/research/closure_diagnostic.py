@@ -1,0 +1,560 @@
+"""B1 -- the closure diagnostic: does an output cluster contain a pair we REJECTED?
+
+``Clusterer`` (transitive closure) is langres's default. Per ``docs/THEORY.md`` §7
+it is correlation clustering with ``+inf`` on observed positive edges and **0 on
+everything else** -- observed negatives and never-observed pairs priced alike. So
+the default *discards evidence we already paid for*: every pair a matcher judged
+and rejected, that nonetheless lands inside an output cluster, is a judgement --
+sometimes a paid LLM judgement -- that the clusterer threw away.
+
+This script turns that theoretical objection into a count. For each registered
+benchmark it runs the real front door (``ERModel.dedupe(..., log=)``) at a
+train-tuned threshold, then asks of the resulting clusters: **how many
+same-cluster pairs were judged ``verdict=False``?** It then re-clusters the
+identical judgement set with ``CorrelationClusterer`` (the Ailon-Charikar-Newman
+pivot algorithm, which only merges on a DIRECT edge to a pivot) and reports the
+same count, so the two clusterers are compared on one scoring run.
+
+Everything here is **$0**: the ``rapidfuzz`` / ``embedding_cosine`` methods make
+no paid call.
+
+TWO TRAPS, both verified against the source before this was written. Either one
+silently invalidates the result, and the naive version of this experiment is
+worse than not running it:
+
+1. **Do not scan ``score < threshold``.** The v4 ``JudgementLog`` row schema
+   (``langres/tracking/judgement_log.py``) has **no ``threshold`` column** -- the
+   threshold is consumed at write time to produce ``verdict`` and is never
+   persisted. Edges are rebuilt from ``verdict``, which ``LoggingMatcher`` computes
+   with the *same* ``predicted_match(judgement, threshold)`` predicate
+   ``Clusterer.cluster()`` itself uses, so the reconstruction is exact. Rows with
+   ``verdict = null`` (an earlier retrieval/reranking stage, or an abstention) are
+   excluded -- they were never a rejection.
+2. **``predicted_match`` gives ``decision`` precedence over ``score``**
+   (``langres/core/models.py``). For a *decider* judge ``verdict`` can be ``True``
+   while ``score`` is below the threshold, or ``None``. A naive score-vs-threshold
+   scan mis-flags exactly those rows -- it manufactures the finding it is looking
+   for. :attr:`BenchmarkFinding.decider_override_rows` counts them, so every run
+   states how many rows the naive scan *would* have got wrong.
+
+The instrument checks itself twice per run, and both checks are reported rather
+than assumed:
+
+* ``verdict_agreement`` -- re-deriving ``predicted_match`` from each row's
+  ``score``/``decision`` must reproduce the logged ``verdict`` on every row.
+* ``reconstruction_exact`` -- re-clustering the reconstructed judgements with a
+  fresh ``Clusterer`` at the same threshold must reproduce ``dedupe()``'s own
+  output clusters exactly. If it does not, the diagnostic is measuring something
+  other than the pipeline and says so loudly instead of reporting a number.
+
+Run (offline, $0)::
+
+    uv run python examples/research/closure_diagnostic.py --fast
+    uv run python examples/research/closure_diagnostic.py            # full portfolio
+    uv run python examples/research/closure_diagnostic.py --only dblp_scholar
+
+``print`` is allowed in examples (this is an operator tool).
+"""
+
+import os
+
+# Pin OpenMP / FAISS threading BEFORE importing anything that pulls torch/faiss
+# (the dataset loaders import the embedding stack lazily; macOS libomp
+# duplicate-load guard -- mirrors examples/research/portfolio_race.py).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import math  # noqa: E402
+import time  # noqa: E402
+from collections import Counter  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Protocol, cast  # noqa: E402
+
+from pydantic import BaseModel  # noqa: E402
+
+from langres.core.clusterer import Clusterer  # noqa: E402
+from langres.core.clusterers.correlation import CorrelationClusterer  # noqa: E402
+from langres.core.models import PairwiseJudgement, predicted_match  # noqa: E402
+from langres.core.score_type import ScoreType  # noqa: E402
+from langres.data.benchmark import Benchmark, complete_partition  # noqa: E402
+from langres.eval import get_benchmark, list_benchmarks  # noqa: E402
+from langres.methods import BlockingBenchmark, make_resolver_factory  # noqa: E402
+from langres.tracking.judgement_log import JudgementLog  # noqa: E402
+
+logger = logging.getLogger("closure_diagnostic")
+
+#: The zero-spend scorer this diagnostic runs by default. ``embedding_cosine`` is
+#: the other $0 option (``--method``); both are rankers, so ``decision`` is always
+#: ``None`` and trap 2 cannot bite -- which is exactly why the run reports the
+#: would-have-been-mis-flagged count instead of asserting it is zero.
+DEFAULT_METHOD = "rapidfuzz"
+
+#: Small, in-repo datasets for a quick pass (``--fast``).
+FAST_SUBSET: frozenset[str] = frozenset({"fodors_zagat", "dblp_acm", "tiny_fixture"})
+
+SEED = 0
+
+#: ``score_type`` is NOT persisted in the judgement log (see the v4 row schema).
+#: The reconstruction fills this placeholder purely to satisfy the required
+#: ``PairwiseJudgement`` field: nothing this script touches -- ``predicted_match``,
+#: ``Clusterer.cluster``, ``CorrelationClusterer.cluster`` -- ever reads it.
+_PLACEHOLDER_SCORE_TYPE: ScoreType = "heuristic"
+
+
+class _DiagBenchmark(Benchmark[Any], BlockingBenchmark, Protocol):
+    """A benchmark usable by BOTH the loader contract and the method registry.
+
+    ``load``/``split`` come from :class:`~langres.data.benchmark.Benchmark`;
+    ``schema`` + pinned blocking from
+    :class:`~langres.methods.BlockingBenchmark`. Every registered loader satisfies
+    this intersection (mirrors ``portfolio_race._RaceBenchmark``).
+    """
+
+
+class ClustererFinding(BaseModel):
+    """One clusterer's view of the same judgement set.
+
+    Attributes:
+        clusterer: ``"closure"`` (transitive closure) or ``"correlation"`` (pivot).
+        n_clusters: Multi-record output clusters (singletons are not emitted).
+        largest_cluster: Size of the biggest output cluster.
+        n_incluster_pairs: ``sum(C(size, 2))`` over the output clusters -- every
+            pair the clustering asserts is the same entity.
+        n_rejected_inside: Same-cluster pairs that were judged ``verdict=False``.
+            **This is (a).**
+        rejected_inside_rate: ``n_rejected_inside / n_rejected`` -- of everything
+            the matcher rejected, the share the clusterer merged anyway.
+        incluster_contamination: ``n_rejected_inside / n_incluster_pairs`` -- of
+            everything the clustering asserts, the share it asserts against
+            evidence.
+        by_cluster_size: ``(size, n_clusters, n_rejected_inside)`` rows -- **(b)**,
+            the distribution over cluster size.
+        bcubed_f1: BCubed F1 of the completed partition against gold.
+        pairwise_f1: Pairwise F1 of the completed partition against gold.
+    """
+
+    clusterer: str
+    n_clusters: int
+    largest_cluster: int
+    n_incluster_pairs: int
+    n_rejected_inside: int
+    rejected_inside_rate: float | None
+    incluster_contamination: float | None
+    by_cluster_size: list[tuple[int, int, int]]
+    bcubed_f1: float
+    pairwise_f1: float
+
+
+class BenchmarkFinding(BaseModel):
+    """The full diagnostic for one benchmark: both clusterers over one scoring run.
+
+    Attributes:
+        benchmark: Registry name.
+        method: The $0 scorer that produced the judgements.
+        threshold: The operating point, tuned on the TRAIN split (no leakage).
+        n_test_records: Records in the held-out split the diagnostic ran on.
+        n_logged: Judgement-log rows written by the run.
+        n_judged: Rows carrying a real verdict (``verdict is not None``).
+        n_accepted: ``verdict=True`` rows -- the edge set both clusterers see.
+        n_rejected: ``verdict=False`` rows -- the evidence closure prices at 0.
+        n_abstained: Rows with ``verdict=null`` (excluded; never a rejection).
+        decider_override_rows: Rows a naive ``score < threshold`` scan would have
+            mis-flagged as rejections -- ``verdict=True`` with a below-threshold or
+            absent score. **Trap 2, counted.**
+        verdict_agreement: Share of judged rows whose logged ``verdict`` is
+            reproduced by re-deriving ``predicted_match`` from the row. Must be 1.0.
+        reconstruction_exact: Whether re-clustering the reconstruction reproduces
+            ``dedupe()``'s own clusters. Must be ``True`` for the numbers to mean
+            anything.
+        seconds: Wall-clock for this benchmark.
+        closure: The default transitive-closure finding.
+        correlation: The pivot-algorithm finding over the identical judgements.
+    """
+
+    benchmark: str
+    method: str
+    threshold: float
+    n_test_records: int
+    n_logged: int
+    n_judged: int
+    n_accepted: int
+    n_rejected: int
+    n_abstained: int
+    decider_override_rows: int
+    verdict_agreement: float | None
+    reconstruction_exact: bool
+    seconds: float
+    closure: ClustererFinding
+    correlation: ClustererFinding
+
+
+def judgements_from_log(rows: list[dict[str, Any]]) -> list[PairwiseJudgement]:
+    """Rebuild the judgements a run produced from its log rows.
+
+    Keeps only rows carrying a real ``verdict`` (trap 1: ``verdict = null`` means
+    an earlier retrieval/reranking stage, or an abstention -- neither is a
+    rejection), and rebuilds each from its **own** ``score``/``decision``, never
+    from the logged ``verdict``. Deriving the judgement from the verdict would
+    make the agreement check tautological; deriving the verdict from the
+    judgement is the check.
+
+    Args:
+        rows: Rows from :meth:`~langres.tracking.judgement_log.JudgementLog.read`.
+
+    Returns:
+        One :class:`~langres.core.models.PairwiseJudgement` per judged row, in log
+        (scoring) order.
+    """
+    return [
+        PairwiseJudgement(
+            left_id=row["left_id"],
+            right_id=row["right_id"],
+            decision=row["decision"],
+            score=row["score"],
+            score_type=_PLACEHOLDER_SCORE_TYPE,
+            decision_step=row.get("decision_step") or "replayed",
+            provenance={},
+        )
+        for row in rows
+        if row["verdict"] is not None
+    ]
+
+
+def _cluster_index(clusters: list[set[str]]) -> dict[str, int]:
+    """Map each clustered id to its cluster index (unclustered ids are absent)."""
+    return {rid: idx for idx, cluster in enumerate(clusters) for rid in cluster}
+
+
+def diagnose(
+    label: str,
+    clusters: list[set[str]],
+    judgements: list[PairwiseJudgement],
+    *,
+    threshold: float,
+    truth_clusters: list[set[str]],
+    all_ids: list[str],
+) -> ClustererFinding:
+    """Count the rejected pairs sitting inside ``clusters`` and score the partition.
+
+    A pair counts when BOTH ids land in the SAME output cluster and the matcher's
+    verdict on it was ``False``. Self-pairs cannot occur (the blocker never emits
+    one) and are ignored if they somehow do.
+
+    Args:
+        label: ``"closure"`` / ``"correlation"`` -- names the finding.
+        clusters: The output clusters to interrogate.
+        judgements: The judgements the clustering was built from.
+        threshold: The operating point ``predicted_match`` is evaluated at.
+        truth_clusters: Gold partition for the same split.
+        all_ids: Every record id in the split (to complete the partition with
+            singletons before scoring).
+
+    Returns:
+        A :class:`ClustererFinding`.
+    """
+    index = _cluster_index(clusters)
+    sizes = [len(cluster) for cluster in clusters]
+    n_incluster_pairs = sum(math.comb(size, 2) for size in sizes)
+
+    rejected_by_cluster: Counter[int] = Counter()
+    n_rejected = 0
+    for judgement in judgements:
+        if predicted_match(judgement, threshold) is not False:
+            continue
+        n_rejected += 1
+        left = index.get(judgement.left_id)
+        right = index.get(judgement.right_id)
+        if left is not None and left == right and judgement.left_id != judgement.right_id:
+            rejected_by_cluster[left] += 1
+
+    n_rejected_inside = sum(rejected_by_cluster.values())
+
+    # (b): fold the per-cluster counts into a per-SIZE distribution.
+    clusters_by_size: Counter[int] = Counter(sizes)
+    rejected_by_size: Counter[int] = Counter()
+    for cluster_idx, count in rejected_by_cluster.items():
+        rejected_by_size[len(clusters[cluster_idx])] += count
+    by_cluster_size = [
+        (size, clusters_by_size[size], rejected_by_size.get(size, 0))
+        for size in sorted(clusters_by_size)
+    ]
+
+    metrics = Clusterer(threshold=threshold).evaluate(
+        complete_partition(clusters, all_ids), truth_clusters
+    )
+    return ClustererFinding(
+        clusterer=label,
+        n_clusters=len(clusters),
+        largest_cluster=max(sizes, default=0),
+        n_incluster_pairs=n_incluster_pairs,
+        n_rejected_inside=n_rejected_inside,
+        rejected_inside_rate=n_rejected_inside / n_rejected if n_rejected else None,
+        incluster_contamination=(
+            n_rejected_inside / n_incluster_pairs if n_incluster_pairs else None
+        ),
+        by_cluster_size=by_cluster_size,
+        bcubed_f1=metrics["bcubed"]["f1"],
+        pairwise_f1=metrics["pairwise"]["f1"],
+    )
+
+
+def tune_threshold(
+    judgements: list[PairwiseJudgement],
+    truth_clusters: list[set[str]],
+    all_ids: list[str],
+    grid: tuple[float, ...],
+) -> float:
+    """Pick the BCubed-F1-best threshold by re-clustering ONE scoring pass.
+
+    The scorers here (``rapidfuzz`` / ``embedding_cosine``) do not read the
+    clusterer's threshold, so their judgements are identical at every grid point:
+    sweeping by re-clustering a single scored pass is exactly equivalent to
+    ``benchmarks.runner.tune_threshold_on_train`` (which rebuilds a resolver per
+    point) and costs one pass instead of ``len(grid)``. Ties keep the lowest
+    threshold. Run on the TRAIN split only -- the test split is never touched.
+
+    Args:
+        judgements: Train-split judgements, reconstructed from the log.
+        truth_clusters: Gold partition for the train split.
+        all_ids: Every train record id.
+        grid: Candidate thresholds.
+
+    Returns:
+        The best-scoring threshold.
+    """
+    best_threshold, best_f1 = grid[0], -1.0
+    for threshold in grid:
+        clusters = Clusterer(threshold=threshold).cluster(judgements)
+        metrics = Clusterer(threshold=threshold).evaluate(
+            complete_partition(clusters, all_ids), truth_clusters
+        )
+        f1 = metrics["bcubed"]["f1"]
+        logger.info("  threshold=%.2f -> train BCubed F1=%.4f", threshold, f1)
+        if f1 > best_f1:
+            best_threshold, best_f1 = threshold, f1
+    return best_threshold
+
+
+def _dedupe_with_log(
+    resolver: Any, records: list[Any], log_path: Path
+) -> tuple[list[set[str]], list[dict[str, Any]]]:
+    """Run the real front door once and return ``(clusters, log rows)``.
+
+    The log file is truncated first so a re-run never reads a previous run's
+    rows appended beneath its own (``JudgementLog`` appends, by design).
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.unlink(missing_ok=True)
+    log = JudgementLog(log_path)
+    clusters = resolver.dedupe([record.model_dump() for record in records], log=log)
+    return list(clusters), log.read()
+
+
+def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> BenchmarkFinding:
+    """Run the whole diagnostic for one registered benchmark.
+
+    Args:
+        name: Registry name (must be ``loadable``).
+        method: A $0 method name (``rapidfuzz`` / ``embedding_cosine``).
+        seed: Split seed.
+        log_dir: Where the (regenerable, gitignored) judgement logs are written.
+
+    Returns:
+        A :class:`BenchmarkFinding`.
+
+    Raises:
+        RuntimeError: If the pipeline has a fitted calibrator, which would make
+            the logged ``verdict`` (computed on the RAW score) disagree with the
+            match cut (applied to the CALIBRATED score). Nothing here fits one --
+            this is a guard against a future change silently invalidating the run.
+    """
+    started = time.monotonic()
+    bench = cast(_DiagBenchmark, get_benchmark(name))
+    corpus, gold_clusters, _ = bench.load()
+    train, test, train_clusters, test_clusters = bench.split(corpus, gold_clusters, seed=seed)
+    factory = make_resolver_factory(method, bench)
+
+    # 1. Operating point: tuned on TRAIN, one scoring pass, no test leakage.
+    probe = factory(0.5)
+    if probe.calibrator is not None:  # pragma: no cover - nothing here fits one
+        raise RuntimeError(
+            f"{name}: resolver carries a fitted calibrator; the logged verdict is "
+            "computed on the raw score while the match cut thresholds the calibrated "
+            "one, so the log would no longer reconstruct the clustering exactly."
+        )
+    _, train_rows = _dedupe_with_log(probe, train, log_dir / f"{name}_train.jsonl")
+    threshold = tune_threshold(
+        judgements_from_log(train_rows),
+        train_clusters,
+        [record.id for record in train],
+        bench.threshold_grid,
+    )
+    logger.info("%s: tuned threshold=%.2f", name, threshold)
+
+    # 2. The measured run: the real front door on the held-out split.
+    resolver = factory(threshold)
+    clusters, rows = _dedupe_with_log(resolver, test, log_dir / f"{name}_test.jsonl")
+    judgements = judgements_from_log(rows)
+
+    # 3. Instrument check A -- the logged verdict is reproducible from the row.
+    agree = sum(
+        1
+        for judgement, row in zip(judgements, [r for r in rows if r["verdict"] is not None])
+        if predicted_match(judgement, threshold) is row["verdict"]
+    )
+    verdict_agreement = agree / len(judgements) if judgements else None
+
+    # 4. Instrument check B -- the reconstruction reproduces dedupe()'s clusters.
+    replayed = Clusterer(threshold=threshold).cluster(judgements)
+    reconstruction_exact = _same_partition(replayed, clusters)
+    if not reconstruction_exact:
+        logger.error(
+            "%s: reconstruction does NOT reproduce dedupe()'s clusters "
+            "(%d replayed vs %d actual) -- the counts below are not the pipeline's.",
+            name,
+            len(replayed),
+            len(clusters),
+        )
+
+    # Trap 2, counted: rows a naive ``score < threshold`` scan would mis-flag.
+    decider_override_rows = sum(
+        1
+        for row in rows
+        if row["verdict"] is True and (row["score"] is None or row["score"] < threshold)
+    )
+
+    all_ids = [record.id for record in test]
+    closure = diagnose(
+        "closure",
+        clusters,
+        judgements,
+        threshold=threshold,
+        truth_clusters=test_clusters,
+        all_ids=all_ids,
+    )
+    correlation = diagnose(
+        "correlation",
+        CorrelationClusterer(threshold=threshold).cluster(judgements),
+        judgements,
+        threshold=threshold,
+        truth_clusters=test_clusters,
+        all_ids=all_ids,
+    )
+
+    verdicts = Counter(row["verdict"] for row in rows)
+    return BenchmarkFinding(
+        benchmark=name,
+        method=method,
+        threshold=threshold,
+        n_test_records=len(test),
+        n_logged=len(rows),
+        n_judged=len(judgements),
+        n_accepted=verdicts[True],
+        n_rejected=verdicts[False],
+        n_abstained=verdicts[None],
+        decider_override_rows=decider_override_rows,
+        verdict_agreement=verdict_agreement,
+        reconstruction_exact=reconstruction_exact,
+        seconds=time.monotonic() - started,
+        closure=closure,
+        correlation=correlation,
+    )
+
+
+def _same_partition(left: list[set[str]], right: list[set[str]]) -> bool:
+    """Whether two clusterings are the same set of clusters (order-independent)."""
+    return {frozenset(cluster) for cluster in left} == {frozenset(cluster) for cluster in right}
+
+
+def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
+    """Registry-driven selection: every loadable entry, or a narrowed subset.
+
+    Args:
+        fast: Keep only :data:`FAST_SUBSET`.
+        only: Explicit names (wins over ``fast``).
+
+    Returns:
+        Registered, loadable benchmark names in registry order.
+    """
+    names = [entry.name for entry in list_benchmarks() if entry.loadable]
+    skipped = [entry.name for entry in list_benchmarks() if not entry.loadable]
+    for name in skipped:
+        print(f"[skip] {name}: external-only, not bundled")
+    if only:
+        return [name for name in names if name in set(only)]
+    if fast:
+        return [name for name in names if name in FAST_SUBSET]
+    return names
+
+
+def to_markdown(findings: list[BenchmarkFinding]) -> str:
+    """Render the headline table: (a) and (c) side by side, per benchmark."""
+    header = (
+        "| benchmark | t | judged | rejected | closure: rejected-inside | rate | "
+        "corr: rejected-inside | closure BCubed F1 | corr BCubed F1 |"
+    )
+    lines = [header, "|---|---|---|---|---|---|---|---|---|"]
+    for f in findings:
+        rate = f.closure.rejected_inside_rate
+        lines.append(
+            f"| {f.benchmark} | {f.threshold:.2f} | {f.n_judged:,} | {f.n_rejected:,} | "
+            f"{f.closure.n_rejected_inside:,} | "
+            f"{'n/a' if rate is None else f'{rate:.4f}'} | "
+            f"{f.correlation.n_rejected_inside:,} | "
+            f"{f.closure.bcubed_f1:.4f} | {f.correlation.bcubed_f1:.4f} |"
+        )
+    return "\n".join(lines)
+
+
+def main() -> None:
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fast", action="store_true", help="only the small in-repo subset")
+    parser.add_argument("--only", nargs="+", help="explicit benchmark names")
+    parser.add_argument("--method", default=DEFAULT_METHOD, help="a $0 method name")
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("examples/research/results/closure_diagnostic.json"),
+        help="where to write the machine-readable findings (a TRACKED path)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path("tmp/closure_diagnostic"),
+        help="where to write the (regenerable, gitignored) judgement logs",
+    )
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    findings: list[BenchmarkFinding] = []
+    for name in select_benchmarks(fast=args.fast, only=args.only):
+        print(f"[run] {name}: {args.method} (offline, $0) ...")
+        try:
+            finding = run_benchmark(name, method=args.method, seed=args.seed, log_dir=args.log_dir)
+        except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
+            print(f"[fail] {name}: {type(exc).__name__}: {exc}")
+            continue
+        findings.append(finding)
+        print(
+            f"       t={finding.threshold:.2f} judged={finding.n_judged:,} "
+            f"rejected={finding.n_rejected:,} "
+            f"rejected-inside closure={finding.closure.n_rejected_inside:,} "
+            f"corr={finding.correlation.n_rejected_inside:,} "
+            f"({finding.seconds:.1f}s)"
+        )
+
+    print("\n" + to_markdown(findings))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(
+        json.dumps([f.model_dump() for f in findings], indent=2, sort_keys=True) + "\n"
+    )
+    print(f"\nwrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()
