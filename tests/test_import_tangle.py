@@ -297,10 +297,27 @@ RUNTIME = TangleBaseline(
 # recomputing Tarjan before the move, measured identical after: [9, 3, 2, 2, 2] /
 # 18, `largest_scc` still 9. `metrics.analysis` is the ONLY member below that
 # swapped names.
+#
+# RAISED 9 -> 10 (tangled 18 -> 19) by the B2 vocabulary-overlap section
+# (`data.data_profile.vocabulary`). This is the "prefer breaking the coupling"
+# case where the coupling cannot be broken by the new module: the knot's root is
+# the PRE-EXISTING `base <-> builders` 2-cycle (`base.py:205,217` defer-import
+# `builders` for the package's import-light budget; `builders` imports `base` at
+# toplevel). Every section module imports `base` at toplevel and is imported by
+# `builders` at toplevel, so section -> base -> builders -> section closes the
+# loop for ALL SEVEN existing sections -- `corpus_field`, `embedding_section`,
+# `failure_mode`, `hero`, `label_structure`, `mining_readiness`, `separability`
+# are already listed below for exactly this reason. Adding an eighth
+# `ProfileSection` therefore grows this SCC by exactly 1, by construction, and no
+# arrangement of the new file avoids it (this view counts lazy edges, so
+# deferring the `builders -> vocabulary` import would not help either).
+# Verified by recomputing Tarjan: the SCC is [10] and its members are exactly the
+# ten `data.data_profile.*` modules -- no OTHER component grew, and nothing new
+# merged in. Whoever unpicks `base <-> builders` collapses all ten at once.
 ALL_EDGES = TangleBaseline(
     view="all-edges (incl. lazy/TYPE_CHECKING -- what grimp/import-linter sees)",
     kinds=None,
-    largest_scc=9,
+    largest_scc=10,
     tangled=frozenset(
         {
             "langres.curation.anchor_store",
@@ -319,6 +336,7 @@ ALL_EDGES = TangleBaseline(
             "langres.data.data_profile.label_structure",
             "langres.data.data_profile.mining_readiness",
             "langres.data.data_profile.separability",
+            "langres.data.data_profile.vocabulary",
             "langres.methods",
             "langres.plotting.blockers",
         }
