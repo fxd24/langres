@@ -45,6 +45,16 @@ one is true -- a fragment whose binding block needs the network is
 `requires-network`, not `illustrative` -- and read the per-document executed
 ratio that :func:`report` prints, which is what makes the drift visible.
 
+**A one-hop probe cannot catch a two-hop leak.** The clean-venv check originally
+inspected only the interpreter this file launches directly, and passed. Meanwhile
+`PATH` still began with the repo's own `.venv/bin` -- CI runs this gate under
+`uv run` -- so a snippet that shelled out to `python` or the `langres` console
+script would have run against the source tree and its dev dependencies, reached
+the sentinel, and reported PASS while failing for a pip user. Isolation has to be
+checked at every hop a snippet can take, not at the first one; and "first in
+PATH" is a *preference*, not an exclusion, so the repo's entries are removed
+rather than merely outranked (see :func:`_snippet_path`).
+
 The direction of rot is the whole design. **Default is "execute".** A newly added
 snippet nobody classified is *run*, and fails if it does not work on a bare
 install -- the gate rots **closed** (a new snippet fails until someone looks at
@@ -704,14 +714,21 @@ def report(results: list[SnippetResult]) -> str:
     # once: a page went 2-executed/13-failing -> 1-executed/17-exempted and the
     # summary line improved. A ratio makes that visible in a diff, with no
     # threshold to argue about.
+    #
+    # The denominator is PYTHON blocks, not all fenced blocks. Counting bash and
+    # text in it would pad every ratio with blocks that can never run and make an
+    # eroding page look better than it is -- a metric drifting from the thing it
+    # measures, which is the failure this whole line exists to expose.
     lines.append("")
-    lines.append("Executed per document (a low ratio means the page is exempted, not proven)")
+    lines.append("Python blocks checked per document (a low ratio means exempted, not proven)")
     for doc in DOC_PATHS:
-        in_doc = [r for r in results if r.snippet.doc == doc]
+        in_doc = [r for r in results if r.snippet.doc == doc and r.snippet.language == "python"]
         if not in_doc:
             continue
-        ran = sum(1 for r in in_doc if r.status in ("pass", "fail"))
-        lines.append(f"  {doc:32s} {ran}/{len(in_doc)} executed")
+        # "Checked", not "executed": a block rejected by the `examples/` rule
+        # never ran, but it was observed and reported -- the opposite of exempted.
+        checked = sum(1 for r in in_doc if r.status != "skip")
+        lines.append(f"  {doc:32s} {checked}/{len(in_doc)} python blocks checked")
 
     lines.append("")
     lines.append(f"{passed} passed, {len(failures)} failed, {skipped} skipped")

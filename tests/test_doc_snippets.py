@@ -387,7 +387,7 @@ def test_report_always_shows_how_much_of_each_page_actually_ran() -> None:
     )
     text = report(results)
     assert "0 failed" in text, "precondition: this run has nothing to complain about"
-    assert f"{DOC_PATHS[0]:32s} 0/2 executed" in text
+    assert f"{DOC_PATHS[0]:32s} 0/2 python blocks checked" in text
 
 
 def test_a_pymdownx_transclusion_is_refused_rather_than_ignored(tmp_path: Path) -> None:
