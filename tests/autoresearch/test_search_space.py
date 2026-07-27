@@ -63,7 +63,50 @@ def test_configs_default_is_the_k_sweep() -> None:
 
 def test_config_dict_has_the_expected_keys() -> None:
     config = next(SearchSpace().configs())
-    assert set(config) == {"blocker", "embedding_model", "metric", "text_field", "k_neighbors"}
+    assert set(config) == {
+        "blocker",
+        "embedding_model",
+        "metric",
+        "text_field",
+        "query_prompt",
+        "k_neighbors",
+    }
+
+
+def test_query_prompt_defaults_to_no_instruction() -> None:
+    """The default grid must stay the symmetric, no-extra-encode-pass one."""
+    assert SearchSpace().query_prompt == (None,)
+    assert {c["query_prompt"] for c in SearchSpace().configs()} == {None}
+
+
+def test_query_prompt_multiplies_the_grid() -> None:
+    space = SearchSpace(query_prompt=(None, "Find the duplicate record for: "), k_neighbors=(5, 10))
+    configs = list(space.configs())
+
+    assert len(space) == len(configs) == 4
+    assert {c["query_prompt"] for c in configs} == {None, "Find the duplicate record for: "}
+
+
+def test_query_prompt_varies_outside_k_and_inside_the_index_axes() -> None:
+    """Prompt changes queries, not the index — so it must not invalidate the cache.
+
+    The loop caches one index per ``(embedding_model, metric, text_field)``. If
+    ``query_prompt`` varied *outside* those it would force a rebuild per prompt;
+    if it varied *inside* ``k`` it would break the k-block contract. It sits
+    between.
+    """
+    space = SearchSpace(
+        embedding_model=("m1", "m2"),
+        query_prompt=(None, "instruct: "),
+        k_neighbors=(5, 10),
+    )
+    configs = list(space.configs())
+
+    index_keys = [(c["embedding_model"], c["metric"], c["text_field"]) for c in configs]
+    # Each index group is contiguous: every prompt for m1, then every prompt for m2.
+    assert index_keys == sorted(index_keys, key=index_keys.index)
+    assert [c["embedding_model"] for c in configs] == ["m1"] * 4 + ["m2"] * 4
+    assert [c["k_neighbors"] for c in configs] == [5, 10] * 4
 
 
 def test_k_neighbors_is_the_innermost_dimension() -> None:

@@ -39,6 +39,15 @@ class SearchSpace:
         metric: FAISS distance metrics (``"L2"`` / ``"cosine"``).
         text_field: Record attribute names holding each record's blocking text.
             Dataset-specific — override the default to match your schema's field.
+        query_prompt: Instruction prefixes to try on the **query** side, with
+            ``None`` meaning "no instruction" (the symmetric default). Instructional
+            embedders (EmbeddingGemma / E5 / BGE / Qwen3-Embedding) are trained to
+            read a task prefix, so this is a real quality axis for them and a
+            no-op-but-costly one for models that ignore prompts. Documents stay
+            generic either way; a prompt costs one extra encode pass over the
+            corpus per search, which is why it is not free to leave on.
+            **Outer to** ``k_neighbors`` so the index is still built once per
+            index-defining group (the prompt affects queries, not the index).
         k_neighbors: Nearest-neighbour counts to sweep. The **innermost** axis of
             :meth:`configs` (see its ordering contract).
     """
@@ -47,6 +56,7 @@ class SearchSpace:
     embedding_model: tuple[str, ...] = ("all-MiniLM-L6-v2",)
     metric: tuple[str, ...] = ("cosine",)
     text_field: tuple[str, ...] = ("name",)
+    query_prompt: tuple[str | None, ...] = (None,)
     k_neighbors: tuple[int, ...] = (5, 10, 20)
 
     def __post_init__(self) -> None:
@@ -61,25 +71,31 @@ class SearchSpace:
 
         **Ordering contract (relied on by the loop):** ``k_neighbors`` is the
         **innermost** varying dimension, so consecutive configs hold
-        ``(blocker, embedding_model, metric, text_field)`` fixed while ``k``
-        varies across its full range before any outer axis advances. This lets
-        the downstream loop build **one** vector index per
+        ``(blocker, embedding_model, metric, text_field, query_prompt)`` fixed
+        while ``k`` varies across its full range before any outer axis advances.
+        This lets the downstream loop build **one** vector index per
         ``(embedding_model, metric, text_field)`` and reuse it across every
         ``k`` value (``k`` lives on the blocker, not the index), instead of
         re-embedding the corpus for each ``k``.
 
+        ``query_prompt`` sits **outside** ``k`` and **inside** the three
+        index-defining axes on purpose: it changes how *queries* are encoded, not
+        what is indexed, so it never invalidates the cached index — but it does
+        change results at every ``k``, so it must not be innermost either.
+
         Yields:
             One ``dict[str, Any]`` per grid point, with keys ``blocker``,
-            ``embedding_model``, ``metric``, ``text_field``, ``k_neighbors`` (in
-            that order).
+            ``embedding_model``, ``metric``, ``text_field``, ``query_prompt``,
+            ``k_neighbors`` (in that order).
         """
         # itertools.product varies its LAST argument fastest, so listing
         # k_neighbors last makes it the innermost dimension (the contract above).
-        for blocker, embedding_model, metric, text_field, k in itertools.product(
+        for blocker, embedding_model, metric, text_field, query_prompt, k in itertools.product(
             self.blocker,
             self.embedding_model,
             self.metric,
             self.text_field,
+            self.query_prompt,
             self.k_neighbors,
         ):
             yield {
@@ -87,6 +103,7 @@ class SearchSpace:
                 "embedding_model": embedding_model,
                 "metric": metric,
                 "text_field": text_field,
+                "query_prompt": query_prompt,
                 "k_neighbors": k,
             }
 
@@ -97,5 +114,6 @@ class SearchSpace:
             * len(self.embedding_model)
             * len(self.metric)
             * len(self.text_field)
+            * len(self.query_prompt)
             * len(self.k_neighbors)
         )
