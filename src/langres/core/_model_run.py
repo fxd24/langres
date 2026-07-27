@@ -518,21 +518,23 @@ class ModelRun(ModelState):
         below today's threshold, so the "derived" cut could only ever recover the
         cut that produced the sample.
 
-        Classic four-slot models need no special handling: their cut lives on the
-        clusterer and is applied at :meth:`_cluster`, never inside the scoring
-        chain, so this *is* :meth:`_scored_pairs`. An explicit ``_ops`` chain runs
-        Source + body with the terminal
+        It runs Source + body with the terminal
         :class:`~langres.core.op.ThresholdSelect` (the one
         :meth:`_chain_threshold_select` names, and the one a fit writes to)
         omitted -- every other Op, including an upstream ``TopKSelect``, still
         runs, so the rows are exactly what the cut would have been handed.
 
+        **Explicit ``_ops`` chains only**, which is why there is no classic
+        branch here: a four-slot model's cut lives on the clusterer and is
+        applied at :meth:`_cluster`, never inside the scoring chain, so it has no
+        pre-threshold/post-threshold distinction to draw -- and its fit path
+        scores only the *labeled* candidates rather than the whole corpus.
+        :meth:`_chain_source` raises if this is called without a chain.
+
         No ``log=``: this is a fit-time measurement pass, not a user-facing
         resolve, so its judgements are not flywheel signal. Scoring still runs
         through the same spend-capped seam as inference.
         """
-        if self._ops is None:
-            return self._scored_pairs(records)
         fitted_select = self._chain_threshold_select()
         body = [op for op in self._explicit_body() if op is not fitted_select]
         return _run_stages(records, [self._chain_source(), *body])
