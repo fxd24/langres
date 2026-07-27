@@ -1533,5 +1533,225 @@
     ],
     "threshold": 0.8,
     "verdict_agreement": 1.0
+  },
+  {
+    "benchmark": "wdc_computers",
+    "closure": {
+      "bcubed_f1": 0.7242338421193463,
+      "by_cluster_size": [
+        [
+          2,
+          172,
+          0
+        ],
+        [
+          3,
+          35,
+          9
+        ],
+        [
+          4,
+          22,
+          18
+        ],
+        [
+          5,
+          3,
+          6
+        ],
+        [
+          6,
+          7,
+          30
+        ],
+        [
+          7,
+          5,
+          31
+        ],
+        [
+          8,
+          5,
+          45
+        ],
+        [
+          9,
+          1,
+          23
+        ],
+        [
+          10,
+          2,
+          25
+        ],
+        [
+          11,
+          1,
+          26
+        ],
+        [
+          12,
+          2,
+          69
+        ],
+        [
+          14,
+          2,
+          122
+        ]
+      ],
+      "clusterer": "closure",
+      "incluster_contamination": 0.3146417445482866,
+      "largest_cluster": 14,
+      "n_clusters": 257,
+      "n_incluster_pairs": 1284,
+      "n_rejected_inside": 404,
+      "pairwise_f1": 0.04714640198511166,
+      "rejected_inside_rate": 0.008691536508756077
+    },
+    "correlation": {
+      "bcubed_f1": 0.742576437684948,
+      "by_cluster_size": [
+        [
+          1,
+          30,
+          0
+        ],
+        [
+          2,
+          181,
+          0
+        ],
+        [
+          3,
+          44,
+          9
+        ],
+        [
+          4,
+          24,
+          13
+        ],
+        [
+          5,
+          7,
+          10
+        ],
+        [
+          6,
+          6,
+          9
+        ],
+        [
+          7,
+          4,
+          3
+        ],
+        [
+          8,
+          3,
+          4
+        ],
+        [
+          9,
+          2,
+          15
+        ]
+      ],
+      "clusterer": "correlation",
+      "incluster_contamination": 0.073512252042007,
+      "largest_cluster": 9,
+      "n_clusters": 301,
+      "n_incluster_pairs": 857,
+      "n_rejected_inside": 63,
+      "pairwise_f1": 0.05738396624472575,
+      "rejected_inside_rate": 0.0013553633664644378
+    },
+    "decider_override_rows": 0,
+    "method": "rapidfuzz",
+    "n_abstained": 0,
+    "n_accepted": 999,
+    "n_judged": 47481,
+    "n_logged": 47481,
+    "n_rejected": 46482,
+    "n_test_records": 1390,
+    "reconstruction_exact": true,
+    "seconds": 58.331907707965,
+    "sweep": [
+      {
+        "closure_bcubed_f1": 0.0021156624163842356,
+        "closure_clusters": 1,
+        "closure_largest": 1390,
+        "closure_rejected_inside": 8732,
+        "correlation_bcubed_f1": 0.12156500715533294,
+        "correlation_clusters": 82,
+        "correlation_largest": 97,
+        "correlation_rejected_inside": 766,
+        "n_rejected": 8732,
+        "threshold": 0.3
+      },
+      {
+        "closure_bcubed_f1": 0.03021743124222699,
+        "closure_clusters": 2,
+        "closure_largest": 1365,
+        "closure_rejected_inside": 23213,
+        "correlation_bcubed_f1": 0.24528934391163493,
+        "correlation_clusters": 166,
+        "correlation_largest": 94,
+        "correlation_rejected_inside": 1499,
+        "n_rejected": 24560,
+        "threshold": 0.4
+      },
+      {
+        "closure_bcubed_f1": 0.14049422588603347,
+        "closure_clusters": 26,
+        "closure_largest": 1243,
+        "closure_rejected_inside": 27643,
+        "correlation_bcubed_f1": 0.38902060528897825,
+        "correlation_clusters": 254,
+        "correlation_largest": 67,
+        "correlation_rejected_inside": 1133,
+        "n_rejected": 35666,
+        "threshold": 0.5
+      },
+      {
+        "closure_bcubed_f1": 0.3795929613996213,
+        "closure_clusters": 120,
+        "closure_largest": 244,
+        "closure_rejected_inside": 11468,
+        "correlation_bcubed_f1": 0.5249766647157798,
+        "correlation_clusters": 306,
+        "correlation_largest": 29,
+        "correlation_rejected_inside": 562,
+        "n_rejected": 42144,
+        "threshold": 0.6
+      },
+      {
+        "closure_bcubed_f1": 0.5837467445567692,
+        "closure_clusters": 225,
+        "closure_largest": 99,
+        "closure_rejected_inside": 3281,
+        "correlation_bcubed_f1": 0.6446856109579452,
+        "correlation_clusters": 335,
+        "correlation_largest": 15,
+        "correlation_rejected_inside": 211,
+        "n_rejected": 45250,
+        "threshold": 0.7
+      },
+      {
+        "closure_bcubed_f1": 0.7242338421193463,
+        "closure_clusters": 257,
+        "closure_largest": 14,
+        "closure_rejected_inside": 404,
+        "correlation_bcubed_f1": 0.742576437684948,
+        "correlation_clusters": 301,
+        "correlation_largest": 9,
+        "correlation_rejected_inside": 63,
+        "n_rejected": 46482,
+        "threshold": 0.8
+      }
+    ],
+    "threshold": 0.8,
+    "verdict_agreement": 1.0
   }
 ]
