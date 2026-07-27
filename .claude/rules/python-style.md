@@ -27,6 +27,10 @@ Read before writing or editing Python in this repo.
   - Example: Create scripts in `<repo-root>/tmp/test_script.py` instead of `/tmp/test_script.py`
 - **Environment Variables**: The `.env` file contains environment configuration (including OpenMP settings for macOS). Use `uv run --env-file .env` for commands that need these settings. See `docs/FRICTION_LOG.md` for known issues and remedies.
 
+## Import Weight
+
+Heavy/optional symbols resolve lazily (PEP 562 `__getattr__` in `langres/core/__init__.py`, the implementation packages such as `langres/core/matchers/__init__.py`, and `langres/clients/__init__.py`) so a bare `import langres` never pulls torch/litellm/faiss/scikit-learn/ranx into `sys.modules` — see `tests/test_import_budget.py`, which is the gate that fails if one leaks in.
+
 ## Naming Conventions
 
 - **Classes**: PascalCase (e.g., `DeduplicationTask`, `CompanyFlow`)
