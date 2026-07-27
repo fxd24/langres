@@ -87,7 +87,24 @@ class SentenceTransformer:
         model: str | dict[str, str] | ModelRef,
         *,
         runtime_config: SentenceTransformerRuntimeConfig | None = None,
+        trust_remote_code: bool = False,
     ) -> None:
+        """Build a weightless dense-embedding resource.
+
+        Args:
+            model: The checkpoint reference (string, dict, or ``ModelRef``).
+            runtime_config: Weightless runtime settings. Everything here is
+                serialized into artifacts and restored on load.
+            trust_remote_code: Execute the checkpoint's own modelling code.
+                Required by checkpoints that ship a custom architecture
+                (``nomic-ai/nomic-embed-text-v1.5``,
+                ``Alibaba-NLP/gte-base-en-v1.5``). **A constructor argument, not
+                a runtime-config field, and deliberately so:** runtime config
+                round-trips into a saved artifact, so a field here would let a
+                *downloaded* artifact request arbitrary code execution. Turning
+                it on stays an explicit act in the caller's own source and does
+                not survive ``save``/``load``.
+        """
         self.model_ref = normalize_inprocess_ref(model, slot="SentenceTransformer")
         if self.model_ref.adapter is not None:
             raise UnsupportedBackboneError(
@@ -95,6 +112,7 @@ class SentenceTransformer:
                 "adapter into an embedding checkpoint or pass the merged model ref."
             )
         self.runtime_config = runtime_config or SentenceTransformerRuntimeConfig()
+        self.trust_remote_code = trust_remote_code
         self._embedder = SentenceTransformerEmbedder(
             model_name=self.model_ref,
             batch_size=self.runtime_config.batch_size,
@@ -104,7 +122,32 @@ class SentenceTransformer:
             dtype=self.runtime_config.dtype,
             backend=self.runtime_config.backend,
             local_files_only=self.runtime_config.local_files_only,
+            trust_remote_code=trust_remote_code,
+            truncate_dim=self.runtime_config.truncate_dim,
+            prompt_name=self.runtime_config.prompt_name,
+            prompts=self.runtime_config.prompts,
         )
+
+    @property
+    def registered_prompts(self) -> dict[str, str]:
+        """Prompts the loaded checkpoint actually registers, measured not declared.
+
+        Instructional embedders ship their documented task prefixes in
+        ``config_sentence_transformers.json`` (EmbeddingGemma's
+        ``"query"``/``"document"``, E5's ``"query"``/``"passage"``, …), and
+        sentence-transformers loads them onto the model. Reading them off the
+        loaded model is how a caller discovers a model's own recipe without a
+        hand-maintained per-model table, which would silently rot.
+
+        Returns:
+            The ``{name: prefix}`` mapping, empty when the model registers none
+            (and empty before the model has been loaded — this never triggers a
+            download on its own).
+        """
+        loaded = getattr(self._embedder, "_model", None)
+        if loaded is None:
+            return {}
+        return dict(getattr(loaded, "prompts", {}) or {})
 
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         """Embed ordered texts and attach measured vector facts."""

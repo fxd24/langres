@@ -2,6 +2,7 @@
 
 Start with a complete, offline experiment:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/research/first_experiment.py
 ```
@@ -28,24 +29,65 @@ architecture.
 
 Run the four recipes without downloading weights:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/research_recipes.py
 ```
 
 Before selecting an embedding model, measure whether it separates labeled
-matches from non-matches:
+matches from non-matches. Start from a labeled benchmark — `fodors_zagat` ships
+in the wheel, so this needs no extras and no checkout:
 
-```bash
-uv run python examples/embedding_separability.py
+```python
+from itertools import combinations
+
+from langres.data import get_benchmark
+
+corpus, gold_clusters, _ = get_benchmark("fodors_zagat").load()
+gold_pairs = {
+    frozenset(pair)
+    for cluster in gold_clusters
+    for pair in combinations(sorted(cluster), 2)
+}
+print(f"{len(corpus)} records, {len(gold_pairs)} gold pairs to separate")
 ```
 
-The example uses `FakeEmbedder` to test the measurement path only. Replace that
-resource with a pinned production embedder and rerun on your labeled sample;
-do not interpret fake-resource numbers as semantic quality.
+Embedding those records needs the `[semantic]` extra:
+
+<!-- docs-gate: requires-extra=semantic -->
+```python
+from langres.resources import SentenceTransformer
+
+texts = [" ".join(filter(None, (record.name, record.addr))) for record in corpus]
+vectors = SentenceTransformer("all-MiniLM-L6-v2").embed(texts).vectors
+# Score gold pairs against sampled non-gold pairs and read the ROC-AUC.
+```
+
+The runnable version — both arms, the seeded negative sample, and an optional
+query-side instruction — is a repo script:
+
+<!-- docs-gate: requires-repo -->
+```bash
+uv run --env-file .env python examples/embedding_separability.py
+uv run --env-file .env python examples/embedding_separability.py \
+    --model BAAI/bge-small-en-v1.5 --instruction "Find the duplicate record for: "
+```
+
+It downloads a real checkpoint and scores it on a real labeled benchmark
+(`fodors_zagat`), reporting ROC-AUC over gold pairs versus a seeded sample of
+non-gold pairs. Read the AUC rather than the cosine margin — a margin is not
+comparable across models. (It previously ran on `FakeEmbedder`, whose
+hash-derived vectors made the printed number independent of embedder quality.)
+
+For the model-by-model sweep — candidate recall, separability AUC, and measured
+parameter counts across the benchmark portfolio — see
+`examples/research/embedder_ladder.py` and
+[`docs/research/20260727_embedder_ladder.md`](research/20260727_embedder_ladder.md).
 
 Next, declare more than one benchmark, split, and seed. Plan first, then opt
 into the 16 local cells:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/research/experiment_matrix.py
 uv run python examples/research/experiment_matrix.py --execute
@@ -81,6 +123,7 @@ prompt-tuned smaller LLM, in this page's $0 demo a classical *student* model
 trained on them — and a **cascade** runs the cheap judge everywhere while
 escalating only the still-uncertain pairs back to the frontier.
 
+<!-- docs-gate: illustrative -->
 ```
    ┌────────────────────────────────────────────────────────────────────┐
    │                         THE DATA FLYWHEEL                          │
@@ -102,6 +145,7 @@ the core of the loop (steps 1–4: log → review the margin → CSV round-trip 
 harvest → data-driven threshold → re-run → tearsheet, a one-page HTML quality
 report) in ~90 lines, offline at **$0**. Run it while you read:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/flywheel_min.py
 ```
@@ -146,6 +190,7 @@ result = FuzzyString(threshold=0.6).dedupe(records)
 free with an embedding student, and escalates only the uncertain band to a
 real LLM judge — under a **default $1 spend cap**:
 
+<!-- docs-gate: requires-network -->
 ```python
 from langres.architectures import VectorLLMCascade
 
@@ -161,6 +206,7 @@ degrade to fuzzy matching. A spend-cap breach instead raises `BudgetExceeded`
 (root-exported from `langres`) carrying the partial judgements, never a silent
 bill:
 
+<!-- docs-gate: requires-network -->
 ```python
 from langres import BudgetExceeded
 from langres.architectures import VectorLLMCascade
@@ -182,6 +228,7 @@ except BudgetExceeded as exc:
 both of its backbones' extras — it blocks with a vector index and judges with a
 real LLM:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv sync                               # core: FuzzyString, $0
 uv sync --extra llm --extra semantic  # VectorLLMCascade's two backbones
@@ -206,6 +253,7 @@ Start with the teacher. `VectorLLMCascade(llm=...).dedupe(records)` blocks
 free with the embedding student, escalating only the uncertain band to the
 LLM — and clusters, spend-capped:
 
+<!-- docs-gate: requires-network -->
 ```python
 from langres.architectures import VectorLLMCascade
 
@@ -225,6 +273,7 @@ it records every judge call (ids, score, verdict, model, cost) to a JSONL file
 with **zero overhead when omitted**. Every architecture's `.dedupe()`/`.compare()`
 takes it. This is the flywheel *inlet*:
 
+<!-- docs-gate: requires-network -->
 ```python
 result = model.dedupe(records, log="judgements.jsonl")
 # FuzzyString(threshold=0.6).dedupe(records, log="judgements.jsonl") is the $0 version
@@ -257,6 +306,7 @@ round-trip** — `langres export-csv` writes the queued pairs to a plain `.csv`
 file you can open in any spreadsheet; fill the `label` column with `y`/`n`,
 and `langres import-csv` reads the answers back:
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run langres export-csv queue.jsonl to_label.csv   # fill the 'label' column (y/n)
 uv run langres import-csv to_label.csv queue.jsonl   # -> corrections.jsonl
@@ -274,6 +324,7 @@ resumes. (`uv run langres --version` reports your build.) Depth:
 with the human corrections (**gold** — overrides), keyed order-independently by
 pair. `derive_threshold_from_pairs` then reads a data-driven cut off the result:
 
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres.core.harvest import (
     CorrectionLog, harvest_labeled_pairs, derive_threshold_from_pairs,
@@ -300,6 +351,7 @@ a `RandomForestMatcher` — a **trainable judge**, the loop's $0 stand-in for th
 cheaper model — on the harvested labels, then calibrates *its own* threshold on
 *its own* scores:
 
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres.core.matchers.random_forest_judge import RandomForestMatcher
 from langres.training.calibration import derive_threshold
@@ -316,7 +368,13 @@ student_threshold = derive_threshold(student_scores, heldout_labels)
 > smaller LLM** (`DSPyMatcher`): a precision-tuned DSPy prompt signature let a cheap
 > model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
 > automatic MIPROv2 *compilation* was measured and cut — the signature is the
-> lever). Fine-tuning a small LM on these labels is the roadmap's next rung.
+> lever). Fine-tuning a small LM on these labels is **not** roadmap — it ships:
+> `langres.finetune(pairs, QLoRA(base=...))` returns a weightless `ModelRef`,
+> `langres.run_finetune(...)` adds the cost digest, and `Resolver.fit(...,
+> method=QLoRA(...))` builds the full `FitReport`
+> (`src/langres/training/finetune.py`). The default `QLoRATrainer.train` is
+> marked `# pragma: no cover` because real training runs on GPU in the
+> `test-finetune` job, not in the fast suite.
 > Whichever student you pick, calibrate it on **its own** scores, never the
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
@@ -334,6 +392,7 @@ probabilities). A hand-built matcher like this is exactly what the mid-level
 custom composition (this cascade wraps the `RandomForestMatcher` step 5
 trained, not `VectorLLMCascade`'s own embedding student) goes here instead:
 
+<!-- docs-gate: requires-extra=trained -->
 ```python
 from langres import Resolver
 from langres.core.matchers.cascade_judge import CascadeMatcher
@@ -357,6 +416,7 @@ Freeze the configured pipeline — schema, blocker, matcher (including a fitted
 CascadeMatcher student), threshold — into a reusable artifact. Every `ERModel`
 (a named architecture or the `resolver` from step 6) has `.save`/`.load`:
 
+<!-- docs-gate: requires-extra=trained -->
 ```python
 resolver.save("artifacts/contacts_v1")            # resolver.json + per-child sidecars
 reloaded = Resolver.load("artifacts/contacts_v1") # fitted student round-trips, no pickle

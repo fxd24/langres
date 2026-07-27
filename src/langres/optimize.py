@@ -124,8 +124,16 @@ def _score_loaded(
     Builds the blocker the config describes (a prebuilt ``index`` is required for
     ``blocker == "vector"``; ignored for ``"all_pairs"``), streams the corpus to
     candidates, and evaluates blocking. For a two-source corpus the candidates are
-    filtered to cross-source pairs (all gold matches are cross-source) and RR is
-    computed with ``n_left``/``n_right``; otherwise RR uses ``num_records``.
+    filtered to cross-source pairs and RR is computed with ``n_left``/``n_right``;
+    otherwise RR uses ``num_records``.
+
+    **``candidate_recall`` can be capped below 1.0 by that filter**, and the cap
+    belongs to the benchmark rather than to the config being scored: a gold
+    cluster spanning three or more records emits intra-source gold pairs, and no
+    cross-source candidate set can contain them. Measured on ``amazon_google``:
+    the ceiling is ~0.84, so no config there can report more. This is fine for
+    *comparing* configs (every config faces the same ceiling) but wrong to read
+    as an absolute "we are missing 16% of matches".
     """
     from langres.autoresearch.factory import build_blocker_from_config
     from langres.core.metrics import evaluate_blocking
@@ -134,8 +142,10 @@ def _score_loaded(
     candidates = list(blocker.stream([record.model_dump() for record in corpus]))
 
     if source_sizes is not None:
-        # Cross-source linkage: keep only inter-source pairs (all gold matches
-        # are cross-source, so recall is unchanged) and use |A|*|B| for RR.
+        # Cross-source linkage: keep only inter-source pairs so RR can use
+        # |A|*|B|. NOT recall-neutral -- see the ceiling note in the docstring.
+        # (This comment used to assert "all gold matches are cross-source, so
+        # recall is unchanged". That was measured false.)
         candidates = [c for c in candidates if c.left.source != c.right.source]
         n_left, n_right = source_sizes
         stats = evaluate_blocking(candidates, gold_clusters, n_left=n_left, n_right=n_right)
@@ -168,7 +178,7 @@ def score_blocking(
     Args:
         config: A config dict as yielded by ``SearchSpace.configs()`` (keys
             ``blocker``, and for ``"vector"`` also ``embedding_model`` / ``metric``
-            / ``text_field`` / ``k_neighbors``).
+            / ``text_field`` / ``k_neighbors`` / ``query_prompt``).
         benchmark: A registered benchmark **name** (loaded via the data registry)
             or an already-built benchmark object (offline / test path).
         embedder: Optional pre-built embedder (a ``FakeEmbedder`` in tests) passed
@@ -179,7 +189,10 @@ def score_blocking(
             (the ``optimize`` closure threads a cached index in through here).
 
     Returns:
-        The blocking metrics mapping (all values ``float``).
+        The blocking metrics mapping (all values ``float``). On a two-source
+        benchmark ``candidate_recall`` is capped below 1.0 by the cross-source
+        filter — see :func:`_score_loaded`. Compare configs by it; do not read it
+        as the absolute share of matches found.
     """
     bench = _resolve_benchmark(benchmark)
     corpus, gold_clusters, _gold_pairs = bench.load()
@@ -200,10 +213,21 @@ def _canonical_config(config: Mapping[str, Any]) -> dict[str, Any]:
     keys. Reducing each to ``{"blocker": "all_pairs"}`` makes them hash to one
     ``recipe_id`` so the loop's in-run dedup skips the redundant repeats. A
     ``vector`` config is recipe-relevant in full and passes through unchanged.
+
+    ``query_prompt=None`` is dropped for the same reason, and one more: a
+    ``recipe_id`` is a **content hash** used to recognise a config across runs
+    (``tracking.runs``). ``SearchSpace`` now emits ``"query_prompt": None`` on
+    every config, so keeping the key would re-hash every unprompted recipe and
+    make every historical ``RunStore`` record unrecognisable — "already scored
+    this?" would answer *no* for the entire existing store. An absent prompt and
+    an unprompted run are the same experiment, so they must hash the same.
     """
     if config.get("blocker") == "all_pairs":
         return {"blocker": "all_pairs"}
-    return dict(config)
+    canonical = dict(config)
+    if canonical.get("query_prompt") is None:
+        canonical.pop("query_prompt", None)
+    return canonical
 
 
 def optimize(

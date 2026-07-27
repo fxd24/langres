@@ -37,6 +37,48 @@ from langres.core.serialization import ComponentSpec, SerializableState
 logger = logging.getLogger(__name__)
 
 
+def _neighbor_columns(neighbor_row: Any, anchor: int, limit: int) -> list[int]:
+    """Columns of one ``search_all`` row that are real neighbours of ``anchor``.
+
+    Drops the anchor's self-match **by identity** (``neighbour == anchor``)
+    rather than by position. Position is not safe:
+
+    - Under an asymmetric ``query_prompt`` the query vector is re-encoded with
+      the prompt while the stored document vector is not, so the anchor is not
+      guaranteed to rank first — slicing ``row[1:]`` would then keep the anchor
+      (yielding a degenerate self-pair) *and* drop a genuine neighbour.
+    - Even symmetrically, an exact-duplicate text ties with the anchor at
+      distance 0 and can take column 0, with the same consequence.
+
+    Negative positions are dropped too. An index that finds fewer than ``k``
+    neighbours pads the row with ``-1`` (``QdrantHybridIndex.search`` does this
+    explicitly), and ``-1`` is a perfectly valid Python index: passing it through
+    would silently fabricate a candidate pairing the anchor with the **last
+    record in the corpus** at whatever similarity the padding carried.
+
+    Args:
+        neighbor_row: One row of the index's ``indices`` matrix (corpus
+            positions of the anchor's nearest neighbours, nearest first).
+        anchor: The querying record's own corpus position.
+        limit: Maximum number of neighbour columns to return (``k_neighbors``),
+            so the candidate budget stays the same whether or not the anchor
+            appeared in its own result row.
+
+    Returns:
+        Column positions into ``neighbor_row``, nearest first, at most ``limit``
+        of them, never including the anchor itself and never a padding slot.
+    """
+    columns: list[int] = []
+    for column, neighbour in enumerate(neighbor_row):
+        position = int(neighbour)
+        if position == anchor or position < 0:
+            continue
+        columns.append(column)
+        if len(columns) == limit:
+            break
+    return columns
+
+
 def _index_type_name(index: object) -> str:
     """Resolve the registry type name for a vector index instance.
 
@@ -295,7 +337,27 @@ class VectorBlocker(Blocker[SchemaT]):
             k_neighbors: Number of nearest neighbors per entity. Higher = better
                 recall, more candidates. Default: 10.
             query_prompt: Optional instruction prepended to each query at search
-                time (for instructional embeddings). Default: None.
+                time (for instructional embeddings such as EmbeddingGemma / E5 /
+                BGE / Qwen3-Embedding). When set, the index re-encodes the query
+                side with the prompt while the indexed documents stay generic —
+                so this costs one extra encode pass over the corpus per search.
+                Default: None (symmetric; no re-encode).
+
+                **How far it reaches depends on the index.**
+                :class:`~langres.core.indexes.vector_index.FAISSIndex` honours it
+                fully — ``search_all`` re-encodes the query side.
+                :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`
+                honours it at the stage that decides the final order: its dense
+                *prefetch* is short-circuited on cached vectors, but the
+                late-interaction reranking pass encodes queries with the prompt
+                (``reranking_vector_index.py:294``).
+                :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex`
+                accepts the argument and **discards it** — its ``search_all``
+                forwards the cached dense vectors into ``search``, which
+                short-circuits on them exactly the way ``FAISSIndex`` used to, so
+                sweeping this parameter over it yields a flat, meaningless result
+                rather than an error. Not fixed here because verifying a
+                Qdrant-backed fix needs a live server; tracked as follow-up work.
 
         Raises:
             ValueError: If k_neighbors is not positive, or if the schema /
@@ -523,7 +585,8 @@ class VectorBlocker(Blocker[SchemaT]):
             return
 
         # 4. Search for k nearest neighbors for each entity (deduplication pattern)
-        # k+1 because the nearest neighbor will be the entity itself
+        # k+1 leaves room for the entity's own self-match, which _neighbor_columns
+        # then drops by identity (it is usually, but not always, at column 0).
         k = min(self.k_neighbors + 1, len(entities))
         distances, indices = self.vector_index.search_all(k, query_prompt=self.query_prompt)
 
@@ -540,13 +603,11 @@ class VectorBlocker(Blocker[SchemaT]):
         for i in range(
             len(entities)
         ):  # TODO: instead of loop is there a vector operation that can speed things up?
-            # Get neighbor indices for entity i (skip first, which is itself)
-            neighbor_indices = indices[i][1:]  # Skip index 0 (self)
-            neighbor_similarities = similarities[i][1:]  # Skip index 0 (self)
+            # Drop entity i's own self-match by identity, not by position (see
+            # _neighbor_columns: a query_prompt or a duplicate text can move it).
+            columns = _neighbor_columns(indices[i], i, self.k_neighbors)
 
-            for idx, (j, similarity) in enumerate(zip(neighbor_indices, neighbor_similarities)):
-                j = int(j)  # Convert numpy.int64 to int
-
+            for j, similarity in ((int(indices[i][c]), similarities[i][c]) for c in columns):
                 # Create a canonical pair representation (order-independent)
                 pair_key = frozenset([entities[i].id, entities[j].id])  # type: ignore[attr-defined]
 
@@ -643,10 +704,11 @@ class VectorBlocker(Blocker[SchemaT]):
 
         seen_pairs: set[frozenset[str]] = set()
         for i in range(len(entities)):
-            neighbor_indices = indices[i][1:]  # Skip index 0 (self)
+            # Same identity-based self-match drop as stream() (see _neighbor_columns).
             members = []
-            for j in neighbor_indices:
-                j = int(j)  # Convert numpy.int64 to int
+            for j in (
+                int(indices[i][c]) for c in _neighbor_columns(indices[i], i, self.k_neighbors)
+            ):
                 pair_key = frozenset([entities[i].id, entities[j].id])  # type: ignore[attr-defined]
                 if pair_key in seen_pairs:
                     continue

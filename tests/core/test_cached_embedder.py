@@ -696,3 +696,97 @@ class TestDiskCachedEmbedderPromptCachingIntegration:
 
         # Values should match (within tolerance for dtype conversion)
         np.testing.assert_allclose(result, precomputed_f64, rtol=1e-6)
+
+
+class TestCacheKeyCoversEmbedderSettings:
+    """The key must cover every embedder setting that changes the vectors.
+
+    ``(text, prompt)`` alone is not enough once the embedder can carry
+    ``prompt_name``/``truncate_dim``: sentence-transformers applies a registered
+    ``default_prompt_name`` precisely when ``prompt`` is ``None``, so two
+    embedders differing only by ``prompt_name`` would otherwise hash identically
+    and one would silently serve the other's vectors.
+    """
+
+    def _cached(self, tmp_path, **settings):
+        embedder = FakeEmbedder(embedding_dim=8)
+        for name, value in settings.items():
+            setattr(embedder, name, value)
+        return DiskCachedEmbedder(
+            embedder=embedder, cache_dir=tmp_path / "cache", namespace="shared"
+        )
+
+    def test_prompt_name_changes_the_key(self, tmp_path):
+        plain = self._cached(tmp_path)
+        prompted = self._cached(tmp_path, prompt_name="query")
+        assert plain._hash_text("acme") != prompted._hash_text("acme")
+
+    def test_truncate_dim_changes_the_key(self, tmp_path):
+        full = self._cached(tmp_path)
+        truncated = self._cached(tmp_path, truncate_dim=128)
+        assert full._hash_text("acme") != truncated._hash_text("acme")
+
+    def test_an_embedder_with_neither_keeps_its_existing_cache_entries(self, tmp_path):
+        """Backwards compatible on purpose: closing the hazard must not force a re-encode.
+
+        The overwhelmingly common case sets neither knob, and every cache written
+        before they existed was keyed on the bare text.
+        """
+        import hashlib
+
+        cached = self._cached(tmp_path)
+        expected = hashlib.blake2b()
+        expected.update(b"acme")
+        assert cached._hash_text("acme") == expected.hexdigest()
+        assert cached._embedder_discriminator() == ""
+
+    def test_the_prompt_is_still_part_of_the_key(self, tmp_path):
+        cached = self._cached(tmp_path, prompt_name="query")
+        assert cached._hash_text("acme") != cached._hash_text("acme", prompt="find: ")
+
+    def test_the_same_prompt_name_over_different_mappings_is_a_different_key(self, tmp_path):
+        """The name is a pointer; ``prompts`` is what it points AT.
+
+        Two embedders both at ``prompt_name="query"`` whose mappings define
+        ``query`` differently prepend different text, so they must not share
+        entries — keying on the name alone lets the second silently serve the
+        first's vectors.
+        """
+        one = self._cached(tmp_path, prompt_name="query", prompts={"query": "find: "})
+        other = self._cached(tmp_path, prompt_name="query", prompts={"query": "retrieve: "})
+        assert one._hash_text("acme") != other._hash_text("acme")
+
+    def test_mapping_order_is_not_part_of_the_key(self, tmp_path):
+        """Same mapping, different insertion order, same vectors — so, same key."""
+        one = self._cached(tmp_path, prompts={"query": "find: ", "document": "doc: "})
+        other = self._cached(tmp_path, prompts={"document": "doc: ", "query": "find: "})
+        assert one._hash_text("acme") == other._hash_text("acme")
+
+    def test_a_mapping_alone_changes_the_key(self, tmp_path):
+        """``prompts`` without ``prompt_name`` still changes what ``encode`` prepends."""
+        plain = self._cached(tmp_path)
+        mapped = self._cached(tmp_path, prompts={"query": "find: "})
+        assert plain._hash_text("acme") != mapped._hash_text("acme")
+
+    def test_a_non_dict_mapping_of_prompts_still_reaches_the_key(self, tmp_path):
+        """``Mapping``, not ``dict`` — a read-only prompt mapping is still prompts.
+
+        Narrowing to the concrete type would silently drop it from the key,
+        which is the exact fail-open this check exists to prevent.
+        """
+        from types import MappingProxyType
+
+        one = self._cached(tmp_path, prompts=MappingProxyType({"query": "find: "}))
+        other = self._cached(tmp_path, prompts=MappingProxyType({"query": "retrieve: "}))
+        plain = self._cached(tmp_path)
+
+        assert one._hash_text("acme") != plain._hash_text("acme")
+        assert one._hash_text("acme") != other._hash_text("acme")
+
+    def test_an_unrelated_prompts_attribute_is_not_a_prompt_mapping(self, tmp_path):
+        """A structurally typed embedder can carry anything under that name.
+
+        Key derivation must neither raise on it nor key on its repr.
+        """
+        cached = self._cached(tmp_path, prompts="not a mapping")
+        assert cached._embedder_discriminator() == ""

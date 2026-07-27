@@ -96,6 +96,42 @@ def test_vector_config_without_index_raises() -> None:
         build_blocker_from_config(config, schema=CompanySchema, index=None)
 
 
+def _vector_config(**overrides: object) -> dict[str, object]:
+    config: dict[str, object] = {
+        "blocker": "vector",
+        "embedding_model": "unused-with-fake",
+        "metric": "cosine",
+        "text_field": "name",
+        "k_neighbors": 2,
+    }
+    config.update(overrides)
+    return config
+
+
+def test_vector_config_consumes_the_query_prompt_axis() -> None:
+    """A SearchSpace axis the factory drops is worse than no axis at all.
+
+    An unconsumed ``query_prompt`` would make the search enumerate prompt
+    variants that all build the *same* blocker, then report the resulting flat
+    table as evidence that instructions do not help retrieval.
+    """
+    blocker = build_blocker_from_config(
+        _vector_config(query_prompt="Find the duplicate record for: "),
+        schema=CompanySchema,
+        index=_fake_index(),
+    )
+
+    assert isinstance(blocker, VectorBlocker)
+    assert blocker.query_prompt == "Find the duplicate record for: "
+
+
+def test_vector_config_without_a_query_prompt_key_still_builds() -> None:
+    """Configs written before the axis existed must keep working (absent = None)."""
+    blocker = build_blocker_from_config(_vector_config(), schema=CompanySchema, index=_fake_index())
+
+    assert blocker.query_prompt is None
+
+
 # ---------------------------------------------------------------------------
 # build_blocker_from_config -- all_pairs
 # ---------------------------------------------------------------------------

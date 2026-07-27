@@ -8,7 +8,8 @@ entry points converge on one internal assembler (:func:`_assemble`) so the two
 paths return the *same* pinned section layout:
 
     hero -> label-structure -> separability -> [mining-readiness] ->
-    [failure-mode] -> corpus-fields -> embeddings -> embedding-comparison
+    [failure-mode] -> corpus-fields -> [vocabulary-overlap] -> embeddings ->
+    embedding-comparison
 
 Each section is included only when its input is present; omitting an input drops
 that section silently (never a raise). Mining readiness and failure mode are the
@@ -56,6 +57,10 @@ from langres.data.data_profile.separability import (
     profile_separability,
     string_signal,
 )
+from langres.data.data_profile.vocabulary import (
+    VocabularyOverlapSection,
+    profile_vocabulary_overlap,
+)
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -75,10 +80,18 @@ _KNOWN_KINDS: frozenset[str] = frozenset(
         "failure_mode",
         "separability",
         "corpus_field",
+        "vocabulary_overlap",
         "embedding",
         "embedding_comparison",
     }
 )
+
+#: Default record field naming which side of a two-source linkage corpus a record
+#: came from. Every registered langres benchmark carries it (``"abt"``/``"buy"``,
+#: ``"a"``/``"b"``, ...). A corpus without it -- or with anything other than
+#: exactly two distinct values -- simply has no two-source vocabulary overlap to
+#: measure, and the section is omitted.
+_DEFAULT_SOURCE_KEY = "source"
 
 #: Default cap on how many negative (non-matching) pairs are sampled per report
 #: for the separability chart. Bounds the scan on a huge corpus; logged when it
@@ -111,8 +124,10 @@ def from_benchmark(
     when given a name), loads its full corpus + gold clustering, and composes the
     default section set over them: a KPI hero, label structure, separability
     (rapidfuzz ``string_signal`` by default, plus a cosine signal per embedding
-    source when ``embeddings=`` is given), corpus fields, one embedding section per
-    source, and an embedding comparison when two or more sources are passed.
+    source when ``embeddings=`` is given), corpus fields, the two-source
+    vocabulary overlap (when the records carry a two-valued ``source`` field), one
+    embedding section per source, and an embedding comparison when two or more
+    sources are passed.
 
     Args:
         benchmark_or_name: A registered benchmark name (e.g. ``"abt_buy"``) or an
@@ -182,6 +197,7 @@ def from_records(
     failure_mode: FailureModeSection | None = None,
     include: Collection[str] | None = None,
     id_key: str = "id",
+    source_key: str = _DEFAULT_SOURCE_KEY,
     negatives_cap: int = _DEFAULT_NEGATIVES_CAP,
     top_n_fields: int = 50,
     seed: int = _NEGATIVES_SEED,
@@ -212,6 +228,10 @@ def from_records(
         include: Optional selector of section *kinds* (see :func:`from_benchmark`).
         id_key: The record field holding the id used for pairs / embedding
             alignment (default ``"id"``).
+        source_key: The record field naming which side of a two-source linkage
+            corpus a record came from (default ``"source"``). Drives the
+            vocabulary-overlap section; a corpus without exactly two distinct
+            values simply drops it.
         negatives_cap: Cap on sampled non-matching pairs for separability.
         top_n_fields: Row cap for the corpus-field table.
         seed: Seed for the deterministic negative-pair sample.
@@ -232,6 +252,7 @@ def from_records(
         top_n_fields=top_n_fields,
         seed=seed,
         id_key=id_key,
+        source_key=source_key,
         mining_readiness=mining_readiness,
         failure_mode=failure_mode,
     )
@@ -343,6 +364,7 @@ def _assemble(
     top_n_fields: int,
     seed: int,
     id_key: str,
+    source_key: str = _DEFAULT_SOURCE_KEY,
     mining_readiness: MiningReadinessSection | None = None,
     failure_mode: FailureModeSection | None = None,
 ) -> DataProfileReport:
@@ -353,7 +375,8 @@ def _assemble(
     ``mining_readiness`` and ``failure_mode`` sections, when supplied, are
     **precomputed** inputs the caller assembled from the miners / a matcher's
     judgement log (this package never runs a matcher), inserted after the
-    label-structure / separability blocks.
+    label-structure / separability blocks. The vocabulary-overlap section needs a
+    two-source corpus and is derived from ``source_key`` (omitted otherwise).
     """
     sources = list(embeddings or [])
     id_map = _index_by_id(records, id_key)
@@ -385,6 +408,15 @@ def _assemble(
     fields = profile_corpus_fields(records, top_n=top_n_fields)
     if fields is not None:
         body.append(fields)
+
+    vocabulary = _build_vocabulary_overlap(
+        records,
+        id_key=id_key,
+        source_key=source_key,
+        derived_keys=tuple(getattr(schema, "model_computed_fields", ()) or ()),
+    )
+    if vocabulary is not None:
+        body.append(vocabulary)
 
     for source in sources:
         body.append(profile_embedding(source, corpus_ids))
@@ -606,19 +638,94 @@ def _validate_include(include: Collection[str]) -> None:
         )
 
 
-def _embed_text(record: Mapping[str, Any], *, id_key: str, text_key: str | None) -> str:
-    """The text to embed for one record.
+def _embed_text(
+    record: Mapping[str, Any],
+    *,
+    id_key: str,
+    text_key: str | None,
+    exclude: Collection[str] = (),
+) -> str:
+    """The text to embed (or tokenize) for one record.
 
     Uses ``record[text_key]`` when a key is given; otherwise joins every non-empty
-    string field except ``id_key`` -- a sensible generic default for a schema-free
-    record.
+    string field except ``id_key`` and anything in ``exclude`` -- a sensible
+    generic default for a schema-free record. ``exclude`` exists for the
+    vocabulary profile, which must drop the source-label field: a constant
+    per-record token that appears on exactly one side would count as that side's
+    own vocabulary and depress the shared-token coverage it is trying to measure.
     """
     if text_key is not None:
         value = record.get(text_key)
         return str(value) if value is not None else ""
+    skip = {id_key, *exclude}
     parts = [
         value
         for key, value in record.items()
-        if key != id_key and isinstance(value, str) and value.strip()
+        if key not in skip and isinstance(value, str) and value.strip()
     ]
     return " ".join(parts)
+
+
+def _build_vocabulary_overlap(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    id_key: str,
+    source_key: str,
+    derived_keys: Collection[str] = (),
+) -> VocabularyOverlapSection | None:
+    """Derive the two sides of a linkage corpus from ``source_key`` and profile them.
+
+    Returns ``None`` -- so the section is simply absent -- whenever there is no
+    two-source structure to measure: no record carries ``source_key``, or the
+    field takes anything other than exactly two distinct values (a single-source
+    dedup corpus, or a multi-source one this pairwise measure does not describe).
+    The two sides are ordered by their source label so the report is deterministic
+    and ``left``/``right`` mean the same thing across runs.
+
+    ``derived_keys`` are the schema's **computed** fields, and dropping them is
+    load-bearing, not tidiness. ``model_dump()`` includes computed fields, and the
+    ER schemas' ``embed_text`` is a *concatenation of other fields* on the same
+    record (``AbtBuySchema.embed_text == name + " " + description``). Tokenizing
+    the dump as-is would therefore count the blocking text twice, and since token
+    coverage is occurrence-weighted it would silently over-weight exactly the
+    fields a blocker reads. It would also disagree with the separability signal
+    measured beside it, which iterates ``model_fields`` and never sees a computed
+    field at all.
+    """
+    # Grouped by the RAW value, not by ``str(value)``: stringifying first makes the
+    # int 1 and the str "1" the same key, so a genuinely two-source corpus would
+    # collapse to one group and the section would silently vanish -- exactly the
+    # "exactly two distinct values" condition this function documents. Convert only
+    # for the display labels, below.
+    by_source: dict[Any, list[str]] = {}
+    exclude = (source_key, *derived_keys)
+    for record in records:
+        value = record.get(source_key)
+        if value is None:
+            continue
+        by_source.setdefault(value, []).append(
+            _embed_text(record, id_key=id_key, text_key=None, exclude=exclude)
+        )
+    if len(by_source) != 2:
+        if by_source:
+            logger.debug(
+                "vocabulary overlap skipped: %r takes %d distinct values (need exactly 2)",
+                source_key,
+                len(by_source),
+            )
+        return None
+    # Sorted on the rendered label (raw values may not be mutually comparable --
+    # sorting {1, "a"} raises TypeError), with repr as a stable tie-break so the
+    # ordering is total and deterministic across runs.
+    left_value, right_value = sorted(by_source, key=lambda value: (str(value), repr(value)))
+    left_name, right_name = str(left_value), str(right_value)
+    if left_name == right_name:
+        # Two distinct sources that render identically (1 vs "1"). Keeping both
+        # labels as "1" would make the report unreadable; repr disambiguates them.
+        left_name, right_name = repr(left_value), repr(right_value)
+    return profile_vocabulary_overlap(
+        by_source[left_value],
+        by_source[right_value],
+        left_name=left_name,
+        right_name=right_name,
+    )

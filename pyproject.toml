@@ -63,6 +63,19 @@ semantic = [
     "qdrant-client>=1.15.1",
     "sentence-transformers>=5.1.2",
     "torch>=2.12.1",
+    # transformers arrives transitively via sentence-transformers, which pins no
+    # useful floor -- so it is named DIRECTLY here for a correctness reason, not
+    # tidiness. `google/embeddinggemma-300m` sets `use_bidirectional_attention:
+    # true` in its config, and a Gemma3TextConfig that predates 4.56.2 does not
+    # declare that parameter. HF configs swallow unknown keys silently (measured:
+    # `Gemma3TextConfig(this_key_does_not_exist=True)` raises nothing and sets the
+    # attribute), so the model still loads, still embeds, and returns plausible
+    # but WRONG vectors under causal instead of bidirectional attention. There is
+    # no error to notice -- the model just scores badly, and you blame the model.
+    # `core.embeddings._require_honoured_config_keys` is the belt to this
+    # suspenders: it raises at load time if the checkpoint declares a
+    # semantics-changing key the installed config class cannot accept.
+    "transformers>=4.56.2",
 ]
 # The LLM/judge stack -- LLMJudge, DSPyJudge, CascadeModule's OpenAI client.
 # Required for judge="zero_shot_llm" / judge="auto" with a key set.

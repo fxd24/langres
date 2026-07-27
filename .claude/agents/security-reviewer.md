@@ -399,4 +399,4 @@ After security review, consider:
 1. **Critical issues found?** - Block deployment, fix immediately
 2. **Code changes needed?** - Return to developer with specific fixes
 3. **Tests needed?** - Recommend security test cases
-4. **Further code review?** - Recommend **code-reviewer** for quality check
+4. **Further code review?** - Recommend **langres-code-reviewer** for quality check

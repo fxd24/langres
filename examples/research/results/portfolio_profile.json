@@ -1,0 +1,589 @@
+[
+  {
+    "caveats": [],
+    "cross_source_ceiling": 0.9846743295019157,
+    "domain": "product",
+    "entropy_bits": 10.133756766574466,
+    "excluded_files": [
+      "src/langres/data/datasets/abt_buy/tableA.csv",
+      "src/langres/data/datasets/abt_buy/tableB.csv",
+      "src/langres/data/datasets/abt_buy/test.csv",
+      "src/langres/data/datasets/abt_buy/train.csv",
+      "src/langres/data/datasets/abt_buy/valid.csv"
+    ],
+    "imbalance_ratio": 2259.419540229885,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 3,
+    "mean_field_len": 71.3796460496399,
+    "min_non_null_rate": 0.46387482742751956,
+    "n_clusters": 1145,
+    "n_fields": 6,
+    "n_files_shipped": 1,
+    "n_records": 2173,
+    "n_singletons": 133,
+    "name": "abt_buy",
+    "positive_pairs": 1044,
+    "prevalence": 0.0004423957509667873,
+    "published_f1": 0.893,
+    "published_system": "Ditto (Li et al., VLDB 2021)",
+    "rapidfuzz_argmax_f1": 0.20773930753564157,
+    "rapidfuzz_f1": 0.2017857142857143,
+    "rapidfuzz_threshold": 0.316680024935435,
+    "saturated": false,
+    "saturation_error": null,
+    "separability_auc": 0.9567006704980843,
+    "size_distribution": [
+      [
+        1,
+        133
+      ],
+      [
+        2,
+        996
+      ],
+      [
+        3,
+        16
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.321779930376873,
+    "vocab_min_coverage": 0.796002248977297,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.839568345323741,
+    "domain": "product",
+    "entropy_bits": 11.622400810642507,
+    "excluded_files": [
+      "src/langres/data/datasets/amazon_google/tableA.csv",
+      "src/langres/data/datasets/amazon_google/tableB.csv",
+      "src/langres/data/datasets/amazon_google/test.csv",
+      "src/langres/data/datasets/amazon_google/train.csv",
+      "src/langres/data/datasets/amazon_google/valid.csv"
+    ],
+    "imbalance_ratio": 7572.500719424461,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 6,
+    "mean_field_len": 22.570930569459723,
+    "min_non_null_rate": 0.3745914142514709,
+    "n_clusters": 3423,
+    "n_fields": 6,
+    "n_files_shipped": 1,
+    "n_records": 4589,
+    "n_singletons": 2428,
+    "name": "amazon_google",
+    "positive_pairs": 1390,
+    "prevalence": 0.00013203933518289728,
+    "published_f1": 0.756,
+    "published_system": "Ditto (Li et al., VLDB 2021)",
+    "rapidfuzz_argmax_f1": 0.30616302186878724,
+    "rapidfuzz_f1": 0.2880658436213992,
+    "rapidfuzz_threshold": 0.44175824175824174,
+    "saturated": false,
+    "saturation_error": null,
+    "separability_auc": 0.9552041151079137,
+    "size_distribution": [
+      [
+        1,
+        2428
+      ],
+      [
+        2,
+        863
+      ],
+      [
+        3,
+        106
+      ],
+      [
+        4,
+        14
+      ],
+      [
+        5,
+        11
+      ],
+      [
+        6,
+        1
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.33787247677026594,
+    "vocab_min_coverage": 0.7908159036277733,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [],
+    "cross_source_ceiling": 1.0,
+    "domain": "bibliographic",
+    "entropy_bits": 11.357230323458674,
+    "excluded_files": [
+      "src/langres/data/datasets/dblp_acm/tableA.csv",
+      "src/langres/data/datasets/dblp_acm/tableB.csv",
+      "src/langres/data/datasets/dblp_acm/test.csv",
+      "src/langres/data/datasets/dblp_acm/train.csv",
+      "src/langres/data/datasets/dblp_acm/valid.csv"
+    ],
+    "imbalance_ratio": 5427.646396396396,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 2,
+    "mean_field_len": 39.03972445903005,
+    "min_non_null_rate": 0.9971486761710794,
+    "n_clusters": 2690,
+    "n_fields": 7,
+    "n_files_shipped": 0,
+    "n_records": 4910,
+    "n_singletons": 470,
+    "name": "dblp_acm",
+    "positive_pairs": 2220,
+    "prevalence": 0.00018420798242888182,
+    "published_f1": 0.98,
+    "published_system": "reported SOTA (~0.98; source names no system)",
+    "rapidfuzz_argmax_f1": 0.9033659066232357,
+    "rapidfuzz_f1": 0.8904810644831116,
+    "rapidfuzz_threshold": 0.6593314093314093,
+    "saturated": false,
+    "saturation_error": null,
+    "separability_auc": 0.999566490990991,
+    "size_distribution": [
+      [
+        1,
+        470
+      ],
+      [
+        2,
+        2220
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.842234198922097,
+    "vocab_min_coverage": 0.9665002171081198,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [
+      "capped-recall",
+      "large-component"
+    ],
+    "cross_source_ceiling": 0.3976603938094892,
+    "domain": "bibliographic",
+    "entropy_bits": 15.811747672745367,
+    "excluded_files": [
+      "src/langres/data/datasets/dblp_scholar/tableA.csv",
+      "src/langres/data/datasets/dblp_scholar/tableB.csv",
+      "src/langres/data/datasets/dblp_scholar/test.csv",
+      "src/langres/data/datasets/dblp_scholar/train.csv",
+      "src/langres/data/datasets/dblp_scholar/valid.csv"
+    ],
+    "imbalance_ratio": 162490.23599505922,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 37,
+    "mean_field_len": 34.85309301640108,
+    "min_non_null_rate": 0.4798068152932909,
+    "n_clusters": 61604,
+    "n_fields": 7,
+    "n_files_shipped": 0,
+    "n_records": 66879,
+    "n_singletons": 59253,
+    "name": "dblp_scholar",
+    "positive_pairs": 13763,
+    "prevalence": 6.154178063058161e-06,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": 0.6654478976234005,
+    "rapidfuzz_f1": 0.6588407923697726,
+    "rapidfuzz_threshold": 0.4433997155049787,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.9927786318389886,
+    "size_distribution": [
+      [
+        1,
+        59253
+      ],
+      [
+        2,
+        1136
+      ],
+      [
+        3,
+        577
+      ],
+      [
+        4,
+        289
+      ],
+      [
+        5,
+        125
+      ],
+      [
+        6,
+        80
+      ],
+      [
+        7,
+        52
+      ],
+      [
+        8,
+        24
+      ],
+      [
+        9,
+        22
+      ],
+      [
+        10,
+        12
+      ],
+      [
+        11,
+        6
+      ],
+      [
+        12,
+        8
+      ],
+      [
+        13,
+        3
+      ],
+      [
+        14,
+        8
+      ],
+      [
+        15,
+        1
+      ],
+      [
+        16,
+        2
+      ],
+      [
+        17,
+        1
+      ],
+      [
+        18,
+        3
+      ],
+      [
+        20,
+        1
+      ],
+      [
+        37,
+        1
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.061356913044417094,
+    "vocab_min_coverage": 0.651113124747795,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [
+      "one-to-one"
+    ],
+    "cross_source_ceiling": 1.0,
+    "domain": "person",
+    "entropy_bits": 8.965784284662087,
+    "excluded_files": [],
+    "imbalance_ratio": 998.0,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 2,
+    "mean_field_len": 7.65137121354633,
+    "min_non_null_rate": 0.883,
+    "n_clusters": 500,
+    "n_fields": 13,
+    "n_files_shipped": 3,
+    "n_records": 1000,
+    "n_singletons": 0,
+    "name": "febrl_person",
+    "positive_pairs": 500,
+    "prevalence": 0.001001001001001001,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": null,
+    "rapidfuzz_f1": null,
+    "rapidfuzz_threshold": null,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 1.0,
+    "size_distribution": [
+      [
+        2,
+        500
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.6821067481777568,
+    "vocab_min_coverage": 0.8510347186591415,
+    "wheel_loadable": true
+  },
+  {
+    "caveats": [
+      "tiny-gold"
+    ],
+    "cross_source_ceiling": 1.0,
+    "domain": "restaurant",
+    "entropy_bits": 9.495628242904209,
+    "excluded_files": [],
+    "imbalance_ratio": 3327.714285714286,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 2,
+    "mean_field_len": 14.998395321016265,
+    "min_non_null_rate": 0.9988425925925926,
+    "n_clusters": 752,
+    "n_fields": 8,
+    "n_files_shipped": 3,
+    "n_records": 864,
+    "n_singletons": 640,
+    "name": "fodors_zagat",
+    "positive_pairs": 112,
+    "prevalence": 0.0003004162911463027,
+    "published_f1": 1.0,
+    "published_system": "ZeroER (Wu et al., SIGMOD 2020)",
+    "rapidfuzz_argmax_f1": null,
+    "rapidfuzz_f1": null,
+    "rapidfuzz_threshold": null,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.9984053571428572,
+    "size_distribution": [
+      [
+        1,
+        640
+      ],
+      [
+        2,
+        112
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.28541810642709053,
+    "vocab_min_coverage": 0.708029197080292,
+    "wheel_loadable": true
+  },
+  {
+    "caveats": [],
+    "cross_source_ceiling": null,
+    "domain": "person/org",
+    "entropy_bits": null,
+    "excluded_files": [],
+    "imbalance_ratio": null,
+    "load_error": "external-only: not vendored (see the registry fetch hint)",
+    "loadable": false,
+    "loaded": false,
+    "max_cluster_size": null,
+    "mean_field_len": null,
+    "min_non_null_rate": null,
+    "n_clusters": null,
+    "n_fields": null,
+    "n_files_shipped": 0,
+    "n_records": null,
+    "n_singletons": null,
+    "name": "opensanctions",
+    "positive_pairs": null,
+    "prevalence": null,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": null,
+    "rapidfuzz_f1": null,
+    "rapidfuzz_threshold": null,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": null,
+    "size_distribution": [],
+    "task": "linkage",
+    "vocab_jaccard": null,
+    "vocab_min_coverage": null,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [
+      "lexical-gap",
+      "tiny-gold"
+    ],
+    "cross_source_ceiling": 1.0,
+    "domain": "product",
+    "entropy_bits": 3.084962500721156,
+    "excluded_files": [],
+    "imbalance_ratio": 21.0,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 2,
+    "mean_field_len": 18.933333333333334,
+    "min_non_null_rate": 1.0,
+    "n_clusters": 9,
+    "n_fields": 5,
+    "n_files_shipped": 5,
+    "n_records": 12,
+    "n_singletons": 6,
+    "name": "tiny_fixture",
+    "positive_pairs": 3,
+    "prevalence": 0.045454545454545456,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": 0.0,
+    "rapidfuzz_f1": 0.0,
+    "rapidfuzz_threshold": 0.6214285714285714,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.9894179894179894,
+    "size_distribution": [
+      [
+        1,
+        6
+      ],
+      [
+        2,
+        3
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.26865671641791045,
+    "vocab_min_coverage": 0.44680851063829785,
+    "wheel_loadable": true
+  },
+  {
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.8836996336996337,
+    "domain": "product",
+    "entropy_bits": 14.506055133213854,
+    "excluded_files": [
+      "src/langres/data/datasets/walmart_amazon/tableA.csv",
+      "src/langres/data/datasets/walmart_amazon/tableB.csv",
+      "src/langres/data/datasets/walmart_amazon/test.csv",
+      "src/langres/data/datasets/walmart_amazon/train.csv",
+      "src/langres/data/datasets/walmart_amazon/valid.csv"
+    ],
+    "imbalance_ratio": 277706.76373626373,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 4,
+    "mean_field_len": 26.486328308389812,
+    "min_non_null_rate": 0.7375345135617996,
+    "n_clusters": 23666,
+    "n_fields": 8,
+    "n_files_shipped": 0,
+    "n_records": 24628,
+    "n_singletons": 22820,
+    "name": "walmart_amazon",
+    "positive_pairs": 1092,
+    "prevalence": 3.600907610741808e-06,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": 0.32122370936902483,
+    "rapidfuzz_f1": 0.3050847457627119,
+    "rapidfuzz_threshold": 0.615611850579648,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.995994880952381,
+    "size_distribution": [
+      [
+        1,
+        22820
+      ],
+      [
+        2,
+        744
+      ],
+      [
+        3,
+        88
+      ],
+      [
+        4,
+        14
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.13333333333333333,
+    "vocab_min_coverage": 0.8059465109130034,
+    "wheel_loadable": false
+  },
+  {
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.9000900090009001,
+    "domain": "product",
+    "entropy_bits": 11.738329606793577,
+    "excluded_files": [
+      "src/langres/data/datasets/wdc_computers/tableA.csv",
+      "src/langres/data/datasets/wdc_computers/tableB.csv",
+      "src/langres/data/datasets/wdc_computers/test.csv",
+      "src/langres/data/datasets/wdc_computers/train.csv",
+      "src/langres/data/datasets/wdc_computers/valid.csv"
+    ],
+    "imbalance_ratio": 9715.454545454546,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 4,
+    "mean_field_len": 46.163223585108675,
+    "min_non_null_rate": 1.0,
+    "n_clusters": 3661,
+    "n_fields": 4,
+    "n_files_shipped": 0,
+    "n_records": 4647,
+    "n_singletons": 2784,
+    "name": "wdc_computers",
+    "positive_pairs": 1111,
+    "prevalence": 0.00010291819874439798,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": 0.46493756003842457,
+    "rapidfuzz_f1": 0.4446764091858038,
+    "rapidfuzz_threshold": 0.43939393939393945,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.9294799189918992,
+    "size_distribution": [
+      [
+        1,
+        2784
+      ],
+      [
+        2,
+        784
+      ],
+      [
+        3,
+        77
+      ],
+      [
+        4,
+        16
+      ]
+    ],
+    "task": "linkage",
+    "vocab_jaccard": 0.7199337121212122,
+    "vocab_min_coverage": 0.9781867052620696,
+    "wheel_loadable": false
+  }
+]

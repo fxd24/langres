@@ -338,6 +338,139 @@ class TestFAISSIndexInstructionPrompts:
         assert not np.allclose(distances_with, distances_without)
 
 
+class TestFAISSIndexSearchAllPromptIsObservable:
+    """``search_all``'s ``query_prompt`` must change the retrieved RESULT.
+
+    The regression these lock: ``search_all`` used to forward the cached corpus
+    vectors into ``search()``, which takes its pre-computed-ndarray branch and
+    never applies a prompt. Every assertion the repo had about prompts was about
+    *forwarding* (``search_all`` was called with the right kwarg) — none looked
+    at the output, so all of them stayed green while the prompt did nothing.
+    These assert on the numbers instead.
+    """
+
+    def test_search_all_prompt_changes_distances(self):
+        """A prompted search_all must not return the unprompted distances."""
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=64), metric="cosine")
+        index.create_index(["Apple Inc.", "Microsoft Corp.", "Google LLC", "Amazon"])
+
+        plain_distances, _ = index.search_all(k=3)
+        prompted_distances, _ = index.search_all(k=3, query_prompt="Find the duplicate record")
+
+        assert not np.array_equal(plain_distances, prompted_distances)
+
+    def test_search_all_prompt_re_encodes_the_query_side_only(self):
+        """The prompt reaches the encoder; the indexed documents stay generic."""
+        encode_calls: list[dict] = []
+        base = FakeEmbedder(embedding_dim=64)
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                return base.encode(texts, prompt=prompt)
+
+            @property
+            def embedding_dim(self):
+                return base.embedding_dim
+
+        index = FAISSIndex(embedder=TrackingEmbedder(), metric="cosine")
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+        index.search_all(k=2, query_prompt="Find the duplicate record")
+
+        # create_index encodes documents without a prompt; search_all re-encodes
+        # the same texts as queries WITH the prompt.
+        assert [call["prompt"] for call in encode_calls] == [None, "Find the duplicate record"]
+        assert encode_calls[1]["texts"] == texts
+
+    def test_a_mutated_caller_list_cannot_change_what_the_query_side_encodes(self):
+        """``create_index`` snapshots its texts, so later mutation cannot desync them.
+
+        The indexed vectors are frozen at build time. A prompted ``search_all``
+        re-encodes the corpus texts, so aliasing the caller's list would query
+        one corpus against another corpus's vectors — mismatched rows, or a
+        length mismatch, while the unprompted path stayed correct off the cached
+        vectors and hid it.
+        """
+        encode_calls: list[dict] = []
+        base = FakeEmbedder(embedding_dim=64)
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": list(texts), "prompt": prompt})
+                return base.encode(texts, prompt=prompt)
+
+            @property
+            def embedding_dim(self):
+                return base.embedding_dim
+
+        index = FAISSIndex(embedder=TrackingEmbedder(), metric="cosine")
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        texts.append("Added after the index was built")
+        texts[0] = "Rewritten after the index was built"
+        index.search_all(k=2, query_prompt="Find the duplicate record")
+
+        assert encode_calls[1]["texts"] == ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+
+    def test_search_all_without_prompt_never_re_encodes(self):
+        """The cheap symmetric path is preserved: no prompt, no second encode."""
+        encode_calls: list[dict] = []
+        base = FakeEmbedder(embedding_dim=64)
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": texts, "prompt": prompt})
+                return base.encode(texts, prompt=prompt)
+
+            @property
+            def embedding_dim(self):
+                return base.embedding_dim
+
+        index = FAISSIndex(embedder=TrackingEmbedder(), metric="cosine")
+        index.create_index(["Apple Inc.", "Microsoft Corp.", "Google LLC"])
+        index.search_all(k=2)
+
+        assert len(encode_calls) == 1
+
+    def test_search_all_prompt_without_corpus_texts_raises(self):
+        """A build()-populated index cannot re-encode, so it must refuse the prompt.
+
+        Silently ignoring it is exactly the bug; an index with no corpus texts
+        says so instead of returning unprompted results that look prompted.
+        """
+        index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=64), metric="cosine")
+        index.build(np.random.rand(4, 64).astype(np.float32))
+
+        # The symmetric path still works from cached vectors.
+        index.search_all(k=2)
+
+        with pytest.raises(RuntimeError, match="corpus texts"):
+            index.search_all(k=2, query_prompt="Find the duplicate record")
+
+    @pytest.mark.slow
+    def test_search_all_prompt_changes_results_with_a_real_model(self):
+        """The same, end-to-end on a real sentence-transformers model."""
+        index = FAISSIndex(embedder=SentenceTransformerEmbedder("all-MiniLM-L6-v2"))
+        index.create_index(
+            [
+                "Apple Inc.",
+                "Apple Computer Incorporated",
+                "Microsoft Corporation",
+                "Microsoft Corp",
+                "Umbrella Health Systems",
+            ]
+        )
+
+        plain_distances, _ = index.search_all(k=3)
+        prompted_distances, _ = index.search_all(
+            k=3, query_prompt="Find the duplicate company record for: "
+        )
+
+        assert not np.allclose(plain_distances, prompted_distances)
+
+
 class TestFAISSIndexPrecomputedEmbeddings:
     """Tests for FAISSIndex pre-computed embedding support (performance fix)."""
 

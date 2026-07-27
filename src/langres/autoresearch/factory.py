@@ -94,7 +94,9 @@ def build_blocker_from_config(
 
     Args:
         config: A config dict as yielded by ``SearchSpace.configs()``. For the
-            vector path it must carry ``text_field`` and ``k_neighbors``.
+            vector path it must carry ``text_field`` and ``k_neighbors``, and may
+            carry ``query_prompt`` (absent is treated as ``None``, so pre-prompt
+            configs still build).
         schema: The Pydantic record schema, passed declaratively so the blocker
             stays config-serializable.
         index: A prebuilt vector index. **Required** for ``blocker == "vector"``;
@@ -119,6 +121,10 @@ def build_blocker_from_config(
             schema=schema,
             text_field=config["text_field"],
             k_neighbors=config["k_neighbors"],
+            # A declared-but-unconsumed axis is worse than no axis: the search
+            # would enumerate prompt variants that all build the same blocker and
+            # report a flat result as evidence prompts do not help.
+            query_prompt=config.get("query_prompt"),
         )
     if blocker_kind == "all_pairs":
         return AllPairsBlocker(schema=schema)
