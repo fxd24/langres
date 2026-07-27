@@ -24,6 +24,10 @@ import numpy as np
 import pytest
 
 from langres.core.indexes.hybrid_vector_index import FakeHybridVectorIndex, QdrantHybridIndex
+from langres.core.indexes.reranking_vector_index import (
+    FakeHybridRerankingVectorIndex,
+    QdrantHybridRerankingIndex,
+)
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex, VectorIndex
 
 
@@ -45,6 +49,8 @@ SEARCH_CONFORMANCE: tuple[tuple[type, bool], ...] = (
     (FakeVectorIndex, True),
     (QdrantHybridIndex, False),
     (FakeHybridVectorIndex, False),
+    (QdrantHybridRerankingIndex, False),
+    (FakeHybridRerankingVectorIndex, False),
 )
 
 

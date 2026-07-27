@@ -51,7 +51,20 @@ class QdrantHybridRerankingIndex:
     3. Fusion: Combine dense + sparse results (RRF or DBSF)
     4. Rerank: Late-interaction (ColBERT/ColPali) on fused results
 
-    Implements VectorIndex protocol for compatibility with existing blockers.
+    **Partial** ``VectorIndex`` conformance, same as its non-reranking sibling
+    :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex` and for
+    the same reason: ``create_index`` and ``search_all`` match the protocol, but
+    ``search`` accepts ``str | list[str]`` where the protocol accepts
+    ``str | list[str] | np.ndarray``. Hybrid retrieval needs the query *text* —
+    the sparse side has to encode it — so the missing branch is a real capability
+    difference, not an oversight to widen away. A static checker is right to
+    reject assigning this class to a ``VectorIndex``-typed name.
+
+    This docstring previously claimed plain "Implements VectorIndex protocol",
+    which was false and which nothing could contradict. The conformance of every
+    index is now asserted twice: under mypy in
+    ``langres/core/indexes/__init__.py``, and at runtime in
+    ``tests/core/indexes/test_vector_index_conformance.py``.
 
     The index owns all three embedders and manages the complete lifecycle:
     1. create_index(texts) - Preprocessing: embed and upload to Qdrant

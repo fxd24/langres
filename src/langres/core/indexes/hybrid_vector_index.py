@@ -7,7 +7,11 @@ Key features:
 - Dense + sparse vector storage in single collection
 - RRF or DBSF fusion for result combination
 - Native batch operations via Qdrant client
-- Implements VectorIndex protocol for consistency
+- Implements VectorIndex **apart from** ``search``, which cannot accept the
+  protocol's ``np.ndarray`` branch: hybrid retrieval needs the query *text* for
+  the sparse side. See the class docstring; the exact conformance of every index
+  is asserted in ``langres/core/indexes/__init__.py`` and in
+  ``tests/core/indexes/test_vector_index_conformance.py``.
 """
 
 import logging

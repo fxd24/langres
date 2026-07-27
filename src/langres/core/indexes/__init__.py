@@ -25,6 +25,49 @@ if TYPE_CHECKING:
         VectorIndex,
     )
 
+    def _assert_vector_index_conformance(
+        faiss: FAISSIndex,
+        fake: FakeVectorIndex,
+        hybrid: QdrantHybridIndex,
+        hybrid_fake: FakeHybridVectorIndex,
+        reranking: QdrantHybridRerankingIndex,
+        reranking_fake: FakeHybridRerankingVectorIndex,
+    ) -> None:
+        """Pin which indexes satisfy :class:`VectorIndex` — checked by mypy.
+
+        Three docstrings in this package claimed "Implements VectorIndex
+        protocol" while their ``search`` accepted a strictly narrower
+        ``query_texts`` than the protocol. Nothing could contradict them:
+        ``VectorBlocker.__init__`` types its parameter as ``VectorIndex`` and its
+        docs name ``QdrantHybridIndex`` as a production choice, but the actual
+        ``VectorBlocker(vector_index=QdrantHybridIndex(...))`` construction only
+        appears under ``examples/``, and CI runs ``uv run mypy src``
+        (``.github/workflows/lint.yml:52``) — **src only**. The one gate that
+        could catch a Protocol mismatch structurally never saw the call site.
+
+        This function is that call site, living where mypy does look. It is
+        ``TYPE_CHECKING``-only: never imported, never called, zero runtime cost.
+
+        The negative cases carry ``# type: ignore[assignment]`` rather than being
+        omitted, and that is the load-bearing part. ``strict = true`` implies
+        ``warn_unused_ignores``, so if one of those classes is ever widened to
+        conform, its ignore becomes unnecessary and **mypy fails** — sending the
+        author to the class docstring that says it does not conform. An omitted
+        case would just go quietly out of date, which is the failure this whole
+        change is about.
+        """
+        conforms: VectorIndex
+        conforms = faiss
+        conforms = fake
+
+        # Narrower ``search``: hybrid retrieval needs the query text for the
+        # sparse side, so it cannot accept the protocol's ``np.ndarray`` branch.
+        conforms = hybrid  # type: ignore[assignment]
+        conforms = hybrid_fake  # type: ignore[assignment]
+        conforms = reranking  # type: ignore[assignment]
+        conforms = reranking_fake  # type: ignore[assignment]
+
+
 __all__ = [
     "FAISSIndex",
     "FakeVectorIndex",
