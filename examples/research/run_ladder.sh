@@ -47,6 +47,11 @@ BENCHMARKS="fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon"
 
 mkdir -p "$LOG_DIR"
 
+# The full ladder, in the deliberate order documented above. Override with
+# LADDER_MODELS (space-separated) to drive a subset -- e.g. re-measuring only the
+# models stranded at an older metric revision, which is a real and recurring
+# need and otherwise invites editing this list in place and forgetting to
+# restore it.
 MODELS=(
   "all-MiniLM-L6-v2"
   "google/embeddinggemma-300m"
@@ -63,8 +68,23 @@ MODELS=(
   "Qwen/Qwen3-Embedding-4B"
   "Qwen/Qwen3-Embedding-8B"
 )
+if [ -n "${LADDER_MODELS:-}" ]; then
+  # shellcheck disable=SC2206  # word splitting is the interface here
+  MODELS=(${LADDER_MODELS})
+fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# `.env` is gitignored, so a fresh checkout or a worktree does not have one and
+# `uv run --env-file .env` exits 2 before the harness starts. This sweep is $0
+# and offline -- it needs no key -- so a missing `.env` must not stop it. Pass
+# the flag only when the file is actually there.
+ENV_FILE_ARG=()
+if [ -f .env ]; then
+  ENV_FILE_ARG=(--env-file .env)
+else
+  log "no .env in this checkout -- running without one (this sweep is \$0/offline)"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Wait for any in-flight sweep. NOT optional: a second `uv run` in this
@@ -137,7 +157,7 @@ for model in "${MODELS[@]}"; do
   # host without it exit non-zero -- and the failure path below then DELETES
   # that model's previously measured rows and commits the deletion. Set
   # LADDER_DEVICE only to override deliberately.
-  uv run --env-file .env python examples/research/embedder_ladder.py \
+  uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
     --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?

@@ -632,10 +632,14 @@ def build_prompted_index(
 
     Returns ``(index, corpus vectors, build seconds, texts encoded)``.
 
-    The prefix is applied by plain string concatenation rather than
-    sentence-transformers' ``prompt=`` because ``FAISSIndex.create_index`` takes
-    no prompt at all — the document-side gap this run reports. The two are
-    equivalent for the checkpoints measured here, verified rather than assumed:
+    The prefix is applied by plain string concatenation rather than by binding
+    ``prompt_name=`` on the embedder. **Not because the latter does not work** —
+    it does, and ``tests/core/blockers/test_asymmetric_prompt_recipe.py`` proves
+    the two produce identical results — but because these rows must keep
+    reproducing the table measured before that recipe was documented. An earlier
+    version of this docstring called it a product gap; that claim is corrected in
+    the report. The two are equivalent for the checkpoints measured here,
+    verified rather than assumed:
     sentence-transformers applies a prompt as ``prompt + text``
     (``sentence_transformers/base/model.py:560``) and only excludes its tokens
     from pooling when ``include_prompt=False``
@@ -650,8 +654,10 @@ def build_prompted_index(
     build the query vectors — so on a documented arm the query would come out as
     ``query_prompt + document_prompt + text``, a double-prefixed recipe no model
     card describes, and the arm's recall would measure something nobody asked
-    for. Reaching behind ``create_index`` is not elegance; it is the same
-    document-side product gap surfacing a second time, on the read path.
+    for. Reaching behind ``create_index`` is not elegance; it is the cost of
+    hand-prefixing the corpus instead of using ``prompt_name=``, which does not
+    have this problem because the prefix lives on the embedder, not in the
+    snapshotted text.
     """
     from langres.core.indexes.vector_index import FAISSIndex
 
@@ -1112,6 +1118,43 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "mean.** Pick the model against the data you actually have; the "
             "per-benchmark tables below are the unit of decision.\n"
         )
+        # The arm these headline numbers came from, and the half-driven arm they
+        # were once wrongly attributed to. Both derived from the rows: a
+        # correction that hand-types the number it corrects is the same defect.
+        instruct_row = next(
+            (
+                r
+                for r in ok
+                if r.model == model
+                and r.benchmark == high_row.benchmark
+                and r.k == headline_k
+                and r.prompt_arm == "instruct"
+            ),
+            None,
+        )
+        out.append(
+            "\n**Both of those numbers come from the `none` arm — neither the query "
+            "side nor the document side carries a prompt.** `render_report` filters "
+            "`prompt_arm == 'none'` for this comparison and the section heading below "
+            "says `no instruction`. That is langres's **default** configuration: a "
+            "`VectorBlocker` with no `query_prompt` over an embedder with no "
+            "`prompt_name`. The headline is therefore a statement about the two models "
+            "as they ship, not about a half-driven one.\n"
+        )
+        if instruct_row is not None and instruct_row.prompt_delta is not None:
+            out.append(
+                "\n> **Correction — supersedes the merged #239 PR body.** That body "
+                "said: *'Every number below, including the "
+                f"**{high:+.4f}** on `{high_row.benchmark}`, was measured with only the "
+                "query side driven.'* **That is false**, by the arm filter cited above. "
+                "The genuinely half-driven arm is `instruct`, and on "
+                f"`{high_row.benchmark}` it moves `{model}` by "
+                f"**{instruct_row.prompt_delta:+.4f}** "
+                f"{_ci(instruct_row.prompt_delta_ci_low, instruct_row.prompt_delta_ci_high)} "
+                "— a different number, from a different table. The correction runs in "
+                "the direction that makes the headline **stronger**, not weaker: it was "
+                "measured in the configuration langres actually ships.\n"
+            )
 
     out.append("\n## How to read this (please read before quoting a number)\n")
     out.append(
@@ -1397,24 +1440,59 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                     f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
                 )
 
-    out.append("\n### Finding: langres's blocking path has no document-side prompt\n")
+    out.append("\n### The asymmetric recipe, and how to drive it (corrected)\n")
     out.append(
-        "\nMeasuring the `documented` arm surfaced a gap in the library, not in this "
-        "harness. `VectorBlocker(query_prompt=...)` prefixes the **query** side; the "
-        "index is built by `VectorIndex.create_index(texts)`, whose signature takes "
-        "no prompt at all (`src/langres/core/indexes/vector_index.py`). So the "
-        "asymmetric recipe an instruction-trained checkpoint documents is not "
-        "expressible through the blocking API: a caller can reach it only by "
-        "combining two objects — an embedder constructed with a document "
-        "`prompt_name` and a blocker constructed with a matching `query_prompt` — "
-        "which no documentation describes and nothing checks for agreement.\n"
-        "\nThis harness works around it by prefixing the corpus text itself. That is "
-        "exactly equivalent **for these checkpoints**, verified rather than assumed: "
-        "sentence-transformers applies a prompt as `prompt + text`, and excludes its "
-        "tokens from pooling only when the checkpoint sets `include_prompt=false`, "
-        "which neither of these does. A checkpoint that did set it would need the "
-        "real API. **The gap is reported, not fixed here** — closing it changes a "
-        "core contract and belongs in its own change.\n"
+        "\n> **Correction.** An earlier version of this section was headed *'langres's "
+        "blocking path has no document-side prompt'* and said the asymmetric recipe was "
+        "**'not expressible through the blocking API'**. That is **false**. It is "
+        "expressible today, with no API change — the defect was that nothing documented "
+        "it and nothing checked it.\n"
+        "\n`create_index(texts)` indeed takes no prompt argument, but the document-side "
+        "prompt does not travel through that argument: it is bound to the **embedder** "
+        "the index owns. `SentenceTransformerEmbedder` forwards `prompts=` and "
+        "`prompt_name=` into the `SentenceTransformer` constructor as "
+        "`default_prompt_name` (`src/langres/core/embeddings.py`), and "
+        "sentence-transformers resolves an `encode(prompt=None)` call back to that "
+        "default (`base/model.py`, `_resolve_prompt`). So every text `create_index` "
+        "encodes already carries the document prefix. `search_all(query_prompt=...)` "
+        "then passes an **explicit** prompt, which takes precedence over the default — "
+        "queries get the query prefix, documents keep the document prefix.\n"
+        "\nThat is the whole asymmetric recipe, and it is verified rather than argued: "
+        "`tests/core/blockers/test_asymmetric_prompt_recipe.py` builds it through the "
+        "shipped API and asserts it is **byte-identical** to this harness's "
+        "prefix-the-corpus-by-hand workaround, with two controls — dropping the "
+        "document prompt changes the result, and dropping the query prompt changes the "
+        "result. (A `query_prompt` that silently did nothing already shipped here once "
+        "and made every prompt cell read `0.0000`.)\n"
+        "\n```python\n"
+        "embedder = SentenceTransformerEmbedder(\n"
+        '    "google/embeddinggemma-300m",\n'
+        '    prompts={"document": "title: none | text: ", "query": "task: search result | query: "},\n'
+        '    prompt_name="document",   # <- the DOCUMENT side, applied by create_index\n'
+        ")\n"
+        "blocker = VectorBlocker(\n"
+        "    vector_index=FAISSIndex(embedder),\n"
+        '    query_prompt="task: search result | query: ",  # <- the QUERY side\n'
+        "    schema=MySchema,\n"
+        '    text_field="name",\n'
+        ")\n"
+        "```\n"
+        "\n**What was actually broken, and is fixed in the same change as this "
+        "correction:**\n"
+        "\n- Nothing checked that the two sides agree. Setting the embedder's "
+        "`prompt_name` and forgetting the blocker's `query_prompt` is silently *worse* "
+        "than setting neither: `search_all(query_prompt=None)` reuses the cached corpus "
+        "vectors as queries, so the queries are encoded with the **document** prefix. "
+        "`VectorBlocker` now warns on exactly that combination.\n"
+        "- `QdrantHybridIndex.search_all` accepted `query_prompt` and **discarded** it, "
+        "so sweeping the axis over that index returned a flat, meaningless result "
+        "instead of an error. It now raises.\n"
+        "\nThis harness still prefixes the corpus text itself, because it must reproduce "
+        "rows measured before the recipe was documented. That is exactly equivalent "
+        "**for these checkpoints**, verified rather than assumed: sentence-transformers "
+        "applies a prompt as `prompt + text`, and excludes its tokens from pooling only "
+        "when the checkpoint sets `include_prompt=false`, which neither of these does. "
+        "A checkpoint that did set it would need the real API above.\n"
     )
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
