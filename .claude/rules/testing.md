@@ -43,42 +43,45 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
-- **Two gates run on `test-full`, and they are not the same number as this
-  policy.** The repo-wide floor is 90% (`--cov-fail-under` in `pyproject.toml`).
-  The contract additionally has its own path-scoped gate
-  (`coverage report --include="src/langres/core/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/training/*,src/langres/optimize.py"
-  --precision=2 --fail-under=98` in `.github/workflows/test.yml`). That 98 is a
-  **regression ratchet** pinned just under the measured value (98.84% at
-  `ba4b1b7`), not the policy — the *target* remains 95–100%. It exists because
-  the repo-wide 90% floor sits ~8 points below actual coverage, so the contract
-  could be quietly declassified with CI green throughout. Raise it as the real
-  number climbs; if it blocks legitimate work, lower it deliberately rather than
-  deleting it.
-  **When the contract moves to a new package, extend that `--include` glob** or
-  the gate silently stops covering it. (`report/`, `autoresearch/`, `training/`
-  and the `optimize.py` facade are in the glob for exactly that reason — they
-  carry public surface (`EvalReport`, `optimize()`/`score_blocking`,
-  `derive_threshold`/`Calibrator`/`FitReport`/`QLoRA`), so letting them fall out
-  would un-gate contract code while making the remaining number look *better*.
-  `training/*` was added when the fit family moved there out of `core/` — a
-  coverage-neutral relocation of already-gated code.)
-  **`src/langres/optimize.py` is listed as a file, not folded into a `*` glob**:
-  the facade is a module and the engine beside it is the `autoresearch/` package,
-  and coverage compiles a trailing `/*` to `optimize[/\\].*` — which matches a
-  directory's contents and can never match `optimize.py`. An `optimize/*` entry
-  here matches **nothing** and drops the facade silently. (Trailing `/*` *is*
-  recursive, so `autoresearch/*` covers the whole engine and `core/*` reaches
-  `core/blockers/vector.py`.)
-- **Headroom: the glob TOTAL is 98.39% against the 98 floor** (measured
-  2026-07-17 on `test-full`, at `0a38e46`, before the optimize/autoresearch
-  rename — which moves files without changing a line, so the number carries).
-  Note the floor gates the **whole include list**, not `core/*` alone: `core/*`
-  by itself measures 98.43%, which is close enough to mislead but is not the
-  number the gate compares. The floor was set from a measured 98.84%, so the
-  glob has drifted ~0.45pp down and the ratchet has ~0.39pp of slack left. If
-  this gate fires on you after a small change, you probably did not break it —
-  it has been tightening for a while. Diagnose the drift before lowering the
-  floor.
+- **The contract coverage gate runs in TWO places, at two floors, over ONE
+  include list.** The repo-wide floor is 90% (`--cov-fail-under` in
+  `pyproject.toml`). The contract additionally has its own path-scoped gate:
+
+  | where | suite | floor | role |
+  |---|---|---|---|
+  | `test` job (**every PR**) | fast (`not slow`) | **97.5** | early warning, ~12s |
+  | `test-full` job (**merge to main**) | full incl. slow | **98** | authoritative |
+
+  **Do not copy the `--include` list into this file or anywhere else.** It is
+  defined once, as `env.CONTRACT_COVERAGE_INCLUDE` at the top of
+  `.github/workflows/test.yml`, and both gates read it. A list duplicated in two
+  places drifts, and the copy that drifts silently stops gating what it names —
+  the paragraph that used to live here had already gone stale, omitting
+  `metrics/*`, `tracking/*` and the four `curation/` contract files. Read the
+  `env` block for the maintenance rules (why `optimize.py` is a FILE and not an
+  `optimize/*` glob; why the curation modules are listed individually; why the
+  glob follows the contract, not the average).
+
+  That 98 is a **regression ratchet** pinned just under a measured value, not the
+  policy — the *target* remains 95–100%. It exists because the repo-wide 90% floor
+  sits ~8 points below actual coverage, so the contract could be quietly
+  declassified with CI green throughout. Raise it as the real number climbs; if it
+  blocks legitimate work, lower it deliberately rather than deleting it.
+- **Why two floors is not the "two numbers drift" disease.** The thing that rots
+  is the include *list*, and there is only one of it. The floors differ because the
+  two gates measure genuinely different data: the per-PR job excludes the slow ML
+  tests, so paths covered only by them read as uncovered there. Measured on one
+  tree, 2026-07-28: full suite **98.05%**, fast suite **97.87%** — the slow tests
+  are worth only **0.18pp** of this include list, so the fast measurement is a close
+  proxy, not a different quantity wearing the same name.
+- **Timings, measured 2026-07-28** (the previous "~10min" claim was stale by 4x and
+  was the justification for keeping the contract gate off PRs entirely):
+  `test-full` **~38–41 min**, the per-PR `test` job **~6 min**, the gate step
+  itself **~12 s**. The cost is the suite, never the gate.
+- **If the contract gate fires on you, diagnose the drift before touching the
+  floor.** It has real precedent: `main` was red for six days across seven merges
+  because #229 took the TOTAL 98.28% → 97.27% in a single commit and `test-full`
+  does not run on PRs, so nothing observed it until after the merge.
 - Type-check as you go: `uv run mypy src/`
 
 ## Development Workflow (Human-Like Iteration)
