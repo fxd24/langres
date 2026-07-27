@@ -529,6 +529,96 @@ def test_stream_with_fake_hybrid_reranking_index_end_to_end():
 
 
 # ============================================================================
+# query_prompt must change the CANDIDATE SET, not just be forwarded.
+#
+# The two tests above assert forwarding only, and they stayed green for the
+# whole time the prompt was a no-op (FAISSIndex.search_all handed the cached
+# corpus vectors to search(), which never applies a prompt). These assert on
+# the blocker's actual output.
+# ============================================================================
+
+
+def _prompted_candidate_pairs(query_prompt: str | None) -> set[frozenset[str]]:
+    """Candidate id-pairs a FAISS-backed VectorBlocker emits under ``query_prompt``."""
+    from langres.core.embeddings import FakeEmbedder
+
+    data = [
+        {"id": "c0", "name": "Apple Inc."},
+        {"id": "c1", "name": "Apple Computer Incorporated"},
+        {"id": "c2", "name": "Microsoft Corporation"},
+        {"id": "c3", "name": "Microsoft Corp"},
+        {"id": "c4", "name": "Umbrella Health Systems"},
+        {"id": "c5", "name": "Acme Corporation"},
+    ]
+    index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=64), metric="cosine")
+    index.create_index([record["name"] for record in data])
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=index,
+        k_neighbors=2,
+        query_prompt=query_prompt,
+    )
+    return {frozenset([c.left.id, c.right.id]) for c in blocker.stream(data)}
+
+
+def test_query_prompt_changes_the_candidate_set():
+    """A prompted blocker must retrieve different candidates than an unprompted one."""
+    plain = _prompted_candidate_pairs(None)
+    prompted = _prompted_candidate_pairs("Find the duplicate company record for: ")
+
+    assert plain
+    assert prompted
+    assert plain != prompted
+
+
+def test_query_prompt_never_yields_a_self_pair():
+    """Under a prompt the anchor may not rank first; it must still be dropped.
+
+    ``stream()`` used to drop "self" by slicing ``row[1:]``. Once queries are
+    re-encoded with a prompt the anchor is no longer guaranteed to sit at column
+    0, so that slice could keep it — emitting a degenerate ``(x, x)`` candidate.
+    """
+    for pair in _prompted_candidate_pairs("Find the duplicate company record for: "):
+        assert len(pair) == 2
+
+
+def test_query_prompt_respects_the_k_neighbors_budget():
+    """Dropping the anchor by identity must not inflate the candidate budget."""
+    prompted = _prompted_candidate_pairs("Find the duplicate company record for: ")
+
+    # 6 records x k_neighbors=2, undirected and deduplicated, so at most 12.
+    assert 0 < len(prompted) <= 12
+
+
+def test_stream_groups_never_puts_the_anchor_in_its_own_group():
+    """The same identity-based self-drop applies to the native group path."""
+    from langres.core.embeddings import FakeEmbedder
+
+    data = [
+        {"id": "c0", "name": "Apple Inc."},
+        {"id": "c1", "name": "Apple Computer Incorporated"},
+        {"id": "c2", "name": "Microsoft Corporation"},
+        {"id": "c3", "name": "Microsoft Corp"},
+    ]
+    index = FAISSIndex(embedder=FakeEmbedder(embedding_dim=64), metric="cosine")
+    index.create_index([record["name"] for record in data])
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=index,
+        k_neighbors=2,
+        query_prompt="Find the duplicate company record for: ",
+    )
+
+    groups = list(blocker.stream_groups(data))
+
+    assert groups
+    for group in groups:
+        assert all(member.id != group.anchor.id for member in group.members)
+
+
+# ============================================================================
 # stream_groups(): VectorBlocker's NATIVE per-anchor implementation (E3).
 #
 # Unlike the base Blocker's buffered/skew-prone default (which derives groups
