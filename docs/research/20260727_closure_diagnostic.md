@@ -1,8 +1,12 @@
 # B1 — The closure diagnostic: does an output cluster contain a pair we judged and *rejected*?
 
-**Date:** 2026-07-27 · **Cost:** $0 (rapidfuzz scorer, no paid call, no network) ·
+**Date:** 2026-07-27 · **Cost:** $0 in spend (rapidfuzz scorer, no paid call) ·
 **Harness:** `examples/research/closure_diagnostic.py` ·
 **Raw data:** `examples/research/results/closure_diagnostic.json`
+
+> Not dependency-free or offline on a cold cache: blocking is always the
+> benchmark's own `VectorBlocker`, so a run needs the `[semantic]` extra and
+> downloads `all-MiniLM-L6-v2` once. No paid model is ever called.
 
 `Clusterer` — transitive closure over the accepted edges — is what an `ERModel`
 uses unless you say otherwise. `docs/THEORY.md` §7 prices it as correlation
@@ -178,8 +182,19 @@ not address it.
 ### 3.3 (c) — correlation clustering strictly dominates, everywhere measured
 
 Same judgements, same threshold, different `π`. `CorrelationClusterer`
-(Ailon–Charikar–Newman pivot, `src/langres/core/clusterers/correlation.py`) is a
-drop-in with the same constructor and config.
+(`src/langres/core/clusterers/correlation.py`) is a drop-in with the same
+constructor and config: a node joins a cluster only on a **direct** edge to that
+cluster's pivot.
+
+One correction while citing it, because it matters for how these numbers may be
+read: the shipped pivot order is **deterministic** — `sorted` by highest incident
+score, ties by node id (`_pivot_priority`) — not the *uniformly random* pivot of
+Ailon–Charikar–Newman that the class docstring names. ACN's 3-approximation
+guarantee is a property of that randomization and does **not** transfer to this
+implementation. For this harness the determinism is a feature (the correlation
+column is exactly reproducible, no seed required), but nothing below is evidence
+for an approximation bound. *(The overclaim is in the source docstring, which is
+outside this PR's scope to edit — flagged as a follow-up.)*
 
 Over the **54 grid points** across 9 benchmarks:
 

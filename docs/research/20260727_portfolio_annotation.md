@@ -1,7 +1,7 @@
 # B2 — Portfolio annotation: is the benchmark portfolio trustworthy?
 
-**Date:** 2026-07-27 · **Cost:** $0 (rapidfuzz + the profiler; no paid call, no
-network) · **Harness:** `examples/research/portfolio_profile.py` ·
+**Date:** 2026-07-27 · **Cost:** $0 in spend (rapidfuzz + the profiler; no paid
+call) · **Harness:** `examples/research/portfolio_profile.py` ·
 **Raw data:** `examples/research/results/portfolio_profile.json`
 
 Every claim langres makes is measured on this portfolio. If a benchmark is
@@ -36,14 +36,34 @@ metric (see §4) — which is exactly why the verdict has to name its metric.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.795 | 0.2018 | 0.893 (Ditto) | **no** | — |
 | `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.793 | 0.2881 | 0.756 (Ditto) | **no** | — |
-| `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 0.8905 | 0.98 | **no** (gap 0.09) | strictly 1:1 labels |
+| `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 0.8905 | ~0.98 | **no** (gap 0.09) | † strictly 1:1 labels |
 | `dblp_scholar` | linkage | no | 66,879 | 13,763 | 6.15e-06 | **37** | 0.993 | **0.061** | 0.651 | 0.6588 | not recorded | **?** | **large-component** |
 | `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.798 | 0.3051 | not recorded | **?** | — |
 | `wdc_computers` | linkage | no | 4,647 | 1,111 | 1.03e-04 | 4 | 0.929 | 0.720 | 0.978 | 0.4447 | not recorded | **?** | — |
-| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.702 | no literature split | 1.00 (ZeroER) | **YES** — see §4 | **tiny-gold** |
+| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.702 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
 | `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.838 | no literature split | not recorded | **?** | **one-to-one by construction** |
 | `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
-| `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | not loadable | 98.95 (GPT-4o) | **?** | external-only (CC-BY-NC) |
+| `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | not loadable | † 98.95 (GPT-4o, 0–100) | **?** | external-only (CC-BY-NC) |
+
+**† = written by hand, not produced by the harness.** Four cells, and they are
+marked because everything else in this table is a rendering of
+`portfolio_profile.json` and a reader is entitled to know which is which:
+
+- `fodors_zagat` **saturated** — the harness computes `null` (`?`) because the
+  dataset ships no literature split for `rapidfuzz` to be graded on, so the
+  automated rule cannot fire. The **YES** is the §4 argument, on a different
+  metric, made explicitly.
+- `dblp_acm` **published F1 `~0.98`** — the cited source writes it with a tilde;
+  it is an approximation used as an exact comparand. The verdict survives
+  comfortably (gap 0.0895 against a 0.02 margin), but the `~` belongs in the cell.
+- `dblp_acm` **"strictly 1:1 labels"** — true and worth saying, but the computed
+  `one-to-one` rule requires zero singletons and `dblp_acm` has 470, so the
+  harness emits no tag. The rule was fixed before looking and is deliberately
+  left alone rather than widened post-hoc to make this cell computed.
+- `opensanctions` **published F1** — recorded in
+  `docs/research/20260701_er_seam_audit.md:182` and the registry, but it is not
+  in `PUBLISHED_SOTA` (nothing loadable to compare) and it is on a 0–100 scale in
+  a column of 0–1 F1s.
 
 **Reading the columns.**
 
