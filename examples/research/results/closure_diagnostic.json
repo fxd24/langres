@@ -1,104 +1,622 @@
 [
   {
-    "benchmark": "fodors_zagat",
+    "benchmark": "abt_buy",
     "closure": {
-      "bcubed_f1": 0.9784941284826157,
+      "bcubed_f1": 0.6454603746331437,
       "by_cluster_size": [
         [
           2,
-          26,
+          33,
           0
+        ],
+        [
+          3,
+          6,
+          3
+        ],
+        [
+          4,
+          3,
+          1
+        ],
+        [
+          5,
+          3,
+          4
+        ],
+        [
+          6,
+          3,
+          9
+        ],
+        [
+          7,
+          1,
+          5
+        ],
+        [
+          27,
+          1,
+          35
         ]
       ],
       "clusterer": "closure",
-      "incluster_contamination": 0.0,
-      "largest_cluster": 2,
-      "n_clusters": 26,
-      "n_incluster_pairs": 26,
-      "n_rejected_inside": 0,
-      "pairwise_f1": 0.8135593220338984,
-      "rejected_inside_rate": 0.0
+      "incluster_contamination": 0.11046511627906977,
+      "largest_cluster": 27,
+      "n_clusters": 50,
+      "n_incluster_pairs": 516,
+      "n_rejected_inside": 57,
+      "pairwise_f1": 0.004842615012106538,
+      "rejected_inside_rate": 0.006480218281036835
     },
     "correlation": {
-      "bcubed_f1": 0.9784941284826157,
+      "bcubed_f1": 0.6510582334726367,
       "by_cluster_size": [
         [
-          2,
-          26,
+          1,
+          7,
           0
+        ],
+        [
+          2,
+          37,
+          0
+        ],
+        [
+          3,
+          7,
+          3
+        ],
+        [
+          4,
+          3,
+          3
+        ],
+        [
+          5,
+          4,
+          4
+        ],
+        [
+          6,
+          3,
+          0
+        ],
+        [
+          11,
+          1,
+          9
         ]
       ],
       "clusterer": "correlation",
-      "incluster_contamination": 0.0,
-      "largest_cluster": 2,
-      "n_clusters": 26,
-      "n_incluster_pairs": 26,
-      "n_rejected_inside": 0,
-      "pairwise_f1": 0.8135593220338984,
-      "rejected_inside_rate": 0.0
+      "incluster_contamination": 0.08796296296296297,
+      "largest_cluster": 11,
+      "n_clusters": 62,
+      "n_incluster_pairs": 216,
+      "n_rejected_inside": 19,
+      "pairwise_f1": 0.0076045627376425855,
+      "rejected_inside_rate": 0.002160072760345612
     },
     "decider_override_rows": 0,
     "method": "rapidfuzz",
     "n_abstained": 0,
-    "n_accepted": 35,
-    "n_judged": 1023,
-    "n_logged": 1023,
-    "n_rejected": 988,
-    "n_test_records": 258,
+    "n_accepted": 208,
+    "n_judged": 9004,
+    "n_logged": 9004,
+    "n_rejected": 8796,
+    "n_test_records": 647,
     "reconstruction_exact": true,
-    "seconds": 8.072934458963573,
+    "seconds": 16.21560033399146,
+    "sweep": [
+      {
+        "closure_bcubed_f1": 0.006035115129228593,
+        "closure_clusters": 1,
+        "closure_largest": 647,
+        "closure_rejected_inside": 3824,
+        "correlation_bcubed_f1": 0.2836510308673815,
+        "correlation_clusters": 96,
+        "correlation_largest": 36,
+        "correlation_rejected_inside": 299,
+        "n_rejected": 3824,
+        "threshold": 0.3
+      },
+      {
+        "closure_bcubed_f1": 0.01823387262888218,
+        "closure_clusters": 2,
+        "closure_largest": 642,
+        "closure_rejected_inside": 4747,
+        "correlation_bcubed_f1": 0.32162888152315416,
+        "correlation_clusters": 120,
+        "correlation_largest": 29,
+        "correlation_rejected_inside": 146,
+        "n_rejected": 4849,
+        "threshold": 0.4
+      },
+      {
+        "closure_bcubed_f1": 0.18786411846344314,
+        "closure_clusters": 12,
+        "closure_largest": 571,
+        "closure_rejected_inside": 4472,
+        "correlation_bcubed_f1": 0.4420301726069078,
+        "correlation_clusters": 155,
+        "correlation_largest": 25,
+        "correlation_rejected_inside": 113,
+        "n_rejected": 6207,
+        "threshold": 0.5
+      },
+      {
+        "closure_bcubed_f1": 0.44006140844825065,
+        "closure_clusters": 49,
+        "closure_largest": 321,
+        "closure_rejected_inside": 1418,
+        "correlation_bcubed_f1": 0.5361534004725981,
+        "correlation_clusters": 160,
+        "correlation_largest": 23,
+        "correlation_rejected_inside": 67,
+        "n_rejected": 7456,
+        "threshold": 0.6
+      },
+      {
+        "closure_bcubed_f1": 0.5875275812972358,
+        "closure_clusters": 69,
+        "closure_largest": 67,
+        "closure_rejected_inside": 214,
+        "correlation_bcubed_f1": 0.6054714911501894,
+        "correlation_clusters": 103,
+        "correlation_largest": 14,
+        "correlation_rejected_inside": 43,
+        "n_rejected": 8446,
+        "threshold": 0.7
+      },
+      {
+        "closure_bcubed_f1": 0.6454603746331437,
+        "closure_clusters": 50,
+        "closure_largest": 27,
+        "closure_rejected_inside": 57,
+        "correlation_bcubed_f1": 0.6510582334726367,
+        "correlation_clusters": 62,
+        "correlation_largest": 11,
+        "correlation_rejected_inside": 19,
+        "n_rejected": 8796,
+        "threshold": 0.8
+      }
+    ],
     "threshold": 0.8,
     "verdict_agreement": 1.0
   },
   {
-    "benchmark": "tiny_fixture",
+    "benchmark": "amazon_google",
     "closure": {
-      "bcubed_f1": 1.0,
+      "bcubed_f1": 0.7391021065963164,
       "by_cluster_size": [
         [
-          2,
+          1,
           1,
           0
+        ],
+        [
+          2,
+          71,
+          0
+        ],
+        [
+          3,
+          26,
+          9
+        ],
+        [
+          4,
+          17,
+          20
+        ],
+        [
+          5,
+          3,
+          10
+        ],
+        [
+          6,
+          2,
+          9
+        ],
+        [
+          8,
+          1,
+          14
+        ],
+        [
+          9,
+          3,
+          34
+        ],
+        [
+          10,
+          1,
+          21
+        ],
+        [
+          11,
+          2,
+          34
+        ],
+        [
+          14,
+          2,
+          109
+        ],
+        [
+          18,
+          2,
+          107
+        ],
+        [
+          20,
+          2,
+          183
+        ],
+        [
+          29,
+          1,
+          175
+        ],
+        [
+          32,
+          1,
+          219
         ]
       ],
       "clusterer": "closure",
-      "incluster_contamination": 0.0,
-      "largest_cluster": 2,
-      "n_clusters": 1,
-      "n_incluster_pairs": 1,
-      "n_rejected_inside": 0,
-      "pairwise_f1": 1.0,
-      "rejected_inside_rate": 0.0
+      "incluster_contamination": 0.3979763912310287,
+      "largest_cluster": 32,
+      "n_clusters": 135,
+      "n_incluster_pairs": 2372,
+      "n_rejected_inside": 944,
+      "pairwise_f1": 0.032234957020057305,
+      "rejected_inside_rate": 0.019675684688815708
     },
     "correlation": {
-      "bcubed_f1": 1.0,
+      "bcubed_f1": 0.7640966122372066,
+      "by_cluster_size": [
+        [
+          1,
+          35,
+          0
+        ],
+        [
+          2,
+          96,
+          0
+        ],
+        [
+          3,
+          40,
+          13
+        ],
+        [
+          4,
+          13,
+          8
+        ],
+        [
+          5,
+          6,
+          10
+        ],
+        [
+          7,
+          4,
+          18
+        ],
+        [
+          8,
+          3,
+          16
+        ],
+        [
+          9,
+          2,
+          25
+        ],
+        [
+          10,
+          1,
+          1
+        ],
+        [
+          11,
+          1,
+          0
+        ],
+        [
+          12,
+          1,
+          19
+        ],
+        [
+          15,
+          1,
+          18
+        ]
+      ],
+      "clusterer": "correlation",
+      "incluster_contamination": 0.14797687861271677,
+      "largest_cluster": 15,
+      "n_clusters": 203,
+      "n_incluster_pairs": 865,
+      "n_rejected_inside": 128,
+      "pairwise_f1": 0.06070038910505836,
+      "rejected_inside_rate": 0.0026678894493309432
+    },
+    "decider_override_rows": 0,
+    "method": "rapidfuzz",
+    "n_abstained": 0,
+    "n_accepted": 876,
+    "n_judged": 48854,
+    "n_logged": 48854,
+    "n_rejected": 47978,
+    "n_test_records": 1374,
+    "reconstruction_exact": true,
+    "seconds": 27.47071191703435,
+    "sweep": [
+      {
+        "closure_bcubed_f1": 0.0023427455835436295,
+        "closure_clusters": 1,
+        "closure_largest": 1374,
+        "closure_rejected_inside": 16920,
+        "correlation_bcubed_f1": 0.16557655532644203,
+        "correlation_clusters": 116,
+        "correlation_largest": 80,
+        "correlation_rejected_inside": 1037,
+        "n_rejected": 16920,
+        "threshold": 0.3
+      },
+      {
+        "closure_bcubed_f1": 0.012454728876400936,
+        "closure_clusters": 2,
+        "closure_largest": 1367,
+        "closure_rejected_inside": 22977,
+        "correlation_bcubed_f1": 0.2158211487012625,
+        "correlation_clusters": 155,
+        "correlation_largest": 98,
+        "correlation_rejected_inside": 415,
+        "n_rejected": 23436,
+        "threshold": 0.4
+      },
+      {
+        "closure_bcubed_f1": 0.04215815174701906,
+        "closure_clusters": 4,
+        "closure_largest": 1344,
+        "closure_rejected_inside": 25340,
+        "correlation_bcubed_f1": 0.2789395057112649,
+        "correlation_clusters": 193,
+        "correlation_largest": 100,
+        "correlation_rejected_inside": 315,
+        "n_rejected": 27094,
+        "threshold": 0.5
+      },
+      {
+        "closure_bcubed_f1": 0.20417381619221547,
+        "closure_clusters": 44,
+        "closure_largest": 1097,
+        "closure_rejected_inside": 22818,
+        "correlation_bcubed_f1": 0.42543071411598465,
+        "correlation_clusters": 274,
+        "correlation_largest": 65,
+        "correlation_rejected_inside": 542,
+        "n_rejected": 38581,
+        "threshold": 0.6
+      },
+      {
+        "closure_bcubed_f1": 0.4932900473232048,
+        "closure_clusters": 96,
+        "closure_largest": 548,
+        "closure_rejected_inside": 8066,
+        "correlation_bcubed_f1": 0.6232818354727614,
+        "correlation_clusters": 318,
+        "correlation_largest": 30,
+        "correlation_rejected_inside": 377,
+        "n_rejected": 45629,
+        "threshold": 0.7
+      },
+      {
+        "closure_bcubed_f1": 0.7391021065963164,
+        "closure_clusters": 135,
+        "closure_largest": 32,
+        "closure_rejected_inside": 944,
+        "correlation_bcubed_f1": 0.7640966122372066,
+        "correlation_clusters": 203,
+        "correlation_largest": 15,
+        "correlation_rejected_inside": 128,
+        "n_rejected": 47978,
+        "threshold": 0.8
+      }
+    ],
+    "threshold": 0.8,
+    "verdict_agreement": 1.0
+  },
+  {
+    "benchmark": "dblp_acm",
+    "closure": {
+      "bcubed_f1": 0.9131246802668255,
       "by_cluster_size": [
         [
           2,
+          499,
+          0
+        ],
+        [
+          3,
+          10,
+          7
+        ],
+        [
+          4,
+          42,
+          45
+        ],
+        [
+          5,
+          4,
+          4
+        ],
+        [
+          6,
+          11,
+          29
+        ],
+        [
+          7,
+          1,
+          9
+        ],
+        [
+          8,
+          3,
+          17
+        ],
+        [
+          12,
+          1,
+          11
+        ]
+      ],
+      "clusterer": "closure",
+      "incluster_contamination": 0.10544511668107173,
+      "largest_cluster": 12,
+      "n_clusters": 571,
+      "n_incluster_pairs": 1157,
+      "n_rejected_inside": 122,
+      "pairwise_f1": 0.6856829402084477,
+      "rejected_inside_rate": 0.02690780767534186
+    },
+    "correlation": {
+      "bcubed_f1": 0.9356531957681898,
+      "by_cluster_size": [
+        [
+          1,
+          42,
+          0
+        ],
+        [
+          2,
+          553,
+          0
+        ],
+        [
+          3,
+          38,
+          20
+        ],
+        [
+          4,
+          8,
+          6
+        ],
+        [
+          5,
+          5,
+          4
+        ],
+        [
+          6,
           1,
           0
         ]
       ],
       "clusterer": "correlation",
-      "incluster_contamination": 0.0,
-      "largest_cluster": 2,
-      "n_clusters": 1,
-      "n_incluster_pairs": 1,
-      "n_rejected_inside": 0,
-      "pairwise_f1": 1.0,
-      "rejected_inside_rate": 0.0
+      "incluster_contamination": 0.038461538461538464,
+      "largest_cluster": 6,
+      "n_clusters": 647,
+      "n_incluster_pairs": 780,
+      "n_rejected_inside": 30,
+      "pairwise_f1": 0.8132780082987553,
+      "rejected_inside_rate": 0.0066166740185266875
     },
     "decider_override_rows": 0,
     "method": "rapidfuzz",
     "n_abstained": 0,
-    "n_accepted": 1,
-    "n_judged": 3,
-    "n_logged": 3,
-    "n_rejected": 2,
-    "n_test_records": 3,
+    "n_accepted": 853,
+    "n_judged": 5387,
+    "n_logged": 5387,
+    "n_rejected": 4534,
+    "n_test_records": 1473,
     "reconstruction_exact": true,
-    "seconds": 6.04091325000627,
-    "threshold": 0.4,
+    "seconds": 12.488454999984242,
+    "sweep": [
+      {
+        "closure_bcubed_f1": 0.003936420729360888,
+        "closure_clusters": 1,
+        "closure_largest": 1472,
+        "closure_rejected_inside": 650,
+        "correlation_bcubed_f1": 0.5362735307889572,
+        "correlation_clusters": 400,
+        "correlation_largest": 17,
+        "correlation_rejected_inside": 30,
+        "n_rejected": 655,
+        "threshold": 0.3
+      },
+      {
+        "closure_bcubed_f1": 0.012019476412606124,
+        "closure_clusters": 3,
+        "closure_largest": 1466,
+        "closure_rejected_inside": 1228,
+        "correlation_bcubed_f1": 0.5894367834702574,
+        "correlation_clusters": 444,
+        "correlation_largest": 16,
+        "correlation_rejected_inside": 49,
+        "n_rejected": 1260,
+        "threshold": 0.4
+      },
+      {
+        "closure_bcubed_f1": 0.14527805886810582,
+        "closure_clusters": 49,
+        "closure_largest": 1331,
+        "closure_rejected_inside": 2079,
+        "correlation_bcubed_f1": 0.6930557314214338,
+        "correlation_clusters": 551,
+        "correlation_largest": 13,
+        "correlation_rejected_inside": 74,
+        "n_rejected": 2703,
+        "threshold": 0.5
+      },
+      {
+        "closure_bcubed_f1": 0.41395828073735935,
+        "closure_clusters": 180,
+        "closure_largest": 559,
+        "closure_rejected_inside": 1039,
+        "correlation_bcubed_f1": 0.7785436708343468,
+        "correlation_clusters": 635,
+        "correlation_largest": 9,
+        "correlation_rejected_inside": 77,
+        "n_rejected": 3569,
+        "threshold": 0.6
+      },
+      {
+        "closure_bcubed_f1": 0.9131246802668255,
+        "closure_clusters": 571,
+        "closure_largest": 12,
+        "closure_rejected_inside": 122,
+        "correlation_bcubed_f1": 0.9356531957681898,
+        "correlation_clusters": 647,
+        "correlation_largest": 6,
+        "correlation_rejected_inside": 30,
+        "n_rejected": 4534,
+        "threshold": 0.7
+      },
+      {
+        "closure_bcubed_f1": 0.8454805260312686,
+        "closure_clusters": 307,
+        "closure_largest": 6,
+        "closure_rejected_inside": 18,
+        "correlation_bcubed_f1": 0.8469282652637651,
+        "correlation_clusters": 314,
+        "correlation_largest": 6,
+        "correlation_rejected_inside": 5,
+        "n_rejected": 5026,
+        "threshold": 0.8
+      }
+    ],
+    "threshold": 0.7,
     "verdict_agreement": 1.0
   }
 ]

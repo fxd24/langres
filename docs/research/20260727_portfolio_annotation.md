@@ -1,0 +1,262 @@
+# B2 — Portfolio annotation: is the benchmark portfolio trustworthy?
+
+**Date:** 2026-07-27 · **Cost:** $0 (rapidfuzz + the profiler; no paid call, no
+network) · **Harness:** `examples/research/portfolio_profile.py` ·
+**Raw data:** `examples/research/results/portfolio_profile.json`
+
+Every claim langres makes is measured on this portfolio. If a benchmark is
+**saturated** (a free method already ties the literature, so it has no headroom
+to rank anything) or **structurally unrepresentative** (an artifact in the gold
+labels makes the metric describe the labeling), then the numbers we report are
+about the benchmark, not the method. This is the calibration of our own
+instrument, and it gates the reading of every model comparison.
+
+**Nothing is retired on this basis.** A saturated set is still a fine regression
+guard; it just cannot be evidence *for* a method. The deliverable is the
+annotation below.
+
+---
+
+## 1. The headline
+
+**No registered benchmark is saturated for the free string method.** On every
+dataset where the comparison can be made honestly, `rapidfuzz` sits **0.09 to
+0.69 F1 below** the published number. The portfolio's problem is not a lack of
+headroom — it is the opposite: a free lexical baseline is nowhere near the
+ceiling, so there is plenty of room to rank methods.
+
+The one genuinely saturated set is **`fodors_zagat`**, and it fails a *different*
+metric (see §4) — which is exactly why the verdict has to name its metric.
+
+---
+
+## 2. The annotation table
+
+| benchmark | task | wheel-loadable | records | gold pairs | prevalence | max gold cluster | sep AUC | vocab Jaccard | min token coverage | rapidfuzz F1 (lit. split) | published F1 | **saturated** | **structural caveats** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.795 | 0.2018 | 0.893 (Ditto) | **no** | — |
+| `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.793 | 0.2881 | 0.756 (Ditto) | **no** | — |
+| `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 0.8905 | 0.98 | **no** (gap 0.09) | strictly 1:1 labels |
+| `dblp_scholar` | linkage | no | 66,879 | 13,763 | 6.15e-06 | **37** | 0.993 | **0.061** | 0.651 | 0.6588 | not recorded | **?** | **large-component** |
+| `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.798 | 0.3051 | not recorded | **?** | — |
+| `wdc_computers` | linkage | no | 4,647 | 1,111 | 1.03e-04 | 4 | 0.929 | 0.720 | 0.978 | 0.4447 | not recorded | **?** | — |
+| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.702 | no literature split | 1.00 (ZeroER) | **YES** — see §4 | **tiny-gold** |
+| `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.838 | no literature split | not recorded | **?** | **one-to-one by construction** |
+| `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
+| `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | not loadable | 98.95 (GPT-4o) | **?** | external-only (CC-BY-NC) |
+
+**Reading the columns.**
+
+- **wheel-loadable** — can a `pip install langres` user load it? `True` only when
+  the dataset vendors data files and `pyproject.toml`'s
+  `[tool.hatch.build] exclude` drops **none** of them. `abt_buy`/`amazon_google`
+  ship their `peeters_sampled_test.csv` pair set but *not* their corpus tables,
+  so they are partially shipped and still raise `BenchmarkDataNotFoundError`.
+  This is reproduction status, not quality — but it does mean six of nine
+  loadable benchmarks exist only in a git checkout.
+- **gold pairs** — within-cluster pairs of the **closure** gold partition, which
+  is larger than the literature's positive count wherever the labels chain:
+  `abt_buy` 1028 → 1044, `amazon_google` 1167 → 1390, `walmart_amazon` 962 →
+  1092. Closure *adds* pairs, in the labels, before we run anything.
+- **rapidfuzz F1** — `rapidfuzz` on the dataset's own fixed *literature*
+  train/valid/test split at a threshold derived on train
+  (`evaluate_fixed_split_honest`). This is the only pair-F1 that is
+  apples-to-apples with a published DeepMatcher/Ditto number. Blank where the
+  dataset ships no literature split.
+- **published F1** — only numbers already recorded in this repository, each with
+  a file citation in `PUBLISHED_SOTA` (`examples/research/portfolio_profile.py`).
+  Four loadable sets have **no** published number written down anywhere here, so
+  they get no verdict — reported as `?`, never silently read as "unsaturated".
+- **vocab Jaccard / min token coverage** — the new `VocabularyOverlapSection`
+  (§6). Jaccard is over token *types*; coverage is the share of a side's token
+  *occurrences* whose type also occurs on the other side.
+
+---
+
+## 3. The rules, fixed before looking
+
+Both are the research agenda's, stated before any number was computed, and both
+are executable code (`examples/research/portfolio_profile.py`), not prose:
+
+- **Saturated** := the free `rapidfuzz` method scores within **0.02** of the
+  published SOTA on the same split. If a free method ties the literature, the set
+  cannot rank methods.
+- **Structurally caveated** := the gold labels carry an artifact that makes the
+  metric describe the labeling rather than the task:
+  - `tiny-gold` — fewer than 200 positive pairs, so one pair moves F1 by ~1%;
+  - `one-to-one` — every gold cluster is exactly a pair and nothing is a
+    singleton: an assignment problem, not the many-to-many ER task;
+  - `large-component` — a gold cluster of 10+ records in a two-source linkage
+    set: the label is itself a transitive closure, so the metric rewards
+    chaining;
+  - `lexical-gap` — the two sources share under 50% of their token occurrences,
+    so a string method measures the encoding gap, not entity resolution.
+
+---
+
+## 4. `fodors_zagat` — confirmed saturated, but not by this rule
+
+The suspicion was right, the stated rule cannot reach it, and the distinction
+matters.
+
+**Confirmed:** the dataset has **112 gold pairs** over 864 records
+(`src/langres/data/datasets/fodors_zagat/SOURCE.md:14` — reproduced exactly by
+the profiler). At 112 pairs, a single pair is worth ~0.9% of F1, so the set
+cannot resolve a method difference smaller than about a point. It is flagged
+`tiny-gold`.
+
+**But it ships no fixed literature split** (a perfect mapping instead), so the
+agenda's pair-F1 rule has nothing to evaluate. The saturation verdict therefore
+rests on numbers already recorded in this repo, on the *clustering* metric:
+
+- `rapidfuzz` BCubed F1 **0.9785** against an all-singletons sanity floor of
+  **0.9317** (`examples/research/m3_zero_spend_race_output.md:22`). **Merging
+  nothing already scores 0.93** — the entire measurable range is 0.047 wide.
+- `random_forest` pair F1 **0.985** (`docs/research/20260702_w1_trained_family_results.md:45`)
+  against ZeroER's published **1.00** — inside the 0.02 margin, on a protocol
+  (best-of-grid threshold on the blocked candidate band) that `docs/BENCHMARKS.md`
+  itself flags as optimistically biased, i.e. biased *toward* this verdict.
+
+**Verdict: saturated on BCubed; keep as a regression guard, never quote it as
+evidence for a method.** And note the general lesson: *saturation is
+metric-dependent*. FZ is saturated on BCubed and unmeasurable on pair-F1; the
+DeepMatcher sets are unsaturated on pair-F1. A verdict without its metric is not
+a verdict.
+
+---
+
+## 5. `dblp_scholar` — confirmed transitive-closure labeling artifact
+
+**Confirmed, exactly.** The profiler independently reproduces
+`src/langres/data/datasets/dblp_scholar/ATTRIBUTION.md`: **66,879 records**,
+**2,351 match clusters**, **13,763 closure gold pairs**, and a **largest gold
+cluster of 37 records**.
+
+A 37-record "entity" in a bibliographic two-source set is a transitive closure of
+the labeling, not 37 genuinely identical papers. Two measurable consequences:
+
+1. **60% of the gold pairs are intra-source.** Of 13,763 within-cluster gold
+   pairs only 5,473 (39.77%) are cross-source, which caps cross-source blocking
+   Pair-Completeness at **0.3977** *regardless of blocking quality* — the
+   achieved 0.3945 is 99.2% of that ceiling. The famous "PC 0.39" is a labeling
+   artifact, not a blocking failure.
+2. **It is also where our own output over-merges.** `dblp_scholar` is the one
+   dataset in the portfolio where transitive-closure clustering produces a giant
+   component (see the B1 diagnostic). B2 and B1 are measuring the same phenomenon
+   from opposite ends: one in the gold labels, one in our output.
+
+`dblp_scholar` also has by far the **lowest vocabulary overlap** in the portfolio
+(Jaccard 0.061) — unsurprising for a 66k-record corpus against a 2.6k-record one,
+and a reminder that Jaccard is type-weighted and size-sensitive; its token
+coverage (0.651) is mid-portfolio.
+
+---
+
+## 6. What was missing and is now measured: vocabulary overlap
+
+Everything else in the B2 list was already computed by `DataProfileReport` — this
+was re-verified against the code, not inherited from the agenda:
+`LabelStructureSection` (class balance, prevalence, imbalance, cluster-size
+distribution), `CorpusFieldSection` (field sparsity, string length),
+`SeparabilitySection` (the pair-difficulty proxy), `HeroSection`.
+
+**Vocabulary overlap was genuinely absent** and now ships as
+`VocabularyOverlapSection` (`src/langres/data/data_profile/vocabulary.py`),
+composed automatically whenever a corpus carries a two-valued `source` field. It
+reports two numbers that answer different questions:
+
+- **type Jaccard** — how much of the combined dictionary is common. Dominated by
+  the long tail of one-off tokens (model numbers, OCR noise), and sensitive to a
+  size imbalance between the sides.
+- **token coverage** per side — the fraction of that side's token *occurrences*
+  whose type also occurs on the other side. This is what a string comparator
+  actually experiences while reading a record.
+
+The two come apart, and the gap is informative: `wdc_computers` has both high
+(J 0.720 / cover 0.978 — the two sides are near lexical twins), while
+`walmart_amazon` has J 0.133 but coverage 0.798 — a shared common core plus two
+large disjoint tails. `tiny_fixture` is the only entry that trips the
+`lexical-gap` rule (0.447), which is fine: it is a 12-record toy, explicitly
+"not a real benchmark" per its own `ATTRIBUTION.md`.
+
+---
+
+## 7. Portfolio-level gaps
+
+**All 10 registered entries are `task="linkage"`. There is no registered dedup
+benchmark** — although `dedupe()` is the primary shipped verb and `"dedup"` is a
+declared-but-unused value of `BenchmarkTask`. Every number langres reports about
+its front door is measured on a cross-source linkage task with a `source` field
+and prefixed ids. This is the largest single gap in the portfolio.
+
+**Benchmarks named in our own docs but never registered:** WDC Products, Beer,
+iTunes-Amazon, Alaska, Machamp (all `docs/research/20260701_er_seam_audit.md:57`;
+WDC Products and Beer/iTunes also in `docs/plans/20260708_eval_readiness_plan.md`).
+Two clarifications worth recording so they are not mistaken for gaps:
+
+- **`wdc_computers` is not WDC Products.** Its own `ATTRIBUTION.md:47-48` says
+  so: it is the *computers* category of the older WDC product corpus, not the
+  newer WDC Products generalization benchmark (arXiv:2301.09521) whose headline
+  finding is that *every* SOTA matcher degrades badly on unseen entities.
+- **"matchbench" is a Hugging Face mirror org, not a benchmark.** It is the
+  provenance of several vendored datasets, not a missing entry.
+
+**Reproduction:** only 3 of 9 loadable datasets (`fodors_zagat`, `febrl_person`,
+`tiny_fixture`) survive the PyPI wheel's exclude list. The other six exist only
+in a git checkout. This is deliberate and licence-driven (the vendored
+DeepMatcher/Magellan corpora carry attribution but no explicit redistribution
+licence) — but it means a `pip` user cannot reproduce most of the portfolio, and
+"failed to load" from a wheel means "excluded from this install", not "broken".
+
+---
+
+## 8. How the instrument was validated before any verdict was published
+
+An instrument that has never been checked against a known value is not an
+instrument. Six numbers were reproduced **exactly** from values already recorded
+in this repository, none of them fed to the profiler:
+
+| quantity | recorded | computed | source |
+|---|---|---|---|
+| `fodors_zagat` gold pairs | 112 | 112 | `datasets/fodors_zagat/SOURCE.md:14` |
+| `dblp_scholar` records / clusters / closure pairs / largest component | 66879 / 2351 / 13763 / 37 | same | `datasets/dblp_scholar/ATTRIBUTION.md` |
+| `walmart_amazon` match clusters / singletons / closure pairs | 846 / 22820 / 1092 | same | `datasets/walmart_amazon/ATTRIBUTION.md` |
+| `wdc_computers` clusters / closure pairs | 877 / 1111 | same | `datasets/wdc_computers/ATTRIBUTION.md` |
+| `dblp_acm` clusters (strictly 1:1) | 2220 | 2220 | `datasets/dblp_acm/ATTRIBUTION.md` |
+| `febrl_person` gold pairs (1:1) | 500 | 500 | `datasets/febrl_person/SOURCE.md` |
+
+The **wheel status** is cross-checked by a different route entirely: this harness
+derives it from `pyproject.toml`'s exclude globs, while
+`tests/test_wheel_contents.py::SHIPPED_NON_PY_FILES` is asserted against the
+*real built artifacts*. `tests/examples/test_portfolio_profile.py` fails if the
+two disagree — which is the failure mode `pyproject.toml`'s own comment warns
+about ("path literals that fail silently").
+
+**Sanity on the saturation numbers themselves:** `rapidfuzz`'s honest F1 on the
+literature splits (`abt_buy` 0.2018, `amazon_google` 0.2881) sits just *below*
+the recorded `RandomForestJudge` floor measured with the same instrument on the
+same splits (0.4036 / 0.3596, `data/benchmarks/phase1/PHASE1_RESULTS.md`) — which
+is the expected ordering: a supervised judge over the whole comparison vector
+should beat one unsupervised combined similarity.
+
+---
+
+## 9. What this changes
+
+- **A model ladder on `amazon_google` / `abt_buy` / `walmart_amazon` /
+  `wdc_computers` is safe from saturation** — none is saturated, none is
+  structurally caveated. There is real headroom to measure.
+- **…but on three of those four, blocking recall is the binding ceiling**, not
+  the model: pinned Pair-Completeness is `amazon_google` 0.8388,
+  `walmart_amazon` 0.8773, `wdc_computers` 0.7237 — all below the 0.90 gate
+  (`abt_buy` 0.9301 is the only one that clears it). Any end-to-end number on
+  those three is capped by the blocker, so a ladder that shares the pinned `k`
+  must report recall alongside F1 or it will read a blocker ceiling as a model
+  plateau.
+- **`fodors_zagat` is a regression guard, not evidence.** Free methods reach
+  within 0.047 of the whole measurable BCubed range.
+- **`dblp_scholar`'s gold labels are a transitive closure**; a metric on it
+  partly measures the labeling. Report cross-source recall next to PC or the 0.39
+  reads as a blocking failure it is not.
+- **The portfolio has no dedup benchmark at all**, which is the gap most worth
+  closing next given what `dedupe()` is.
