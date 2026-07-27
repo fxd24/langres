@@ -40,8 +40,9 @@ class CorrelationClusterer(Clusterer):
 
     Drop-in alternative to the base :class:`~langres.core.clusterer.Clusterer`
     (same ``threshold`` constructor, same ``config``/``from_config``, same output
-    shape, inherits ``evaluate()``/``inspect_clusters()`` unchanged -- only
-    :meth:`cluster` differs).
+    shape on distinct-id judgements -- see :meth:`cluster` for the one self-pair
+    exception -- inherits ``evaluate()``/``inspect_clusters()`` unchanged, and
+    only :meth:`cluster` differs).
 
     **It has now been benchmarked, and it is the recommended choice.** It is
     still not the default -- that is a deliberate product decision, not an
@@ -130,13 +131,22 @@ class CorrelationClusterer(Clusterer):
 
         Dropping the second is what makes this class a genuine **drop-in**: the
         documented ``dedupe()`` contract returns the multi-record clusters and
-        leaves singletons out, so a caller who opts in gets a different (better)
-        *partition* but never a different output *shape*. It costs no information
-        -- an id absent from the result is a singleton entity by that same
-        contract -- and it costs no measurement either: the portfolio harness
-        scores ``complete_partition(clusters, all_ids)``, which restores every
-        unlisted id as its own singleton before computing BCubed, so the
-        diagnostic's numbers are unchanged by this.
+        leaves singletons out, so for judgements with **distinct ids** a caller
+        who opts in gets a different (better) *partition* without a different
+        output *shape*. It costs no information -- an id absent from the result is
+        a singleton entity by that same contract -- and it costs no measurement
+        either: the portfolio harness scores ``complete_partition(clusters,
+        all_ids)``, which restores every unlisted id as its own singleton before
+        computing BCubed, so the diagnostic's numbers are unchanged by this.
+
+        **The one exception, and it runs the other way.** A *self-pair*
+        (``left_id == right_id``) that clears the threshold is skipped outright by
+        :meth:`_build_adjacency`, so that record is absent here -- while the base
+        Clusterer feeds it to ``nx.add_edge(x, x)`` and returns a ``{x}``
+        singleton. On that input the BASE clusterer is the one emitting a
+        singleton. Real, not hypothetical: ``VectorBlocker`` produces 43 accepted
+        self-pairs on ``amazon_google``'s test split. Left as-is deliberately --
+        changing the base clusterer would alter the default path's behaviour.
 
         Args:
             judgements: Iterator or list of PairwiseJudgement objects.

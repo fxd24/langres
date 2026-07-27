@@ -23,8 +23,14 @@ a raw `ERModel`.
   already claimed used to come back as a `{id}` singleton — so opting in changed
   your output *shape*, not just your partition, contradicting both the
   documented `dedupe()` contract and the class's own docstring, which already
-  claimed "no singleton clusters". Both clusterers now return multi-record
-  clusters only, with an unmerged record simply absent.
+  claimed "no singleton clusters". For judgements with **distinct ids** both
+  clusterers now return multi-record clusters only, with an unmerged record
+  simply absent. (One exception, running the other way: on an accepted
+  *self-pair* the base `Clusterer` returns a `{id}` singleton via
+  `nx.add_edge(x, x)` while `CorrelationClusterer` skips self-pairs entirely.
+  `VectorBlocker` emits 43 of those on `amazon_google`'s test split, so it is
+  real; it is left alone because changing the base clusterer would alter the
+  default path.)
   This moves **no** measured number: the benchmark harness scores
   `complete_partition(clusters, all_ids)`, which restores every uncovered id as
   its own singleton before anything is measured. Verified differentially against

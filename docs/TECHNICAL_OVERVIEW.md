@@ -1118,8 +1118,8 @@ the adjacency map (identical to the base `Clusterer`, whose graph an unmerged
 record never enters), and a record *with* a qualifying edge whose neighbours an
 earlier pivot already claimed forms a one-node cluster mid-algorithm, which is
 dropped. That keeps the `dedupe()` contract above — the multi-record clusters,
-singletons left out — true for either clusterer, so opting in changes your
-*partition* without changing your output *shape*.
+singletons left out — true for either clusterer, so for judgements with distinct
+ids opting in changes your *partition* without changing your output *shape*.
 
 Two honest caveats. **Self-pairs are the one input where the two still differ,
 and there the base clusterer is the odd one out**: a `left_id == right_id`
