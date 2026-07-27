@@ -677,6 +677,31 @@ def test_builtin_loader_refuses_to_build_around_a_missing_component(
         serializer.load({}, None, tmp_path)
 
 
+def test_calibrator_score_serializer_round_trips_its_nested_calibrator(tmp_path: Path) -> None:
+    """`calibrator_score` carries the fitted calibrator as its nested component.
+
+    The dump must hand back the calibrator itself (the artifact layer serializes it
+    through the component registry and its sidecar), and the load must rebuild a
+    CalibratorScore around whatever it is given back.
+    """
+    from langres.core.op_adapters import CalibratorScore
+
+    class _FittedCalibrator:
+        def transform(self, scores: list[float]) -> list[float]:
+            return scores
+
+    calibrator = _FittedCalibrator()
+    serializer = get_op_serializer("calibrator_score")
+
+    params, component = serializer.dump(CalibratorScore(calibrator))  # type: ignore[arg-type]
+    assert params == {}
+    assert component is calibrator
+
+    restored = serializer.load(params, calibrator, tmp_path)
+    assert isinstance(restored, CalibratorScore)
+    assert restored.calibrator is calibrator
+
+
 def test_rebuild_op_fails_closed_when_a_role_has_no_param_schema(tmp_path: Path) -> None:
     """No registered `validate_params` means no way to prove the params are safe."""
 
