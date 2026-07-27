@@ -1496,6 +1496,23 @@ class ERModel(ModelRun, ModelPersistence):
                 "derive_threshold=True), or build a classic four-slot model if you "
                 "need to train the matcher itself."
             )
+        # Check for a writable cut BEFORE scoring, not after. _select_threshold
+        # raises the same ValueError, but it is called on the far side of a full
+        # Source+body pass -- so on a chain with a paid MatcherScore and no
+        # ThresholdSelect, deferring to it would bill the entire dataset and then
+        # throw the result away (measured: 435 scoring calls over 30 records
+        # before the refusal). The guard below is the cheap early-out; the one in
+        # _select_threshold stays, because it is the invariant for the classic
+        # path too.
+        if self._threshold_seam() is None:
+            raise ValueError(
+                "fit(derive_threshold=True) found no decision threshold to fit: "
+                "this model's explicit Op chain contains no ThresholdSelect, so "
+                "there is no match cut to write. Add a ThresholdSelect to the "
+                "topology (or use a classic four-slot model, whose cut lives on "
+                "the clusterer). Nothing was scored: this is checked before the "
+                "chain runs, so a paid Score in the chain has not been billed."
+            )
         scored = self._prethreshold_pairs(data)
         score_by_pair = {_row_key(row): row.score for row in scored.rows}
         judgement_by_pair = {
@@ -1532,8 +1549,19 @@ class ERModel(ModelRun, ModelPersistence):
             valid_gold=gold_pairs,
         )
 
+        # Gate on ``judgements``, NOT on ``aligned.valid.candidates``: a chain need
+        # not contain a Score at all (a blocker similarity lands as an *unscored*
+        # row score, ``score_type is None``, so ``[BlockerSource(sim_blocker),
+        # ThresholdSelect, ClustererStage]`` is permitted topology that cuts on
+        # the blocker's own number), and the ``score_type is not None`` filter
+        # above then leaves ``judgements`` legitimately empty.
+        # ``classify_pairs([], gold, t)`` does not return None -- it returns a real
+        # PairMetrics of zeros with ``fn=len(gold)`` -- which would print a
+        # fully-populated "Held-out pair metrics" table of 0.0000 for a fit that
+        # measured nothing. Same convention as ``_described``'s
+        # ``if valid_judgements else None``.
         metrics: PairMetrics | None = None
-        if aligned.valid.candidates:
+        if judgements:
             metrics = classify_pairs(judgements, gold_pairs, cast(float, self._match_threshold()))
 
         matcher = self._chain_scoring_matcher()

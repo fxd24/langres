@@ -141,6 +141,47 @@ def _explicit(threshold: float = _DEFAULT_THRESHOLD) -> ERModel:
     )
 
 
+class _SimilarityBlocker(AllPairsBlocker[Any]):
+    """All pairs, each stamped with a blocker ``similarity_score``.
+
+    The shape a Score-less chain needs: ``BlockerSource`` lands
+    ``similarity_score`` as an **unscored** row score (``score_type is None`` --
+    a blocker similarity is not a judge score), so rows carry a real number to
+    threshold on while producing no ``PairwiseJudgement`` at all.
+    """
+
+    def stream(self, data: list[Any]) -> Iterator[ERCandidate[Any]]:
+        for candidate in super().stream(data):
+            left, right = candidate.left.name.split()[0], candidate.right.name.split()[0]
+            candidate.similarity_score = 0.9 if left == right else 0.1
+            yield candidate
+
+
+class _CountingMatcher:
+    """A ``$0`` stand-in for a paid scorer that records how often it was asked to score.
+
+    Stands in for the thing the cost actually rides on. A real
+    ``LLMMatcher`` here would make the assertion expensive and non-hermetic; what
+    matters is only *whether* the scoring seam was entered, which a counter
+    observes exactly as well and for free.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            self.calls += 1
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                score=1.0,
+                score_type="heuristic",
+                decision_step="counting_stub",
+                provenance={},
+            )
+
+
 class _SupervisedMatcher:
     """A matcher that implements ``SupervisedFitMixin`` and records its training call.
 
@@ -474,17 +515,59 @@ def test_explicit_chain_fit_without_derive_threshold_raises_a_directed_error() -
 
 
 def test_explicit_chain_without_a_threshold_select_refuses_to_derive() -> None:
-    """No cut to write -> raise, rather than derive a number and drop it."""
+    """No cut to write -> raise, rather than derive a number and drop it.
+
+    Asserting only the exception would be a check decoupled from what it guards:
+    it passes whether the refusal happens before or after the chain runs. The
+    ``ValueError`` used to be raised inside ``_select_threshold``, one full
+    Source+body pass downstream, so a chain with a paid ``MatcherScore`` billed
+    the whole dataset and then threw the scores away. The counter is what makes
+    that regression observable: the scorer must be called **zero** times.
+    """
     records, pairs = _dataset()
+    counting = _CountingMatcher()
     model = ERModel.from_topology(
         ops=[
             BlockerSource(AllPairsBlocker(schema=CompanySchema)),
-            MatcherScore(_matcher(), out_space="heuristic"),
+            MatcherScore(counting, out_space="heuristic"),
             ClustererStage(Clusterer(threshold=0.0)),
         ]
     )
     with pytest.raises(ValueError, match="contains no ThresholdSelect"):
         model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert counting.calls == 0
+
+
+def test_a_score_less_chain_reports_no_held_out_metrics() -> None:
+    """Empty judgements must read as "not computed", never as a table of zeros.
+
+    A chain need not contain a ``Score``: cutting on the blocker's own similarity
+    is permitted topology, and every row then carries ``score_type=None``. The
+    metrics gate used to test ``aligned.valid.candidates`` instead of the
+    judgements themselves, and ``classify_pairs([], gold, t)`` does not return
+    ``None`` -- it returns a real ``PairMetrics`` of zeros with ``fn=len(gold)``.
+    That printed a fully-populated "Held-out pair metrics" table of 0.0000 for a
+    fit that measured nothing.
+    """
+    records, pairs = _dataset()
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(_SimilarityBlocker(schema=CompanySchema)),
+            ThresholdSelect(_DEFAULT_THRESHOLD),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    report = model.fit_report_
+    assert report is not None and report.threshold_fit is not None
+    # The cut really was fitted -- the blocker's similarity is a usable score...
+    assert report.threshold_fit.source in {"derived", "declined"}
+    assert report.n_valid > 0  # ...and a held-out split really did exist...
+    # ...but no judgement was ever produced, so there is nothing to grade.
+    assert report.metrics is None
+    assert report.threshold_fit.previous is not None
+    assert report.threshold_fit.previous.held_out_f1 is None
+    assert "No held-out pair P/R/F1 computed for this fit." in report.to_markdown()
 
 
 def test_threshold_seam_reports_where_each_topology_keeps_its_cut() -> None:
