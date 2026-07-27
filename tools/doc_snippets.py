@@ -176,7 +176,10 @@ _EXTRA_PROOF_MODULES = frozenset(
     }
 )
 #: A repo-relative path under `examples/` -- the directory the wheel does not ship.
-_EXAMPLES_REF_RE = re.compile(r"examples/[\w./-]+\.py")
+#: Any path under `examples/`, whatever its extension. Anchoring on `.py` missed
+#: `cat examples/data/companies.json` and `jupyter examples/demo.ipynb` -- the
+#: wheel omits the WHOLE directory, so the file type was never the point.
+_EXAMPLES_REF_RE = re.compile(r"examples/[\w.-]+(?:/[\w.-]+)*")
 
 #: Proof a snippet reached its own last line. See :func:`run_snippet`.
 _SENTINEL = "__langres_docs_gate_reached_end__"
@@ -821,7 +824,12 @@ def main(argv: list[str] | None = None) -> int:
             # let a real `examples/` reference through unseen. This gate exists
             # because a check that passes when it cannot observe is worthless,
             # so the unknown fails closed. (CI never takes this branch.)
-            interpreter = Path(args.interpreter)
+            # Absolute, resolved against the CALLER's directory. Snippets run
+            # with cwd set to a scratch dir, so a relative `--interpreter
+            # .venv/bin/python` would be looked up inside that scratch dir and
+            # die with FileNotFoundError -- after the cleanliness probe (which
+            # runs before the cwd change) had already passed.
+            interpreter = Path(args.interpreter).resolve()
             examples_shipped = False
             # The SAME cleanliness assertion the built venv gets. Skipping it
             # here meant `--interpreter .venv/bin/python` ran every snippet
