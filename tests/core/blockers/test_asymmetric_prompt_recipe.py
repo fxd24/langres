@@ -98,6 +98,26 @@ def _bare_index(texts: list[str]) -> FAISSIndex:
     return index
 
 
+BLOCKER_LOGGER = "langres.core.blockers.vector"
+
+
+def _blocker_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Warnings from the blocker only.
+
+    ``caplog.text`` is the *root* capture, so an unrelated WARNING from faiss or
+    sentence-transformers would make a "stays silent" assertion fail for a reason
+    that has nothing to do with this check -- and, worse, would make it pass for
+    the wrong reason if the polarity were ever flipped.
+    """
+    return [
+        # getMessage() already interpolates record.args -- applying `% args`
+        # again would raise on the interpolated string, not just be redundant.
+        record.getMessage()
+        for record in caplog.records
+        if record.name == BLOCKER_LOGGER and record.levelno >= logging.WARNING
+    ]
+
+
 class TestTheRecipeIsExpressible:
     """The shipped API reaches the documented asymmetric configuration."""
 
@@ -173,8 +193,10 @@ class TestCoherenceWarning:
                 k_neighbors=3,
             )
 
-        assert "document-side prompt" in caplog.text
-        assert "prompt_name='document'" in caplog.text
+        warnings = _blocker_warnings(caplog)
+        assert len(warnings) == 1
+        assert "document-side prompt" in warnings[0]
+        assert "prompt_name='document'" in warnings[0]
 
     def test_silent_when_both_sides_are_driven(
         self, caplog: pytest.LogCaptureFixture
@@ -188,7 +210,7 @@ class TestCoherenceWarning:
                 k_neighbors=3,
             )
 
-        assert caplog.text == ""
+        assert _blocker_warnings(caplog) == []
 
     def test_silent_when_neither_side_is_driven(
         self, caplog: pytest.LogCaptureFixture
@@ -202,7 +224,7 @@ class TestCoherenceWarning:
                 k_neighbors=3,
             )
 
-        assert caplog.text == ""
+        assert _blocker_warnings(caplog) == []
 
     def test_silent_when_only_the_query_side_is_driven(
         self, caplog: pytest.LogCaptureFixture
@@ -222,7 +244,7 @@ class TestCoherenceWarning:
                 k_neighbors=3,
             )
 
-        assert caplog.text == ""
+        assert _blocker_warnings(caplog) == []
 
     def test_an_index_without_an_embedder_is_not_an_error(
         self, caplog: pytest.LogCaptureFixture
@@ -244,4 +266,4 @@ class TestCoherenceWarning:
                 k_neighbors=3,
             )
 
-        assert caplog.text == ""
+        assert _blocker_warnings(caplog) == []
