@@ -14,6 +14,12 @@ human answers them. Two review surfaces, one contract
   corrections log *immediately*, so quitting (or ctrl-D) never loses answered
   work and a re-run resumes where it left off.
 
+``info`` is the odd one out: an install diagnostic, not a review surface. It
+answers the first question a new user hits -- *which extras do I actually have,
+and which benchmark datasets can I load?* -- because a `pip install langres`
+gets neither every extra nor most of the benchmark corpora (they are excluded
+from the wheel; see ``[tool.hatch.build]``).
+
 Design constraints (this is a packaged console-script entry point):
 
 - **stdlib + the light langres contracts only.** ``argparse``/``csv``/``re``
@@ -39,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import re
 import sys
 from collections.abc import Sequence
@@ -66,6 +73,30 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 _PROMPT = "[y]es match  [n]o  [s]kip  [q]uit > "
 
+#: Each optional extra with the import(s) that PROVE it -- the modules langres
+#: itself imports from that stack (verified against `src/`, not assumed from the
+#: dependency list). Probed with :func:`importlib.util.find_spec`, never
+#: ``try: import``: importing torch to discover whether torch is installed costs
+#: seconds and drags the heavy stack into the one command whose job is to work
+#: on a bare install.
+#:
+#: ``bitsandbytes`` (``[finetune]``) is deliberately absent. It is Linux-only in
+#: the extra and langres never imports it by name -- its config arrives via
+#: ``transformers.BitsAndBytesConfig`` -- so probing for it would report a false
+#: "no" on every macOS install that has the extra correctly installed.
+_EXTRA_PROOF_IMPORTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("semantic", ("faiss", "qdrant_client", "sentence_transformers", "torch")),
+    ("llm", ("dspy", "litellm", "openai")),
+    ("trained", ("sklearn",)),
+    ("eval", ("ranx",)),
+    ("finetune", ("peft", "trl")),
+)
+
+#: Credentials the paid path reads. Reported as a **boolean only** -- the value is
+#: tested for truthiness and discarded. `langres info` must never put a secret on
+#: a terminal, in a CI log, or in a pasted bug report.
+_PAID_PATH_KEYS = ("OPENROUTER_API_KEY", "OPENAI_API_KEY")
+
 
 def main(
     argv: Sequence[str] | None = None,
@@ -91,6 +122,8 @@ def main(
     if args.version:
         out_stream.write(f"langres {__version__}\n")
         return 0
+    if args.command == "info":
+        return _info(out_stream)
     if args.command == "review":
         return _review(Path(args.queue), Path(args.out), args.reviewer, in_stream, out_stream)
     if args.command == "export-csv":
@@ -140,7 +173,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{review,export-csv,import-csv,experiments}",
+        metavar="{info,review,export-csv,import-csv,experiments}",
+    )
+
+    subparsers.add_parser(
+        "info",
+        help="Report what this install actually has: extras, datasets, credentials.",
+        description=(
+            "Print the installed langres version, which optional extras resolve (with "
+            "the import that proves each), which benchmark datasets this install can "
+            "actually load, and whether a paid-path API key is configured. Reports key "
+            "presence as yes/no only -- it never prints a key. Runs on a bare core "
+            "install and imports no heavy dependency to decide whether one exists."
+        ),
     )
 
     p_review = subparsers.add_parser(
@@ -234,6 +279,93 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The reproduction artifact emitted by Experiment.run().",
     )
     return parser
+
+
+def _module_installed(name: str) -> bool:
+    """Is ``name`` importable, *without* importing it?
+
+    :func:`importlib.util.find_spec` locates a module's spec on the path; it does
+    not execute the module. That distinction is the whole point here -- a
+    ``try: import torch`` probe would take seconds and pull the heavy stack into
+    ``sys.modules``, which ``tests/test_import_budget.py`` exists to prevent.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        # ImportError: a parent package is absent, so the child cannot exist.
+        # ValueError: the module is present but has no spec (__spec__ is None).
+        return False
+
+
+def _benchmark_status(name: str) -> str:
+    """Actually load benchmark ``name``; return ``""`` on success or a short reason.
+
+    Deliberately behavioral, not a manifest lookup. Whether a dataset is usable
+    here depends on facts no static list tracks -- the wheel excludes most of the
+    corpora, and some loaders need an extra -- and a diagnostic that consults a
+    hand-maintained copy of that answer reports the copy, not the install.
+    Loading every bundled dataset costs about a second in a git checkout, and far
+    less in a wheel install where most fail immediately.
+    """
+    from langres.data.registry import get_benchmark
+
+    try:
+        get_benchmark(name).load()
+    except Exception as exc:
+        # Broad on purpose: this is a diagnostic. Any failure to load is the
+        # answer the user asked for, so no loader error may abort the report.
+        return type(exc).__name__
+    return ""
+
+
+def _info(out_stream: TextIO) -> int:
+    """Print what this install actually has: version, extras, datasets, credentials."""
+    from langres.clients.settings import Settings
+    from langres.data.registry import list_benchmarks
+
+    out_stream.write(f"langres {__version__}\n")
+    out_stream.write(f"python  {sys.version.split()[0]}  ({sys.executable})\n")
+
+    out_stream.write("\nExtras\n")
+    for extra, proofs in _EXTRA_PROOF_IMPORTS:
+        missing = [module for module in proofs if not _module_installed(module)]
+        label = f"[{extra}]"
+        if missing:
+            out_stream.write(
+                f"  {label:<11} no   missing {', '.join(missing)}"
+                f"  ->  pip install 'langres[{extra}]'\n"
+            )
+        else:
+            out_stream.write(f"  {label:<11} yes  {', '.join(proofs)}\n")
+
+    entries = list_benchmarks()
+    statuses = {entry.name: _benchmark_status(entry.name) for entry in entries}
+    loadable = sum(1 for reason in statuses.values() if not reason)
+    out_stream.write(f"\nBenchmark datasets ({loadable}/{len(entries)} loadable here)\n")
+    for entry in entries:
+        reason = statuses[entry.name]
+        verdict = "no   " + reason if reason else "yes"
+        out_stream.write(f"  {entry.name:<16} {verdict}\n")
+    if "BenchmarkDataNotFoundError" in statuses.values():
+        out_stream.write(
+            "  BenchmarkDataNotFoundError = the corpus is excluded from the PyPI wheel\n"
+            "  (no redistribution license); install from a git checkout to get it.\n"
+        )
+
+    # Presence only. The value is never read into the output -- see _PAID_PATH_KEYS.
+    settings = Settings()
+    configured = {
+        "OPENROUTER_API_KEY": bool(settings.openrouter_api_key),
+        "OPENAI_API_KEY": bool(settings.openai_api_key),
+    }
+    out_stream.write("\nPaid path (presence only -- no key is ever printed)\n")
+    for key in _PAID_PATH_KEYS:
+        out_stream.write(f"  {key:<20} {'set' if configured[key] else 'not set'}\n")
+    out_stream.write(
+        "  Read from the environment and from ./.env in the current directory,\n"
+        "  which is the same discovery order the paid path itself uses.\n"
+    )
+    return 0
 
 
 def _review(
