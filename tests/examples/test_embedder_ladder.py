@@ -110,6 +110,50 @@ class TestPairedInterval:
         assert interval.n_entities == 2
 
 
+class TestDocumentedPromptArm:
+    """A checkpoint's OWN prompt recipe is a third arm, and it can be asymmetric.
+
+    The generic-instruction arm answers "does any instruction help". The question
+    a user actually faces is "should I follow the model card", and for
+    EmbeddingGemma the model card is asymmetric: queries get
+    ``"task: search result | query: "`` and documents get
+    ``"title: none | text: "`` — NOT a bare document. Measuring a query prefix
+    against un-prefixed documents is a different configuration from the
+    documented one, so the arm has to carry both sides.
+    """
+
+    def test_arms_are_document_and_query_prompt_pairs(self) -> None:
+        assert LADDER.PROMPT_ARMS["none"] == (None, None)
+        assert LADDER.PROMPT_ARMS["instruct"] == (None, LADDER.INSTRUCTION)
+
+    def test_a_model_without_a_documented_recipe_gets_only_the_base_arms(self) -> None:
+        spec = LADDER.ModelSpec("all-MiniLM-L6-v2")
+        assert spec.documented_arm is None
+        assert LADDER.arms_for(spec, LADDER.PROMPT_ARMS) == LADDER.PROMPT_ARMS
+
+    def test_an_instruction_trained_model_gains_a_third_asymmetric_arm(self) -> None:
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        assert spec.documented_arm is not None
+        arms = LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+
+        assert set(arms) == {"none", "instruct", "documented"}
+        document_prompt, query_prompt = arms["documented"]
+        # Both sides prefixed, and differently -- that is what makes it the
+        # documented recipe rather than the generic arm with different wording.
+        assert document_prompt == "title: none | text: "
+        assert query_prompt == "task: search result | query: "
+
+    def test_the_documented_arm_is_never_added_to_uninstructed_models(self) -> None:
+        """Cheap to add, but it would measure a question already answered.
+
+        Every model here that was trained without a query-side instruction
+        already has its answer from the generic arm; spending queue time on a
+        second flavour of the same negative is the wrong trade.
+        """
+        for name in ("all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-base-en-v1.5"):
+            assert LADDER.MODELS_BY_NAME[name].documented_arm is None
+
+
 class TestPersistence:
     def test_rerunning_a_model_replaces_its_rows_instead_of_appending(self) -> None:
         stale = LADDER.LadderRow(
