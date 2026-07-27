@@ -544,10 +544,12 @@ def test_the_derived_threshold_survives_save_load_but_its_provenance_does_not(
 
     ``fit_report_`` is deliberately never serialized, so a reloaded model carries
     a measured cut with no record that it was measured. Stated here rather than
-    left undefined.
+    left undefined. (Built via ``from_schema`` because the raw ``RapidfuzzMatcher``
+    used elsewhere in this file carries no registry ``type_name`` and so cannot be
+    saved at all.)
     """
     records, pairs = _dataset()
-    model = _classic()
+    model = Resolver.from_schema(CompanySchema, matcher="string", threshold=_DEFAULT_THRESHOLD)
     model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
     derived = model.clusterer.threshold
 
