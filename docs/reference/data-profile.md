@@ -16,6 +16,7 @@ metric family:
 | `LabelStructureSection` | gold cluster-size distribution, singleton rate, positive-pair prevalence + class imbalance |
 | `CorpusFieldSection` | per-field non-null rate, cardinality, value-length distribution (most-missing first) |
 | `SeparabilitySection` | matches-vs-non-matches similarity histogram + AUC for a signal (rapidfuzz string by default, or an embedding cosine) |
+| `VocabularyOverlapSection` | lexical overlap between the two sources of a linkage corpus: token-type Jaccard + overlap coefficient, the occurrence-weighted token coverage per side, and the most-shared tokens |
 | `EmbeddingSection` | one precomputed model's L2-norm distribution (provenance, health) |
 | `EmbeddingComparisonSection` | several models' norm distributions as shared-axis small multiples |
 
@@ -29,7 +30,10 @@ computes nothing itself. Two consequences:
   narrow with `include=` (a selector of section *kinds*; an unknown kind raises).
 - **A missing input is never an error.** No gold clustering -> no label-structure
   or separability section. No `schema` -> no string separability. No embeddings ->
-  no embedding sections. The section is simply absent; the report still renders.
+  no embedding sections. No two-valued `source` field on the records (a
+  single-source dedup corpus) -> no vocabulary overlap; override the field name
+  with `source_key=` on `from_records`. The section is simply absent; the report
+  still renders.
 
 ## Text-first; HTML optional
 

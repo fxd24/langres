@@ -543,12 +543,17 @@ def run_benchmark(name: str, *, method: str, seed: int, log_dir: Path) -> Benchm
     # 2. The measured run: the real front door on the held-out split.
     resolver = factory(threshold)
     clusters, rows = _dedupe_with_log(resolver, test, log_dir / f"{name}_test.jsonl")
-    judgements = judgements_from_log(rows)
+    # ONE filtered row list, shared with the reconstruction, so the two can never
+    # drift out of alignment: zipping judgements against a separately-recomputed
+    # filter would silently pair row i with judgement j the moment the predicate
+    # in judgements_from_log changed.
+    judged_rows = [row for row in rows if row["verdict"] is not None]
+    judgements = judgements_from_log(judged_rows)
 
     # 3. Instrument check A -- the logged verdict is reproducible from the row.
     agree = sum(
         1
-        for judgement, row in zip(judgements, [r for r in rows if r["verdict"] is not None])
+        for judgement, row in zip(judgements, judged_rows, strict=True)
         if predicted_match(judgement, threshold) is row["verdict"]
     )
     verdict_agreement = agree / len(judgements) if judgements else None
