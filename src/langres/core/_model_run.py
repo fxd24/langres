@@ -1052,12 +1052,18 @@ class ModelRun(ModelState):
         :class:`~langres.core.op_adapters.ClustererStage` clustering over the
         survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
         The output is whatever the (zeroed) equivalence clusterer returns over
-        the selected edges: the base connected-components
-        :class:`~langres.core.clusterer.Clusterer` emits only multi-record
-        clusters (an isolated record never enters the graph), whereas a pivot
-        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` can
-        leave a singleton behind -- a record with a qualifying edge whose only
-        neighbours an earlier pivot already claimed.
+        the selected edges, and **every clusterer returns the same shape**:
+        multi-record clusters only, an unmerged record simply absent. The two
+        reach it differently, which is worth knowing when reading either one's
+        source. The base connected-components
+        :class:`~langres.core.clusterer.Clusterer` gets it for free -- an isolated
+        record never enters the graph. A pivot
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` has a
+        second way to strand a record -- one *with* a qualifying edge whose only
+        neighbours an earlier pivot already claimed -- which forms a one-node
+        ``{node}`` cluster mid-algorithm, so it drops those explicitly rather than
+        handing a caller who swapped the clusterer a different output shape for
+        the same meaning.
 
         Args:
             records: Raw records (dicts) in a stable list order.

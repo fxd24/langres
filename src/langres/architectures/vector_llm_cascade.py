@@ -103,6 +103,28 @@ class VectorLLMCascade(ERModel):
         k_neighbors: Neighbors per record the blocker retrieves.
         entity_noun: The domain noun woven into the LLM's prompt ("company",
             "product", ...). Free, and it measurably helps.
+        clusterer: The grouping algorithm. ``None`` (default) builds the base
+            transitive-closure :class:`~langres.core.clusterer.Clusterer` -- the
+            unchanged shipped behaviour. Pass
+            :class:`~langres.core.clusterers.correlation.CorrelationClusterer`
+            to opt into pivot clustering, which measures better on the benchmark
+            portfolio (``docs/research/20260727_closure_diagnostic.md``) and is
+            the recommended choice::
+
+                from langres.core.clusterers import CorrelationClusterer
+
+                VectorLLMCascade(llm=..., clusterer=CorrelationClusterer())
+
+            It matters most here, where the judgements were *paid* for: closure
+            merges through a chain, so it can seat a pair the LLM was paid to
+            reject inside one output cluster. Pivot cuts that 3.0x-7.4x. It does
+            not eliminate it -- neither clusterer prices rejected edges into its
+            objective (see ``CorrelationClusterer``).
+
+            This selects the *algorithm* only: the clusterer is rebuilt at this
+            model's ``threshold``, so any threshold set on the object you pass is
+            ignored and ``threshold=`` stays the one match cut. Topology is
+            otherwise unchanged -- this is still a ``VectorLLMCascade``.
         schema: The entity schema; omit to infer it from the records on first
             use. Pass it explicitly for anything you intend to ``save``.
         budget_usd: Spend cap for this model's whole lifetime, in USD. ``None``
@@ -134,6 +156,7 @@ class VectorLLMCascade(ERModel):
         escalation_band: tuple[float, float] = _ESCALATION_BAND,
         k_neighbors: int = _K_NEIGHBORS,
         entity_noun: str = "entity",
+        clusterer: Clusterer | None = None,
         schema: type[BaseModel] | None = None,
         budget_usd: float | None = None,
     ) -> None:
@@ -146,6 +169,11 @@ class VectorLLMCascade(ERModel):
         self.escalation_band = escalation_band
         self.k_neighbors = k_neighbors
         self.entity_noun = entity_noun
+        # NOT ``self.clusterer``: that name is an ERModel SLOT (a property whose
+        # getter raises until the model is bound). This is the un-bound *choice*,
+        # read by _topology at bind time -- same split, same name, as the four
+        # retrieval recipes in architectures/retrieval.py.
+        self.clusterer_override = clusterer
         self._init_state(budget_usd=budget_usd)
         if schema is not None:
             self._bind(schema)
@@ -225,5 +253,22 @@ class VectorLLMCascade(ERModel):
             "matcher": CascadeMatcher(
                 student=student, escalation=escalation, band=self.escalation_band
             ),
-            "clusterer": Clusterer(threshold=self.threshold),
+            "clusterer": self._build_clusterer(),
         }
+
+    def _build_clusterer(self) -> Clusterer:
+        """The clusterer slot: the caller's algorithm, at THIS model's threshold.
+
+        Rebuilt through ``config``/``from_config`` rather than used as passed, so
+        ``threshold=`` stays the single match cut no matter what threshold the
+        caller happened to set on the object. That is the same clone seam
+        ``ERModel`` already puts every clusterer through on every resolve (its
+        ``_closure_clusterer``), so a clusterer that survives a run survives this,
+        and ``from_config`` re-runs ``__init__`` -- keeping the range validation a
+        plain attribute assignment would have skipped.
+        """
+        if self.clusterer_override is None:
+            return Clusterer(threshold=self.threshold)
+        return type(self.clusterer_override).from_config(
+            {**self.clusterer_override.config, "threshold": self.threshold}
+        )
