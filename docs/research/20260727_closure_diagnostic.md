@@ -40,9 +40,11 @@ The measurement is the deliverable. **Changing the default is a separate PR.**
   giant component was too large to score).
 - **The largest effect is not at the tuned point at all.** One grid step below
   it, closure collapses: on `walmart_amazon` at t = 0.50 it swallows **173,470**
-  rejected pairs (largest cluster: the entire 7,386-record test split) against
-  correlation's 4,615. Closure's quality is a **cliff**; correlation's is a
-  slope.
+  rejected pairs into a largest cluster of **6,798 — 92 % of the 7,386-record
+  test split** — against correlation's 4,615 and 66. Two steps further down
+  (t = 0.30) it degenerates outright: **exactly one cluster on all nine
+  benchmarks**, and on eight of the nine that cluster is the entire test split.
+  Closure's quality is a **cliff**; correlation's is a slope.
 
 ---
 
