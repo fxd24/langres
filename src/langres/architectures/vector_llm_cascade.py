@@ -117,9 +117,17 @@ class VectorLLMCascade(ERModel):
 
             It matters most here, where the judgements were *paid* for: closure
             merges through a chain, so it can seat a pair the LLM was paid to
-            reject inside one output cluster. Pivot cuts that 5.6x across the
-            portfolio (3.0x-7.4x per benchmark). It does not eliminate it --
-            neither clusterer prices rejected edges into its objective (see
+            reject inside one output cluster. That mechanism is structural --
+            it follows from transitive closure, not from any scorer.
+
+            The published *magnitude* does not transfer to this architecture:
+            the 5.6x portfolio reduction (3.0x-7.4x per benchmark) was measured
+            with the **$0 rapidfuzz scorer on one split seed**, and the
+            diagnostic says a decider LLM "could move the numbers" and that the
+            ordering surviving is "a hypothesis, not a measurement". Read the
+            ratio as evidence from the $0 path, not as a measurement of a paid
+            cascade. Either way it does not eliminate the problem -- neither
+            clusterer prices rejected edges into its objective (see
             ``CorrelationClusterer``).
 
             This selects the *algorithm* only: the clusterer is rebuilt at this

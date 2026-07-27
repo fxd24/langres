@@ -47,9 +47,12 @@ a raw `ERModel`.
 as the recommended choice with its numbers
 (`docs/research/20260727_closure_diagnostic.md`): higher BCubed F1 at 36 of the
 45 scored grid points, tied at 9, worse at 0, with 9 further points unscorable
-because closure's component was too large to score. It mitigates *chaining*; it
-does **not** consume negative evidence — rejected edges are discarded before
-pivoting, exactly as the base `Clusterer` discards them.
+because closure's component was too large to score. Those numbers were measured
+with one **$0 `rapidfuzz` scorer on one split seed**; the diagnostic flags a
+decider LLM as able to move them, so they are not a measurement of a paid
+pipeline. It mitigates *chaining*; it does **not** consume negative evidence —
+rejected edges are discarded before pivoting, exactly as the base `Clusterer`
+discards them.
 
 ### Research execution foundation
 

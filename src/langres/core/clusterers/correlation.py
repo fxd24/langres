@@ -64,6 +64,13 @@ class CorrelationClusterer(Clusterer):
       7,386-record split in one cluster) while pivot degrades smoothly. Closure's
       quality is a cliff; pivot's is a slope.
 
+    **What those numbers were measured on.** One **$0 scorer** (``rapidfuzz``)
+    and **one split seed** (0). The diagnostic states outright that a matcher
+    with a different error profile -- a decider LLM in particular -- "could move
+    the numbers", and that the *ordering* surviving is "a hypothesis, not a
+    measurement" (§4). The chaining mechanism is structural and
+    scorer-independent; the magnitudes above are not.
+
     Opt in via the ``clusterer=`` argument of the architectures that expose one --
     :class:`~langres.architectures.fuzzy_string.FuzzyString`,
     :class:`~langres.architectures.vector_llm_cascade.VectorLLMCascade`, and the

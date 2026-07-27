@@ -1168,6 +1168,13 @@ judgement set (`docs/research/20260727_closure_diagnostic.md`; the earlier
 | judged-and-*rejected* pairs inside an output cluster, tuned point | **3,776 → 676** across the portfolio (5.6×; per benchmark, 3.0×–7.4×) |
 | worst single benchmark for closure | `amazon_google` contributes **944** of that 3,776 — and those 944 are **39.8% of every pair sharing one of its own output clusters** (pivot: 128, 14.8%) |
 
+**What this was measured on.** One **$0 scorer** (`rapidfuzz`) and **one split
+seed** (0). The diagnostic says a matcher with a different error profile — a
+decider LLM in particular — "could move the numbers", and that the *ordering*
+surviving is "a hypothesis, not a measurement". The chaining mechanism is
+structural and scorer-independent; these magnitudes are not, so do not read them
+as a measurement of a paid LLM pipeline.
+
 The 3,776 is the **portfolio** total, not one dataset's; the 39.8% is a rate over
 `amazon_google`'s in-cluster pairs, not a share of the 3,776. The largest effect is
 not at the tuned point at all: one grid step below it closure collapses into a
