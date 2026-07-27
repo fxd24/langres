@@ -719,7 +719,8 @@ class TestRecommendationSplitsOnLicence:
 
     def _section(self) -> str:
         report = LADDER.render_report(self._rows())
-        return report[report.index("## Recommendation") : report.index("## The recall/cost frontier")]
+        start = report.index("## Recommendation")
+        return report[start : report.index("## The recall/cost frontier")]
 
     def test_the_restricted_model_is_not_in_the_default_candidate_table(self) -> None:
         osi_table = self._section().split("### Use-restricted")[0]

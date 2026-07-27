@@ -1654,7 +1654,10 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "\n```python\n"
         "embedder = SentenceTransformerEmbedder(\n"
         '    "google/embeddinggemma-300m",\n'
-        '    prompts={"document": "title: none | text: ", "query": "task: search result | query: "},\n'
+        "    prompts={\n"
+        '        "document": "title: none | text: ",\n'
+        '        "query": "task: search result | query: ",\n'
+        "    },\n"
         '    prompt_name="document",   # <- the DOCUMENT side, applied by create_index\n'
         ")\n"
         "blocker = VectorBlocker(\n"
