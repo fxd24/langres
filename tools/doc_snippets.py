@@ -420,8 +420,21 @@ def assert_gate_is_observing(snippets: list[Snippet]) -> None:
     #
     # The floor is deliberately "at least one", not a ratio: a threshold would be
     # an arbitrary number to argue with, and the real defence is the
-    # executed/total ratio that `report` now prints for every document. This
-    # catches only total collapse; the ratio makes partial erosion visible.
+    # checked/total ratio that `report` prints for every document.
+    #
+    # KNOWN LIMIT, measured rather than assumed: this floor does NOT catch the
+    # regression that motivated it. A page keeping one trivial checked block
+    # (`pass`) while exempting all 17 behavioural examples satisfies it -- the
+    # 1-checked/17-exempted state passes, verified directly against this
+    # function. The ratio is printed but compared to nothing, so erosion is
+    # visible only to a reader who happens to look at a green job's log.
+    #
+    # Closing it properly needs a committed per-document baseline that fails on
+    # a DECREASE (the shape of `tests/test_import_tangle.py`, this repo's
+    # existing ratchet). That is deliberately not done here: a baseline pinned
+    # to today's numbers would fail the moment the in-flight documentation
+    # branches legitimately move them, so it belongs in a change that can update
+    # the baseline and the docs together, as one reviewable diff.
     for doc in DOC_PATHS:
         in_doc = [s for s in snippets if s.doc == doc]
         has_python = any(s.language in EXECUTED_LANGUAGES and s.code.strip() for s in in_doc)
