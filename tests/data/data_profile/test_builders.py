@@ -383,3 +383,63 @@ class TestFromEmbedder:
         assert src.pre_normalized is True
         assert src.metric == "cosine"
         assert (tmp_path / "vecs.npy").exists()
+
+
+class TestVocabularyOverlapWiring:
+    """The two-source split that feeds the vocabulary-overlap section."""
+
+    _TWO_SOURCE = [
+        {"id": "a1", "source": "abt", "name": "Canon EOS camera"},
+        {"id": "b1", "source": "buy", "name": "Canon camera black"},
+    ]
+
+    def test_two_source_records_produce_the_section(self) -> None:
+        report = from_records(self._TWO_SOURCE)
+        section = report["Vocabulary overlap"]
+        assert section.kind == "vocabulary_overlap"
+        # Sides are ordered by source label, so left/right are stable across runs.
+        assert section.summary["Vocabulary overlap.n_shared_types"] == 2  # canon, camera
+
+    def test_single_source_corpus_drops_the_section(self) -> None:
+        records = [{"id": "1", "source": "only", "name": "Acme"}]
+        assert "vocabulary_overlap" not in {s.kind for s in from_records(records).sections}
+
+    def test_corpus_without_the_source_field_drops_the_section(self) -> None:
+        assert "vocabulary_overlap" not in {s.kind for s in from_records(_RECORDS).sections}
+
+    def test_three_sources_drop_the_section_and_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        records = [{"id": str(i), "source": f"s{i}", "name": "x"} for i in range(3)]
+        with caplog.at_level(logging.DEBUG, logger="langres.data.data_profile.builders"):
+            report = from_records(records)
+        assert "vocabulary_overlap" not in {s.kind for s in report.sections}
+        assert "need exactly 2" in caplog.text  # never a silent drop
+
+    def test_custom_source_key_is_honoured(self) -> None:
+        records = [
+            {"id": "a1", "side": "left", "name": "Acme Corp"},
+            {"id": "b1", "side": "right", "name": "Acme Corporation"},
+        ]
+        report = from_records(records, source_key="side")
+        assert report["Vocabulary overlap"].kind == "vocabulary_overlap"
+
+    def test_source_label_is_excluded_from_the_vocabulary(self) -> None:
+        # The source label is a constant per-record token on exactly one side; if
+        # it leaked in it would count as that side's own vocabulary and depress
+        # the measured coverage.
+        report = from_records(self._TWO_SOURCE)
+        tokens = {row["token"] for row in report["Vocabulary overlap"].rows()}
+        assert "abt" not in tokens and "buy" not in tokens
+
+    def test_include_can_select_the_new_kind(self) -> None:
+        report = from_records(self._TWO_SOURCE, include={"vocabulary_overlap"})
+        assert [s.kind for s in report.sections] == ["vocabulary_overlap"]
+
+
+class TestEmbedTextExclude:
+    def test_exclude_drops_named_fields(self) -> None:
+        record = {"id": "1", "source": "abt", "name": "Acme"}
+        assert _embed_text(record, id_key="id", text_key=None, exclude=("source",)) == "Acme"
+
+    def test_default_exclude_keeps_prior_behavior(self) -> None:
+        record = {"id": "1", "source": "abt", "name": "Acme"}
+        assert _embed_text(record, id_key="id", text_key=None) == "abt Acme"

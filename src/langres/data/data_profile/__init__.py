@@ -61,6 +61,12 @@ from langres.data.data_profile.separability import (
     profile_separability,
     string_signal,
 )
+from langres.data.data_profile.vocabulary import (
+    TokenOverlap,
+    VocabularyOverlapSection,
+    profile_vocabulary_overlap,
+    tokenize,
+)
 
 __all__ = [
     # Seam
@@ -75,6 +81,8 @@ __all__ = [
     "CorpusFieldSection",
     "FieldStat",
     "SeparabilitySection",
+    "VocabularyOverlapSection",
+    "TokenOverlap",
     "EmbeddingSection",
     "EmbeddingComparisonSection",
     # Profiler functions
@@ -84,6 +92,8 @@ __all__ = [
     "profile_failure_mode",
     "profile_corpus_fields",
     "profile_separability",
+    "profile_vocabulary_overlap",
+    "tokenize",
     "profile_embedding",
     "profile_embedding_comparison",
     # Signals + embedding sources
