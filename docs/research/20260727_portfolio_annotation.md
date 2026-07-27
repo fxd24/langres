@@ -133,17 +133,28 @@ a verdict.
 cluster of 37 records**.
 
 A 37-record "entity" in a bibliographic two-source set is a transitive closure of
-the labeling, not 37 genuinely identical papers. Two measurable consequences:
+the labeling, not 37 genuinely identical papers — and the composition proves it.
+Re-derived by an independent path (stdlib `csv` + union-find over the raw
+`train`/`valid`/`test` label files, importing no langres code, which reproduces
+2,351 components and the largest at 37 exactly), that component holds **2 records
+from table A and 35 from table B**. It is not 37 papers: it is two DBLP entries
+chained together through 35 Scholar records. The next-largest component is 20.
+
+Two measurable consequences:
 
 1. **60% of the gold pairs are intra-source.** Of 13,763 within-cluster gold
    pairs only 5,473 (39.77%) are cross-source, which caps cross-source blocking
    Pair-Completeness at **0.3977** *regardless of blocking quality* — the
    achieved 0.3945 is 99.2% of that ceiling. The famous "PC 0.39" is a labeling
    artifact, not a blocking failure.
-2. **It is also where our own output over-merges.** `dblp_scholar` is the one
-   dataset in the portfolio where transitive-closure clustering produces a giant
-   component (see the B1 diagnostic). B2 and B1 are measuring the same phenomenon
-   from opposite ends: one in the gold labels, one in our output.
+2. **Our own output over-merges here hardest.** At its tuned threshold
+   `dblp_scholar` produces the portfolio's largest closure output cluster —
+   44 records, above even its 37-record gold component (B1, §2.1). It is *not*
+   unique in collapsing at lower thresholds: the completed B1 sweep shows **every
+   one of the nine benchmarks** returns a single cluster at t = 0.30, so the
+   giant component is a property of transitive closure, not of this dataset.
+   What `dblp_scholar` is, is the dataset where the same phenomenon is visible
+   from both ends — in the gold labels *and* in our output.
 
 `dblp_scholar` also has by far the **lowest vocabulary overlap** in the portfolio
 (Jaccard 0.061) — unsurprising for a 66k-record corpus against a 2.6k-record one,
