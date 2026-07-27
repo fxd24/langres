@@ -198,9 +198,7 @@ class TestCoherenceWarning:
         assert "document-side prompt" in warnings[0]
         assert "prompt_name='document'" in warnings[0]
 
-    def test_warns_through_a_caching_decorator(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_warns_through_a_caching_decorator(self, caplog: pytest.LogCaptureFixture) -> None:
         """``DiskCachedEmbedder`` holds the real embedder on ``.embedder``.
 
         It carries no ``prompt_name`` of its own, so a check that only looked at
@@ -232,9 +230,7 @@ class TestCoherenceWarning:
 
         assert len(_blocker_warnings(caplog)) == 1
 
-    def test_silent_when_both_sides_are_driven(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_silent_when_both_sides_are_driven(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger="langres.core.blockers.vector"):
             VectorBlocker(
                 vector_index=_asymmetric_index(),
@@ -246,9 +242,7 @@ class TestCoherenceWarning:
 
         assert _blocker_warnings(caplog) == []
 
-    def test_silent_when_neither_side_is_driven(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_silent_when_neither_side_is_driven(self, caplog: pytest.LogCaptureFixture) -> None:
         """langres's default configuration must not warn."""
         with caplog.at_level(logging.WARNING, logger="langres.core.blockers.vector"):
             VectorBlocker(

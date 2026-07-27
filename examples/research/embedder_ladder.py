@@ -1135,9 +1135,7 @@ def _render_recommendation(
             "in the measurement, not a verdict on the incumbent.\n"
         )
     else:
-        out.append(
-            "\n| model | licence | benchmarks beaten (CI clear of 0) | best Δ | on |\n"
-        )
+        out.append("\n| model | licence | benchmarks beaten (CI clear of 0) | best Δ | on |\n")
         out.append("|---|---|---:|---:|---|\n")
         for name in osi:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
@@ -1149,9 +1147,7 @@ def _render_recommendation(
                     f"{best.vs_reference_delta:+.4f} | {best.benchmark} |\n"
                 )
             else:
-                out.append(
-                    f"| `{name}` | {spec.license} | 0 of {len(benchmarks)} | — | — |\n"
-                )
+                out.append(f"| `{name}` | {spec.license} | 0 of {len(benchmarks)} | — | — |\n")
         # Rank on wins first, then on the largest single win, then on the name so
         # the file is byte-stable across re-renders. A tie broken by name alone
         # would silently promote a model for being alphabetically early.

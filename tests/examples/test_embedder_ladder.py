@@ -754,7 +754,7 @@ class TestRecommendationSplitsOnLicence:
         assert LADDER.ModelSpec("someone/new-model").license == "unknown"
 
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
-        """"3 of 14", never "3 of 3" -- a partial field must read as partial."""
+        """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()
 
         assert f"of the {len(LADDER.MODELS)} models in the ladder" in section
