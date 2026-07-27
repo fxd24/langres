@@ -11,6 +11,9 @@ data, and how well does it hold out?" for a single ``fit()``:
 - **did blocking keep the positives** -- the
   :class:`~langres.curation.harvest.GoldCoverage` from
   :func:`~langres.curation.harvest.align_pairs`;
+- **what cut did it settle on** -- the decision threshold, plus whether that
+  number was *derived* from the labels or is the constructor's no-data default
+  (:class:`ThresholdFit`);
 - **how well does it hold out** -- pair P/R/F1 on the entity-disjoint ``valid``
   split (from :func:`~langres.core.metrics.classify_pairs`), when a split was
   given.
@@ -26,10 +29,58 @@ while this model is the human-facing digest.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from langres.curation.harvest import GoldCoverage
 from langres.core.metrics import PairMetrics
+
+
+class ThresholdFit(BaseModel):
+    """How the decision threshold in :attr:`FitReport.threshold` was arrived at.
+
+    The provenance half of the number: a cut derived from 8 labeled pairs and a
+    cut derived from 800 are the same ``float`` and are *not* the same claim, and
+    a cut that was never derived at all is a constructor default masquerading as
+    a measurement. This model makes the difference readable.
+
+    **What survives ``save``/``load``, and what does not.** The threshold *value*
+    does -- it lives on the clusterer (or the chain's
+    :class:`~langres.core.op.ThresholdSelect`), both of which serialize into
+    ``resolver.json``. This provenance does **not**: it hangs off
+    ``ERModel.fit_report_``, which is deliberately never serialized (a fit-time
+    artifact, see ``langres.core._model_state``). So a reloaded model carries a
+    measured threshold with no record that it was measured -- keep the
+    :class:`FitReport` (``model_dump_json()``) beside the artifact if that
+    provenance matters.
+
+    Attributes:
+        source: ``"derived"`` (measured from labels on this fit) or
+            ``"default"`` (whatever the model was constructed with -- an honest
+            no-data fallback, not a measurement).
+        method: The derivation method (``"youden"``), or ``None`` when
+            ``source="default"``.
+        n_pairs: Labeled pairs the cut was derived from (``0`` when defaulted).
+            Read this before trusting the threshold.
+        held_out: Whether :attr:`FitReport.metrics` grades this cut on pairs it
+            was *not* derived from. ``False`` means the cut and the score share
+            rows (in-sample), so any improvement is optimistic. Deriving without
+            an entity-disjoint ``split`` always yields ``False``.
+        applied_to: Which seam the threshold was written to --
+            ``"clusterer"`` (a classic four-slot model) or ``"threshold_select"``
+            (an explicit ``_ops`` chain's ``ThresholdSelect``). ``None`` when
+            nothing was written.
+        previous: The threshold in force before this fit, so the report shows the
+            move rather than only the destination.
+    """
+
+    source: Literal["derived", "default"]
+    method: str | None = None
+    n_pairs: int = 0
+    held_out: bool = False
+    applied_to: Literal["clusterer", "threshold_select"] | None = None
+    previous: float | None = None
 
 
 class CalibrationDelta(BaseModel):
@@ -73,7 +124,10 @@ class FitReport(BaseModel):
         coverage: Blocking coverage of the labeled positives, or ``None`` when
             fit was given pre-aligned labels (no id-join, so no coverage) or
             nothing trained.
-        threshold: The clusterer decision threshold in force, or ``None``.
+        threshold: The decision threshold in force after this fit, or ``None``.
+        threshold_fit: Where that threshold came from -- derived from labels or
+            left at its constructed default (see :class:`ThresholdFit`), or
+            ``None`` for a fit that reports no threshold at all.
         metrics: Held-out pair P/R/F1 on ``valid``, or ``None`` when no split.
         cost: The derived dollar cost of a paid/GPU fit (tokens→$ or
             GPU-seconds→$), else ``None``. For a local fine-tune with no
@@ -100,6 +154,7 @@ class FitReport(BaseModel):
     entity_disjoint: bool
     coverage: GoldCoverage | None
     threshold: float | None = None
+    threshold_fit: ThresholdFit | None = None
     metrics: PairMetrics | None = None
     cost: float | None = None
     gpu_seconds: float | None = None
@@ -119,6 +174,7 @@ class FitReport(BaseModel):
         seed: int = 0,
         coverage: GoldCoverage | None = None,
         threshold: float | None = None,
+        threshold_fit: ThresholdFit | None = None,
         metrics: PairMetrics | None = None,
         cost: float | None = None,
         gpu_seconds: float | None = None,
@@ -142,6 +198,7 @@ class FitReport(BaseModel):
             entity_disjoint=split is not None,
             coverage=coverage,
             threshold=threshold,
+            threshold_fit=threshold_fit,
             metrics=metrics,
             cost=cost,
             gpu_seconds=gpu_seconds,
@@ -158,6 +215,25 @@ class FitReport(BaseModel):
         nothing to train") rather than an anonymous empty report.
         """
         return cls.build(trainable=f"{matcher_name} (no fit hook)", trained=False, n_train=0)
+
+    def _threshold_suffix(self) -> str:
+        """The provenance clause appended to the rendered threshold line.
+
+        Says *how* the number was reached in the same breath as the number, so a
+        reader cannot take a constructor default for a measurement, nor an
+        in-sample cut for a held-out one.
+        """
+        fit = self.threshold_fit
+        if fit is None:
+            return ""
+        if fit.source == "default":
+            return " (default — not derived from labels)"
+        moved = "" if fit.previous is None else f" from {fit.previous:.4f}"
+        sample = "held-out" if fit.held_out else "IN-SAMPLE"
+        return (
+            f" (derived{moved} by {fit.method} on {fit.n_pairs} labeled pairs, "
+            f"{sample}, applied to the {fit.applied_to})"
+        )
 
     def to_markdown(self) -> str:
         """Render a human-readable Markdown digest of the report.
@@ -179,7 +255,7 @@ class FitReport(BaseModel):
             split_line,
         ]
         if self.threshold is not None:
-            lines.append(f"- Threshold: {self.threshold:.4f}")
+            lines.append(f"- Threshold: {self.threshold:.4f}{self._threshold_suffix()}")
         if self.model_ref is not None:
             lines.append(f"- Model ref: {self.model_ref}")
         if self.gpu_seconds is not None:

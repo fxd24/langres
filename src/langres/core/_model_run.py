@@ -508,6 +508,35 @@ class ModelRun(ModelState):
             return _run_stages(records, [self._chain_source(), *self._explicit_body(log=log)])
         return _run_stages(records, self._stages(log=log))
 
+    def _prethreshold_pairs(self, records: list[Any]) -> Pairs[Any]:
+        """Scored rows as this model's match cut *sees* them -- that cut not applied.
+
+        What a threshold fit has to score against: every row the cut will judge,
+        **including the ones the current cut rejects**. Deriving from
+        :meth:`_scored_pairs` instead would be a subtle, self-confirming bug on an
+        explicit chain -- its ``ThresholdSelect`` has already deleted every row
+        below today's threshold, so the "derived" cut could only ever recover the
+        cut that produced the sample.
+
+        Classic four-slot models need no special handling: their cut lives on the
+        clusterer and is applied at :meth:`_cluster`, never inside the scoring
+        chain, so this *is* :meth:`_scored_pairs`. An explicit ``_ops`` chain runs
+        Source + body with the terminal
+        :class:`~langres.core.op.ThresholdSelect` (the one
+        :meth:`_chain_threshold_select` names, and the one a fit writes to)
+        omitted -- every other Op, including an upstream ``TopKSelect``, still
+        runs, so the rows are exactly what the cut would have been handed.
+
+        No ``log=``: this is a fit-time measurement pass, not a user-facing
+        resolve, so its judgements are not flywheel signal. Scoring still runs
+        through the same spend-capped seam as inference.
+        """
+        if self._ops is None:
+            return self._scored_pairs(records)
+        fitted_select = self._chain_threshold_select()
+        body = [op for op in self._explicit_body() if op is not fitted_select]
+        return _run_stages(records, [self._chain_source(), *body])
+
     def _judgements(
         self, records: list[Any], *, log: JudgementLog | None = None
     ) -> Iterator[PairwiseJudgement]:

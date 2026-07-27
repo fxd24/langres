@@ -313,6 +313,9 @@ def derive_threshold_from_pairs(
             biased scored-only subset. Also propagated from
             :func:`~langres.training.calibration.derive_threshold` (empty input,
             single-class labels under ``"youden"``, bad ``percentile``, ...).
+        ImportError: If scikit-learn (the ``[trained]`` extra) is not installed.
+            Raised, never silently defaulted: the same code must not produce a
+            different threshold depending on which extras are present.
 
     Warns:
         UserWarning: If ``pairs`` is non-empty and every label is silver
@@ -344,7 +347,26 @@ def derive_threshold_from_pairs(
             stacklevel=2,
         )
 
-    from langres.training.calibration import derive_threshold
+    # scikit-learn is the ``[trained]`` extra, and ``training.calibration``
+    # imports it at MODULE scope -- so on a core-only install this import fails,
+    # not the ROC computation below it. Translate the bare
+    # ``ModuleNotFoundError: No module named 'sklearn'`` into problem + cause +
+    # fix, and RAISE rather than fall back: a silent default cut would make the
+    # same code produce different artifacts depending on which extras happen to
+    # be installed, which is exactly the "no silent fallback" property langres
+    # advertises (docs/GETTING_STARTED.md).
+    try:
+        from langres.training.calibration import derive_threshold
+    except ImportError as exc:
+        raise ImportError(
+            "cannot derive a threshold: threshold derivation needs scikit-learn "
+            "(it reads the ROC curve), which ships in langres's optional "
+            "'trained' extra and is not installed. "
+            "Fix: pip install 'langres[trained]' (or uv add 'langres[trained]'). "
+            "langres will not substitute an underived default -- a hand-set cut "
+            "is not a derived one, and the same code must not produce different "
+            "artifacts depending on which extras happen to be installed."
+        ) from exc
 
     return derive_threshold(
         scores,
