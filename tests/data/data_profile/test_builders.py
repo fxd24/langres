@@ -482,6 +482,36 @@ class TestVocabularyOverlapWiring:
         report = from_records(self._TWO_SOURCE, include={"vocabulary_overlap"})
         assert [s.kind for s in report.sections] == ["vocabulary_overlap"]
 
+    def test_two_sources_that_render_alike_are_not_collapsed(self) -> None:
+        """Grouping must key on the raw source value, not on ``str(value)``.
+
+        The int ``1`` and the str ``"1"`` are two distinct sources, but they share
+        a display form. Stringifying before grouping merged them into one key, so
+        ``len(by_source)`` was 1 and the section silently vanished from a corpus
+        that does satisfy the documented "exactly two distinct values" condition.
+        """
+        records = [
+            {"id": "a1", "source": 1, "name": "Canon EOS"},
+            {"id": "b1", "source": "1", "name": "Canon camera"},
+        ]
+        report = from_records(records)
+        assert "Vocabulary overlap" in {s.title for s in report.sections}
+        section = report["Vocabulary overlap"]
+        # One record per side -- proof the two sources stayed apart.
+        assert section.n_left_types == 2
+        assert section.n_right_types == 2
+        # Identical str() forms must still be told apart in the rendered labels.
+        assert section.left_name != section.right_name
+
+    def test_a_single_source_under_two_spellings_still_yields_two_sides(self) -> None:
+        """Sanity companion: two genuinely equal values remain ONE source."""
+        records = [
+            {"id": "a1", "source": "abt", "name": "Canon EOS"},
+            {"id": "a2", "source": "abt", "name": "Canon camera"},
+        ]
+        report = from_records(records)
+        assert "Vocabulary overlap" not in {s.title for s in report.sections}
+
 
 class TestEmbedTextExclude:
     def test_exclude_drops_named_fields(self) -> None:

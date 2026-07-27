@@ -255,6 +255,62 @@ class TestSelection:
             select_benchmarks(fast=False, only=None)
         )
 
+    def test_an_only_that_selects_nothing_raises_instead_of_warning(self) -> None:
+        """A typo must stop the run, not produce an empty result set.
+
+        This previously printed a warning and carried on, so the run reached
+        ``write_findings`` with ``[]`` and replaced the tracked artifact with an
+        empty list -- a warning that named the failure it could not prevent.
+        """
+        with pytest.raises(SystemExit, match="selected no loadable benchmark"):
+            select_benchmarks(fast=False, only=["definitely_not_a_benchmark"])
+
+
+class TestCanonicalArtifactIsProtected:
+    """A narrowed run must not be able to shrink the tracked full-portfolio JSON."""
+
+    def _main_with(self, argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from examples.research import closure_diagnostic
+
+        monkeypatch.setattr(sys, "argv", ["closure_diagnostic.py", *argv])
+        closure_diagnostic.main()
+
+    @pytest.mark.parametrize(
+        "argv", [["--fast"], ["--only", "tiny_fixture"], ["--fast", "--only", "tiny_fixture"]]
+    )
+    def test_a_narrowed_run_without_out_exits_before_measuring(
+        self, argv: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # argparse's error() exits 2. The point is that it happens BEFORE any
+        # benchmark runs, so the canonical file is never opened for writing.
+        with pytest.raises(SystemExit) as excinfo:
+            self._main_with(argv, monkeypatch)
+        assert excinfo.value.code == 2
+
+    def test_a_full_run_still_defaults_to_the_canonical_path(self) -> None:
+        from examples.research.closure_diagnostic import CANONICAL_OUT
+
+        assert CANONICAL_OUT.as_posix() == "examples/research/results/closure_diagnostic.json"
+
+    def test_writing_an_empty_result_over_a_real_one_is_refused(self, tmp_path) -> None:
+        from examples.research.closure_diagnostic import write_findings
+
+        out = tmp_path / "results.json"
+        out.write_text('[{"benchmark": "abt_buy"}]\n')
+        with pytest.raises(SystemExit, match="refusing to overwrite"):
+            write_findings([], out)
+        # The real results are still there -- that is the whole point.
+        assert "abt_buy" in out.read_text()
+
+    def test_writing_an_empty_result_over_nothing_is_allowed(self, tmp_path) -> None:
+        from examples.research.closure_diagnostic import write_findings
+
+        out = tmp_path / "fresh.json"
+        write_findings([], out)
+        assert out.read_text().strip() == "[]"
+
 
 @pytest.mark.slow
 def test_end_to_end_on_the_tiny_fixture_self_verifies(tmp_path) -> None:
