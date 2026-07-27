@@ -1,6 +1,7 @@
 [
   {
     "caveats": [],
+    "cross_source_ceiling": 0.9846743295019157,
     "domain": "product",
     "entropy_bits": 10.133756766574466,
     "excluded_files": [
@@ -53,7 +54,10 @@
     "wheel_loadable": false
   },
   {
-    "caveats": [],
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.839568345323741,
     "domain": "product",
     "entropy_bits": 11.622400810642507,
     "excluded_files": [
@@ -119,6 +123,7 @@
   },
   {
     "caveats": [],
+    "cross_source_ceiling": 1.0,
     "domain": "bibliographic",
     "entropy_bits": 11.357230323458674,
     "excluded_files": [
@@ -168,8 +173,10 @@
   },
   {
     "caveats": [
+      "capped-recall",
       "large-component"
     ],
+    "cross_source_ceiling": 0.3976603938094892,
     "domain": "bibliographic",
     "entropy_bits": 15.811747672745367,
     "excluded_files": [
@@ -293,6 +300,7 @@
     "caveats": [
       "one-to-one"
     ],
+    "cross_source_ceiling": 1.0,
     "domain": "person",
     "entropy_bits": 8.965784284662087,
     "excluded_files": [],
@@ -334,6 +342,7 @@
     "caveats": [
       "tiny-gold"
     ],
+    "cross_source_ceiling": 1.0,
     "domain": "restaurant",
     "entropy_bits": 9.495628242904209,
     "excluded_files": [],
@@ -377,6 +386,7 @@
   },
   {
     "caveats": [],
+    "cross_source_ceiling": null,
     "domain": "person/org",
     "entropy_bits": null,
     "excluded_files": [],
@@ -414,6 +424,7 @@
       "lexical-gap",
       "tiny-gold"
     ],
+    "cross_source_ceiling": 1.0,
     "domain": "product",
     "entropy_bits": 3.084962500721156,
     "excluded_files": [],
@@ -456,7 +467,10 @@
     "wheel_loadable": true
   },
   {
-    "caveats": [],
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.8836996336996337,
     "domain": "product",
     "entropy_bits": 14.506055133213854,
     "excluded_files": [
@@ -513,7 +527,10 @@
     "wheel_loadable": false
   },
   {
-    "caveats": [],
+    "caveats": [
+      "capped-recall"
+    ],
+    "cross_source_ceiling": 0.9000900090009001,
     "domain": "product",
     "entropy_bits": 11.738329606793577,
     "excluded_files": [

@@ -32,18 +32,18 @@ metric (see §4) — which is exactly why the verdict has to name its metric.
 
 ## 2. The annotation table
 
-| benchmark | task | wheel-loadable | records | gold pairs | prevalence | max gold cluster | sep AUC | vocab Jaccard | min token coverage | rapidfuzz F1 (lit. split) | published F1 | **saturated** | **structural caveats** |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.796 | 0.2018 | 0.893 (Ditto) | **no** | — |
-| `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.791 | 0.2881 | 0.756 (Ditto) | **no** | — |
-| `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 0.8905 | ~0.98 | **no** (gap 0.09) | † strictly 1:1 labels |
-| `dblp_scholar` | linkage | no | 66,879 | 13,763 | 6.15e-06 | **37** | 0.993 | **0.061** | 0.651 | 0.6588 | not recorded | **?** | **large-component** |
-| `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.806 | 0.3051 | not recorded | **?** | — |
-| `wdc_computers` | linkage | no | 4,647 | 1,111 | 1.03e-04 | 4 | 0.929 | 0.720 | 0.978 | 0.4447 | not recorded | **?** | — |
-| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.708 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
-| `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.851 | no literature split | not recorded | **?** | **one-to-one by construction** |
-| `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
-| `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | not loadable | † 98.95 (GPT-4o, 0–100) | **?** | external-only (CC-BY-NC) |
+| benchmark | task | wheel-loadable | records | gold pairs | prevalence | max gold cluster | sep AUC | vocab Jaccard | min token coverage | **x-src recall ceiling** | rapidfuzz F1 (lit. split) | published F1 | **saturated** | **structural caveats** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `abt_buy` | linkage | no | 2,173 | 1,044 | 4.42e-04 | 3 | 0.957 | 0.322 | 0.796 | 0.9847 | 0.2018 | 0.893 (Ditto) | **no** | — |
+| `amazon_google` | linkage | no | 4,589 | 1,390 | 1.32e-04 | 6 | 0.955 | 0.338 | 0.791 | **0.8396** | 0.2881 | 0.756 (Ditto) | **no** | **capped-recall** |
+| `dblp_acm` | linkage | no | 4,910 | 2,220 | 1.84e-04 | 2 | 1.000 | 0.842 | 0.967 | 1.0000 | 0.8905 | ~0.98 | **no** (gap 0.09) | † strictly 1:1 labels |
+| `dblp_scholar` | linkage | no | 66,879 | 13,763 | 6.15e-06 | **37** | 0.993 | **0.061** | 0.651 | **0.3977** | 0.6588 | not recorded | **?** | **capped-recall**, **large-component** |
+| `walmart_amazon` | linkage | no | 24,628 | 1,092 | 3.60e-06 | 4 | 0.996 | 0.133 | 0.806 | **0.8837** | 0.3051 | not recorded | **?** | **capped-recall** |
+| `wdc_computers` | linkage | no | 4,647 | 1,111 | 1.03e-04 | 4 | 0.929 | 0.720 | 0.978 | **0.9001** | 0.4447 | not recorded | **?** | **capped-recall** |
+| `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.708 | 1.0000 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
+| `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.851 | 1.0000 | no literature split | not recorded | **?** | **one-to-one by construction** |
+| `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 1.0000 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
+| `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | — | not loadable | † 98.95 (GPT-4o, 0–100) | **?** | external-only (CC-BY-NC) |
 
 **† = written by hand, not produced by the harness.** Four cells, and they are
 marked because everything else in this table is a rendering of
@@ -66,6 +66,17 @@ marked because everything else in this table is a rendering of
   a column of 0–1 F1s.
 
 **Reading the columns.**
+
+- **x-src recall ceiling** — the share of gold pairs a **cross-source** candidate
+  set can ever contain. A two-source linkage pipeline pairs A-records against
+  B-records, so it can never emit a pair whose two records come from the same
+  side; any gold cluster spanning 3+ records emits exactly such pairs, and every
+  one of them is **unreachable by any blocker, however good**. This is a hard cap
+  on every recall / Pair-Completeness / F1 number measured on the dataset, and it
+  is a property of the *labeling*, not of the method. Four of the nine loadable
+  benchmarks are capped: `amazon_google` at 0.8396, `wdc_computers` 0.9001,
+  `walmart_amazon` 0.8837, and `dblp_scholar` at **0.3977**. A "0.84 recall" on
+  `amazon_google` is therefore a **perfect** score, not an 84% one — see §8.
 
 - **wheel-loadable** — can a `pip install langres` user load it? `True` only when
   the dataset vendors data files and `pyproject.toml`'s
@@ -166,7 +177,9 @@ Two measurable consequences:
    pairs only 5,473 (39.77%) are cross-source, which caps cross-source blocking
    Pair-Completeness at **0.3977** *regardless of blocking quality* — the
    achieved 0.3945 is 99.2% of that ceiling. The famous "PC 0.39" is a labeling
-   artifact, not a blocking failure.
+   artifact, not a blocking failure. **This is the extreme case of a
+   portfolio-wide property**, now computed for every entry as the
+   `x-src recall ceiling` column — see §5.1.
 2. **Our own output over-merges here hardest.** At its tuned threshold
    `dblp_scholar` produces the portfolio's largest closure output cluster —
    44 records, above even its 37-record gold component (B1, §2.1). It is *not*
@@ -180,6 +193,45 @@ Two measurable consequences:
 (Jaccard 0.061) — unsurprising for a 66k-record corpus against a 2.6k-record one,
 and a reminder that Jaccard is type-weighted and size-sensitive; its token
 coverage (0.651) is mid-portfolio.
+
+### 5.1 The same cap, portfolio-wide: four benchmarks cannot reach recall 1.0
+
+`dblp_scholar` is the extreme, not the exception. A two-source linkage pipeline
+pairs A against B, so **no candidate set it can produce contains an intra-source
+pair** — and every gold cluster spanning 3+ records emits some. Those gold pairs
+are unreachable by construction, so recall is capped below 1.0 before any method
+runs:
+
+| benchmark | x-src ceiling | unreachable gold pairs | max gold cluster |
+|---|---|---|---|
+| `amazon_google` | **0.8396** | 16.0 % | 6 |
+| `walmart_amazon` | **0.8837** | 11.6 % | 4 |
+| `wdc_computers` | **0.9001** | 10.0 % | 4 |
+| `abt_buy` | 0.9847 | 1.5 % | 3 |
+| `dblp_scholar` | **0.3977** | **60.2 %** | 37 |
+| `dblp_acm` / `febrl_person` / `fodors_zagat` / `tiny_fixture` | 1.0000 | 0 % | 2 |
+
+The four sets at ≤ 0.95 carry the `capped-recall` tag. Note the exact
+correspondence with the last column: **a ceiling below 1.0 is precisely the
+signature of gold clusters larger than 2**, which is why the four 1:1 sets are
+uncapped. It is the same fact the `max gold cluster` column already reported,
+converted into the unit that bounds a result.
+
+**What this changes in how a number is read.** A blocker scoring 0.84 recall on
+`amazon_google` is not at 84 % of the task — it is at **100.0 % of what is
+reachable**. Reporting it against a 1.0 target invents a 16-point gap that no
+amount of engineering can close, and any optimizer maximizing recall there will
+spend its whole budget chasing it. The ceiling belongs beside the score.
+
+This also flags a live claim in shipped source: `src/langres/optimize.py:135-139`
+asserts that all gold matches are inter-source. On four of the nine loadable
+benchmarks that is false, and on `dblp_scholar` it is false for the *majority* of
+gold pairs. Out of scope for this PR (a source fix with its own blast radius),
+recorded here as the measurement that settles it.
+
+Independently corroborated: stream A derived the same four ceilings
+(0.9847 / 0.8396 / 0.8837 / 0.9001) from a completely separate candidate-recall
+harness, and this measurement reproduces them exactly from the gold labels alone.
 
 ---
 
