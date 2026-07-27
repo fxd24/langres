@@ -26,8 +26,6 @@ import pytest
 from langres.core.indexes.hybrid_vector_index import FakeHybridVectorIndex, QdrantHybridIndex
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex, VectorIndex
 
-pytestmark = pytest.mark.unit
-
 
 def _accepted_types(func: object, parameter: str) -> set[object]:
     """The set of types ``parameter`` accepts, flattening a union into members."""
