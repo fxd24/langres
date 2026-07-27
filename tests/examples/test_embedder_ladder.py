@@ -684,3 +684,77 @@ class TestReport:
 
         assert "**failed**" in row
         assert "not run" not in row
+
+
+class TestRecommendationSplitsOnLicence:
+    """The recommendation must not let a use-restricted checkpoint read as a default.
+
+    langres is Apache-2.0. ``google/embeddinggemma-300m`` is the best-measured
+    model on some benchmarks *and* the only non-OSI licence in the ladder, so a
+    recommendation that ranked purely on recall would name it as the default
+    candidate. The split is the whole point of the section, and a bug in it looks
+    exactly like a correct recommendation.
+    """
+
+    @staticmethod
+    def _rows() -> list[Any]:
+        """Gemma clearly ahead of the reference; one OSI model modestly ahead."""
+        return [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "google/embeddinggemma-300m",
+                "none",
+                vs_reference_delta=0.20,
+                vs_reference_ci_low=0.17,
+                vs_reference_ci_high=0.23,
+            ),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.03,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.05,
+            ),
+        ]
+
+    def _section(self) -> str:
+        report = LADDER.render_report(self._rows())
+        return report[report.index("## Recommendation") : report.index("## The recall/cost frontier")]
+
+    def test_the_restricted_model_is_not_in_the_default_candidate_table(self) -> None:
+        osi_table = self._section().split("### Use-restricted")[0]
+
+        assert "`BAAI/bge-small-en-v1.5` | mit" in osi_table
+        assert "google/embeddinggemma-300m" not in osi_table
+
+    def test_the_best_osi_candidate_is_named_and_is_not_the_best_model(self) -> None:
+        """The larger delta belongs to the restricted model; it must not win here."""
+        section = self._section()
+
+        assert "**Best OSI-licensed candidate: `BAAI/bge-small-en-v1.5`**" in section
+
+    def test_the_restricted_model_is_named_with_its_licence_and_as_an_opt_in(self) -> None:
+        restricted = self._section().split("### Use-restricted")[1]
+
+        assert "`google/embeddinggemma-300m` — licence `gemma`" in restricted
+        assert "NOT OSI-approved" in restricted
+        assert "documented opt-in" in restricted
+        # The measurement is still reported -- excluding it from the default
+        # table must not hide that it won.
+        assert "+0.2000" in restricted
+
+    def test_an_unknown_licence_is_not_treated_as_OSI(self) -> None:
+        """The allow list must fail closed: absence is not approval.
+
+        A deny list would let a checkpoint added tomorrow, with a licence nobody
+        classified, walk into the default-candidate table.
+        """
+        assert not LADDER._is_osi(LADDER.ModelSpec("someone/new-model"))
+        assert LADDER.ModelSpec("someone/new-model").license == "unknown"
+
+    def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
+        """"3 of 14", never "3 of 3" -- a partial field must read as partial."""
+        section = self._section()
+
+        assert f"of the {len(LADDER.MODELS)} models in the ladder" in section
+        assert "**3 of the" in section
