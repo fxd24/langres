@@ -538,6 +538,15 @@ def run_snippet(
     # have turned every later block on that page green without executing it.
     script.write_text(prefix + snippet.code + _SENTINEL_EPILOGUE, encoding="utf-8")
     try:
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+        # Evaluated, not waved through. This is the LIST form with no `shell=True`,
+        # so no shell parses it: `argv` reaches execve as separate words and
+        # nothing in `interpreter` or `script` can become a command. (The rule
+        # suggests `shlex.escape()`, which does not exist -- `shlex.quote` does --
+        # and quoting is for the string form we deliberately do not use.)
+        # Running this code is also the entire point of the file: the input is
+        # this repo's own documentation, and anyone who can edit it can already
+        # put whatever they like in a ```python block.
         proc = subprocess.run(
             [str(interpreter), str(script)],
             cwd=workdir,
@@ -633,6 +642,11 @@ def _assert_environment_is_really_clean(interpreter: Path, *, repo_root: Path) -
         "assert not bad, f'PATH resolves {bad} inside the SOURCE TREE, so a snippet that "
         "shells out would run against the repo, not the wheel'"
     )
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+    # Same evaluation as `run_snippet`: list form, no `shell=True`, no shell
+    # involved. `probe` is a fixed template whose only interpolations are two
+    # paths inserted with `!r` (a Python repr, so they cannot terminate the
+    # string literal), and it is handed to `-c` as one argv element.
     proc = subprocess.run(
         [str(interpreter), "-c", probe],
         capture_output=True,
