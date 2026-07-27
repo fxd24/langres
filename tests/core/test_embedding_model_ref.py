@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from types import ModuleType
 from typing import Any
 
@@ -40,6 +41,15 @@ def test_sentence_transformer_loader_receives_revision_and_runtime(monkeypatch) 
     class _FakeSentenceTransformer:
         def __init__(self, model_name: str, **kwargs: Any) -> None:
             calls.append((model_name, kwargs))
+
+        def modules(self) -> Iterator[Any]:
+            """A real ``SentenceTransformer`` is an ``nn.Module``, so it has this.
+
+            The config-honoured guard walks the submodules looking for HF configs;
+            a double that lacks the method would make the guard's own failure look
+            like a load failure. Empty: this fake carries no HF config to check.
+            """
+            return iter(())
 
     sentence_transformers = ModuleType("sentence_transformers")
     sentence_transformers.SentenceTransformer = _FakeSentenceTransformer  # type: ignore[attr-defined]
