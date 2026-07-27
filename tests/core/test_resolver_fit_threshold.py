@@ -59,15 +59,39 @@ _GROUPS = [
     ("nakatomi", "Nakatomi Trading", "Nakatomi Trading Co", "Nakatomi Estates"),
 ]
 
+# The fixture where deriving a cut makes things WORSE, and the reason the fit
+# races the candidate instead of trusting it. Negatives share nothing, so 0.5
+# already separates perfectly; the twins are abbreviations ("Acme Corporation" /
+# "Acme Corp"), so they score in a wide band well above the negatives. Youden's J
+# maximizes tpr - fpr, which ties across that whole gap, and returns a cut high
+# enough to drop a genuine twin. MEASURED at seeds 0/1/4/5: train F1 ties at
+# 1.0000 while held-out pair-F1 would go 1.0000 -> 0.8000.
+_SEPARATED_GROUPS = [
+    ("acme", "Acme Corporation", "Acme Corp", "Zenith Trading"),
+    ("globex", "Globex Incorporated", "Globex Inc", "Wayland Foods"),
+    ("initech", "Initech LLC", "Initech L.L.C.", "Praxis Mining"),
+    ("umbrella", "Umbrella Holdings", "Umbrella Holding Co", "Delos Media"),
+    ("soylent", "Soylent Industries", "Soylent Ind", "Kwik-E Retail"),
+    ("tyrell", "Tyrell Corporation", "Tyrell Corp", "Nakatomi Realty"),
+    ("weyland", "Weyland Yutani Ltd", "Weyland-Yutani Limited", "Cyberdyne Systems"),
+    ("stark", "Stark Industries Inc", "Stark Industries", "Oscorp Labs"),
+]
+
 _DEFAULT_THRESHOLD = 0.5
 _SPLIT = 0.4
 _SEED = 0
 
 
-def _dataset() -> tuple[list[dict[str, str]], list[LabeledPair]]:
+def _dataset(
+    groups: list[tuple[str, str, str, str]] | None = None,
+) -> tuple[list[dict[str, str]], list[LabeledPair]]:
+    """Records + id-keyed labels. ``_GROUPS`` adds a second negative; the
+    separated fixture deliberately does not (it is reproduced exactly as the
+    regression was measured)."""
+    chosen = groups or _GROUPS
     records: list[dict[str, str]] = []
     pairs: list[LabeledPair] = []
-    for key, twin_a, twin_b, other in _GROUPS:
+    for key, twin_a, twin_b, other in chosen:
         a, b, c = f"{key}1", f"{key}2", f"{key}3"
         records += [
             {"id": a, "name": twin_a},
@@ -77,8 +101,11 @@ def _dataset() -> tuple[list[dict[str, str]], list[LabeledPair]]:
         pairs += [
             LabeledPair(left_id=a, right_id=b, score=None, label=True, source="correction"),
             LabeledPair(left_id=a, right_id=c, score=None, label=False, source="correction"),
-            LabeledPair(left_id=b, right_id=c, score=None, label=False, source="correction"),
         ]
+        if chosen is _GROUPS:
+            pairs.append(
+                LabeledPair(left_id=b, right_id=c, score=None, label=False, source="correction")
+            )
     return records, pairs
 
 
@@ -123,9 +150,7 @@ class _SupervisedMatcher:
     def __init__(self) -> None:
         self.fit_calls: list[int] = []
 
-    def fit(
-        self, candidates: Iterator[ERCandidate[Any]], labels: Sequence[bool]
-    ) -> None:
+    def fit(self, candidates: Iterator[ERCandidate[Any]], labels: Sequence[bool]) -> None:
         self.fit_calls.append(len(list(candidates)))
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
@@ -172,7 +197,9 @@ def test_report_records_derived_provenance_for_the_classic_seam() -> None:
     assert fit.n_pairs == report.n_train
     assert fit.held_out is True
     assert fit.applied_to == "clusterer"
-    assert fit.previous == _DEFAULT_THRESHOLD
+    assert fit.selected_on == "train"
+    assert fit.previous is not None and fit.previous.threshold == _DEFAULT_THRESHOLD
+    assert fit.candidate is not None and fit.candidate.threshold == model.clusterer.threshold
     assert report.threshold == model.clusterer.threshold
 
 
@@ -241,6 +268,85 @@ def test_derived_cut_beats_the_default_on_held_out_pairs() -> None:
     assert model.fit_report_.metrics.threshold == pytest.approx(derived_cut)
 
 
+def test_a_derived_cut_that_ties_on_train_is_declined_not_applied() -> None:
+    """Deriving is not keeping, and a tie is not evidence.
+
+    Youden's J maximizes ``tpr - fpr``, which is flat across a wide separating
+    gap, so on this fixture it returns a cut that ties the incumbent on train.
+    Strictly-better wins; a tie keeps the incumbent and writes nothing.
+    """
+    records, pairs = _dataset(_SEPARATED_GROUPS)
+    model = _classic()
+
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    fit = model.fit_report_.threshold_fit if model.fit_report_ else None
+    assert fit is not None and fit.previous is not None and fit.candidate is not None
+
+    assert fit.source == "declined"
+    assert model.clusterer.threshold == _DEFAULT_THRESHOLD  # untouched
+    assert fit.applied_to is None  # nothing was written, so claim nothing
+    # The rejected candidate is still reported -- evidence, not noise.
+    assert fit.candidate.threshold != _DEFAULT_THRESHOLD
+    assert fit.candidate.selection_f1 == fit.previous.selection_f1 == 1.0
+
+
+@pytest.mark.parametrize("seed", [0, 1, 4, 5])
+def test_declining_prevents_a_real_held_out_regression(seed: int) -> None:
+    """The measurement that justifies the race, not a hypothetical.
+
+    On these seeds the derived cut ties on train (so nothing on the selection
+    split warns you) and is genuinely **worse** held-out: pair-F1 1.0000 vs
+    0.8000. Applying it unconditionally -- which is what this fit did before the
+    race was added -- would have shipped that regression as an improvement.
+
+    Both numbers are clean estimates: selection ran on ``train``, so ``valid``
+    was never tuned against.
+    """
+    records, pairs = _dataset(_SEPARATED_GROUPS)
+    model = _classic()
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=seed, derive_threshold=True)
+    fit = model.fit_report_.threshold_fit if model.fit_report_ else None
+    assert fit is not None and fit.previous is not None and fit.candidate is not None
+    assert fit.previous.held_out_f1 == 1.0
+    assert fit.candidate.held_out_f1 == 0.8
+
+    assert fit.source == "declined"
+    assert model.clusterer.threshold == _DEFAULT_THRESHOLD
+    assert model.fit_report_ is not None and model.fit_report_.metrics is not None
+    assert model.fit_report_.metrics.f1 == pytest.approx(fit.previous.held_out_f1)
+
+
+def test_declined_markdown_says_the_candidate_lost() -> None:
+    """A reader must not mistake 'declined' for 'never tried'."""
+    records, pairs = _dataset(_SEPARATED_GROUPS)
+    model = _classic()
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert model.fit_report_ is not None
+    rendered = model.fit_report_.to_markdown()
+    assert "did not beat it on train" in rendered
+    assert "Threshold selection (chosen on train)" in rendered
+    assert "KEPT" in rendered
+
+
+def test_selection_never_reads_the_held_out_split() -> None:
+    """The clean-estimate guarantee: valid changes nothing about which cut wins.
+
+    Re-fitting with a different ``seed`` reshuffles which entity components land
+    in valid. If selection touched valid, the chosen threshold could move with
+    it. It must not: the race runs on train.
+    """
+    records, pairs = _dataset()
+
+    def _cut(seed: int) -> float:
+        model = _classic()
+        model.fit(records, pairs=pairs, split=None, seed=seed, derive_threshold=True)
+        return model.clusterer.threshold
+
+    # With split=None every labeled pair is train, so the seed cannot change the
+    # selection set -- and therefore cannot change the chosen cut.
+    assert _cut(0) == _cut(7) == _cut(99)
+
+
 def test_without_a_split_the_cut_is_in_sample_and_no_metrics_are_reported() -> None:
     """No ``split`` -> the cut is derived honestly, flagged IN-SAMPLE, and ungraded.
 
@@ -285,7 +391,8 @@ def test_derive_threshold_writes_the_chains_threshold_select() -> None:
     assert model._chain_threshold() != _DEFAULT_THRESHOLD
     assert model.fit_report_ is not None and model.fit_report_.threshold_fit is not None
     assert model.fit_report_.threshold_fit.applied_to == "threshold_select"
-    assert model.fit_report_.threshold_fit.previous == _DEFAULT_THRESHOLD
+    previous = model.fit_report_.threshold_fit.previous
+    assert previous is not None and previous.threshold == _DEFAULT_THRESHOLD
     # The seam a classic model uses still raises here -- which is exactly why a
     # single code path would have been wrong.
     with pytest.raises(RuntimeError, match="explicit, slot-neutral Op topology"):
@@ -444,8 +551,12 @@ def test_a_supervised_matcher_trains_and_derives_in_one_fit() -> None:
     assert model.fit_report_ is not None
     assert model.fit_report_.trained is True
     assert model.fit_report_.trainable == "_SupervisedMatcher (SupervisedFitMixin)"
-    assert model.fit_report_.threshold_fit is not None
-    assert model.fit_report_.threshold_fit.source == "derived"
+    fit = model.fit_report_.threshold_fit
+    assert fit is not None
+    # A threshold fit ran; whether it KEPT the candidate is the selection's call,
+    # not this test's business (see the decline tests below).
+    assert fit.source in {"derived", "declined"}
+    assert fit.selected_on == "train" and fit.candidate is not None
 
 
 def test_resolve_actually_uses_the_derived_cut() -> None:

@@ -64,7 +64,12 @@ from langres.core.fit import (
     SupervisedFitMixin,
     UnsupervisedFitMixin,
 )
-from langres.training.fit_report import CalibrationDelta, FitReport, ThresholdFit
+from langres.training.fit_report import (
+    CalibrationDelta,
+    FitReport,
+    ThresholdCandidate,
+    ThresholdFit,
+)
 from langres.curation.harvest import (
     Correction,
     LabeledPair,
@@ -118,6 +123,21 @@ def _pair_key(candidate: ERCandidate[Any]) -> frozenset[str]:
 def _row_key(row: PairRow[Any]) -> frozenset[str]:
     """The same identity for a carrier row, so row-side and candidate-side maps join."""
     return frozenset({row.left_id, row.right_id})
+
+
+def _pair_f1(labeled: Sequence[LabeledPair], threshold: float) -> float:
+    """Pair-F1 of ``score >= threshold`` against the gold labels -- the selection metric.
+
+    Deliberately score-only, unlike
+    :func:`~langres.core.metrics.classify_pairs`: every pair reaching a threshold
+    fit carries a score (``derive_threshold_from_pairs`` refuses the input
+    otherwise), so the decider/abstention branches cannot arise here. ``0.0`` for
+    a cut that predicts nothing, which is the honest score for "matches nothing".
+    """
+    tp = sum(1 for p in labeled if p.score is not None and p.score >= threshold and p.label)
+    fp = sum(1 for p in labeled if p.score is not None and p.score >= threshold and not p.label)
+    fn = sum(1 for p in labeled if not (p.score is not None and p.score >= threshold) and p.label)
+    return 0.0 if tp == 0 else 2 * tp / (2 * tp + fp + fn)
 
 
 def _build_module_for_judge(
@@ -515,15 +535,26 @@ class ERModel(ModelRun, ModelPersistence):
 
         **``derive_threshold=True``: fit the decision cut from the labels.**
         Off by default. When set, ``fit`` scores the labeled ``train`` pairs
-        through this model's own scoring path and derives the match threshold
-        from that score distribution via
-        :func:`~langres.curation.harvest.derive_threshold_from_pairs`, then writes
-        it to wherever *this* model keeps its cut -- ``clusterer.threshold`` on a
-        classic four-slot model, the terminal
-        :class:`~langres.core.op.ThresholdSelect` on an explicit ``_ops`` chain
-        (which has no clusterer slot at all). ``fit_report_.threshold_fit``
-        records which, from how many pairs, and whether the reported metrics are
-        held-out. Three things worth knowing before you switch it on:
+        through this model's own scoring path, derives a candidate match
+        threshold from that score distribution via
+        :func:`~langres.curation.harvest.derive_threshold_from_pairs`, and
+        **races it against the threshold already in force** -- applying it only
+        if it strictly beats the incumbent's pair-F1 on ``train``. A winner is
+        written to wherever *this* model keeps its cut
+        (``clusterer.threshold`` on a classic four-slot model, the terminal
+        :class:`~langres.core.op.ThresholdSelect` on an explicit ``_ops`` chain,
+        which has no clusterer slot at all); a loser is reported and discarded,
+        leaving the threshold untouched. ``fit_report_.threshold_fit`` records
+        which happened, both candidates, and how each scored.
+
+        The race is not ceremony. A derived cut is not automatically a better
+        one: Youden's J is flat across a wide separating gap, so on cleanly
+        separated data it returns a cut that ties on ``train`` and is *worse* on
+        unseen pairs -- measured during development at held-out pair-F1 1.0000 vs
+        0.8000 (``tests/core/test_resolver_fit_threshold.py``). Selection runs on
+        ``train``, never on ``valid``, so the held-out numbers stay clean
+        estimates rather than becoming selection-set numbers. Four more things
+        worth knowing before you switch it on:
 
         - **It needs ``pairs=``, not ``labels=``.** ``pairs=`` is what carries the
           entity-disjoint ``split``, and a threshold derived from the same rows
@@ -548,6 +579,12 @@ class ERModel(ModelRun, ModelPersistence):
           asymmetric, take the derived cut as a *starting point* and move it up,
           or call :func:`~langres.training.calibration.derive_threshold` yourself
           with ``method="percentile"``.
+        - **On an explicit ``_ops`` chain it costs a full pass over ``data``.** A
+          chain's Source owns retrieval, so it cannot score an arbitrary
+          candidate subset the way a classic model can -- deriving runs the whole
+          chain once over every record, not just the labeled pairs. Cheap for a
+          local scorer; with a paid ``Score`` wired into a large chain, size the
+          ``budget_usd`` for it.
 
         Needs scikit-learn (the ``[trained]`` extra). On a core-only install it
         raises a directed :class:`ImportError` rather than falling back to the
@@ -593,7 +630,12 @@ class ERModel(ModelRun, ModelPersistence):
                 implements ``SupervisedFitMixin`` and neither is given; or if
                 ``labels``/``pairs`` is given to a module that cannot use them.
                 Also if ``derive_threshold=True`` without ``pairs=``, together
-                with ``method=``, or on a model that keeps no match cut.
+                with ``method=``, or on a model that keeps no match cut; and --
+                for an explicit ``_ops`` topology, whose only fittable parameter
+                is its ``ThresholdSelect`` -- for any ``fit()`` call that is not
+                ``pairs=... , derive_threshold=True``. (That last case previously
+                surfaced as a ``RuntimeError`` from the four-slot property
+                accessors, which could not describe what such a model *can* fit.)
             ImportError: If ``derive_threshold=True`` and scikit-learn (the
                 ``[trained]`` extra) is not installed.
             NotImplementedError: If ``method`` is given but its ``kind``'s fit
@@ -1208,17 +1250,8 @@ class ERModel(ModelRun, ModelPersistence):
                 iter(aligned.train.candidates), aligned.train.labels
             )
 
-        # Derive BEFORE grading valid: the whole point is that the reported
-        # metrics measure the cut the fit chose, on rows the cut never saw.
-        threshold_fit = ThresholdFit(source="default")
-        if derive_threshold:
-            _warn_if_silver_only(pairs)
-            threshold_fit = self._apply_derived_threshold(
-                self._labeled_for_derivation(aligned.train.candidates, aligned.train.labels),
-                held_out=bool(aligned.valid.candidates),
-            )
-
-        metrics: PairMetrics | None = None
+        judgements: list[PairwiseJudgement] = []
+        gold_pairs: set[frozenset[str]] = set()
         if aligned.valid.candidates:
             judgements = list(self._scorer().forward(iter(aligned.valid.candidates)))
             if derive_threshold:
@@ -1233,6 +1266,21 @@ class ERModel(ModelRun, ModelPersistence):
                 for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
                 if label
             }
+
+        # Select BEFORE grading, so the reported metrics measure the cut actually
+        # in force. Selection reads ``train`` only; the valid judgements are
+        # passed in purely to be *scored* at each candidate, never to choose.
+        threshold_fit = ThresholdFit(source="default")
+        if derive_threshold:
+            _warn_if_silver_only(pairs)
+            threshold_fit = self._select_threshold(
+                self._labeled_for_derivation(aligned.train.candidates, aligned.train.labels),
+                valid_judgements=judgements,
+                valid_gold=gold_pairs,
+            )
+
+        metrics: PairMetrics | None = None
+        if aligned.valid.candidates:
             metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
 
         return FitReport.build(
@@ -1334,10 +1382,41 @@ class ERModel(ModelRun, ModelPersistence):
             for judgement, score in zip(judgements, scores, strict=True)
         ]
 
-    def _apply_derived_threshold(
-        self, labeled: Sequence[LabeledPair], *, held_out: bool
+    def _select_threshold(
+        self,
+        train: Sequence[LabeledPair],
+        *,
+        valid_judgements: list[PairwiseJudgement],
+        valid_gold: set[frozenset[str]],
     ) -> ThresholdFit:
-        """Derive the cut from ``labeled`` and write it to this model's threshold seam.
+        """Derive a candidate cut, race it against the incumbent, keep the winner.
+
+        **Deriving is not the same as keeping.** Youden's J maximizes
+        ``tpr - fpr`` on ``train``; on a wide, cleanly-separated margin that can
+        return a cut which ties there and loses on unseen pairs (measured on a
+        toy fixture: held-out pair-F1 1.00 -> 0.80). So the derived cut has to
+        earn the seat: it is applied only if it *strictly* beats the incumbent's
+        pair-F1. A tie keeps the incumbent -- do not move a threshold without
+        evidence that moving it helps.
+
+        **The race runs on ``train``, never on ``valid``.** Picking the winner on
+        ``valid`` would make ``valid`` a selection set and silently downgrade
+        :attr:`FitReport.metrics` from a held-out estimate to an optimistic one.
+        ``train`` is already spent (the candidate was derived from it), so
+        selecting there costs no further honesty. ``valid_judgements`` are used
+        only to *score* both cuts for the report -- they never influence the
+        choice -- which is why both ``held_out_f1`` values stay clean estimates.
+
+        Args:
+            train: Scored + labeled train pairs; both the derivation input and
+                the selection set.
+            valid_judgements: Held-out judgements, already on the cut's scale.
+                Empty when no split was given.
+            valid_gold: Held-out gold pair keys, aligned with the above.
+
+        Returns:
+            The :class:`ThresholdFit` provenance, with the threshold already
+            written to this model when the candidate won.
 
         Raises:
             ValueError: If this model keeps no match cut at all (an explicit chain
@@ -1353,16 +1432,37 @@ class ERModel(ModelRun, ModelPersistence):
                 "topology (or use a classic four-slot model, whose cut lives on "
                 "the clusterer)."
             )
-        previous = self._match_threshold()
-        threshold = derive_threshold_from_pairs(labeled)
-        self._set_match_threshold(threshold)
+        incumbent = cast(float, self._match_threshold())
+        candidate = derive_threshold_from_pairs(train)
+
+        def _described(threshold: float) -> ThresholdCandidate:
+            return ThresholdCandidate(
+                threshold=threshold,
+                selection_f1=_pair_f1(train, threshold),
+                held_out_f1=(
+                    classify_pairs(valid_judgements, valid_gold, threshold).f1
+                    if valid_judgements
+                    else None
+                ),
+            )
+
+        previous_described, candidate_described = _described(incumbent), _described(candidate)
+        kept = cast(float, candidate_described.selection_f1) > cast(
+            float, previous_described.selection_f1
+        )
+        if kept:
+            self._set_match_threshold(candidate)
         return ThresholdFit(
-            source="derived",
+            source="derived" if kept else "declined",
             method=_THRESHOLD_METHOD,
-            n_pairs=len(labeled),
-            held_out=held_out,
-            applied_to=seam,
-            previous=previous,
+            n_pairs=len(train),
+            held_out=bool(valid_judgements),
+            # Nothing was written when the candidate lost, so naming a seam would
+            # overclaim -- the threshold is still the one the model came with.
+            applied_to=seam if kept else None,
+            selected_on="train",
+            previous=previous_described,
+            candidate=candidate_described,
         )
 
     def _fit_chain_threshold(
@@ -1403,8 +1503,19 @@ class ERModel(ModelRun, ModelPersistence):
         }
         aligned = align_pairs(scored.to_candidates(), pairs, split=split, seed=seed)
 
+        judgements = [
+            judgement
+            for candidate in aligned.valid.candidates
+            if (judgement := judgement_by_pair.get(_pair_key(candidate))) is not None
+        ]
+        gold_pairs = {
+            _pair_key(c)
+            for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
+            if label
+        }
+
         _warn_if_silver_only(pairs)
-        threshold_fit = self._apply_derived_threshold(
+        threshold_fit = self._select_threshold(
             [
                 LabeledPair(
                     left_id=str(candidate.left.id),
@@ -1417,21 +1528,12 @@ class ERModel(ModelRun, ModelPersistence):
                     aligned.train.candidates, aligned.train.labels, strict=True
                 )
             ],
-            held_out=bool(aligned.valid.candidates),
+            valid_judgements=judgements,
+            valid_gold=gold_pairs,
         )
 
         metrics: PairMetrics | None = None
         if aligned.valid.candidates:
-            judgements = [
-                judgement
-                for candidate in aligned.valid.candidates
-                if (judgement := judgement_by_pair.get(_pair_key(candidate))) is not None
-            ]
-            gold_pairs = {
-                _pair_key(c)
-                for c, label in zip(aligned.valid.candidates, aligned.valid.labels, strict=True)
-                if label
-            }
             metrics = classify_pairs(judgements, gold_pairs, cast(float, self._match_threshold()))
 
         matcher = self._chain_scoring_matcher()

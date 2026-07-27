@@ -436,14 +436,43 @@ resolver.fit(records, pairs=labeled_pairs, split=0.3, seed=0, derive_threshold=T
 
 print(resolver.fit_report_.to_markdown())
 # - Threshold: 0.8824 (derived from 0.5000 by youden on 18 labeled pairs,
-#                      held-out, applied to the clusterer)
+#                      chosen on train, held-out, applied to the clusterer)
+#
+# ## Threshold selection (chosen on train)
+# - incumbent 0.5000: selection F1 0.5217, held-out F1 0.5714
+# - derived 0.8824 — KEPT: selection F1 1.0000, held-out F1 1.0000
 ```
 
 It is **opt-in**: the default leaves the constructed threshold alone, which is the
 right no-data fallback. What it changes is that a user who *does* have labels no
 longer resolves at a constant nobody measured.
 
-Four things worth knowing:
+**It derives, then races — it does not just apply.** A derived cut is not
+automatically a better cut. Youden's J maximizes `tpr - fpr`, which is flat
+across a wide separating gap, so on cleanly-separated data it happily returns a
+cut that ties on `train` and is *worse* on unseen pairs. We measured exactly
+that: held-out pair-F1 **1.0000 → 0.8000** on a fixture where `0.5` was already
+optimal. So the candidate has to beat the incumbent's pair-F1 to be applied; a
+tie keeps the incumbent, and `fit_report_.threshold_fit.source` reads
+`"declined"` with the rejected candidate still reported:
+
+```
+# - Threshold: 0.5000 (kept: the cut derived from 16 labeled pairs 0.8824
+#                      did not beat it on train)
+```
+
+**The race runs on `train`, never on `valid`.** Picking the winner on the
+held-out split would make that split a selection set and silently downgrade the
+reported P/R/F1 from a held-out estimate to an optimistic one. `train` was
+already spent deriving the candidate, so selecting there costs no further
+honesty — and both `held_out_f1` values in the report stay clean. The residual
+gap, stated rather than hidden: a cut chosen on `train` can still fail to
+generalise; selecting there bounds the risk, it does not remove it. A three-way
+derive/select/report split would close it, and is deliberately left as follow-on
+work — at the label counts this targets (a handful of corrections out of a review
+loop) three splits would make every number noise.
+
+Five more things worth knowing:
 
 - **It needs `pairs=`, not `labels=`.** `pairs=` is what carries the
   entity-disjoint `split=`. With a split, the cut is derived on `train` and the
@@ -464,7 +493,13 @@ Four things worth knowing:
   poison a whole cluster, while a false split leaves two records that can still
   be merged later. If that asymmetry matters to you, treat the derived cut as a
   starting point and move it **up**, or call `derive_threshold` yourself with
-  `method="percentile"`.
+  `method="percentile"`. (The race uses pair-F1, which inherits the same
+  symmetry.)
+- **On an explicit `_ops` chain, deriving costs a full pass over `data`.** A
+  chain's Source owns retrieval, so — unlike a classic model, which scores only
+  the labeled candidates — it must run the whole chain over every record. Cheap
+  for a local scorer; with a paid `Score` in a large chain, size `budget_usd`
+  for it.
 
 Needs the `[trained]` extra (scikit-learn). On a core-only install it raises a
 directed `ImportError` rather than quietly keeping the default — identical code
