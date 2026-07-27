@@ -198,6 +198,40 @@ class TestCoherenceWarning:
         assert "document-side prompt" in warnings[0]
         assert "prompt_name='document'" in warnings[0]
 
+    def test_warns_through_a_caching_decorator(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``DiskCachedEmbedder`` holds the real embedder on ``.embedder``.
+
+        It carries no ``prompt_name`` of its own, so a check that only looked at
+        the outermost object would go quiet for every cached embedder — a silent
+        hole in a check whose entire purpose is not to be silent.
+        """
+
+        class _Cache:
+            def __init__(self, embedder: _PrefixEmbedder) -> None:
+                self.embedder = embedder
+
+            def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+                return self.embedder.encode(texts, prompt=prompt)
+
+        inner = _PrefixEmbedder(
+            prompt_name="document",
+            prompts={"document": DOCUMENT_PROMPT, "query": QUERY_PROMPT},
+        )
+        index = FAISSIndex(embedder=_Cache(inner), metric="cosine")
+        index.create_index(list(TEXTS))
+
+        with caplog.at_level(logging.WARNING, logger=BLOCKER_LOGGER):
+            VectorBlocker(
+                vector_index=index,
+                schema_factory=lambda record: record,
+                text_field_extractor=lambda entity: str(entity["name"]),
+                k_neighbors=3,
+            )
+
+        assert len(_blocker_warnings(caplog)) == 1
+
     def test_silent_when_both_sides_are_driven(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

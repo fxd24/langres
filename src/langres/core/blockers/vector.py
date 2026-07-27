@@ -56,6 +56,15 @@ def _document_prompt_name(vector_index: Any) -> str | None:
         # QdrantHybridIndex/QdrantHybridRerankingIndex name theirs differently:
         # the dense side is the one create_index() encodes documents with.
         embedder = getattr(vector_index, "dense_embedder", None)
+
+    # Unwrap ONE decorator level. `DiskCachedEmbedder` holds the real embedder on
+    # `.embedder` and carries no `prompt_name` of its own, so without this the
+    # check would go quiet for every cached embedder -- a silent hole in a check
+    # whose whole job is not to be silent. One level, not a loop: an unbounded
+    # walk would follow any `.embedder` chain a caller invented.
+    if getattr(embedder, "prompt_name", None) is None:
+        embedder = getattr(embedder, "embedder", embedder)
+
     name = getattr(embedder, "prompt_name", None)
     return name if isinstance(name, str) else None
 
