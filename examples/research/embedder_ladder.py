@@ -116,6 +116,15 @@ class ModelSpec:
 #: Listed in roughly ascending expected size so a truncated sweep still covers
 #: the cheap tiers completely. Ordering is a *scheduling* hint only — every
 #: published number comes from the measured ``parameter_count``.
+#:
+#: **Scheduling caveat, learned the expensive way.** Ascending size is the right
+#: default for *recall vs. parameters*, but it is the wrong order for the prompt
+#: axis: every model in the cheap half (MiniLM, mpnet, BGE v1.5) was trained
+#: WITHOUT a query-side instruction, so a sweep truncated there measures only
+#: "what does a prompt do to a model that never saw one" and cannot speak to
+#: instruction-following at all. When time is short, run
+#: ``google/embeddinggemma-300m`` and a ``Qwen/Qwen3-Embedding-*`` tier before
+#: finishing the ladder — they are the ones that make the axis mean anything.
 MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("all-MiniLM-L6-v2"),
     ModelSpec("all-MiniLM-L12-v2"),
@@ -959,6 +968,14 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "`BenchmarkDataNotFoundError`.\n"
     )
 
+    out.append(
+        "- **Parameter count is not the axis.** Measured here, not asserted: "
+        "`all-mpnet-base-v2` (109M) is *worse* than `all-MiniLM-L6-v2` (22.7M) on "
+        "`wdc_computers`. A ladder that had assumed bigger-is-better, or that had "
+        "read sizes off a table instead of the loaded model, would have hidden "
+        "that.\n"
+    )
+
     out.append("\n## Models that were measured\n")
     out.append(
         "\n`dtype` is the load precision. It is shown because half precision is a "
@@ -1043,6 +1060,30 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "query help', not 'is each model at its documented best'. The `own prompt "
         "names` column above shows which models ship a documented recipe this sweep "
         "did not use.\n"
+    )
+    out.append(
+        "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
+        ">\n"
+        "> **A negative result here is mostly a statement about the models in it.**\n"
+        "> `all-MiniLM-*`, `all-mpnet-base-v2` and the BGE v1.5 family were not\n"
+        "> trained with a task instruction on the query side. Prepending one to a\n"
+        "> model that never saw one in training does not give it an instruction to\n"
+        "> follow — it moves the query vector away from the document vectors it is\n"
+        "> supposed to match. Measuring that it hurts is a real, useful, and\n"
+        "> actionable finding: **do not switch these models on by default with a\n"
+        "> prompt.** It is not evidence about instruction-following embedders.\n"
+        ">\n"
+        "> The hypothesis this axis exists to test is about the models trained for\n"
+        "> it — `google/embeddinggemma-300m`, `Qwen/Qwen3-Embedding-*`, and E5's\n"
+        "> native `query:`/`passage:` scheme (which this sweep's single generic\n"
+        "> instruction is **not**; see `own prompt names`). Until those are in the\n"
+        "> table, the instruction-following question is **open**, not answered.\n"
+        ">\n"
+        "> This distinction is the whole reason the axis was worth fixing. Before\n"
+        "> the `query_prompt` no-op was repaired every cell here read exactly\n"
+        "> `0.0000`, and the conclusion would have been a confident 'instructions\n"
+        "> do not help'. Publishing an unprompted-model-only sweep as if it settled\n"
+        "> the question would reach the same false negative by a different route.\n"
     )
     out.append(
         "\n**`Δ per-record` is the statistic the interval bounds** — the mean "
