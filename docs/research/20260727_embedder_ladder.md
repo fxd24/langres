@@ -31,65 +31,65 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 
 ### abt_buy
 
-2,173 records, 1,044 gold pairs, reachable recall ceiling **n/a** — saturation: unknown (stream B) (imported, see above).
+2,173 records, 1,044 gold pairs, reachable recall ceiling **0.9847** — saturation: not saturated (imported, see above).
 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.9349 | 0.9494 | 0.9941 | 11,204 | 11985 | 11.8 | 2,173 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.9674 | n/a | 0.9976 | 11,072 | 11445 | 8.2 | n/a |
-| `all-MiniLM-L12-v2` | 33.4M | 0.9531 | n/a | 0.9960 | 11,678 | 12253 | 9.0 | n/a |
+| `all-MiniLM-L12-v2` | 33.4M | 0.9531 | 0.9679 | 0.9960 | 11,678 | 12253 | 21.7 | 2,173 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.9713 | n/a | 0.9971 | 10,241 | 10544 | 15.5 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.9674 | n/a | 0.9977 | 8,799 | 9095 | 13.8 | n/a |
 | `all-mpnet-base-v2` | 109.5M | 0.9368 | n/a | 0.9941 | 10,897 | 11632 | 20.0 | n/a |
 
 ### amazon_google
 
-4,589 records, 1,390 gold pairs, reachable recall ceiling **n/a** — saturation: unknown (stream B) (imported, see above).
+4,589 records, 1,390 gold pairs, reachable recall ceiling **0.8396** — saturation: not saturated (imported, see above).
 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.8266 | 0.9846 | 0.9989 | 23,024 | 27853 | 17.2 | 4,589 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.8345 | n/a | 0.9989 | 22,470 | 26925 | 9.9 | n/a |
-| `all-MiniLM-L12-v2` | 33.4M | 0.8288 | n/a | 0.9987 | 22,790 | 27498 | 10.7 | n/a |
+| `all-MiniLM-L12-v2` | 33.4M | 0.8288 | 0.9871 | 0.9987 | 22,790 | 27498 | 18.2 | 4,589 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.8317 | n/a | 0.9985 | 22,960 | 27608 | 14.3 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.8324 | n/a | 0.9993 | 21,433 | 25749 | 14.6 | n/a |
 | `all-mpnet-base-v2` | 109.5M | 0.8108 | n/a | 0.9972 | 22,886 | 28227 | 19.7 | n/a |
 
 ### fodors_zagat
 
-864 records, 112 gold pairs, reachable recall ceiling **n/a** — saturation: unknown (stream B) (imported, see above).
+864 records, 112 gold pairs, reachable recall ceiling **1.0000** — saturation: saturated (methods span 0.047) (imported, see above).
 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 1.0000 | 1.0000 | 0.9997 | 4,880 | 4880 | 20.5 | 864 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 1.0000 | n/a | 1.0000 | 4,795 | 4795 | 6.1 | n/a |
-| `all-MiniLM-L12-v2` | 33.4M | 1.0000 | n/a | 0.9997 | 4,704 | 4704 | 5.1 | n/a |
+| `all-MiniLM-L12-v2` | 33.4M | 1.0000 | 1.0000 | 0.9997 | 4,704 | 4704 | 12.5 | 864 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 1.0000 | n/a | 1.0000 | 4,505 | 4505 | 8.2 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 1.0000 | n/a | 1.0000 | 4,431 | 4431 | 56.6 | n/a |
 | `all-mpnet-base-v2` | 109.5M | 1.0000 | n/a | 0.9996 | 5,162 | 5162 | 8.5 | n/a |
 
 ### walmart_amazon
 
-24,628 records, 1,092 gold pairs, reachable recall ceiling **n/a** — saturation: unknown (stream B) (imported, see above).
+24,628 records, 1,092 gold pairs, reachable recall ceiling **0.8837** — saturation: not saturated (imported, see above).
 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.8654 | 0.9793 | 0.9997 | 46,435 | 53658 | 50.8 | 24,628 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.8782 | n/a | 0.9999 | 46,337 | 52763 | 50.2 | n/a |
-| `all-MiniLM-L12-v2` | 33.4M | 0.8645 | n/a | 0.9996 | 45,469 | 52598 | 46.9 | n/a |
+| `all-MiniLM-L12-v2` | 33.4M | 0.8645 | 0.9782 | 0.9996 | 45,469 | 52598 | 70.4 | 24,628 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.8755 | n/a | 0.9998 | 43,963 | 50217 | 147.2 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.8810 | n/a | 0.9999 | 46,493 | 52776 | 72.8 | n/a |
 | `all-mpnet-base-v2` | 109.5M | 0.8498 | n/a | 0.9994 | 46,448 | 54656 | 137.0 | n/a |
 
 ### wdc_computers
 
-4,647 records, 1,111 gold pairs, reachable recall ceiling **n/a** — saturation: unknown (stream B) (imported, see above).
+4,647 records, 1,111 gold pairs, reachable recall ceiling **0.9001** — saturation: not saturated (imported, see above).
 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `all-MiniLM-L6-v2` | 22.7M | 0.5770 | 0.6410 | 0.9724 | 32,369 | 56103 | 14.8 | 4,647 |
 | `BAAI/bge-small-en-v1.5` | 33.4M | 0.5725 | n/a | 0.9712 | 32,566 | 56888 | 11.1 | n/a |
-| `all-MiniLM-L12-v2` | 33.4M | 0.5446 | n/a | 0.9650 | 32,679 | 60011 | 10.9 | n/a |
+| `all-MiniLM-L12-v2` | 33.4M | 0.5446 | 0.6050 | 0.9650 | 32,679 | 60011 | 24.6 | 4,647 |
 | `BAAI/bge-base-en-v1.5` | 109.5M | 0.6103 | n/a | 0.9794 | 32,347 | 53005 | 16.6 | n/a |
 | `intfloat/e5-base-v2` | 109.5M | 0.7264 | n/a | 0.9861 | 31,840 | 43834 | 18.1 | n/a |
 | `all-mpnet-base-v2` | 109.5M | 0.5311 | n/a | 0.9694 | 32,880 | 61915 | 25.7 | n/a |
@@ -112,11 +112,11 @@ Same model, same `k`, same index — only the query side is re-encoded with a si
 | `BAAI/bge-small-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 0.9999 | -0.0001 |
 | `BAAI/bge-small-en-v1.5` | walmart_amazon | 0.8782 | 0.8773 | -0.0009 | n/a | 0.9999 | 0.9996 | -0.0003 |
 | `BAAI/bge-small-en-v1.5` | wdc_computers | 0.5725 | 0.5788 | +0.0063 | n/a | 0.9712 | 0.9452 | -0.0261 |
-| `all-MiniLM-L12-v2` | abt_buy | 0.9531 | 0.9598 | +0.0067 | n/a | 0.9960 | 0.9961 | +0.0001 |
-| `all-MiniLM-L12-v2` | amazon_google | 0.8288 | 0.8072 | -0.0216 | n/a | 0.9987 | 0.9963 | -0.0024 |
-| `all-MiniLM-L12-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 0.9997 | 0.9994 | -0.0003 |
-| `all-MiniLM-L12-v2` | walmart_amazon | 0.8645 | 0.8645 | +0.0000 | n/a | 0.9996 | 0.9989 | -0.0007 |
-| `all-MiniLM-L12-v2` | wdc_computers | 0.5446 | 0.5698 | +0.0252 | n/a | 0.9650 | 0.9514 | -0.0136 |
+| `all-MiniLM-L12-v2` | abt_buy | 0.9531 | 0.9598 | +0.0067 | [-0.0010, +0.0138] (spans 0) | 0.9960 | 0.9960 | -0.0000 |
+| `all-MiniLM-L12-v2` | amazon_google | 0.8288 | 0.8072 | -0.0216 | [-0.0327, -0.0142] | 0.9987 | 0.9971 | -0.0016 |
+| `all-MiniLM-L12-v2` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | [+0.0000, +0.0000] (spans 0) | 0.9997 | 0.9996 | -0.0001 |
+| `all-MiniLM-L12-v2` | walmart_amazon | 0.8645 | 0.8645 | +0.0000 | [-0.0100, +0.0050] (spans 0) | 0.9996 | 0.9994 | -0.0002 |
+| `all-MiniLM-L12-v2` | wdc_computers | 0.5446 | 0.5698 | +0.0252 | [+0.0029, +0.0505] | 0.9650 | 0.9569 | -0.0081 |
 | `BAAI/bge-base-en-v1.5` | abt_buy | 0.9713 | 0.9741 | +0.0029 | n/a | 0.9971 | 0.9973 | +0.0002 |
 | `BAAI/bge-base-en-v1.5` | amazon_google | 0.8317 | 0.8180 | -0.0137 | n/a | 0.9985 | 0.9963 | -0.0023 |
 | `BAAI/bge-base-en-v1.5` | fodors_zagat | 1.0000 | 1.0000 | +0.0000 | n/a | 1.0000 | 0.9999 | -0.0001 |
@@ -141,6 +141,11 @@ Every model against `all-MiniLM-L6-v2` — langres's current `DEFAULT_EMBEDDING_
 
 | model | benchmark | Δ per-record recall | 95% CI | clusters |
 |---|---|---:|---|---:|
+| `all-MiniLM-L12-v2` | abt_buy | +0.0186 | [+0.0088, +0.0285] | 1,012 |
+| `all-MiniLM-L12-v2` | amazon_google | +0.0020 | [-0.0037, +0.0074] (spans 0) | 995 |
+| `all-MiniLM-L12-v2` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (spans 0) | 112 |
+| `all-MiniLM-L12-v2` | walmart_amazon | -0.0011 | [-0.0077, +0.0055] (spans 0) | 846 |
+| `all-MiniLM-L12-v2` | wdc_computers | -0.0363 | [-0.0590, -0.0132] | 877 |
 
 ## The recall/cost frontier (every k)
 
