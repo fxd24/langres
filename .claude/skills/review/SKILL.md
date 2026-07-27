@@ -26,7 +26,7 @@ Launch multiple parallel code reviews covering different aspects, plus get secon
 
 ## Review Dimensions
 
-### 1. Architecture & Design (code-reviewer agent)
+### 1. Architecture & Design (langres-code-reviewer agent)
 - Clean architecture principles
 - Separation of concerns
 - Repository/service layer violations
@@ -39,13 +39,7 @@ Launch multiple parallel code reviews covering different aspects, plus get secon
 - Secret handling
 - SQL injection risks
 
-### 3. Data Pipeline (data-pipeline-reviewer agent)
-- Dagster asset patterns
-- Idempotency
-- Error handling
-- Connection management
-
-### 4. External Perspectives (second-opinion skill)
+### 3. External Perspectives (second-opinion skill)
 - Codex (gpt-5.3-codex) - OpenAI's latest code-focused model
 - Codex (gpt-5.2-codex) - OpenAI's previous code-focused model
 - Kimi K2.5 - Strong reasoning, different approach
@@ -60,9 +54,8 @@ Launch multiple parallel code reviews covering different aspects, plus get secon
 ```
 
 Launches:
-- code-reviewer agent (architecture, patterns, quality)
+- langres-code-reviewer agent (architecture, patterns, quality)
 - security-reviewer agent (if auth/input handling detected)
-- data-pipeline-reviewer agent (if Dagster assets detected)
 - External reviews via Codex (gpt-5.3-codex) + 2-3 OpenCode models
 
 ### Quick Review (skip external)
@@ -97,7 +90,7 @@ Determine what's being reviewed:
 Use the Task tool to spawn appropriate reviewer agents:
 
 ```
-Task: code-reviewer
+Task: langres-code-reviewer
 "Review {files} for architecture, design patterns, code quality. Focus on:
 - Clean architecture violations
 - Unnecessary abstractions (thin wrappers)
@@ -108,8 +101,6 @@ Read CLAUDE.md and docs/COMMON_IMPLEMENTATION_ERRORS.md first."
 Task: security-reviewer (if security-relevant)
 "Security review of {files}. Focus on OWASP Top 10."
 
-Task: data-pipeline-reviewer (if pipeline code)
-"Review {files} for pipeline best practices, idempotency, error handling."
 ```
 
 ### Step 3: Launch External Reviews (Parallel)
@@ -186,7 +177,7 @@ After synthesizing, assess **each deduplicated finding** and categorize it into 
 ## Comprehensive Code Review: {target}
 
 ### Review Sources
-- [x] code-reviewer (Claude)
+- [x] langres-code-reviewer (Claude)
 - [x] security-reviewer (Claude)
 - [x] Codex gpt-5.3-codex
 - [x] OpenCode kimi-k2.5-free
@@ -199,7 +190,7 @@ After synthesizing, assess **each deduplicated finding** and categorize it into 
 [Significant issues]
 
 ### Architecture & Design
-[From code-reviewer + external perspectives]
+[From langres-code-reviewer + external perspectives]
 
 ### Security Concerns
 [From security-reviewer + external perspectives]
@@ -214,7 +205,7 @@ After synthesizing, assess **each deduplicated finding** and categorize it into 
 
 | # | Finding | Source(s) | Severity | Assessment | Rationale |
 |---|---------|-----------|----------|------------|-----------|
-| 1 | [Brief description] | code-reviewer, Codex | Critical | **Fix now** | [Why this needs immediate attention] |
+| 1 | [Brief description] | langres-code-reviewer, Codex | Critical | **Fix now** | [Why this needs immediate attention] |
 | 2 | [Brief description] | security-reviewer | High | **Fix now** | [Why this is blocking] |
 | 3 | [Brief description] | Codex, Kimi | Medium | **Defer to issue** | [Valid but not blocking; suggest issue title] |
 | 4 | [Brief description] | GLM | Low | **False positive** | [Why this doesn't apply] |
