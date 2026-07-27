@@ -27,6 +27,7 @@ from doc_snippets import (
     DirectiveError,
     Snippet,
     _snippet_env,
+    assert_gate_is_observing,
     build_clean_install,
     check_examples_reference,
     collect,
@@ -150,6 +151,69 @@ def test_examples_rule_switches_itself_off_if_examples_ever_ship() -> None:
         check_examples_reference(_snippet("python examples/foo.py\n"), examples_shipped=True)
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "exemption", ["requires-repo", "illustrative", "requires-network", "requires-extra=semantic"]
+)
+def test_any_declared_exemption_satisfies_the_examples_rule(exemption: str) -> None:
+    """The rule polices one claim: "a bare install can run this".
+
+    A block that declares *any* exemption has stopped making that claim. Demanding
+    `requires-repo` specifically forced a mislabel -- an `illustrative` fragment
+    that merely mentions an example path could only be silenced by tagging it
+    `requires-repo`, which says something false about it.
+    """
+    assert (
+        check_examples_reference(
+            _snippet("python examples/foo.py\n", exemption=exemption), examples_shipped=False
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# The gate must not be able to pass by observing nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_refuses_to_pass_when_no_python_block_is_executable(tmp_path: Path) -> None:
+    """0 executable snippets is an ERROR, not a green run.
+
+    The failure shape this blocks: a change to _FENCE_RE / DOC_PATHS /
+    EXECUTED_LANGUAGES stops matching, everything is skipped, the job prints
+    "0 failed" and goes green forever -- the same silent-match-nothing failure
+    the `[tool.hatch.build]` path literals carry.
+    """
+    only_exempted = _extract(
+        tmp_path,
+        "<!-- docs-gate: illustrative -->\n```python\nx = 1\n```\n\n```bash\nls\n```\n",
+    )
+    with pytest.raises(DirectiveError, match="0 of them are executable python"):
+        assert_gate_is_observing(only_exempted)
+
+
+def test_gate_refuses_to_pass_on_an_empty_snippet_set() -> None:
+    with pytest.raises(DirectiveError, match="passes by finding nothing"):
+        assert_gate_is_observing([])
+
+
+def test_a_document_matching_no_fenced_block_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A doc the extractor cannot see is a doc it cannot check."""
+    (tmp_path / "README.md").write_text("no code here at all\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setattr("doc_snippets.DOC_PATHS", ("README.md",))
+    with pytest.raises(DirectiveError, match="contributed 0 fenced code blocks"):
+        collect(tmp_path)
+
+
+def test_the_real_docs_still_have_executable_python() -> None:
+    """The guard above, applied to the actual repo -- this gate is observing."""
+    assert_gate_is_observing(collect(REPO_ROOT))
 
 
 # ---------------------------------------------------------------------------

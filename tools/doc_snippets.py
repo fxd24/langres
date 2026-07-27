@@ -47,10 +47,22 @@ Only ```python blocks execute -- running arbitrary ```bash from documentation
 (`pip install ...`, `git clone ...`) would exercise the network, not the wheel.
 But the reported defect lived in a bash block, so one static rule covers every
 fenced block regardless of language: **a block that references an `examples/...`
-path must declare `requires-repo`**, because the built wheel does not ship that
-directory. That claim is *observed* from the wheel this run built, not assumed
-(see `examples_shipped` in :func:`run`) -- if `examples/` ever starts shipping,
-the rule correctly stops firing.
+path must declare an exemption** (`requires-repo` is the apt one), because the
+built wheel does not ship that directory. That claim is *observed* from the wheel
+this run built, not assumed (see `examples_shipped` in :func:`main`) -- if
+`examples/` ever starts shipping, the rule correctly stops firing.
+
+Note the rule exists because *importing* is not enough to catch this class.
+Measured on a bare wheel install: `from langres.core.indexes import
+QdrantDenseIndex` succeeds, and so does constructing one -- `qdrant_client` is
+only reached in use. A gate that scanned imports would have missed the very
+defect it was built for. This one runs the code.
+
+## Finding nothing is a failure, not a pass
+
+:func:`assert_gate_is_observing` refuses a run with zero executable snippets, and
+:func:`collect` refuses a document that yields zero fenced blocks. A gate that
+can go green by matching nothing is this repo's recurring bug, not a corner case.
 
 ## Running it
 
@@ -251,12 +263,51 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
 
 
 def collect(repo_root: Path = REPO_ROOT) -> list[Snippet]:
-    """Every fenced block across :data:`DOC_PATHS`, in document order."""
+    """Every fenced block across :data:`DOC_PATHS`, in document order.
+
+    Raises if any document contributes **zero** blocks -- see
+    :func:`assert_gate_is_observing` for why finding nothing must be loud.
+    """
     extras = declared_extras(repo_root)
     snippets: list[Snippet] = []
     for doc in DOC_PATHS:
-        snippets.extend(extract(repo_root / doc, doc=doc, extras=extras))
+        found = extract(repo_root / doc, doc=doc, extras=extras)
+        if not found:
+            raise DirectiveError(
+                f"{doc} contributed 0 fenced code blocks. Either the file moved (fix "
+                "DOC_PATHS), or the fence syntax changed and _FENCE_RE no longer matches "
+                "it. A document this gate cannot see is a document it cannot check."
+            )
+        snippets.extend(found)
     return snippets
+
+
+def assert_gate_is_observing(snippets: list[Snippet]) -> None:
+    """Fail loudly if there is nothing left to execute.
+
+    A gate that can pass by matching nothing is this repo's recurring failure --
+    the `[tool.hatch.build]` path literals that "fail silently" when a directory
+    is renamed, the step named "95% coverage gate" that enforced 90, the
+    cancelled run read as green. Every one of them reported all-clear while
+    observing nothing.
+
+    The shape here would be: a change to ``_FENCE_RE``, ``DOC_PATHS`` or
+    ``EXECUTED_LANGUAGES`` stops matching python blocks, every remaining block is
+    skipped, the job prints "0 failed" and goes green forever. So an empty
+    executable set is an error, not a pass -- and the exemptions cannot cause it
+    either: if every python block in the docs were exempted, this gate would be
+    running nothing and should say so out loud.
+    """
+    executable = [s for s in snippets if s.language in EXECUTED_LANGUAGES and s.exemption is None]
+    if not executable:
+        total = len(snippets)
+        raise DirectiveError(
+            f"found {total} fenced block(s) across {', '.join(DOC_PATHS)} but 0 of them are "
+            "executable python, so this run would check nothing and pass. Either every "
+            "python block is now exempted (make one runnable on a bare install), or the "
+            "extractor stopped recognizing them (check _FENCE_RE / EXECUTED_LANGUAGES). "
+            "A gate that passes by finding nothing is worse than no gate."
+        )
 
 
 def _snippet_env() -> dict[str, str]:
@@ -284,8 +335,17 @@ def check_examples_reference(snippet: Snippet, *, examples_shipped: bool) -> str
     file from ``examples/`` cannot work for a pip user. ``examples_shipped`` is
     measured from the wheel this run built, so the rule disappears by itself if
     that ever changes.
+
+    **ANY declared exemption satisfies this rule, not just ``requires-repo``.**
+    The rule polices one claim -- "a bare install can run this" -- and a block
+    that declares *any* exemption has stopped making that claim. Requiring
+    `requires-repo` specifically forced a mislabel: an `illustrative` block that
+    merely mentions an example path was unfixable except by tagging it
+    `requires-repo`, which says something false about it. `requires-repo` stays
+    the suggestion in the message because it is the apt reason for the common
+    case.
     """
-    if examples_shipped or snippet.exemption == _REASON_REQUIRES_REPO:
+    if examples_shipped or snippet.exemption is not None:
         return None
     referenced = sorted(set(_EXAMPLES_REF_RE.findall(snippet.code)))
     if not referenced:
@@ -443,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter = Path(args.interpreter)
             examples_shipped = False
         snippets = collect()
+        assert_gate_is_observing(snippets)
         results = run(
             snippets,
             interpreter=interpreter,
