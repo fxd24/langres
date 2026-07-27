@@ -419,8 +419,15 @@ class FAISSIndex:
         # 3. Add embeddings to index
         self._index.add(self._corpus_embeddings)
 
-        # 4. Cache corpus texts for search_all() (needed for query_prompt support)
-        self._corpus_texts = texts
+        # 4. Snapshot corpus texts for search_all() (needed for query_prompt
+        #    support). A COPY, not the caller's list: the vectors above are
+        #    frozen at this instant, and `search_all(query_prompt=...)`
+        #    re-encodes these texts to build the query side. Aliasing the
+        #    caller's list would let a later mutation query one corpus against
+        #    another corpus's index -- silently mismatched rows, or a length
+        #    mismatch, with the unprompted path still returning correct results
+        #    from the cached vectors.
+        self._corpus_texts = list(texts)
 
         logger.info(
             "Built FAISS index with %d vectors, dim=%d, metric=%s",
@@ -482,26 +489,59 @@ class FAISSIndex:
     def search_all(self, k: int, query_prompt: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Search all corpus items against each other (deduplication pattern).
 
-        Reuses cached corpus embeddings for efficiency. For deduplication,
-        symmetric encoding (no prompt) is typical since both query and document
-        sides come from the same corpus.
+        Two regimes, and the difference is the whole point of ``query_prompt``:
+
+        - **Symmetric** (``query_prompt is None``): reuse the cached corpus
+          vectors verbatim. Nothing is re-encoded, so this stays the cheap
+          default for deduplication.
+        - **Asymmetric** (``query_prompt`` given): the corpus was embedded at
+          ``create_index`` time *without* a prompt (documents stay generic), so
+          the query side must be **re-encoded** with the prompt. This is the
+          shape EmbeddingGemma / E5 / BGE / Qwen3-Embedding document: prompt the
+          query, leave the document plain.
+
+        Re-encoding here is what makes the prompt observable. Passing the cached
+        document vectors into :meth:`search` instead takes its pre-computed-array
+        branch, which never applies a prompt — so ``search_all`` returned
+        byte-identical distances *and* indices with and without a prompt, and any
+        experiment sweeping the prompt axis silently measured nothing.
 
         Args:
             k: Number of neighbors per corpus item.
-            query_prompt: Optional instruction prompt for query encoding.
-                Typically None for deduplication (symmetric encoding).
-                Default: None.
+            query_prompt: Optional instruction prompt for query encoding. ``None``
+                (the default) keeps the symmetric, no-re-encode path.
 
         Returns:
             distances: shape (N, k) where N = corpus size
             indices: shape (N, k)
+
+        Raises:
+            RuntimeError: If the index is not built, or if a ``query_prompt`` is
+                given but the corpus texts needed to re-encode are unavailable
+                (an index populated through the deprecated :meth:`build` path).
+
+        Note:
+            Under a prompt the query vectors differ from the stored document
+            vectors, so a corpus item is **no longer guaranteed to be its own
+            nearest neighbour**. Callers must drop the self-match by identity
+            (``neighbour == anchor``), never by assuming it sits at column 0 —
+            :class:`~langres.core.blockers.vector.VectorBlocker` does exactly that.
         """
         if self._corpus_embeddings is None or self._index is None:
             raise RuntimeError("Index not built. Must call create_index() first.")
 
-        # Pass pre-computed embeddings to search() - no re-encoding!
-        # query_prompt parameter is passed through but ignored for pre-computed embeddings
-        return self.search(self._corpus_embeddings, k, query_prompt=query_prompt)
+        if query_prompt is None:
+            # Symmetric: pass pre-computed embeddings to search() - no re-encoding.
+            return self.search(self._corpus_embeddings, k)
+
+        if self._corpus_texts is None:
+            raise RuntimeError(
+                "search_all(query_prompt=...) must re-encode the query side with "
+                "the prompt, but this index holds no corpus texts (it was built "
+                "through the deprecated build(embeddings) path). Rebuild it with "
+                "create_index(texts), or call search_all(k) without a prompt."
+            )
+        return self.search(self._corpus_texts, k, query_prompt=query_prompt)
 
     def to_similarities(self, distances: np.ndarray) -> np.ndarray:
         """Convert FAISS distances to similarities in [0, 1] using the index metric.

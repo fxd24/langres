@@ -162,6 +162,31 @@ def test_optimize_dedup_collapses_degenerate_all_pairs(tmp_path: Any) -> None:
     assert len(RunStore(store_path).read()) == 1
 
 
+def test_an_unprompted_config_keeps_its_historical_recipe_id() -> None:
+    """``query_prompt=None`` must not re-hash every recipe already in a RunStore.
+
+    ``recipe_id`` is a content hash used to recognise a config ACROSS runs. When
+    the ``query_prompt`` axis was added, ``SearchSpace`` began emitting
+    ``"query_prompt": None`` on every config — so without this, every historical
+    record would hash differently and "already scored this?" would answer *no*
+    for the entire existing store.
+    """
+    from langres.optimize import _canonical_config
+
+    with_key = _canonical_config(
+        {"blocker": "vector", "embedding_model": "m", "k_neighbors": 5, "query_prompt": None}
+    )
+    without_key = _canonical_config({"blocker": "vector", "embedding_model": "m", "k_neighbors": 5})
+    assert with_key == without_key
+
+    # A real prompt IS recipe-relevant and must survive.
+    prompted = _canonical_config(
+        {"blocker": "vector", "embedding_model": "m", "k_neighbors": 5, "query_prompt": "find: "}
+    )
+    assert prompted["query_prompt"] == "find: "
+    assert prompted != without_key
+
+
 def test_optimize_vector_reuses_index_across_k() -> None:
     pytest.importorskip("faiss", reason="requires the [semantic] extra")
     from langres.core.embeddings import FakeEmbedder

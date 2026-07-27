@@ -795,6 +795,30 @@ coupled to $\varphi$ by construction, rather than by an outer optimization loop.
   (`src/langres/core/blockers/vector.py`). So "put an instruction on the retrieval side"
   is a **parameter we already have and have never optimized**. `[verified — read the
   signature]`
+
+  > **CORRECTION (2026-07-27).** The parameter existed; it **did nothing**.
+  > `VectorBlocker.stream` threaded `query_prompt` into `vector_index.search_all`,
+  > which forwarded the **cached corpus vectors** into `search()` — and `search()`
+  > takes its pre-computed-`ndarray` branch, which never applies a prompt. Measured
+  > before the fix: prompted and unprompted `search_all` returned **byte-identical
+  > distances and indices**, while the embedder itself honoured the prompt (max abs
+  > vector diff 0.17). Every prompt test in the repo asserted *forwarding*, never the
+  > result, so all of them stayed green.
+  >
+  > Note what the evidence tag says: `[verified — read the signature]`. Reading a
+  > signature verifies that a parameter is *accepted*, not that it is *honoured* —
+  > the same species of error as this repo's "grep is not an import graph". Had
+  > measurement (1) below been run against the code as it stood, it would have
+  > returned a clean, confident **false null**: "a hand-written instruction does not
+  > move recall, C3 stops here" — and C3 would have been closed on an artifact.
+  >
+  > Fixed in `feat/embedder-ladder`: `search_all` now re-encodes the query side with
+  > the prompt (documents stay generic), `VectorBlocker` drops the self-match by
+  > identity rather than by position (under a prompt the anchor is no longer
+  > guaranteed to rank first), the `SearchSpace` `query_prompt` axis measurement (1)
+  > asks for now exists and is consumed by the factory, and the regression tests
+  > assert the retrieved **result** changes. Measurement (1)'s numbers are in
+  > [`20260727_embedder_ladder.md`](20260727_embedder_ladder.md).
 - **Instruction-following embedders are established**: E5-mistral
   ([2401.00368](https://arxiv.org/abs/2401.00368)) and the instruction/prompt treatment in
   `20260707_data_prep_hard_case_mining_survey.md` §11–12, which also covers **GritLM**
@@ -816,6 +840,9 @@ coupled to $\varphi$ by construction, rather than by an outer optimization loop.
    (`langres/autoresearch/search_space.py:27`) is a frozen Cartesian grid — adding a
    `query_prompt` axis is a small, honest change. *If a hand-written instruction moves
    recall, the transfer question is live. If not, C3 stops here* — cheaply.
+   **Done (2026-07-27):** the axis exists and is consumed end to end; the measured
+   answer is in [`20260727_embedder_ladder.md`](20260727_embedder_ladder.md). Read
+   the correction above before quoting any pre-fix prompt result.
 2. **Does the tuned instruction transfer?** Take the instruction DSPy optimized **for
    matching**, put it in `query_prompt`, and measure recall against (a) no prompt, (b) a
    naive hand-written prompt, (c) an instruction tuned **directly** on a recall objective.

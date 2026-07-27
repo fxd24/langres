@@ -53,7 +53,98 @@ def test_sentence_transformer_resource_preserves_model_ref_and_runtime_config() 
         "normalize_embeddings": False,
         "quantization": None,
         "show_progress_bar": False,
+        "truncate_dim": None,
+        "prompt_name": None,
+        "prompts": None,
     }
+
+
+def test_sentence_transformer_runtime_config_threads_prompt_and_load_knobs() -> None:
+    """The instruction/Matryoshka knobs reach the underlying embedder.
+
+    Without these an instructional checkpoint (EmbeddingGemma, E5, BGE,
+    Qwen3-Embedding) can only be embedded prompt-less — which measures the wrong
+    thing.
+    """
+    runtime = SentenceTransformerRuntimeConfig(
+        truncate_dim=256,
+        prompt_name="query",
+        prompts={"query": "task: search result | query: "},
+        device="mps",
+        batch_size=64,
+    )
+    resource = SentenceTransformer(
+        "org/instructional-embedder", runtime_config=runtime, trust_remote_code=True
+    )
+
+    embedder = resource._embedder
+    assert embedder.trust_remote_code is True
+    assert embedder.truncate_dim == 256
+    assert embedder.prompt_name == "query"
+    assert embedder.prompts == {"query": "task: search result | query: "}
+    assert embedder.device == "mps"
+    assert embedder.batch_size == 64
+    # Still weightless: threading knobs must not trigger a download.
+    assert embedder._model is None
+
+
+def test_trust_remote_code_never_round_trips_through_a_saved_artifact() -> None:
+    """A downloaded artifact must not be able to ask for arbitrary code execution.
+
+    ``trust_remote_code`` makes ``sentence-transformers`` import and run Python
+    from the model repo. A saved ``resolver.json`` names an embedder config, and
+    ``langres.hub.from_pretrained`` loads artifacts written by someone else — so a
+    persisted ``trust_remote_code: true`` would be remote-code execution requested
+    *by the artifact*, not by the caller. It is therefore a constructor argument
+    only, and rebuilding from config always lands on ``False``.
+    """
+    resource = SentenceTransformer("org/custom-architecture", trust_remote_code=True)
+    assert resource.trust_remote_code is True
+    assert "trust_remote_code" not in resource.config["runtime_config"]  # type: ignore[operator]
+
+    rebuilt = SentenceTransformer.from_config(resource.config)
+    assert rebuilt.trust_remote_code is False
+    assert rebuilt._embedder.trust_remote_code is False
+
+    with pytest.raises(ValidationError):
+        SentenceTransformerRuntimeConfig(trust_remote_code=True)  # type: ignore[call-arg]
+
+
+def test_sentence_transformer_prompt_knobs_round_trip_through_config() -> None:
+    """A prompted/truncated resource must rebuild identically from its config."""
+    resource = SentenceTransformer(
+        "org/instructional-embedder",
+        runtime_config=SentenceTransformerRuntimeConfig(
+            truncate_dim=128,
+            prompt_name="document",
+            prompts={"document": "title: none | text: "},
+        ),
+    )
+
+    rebuilt = SentenceTransformer.from_config(resource.config)
+
+    assert rebuilt.config == resource.config
+    assert rebuilt._embedder.prompt_name == "document"
+    assert rebuilt._embedder.truncate_dim == 128
+
+
+def test_sentence_transformer_registered_prompts_reads_the_loaded_model() -> None:
+    """A model's own documented prefixes are measured, never hand-tabulated."""
+    resource = SentenceTransformer("org/instructional-embedder")
+
+    # Nothing loaded yet: reporting prompts must not force a download.
+    assert resource.registered_prompts == {}
+
+    resource._embedder._model = SimpleNamespace(prompts={"query": "q: ", "document": "d: "})
+    assert resource.registered_prompts == {"query": "q: ", "document": "d: "}
+
+
+def test_sentence_transformer_registered_prompts_tolerates_a_model_without_prompts() -> None:
+    """Most checkpoints register none; that is an empty mapping, not an error."""
+    resource = SentenceTransformer("org/plain-embedder")
+    resource._embedder._model = SimpleNamespace()
+
+    assert resource.registered_prompts == {}
 
 
 def test_sentence_transformer_resource_embeds_through_legacy_provider() -> None:

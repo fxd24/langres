@@ -88,11 +88,32 @@ class ResourceRuntimeConfig(BaseModel):
 
 
 class SentenceTransformerRuntimeConfig(ResourceRuntimeConfig):
-    """Runtime settings for dense Sentence Transformers."""
+    """Runtime settings for dense Sentence Transformers.
+
+    ``prompt_name`` / ``prompts`` are what make an *instructional* embedder
+    (EmbeddingGemma, E5, BGE, Qwen3-Embedding) usable at all: those models are
+    trained to read a task prefix, and embedding them without one measures the
+    wrong thing. ``prompt_name`` selects a prompt the checkpoint already
+    registers (its ``config_sentence_transformers.json``); ``prompts`` adds
+    ``{name: prefix}`` entries for checkpoints that ship none.
+    """
 
     backend: Literal["torch", "onnx", "openvino"] = "torch"
     normalize_embeddings: bool = True
     show_progress_bar: bool = False
+    #: Truncate output vectors to this many dimensions (Matryoshka checkpoints
+    #: are trained so a prefix stays usable). ``None`` = the full dimension.
+    truncate_dim: int | None = Field(default=None, ge=1)
+    #: Default prompt name applied to every ``embed`` call.
+    prompt_name: str | None = Field(default=None, min_length=1)
+    #: Extra ``{name: prefix}`` prompts registered on the loaded model.
+    prompts: dict[str, str] | None = None
+
+    # NOTE: `trust_remote_code` is deliberately absent. See the note on
+    # `langres.core.embeddings.SentenceTransformerEmbedderConfig`: a runtime
+    # config is serialized into artifacts, and an artifact that can request
+    # remote code execution is an artifact that can run attacker Python on the
+    # first embed(). It is a constructor-only argument on `SentenceTransformer`.
 
 
 class RerankerRuntimeConfig(ResourceRuntimeConfig):

@@ -5,14 +5,126 @@ import logging
 import numpy as np
 import pytest
 
+from langres.core import embeddings as embeddings_module
 from langres.core.embeddings import (
     EmbeddingProvider,
     FakeEmbedder,
     SentenceTransformerEmbedder,
+    UnhonouredModelConfigError,
+    _require_honoured_config_keys,
 )
 from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)
+
+
+class _SwallowedConfig:
+    """A config class that does NOT declare the key its instance carries.
+
+    Stands in for a ``Gemma3TextConfig`` older than transformers 4.56.2: the
+    checkpoint's ``use_bidirectional_attention: true`` lands on the object as an
+    unknown kwarg, and no modelling code reads it.
+    """
+
+    def __init__(self) -> None:
+        self.use_bidirectional_attention = True
+
+
+class _HonouredConfig:
+    """A config class that declares the key, i.e. a transformers new enough to use it."""
+
+    def __init__(self, use_bidirectional_attention: bool = True) -> None:
+        self.use_bidirectional_attention = use_bidirectional_attention
+
+
+class _FakeModule:
+    def __init__(self, config: object) -> None:
+        self.config = config
+
+
+class _FakeModel:
+    def __init__(self, *modules: object) -> None:
+        self._fake_modules = modules
+
+    def modules(self):
+        return iter(self._fake_modules)
+
+
+class TestUnhonouredConfigGuard:
+    """The guard against silently-wrong vectors from a too-old ``transformers``.
+
+    A Hugging Face config swallows unknown keys (verified:
+    ``Gemma3TextConfig(this_key_does_not_exist=True)`` raises nothing), so
+    ``google/embeddinggemma-300m`` on transformers < 4.56.2 loads, embeds, and
+    returns plausible but wrong vectors under causal attention. There is no
+    error to notice — the model just scores badly and you blame the model.
+    """
+
+    def test_guard_raises_when_the_key_is_swallowed(self):
+        """The failure it exists to catch — proven to actually fire."""
+        model = _FakeModel(_FakeModule(_SwallowedConfig()))
+
+        with pytest.raises(UnhonouredModelConfigError, match="use_bidirectional_attention"):
+            _require_honoured_config_keys(model, "google/embeddinggemma-300m")
+
+    def test_guard_error_names_the_fix(self):
+        """An actionable message, not just a refusal."""
+        model = _FakeModel(_FakeModule(_SwallowedConfig()))
+
+        with pytest.raises(UnhonouredModelConfigError, match="transformers>=4.56.2"):
+            _require_honoured_config_keys(model, "google/embeddinggemma-300m")
+
+    def test_guard_passes_when_the_key_is_declared(self):
+        """A transformers new enough to accept the key must not be blocked."""
+        _require_honoured_config_keys(_FakeModel(_FakeModule(_HonouredConfig())), "any/model")
+
+    def test_guard_ignores_modules_without_a_config(self):
+        """Pooling/normalize layers carry no config and must not trip the guard."""
+        _require_honoured_config_keys(_FakeModel(_FakeModule(None), object()), "any/model")
+
+    def test_guard_ignores_a_key_the_checkpoint_did_not_set(self):
+        """Only a checkpoint that ASKED for the behaviour can be let down by it."""
+
+        class _NotRequested:
+            def __init__(self) -> None:
+                self.use_bidirectional_attention = False
+
+        _require_honoured_config_keys(_FakeModel(_FakeModule(_NotRequested())), "any/model")
+
+    @pytest.mark.slow
+    def test_guard_is_wired_into_the_real_load_path(self, monkeypatch):
+        """Loading a real model runs the guard — not just the helper in isolation.
+
+        Uses ``model_type``, which every ``BertConfig`` carries truthily
+        (``"bert"``) but does not declare as an ``__init__`` parameter, so a real
+        all-MiniLM load hits exactly the swallowed-key condition. Without this,
+        the guard could be correct and never called.
+        """
+        monkeypatch.setattr(
+            embeddings_module, "SEMANTIC_CONFIG_KEYS", {"model_type": "a newer transformers"}
+        )
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+
+        with pytest.raises(UnhonouredModelConfigError, match="model_type"):
+            embedder.encode(["Apple Inc."])
+
+    @pytest.mark.slow
+    def test_guard_still_fires_on_the_SECOND_load_attempt(self, monkeypatch):
+        """A guard that only holds once is not a guard.
+
+        ``_get_model`` used to assign ``self._model`` before validating it, so the
+        raise left the rejected model on the instance and the next call took the
+        cached branch and returned it. Found by cross-model review.
+        """
+        monkeypatch.setattr(
+            embeddings_module, "SEMANTIC_CONFIG_KEYS", {"model_type": "a newer transformers"}
+        )
+        embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+
+        for _ in range(2):
+            with pytest.raises(UnhonouredModelConfigError, match="model_type"):
+                embedder.encode(["Apple Inc."])
+        assert embedder._model is None
 
 
 def test_registered_under_sentence_transformer_embedder_via_lazy_lookup() -> None:
