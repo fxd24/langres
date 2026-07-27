@@ -61,6 +61,7 @@ __all__ = [
     "align_pairs",
     "derive_threshold_from_pairs",
     "harvest_labeled_pairs",
+    "warn_if_silver_only",
 ]
 
 #: Schema type variable for the entity schema an ``ERCandidate`` carries. Defined
@@ -277,6 +278,43 @@ def harvest_labeled_pairs(
     return pairs
 
 
+def warn_if_silver_only(
+    pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction], *, stacklevel: int = 2
+) -> None:
+    """Warn when every supplied label is the judge's own verdict (circular calibration).
+
+    The shared guard behind :func:`derive_threshold_from_pairs` and
+    ``ERModel.fit(derive_threshold=True)``. Both derive a cut from labels; both
+    must say so when those labels are *silver* -- the judge's logged verdicts,
+    which were produced BY a cut, so a threshold search can only recover the cut
+    that made them. (Training a *different* model on silver labels is
+    legitimate, which is why :func:`harvest_labeled_pairs` stays warning-free.)
+
+    Anything that is not an in-memory sequence of :class:`LabeledPair` is silently
+    accepted: only ``LabeledPair`` carries ``source``, so a ``corrections.jsonl``
+    path or a :class:`Correction` sequence is human-reviewed by construction and
+    has no silver case to warn about.
+
+    Args:
+        pairs: The labels as the caller supplied them.
+        stacklevel: Forwarded to :func:`warnings.warn` (+1 for this frame), so the
+            warning points at the user's call rather than at langres internals.
+    """
+    if isinstance(pairs, (str, Path)) or not pairs:
+        return
+    if not all(isinstance(pair, LabeledPair) and pair.source == "verdict" for pair in pairs):
+        return
+    warnings.warn(
+        "silver-only calibration is circular -- deriving a threshold from "
+        "a judge's own verdicts can only recover the cut that produced "
+        "them; overlay human corrections (source='correction') before "
+        "calibrating. (Training a DIFFERENT model on silver labels is "
+        "fine.)",
+        UserWarning,
+        stacklevel=stacklevel + 1,
+    )
+
+
 def derive_threshold_from_pairs(
     pairs: Sequence[LabeledPair],
     *,
@@ -336,16 +374,7 @@ def derive_threshold_from_pairs(
             )
         scores.append(pair.score)
 
-    if pairs and all(pair.source == "verdict" for pair in pairs):
-        warnings.warn(
-            "silver-only calibration is circular -- deriving a threshold from "
-            "a judge's own verdicts can only recover the cut that produced "
-            "them; overlay human corrections (source='correction') before "
-            "calibrating. (Training a DIFFERENT model on silver labels is "
-            "fine.)",
-            UserWarning,
-            stacklevel=2,
-        )
+    warn_if_silver_only(pairs, stacklevel=3)
 
     # scikit-learn is the ``[trained]`` extra, and ``training.calibration``
     # imports it at MODULE scope -- so on a core-only install this import fails,
