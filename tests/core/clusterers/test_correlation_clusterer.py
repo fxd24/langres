@@ -401,9 +401,9 @@ def test_bcubed_and_pairwise_are_unchanged_on_the_stranding_case() -> None:
 
     assert before != after  # the inputs to the metric really do differ
 
-    assert evaluate_clustering(
-        complete_partition(before, _ALL_IDS), gold
-    ) == evaluate_clustering(complete_partition(after, _ALL_IDS), gold)
+    assert evaluate_clustering(complete_partition(before, _ALL_IDS), gold) == evaluate_clustering(
+        complete_partition(after, _ALL_IDS), gold
+    )
 
 
 def test_rejected_pairs_inside_clusters_is_unchanged_by_the_drop() -> None:

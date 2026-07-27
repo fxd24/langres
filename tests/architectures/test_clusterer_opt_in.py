@@ -93,9 +93,7 @@ def test_fuzzy_string_accepts_a_correlation_clusterer() -> None:
 
 
 def test_vector_llm_cascade_accepts_a_correlation_clusterer() -> None:
-    model = VectorLLMCascade(
-        llm="openrouter/openai/gpt-4o-mini", clusterer=CorrelationClusterer()
-    )
+    model = VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", clusterer=CorrelationClusterer())
 
     assert type(model._build_clusterer()) is CorrelationClusterer
 
@@ -106,9 +104,7 @@ def test_opting_in_changes_the_clustering_not_the_architecture() -> None:
     The measured difference this opt-in exists to deliver, at the front door.
     """
     closure = FuzzyString(threshold=_CHAIN_THRESHOLD).dedupe(_CHAIN)
-    pivot = FuzzyString(
-        threshold=_CHAIN_THRESHOLD, clusterer=CorrelationClusterer()
-    ).dedupe(_CHAIN)
+    pivot = FuzzyString(threshold=_CHAIN_THRESHOLD, clusterer=CorrelationClusterer()).dedupe(_CHAIN)
 
     assert sorted(map(sorted, closure)) == [["1", "2", "3"]]  # chained through 2
     assert sorted(map(sorted, pivot)) == [["1", "2"]]  # no direct 1-3 edge
@@ -123,9 +119,7 @@ def test_opting_in_does_not_introduce_singleton_clusters() -> None:
     output *shape*; ``dedupe()`` is documented to return the multi-record
     clusters and leave singletons out.
     """
-    pivot = FuzzyString(
-        threshold=_CHAIN_THRESHOLD, clusterer=CorrelationClusterer()
-    ).dedupe(_CHAIN)
+    pivot = FuzzyString(threshold=_CHAIN_THRESHOLD, clusterer=CorrelationClusterer()).dedupe(_CHAIN)
 
     assert "3" not in {rid for cluster in pivot for rid in cluster}
     assert all(len(cluster) > 1 for cluster in pivot)
