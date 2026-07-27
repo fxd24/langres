@@ -602,6 +602,51 @@ def _registered_prompts(base_embedder: Any) -> list[str]:
     return sorted(name for name, prefix in (getattr(model, "prompts", {}) or {}).items() if prefix)
 
 
+def build_prompted_index(
+    embedder: Any, texts: Sequence[str], document_prompt: str | None
+) -> tuple[Any, np.ndarray, float, int]:
+    """Index the corpus under one document-side prefix.
+
+    Returns ``(index, corpus vectors, build seconds, texts encoded)``.
+
+    The prefix is applied by plain string concatenation rather than
+    sentence-transformers' ``prompt=`` because ``FAISSIndex.create_index`` takes
+    no prompt at all — the document-side gap this run reports. The two are
+    equivalent for the checkpoints measured here, verified rather than assumed:
+    sentence-transformers applies a prompt as ``prompt + text``
+    (``sentence_transformers/base/model.py:560``) and only excludes its tokens
+    from pooling when ``include_prompt=False``
+    (``sentence_transformers/sentence_transformer/modules/pooling.py:125``),
+    which both documented checkpoints ship as ``true``. A checkpoint shipping
+    ``include_prompt=false`` would NOT be equivalent and must not be added to
+    ``documented_arm`` without changing this.
+
+    **The query side is rebound to the bare text**, and that line is the whole
+    reason this is a function worth testing. ``create_index`` snapshots the texts
+    it was handed, and ``search_all(query_prompt=...)`` re-encodes *those* to
+    build the query vectors — so on a documented arm the query would come out as
+    ``query_prompt + document_prompt + text``, a double-prefixed recipe no model
+    card describes, and the arm's recall would measure something nobody asked
+    for. Reaching behind ``create_index`` is not elegance; it is the same
+    document-side product gap surfacing a second time, on the read path.
+    """
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    doc_texts = [document_prompt + text for text in texts] if document_prompt else list(texts)
+    # `misses` is cumulative over the embedder, so the delta — not the total — is
+    # what this build encoded. Zero means the seconds below are a SQLite read,
+    # not an encode, and must not be quoted as an encoding cost.
+    before = int(embedder.cache_info()["misses"])
+    started = time.perf_counter()
+    index = FAISSIndex(embedder=embedder, metric="cosine")
+    index.create_index(doc_texts)
+    seconds = time.perf_counter() - started
+    encoded = int(embedder.cache_info()["misses"]) - before
+    if document_prompt:
+        index._corpus_texts = list(texts)
+    return index, embedder.encode(doc_texts), seconds, encoded
+
+
 def evaluate_model_on_benchmark(
     spec: ModelSpec,
     benchmark: str,
@@ -627,7 +672,6 @@ def evaluate_model_on_benchmark(
         later run needs to compare against.
     """
     from langres.core.blockers.vector import VectorBlocker
-    from langres.core.indexes.vector_index import FAISSIndex
     from langres.metrics.metrics import evaluate_blocking
 
     rows: list[LadderRow] = []
@@ -675,41 +719,11 @@ def evaluate_model_on_benchmark(
     #: index: only the arms that actually change the corpus pay to rebuild it.
     built: dict[str | None, tuple[Any, np.ndarray, float, int]] = {}
 
-    def index_for(document_prompt: str | None) -> tuple[Any, np.ndarray, float, int]:
-        """Build (or reuse) the corpus index under one document-side prefix.
-
-        The prefix is applied by plain string concatenation rather than
-        sentence-transformers' ``prompt=`` because ``FAISSIndex.create_index``
-        takes no prompt at all — the document-side gap this run reports. The two
-        are equivalent for the checkpoints measured here, verified rather than
-        assumed: sentence-transformers applies a prompt as ``prompt + text``
-        (``sentence_transformers/base/model.py:560``) and only excludes its tokens
-        from pooling when ``include_prompt=False``
-        (``sentence_transformers/sentence_transformer/modules/pooling.py:125``),
-        which both documented checkpoints ship as ``true``. A checkpoint shipping
-        ``include_prompt=false`` would NOT be equivalent and must not be added to
-        ``documented_arm`` without changing this.
-        """
-        if document_prompt not in built:
-            doc_texts = [document_prompt + text for text in texts] if document_prompt else texts
-            # `misses` is cumulative over the embedder, so the delta — not the
-            # total — is what this build encoded. Zero means the seconds below are
-            # a SQLite read, not an encode, and must not be quoted as an encoding
-            # cost.
-            before = int(embedder.cache_info()["misses"])
-            started = time.perf_counter()
-            index = FAISSIndex(embedder=embedder, metric="cosine")
-            index.create_index(doc_texts)
-            seconds = time.perf_counter() - started
-            encoded = int(embedder.cache_info()["misses"]) - before
-            built[document_prompt] = (index, embedder.encode(doc_texts), seconds, encoded)
-        return built[document_prompt]
-
     for arm, (document_prompt, query_prompt) in prompt_arms.items():
         try:
-            index, doc_vectors, index_build_seconds, index_build_encoded = index_for(
-                document_prompt
-            )
+            if document_prompt not in built:
+                built[document_prompt] = build_prompted_index(embedder, texts, document_prompt)
+            index, doc_vectors, index_build_seconds, index_build_encoded = built[document_prompt]
             # `prompt=None` is a cache hit on the corpus encode whenever the arm
             # leaves the document side bare, so this is one line, not a branch.
             query_vectors = embedder.encode(texts, prompt=query_prompt)

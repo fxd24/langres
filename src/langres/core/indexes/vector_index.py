@@ -419,8 +419,15 @@ class FAISSIndex:
         # 3. Add embeddings to index
         self._index.add(self._corpus_embeddings)
 
-        # 4. Cache corpus texts for search_all() (needed for query_prompt support)
-        self._corpus_texts = texts
+        # 4. Snapshot corpus texts for search_all() (needed for query_prompt
+        #    support). A COPY, not the caller's list: the vectors above are
+        #    frozen at this instant, and `search_all(query_prompt=...)`
+        #    re-encodes these texts to build the query side. Aliasing the
+        #    caller's list would let a later mutation query one corpus against
+        #    another corpus's index -- silently mismatched rows, or a length
+        #    mismatch, with the unprompted path still returning correct results
+        #    from the cached vectors.
+        self._corpus_texts = list(texts)
 
         logger.info(
             "Built FAISS index with %d vectors, dim=%d, metric=%s",

@@ -155,6 +155,71 @@ class TestDocumentedPromptArm:
             assert LADDER.MODELS_BY_NAME[name].documented_arm is None
 
 
+class _CountingEmbedder:
+    """Deterministic $0 embedder that records every text it is asked to encode."""
+
+    embedding_dim = 8
+
+    def __init__(self) -> None:
+        self.seen: list[list[str]] = []
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        rendered = [(prompt or "") + text for text in texts]
+        self.seen.append(rendered)
+        # Any deterministic function of the string works; the assertions are
+        # about WHICH strings arrive, never about the geometry.
+        return np.array([[float(len(t) + i) for i in range(8)] for t in rendered], dtype=np.float32)
+
+    def cache_info(self) -> dict[str, int]:
+        return {"misses": sum(len(batch) for batch in self.seen)}
+
+
+class TestDocumentSidePrefix:
+    """The document prefix must not leak onto the query side.
+
+    ``create_index`` snapshots the texts it is given and
+    ``search_all(query_prompt=...)`` re-encodes *those*, so a documented arm
+    built from prefixed documents would query with
+    ``query_prompt + document_prompt + text`` — a recipe no model card
+    describes. The arm would still produce a full table of plausible recall
+    numbers, measured under a configuration nobody chose.
+    """
+
+    def test_documents_are_prefixed_and_the_query_side_is_not(self) -> None:
+        embedder = _CountingEmbedder()
+        texts = ["Apple Inc.", "Apple Computer", "Microsoft Corp"]
+
+        index, _vectors, _seconds, _encoded = LADDER.build_prompted_index(
+            embedder, texts, "title: none | text: "
+        )
+
+        # What the index was BUILT from carries the document prefix...
+        assert embedder.seen[0] == ["title: none | text: " + text for text in texts]
+        # ...and what it will RE-ENCODE as queries does not.
+        assert index._corpus_texts == texts
+
+    def test_a_prompted_search_never_double_prefixes(self) -> None:
+        embedder = _CountingEmbedder()
+        texts = ["Apple Inc.", "Apple Computer", "Microsoft Corp"]
+
+        index, _vectors, _seconds, _encoded = LADDER.build_prompted_index(
+            embedder, texts, "title: none | text: "
+        )
+        embedder.seen.clear()
+        index.search_all(k=2, query_prompt="task: search result | query: ")
+
+        assert embedder.seen == [["task: search result | query: " + text for text in texts]]
+
+    def test_an_unprefixed_arm_indexes_the_text_verbatim(self) -> None:
+        embedder = _CountingEmbedder()
+        texts = ["Apple Inc.", "Microsoft Corp"]
+
+        index, _vectors, _seconds, _encoded = LADDER.build_prompted_index(embedder, texts, None)
+
+        assert embedder.seen[0] == texts
+        assert index._corpus_texts == texts
+
+
 class TestPersistence:
     def test_rerunning_a_model_replaces_its_rows_instead_of_appending(self) -> None:
         stale = LADDER.LadderRow(

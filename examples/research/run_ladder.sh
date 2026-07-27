@@ -131,8 +131,15 @@ for model in "${MODELS[@]}"; do
   safe="${model//\//__}"
   log "=== $model ==="
 
+  # No --device: the harness passes None to sentence-transformers, whose
+  # get_device_name() picks cuda / mps / npu / xpu / cpu for the host it is on
+  # (util/environment.py:51). Pinning a device here would make every run on a
+  # host without it exit non-zero -- and the failure path below then DELETES
+  # that model's previously measured rows and commits the deletion. Set
+  # LADDER_DEVICE only to override deliberately.
   uv run --env-file .env python examples/research/embedder_ladder.py \
-    --models "$model" --device mps > "$LOG_DIR/$safe.log" 2>&1
+    --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+    > "$LOG_DIR/$safe.log" 2>&1
   code=$?
 
   if [ $code -ne 0 ]; then
@@ -144,10 +151,17 @@ for model in "${MODELS[@]}"; do
   fi
 
   git add "$ROWS" "$REPORT" "$REFERENCE" 2>/dev/null
-  if git diff --cached --quiet; then
+  # Path-scoped, like the commit below: an operator's unrelated staged work
+  # would otherwise read as "this model produced results".
+  if git diff --cached --quiet -- "$ROWS" "$REPORT" "$REFERENCE"; then
     log "$model produced no change to the tracked artifacts"
   else
-    git commit -q -m "results(embedder-ladder): $model" \
+    # --only: commit EXACTLY these three paths. A plain `git commit` takes the
+    # whole index, so anything the operator had staged for unrelated work would
+    # be swept into this commit and pushed by the next line -- publishing
+    # in-progress work nobody chose to publish.
+    git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
+      -m "results(embedder-ladder): $model" \
       -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code." \
       && log "committed $model"
     git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"

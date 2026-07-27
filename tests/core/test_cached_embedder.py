@@ -743,3 +743,27 @@ class TestCacheKeyCoversEmbedderSettings:
     def test_the_prompt_is_still_part_of_the_key(self, tmp_path):
         cached = self._cached(tmp_path, prompt_name="query")
         assert cached._hash_text("acme") != cached._hash_text("acme", prompt="find: ")
+
+    def test_the_same_prompt_name_over_different_mappings_is_a_different_key(self, tmp_path):
+        """The name is a pointer; ``prompts`` is what it points AT.
+
+        Two embedders both at ``prompt_name="query"`` whose mappings define
+        ``query`` differently prepend different text, so they must not share
+        entries — keying on the name alone lets the second silently serve the
+        first's vectors.
+        """
+        one = self._cached(tmp_path, prompt_name="query", prompts={"query": "find: "})
+        other = self._cached(tmp_path, prompt_name="query", prompts={"query": "retrieve: "})
+        assert one._hash_text("acme") != other._hash_text("acme")
+
+    def test_mapping_order_is_not_part_of_the_key(self, tmp_path):
+        """Same mapping, different insertion order, same vectors — so, same key."""
+        one = self._cached(tmp_path, prompts={"query": "find: ", "document": "doc: "})
+        other = self._cached(tmp_path, prompts={"document": "doc: ", "query": "find: "})
+        assert one._hash_text("acme") == other._hash_text("acme")
+
+    def test_a_mapping_alone_changes_the_key(self, tmp_path):
+        """``prompts`` without ``prompt_name`` still changes what ``encode`` prepends."""
+        plain = self._cached(tmp_path)
+        mapped = self._cached(tmp_path, prompts={"query": "find: "})
+        assert plain._hash_text("acme") != mapped._hash_text("acme")

@@ -1358,15 +1358,26 @@ class DiskCachedEmbedder:
         ``prompt_name`` would hash identically and one would silently serve the
         other's vectors. ``truncate_dim`` changes the vector's length outright.
 
-        Returns ``""`` when neither is set, so every cache written before these
-        knobs existed still hits. That is deliberate: closing the hazard must not
-        cost a full re-encode for the overwhelmingly common unset case.
+        The name alone is not enough: ``prompts`` is what the name *resolves to*,
+        so two embedders both at ``prompt_name="query"`` with different mappings
+        apply different prefixes and must not share entries. It is read only when
+        it is actually a mapping, and serialized sorted — dict order is not part
+        of its meaning, so it must not be part of the key.
+
+        Returns ``""`` when none of them is set, so every cache written before
+        these knobs existed still hits. That is deliberate: closing the hazard
+        must not cost a full re-encode for the overwhelmingly common unset case.
         """
         prompt_name = getattr(self.embedder, "prompt_name", None)
         truncate_dim = getattr(self.embedder, "truncate_dim", None)
-        if prompt_name is None and truncate_dim is None:
+        prompts = getattr(self.embedder, "prompts", None)
+        # A mapping only — the wrapped embedder is structurally typed, so an
+        # unrelated `prompts` attribute of some other shape must not become the
+        # cache key (nor raise from a key-derivation function).
+        registered = sorted(prompts.items()) if isinstance(prompts, dict) else []
+        if prompt_name is None and truncate_dim is None and not registered:
             return ""
-        return f"|||NAME|||{prompt_name}|||DIM|||{truncate_dim}"
+        return f"|||NAME|||{prompt_name}|||DIM|||{truncate_dim}|||PROMPTS|||{registered!r}"
 
     def _hash_text(self, text: str, prompt: str | None = None) -> str:
         """Generate cache key from text, prompt, and the embedder's own settings.

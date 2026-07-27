@@ -383,6 +383,37 @@ class TestFAISSIndexSearchAllPromptIsObservable:
         assert [call["prompt"] for call in encode_calls] == [None, "Find the duplicate record"]
         assert encode_calls[1]["texts"] == texts
 
+    def test_a_mutated_caller_list_cannot_change_what_the_query_side_encodes(self):
+        """``create_index`` snapshots its texts, so later mutation cannot desync them.
+
+        The indexed vectors are frozen at build time. A prompted ``search_all``
+        re-encodes the corpus texts, so aliasing the caller's list would query
+        one corpus against another corpus's vectors — mismatched rows, or a
+        length mismatch, while the unprompted path stayed correct off the cached
+        vectors and hid it.
+        """
+        encode_calls: list[dict] = []
+        base = FakeEmbedder(embedding_dim=64)
+
+        class TrackingEmbedder:
+            def encode(self, texts, prompt=None):
+                encode_calls.append({"texts": list(texts), "prompt": prompt})
+                return base.encode(texts, prompt=prompt)
+
+            @property
+            def embedding_dim(self):
+                return base.embedding_dim
+
+        index = FAISSIndex(embedder=TrackingEmbedder(), metric="cosine")
+        texts = ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+        index.create_index(texts)
+
+        texts.append("Added after the index was built")
+        texts[0] = "Rewritten after the index was built"
+        index.search_all(k=2, query_prompt="Find the duplicate record")
+
+        assert encode_calls[1]["texts"] == ["Apple Inc.", "Microsoft Corp.", "Google LLC"]
+
     def test_search_all_without_prompt_never_re_encodes(self):
         """The cheap symmetric path is preserved: no prompt, no second encode."""
         encode_calls: list[dict] = []
