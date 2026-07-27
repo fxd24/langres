@@ -86,6 +86,22 @@ else
   log "no .env in this checkout -- running without one (this sweep is \$0/offline)"
 fi
 
+# The OpenMP settings are NOT optional, and making `.env` optional above is
+# exactly what exposed that: torch, faiss and scikit-learn each bundle their own
+# `libomp.dylib`, and with two runtimes loaded a sweep DEADLOCKS in
+# `__kmp_join_barrier` -- the process sits at 0% CPU forever rather than failing,
+# so the failure path below never fires and the sweep simply stops. Observed on
+# `all-mpnet-base-v2` after three models had already succeeded, which is what
+# makes it worth pinning rather than hoping.
+#
+# `docs/FRICTION_LOG.md` documents these as `.env` contents. Defaulting them
+# HERE (only when unset, so `.env` and the caller still win) is what makes the
+# script correct on a checkout that has no `.env` -- otherwise "it runs without
+# one" is true right up until it hangs.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export KMP_DUPLICATE_LIB_OK="${KMP_DUPLICATE_LIB_OK:-1}"
+log "OMP_NUM_THREADS=$OMP_NUM_THREADS KMP_DUPLICATE_LIB_OK=$KMP_DUPLICATE_LIB_OK"
+
 # ---------------------------------------------------------------------------
 # 1. Wait for any in-flight sweep. NOT optional: a second `uv run` in this
 #    worktree does not fail loudly, it invents failures.
