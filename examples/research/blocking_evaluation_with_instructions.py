@@ -92,6 +92,14 @@ EMBEDDING_INSTRUCTION = (
     "acronyms, abbreviations, and spelling variations\nQuery: "
 )
 
+#: Ranking label for the hybrid arm. It carries "(unprompted)" because this arm
+#: is the only one without ``EMBEDDING_INSTRUCTION`` -- ``search_all`` answers
+#: from vectors cached at ``create_index`` time, so a query prompt cannot reach
+#: the encoder. Putting the regime in the LABEL means it travels with the value
+#: into every ranking, printed table and saved JSON, instead of living in a
+#: caveat the reader has to go and find.
+HYBRID_ARM_LABEL = "Qdrant Hybrid (unprompted)"
+
 
 class OrganizationSchema(BaseModel):
     """Schema for funder organization entities."""
@@ -201,7 +209,10 @@ def setup_qdrant_hybrid_blocker(
     Returns:
         VectorBlocker configured with Qdrant hybrid index
     """
-    logger.info("Setting up Qdrant blocker (dense + sparse hybrid with instructions)...")
+    logger.info(
+        "Setting up Qdrant blocker (dense + sparse hybrid, NO query instruction -- "
+        "this arm is the unprompted baseline; see the comment below)..."
+    )
 
     # Sparse embedder (BM25)
     sparse_embedder = FastEmbedSparseEmbedder(model_name=SPARSE_MODEL)
@@ -234,7 +245,7 @@ def setup_qdrant_hybrid_blocker(
 
     logger.info(
         f"Qdrant hybrid blocker ready (k={K_NEIGHBORS}, prefetch={PREFETCH_LIMIT}, "
-        f"fusion=RRF, sparse={SPARSE_MODEL}, with instructions)"
+        f"fusion=RRF, sparse={SPARSE_MODEL}, query_prompt=None -- UNPROMPTED)"
     )
     return blocker
 
@@ -625,14 +636,14 @@ def save_results(
     # Calculate rankings
     recall_scores = [
         ("FAISS", faiss_results["recall"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["recall"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["recall"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["recall"]),
     ]
     recall_ranking = [name for name, _ in sorted(recall_scores, key=lambda x: x[1], reverse=True)]
 
     precision_scores = [
         ("FAISS", faiss_results["precision"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["precision"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["precision"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["precision"]),
     ]
     precision_ranking = [
@@ -641,7 +652,7 @@ def save_results(
 
     speed_scores = [
         ("FAISS", faiss_results["indexing_time_seconds"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["indexing_time_seconds"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["indexing_time_seconds"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["indexing_time_seconds"]),
     ]
     speed_ranking = [name for name, _ in sorted(speed_scores, key=lambda x: x[1])]
@@ -660,7 +671,18 @@ def save_results(
             "k_neighbors": K_NEIGHBORS,
             "prefetch_limit": PREFETCH_LIMIT,
             "crossencoder_prefetch": CROSSENCODER_PREFETCH,
-            "embedding_instruction": EMBEDDING_INSTRUCTION,
+            # Per-arm, NOT one global key. The arms do not share a prompt regime:
+            # the hybrid arm reaches its index through `search_all`, which answers
+            # from vectors cached at `create_index` time, so a query prompt cannot
+            # reach the encoder there. Recording a single `embedding_instruction`
+            # would tell a downstream reader that every arm was prompted, which is
+            # how a delta that mixes an index change with a prompt-regime change
+            # gets read as a pure index result.
+            "query_prompt_by_arm": {
+                "faiss_dense_only": EMBEDDING_INSTRUCTION,
+                "qdrant_hybrid": None,
+                "jina_crossencoder": EMBEDDING_INSTRUCTION,
+            },
         },
         "caching": {
             "cache_dir": str(CACHE_DIR),
@@ -680,6 +702,21 @@ def save_results(
             "jina_crossencoder": qdrant_crossencoder_results,
         },
         "comparison": {
+            # Which of the deltas below are NOT like-for-like. `qdrant_hybrid` is
+            # unprompted while the other two arms are prompted, so any delta with
+            # one foot in each camp moves an index AND a prompt regime at once and
+            # cannot be attributed to either alone. Named here rather than left for
+            # the reader to infer from `query_prompt_by_arm`, because a delta that
+            # looks like every other delta will be read like every other delta.
+            "confounded_deltas": {
+                "hybrid_vs_faiss": (
+                    "index change + prompt regime change (hybrid unprompted, FAISS prompted)"
+                ),
+                "crossencoder_vs_hybrid": (
+                    "reranker + prompt regime change (hybrid unprompted, crossencoder prompted)"
+                ),
+            },
+            "like_for_like_deltas": ["crossencoder_vs_faiss"],
             "recall_ranking": recall_ranking,
             "precision_ranking": precision_ranking,
             "speed_ranking": speed_ranking,
@@ -730,7 +767,7 @@ def save_results(
                 "best_f1": max(
                     [
                         ("FAISS", faiss_results["f1"]),
-                        ("Qdrant Hybrid", qdrant_hybrid_results["f1"]),
+                        (HYBRID_ARM_LABEL, qdrant_hybrid_results["f1"]),
                         ("Jina CrossEncoder", qdrant_crossencoder_results["f1"]),
                     ],
                     key=lambda x: x[1],
