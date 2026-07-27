@@ -89,6 +89,80 @@ def _normalize_embedding_ref(model: str | dict[str, str] | ModelRef) -> ModelRef
     return ref
 
 
+#: Config keys that CHANGE EMBEDDING SEMANTICS and must actually be honoured.
+#:
+#: A Hugging Face ``PretrainedConfig`` swallows unknown keys silently: it sets
+#: them as attributes and raises nothing (measured —
+#: ``Gemma3TextConfig(this_key_does_not_exist=True)`` succeeds). So a checkpoint
+#: whose ``config.json`` asks for a behaviour the installed ``transformers``
+#: predates loads happily and returns plausible but WRONG vectors, with no error
+#: anywhere. ``google/embeddinggemma-300m`` is the live case: it sets
+#: ``use_bidirectional_attention: true``, added to ``Gemma3TextConfig`` in
+#: transformers 4.56.2. On an older install the key is swallowed, the model runs
+#: under causal attention, and it simply *scores badly* — indistinguishable from
+#: a weak model unless you know to look.
+#:
+#: Keyed by config attribute; the value is the human-readable requirement quoted
+#: in the error. Only keys whose absence corrupts the output belong here — this
+#: guard fails loud, so a false positive blocks a working model.
+SEMANTIC_CONFIG_KEYS: dict[str, str] = {
+    "use_bidirectional_attention": "transformers>=4.56.2",
+}
+
+
+class UnhonouredModelConfigError(RuntimeError):
+    """A checkpoint asked for behaviour the installed ``transformers`` cannot provide.
+
+    Raised at load time instead of letting the model return silently-wrong
+    vectors. See :data:`SEMANTIC_CONFIG_KEYS`.
+    """
+
+
+def _require_honoured_config_keys(model: Any, model_name: str) -> None:
+    """Fail loud if the loaded checkpoint declares a key its config class ignores.
+
+    Walks the loaded sentence-transformers model's submodules for HF configs and
+    checks every :data:`SEMANTIC_CONFIG_KEYS` entry the checkpoint set truthily.
+    A key that is set but **not declared by the config class's ``__init__``** was
+    swallowed as an unknown kwarg — the installed ``transformers`` has no code
+    reading it, so the requested behaviour is not happening.
+
+    Declaration in the signature is the strongest cheap signal available: it is
+    exactly the boundary at which support was added, and it needs no version
+    string parsing or per-model allowlist (both of which rot). It does not prove
+    the modelling code honours the key, only that this ``transformers`` knows it.
+
+    Args:
+        model: A loaded ``sentence_transformers.SentenceTransformer``.
+        model_name: The reference being loaded, quoted in the error message.
+
+    Raises:
+        UnhonouredModelConfigError: If a semantics-changing key was swallowed.
+    """
+    import inspect
+
+    for module in model.modules():
+        config = getattr(module, "config", None)
+        if config is None or not hasattr(type(config), "__init__"):
+            continue
+        try:
+            declared = inspect.signature(type(config).__init__).parameters
+        except (TypeError, ValueError):  # pragma: no cover - exotic config classes
+            continue
+        for key, requirement in SEMANTIC_CONFIG_KEYS.items():
+            if getattr(config, key, None) and key not in declared:
+                import transformers
+
+                raise UnhonouredModelConfigError(
+                    f"Checkpoint {model_name!r} sets {key!r} in its config, but the "
+                    f"installed {type(config).__name__} does not accept that parameter "
+                    f"(transformers {transformers.__version__}). Hugging Face configs "
+                    "swallow unknown keys silently, so this model would load, embed, "
+                    "and return plausible but WRONG vectors. "
+                    f"Fix: install {requirement}."
+                )
+
+
 class SentenceTransformerEmbedderConfig(BaseModel):
     """Light, JSON-serializable construction config for a SentenceTransformerEmbedder.
 
@@ -106,6 +180,10 @@ class SentenceTransformerEmbedderConfig(BaseModel):
     dtype: EmbeddingDType | None = None
     backend: EmbeddingBackend = "torch"
     local_files_only: bool = False
+    trust_remote_code: bool = False
+    truncate_dim: int | None = None
+    prompt_name: str | None = None
+    prompts: dict[str, str] | None = None
 
 
 class FakeEmbedderConfig(BaseModel):
@@ -373,6 +451,10 @@ class SentenceTransformerEmbedder:
         dtype: EmbeddingDType | None = None,
         backend: EmbeddingBackend = "torch",
         local_files_only: bool = False,
+        trust_remote_code: bool = False,
+        truncate_dim: int | None = None,
+        prompt_name: str | None = None,
+        prompts: dict[str, str] | None = None,
     ) -> None:
         """Initialize SentenceTransformerEmbedder.
 
@@ -386,6 +468,27 @@ class SentenceTransformerEmbedder:
             normalize_embeddings: L2-normalize embeddings to unit vectors.
                 Default: True. Required for Qdrant Distance.COSINE and
                 cosine similarity metrics.
+            device: Torch device string (``"cpu"``, ``"cuda"``, ``"mps"``).
+                Default: None (sentence-transformers picks one).
+            dtype: Optional torch dtype for the loaded weights.
+            backend: ``"torch"`` / ``"onnx"`` / ``"openvino"``.
+            local_files_only: Load only from the local Hub cache (no network).
+            trust_remote_code: Execute the checkpoint's own modelling code.
+                Required by models that ship custom architectures on the Hub
+                (e.g. ``nomic-ai/nomic-embed-text-v1.5``,
+                ``Alibaba-NLP/gte-base-en-v1.5``). **Off by default and it stays
+                that way**: enabling it runs arbitrary Python from the model
+                repo, so it is a per-call, per-model decision by the caller.
+            truncate_dim: Truncate output vectors to this many dimensions
+                (Matryoshka models such as ``nomic-embed-text-v1.5`` and
+                ``mxbai-embed-large-v1`` are trained so a prefix stays usable).
+                Default: None (full dimension).
+            prompt_name: Name of a prompt registered in the model's own
+                ``prompts`` mapping (its ``config_sentence_transformers.json``,
+                e.g. EmbeddingGemma's ``"query"`` / ``"document"``), applied when
+                :meth:`encode` is called without an explicit ``prompt``.
+            prompts: Extra ``{name: prefix}`` prompts to register on the loaded
+                model, for checkpoints that ship none.
 
         Note:
             The model is NOT loaded during __init__. It will be loaded
@@ -402,6 +505,10 @@ class SentenceTransformerEmbedder:
         self.dtype = dtype
         self.backend = backend
         self.local_files_only = local_files_only
+        self.trust_remote_code = trust_remote_code
+        self.truncate_dim = truncate_dim
+        self.prompt_name = prompt_name
+        self.prompts = dict(prompts) if prompts is not None else None
         self._model: Any = None
 
     def _get_model(self) -> Any:
@@ -426,12 +533,16 @@ class SentenceTransformerEmbedder:
             self._model = SentenceTransformer(
                 self.model_name,
                 device=self.device,
-                trust_remote_code=False,
+                trust_remote_code=self.trust_remote_code,
                 revision=self.model_ref.revision,
                 local_files_only=self.local_files_only,
                 model_kwargs=model_kwargs,
                 backend=self.backend,
+                truncate_dim=self.truncate_dim,
+                prompts=self.prompts,
+                default_prompt_name=self.prompt_name,
             )
+            _require_honoured_config_keys(self._model, self.model_name)
         return self._model
 
     def config(self) -> SentenceTransformerEmbedderConfig:
@@ -450,6 +561,10 @@ class SentenceTransformerEmbedder:
             dtype=self.dtype,
             backend=self.backend,
             local_files_only=self.local_files_only,
+            trust_remote_code=self.trust_remote_code,
+            truncate_dim=self.truncate_dim,
+            prompt_name=self.prompt_name,
+            prompts=self.prompts,
         )
 
     @classmethod
@@ -470,6 +585,10 @@ class SentenceTransformerEmbedder:
             dtype=config.dtype,
             backend=config.backend,
             local_files_only=config.local_files_only,
+            trust_remote_code=config.trust_remote_code,
+            truncate_dim=config.truncate_dim,
+            prompt_name=config.prompt_name,
+            prompts=config.prompts,
         )
 
     def encode(self, texts: list[str] | np.ndarray, prompt: str | None = None) -> np.ndarray:

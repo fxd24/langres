@@ -104,7 +104,32 @@ class SentenceTransformer:
             dtype=self.runtime_config.dtype,
             backend=self.runtime_config.backend,
             local_files_only=self.runtime_config.local_files_only,
+            trust_remote_code=self.runtime_config.trust_remote_code,
+            truncate_dim=self.runtime_config.truncate_dim,
+            prompt_name=self.runtime_config.prompt_name,
+            prompts=self.runtime_config.prompts,
         )
+
+    @property
+    def registered_prompts(self) -> dict[str, str]:
+        """Prompts the loaded checkpoint actually registers, measured not declared.
+
+        Instructional embedders ship their documented task prefixes in
+        ``config_sentence_transformers.json`` (EmbeddingGemma's
+        ``"query"``/``"document"``, E5's ``"query"``/``"passage"``, …), and
+        sentence-transformers loads them onto the model. Reading them off the
+        loaded model is how a caller discovers a model's own recipe without a
+        hand-maintained per-model table, which would silently rot.
+
+        Returns:
+            The ``{name: prefix}`` mapping, empty when the model registers none
+            (and empty before the model has been loaded — this never triggers a
+            download on its own).
+        """
+        loaded = getattr(self._embedder, "_model", None)
+        if loaded is None:
+            return {}
+        return dict(getattr(loaded, "prompts", {}) or {})
 
     def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
         """Embed ordered texts and attach measured vector facts."""
