@@ -23,11 +23,20 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import tomllib
+from pathlib import Path
 
 import pytest
 
 from langres import __version__
-from langres.cli import _EXTRA_PROOF_IMPORTS, _PAID_PATH_KEYS, main
+from langres.cli import (
+    _EXTRA_PROOF_IMPORTS,
+    _EXTRAS_NOT_REPORTED,
+    _PAID_PATH_KEYS,
+    main,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Every module `langres info` probes for. If `info` ever switches from
 #: `find_spec` to `try: import`, these land in `sys.modules` and the
@@ -84,23 +93,78 @@ def test_info_reports_key_presence_but_never_the_key(
 ) -> None:
     """The security property: presence is a boolean, the value never surfaces."""
     secret = "sk-canary-must-never-be-printed"
-    for key in _PAID_PATH_KEYS:
+    for key, _ in _PAID_PATH_KEYS:
         monkeypatch.setenv(key, secret)
 
     output = _run_info()
 
     assert secret not in output
-    for key in _PAID_PATH_KEYS:
-        assert key in output
-    assert "not set" not in output.split("Paid path")[1]
+    # Assert the per-key LINES, not the section: the section's footer prose
+    # mentions "not set" and would make a substring check pass vacuously.
+    for key, _ in _PAID_PATH_KEYS:
+        assert f"{key:<20} set" in output
 
 
 def test_info_reports_an_absent_key_as_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in _PAID_PATH_KEYS:
+    for key, _ in _PAID_PATH_KEYS:
         monkeypatch.setenv(key, "")
     output = _run_info().split("Paid path")[1]
-    for key in _PAID_PATH_KEYS:
+    for key, _ in _PAID_PATH_KEYS:
         assert f"{key:<20} not set" in output
+
+
+def test_info_does_not_claim_the_paid_path_sees_exactly_what_it_sees() -> None:
+    """`Settings` reads ./.env; litellm's load_dotenv walks UP to a parent.
+
+    An earlier draft claimed the two discovery orders were the same. They are
+    not, and the divergence runs in the dangerous direction: "not set" here for
+    a key a real call would find and spend with.
+    """
+    output = _run_info().split("Paid path")[1]
+    assert "PARENT directory" in output
+
+
+def test_info_survives_an_unreadable_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken `.env` is a reason to RUN a diagnostic, not a reason for it to die.
+
+    `Settings()` reads `./.env`; a binary one raises UnicodeDecodeError. Before
+    the guard this printed most of the report and then a traceback.
+    """
+    (tmp_path / ".env").write_bytes(bytes(range(256)) * 4)
+    monkeypatch.chdir(tmp_path)
+
+    buffer = io.StringIO()
+    assert main(["info"], output_stream=buffer) == 0
+    output = buffer.getvalue()
+
+    assert "could not read settings" in output
+    # The earlier sections still printed -- a partial answer beats a crash.
+    assert f"langres {__version__}" in output
+
+
+def test_every_declared_extra_is_either_probed_or_deliberately_exempt() -> None:
+    """A new extra must be classified, not silently absent from the report.
+
+    The rest of this file iterates `_EXTRA_PROOF_IMPORTS`, so it can only ever
+    check extras someone already added -- it regenerates its expectation from
+    the thing that would break. This reads pyproject instead.
+    """
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = set(config["project"]["optional-dependencies"])
+    reported = {extra for extra, _ in _EXTRA_PROOF_IMPORTS}
+
+    unclassified = declared - reported - set(_EXTRAS_NOT_REPORTED)
+    assert not unclassified, (
+        f"pyproject declares extra(s) {sorted(unclassified)} that `langres info` neither "
+        "probes nor exempts. Add proof imports to _EXTRA_PROOF_IMPORTS, or an entry with a "
+        "reason to _EXTRAS_NOT_REPORTED."
+    )
+    assert not reported - declared, (
+        f"`langres info` reports extra(s) {sorted(reported - declared)} that pyproject does "
+        "not declare -- they can never resolve."
+    )
 
 
 def test_info_is_listed_in_the_top_level_help() -> None:

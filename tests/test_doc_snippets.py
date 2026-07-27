@@ -18,6 +18,7 @@ they inject one and watch it caught, against a real wheel in a real empty venv.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,78 @@ def test_the_real_docs_still_have_executable_python() -> None:
     assert_gate_is_observing(collect(REPO_ROOT))
 
 
+def test_an_empty_python_fence_does_not_satisfy_the_observability_guard(
+    tmp_path: Path,
+) -> None:
+    """An empty ```python``` block runs and passes while proving nothing."""
+    with pytest.raises(DirectiveError, match="0 of them are executable python"):
+        assert_gate_is_observing(_extract(tmp_path, "```python\n```\n"))
+
+
+# ---------------------------------------------------------------------------
+# Fences the renderer shows but a naive parser cannot see. Each of these was
+# MEASURED extracting to nothing before the fix -- a python block visible on the
+# docs site, silently absent from this gate, with no error and no skip line.
+# `mkdocs.yml` enables pymdownx.superfences, which renders all of them.
+# ---------------------------------------------------------------------------
+
+
+def test_tilde_fences_are_extracted(tmp_path: Path) -> None:
+    (snippet,) = _extract(tmp_path, "~~~python\nx = 1\n~~~\n")
+    assert snippet.language == "python"
+    assert snippet.code == "x = 1\n"
+
+
+def test_indented_fence_is_extracted_and_dedented(tmp_path: Path) -> None:
+    """A fence nested in a list item carries indentation; the body must dedent."""
+    (snippet,) = _extract(tmp_path, "1. step\n\n   ```python\n   x = 1\n   ```\n")
+    assert snippet.language == "python"
+    assert snippet.code == "x = 1\n"
+
+
+def test_a_backtick_fence_is_not_closed_by_a_tilde_fence(tmp_path: Path) -> None:
+    (snippet,) = _extract(tmp_path, "```python\nx = 1\n~~~\ny = 2\n```\n")
+    assert snippet.code == "x = 1\n~~~\ny = 2\n"
+
+
+def test_a_second_language_fence_does_not_close_a_block(tmp_path: Path) -> None:
+    """A closer carries no info string; treating one as a closer swallowed the rest."""
+    first, second = _extract(tmp_path, "```bash\nls\n```\n\n```python\nx = 1\n```\n")
+    assert (first.language, second.language) == ("bash", "python")
+    assert second.code == "x = 1\n"
+
+
+def test_a_fence_that_runs_to_end_of_file_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(DirectiveError, match="never closed"):
+        _extract(tmp_path, "```python\nx = 1\n")
+
+
+def test_a_python_block_swallowed_by_a_missing_closer_is_an_error(tmp_path: Path) -> None:
+    """Measured: an unclosed bash fence absorbed the python block that followed.
+
+    CommonMark agrees with the parser here -- the python really is bash *content*
+    -- so the doc renders wrong too. The point is that it must not be silent: as
+    written, that python block would never be executed by this gate.
+    """
+    with pytest.raises(DirectiveError, match="missing its closing fence"):
+        _extract(tmp_path, "```bash\nls\n\n```python\nx = 1\n```\n")
+
+
+def test_a_blockquoted_fence_is_rejected_rather_than_ignored(tmp_path: Path) -> None:
+    """Failing closed on a construct this parser cannot read."""
+    with fail_closed_on_unsupported_fence():
+        _extract(tmp_path, "> ```python\n> x = 1\n> ```\n")
+
+
+def test_a_deeply_indented_fence_is_rejected_rather_than_ignored(tmp_path: Path) -> None:
+    with fail_closed_on_unsupported_fence():
+        _extract(tmp_path, "text\n\n        ```python\n        x = 1\n        ```\n")
+
+
+def fail_closed_on_unsupported_fence() -> pytest.RaisesContext[DirectiveError]:
+    return pytest.raises(DirectiveError, match="silently skipped")
+
+
 # ---------------------------------------------------------------------------
 # The gate must not be defeatable by the developer's own environment.
 # ---------------------------------------------------------------------------
@@ -329,6 +402,61 @@ def test_snippets_run_cumulatively_within_one_document(clean_install: Path, tmp_
 
     assert first.status == "pass", first.detail
     assert second.status == "pass", second.detail
+
+
+def test_a_block_that_exits_early_cannot_green_light_the_blocks_after_it(
+    clean_install: Path, tmp_path: Path
+) -> None:
+    """Exit code 0 is not evidence the snippet ran.
+
+    Measured before the sentinel: a first block containing `sys.exit(0)` made a
+    second block whose body was `import totally_missing_module` report PASS. One
+    documented error-handling example calling sys.exit would have turned every
+    later block on that page green without executing a line of it.
+    """
+    snippets = _extract(
+        tmp_path,
+        "```python\nimport sys\nsys.exit(0)\n```\n\n"
+        "```python\nimport totally_missing_module_zzz\n```\n",
+    )
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    first, second = run(
+        snippets, interpreter=clean_install, workdir=workdir, examples_shipped=False
+    )
+
+    assert first.status == "fail"
+    assert "terminated the interpreter early" in first.detail
+    assert second.status == "fail", "a sys.exit(0) prefix silently green-lit a broken snippet"
+
+
+def test_the_clean_install_proves_it_is_actually_clean(clean_install: Path) -> None:
+    """`build_clean_install` verifies its own premise before any snippet runs.
+
+    If the "clean" venv could see the source tree or an extra, every snippet
+    would pass against the developer's environment and this gate would be green
+    forever with no signal. The fixture calls that check; reaching here is it
+    passing. Re-assert the two properties directly so the check is not merely
+    assumed to have run.
+    """
+    probe = subprocess.run(
+        [
+            str(clean_install),
+            "-c",
+            "import langres, pathlib, importlib.util as u;"
+            "print(pathlib.Path(langres.__file__).resolve());"
+            "print(u.find_spec('faiss'))",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    langres_path, faiss_spec = probe.stdout.strip().splitlines()
+    assert str(REPO_ROOT) not in langres_path, (
+        f"snippets would import from the source tree: {langres_path}"
+    )
+    assert faiss_spec == "None", "the [semantic] extra leaked into the 'clean' install"
 
 
 def test_a_failing_block_is_not_carried_into_later_blocks(

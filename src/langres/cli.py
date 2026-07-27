@@ -85,17 +85,39 @@ _PROMPT = "[y]es match  [n]o  [s]kip  [q]uit > "
 #: ``transformers.BitsAndBytesConfig`` -- so probing for it would report a false
 #: "no" on every macOS install that has the extra correctly installed.
 _EXTRA_PROOF_IMPORTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("semantic", ("faiss", "qdrant_client", "sentence_transformers", "torch")),
+    # fastembed backs the sparse/late-interaction embedders in
+    # core/embeddings.py, so omitting it would report "[semantic] yes" on an
+    # install where those fail -- the mirror of the bitsandbytes false "no".
+    ("semantic", ("faiss", "fastembed", "qdrant_client", "sentence_transformers", "torch")),
     ("llm", ("dspy", "litellm", "openai")),
     ("trained", ("sklearn",)),
     ("eval", ("ranx",)),
     ("finetune", ("peft", "trl")),
+    ("hub", ("huggingface_hub",)),
 )
 
-#: Credentials the paid path reads. Reported as a **boolean only** -- the value is
-#: tested for truthiness and discarded. `langres info` must never put a secret on
-#: a terminal, in a CI log, or in a pasted bug report.
-_PAID_PATH_KEYS = ("OPENROUTER_API_KEY", "OPENAI_API_KEY")
+#: Declared extras `langres info` deliberately does NOT report, each with its
+#: reason. Paired with a test that reads `[project.optional-dependencies]` from
+#: pyproject: a new extra fails that test until it is either given proof imports
+#: or listed here on purpose. Without it the table's only "expectation" was the
+#: table itself -- an expectation regenerated from the thing that breaks cannot
+#: detect it breaking.
+_EXTRAS_NOT_REPORTED: dict[str, str] = {
+    "mlflow": "opt-in experiment-tracking backend, not part of the resolve path",
+    "wandb": "opt-in experiment-tracking backend, not part of the resolve path",
+    "trackio": "opt-in experiment-tracking backend, not part of the resolve path",
+}
+
+#: Credentials the paid path reads, as ``(env var, Settings field)``. Reported as
+#: a **boolean only** -- the value is tested for truthiness and discarded.
+#: `langres info` must never put a secret on a terminal, in a CI log, or in a
+#: pasted bug report. The two halves are paired here rather than in two
+#: hand-synced lists, where adding a key to one and not the other would raise a
+#: KeyError inside the one command that must never crash.
+_PAID_PATH_KEYS: tuple[tuple[str, str], ...] = (
+    ("OPENROUTER_API_KEY", "openrouter_api_key"),
+    ("OPENAI_API_KEY", "openai_api_key"),
+)
 
 
 def main(
@@ -290,7 +312,13 @@ def _module_installed(name: str) -> bool:
     ``sys.modules``, which ``tests/test_import_budget.py`` exists to prevent.
     """
     try:
-        return importlib.util.find_spec(name) is not None
+        spec = importlib.util.find_spec(name)
+        # `spec.loader is None` means a namespace package -- a bare directory
+        # with no module in it, which a partial uninstall leaves behind.
+        # Measured: an empty `torchzzz/` on sys.path makes find_spec return a
+        # spec, so `is not None` alone would report an extra as installed on an
+        # environment where importing it raises.
+        return spec is not None and spec.loader is not None
     except (ImportError, ValueError):
         # ImportError: a parent package is absent, so the child cannot exist.
         # ValueError: the module is present but has no spec (__spec__ is None).
@@ -352,18 +380,27 @@ def _info(out_stream: TextIO) -> int:
             "  (no redistribution license); install from a git checkout to get it.\n"
         )
 
-    # Presence only. The value is never read into the output -- see _PAID_PATH_KEYS.
-    settings = Settings()
-    configured = {
-        "OPENROUTER_API_KEY": bool(settings.openrouter_api_key),
-        "OPENAI_API_KEY": bool(settings.openai_api_key),
-    }
     out_stream.write("\nPaid path (presence only -- no key is ever printed)\n")
-    for key in _PAID_PATH_KEYS:
-        out_stream.write(f"  {key:<20} {'set' if configured[key] else 'not set'}\n")
+    try:
+        # Presence only: each value is coerced to bool here and never written.
+        settings = Settings()
+    except Exception as exc:
+        # A diagnostic must not die on the broken `.env` it is being run to
+        # diagnose. Measured: a binary `.env` raises UnicodeDecodeError and a
+        # mode-000 `.env` raises PermissionError, both after the sections above
+        # had already printed -- a half report plus a traceback. Only the
+        # exception *type* is surfaced: a pydantic ValidationError's str embeds
+        # the offending input value, which could be a key.
+        out_stream.write(f"  could not read settings ({type(exc).__name__}) -- check ./.env\n")
+        return 0
+    for key, field in _PAID_PATH_KEYS:
+        present = bool(getattr(settings, field))
+        out_stream.write(f"  {key:<20} {'set' if present else 'not set'}\n")
     out_stream.write(
-        "  Read from the environment and from ./.env in the current directory,\n"
-        "  which is the same discovery order the paid path itself uses.\n"
+        "  Read from the environment and from ./.env in the CURRENT directory.\n"
+        "  A real LLM call can additionally pick up a .env in a PARENT directory\n"
+        "  (litellm runs load_dotenv() on import), so 'not set' here does not\n"
+        "  guarantee a paid call would find no key.\n"
     )
     return 0
 

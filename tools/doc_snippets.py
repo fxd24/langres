@@ -116,9 +116,23 @@ BARE_EXEMPTION_REASONS = frozenset(
 )
 
 _DIRECTIVE_RE = re.compile(r"^\s*<!--\s*docs-gate:\s*(?P<token>[^\s>]+)\s*-->\s*$")
-_FENCE_RE = re.compile(r"^(?P<ticks>`{3,})(?P<info>.*)$")
+#: A fenced block. Both fence characters, and CommonMark's legal 0-3 spaces of
+#: indentation, are matched **because not matching them is a silent skip** --
+#: the gate's worst failure mode. `mkdocs.yml` enables `pymdownx.superfences`,
+#: which renders ``~~~python`` and list-indented fences exactly like ```` ```python ````,
+#: so a doc could show a python block this gate never saw. Measured before the
+#: fix: `~~~python`, a 3-space-indented fence, and a list-nested fence all
+#: extracted to nothing, with no error and no skip line.
+_FENCE_RE = re.compile(r"^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+#: A fence this parser deliberately does NOT support. Matching it raises rather
+#: than ignoring it: failing closed on a construct we cannot read is the point.
+_UNSUPPORTED_FENCE_RE = re.compile(r"^(?:\s*>[\s>]*|[ \t]{4,})(?:`{3,}|~{3,})")
 #: A repo-relative path under `examples/` -- the directory the wheel does not ship.
 _EXAMPLES_REF_RE = re.compile(r"examples/[\w./-]+\.py")
+
+#: Proof a snippet reached its own last line. See :func:`run_snippet`.
+_SENTINEL = "__langres_docs_gate_reached_end__"
+_SENTINEL_EPILOGUE = f'\nimport sys as _dg_sys\n_dg_sys.stderr.write("{_SENTINEL}")\n'
 
 
 class DirectiveError(Exception):
@@ -208,6 +222,13 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
 
         fence = _FENCE_RE.match(line)
         if fence is None:
+            if _UNSUPPORTED_FENCE_RE.match(line):
+                raise DirectiveError(
+                    f"{doc}:{index + 1}: this fenced block is indented 4+ spaces or nested in "
+                    "a blockquote, which this extractor does not read -- so it would be "
+                    "silently skipped rather than checked. Unindent it (0-3 spaces) or move "
+                    "it out of the quote."
+                )
             if pending is not None and line.strip():
                 raise DirectiveError(
                     f"{doc}:{pending_line}: docs-gate directive is not followed by a fenced "
@@ -218,7 +239,8 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
             continue
 
         fence_line = index + 1  # 1-based line number of the opening fence
-        ticks = fence.group("ticks")
+        indent = len(fence.group("indent"))
+        marker = fence.group("fence")
         info = fence.group("info").strip()
         language = info.split()[0].lower() if info else ""
 
@@ -231,16 +253,46 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
 
         body: list[str] = []
         index += 1
+        closed = False
         while index < len(lines):
             closing = _FENCE_RE.match(lines[index])
+            # CommonMark: the closer must use the SAME character, be at least as
+            # long, and carry no info string. Matching on length alone let a
+            # second ```python read as a closer, swallowing every block after it.
             if (
                 closing is not None
-                and len(closing.group("ticks")) >= len(ticks)
+                and closing.group("fence")[0] == marker[0]
+                and len(closing.group("fence")) >= len(marker)
                 and not closing.group("info").strip()
             ):
+                closed = True
                 break
-            body.append(lines[index])
+            # An opener for an EXECUTED language inside another block's body is
+            # almost always a missing closing fence upstream. CommonMark (and
+            # this parser) then read the python block as bash *content*, so it
+            # silently leaves the gate -- rendered as code on the site, never
+            # executed here. Raise instead of swallowing it.
+            nested = _FENCE_RE.match(lines[index])
+            if (
+                nested is not None
+                and nested.group("info").strip().split()[:1]
+                and (nested.group("info").strip().split()[0].lower() in EXECUTED_LANGUAGES)
+            ):
+                raise DirectiveError(
+                    f"{doc}:{index + 1}: a '{language or 'bare'}' block opened at line "
+                    f"{fence_line} contains what looks like the start of a python block. "
+                    "Almost certainly the block above is missing its closing fence -- as "
+                    "written, that python is treated as text and is NEVER executed by this "
+                    "gate."
+                )
+            body.append(_dedent_body_line(lines[index], indent))
             index += 1
+        if not closed:
+            raise DirectiveError(
+                f"{doc}:{fence_line}: fenced block is never closed (reached end of file). "
+                "An unclosed fence swallows every block after it, so those snippets would "
+                "vanish from this gate silently. Close it."
+            )
         index += 1  # step past the closing fence
 
         snippets.append(
@@ -260,6 +312,13 @@ def extract(path: Path, *, doc: str, extras: frozenset[str]) -> list[Snippet]:
             "fenced block after it."
         )
     return snippets
+
+
+def _dedent_body_line(line: str, indent: int) -> str:
+    """Strip the fence's own indentation from a body line (list-nested fences)."""
+    if indent and not line[:indent].strip():
+        return line[indent:]
+    return line
 
 
 def collect(repo_root: Path = REPO_ROOT) -> list[Snippet]:
@@ -298,7 +357,14 @@ def assert_gate_is_observing(snippets: list[Snippet]) -> None:
     either: if every python block in the docs were exempted, this gate would be
     running nothing and should say so out loud.
     """
-    executable = [s for s in snippets if s.language in EXECUTED_LANGUAGES and s.exemption is None]
+    # `code.strip()` matters: an empty ```python``` fence is "executable", runs,
+    # and passes -- so counting fences rather than content would let this
+    # assertion be satisfied by a block that proves nothing.
+    executable = [
+        s
+        for s in snippets
+        if s.language in EXECUTED_LANGUAGES and s.exemption is None and s.code.strip()
+    ]
     if not executable:
         total = len(snippets)
         raise DirectiveError(
@@ -310,22 +376,24 @@ def assert_gate_is_observing(snippets: list[Snippet]) -> None:
         )
 
 
+#: The ONLY variables a snippet's interpreter inherits. An **allow-list**, not a
+#: subtraction of known-bad names: a deny-list of credential suffixes rots open,
+#: and this one measurably did -- `AWS_SECRET_ACCESS_KEY`, `AZURE_OPENAI_KEY`,
+#: `GOOGLE_APPLICATION_CREDENTIALS` and `LANGFUSE_SECRET_KEY` all survived a
+#: `endswith(("_API_KEY", "_TOKEN"))` filter. Every new credential a provider
+#: invents would have survived it too.
+#:
+#: `PYTHONPATH` is deliberately absent: pytest puts `src` and `tools` on it
+#: (`[tool.pytest.ini_options].pythonpath`), and inheriting that would let a
+#: snippet import langres from the SOURCE TREE and pass while the wheel is
+#: broken -- the precise way this gate would lie. `PYTHONHOME`/`PYTHONSTARTUP`
+#: are absent for the same reason.
+_INHERITED_ENV_VARS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT")
+
+
 def _snippet_env() -> dict[str, str]:
-    """The child environment: no repo on the path, no credentials.
-
-    ``PYTHONPATH`` is cleared because pytest puts ``src`` and ``tools`` on it
-    (`[tool.pytest.ini_options].pythonpath`); inheriting that would let a snippet
-    import langres from the source tree and pass while the wheel is broken --
-    the precise way this gate would lie.
-
-    API keys are stripped so a documentation snippet can never bill anyone. That
-    is not a complete spend guard (litellm's import runs ``load_dotenv()``), but
-    the snippet also runs in a scratch directory with no ``.env`` in it, so there
-    is nothing for that to find.
-    """
-    env = {k: v for k, v in os.environ.items() if not k.endswith(("_API_KEY", "_TOKEN"))}
-    env.pop("PYTHONPATH", None)
-    return env
+    """The child environment: no repo on the path, no credentials, nothing else."""
+    return {name: os.environ[name] for name in _INHERITED_ENV_VARS if name in os.environ}
 
 
 def check_examples_reference(snippet: Snippet, *, examples_shipped: bool) -> str | None:
@@ -367,20 +435,39 @@ def run_snippet(
     document -- see :func:`run` for why the page, not the block, is the unit.
     """
     script = workdir / "snippet.py"
-    script.write_text(prefix + snippet.code, encoding="utf-8")
-    proc = subprocess.run(
-        [str(interpreter), str(script)],
-        cwd=workdir,
-        capture_output=True,
-        text=True,
-        env=_snippet_env(),
-        # Generous on purpose: a doc snippet should be quick, but a cold model
-        # download or a slow import must not be reported as a broken snippet.
-        timeout=600,
-    )
-    if proc.returncode == 0:
+    # The sentinel is appended AFTER the snippet (which still runs verbatim) and
+    # is what "passed" actually means. Exit code 0 alone is not evidence the body
+    # ran: measured, a prefix block containing `sys.exit(0)` / `raise SystemExit`
+    # / `os._exit(0)` made a snippet whose body was `import totally_missing_module`
+    # report PASS. One `sys.exit` in a documented error-handling example would
+    # have turned every later block on that page green without executing it.
+    script.write_text(prefix + snippet.code + _SENTINEL_EPILOGUE, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            [str(interpreter), str(script)],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            env=_snippet_env(),
+            # Generous on purpose: a doc snippet should be quick, but a cold model
+            # download or a slow import must not be reported as a broken snippet.
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        # Caught, not propagated: an escaping exception would discard the whole
+        # report, losing every failure already determined.
+        return SnippetResult(snippet, "fail", "timed out after 600s")
+    if proc.returncode == 0 and _SENTINEL in proc.stderr:
         return SnippetResult(snippet, "pass", "")
-    tail = (proc.stderr or proc.stdout).strip().splitlines()
+    if proc.returncode == 0:
+        return SnippetResult(
+            snippet,
+            "fail",
+            "the snippet exited 0 without reaching the end of the block (something in it "
+            "terminated the interpreter early, e.g. sys.exit/SystemExit/os._exit), so this "
+            "block was not actually executed to completion.",
+        )
+    tail = (proc.stderr or proc.stdout).replace(_SENTINEL, "").strip().splitlines()
     return SnippetResult(snippet, "fail", "\n".join(tail[-12:]))
 
 
@@ -407,7 +494,44 @@ def build_clean_install(workdir: Path, *, repo_root: Path = REPO_ROOT) -> tuple[
         check=True,
         capture_output=True,
     )
+    _assert_environment_is_really_clean(interpreter, repo_root=repo_root)
     return interpreter, wheel
+
+
+def _assert_environment_is_really_clean(interpreter: Path, *, repo_root: Path) -> None:
+    """Prove the premise this whole gate rests on, instead of assuming it.
+
+    Everything here is worthless if the "clean" venv can still see the source
+    tree or an extra: every snippet would pass against the developer's full
+    environment and the job would be green forever with no signal -- a check
+    nobody has watched fail. So check it, every run, before running any snippet.
+
+    Two properties, both cheap: langres must resolve *inside the venv*, and a
+    `[semantic]`-only import must fail. The second is the same probe the
+    proof-of-failure test uses, which is what makes it meaningful.
+    """
+    probe = (
+        "import langres, sys, pathlib;"
+        "here = pathlib.Path(langres.__file__).resolve();"
+        f"venv = pathlib.Path({str(interpreter.parent.parent)!r}).resolve();"
+        f"repo = pathlib.Path({str(repo_root)!r}).resolve();"
+        "assert venv in here.parents, f'langres resolved OUTSIDE the clean venv: {here}';"
+        "assert repo not in here.parents, f'langres resolved from the SOURCE TREE: {here}';"
+        "import importlib.util as u;"
+        "assert u.find_spec('faiss') is None, 'the [semantic] extra leaked into the clean venv'"
+    )
+    proc = subprocess.run(
+        [str(interpreter), "-c", probe],
+        capture_output=True,
+        text=True,
+        env=_snippet_env(),
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        raise DirectiveError(
+            "the 'clean install' this gate runs snippets against is NOT clean, so every "
+            "result it produces would be meaningless:\n" + (proc.stderr or proc.stdout).strip()
+        )
 
 
 def run(
