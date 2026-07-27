@@ -36,12 +36,21 @@ Before selecting an embedding model, measure whether it separates labeled
 matches from non-matches:
 
 ```bash
-uv run python examples/embedding_separability.py
+uv run --env-file .env python examples/embedding_separability.py
+uv run --env-file .env python examples/embedding_separability.py \
+    --model BAAI/bge-small-en-v1.5 --instruction "Find the duplicate record for: "
 ```
 
-The example uses `FakeEmbedder` to test the measurement path only. Replace that
-resource with a pinned production embedder and rerun on your labeled sample;
-do not interpret fake-resource numbers as semantic quality.
+This downloads a real checkpoint and scores it on a real labeled benchmark
+(`fodors_zagat`), reporting ROC-AUC over gold pairs versus a seeded sample of
+non-gold pairs. Read the AUC rather than the cosine margin — a margin is not
+comparable across models. (It previously ran on `FakeEmbedder`, whose
+hash-derived vectors made the printed number independent of embedder quality.)
+
+For the model-by-model sweep — candidate recall, separability AUC, and measured
+parameter counts across the benchmark portfolio — see
+`examples/research/embedder_ladder.py` and
+[`docs/research/20260727_embedder_ladder.md`](research/20260727_embedder_ladder.md).
 
 Next, declare more than one benchmark, split, and seed. Plan first, then opt
 into the 16 local cells:
