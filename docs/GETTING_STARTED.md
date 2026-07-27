@@ -325,7 +325,13 @@ student_threshold = derive_threshold(student_scores, heldout_labels)
 > smaller LLM** (`DSPyMatcher`): a precision-tuned DSPy prompt signature let a cheap
 > model beat an uncompiled frontier model at lower cost (see `docs/ROADMAP.md`;
 > automatic MIPROv2 *compilation* was measured and cut — the signature is the
-> lever). Fine-tuning a small LM on these labels is the roadmap's next rung.
+> lever). Fine-tuning a small LM on these labels is **not** roadmap — it ships:
+> `langres.finetune(pairs, QLoRA(base=...))` returns a weightless `ModelRef`,
+> `langres.run_finetune(...)` adds the cost digest, and `Resolver.fit(...,
+> method=QLoRA(...))` builds the full `FitReport`
+> (`src/langres/training/finetune.py`). The default `QLoRATrainer.train` is
+> marked `# pragma: no cover` because real training runs on GPU in the
+> `test-finetune` job, not in the fast suite.
 > Whichever student you pick, calibrate it on **its own** scores, never the
 > teacher's — `prob_rf` and `prob_llm` are different scales.
 
