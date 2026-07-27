@@ -182,6 +182,33 @@ class TestTuneThreshold:
         assert best == 0.5
 
 
+def _stub_finding(name: str = "demo") -> BenchmarkFinding:
+    """A valid, empty ``BenchmarkFinding`` for tests that must not measure anything.
+
+    Real enough for ``to_markdown`` and ``main``'s progress line, so ``main`` can
+    be driven end-to-end without running a benchmark.
+    """
+    empty = diagnose("closure", [], [], threshold=0.5, truth_clusters=[{"a"}], all_ids=["a"])
+    return BenchmarkFinding(
+        benchmark=name,
+        method="rapidfuzz",
+        threshold=0.5,
+        n_test_records=1,
+        n_logged=0,
+        n_judged=0,
+        n_accepted=0,
+        n_rejected=0,
+        n_abstained=0,
+        decider_override_rows=0,
+        verdict_agreement=None,
+        reconstruction_exact=True,
+        seconds=0.1,
+        closure=empty,
+        correlation=empty,
+        sweep=[],
+    )
+
+
 class TestReporting:
     def _finding(self, sweep: list[SweepPoint]) -> BenchmarkFinding:
         empty = diagnose("closure", [], [], threshold=0.5, truth_clusters=[{"a"}], all_ids=["a"])
@@ -277,22 +304,82 @@ class TestCanonicalArtifactIsProtected:
         monkeypatch.setattr(sys, "argv", ["closure_diagnostic.py", *argv])
         closure_diagnostic.main()
 
+    def _spy_on_work(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+        """Replace everything that measures or writes with a recording stub.
+
+        Doubles as the safety net: because no real ``write_findings`` runs, these
+        tests cannot touch the tracked artifact even if the guard under test has
+        regressed -- which is the failure they exist to catch.
+        """
+        from examples.research import closure_diagnostic
+
+        seen: dict[str, list[Any]] = {"run": [], "write": []}
+
+        def _run(name: str, **kwargs: Any) -> BenchmarkFinding:
+            seen["run"].append(name)
+            return _stub_finding(name)
+
+        def _write(findings: list[BenchmarkFinding], out: Any) -> None:
+            seen["write"].append(out)
+
+        monkeypatch.setattr(closure_diagnostic, "run_benchmark", _run)
+        monkeypatch.setattr(closure_diagnostic, "write_findings", _write)
+        return seen
+
     @pytest.mark.parametrize(
         "argv", [["--fast"], ["--only", "tiny_fixture"], ["--fast", "--only", "tiny_fixture"]]
     )
     def test_a_narrowed_run_without_out_exits_before_measuring(
         self, argv: list[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # argparse's error() exits 2. The point is that it happens BEFORE any
-        # benchmark runs, so the canonical file is never opened for writing.
+        """The exit code is not the property under test -- the ORDERING is.
+
+        Asserting only ``SystemExit(2)`` leaves the gate decoupled from what it
+        claims to check: move the guard below the benchmark loop, or let any
+        other code raise the same exit, and the test stays green while the
+        canonical artifact has already been partially rewritten. So spy on both
+        the measuring and the writing function and require that NEITHER ran.
+        """
+        seen = self._spy_on_work(monkeypatch)
         with pytest.raises(SystemExit) as excinfo:
             self._main_with(argv, monkeypatch)
         assert excinfo.value.code == 2
+        assert seen["run"] == [], "a narrowed run measured a benchmark before bailing out"
+        assert seen["write"] == [], "a narrowed run reached a write before bailing out"
 
     def test_a_full_run_still_defaults_to_the_canonical_path(self) -> None:
         from examples.research.closure_diagnostic import CANONICAL_OUT
 
         assert CANONICAL_OUT.as_posix() == "examples/research/results/closure_diagnostic.json"
+
+    def test_a_full_run_threads_the_resolved_path_into_the_final_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every write on a full run gets ``CANONICAL_OUT``, never ``None``.
+
+        ``main`` resolves ``out = args.out if args.out is not None else
+        CANONICAL_OUT``, but the FINAL write passed ``args.out`` -- still ``None``
+        on a full run. Because the per-benchmark write inside the loop was
+        already correct, the crash landed only *after* every minutes-long
+        measurement had completed: the documented full-portfolio command ran to
+        the end and then died in ``write_findings`` on ``out.parent``.
+
+        The last call is pinned specifically. A test asserting merely that *some*
+        write received a ``Path`` would have passed against the bug, since the
+        in-loop writes always did.
+        """
+        from examples.research import closure_diagnostic
+
+        seen = self._spy_on_work(monkeypatch)
+        monkeypatch.setattr(
+            closure_diagnostic, "select_benchmarks", lambda **kwargs: ["tiny_fixture"]
+        )
+        self._main_with([], monkeypatch)
+
+        assert seen["run"] == ["tiny_fixture"]
+        assert seen["write"], "main() completed without writing anything"
+        assert None not in seen["write"], "a write received None instead of the resolved path"
+        assert seen["write"][-1] == closure_diagnostic.CANONICAL_OUT
 
     def test_writing_an_empty_result_over_a_real_one_is_refused(self, tmp_path) -> None:
         from examples.research.closure_diagnostic import write_findings

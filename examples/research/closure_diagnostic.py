@@ -922,7 +922,10 @@ def main() -> None:
         # Stated next to the table, not only in the log: a missing row otherwise
         # looks identical to a benchmark that was never selected.
         print(f"\nNOT MEASURED ({len(failures)}): {', '.join(failures)}")
-    write_findings(findings, args.out)
+    # ``out``, NOT ``args.out``: the latter is None on a full run (the default is
+    # resolved into ``out`` above), so this line used to raise AttributeError on
+    # ``out.parent`` -- after every benchmark had already been measured.
+    write_findings(findings, out)
     print(f"\nwrote {out}")
 
 
