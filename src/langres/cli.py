@@ -109,27 +109,47 @@ _EXTRAS_NOT_REPORTED: dict[str, str] = {
     "trackio": "opt-in experiment-tracking backend, not part of the resolve path",
 }
 
-#: Credentials the paid path reads, as ``(env var, Settings field)``. Reported as
-#: a **boolean only** -- the value is tested for truthiness and discarded.
-#: `langres info` must never put a secret on a terminal, in a CI log, or in a
-#: pasted bug report. The two halves are paired here rather than in two
-#: hand-synced lists, where adding a key to one and not the other would raise a
-#: KeyError inside the one command that must never crash.
 #: Credentials that can make an inference call cost money, as
-#: ``(env var, Settings field)``. Reporting a subset is worse than useless: an
-#: Azure user with a working key would read "not set" on every line and
-#: conclude they have no paid path configured.
+#: ``(env var, Settings field)``. Reported as a **boolean only** -- the value is
+#: tested for truthiness and discarded, because `langres info` must never put a
+#: secret on a terminal, in a CI log, or in a pasted bug report. The two halves
+#: are paired here rather than in two hand-synced lists, where adding a key to
+#: one and not the other would raise a KeyError inside the one command that must
+#: never crash. Reporting a *subset* is worse than useless: an Azure user with a
+#: working key read "not set" on every line and would conclude they had no paid
+#: path configured.
 _PAID_PATH_KEYS: tuple[tuple[str, str], ...] = (
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("AZURE_API_KEY", "azure_api_key"),
 )
 
+#: Matches `NAME=` / `export NAME=` at the head of a dotenv line. Deliberately
+#: captures only the NAME: the value is never read, so it can never be printed.
+_DOTENV_NAME_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _dotenv_key_names(path: Path = Path(".env")) -> set[str]:
+    """`*_API_KEY` names declared in ./.env, without reading a single value.
+
+    A diagnostic must not die on the broken `.env` it is being run to diagnose,
+    so any read failure yields nothing rather than raising.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    names = {m.group(1) for line in text.splitlines() if (m := _DOTENV_NAME_RE.match(line))}
+    return {name for name in names if name.endswith("_API_KEY")}
+
+
 #: `Settings` credentials deliberately absent from the paid-path report, with
 #: the reason. These buy a *service*, not inference tokens, so listing them
 #: under "paid path" would blur the one question that section answers: can a
 #: `dedupe()` call spend money? A new key on `Settings` must land in one of
-#: these two tables -- `tests/test_cli_info.py` fails until it does.
+#: these two tables -- `tests/test_cli_info.py` fails until it does. Their
+#: uppercase forms are also excluded from the "other provider key(s)" scan, so
+#: a project that merely tracks experiments does not read as having a paid path.
 _KEYS_NOT_PAID_PATH: dict[str, str] = {
     "wandb_api_key": "experiment-tracking backend, bills no inference",
     "langfuse_public_key": "tracing backend, bills no inference",
@@ -422,15 +442,24 @@ def _info(out_stream: TextIO) -> int:
     # "not set" while a real call spends. Enumerating 146 providers would be
     # noise and would rot, so report what is actually in the environment. Names
     # only -- never a value.
-    others = sorted(
+    # `./.env` is scanned too, not just os.environ. A key that lives ONLY in the
+    # dotenv and was never exported is invisible to both `os.environ` and
+    # `Settings` (which ignores undeclared fields) -- while litellm's own
+    # load_dotenv() picks it up and spends it. Reporting nothing in that case
+    # would also contradict the footer's claim that this section reads ./.env.
+    already_named = {key for key, _ in _PAID_PATH_KEYS}
+    # Credentials `_KEYS_NOT_PAID_PATH` classifies as non-billing. Listing
+    # WANDB_API_KEY under "Paid path" would raise a false alarm in any project
+    # that merely tracks experiments.
+    not_paid = {field.upper() for field in _KEYS_NOT_PAID_PATH}
+    others = {
         name
-        for name in os.environ
-        if name.endswith("_API_KEY")
-        and os.environ[name]
-        and name not in {key for key, _ in _PAID_PATH_KEYS}
-    )
+        for name, value in os.environ.items()
+        if name.endswith("_API_KEY") and value and name not in already_named | not_paid
+    }
+    others |= {name for name in _dotenv_key_names() if name not in already_named | not_paid}
     if others:
-        out_stream.write(f"  other provider key(s) present: {', '.join(others)}\n")
+        out_stream.write(f"  other provider key(s) present: {', '.join(sorted(others))}\n")
 
     out_stream.write(
         "  Read from the environment and from ./.env in the CURRENT directory.\n"

@@ -783,6 +783,14 @@ def main(argv: list[str] | None = None) -> int:
             # so the unknown fails closed. (CI never takes this branch.)
             interpreter = Path(args.interpreter)
             examples_shipped = False
+            # The SAME cleanliness assertion the built venv gets. Skipping it
+            # here meant `--interpreter .venv/bin/python` ran every snippet
+            # against the editable source tree with all dev extras present:
+            # a green "clean install" report from an environment that is the
+            # opposite of one -- and the unexempted paid snippets could reach
+            # LiteLLM and bill for real. A convenience flag must not be able to
+            # buy a greener result than the real thing.
+            _assert_environment_is_really_clean(interpreter, repo_root=REPO_ROOT)
         snippets = collect()
         assert_gate_is_observing(snippets)
         results = run(

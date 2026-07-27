@@ -34,6 +34,7 @@ from langres.cli import (
     _EXTRAS_NOT_REPORTED,
     _KEYS_NOT_PAID_PATH,
     _PAID_PATH_KEYS,
+    _dotenv_key_names,
     main,
 )
 from langres.clients.settings import Settings
@@ -192,6 +193,53 @@ def test_every_settings_credential_is_either_reported_or_deliberately_exempt() -
         f"`langres info` reports credential(s) {sorted(reported - declared)} that `Settings` does "
         "not declare -- they would always read 'not set'."
     )
+
+
+def test_a_dotenv_only_provider_key_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key that lives ONLY in ./.env is invisible to os.environ AND Settings.
+
+    `Settings` ignores undeclared fields, so an unexported `ANTHROPIC_API_KEY`
+    reached neither table -- while litellm's own load_dotenv() picks it up and
+    spends it. Reporting nothing there also contradicted the footer's claim that
+    this section reads ./.env.
+    """
+    (tmp_path / ".env").write_text(
+        "ANTHROPIC_API_KEY=sk-ant-must-never-be-printed\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    output = _run_info()
+
+    assert "ANTHROPIC_API_KEY" in output
+    assert "sk-ant-must-never-be-printed" not in output, "the NAME is reported, never the value"
+
+
+def test_non_inference_keys_are_not_reported_as_a_paid_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WANDB_API_KEY under "Paid path" is a false alarm, not a diagnostic.
+
+    `_KEYS_NOT_PAID_PATH` already classifies these as billing no inference, so
+    the scan must honour that classification instead of contradicting it.
+    """
+    monkeypatch.chdir(tmp_path)  # no .env, so only the env var is in play
+    monkeypatch.setenv("WANDB_API_KEY", "not-an-inference-credential")
+
+    assert "WANDB_API_KEY" not in _run_info()
+
+
+def test_a_broken_dotenv_does_not_crash_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A diagnostic must survive the broken `.env` it is being run to diagnose."""
+    (tmp_path / ".env").write_bytes(b"\xff\xfe\x00binary garbage\x00")
+    monkeypatch.chdir(tmp_path)
+
+    assert _dotenv_key_names() == set()
+    assert "langres" in _run_info()
 
 
 def test_info_is_listed_in_the_top_level_help() -> None:
