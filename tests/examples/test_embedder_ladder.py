@@ -330,6 +330,34 @@ class TestPersistence:
         kept = next(r for r in merged if r.benchmark == "elsewhere")
         assert kept.vs_reference_delta == 0.07
 
+    def test_a_reference_cell_that_failed_does_not_survive_in_the_sidecar(self) -> None:
+        """The sidecar must never outlive the rows that back it.
+
+        A failed re-measurement produces no update for that cell, so a plain
+        merge keeps the previous per-record recall. A later model then publishes
+        a `vs_reference_*` interval whose baseline exists nowhere in the current
+        rows — an interval that cannot be reproduced from the data it ships with.
+        """
+        existing = {
+            "ref|b|none": {"r1": (1.0, "c1")},
+            "ref|b|instruct": {"r1": (0.5, "c1")},
+            "ref|elsewhere|none": {"r2": (0.25, "c2")},
+        }
+        touched = {"ref|b|none", "ref|b|instruct"}
+        updates = {"ref|b|none": {"r1": (0.75, "c1")}}
+
+        refreshed = LADDER.refresh_reference(existing, updates, touched)
+
+        # Re-measured: replaced. Attempted and failed: gone. Untouched: kept.
+        assert refreshed["ref|b|none"] == {"r1": (0.75, "c1")}
+        assert "ref|b|instruct" not in refreshed
+        assert refreshed["ref|elsewhere|none"] == {"r2": (0.25, "c2")}
+
+    def test_a_reference_run_where_everything_failed_still_voids_its_cells(self) -> None:
+        """The empty-updates case is the one that most needs voiding, not the one to skip."""
+        existing = {"ref|b|none": {"r1": (1.0, "c1")}}
+        assert LADDER.refresh_reference(existing, {}, {"ref|b|none"}) == {}
+
     def test_rows_round_trip_through_the_tracked_jsonl(self, tmp_path: Path) -> None:
         path = tmp_path / "rows.jsonl"
         row = LADDER.LadderRow(

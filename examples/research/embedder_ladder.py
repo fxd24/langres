@@ -550,6 +550,29 @@ def read_reference(path: Path) -> dict[str, RecallByRecord]:
     }
 
 
+def refresh_reference(
+    existing: dict[str, RecallByRecord],
+    updates: dict[str, RecallByRecord],
+    touched: set[str],
+) -> dict[str, RecallByRecord]:
+    """The sidecar after a reference run, with the cells it invalidated removed.
+
+    ``updates`` carries only the cells that **succeeded**, so merging it over
+    ``existing`` is not enough: an arm that failed on a re-run writes a failure
+    row (and :func:`merge_rows` voids the rows it invalidated), while its old
+    per-record recall survives in the sidecar. A later model then reads that
+    cell and publishes a ``vs_reference_*`` interval against a reference
+    measurement the current rows no longer contain — a confidence interval whose
+    baseline exists nowhere in the data.
+
+    So every cell the run *attempted* is voided first, and only the ones that
+    produced a measurement come back. The sidecar can then never outlive its
+    rows. (Found by cross-model review.)
+    """
+    kept = {key: cell for key, cell in existing.items() if key not in touched}
+    return {**kept, **updates}
+
+
 def write_reference(path: Path, store: dict[str, RecallByRecord]) -> None:
     """Persist the reference per-record recall, sorted so the file diffs readably."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1628,8 +1651,18 @@ def main(argv: Sequence[str] | None = None) -> None:
             reference_updates.update(updates)
         # Persist after EVERY model: a long sweep must be durable at each step,
         # not only at the end.
-        if reference_updates:
-            write_reference(args.reference, {**reference, **reference_updates})
+        if spec.name == REFERENCE_MODEL:
+            # Unconditional, NOT `if reference_updates:` — a reference run where
+            # every arm failed produces no updates at all, and that is exactly
+            # the run whose stale cells must go.
+            touched = {
+                _reference_key(benchmark, arm)
+                for benchmark in args.benchmarks
+                for arm in arms_for(spec, arms)
+            }
+            write_reference(
+                args.reference, refresh_reference(reference, reference_updates, touched)
+            )
         merged = merge_rows(read_rows(args.rows), fresh)
         write_rows(args.rows, merged)
         args.report.parent.mkdir(parents=True, exist_ok=True)

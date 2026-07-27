@@ -160,10 +160,19 @@ for model in "${MODELS[@]}"; do
     # whole index, so anything the operator had staged for unrelated work would
     # be swept into this commit and pushed by the next line -- publishing
     # in-progress work nobody chose to publish.
-    git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
+    # A failed commit STOPS the sweep. This script exists to make each model's
+    # rows durable the moment they exist; if the commit fails (hook, missing
+    # identity, disk), the results are merely staged, and carrying on would let
+    # the NEXT model's --only commit bundle them under the wrong message. A
+    # bare `&& log` would swallow exactly that.
+    if ! git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
       -m "results(embedder-ladder): $model" \
-      -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code." \
-      && log "committed $model"
+      -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code."
+    then
+      log "FATAL: commit failed for $model. Results are staged but NOT durable; stopping."
+      exit 1
+    fi
+    log "committed $model"
     git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"
   fi
 done

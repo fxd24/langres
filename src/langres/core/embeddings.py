@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Protocol
 
@@ -1373,8 +1374,11 @@ class DiskCachedEmbedder:
         prompts = getattr(self.embedder, "prompts", None)
         # A mapping only — the wrapped embedder is structurally typed, so an
         # unrelated `prompts` attribute of some other shape must not become the
-        # cache key (nor raise from a key-derivation function).
-        registered = sorted(prompts.items()) if isinstance(prompts, dict) else []
+        # cache key (nor raise from a key-derivation function). `Mapping`, not
+        # `dict`: a `MappingProxyType` / `UserDict` of prompts is a real prompt
+        # mapping, and narrowing to the concrete type would silently drop it
+        # from the key — the fail-open this check exists to prevent.
+        registered = sorted(prompts.items()) if isinstance(prompts, Mapping) else []
         if prompt_name is None and truncate_dim is None and not registered:
             return ""
         return f"|||NAME|||{prompt_name}|||DIM|||{truncate_dim}|||PROMPTS|||{registered!r}"

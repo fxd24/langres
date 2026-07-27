@@ -767,3 +767,26 @@ class TestCacheKeyCoversEmbedderSettings:
         plain = self._cached(tmp_path)
         mapped = self._cached(tmp_path, prompts={"query": "find: "})
         assert plain._hash_text("acme") != mapped._hash_text("acme")
+
+    def test_a_non_dict_mapping_of_prompts_still_reaches_the_key(self, tmp_path):
+        """``Mapping``, not ``dict`` — a read-only prompt mapping is still prompts.
+
+        Narrowing to the concrete type would silently drop it from the key,
+        which is the exact fail-open this check exists to prevent.
+        """
+        from types import MappingProxyType
+
+        one = self._cached(tmp_path, prompts=MappingProxyType({"query": "find: "}))
+        other = self._cached(tmp_path, prompts=MappingProxyType({"query": "retrieve: "}))
+        plain = self._cached(tmp_path)
+
+        assert one._hash_text("acme") != plain._hash_text("acme")
+        assert one._hash_text("acme") != other._hash_text("acme")
+
+    def test_an_unrelated_prompts_attribute_is_not_a_prompt_mapping(self, tmp_path):
+        """A structurally typed embedder can carry anything under that name.
+
+        Key derivation must neither raise on it nor key on its repr.
+        """
+        cached = self._cached(tmp_path, prompts="not a mapping")
+        assert cached._embedder_discriminator() == ""
