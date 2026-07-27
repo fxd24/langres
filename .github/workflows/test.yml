@@ -114,6 +114,69 @@ jobs:
       - name: Verify the core-only flywheel loop (examples/flywheel_min.py) works
         run: uv run python examples/flywheel_min.py
 
+  # Does the documentation work for the audience it is advertised to?
+  #
+  # Every other job here installs the SOURCE TREE with `uv sync --all-extras`.
+  # That is the developer's environment, and in it the docs cannot fail: the
+  # `examples/` directory exists and every optional extra is present. So when
+  # `docs/index.md` put `uv run python examples/research/first_experiment.py`
+  # directly above `pip install langres`, nothing in CI could see it -- a pip
+  # user fails twice over (the wheel ships `src/langres` only, and that script
+  # needs `qdrant-client` from `[semantic]`). A human reading the docs found it.
+  #
+  # This job reproduces the USER's environment instead: build the real wheel,
+  # install it into a fresh virtualenv with no extras, and execute every
+  # ```python block in README.md / docs/index.md / docs/GETTING_STARTED.md with
+  # that interpreter. Snippets are extracted mechanically from the fenced blocks
+  # -- never hand-copied into a fixture, which would drift and leave the gate
+  # verifying the copy.
+  #
+  # Snippets that are MEANT to need more than a bare install declare it in the
+  # document, above the block (`<!-- docs-gate: requires-extra=semantic -->`,
+  # `requires-repo`, `requires-network`, `illustrative`). The default is
+  # EXECUTE, so a new unclassified snippet fails until someone looks at it --
+  # the list rots CLOSED. An unknown token, an unknown fence language, or a
+  # directive attached to nothing is a hard error, never a silent skip.
+  #
+  # !! NOT `continue-on-error` ON PURPOSE. !! A non-blocking gate is exactly the
+  # failure this repo has hit five times (a step named "95% coverage gate"
+  # enforcing 90; a cancelled run read as green; a review bot reporting `pass`
+  # in 5s without fetching the diff) and this job exists because of the sixth.
+  # "Advisory now, required later" has no forcing function: it lands a green
+  # check that observes nothing. If this job is red, either the docs are wrong
+  # or a snippet needs its exemption declared -- both are the gate working.
+  #
+  # Proof it can actually fail lives in tests/test_doc_snippets.py, which
+  # injects a `[semantic]`-only snippet into a synthetic doc and asserts the
+  # runner reports it red against a real wheel in a real empty venv.
+  #
+  # Runs on PRs (where docs change) AND on merges to main -- deliberately no
+  # event `if:`, unlike the jobs around it.
+  docs-clean-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          python-version: "3.13"
+          enable-cache: true
+
+      # Bare `uv sync` (no extras): tools/doc_snippets.py is stdlib-only and
+      # builds its own clean venv for the snippets. Installing extras here would
+      # not reach the snippets (they run against the wheel venv), so this stays
+      # minimal.
+      - name: Install dependencies (core only)
+        run: uv sync
+
+      # The SAME command a developer runs locally, so there is no CI-only path
+      # to drift: it builds the wheel, makes the clean venv, and runs the docs.
+      - name: Run the user-facing docs against a clean wheel install
+        run: uv run python tools/doc_snippets.py
+
   # Full suite INCLUDING the slow embedding/ML tests, plus the coverage gates:
   # the repo-wide floor (inherited from pyproject addopts) and the core-contract
   # floor (a separate step). Runs on every merge to main (push) + on

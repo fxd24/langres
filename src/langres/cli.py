@@ -14,6 +14,12 @@ human answers them. Two review surfaces, one contract
   corrections log *immediately*, so quitting (or ctrl-D) never loses answered
   work and a re-run resumes where it left off.
 
+``info`` is the odd one out: an install diagnostic, not a review surface. It
+answers the first question a new user hits -- *which extras do I actually have,
+and which benchmark datasets can I load?* -- because a `pip install langres`
+gets neither every extra nor most of the benchmark corpora (they are excluded
+from the wheel; see ``[tool.hatch.build]``).
+
 Design constraints (this is a packaged console-script entry point):
 
 - **stdlib + the light langres contracts only.** ``argparse``/``csv``/``re``
@@ -39,6 +45,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -66,6 +74,114 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 _PROMPT = "[y]es match  [n]o  [s]kip  [q]uit > "
 
+#: Each optional extra with the import(s) that PROVE it -- the modules langres
+#: itself imports from that stack (verified against `src/`, not assumed from the
+#: dependency list). Probed with :func:`importlib.util.find_spec`, never
+#: ``try: import``: importing torch to discover whether torch is installed costs
+#: seconds and drags the heavy stack into the one command whose job is to work
+#: on a bare install.
+#:
+#: ``bitsandbytes`` (``[finetune]``) is deliberately absent. It is Linux-only in
+#: the extra and langres never imports it by name -- its config arrives via
+#: ``transformers.BitsAndBytesConfig`` -- so probing for it would report a false
+#: "no" on every macOS install that has the extra correctly installed.
+_EXTRA_PROOF_IMPORTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # fastembed backs the sparse/late-interaction embedders in
+    # core/embeddings.py, so omitting it would report "[semantic] yes" on an
+    # install where those fail -- the mirror of the bitsandbytes false "no".
+    ("semantic", ("faiss", "fastembed", "qdrant_client", "sentence_transformers", "torch")),
+    ("llm", ("dspy", "litellm", "openai")),
+    ("trained", ("sklearn",)),
+    ("eval", ("ranx",)),
+    ("finetune", ("peft", "trl")),
+    ("hub", ("huggingface_hub",)),
+)
+
+#: Declared extras `langres info` deliberately does NOT report, each with its
+#: reason. Paired with a test that reads `[project.optional-dependencies]` from
+#: pyproject: a new extra fails that test until it is either given proof imports
+#: or listed here on purpose. Without it the table's only "expectation" was the
+#: table itself -- an expectation regenerated from the thing that breaks cannot
+#: detect it breaking.
+_EXTRAS_NOT_REPORTED: dict[str, str] = {
+    "mlflow": "opt-in experiment-tracking backend, not part of the resolve path",
+    "wandb": "opt-in experiment-tracking backend, not part of the resolve path",
+    "trackio": "opt-in experiment-tracking backend, not part of the resolve path",
+}
+
+#: Credentials that can make an inference call cost money, as
+#: ``(env var, Settings field)``. Reported as a **boolean only** -- the value is
+#: tested for truthiness and discarded, because `langres info` must never put a
+#: secret on a terminal, in a CI log, or in a pasted bug report. The two halves
+#: are paired here rather than in two hand-synced lists, where adding a key to
+#: one and not the other would raise a KeyError inside the one command that must
+#: never crash. Reporting a *subset* is worse than useless: an Azure user with a
+#: working key read "not set" on every line and would conclude they had no paid
+#: path configured.
+_PAID_PATH_KEYS: tuple[tuple[str, str], ...] = (
+    ("OPENROUTER_API_KEY", "openrouter_api_key"),
+    ("OPENAI_API_KEY", "openai_api_key"),
+    ("AZURE_API_KEY", "azure_api_key"),
+)
+
+#: Matches `NAME=` / `export NAME=` at the head of a dotenv line. Deliberately
+#: captures only the NAME: the value is never read, so it can never be printed.
+_DOTENV_NAME_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _dotenv_key_names(path: Path = Path(".env")) -> set[str]:
+    """`*_API_KEY` names declared in ./.env, without reading a single value.
+
+    A diagnostic must not die on the broken `.env` it is being run to diagnose,
+    so any read failure yields nothing rather than raising.
+    """
+    try:
+        # utf-8-sig, not utf-8: a `.env` saved by a Windows editor starts with a
+        # BOM, and under plain utf-8 that BOM sits before the first name so the
+        # line does not match -- hiding the FIRST key in the file. Measured. That
+        # is the expensive direction of wrong for this scan: reporting "no key"
+        # while litellm loads the same file and spends is the exact bug it
+        # exists to prevent. utf-8-sig is identical to utf-8 when no BOM present.
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    # Quote state is tracked across lines because a multiline quoted value is ONE
+    # binding, and its interior is secret content. Matching every physical line
+    # independently meant a value containing a line like `x_API_KEY=...` had that
+    # fragment reported as a "name" -- printing part of a secret from the command
+    # whose first property is that it never prints one. Over-reporting a name
+    # looked harmless until the name could be *derived from the value*.
+    names: set[str] = set()
+    quote: str | None = None
+    for line in text.splitlines():
+        if quote is not None:
+            if quote in line:  # the value ends here; the rest of the file is bindings again
+                quote = None
+            continue
+        match = _DOTENV_NAME_RE.match(line)
+        if match is None:
+            continue
+        names.add(match.group(1))
+        value = line[match.end() :].lstrip()
+        if value[:1] in ("'", '"') and value[0] not in value[1:]:
+            quote = value[0]  # opens here, closes on a later line
+    return {name for name in names if name.endswith("_API_KEY")}
+
+
+#: `Settings` credentials deliberately absent from the paid-path report, with
+#: the reason. These buy a *service*, not inference tokens, so listing them
+#: under "paid path" would blur the one question that section answers: can a
+#: `dedupe()` call spend money? A new key on `Settings` must land in one of
+#: these two tables -- `tests/test_cli_info.py` fails until it does. Their
+#: uppercase forms are also excluded from the "other provider key(s)" scan, so
+#: a project that merely tracks experiments does not read as having a paid path.
+_KEYS_NOT_PAID_PATH: dict[str, str] = {
+    "wandb_api_key": "experiment-tracking backend, bills no inference",
+    "langfuse_public_key": "tracing backend, bills no inference",
+    "langfuse_secret_key": "tracing backend, bills no inference",
+    "qdrant_api_key": "vector-store service, bills no inference",
+}
+
 
 def main(
     argv: Sequence[str] | None = None,
@@ -91,6 +207,8 @@ def main(
     if args.version:
         out_stream.write(f"langres {__version__}\n")
         return 0
+    if args.command == "info":
+        return _info(out_stream)
     if args.command == "review":
         return _review(Path(args.queue), Path(args.out), args.reviewer, in_stream, out_stream)
     if args.command == "export-csv":
@@ -140,7 +258,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{review,export-csv,import-csv,experiments}",
+        metavar="{info,review,export-csv,import-csv,experiments}",
+    )
+
+    subparsers.add_parser(
+        "info",
+        help="Report what this install actually has: extras, datasets, credentials.",
+        description=(
+            "Print the installed langres version, which optional extras resolve (with "
+            "the import that proves each), which benchmark datasets this install can "
+            "actually load, and whether a paid-path API key is configured. Reports key "
+            "presence as yes/no only -- it never prints a key. Runs on a bare core "
+            "install and imports no heavy dependency to decide whether one exists."
+        ),
     )
 
     p_review = subparsers.add_parser(
@@ -234,6 +364,136 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The reproduction artifact emitted by Experiment.run().",
     )
     return parser
+
+
+def _module_installed(name: str) -> bool:
+    """Is ``name`` importable, *without* importing it?
+
+    :func:`importlib.util.find_spec` locates a module's spec on the path; it does
+    not execute the module. That distinction is the whole point here -- a
+    ``try: import torch`` probe would take seconds and pull the heavy stack into
+    ``sys.modules``, which ``tests/test_import_budget.py`` exists to prevent.
+    """
+    try:
+        spec = importlib.util.find_spec(name)
+        # `spec.loader is None` means a namespace package -- a bare directory
+        # with no module in it, which a partial uninstall leaves behind.
+        # Measured: an empty `torchzzz/` on sys.path makes find_spec return a
+        # spec, so `is not None` alone would report an extra as installed on an
+        # environment where importing it raises.
+        return spec is not None and spec.loader is not None
+    except (ImportError, ValueError):
+        # ImportError: a parent package is absent, so the child cannot exist.
+        # ValueError: the module is present but has no spec (__spec__ is None).
+        return False
+
+
+def _benchmark_status(name: str) -> str:
+    """Actually load benchmark ``name``; return ``""`` on success or a short reason.
+
+    Deliberately behavioral, not a manifest lookup. Whether a dataset is usable
+    here depends on facts no static list tracks -- the wheel excludes most of the
+    corpora, and some loaders need an extra -- and a diagnostic that consults a
+    hand-maintained copy of that answer reports the copy, not the install.
+    Loading every bundled dataset costs about a second in a git checkout, and far
+    less in a wheel install where most fail immediately.
+    """
+    from langres.data.registry import get_benchmark
+
+    try:
+        get_benchmark(name).load()
+    except Exception as exc:
+        # Broad on purpose: this is a diagnostic. Any failure to load is the
+        # answer the user asked for, so no loader error may abort the report.
+        return type(exc).__name__
+    return ""
+
+
+def _info(out_stream: TextIO) -> int:
+    """Print what this install actually has: version, extras, datasets, credentials."""
+    from langres.clients.settings import Settings
+    from langres.data.registry import list_benchmarks
+
+    out_stream.write(f"langres {__version__}\n")
+    out_stream.write(f"python  {sys.version.split()[0]}  ({sys.executable})\n")
+
+    out_stream.write("\nExtras\n")
+    for extra, proofs in _EXTRA_PROOF_IMPORTS:
+        missing = [module for module in proofs if not _module_installed(module)]
+        label = f"[{extra}]"
+        if missing:
+            out_stream.write(
+                f"  {label:<11} no   missing {', '.join(missing)}"
+                f"  ->  pip install 'langres[{extra}]'\n"
+            )
+        else:
+            out_stream.write(f"  {label:<11} yes  {', '.join(proofs)}\n")
+
+    entries = list_benchmarks()
+    statuses = {entry.name: _benchmark_status(entry.name) for entry in entries}
+    loadable = sum(1 for reason in statuses.values() if not reason)
+    out_stream.write(f"\nBenchmark datasets ({loadable}/{len(entries)} loadable here)\n")
+    for entry in entries:
+        reason = statuses[entry.name]
+        verdict = "no   " + reason if reason else "yes"
+        out_stream.write(f"  {entry.name:<16} {verdict}\n")
+    if "BenchmarkDataNotFoundError" in statuses.values():
+        out_stream.write(
+            "  BenchmarkDataNotFoundError = the corpus is excluded from the PyPI wheel\n"
+            "  (no redistribution license); install from a git checkout to get it.\n"
+        )
+
+    out_stream.write("\nPaid path (presence only -- no key is ever printed)\n")
+    try:
+        # Presence only: each value is coerced to bool here and never written.
+        settings = Settings()
+    except Exception as exc:
+        # A diagnostic must not die on the broken `.env` it is being run to
+        # diagnose. Measured: a binary `.env` raises UnicodeDecodeError and a
+        # mode-000 `.env` raises PermissionError, both after the sections above
+        # had already printed -- a half report plus a traceback. Only the
+        # exception *type* is surfaced: a pydantic ValidationError's str embeds
+        # the offending input value, which could be a key.
+        out_stream.write(f"  could not read settings ({type(exc).__name__}) -- check ./.env\n")
+        return 0
+    for key, field in _PAID_PATH_KEYS:
+        present = bool(getattr(settings, field))
+        out_stream.write(f"  {key:<20} {'set' if present else 'not set'}\n")
+
+    # langres declares three credentials, but a served model is routed by
+    # litellm, which knows ~146 providers -- so `anthropic/...` bills with
+    # ANTHROPIC_API_KEY, a variable `Settings` never mentions. Listing only the
+    # three would reproduce the Azure bug one provider over: every line reads
+    # "not set" while a real call spends. Enumerating 146 providers would be
+    # noise and would rot, so report what is actually in the environment. Names
+    # only -- never a value.
+    # `./.env` is scanned too, not just os.environ. A key that lives ONLY in the
+    # dotenv and was never exported is invisible to both `os.environ` and
+    # `Settings` (which ignores undeclared fields) -- while litellm's own
+    # load_dotenv() picks it up and spends it. Reporting nothing in that case
+    # would also contradict the footer's claim that this section reads ./.env.
+    already_named = {key for key, _ in _PAID_PATH_KEYS}
+    # Credentials `_KEYS_NOT_PAID_PATH` classifies as non-billing. Listing
+    # WANDB_API_KEY under "Paid path" would raise a false alarm in any project
+    # that merely tracks experiments.
+    not_paid = {field.upper() for field in _KEYS_NOT_PAID_PATH}
+    others = {
+        name
+        for name, value in os.environ.items()
+        if name.endswith("_API_KEY") and value and name not in already_named | not_paid
+    }
+    others |= {name for name in _dotenv_key_names() if name not in already_named | not_paid}
+    if others:
+        out_stream.write(f"  other provider key(s) present: {', '.join(sorted(others))}\n")
+
+    out_stream.write(
+        "  Read from the environment and from ./.env in the CURRENT directory.\n"
+        "  A real LLM call can additionally pick up a .env in a PARENT directory\n"
+        "  (litellm runs load_dotenv() on import), so 'not set' here does not\n"
+        "  guarantee a paid call would find no key. Any litellm provider key in\n"
+        "  the environment can bill, not only the ones named above.\n"
+    )
+    return 0
 
 
 def _review(

@@ -61,7 +61,7 @@ langres/
 ├── src/langres/
 │   ├── architectures/  # Named pipelines/recipes: FuzzyString, VectorLLMCascade, Retrieve*
 │   ├── resources/      # Import-light Embedder/Reranker/LLM contracts, fakes, lazy adapters and Ops
-│   ├── cli.py          # langres CLI: review / export-csv / import-csv (labeling loop)
+│   ├── cli.py          # langres CLI, enumerated from add_parser: info (install diagnostic) / review / export-csv / import-csv (labeling loop) / experiments, whose OWN subcommands are reproduce / verify (`langres experiments reproduce`)
 │   ├── core/           # Low-level primitives + the Resolver
 │   │   ├── resolver.py     # ERModel (aliased Resolver): the class + from_schema / fit / the anchor surface; no matcher="auto"
 │   │   ├── _model_state.py, _model_run.py, _model_persist.py  # ERModel split by responsibility: what it IS / how it runs / how it persists
