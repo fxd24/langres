@@ -350,9 +350,13 @@ def test_a_self_pair_is_the_one_input_where_the_two_shapes_still_differ() -> Non
 
     An accepted ``left_id == right_id`` judgement reaches ``nx.add_edge(x, x)``,
     so the base Clusterer returns a ``{x}`` singleton; ``CorrelationClusterer``
-    skips self-pairs in ``_build_adjacency`` and returns nothing. This is NOT
-    hypothetical -- ``VectorBlocker`` emits 43 accepted self-pairs on
-    ``amazon_google``'s test split.
+    skips self-pairs in ``_build_adjacency`` and returns nothing.
+
+    Neither shipped blocker emits a self-pair (``AllPairsBlocker`` pairs only
+    ``i < j``; ``VectorBlocker._neighbor_columns`` drops the anchor by identity),
+    so this is a contract difference reachable via duplicate ids or a custom
+    blocker -- not something a default pipeline hands you. This test is what
+    makes the divergence a documented fact rather than a claim in prose.
 
     Deliberately not "fixed": teaching the base clusterer to drop self-pairs
     would change the DEFAULT path's behaviour. Pinned here so the asymmetry stays

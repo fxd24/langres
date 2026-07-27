@@ -1125,9 +1125,11 @@ Two honest caveats. **Self-pairs are the one input where the two still differ,
 and there the base clusterer is the odd one out**: a `left_id == right_id`
 judgement clearing the threshold becomes `nx.add_edge(x, x)`, so the base
 `Clusterer` returns a `{x}` singleton while `CorrelationClusterer` skips
-self-pairs and returns nothing. That is not theoretical — `VectorBlocker` emits
-43 accepted self-pairs on `amazon_google`'s test split — and it is left alone on
-purpose, since changing it would alter the default path's behaviour. And the
+self-pairs and returns nothing. It is left alone on purpose, since changing it
+would alter the default path's behaviour. Note that neither shipped blocker
+produces this input — `AllPairsBlocker` pairs only positions `i < j`, and
+`VectorBlocker` drops the anchor's self-match by identity to avoid exactly this —
+so it takes duplicate ids or a custom blocker to reach. And the
 shape is a property of these two implementations, **not** an invariant the model
 enforces: a custom `Clusterer` subclass that emits singletons has them passed
 through unchanged.

@@ -1061,10 +1061,10 @@ class ModelRun(ModelState):
           base Clusterer call ``nx.add_edge(x, x)``, and networkx returns ``{x}``
           -- a one-node component -- whereas
           :class:`~langres.core.clusterers.correlation.CorrelationClusterer`
-          skips self-pairs outright and emits nothing. Not hypothetical:
-          ``VectorBlocker`` produces 43 accepted self-pairs on ``amazon_google``'s
-          test split. Left as-is deliberately -- teaching the base clusterer to
-          drop them is a behaviour change to the DEFAULT path.
+          skips self-pairs outright and emits nothing. Left as-is deliberately --
+          teaching the base clusterer to drop them is a behaviour change to the
+          DEFAULT path. Neither shipped blocker produces this input, so reaching
+          it takes duplicate ids or a custom blocker.
         * **Nothing here enforces the shape.** It is a property of the two
           shipped implementations, not an invariant of this method: a custom
           :class:`~langres.core.clusterer.Clusterer` subclass that emits a

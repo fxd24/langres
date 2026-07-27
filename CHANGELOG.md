@@ -28,9 +28,9 @@ a raw `ERModel`.
   simply absent. (One exception, running the other way: on an accepted
   *self-pair* the base `Clusterer` returns a `{id}` singleton via
   `nx.add_edge(x, x)` while `CorrelationClusterer` skips self-pairs entirely.
-  `VectorBlocker` emits 43 of those on `amazon_google`'s test split, so it is
-  real; it is left alone because changing the base clusterer would alter the
-  default path.)
+  No shipped blocker emits a self-pair, so this needs duplicate ids or a custom
+  blocker to reach; it is left alone because changing the base clusterer would
+  alter the default path.)
   This moves **no** measured number: the benchmark harness scores
   `complete_partition(clusters, all_ids)`, which restores every uncovered id as
   its own singleton before anything is measured. Verified differentially against

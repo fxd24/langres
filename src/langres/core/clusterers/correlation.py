@@ -144,9 +144,17 @@ class CorrelationClusterer(Clusterer):
         :meth:`_build_adjacency`, so that record is absent here -- while the base
         Clusterer feeds it to ``nx.add_edge(x, x)`` and returns a ``{x}``
         singleton. On that input the BASE clusterer is the one emitting a
-        singleton. Real, not hypothetical: ``VectorBlocker`` produces 43 accepted
-        self-pairs on ``amazon_google``'s test split. Left as-is deliberately --
-        changing the base clusterer would alter the default path's behaviour.
+        singleton -- pinned by
+        ``test_a_self_pair_is_the_one_input_where_the_two_shapes_still_differ``.
+        Left as-is deliberately: changing the base clusterer would alter the
+        default path's behaviour.
+
+        Neither shipped blocker hands a clusterer this input. ``AllPairsBlocker``
+        pairs only positions ``i < j``, and ``VectorBlocker`` drops the anchor's
+        self-match **by identity** (``blockers/vector.py:_neighbor_columns``) --
+        its docstring says it does so specifically to avoid "yielding a
+        degenerate self-pair". Reaching this case therefore takes duplicate ids
+        in the input or a custom blocker, not a default pipeline.
 
         Args:
             judgements: Iterator or list of PairwiseJudgement objects.
