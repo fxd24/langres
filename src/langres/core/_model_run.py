@@ -1052,15 +1052,29 @@ class ModelRun(ModelState):
         :class:`~langres.core.op_adapters.ClustererStage` clustering over the
         survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
         The output is whatever the (zeroed) equivalence clusterer returns over
-        the selected edges. **Both SHIPPED clusterers return the same shape** --
-        multi-record clusters only, an unmerged record simply absent -- but that
-        is a property of those two implementations, **not** an invariant this
-        method enforces: a custom :class:`~langres.core.clusterer.Clusterer`
-        subclass that emits a one-node cluster has it passed straight through
-        (``ClustererStage.forward`` returns the clusterer's output unchanged, and
-        nothing here normalizes it). The two shipped ones reach the shape
-        differently, which is worth knowing when reading either one's source. The
-        base connected-components
+        the selected edges. **For judgements with DISTINCT ids, both shipped
+        clusterers return the same shape** -- multi-record clusters only, an
+        unmerged record simply absent. Two caveats, both real:
+
+        * **Self-pairs break the tie, in the base clusterer's favour.** A
+          ``left_id == right_id`` judgement that clears the threshold makes the
+          base Clusterer call ``nx.add_edge(x, x)``, and networkx returns ``{x}``
+          -- a one-node component -- whereas
+          :class:`~langres.core.clusterers.correlation.CorrelationClusterer`
+          skips self-pairs outright and emits nothing. Not hypothetical:
+          ``VectorBlocker`` produces 43 accepted self-pairs on ``amazon_google``'s
+          test split. Left as-is deliberately -- teaching the base clusterer to
+          drop them is a behaviour change to the DEFAULT path.
+        * **Nothing here enforces the shape.** It is a property of the two
+          shipped implementations, not an invariant of this method: a custom
+          :class:`~langres.core.clusterer.Clusterer` subclass that emits a
+          one-node cluster has it passed straight through
+          (``ClustererStage.forward`` returns the clusterer's output unchanged,
+          and ``_cluster`` normalizes nothing).
+
+        The two shipped ones reach the distinct-id shape differently, which is
+        worth knowing when reading either one's source. The base
+        connected-components
         :class:`~langres.core.clusterer.Clusterer` gets it for free -- an isolated
         record never enters the graph. A pivot
         :class:`~langres.core.clusterers.correlation.CorrelationClusterer` has a

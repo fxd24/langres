@@ -1118,8 +1118,19 @@ the adjacency map (identical to the base `Clusterer`, whose graph an unmerged
 record never enters), and a record *with* a qualifying edge whose neighbours an
 earlier pivot already claimed forms a one-node cluster mid-algorithm, which is
 dropped. That keeps the `dedupe()` contract above — the multi-record clusters,
-singletons left out — true no matter which clusterer you pick, so opting in
-changes your *partition* without changing your output *shape*.
+singletons left out — true for either clusterer, so opting in changes your
+*partition* without changing your output *shape*.
+
+Two honest caveats. **Self-pairs are the one input where the two still differ,
+and there the base clusterer is the odd one out**: a `left_id == right_id`
+judgement clearing the threshold becomes `nx.add_edge(x, x)`, so the base
+`Clusterer` returns a `{x}` singleton while `CorrelationClusterer` skips
+self-pairs and returns nothing. That is not theoretical — `VectorBlocker` emits
+43 accepted self-pairs on `amazon_google`'s test split — and it is left alone on
+purpose, since changing it would alter the default path's behaviour. And the
+shape is a property of these two implementations, **not** an invariant the model
+enforces: a custom `Clusterer` subclass that emits singletons has them passed
+through unchanged.
 
 #### How to opt in
 

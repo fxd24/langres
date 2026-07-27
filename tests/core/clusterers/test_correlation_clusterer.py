@@ -345,6 +345,25 @@ def test_base_clusterer_never_emits_a_size_one_cluster_on_this_input() -> None:
     assert all(len(cluster) > 1 for cluster in clusters)
 
 
+def test_a_self_pair_is_the_one_input_where_the_two_shapes_still_differ() -> None:
+    """The documented exception, pinned -- and the base clusterer is the odd one out.
+
+    An accepted ``left_id == right_id`` judgement reaches ``nx.add_edge(x, x)``,
+    so the base Clusterer returns a ``{x}`` singleton; ``CorrelationClusterer``
+    skips self-pairs in ``_build_adjacency`` and returns nothing. This is NOT
+    hypothetical -- ``VectorBlocker`` emits 43 accepted self-pairs on
+    ``amazon_google``'s test split.
+
+    Deliberately not "fixed": teaching the base clusterer to drop self-pairs
+    would change the DEFAULT path's behaviour. Pinned here so the asymmetry stays
+    a documented, deliberate exception rather than quietly becoming a surprise.
+    """
+    self_pair = [_j("X", "X", 0.99)]
+
+    assert Clusterer(threshold=0.5).cluster(self_pair) == [{"X"}]
+    assert CorrelationClusterer(threshold=0.5).cluster(self_pair) == []
+
+
 def _random_judgements(rng: random.Random, n_ids: int, n_edges: int) -> list[PairwiseJudgement]:
     ids = [f"r{i}" for i in range(n_ids)]
     out = []
