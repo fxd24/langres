@@ -100,11 +100,21 @@ class ThresholdFit(BaseModel):
         source: What happened to the threshold. ``"derived"`` -- a cut was
             derived and kept. ``"declined"`` -- a cut was derived, lost to the
             incumbent on the selection split, and was **not** applied; the
-            threshold is unchanged. ``"default"`` -- no derivation was attempted,
-            so the threshold is whatever the model was constructed with (an
-            honest no-data fallback, not a measurement).
+            threshold is unchanged. ``"not_fitted"`` -- **this** fit did not fit
+            the threshold (``derive_threshold=False``), so the cut is whatever
+            the model already carried.
+
+            Note what ``"not_fitted"`` deliberately does **not** claim: that the
+            threshold is a constructor default. This report cannot know that. A
+            model whose earlier ``fit(derive_threshold=True)`` derived its cut,
+            re-fitted later without the flag, would be relabelled a "default" by
+            such a claim -- a false provenance record in the one field whose
+            entire job is provenance. ``fit_report_`` is not serialized, so a
+            later fit has no way to recover the earlier one's origin; saying
+            "this fit did not touch it" is the strongest true statement
+            available.
         method: The derivation method (``"youden"``), or ``None`` when
-            ``source="default"``.
+            ``source="not_fitted"``.
         n_pairs: Labeled pairs the cut was derived from (``0`` when defaulted).
             Read this before trusting the threshold.
         held_out: Whether :attr:`FitReport.metrics` grades the threshold in force
@@ -114,7 +124,7 @@ class ThresholdFit(BaseModel):
         applied_to: Which seam the threshold was written to --
             ``"clusterer"`` (a classic four-slot model) or ``"threshold_select"``
             (an explicit ``_ops`` chain's ``ThresholdSelect``). ``None`` when
-            nothing was written, i.e. for ``"default"`` and ``"declined"``.
+            nothing was written, i.e. for ``"not_fitted"`` and ``"declined"``.
         selected_on: The split that chose between the candidates (``"train"``),
             or ``None`` when no derivation ran. Named explicitly so a reader can
             see it was *not* ``valid``.
@@ -124,7 +134,7 @@ class ThresholdFit(BaseModel):
             lets a caller judge the margin instead of trusting the rule.
     """
 
-    source: Literal["derived", "declined", "default"]
+    source: Literal["derived", "declined", "not_fitted"]
     method: str | None = None
     n_pairs: int = 0
     held_out: bool = False
@@ -277,8 +287,8 @@ class FitReport(BaseModel):
         fit = self.threshold_fit
         if fit is None:
             return ""
-        if fit.source == "default":
-            return " (default — not derived from labels)"
+        if fit.source == "not_fitted":
+            return " (not fitted by this fit — pass derive_threshold=True to fit it from labels)"
         if fit.source == "declined":
             candidate = "" if fit.candidate is None else f" {fit.candidate.threshold:.4f}"
             return (
@@ -299,7 +309,7 @@ class FitReport(BaseModel):
         ``train``, so nothing was ever tuned against ``valid``.
         """
         fit = self.threshold_fit
-        if fit is None or fit.source == "default":
+        if fit is None or fit.source == "not_fitted":
             return []
         rows = [("incumbent", fit.previous), ("derived", fit.candidate)]
         lines = [f"## Threshold selection (chosen on {fit.selected_on})", ""]

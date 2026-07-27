@@ -166,8 +166,9 @@ class _CountingMatcher:
     observes exactly as well and for free.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, score: float = 1.0) -> None:
         self.calls = 0
+        self.score = score
 
     def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
         for candidate in candidates:
@@ -175,9 +176,26 @@ class _CountingMatcher:
             yield PairwiseJudgement(
                 left_id=candidate.left.id,
                 right_id=candidate.right.id,
-                score=1.0,
+                score=self.score,
                 score_type="heuristic",
                 decision_step="counting_stub",
+                provenance={},
+            )
+
+
+class _DecidingMatcher:
+    """A matcher that both decides and ranks -- the case a threshold cannot govern."""
+
+    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            same = candidate.left.name.split()[0] == candidate.right.name.split()[0]
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                score=0.9 if same else 0.1,
+                decision=same,
+                score_type="heuristic",
+                decision_step="deciding_stub",
                 provenance={},
             )
 
@@ -267,7 +285,7 @@ def test_default_leaves_the_threshold_untouched_and_says_so() -> None:
     assert supervised.clusterer.threshold == _DEFAULT_THRESHOLD
     assert supervised.fit_report_ is not None
     assert supervised.fit_report_.threshold_fit is not None
-    assert supervised.fit_report_.threshold_fit.source == "default"
+    assert supervised.fit_report_.threshold_fit.source == "not_fitted"
     assert supervised.fit_report_.threshold_fit.n_pairs == 0
     assert model.clusterer.threshold == _DEFAULT_THRESHOLD  # untouched, never fitted
 
@@ -368,6 +386,97 @@ def test_declined_markdown_says_the_candidate_lost() -> None:
     assert "did not beat it on train" in rendered
     assert "Threshold selection (chosen on train)" in rendered
     assert "KEPT" in rendered
+
+
+def test_a_later_plain_fit_does_not_relabel_a_derived_cut_as_a_default() -> None:
+    """``not_fitted`` must not claim the cut is a constructor default.
+
+    Provenance is the whole job of this field, so a false provenance record is
+    the worst thing it can carry. ``fit_report_`` is not serialized, so a second
+    ``fit()`` cannot recover the first one's origin -- "this fit did not touch
+    it" is the strongest true statement available, and the rendering must say
+    exactly that and no more.
+    """
+    records, pairs = _dataset()
+    model = _classic()
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert model.fit_report_ is not None and model.fit_report_.threshold_fit is not None
+    assert model.fit_report_.threshold_fit.source == "derived"
+    derived_cut = model.clusterer.threshold
+
+    model.module = _SupervisedMatcher()  # type: ignore[assignment]
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED)  # no derive_threshold
+
+    assert model.clusterer.threshold == derived_cut  # the derived cut is still in force
+    assert model.fit_report_ is not None and model.fit_report_.threshold_fit is not None
+    assert model.fit_report_.threshold_fit.source == "not_fitted"
+    rendered = model.fit_report_.to_markdown()
+    assert "not fitted by this fit" in rendered
+    assert "default" not in rendered  # never claims an origin it cannot know
+
+
+def test_deriving_refuses_a_matcher_that_emits_decisions() -> None:
+    """A cut resolve() would ignore must raise, not be reported as an improvement.
+
+    ``predicted_match`` gives ``decision`` precedence over ``score``, so for a
+    matcher emitting both, moving the threshold changes nothing at resolve time.
+    Deriving one anyway would report a measured improvement for a fit that is
+    silently inert -- the exact class of failure this feature exists to prevent.
+    """
+    records, pairs = _dataset()
+    model = Resolver(
+        blocker=AllPairsBlocker(schema=CompanySchema),
+        comparator=None,
+        matcher=_DecidingMatcher(),  # type: ignore[arg-type]
+        clusterer=Clusterer(threshold=_DEFAULT_THRESHOLD),
+    )
+    with pytest.raises(ValueError, match="emits an explicit decision"):
+        model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert model.clusterer.threshold == _DEFAULT_THRESHOLD
+
+
+def test_a_score_after_the_fitted_select_does_not_contaminate_the_derivation() -> None:
+    """The cut must be derived from the scores its own Select actually reads.
+
+    ``Source -> ScoreA -> ThresholdSelect -> ScoreB -> ClusterStage`` is supported
+    topology -- that is what a reranker is. Merely *removing* the Select and
+    running the rest would let ``ScoreB`` overwrite the score column, so the fit
+    would derive a cut from ``ScoreB`` values and write it into a Select that
+    thresholds ``ScoreA`` values. ``ScoreB`` here returns a constant 0.01, far
+    below anything ``ScoreA`` produces: if it ran, the derived cut would collapse
+    toward it and the marker below would be reached.
+    """
+    records, pairs = _dataset()
+    downstream = _CountingMatcher(score=0.01)
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            MatcherScore(_matcher(), out_space="heuristic"),
+            ThresholdSelect(_DEFAULT_THRESHOLD),
+            MatcherScore(downstream, out_space="heuristic"),
+            ClustererStage(Clusterer(threshold=0.0)),
+        ]
+    )
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+
+    assert downstream.calls == 0  # nothing past the fitted cut runs during the fit
+    fit = model.fit_report_.threshold_fit if model.fit_report_ else None
+    assert fit is not None and fit.candidate is not None
+    assert fit.candidate.threshold > 0.5  # a rapidfuzz cut, not a 0.01-contaminated one
+
+
+def test_fit_normalizes_raw_records_for_an_explicit_chain() -> None:
+    """A chain Source is handed typed entities, never the raw dicts fit() received.
+
+    ``_dedupe_explicit`` and ``execute`` both call ``normalize_records`` first;
+    the fit path must not be the one door that skips it.
+    """
+    records, pairs = _dataset()
+    assert isinstance(records[0], dict)  # the fixture really is raw dicts
+    model = _explicit()
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert model.fit_report_ is not None and model.fit_report_.threshold_fit is not None
+    assert model.fit_report_.threshold_fit.n_pairs > 0
 
 
 def test_markdown_renders_a_partial_threshold_fit() -> None:

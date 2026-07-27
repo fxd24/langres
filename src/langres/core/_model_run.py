@@ -518,11 +518,21 @@ class ModelRun(ModelState):
         below today's threshold, so the "derived" cut could only ever recover the
         cut that produced the sample.
 
-        It runs Source + body with the terminal
+        It runs Source + body **truncated at** the terminal
         :class:`~langres.core.op.ThresholdSelect` (the one
-        :meth:`_chain_threshold_select` names, and the one a fit writes to)
-        omitted -- every other Op, including an upstream ``TopKSelect``, still
-        runs, so the rows are exactly what the cut would have been handed.
+        :meth:`_chain_threshold_select` names, and the one a fit writes to):
+        every Op *before* it -- including an upstream ``TopKSelect`` or ``Score``
+        -- runs, and nothing after it does. The rows are then exactly what that
+        cut would have been handed.
+
+        Truncating rather than *removing* the select is load-bearing. A ``Score``
+        after a ``Select`` is supported topology (that is what a reranker is:
+        ``Source -> ScoreA -> ThresholdSelect -> ScoreB -> ClusterStage``). If the
+        select were merely filtered out and the rest still ran, ``ScoreB`` would
+        overwrite the score column, and the fit would derive a cut from ``ScoreB``
+        values and write it into a select that thresholds ``ScoreA`` values -- a
+        silent scale mismatch. Consequently this measures the chain *up to* the
+        fitted cut; ops downstream of it are not exercised by the fit.
 
         **Explicit ``_ops`` chains only**, which is why there is no classic
         branch here: a four-slot model's cut lives on the clusterer and is
@@ -531,13 +541,19 @@ class ModelRun(ModelState):
         scores only the *labeled* candidates rather than the whole corpus.
         :meth:`_chain_source` raises if this is called without a chain.
 
+        ``records`` are normalized first, exactly as :meth:`_dedupe_explicit` and
+        :meth:`execute` do -- a chain Source is handed typed entities, never the
+        raw dicts a caller passed to ``fit``.
+
         No ``log=``: this is a fit-time measurement pass, not a user-facing
         resolve, so its judgements are not flywheel signal. Scoring still runs
         through the same spend-capped seam as inference.
         """
         fitted_select = self._chain_threshold_select()
-        body = [op for op in self._explicit_body() if op is not fitted_select]
-        return _run_stages(records, [self._chain_source(), *body])
+        body = self._explicit_body()
+        upto = next((i for i, op in enumerate(body) if op is fitted_select), len(body))
+        _schema, normalized = normalize_records(records, self._chain_source_schema())
+        return _run_stages(normalized, [self._chain_source(), *body[:upto]])
 
     def _judgements(
         self, records: list[Any], *, log: JudgementLog | None = None

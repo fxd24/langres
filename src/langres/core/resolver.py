@@ -46,7 +46,7 @@ reconstructs uniformly. See that module for the full convention.
 
 import logging
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
@@ -138,6 +138,35 @@ def _pair_f1(labeled: Sequence[LabeledPair], threshold: float) -> float:
     fp = sum(1 for p in labeled if p.score is not None and p.score >= threshold and not p.label)
     fn = sum(1 for p in labeled if not (p.score is not None and p.score >= threshold) and p.label)
     return 0.0 if tp == 0 else 2 * tp / (2 * tp + fp + fn)
+
+
+def _refuse_deciders(judgements: Iterable[PairwiseJudgement | None]) -> None:
+    """Refuse to fit a threshold that inference would then ignore.
+
+    :func:`~langres.core.models.predicted_match` -- the ONE place that answers
+    "is this pair a match" -- gives ``decision`` precedence over ``score``: "a
+    judge that both decided and ranked already made its call, so the threshold
+    never overrides it". So for a matcher that emits an explicit ``decision``,
+    moving the cut changes *nothing* at resolve time.
+
+    That is the failure mode this whole feature exists to prevent, one level up:
+    the fit would derive a number, race it, report an improvement, apply it --
+    and resolve identically either way. A silently inert fit reported as a
+    success is worse than a refusal, so this raises.
+
+    (A *pure* decider, ``score=None`` with no ``decision``, is already refused by
+    ``derive_threshold_from_pairs``. This catches the both-emitting case, which
+    has scores and so would otherwise sail through.)
+    """
+    if any(j is not None and j.decision is not None for j in judgements):
+        raise ValueError(
+            "fit(derive_threshold=True) cannot fit a threshold for this matcher: "
+            "it emits an explicit decision, and predicted_match gives decision "
+            "precedence over score -- so resolve() would ignore whatever cut was "
+            "derived and this fit would be silently inert. Use a ranking matcher "
+            "(score only) to fit a cut, or drop derive_threshold=True and let the "
+            "matcher's own decisions stand."
+        )
 
 
 def _build_module_for_judge(
@@ -1270,7 +1299,7 @@ class ERModel(ModelRun, ModelPersistence):
         # Select BEFORE grading, so the reported metrics measure the cut actually
         # in force. Selection reads ``train`` only; the valid judgements are
         # passed in purely to be *scored* at each candidate, never to choose.
-        threshold_fit = ThresholdFit(source="default")
+        threshold_fit = ThresholdFit(source="not_fitted")
         if derive_threshold:
             _warn_if_silver_only(pairs)
             threshold_fit = self._select_threshold(
@@ -1325,6 +1354,7 @@ class ERModel(ModelRun, ModelPersistence):
         stays inside this model's ``budget_usd`` ledger.
         """
         judgements = list(self._scorer().forward(iter(candidates)))
+        _refuse_deciders(judgements)
         by_pair = {frozenset({j.left_id, j.right_id}): j for j in judgements}
         scores = self._cut_scale_scores([by_pair.get(_pair_key(c)) for c in candidates])
         return [
@@ -1518,6 +1548,7 @@ class ERModel(ModelRun, ModelPersistence):
         judgement_by_pair = {
             _row_key(row): row.to_judgement() for row in scored.rows if row.score_type is not None
         }
+        _refuse_deciders(judgement_by_pair.values())
         aligned = align_pairs(scored.to_candidates(), pairs, split=split, seed=seed)
 
         judgements = [
