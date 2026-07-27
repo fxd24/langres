@@ -28,14 +28,57 @@ cohort.
 
 ---
 
-## First experiment: one command, offline, $0
+## First run: one command, offline, $0
 
 ```bash
-uv run python examples/research/first_experiment.py
+pip install langres
+```
+
+That is the whole install for the offline path — **core only**, no extras, no
+API key, no network, no paid call:
+
+```python
+from langres.architectures import FuzzyString
+
+records = [
+    {"id": "1", "name": "Acme Corporation", "city": "New York"},
+    {"id": "2", "name": "Acme Corp", "city": "New York"},
+    {"id": "3", "name": "Unrelated Bakery", "city": "Miami"},
+]
+
+print(FuzzyString(threshold=0.6).dedupe(records))
+# DedupeResult([{'1', '2'}], architecture='FuzzyString', backbone=None,
+#              score_type='heuristic', threshold=0.6)
+```
+
+The result names the model that produced it, so you never have to remember
+which one ran or what its scores meant. From a git checkout the same
+walkthrough is a runnable script — CI runs it on a bare `uv sync` to keep it
+honest:
+
+<!-- docs-gate: requires-repo -->
+```bash
+git clone https://github.com/fxd24/langres.git && cd langres && uv sync
+uv run python examples/quickstart_models.py
+```
+
+`examples/` is not part of the published wheel, so every script path in this
+README assumes a git checkout.
+
+### The research path
+
+The resources/operations/recipes vocabulary has its own runner:
+
+<!-- docs-gate: requires-repo -->
+```bash
+uv run python examples/research/first_experiment.py   # git checkout + [semantic]
 ```
 
 This runs the real experiment runner over the bundled `tiny_fixture`, using a
-deterministic fake embedder: no key, download, network request, or paid call.
+deterministic **fake** embedder: no key, download, network request, or paid
+call. Because the embedder is fake, its numbers demonstrate that the contracts
+compose — they are not a quality result. It needs the `[semantic]` extra
+(research `Retrieve` builds a Qdrant index) on top of a git checkout.
 The returned `ExperimentReport` records the protocol and every completed or
 failed cell. Move outward progressively:
 
@@ -75,7 +118,8 @@ closest to the decision threshold, i.e. the ones the judge is least sure about
 and the only ones worth human eyes; the harvested labels then buy the **same
 judgement cheaper** — the production pattern is prompt-tuning a *smaller* LLM
 with DSPy (`DSPyMatcher`), with
-fine-tuning a small LM as the roadmap's next rung — and a **cascade** runs the
+QLoRA fine-tuning of a small LM as the next rung down (also shipped — see the
+fine-tuning caveat below) — and a **cascade** runs the
 cheap judge everywhere, escalating only the still-uncertain pairs back to the
 frontier. The point is reusing the knowledge already encoded in LLMs and
 pushing it further.
@@ -112,6 +156,7 @@ baselines and **$0 plumbing**. Run the loop's core offline for free — dedupe �
 log → review → harvest → tuned threshold → tearsheet (a one-page HTML quality
 report):
 
+<!-- docs-gate: requires-repo -->
 ```bash
 uv run python examples/flywheel_min.py
 ```
@@ -210,6 +255,7 @@ if verdict:                            # LinkVerdict is truthy iff it's a match
 spends money because you named it, never because a heuristic sniffed an
 environment variable for a key:
 
+<!-- docs-gate: requires-network -->
 ```python
 from langres.architectures import VectorLLMCascade
 
@@ -282,10 +328,22 @@ custom pipelines. See [docs/DX_RESOLVER.md](docs/DX_RESOLVER.md) and
 | **Golden records / canonicalization** (`Canonicalizer` survivorship + `enrich`) | ✅ shipped |
 | Evaluation instrument: benchmark registry, `evaluate()`, `EvalReport` tearsheet | ✅ shipped |
 | **Self-tuning blocking search** (`langres.optimize` — `propose→run→eval→keep` over a `SearchSpace`, gated by a loss-like `Objective`) | ✅ shipped (blocking vertical; matching + fine-tuning roadmap) |
+| **Fine-tuning a small LM** on harvested labels — the next cost rung (`QLoRA`, `run_finetune`, `finetune`; `[finetune]` extra) | ✅ shipped (see the caveat below) |
 | Cross-source linking (`Resolver.link`, `stream_against`) | 🚧 reserved stubs (raise `NotImplementedError`) — roadmap |
-| Fine-tuning a small LM on harvested labels (the next cost rung) | 🚧 roadmap |
 | Negative constraints (cannot-link clustering) | 🚧 roadmap |
 | Streaming / temporal resolution | ⚪ out of scope (see [docs/USE_CASES.md](docs/USE_CASES.md)) |
+
+**The fine-tuning caveat, stated plainly.** `langres.training.finetune` ships the
+orchestration — `run_finetune()` / `finetune()`, the `QLoRA(Method)` object that
+`ERModel.fit(method=QLoRA(...))` dispatches into, and the `QLoRATrainer` that
+drives peft/trl/bitsandbytes. `QLoRA`, `run_finetune` and `finetune` are
+root-exported from `langres`; `QLoRATrainer` is imported from
+`langres.training.finetune`. What is *not* covered by the fast test suite is the
+training step itself: `QLoRATrainer.train` is marked `# pragma: no cover`,
+because a real run needs a GPU. The fast suite exercises the orchestration
+against a fake trainer, and the actual training stack runs in the dedicated
+`test-finetune` CI job. Install it with `pip install 'langres[finetune]'`; a
+worked run is [`examples/finetune_capstone.py`](examples/finetune_capstone.py).
 
 See [docs/USE_CASES.md](docs/USE_CASES.md) for the full use-case taxonomy and
 [docs/ROADMAP.md](docs/ROADMAP.md) for the milestone map. Deferred backlog items
@@ -302,10 +360,13 @@ diagram, the most-confident errors — and reports **what those judgements cost
 to produce** right next to the quality numbers (side by side, on purpose:
 there is no blended "cost-per-precision" metric to hide behind):
 
+<!-- docs-gate: illustrative -->
 ```python
 from pathlib import Path
 from langres.report.eval_report import EvalReport
 
+# judgements / gold_pairs / costs are yours; the quickstart script linked
+# below builds all three end to end, offline, and runs in CI.
 report = EvalReport.from_judgements(judgements, gold_pairs, threshold=0.6, costs=costs)
 print(report.summary)             # P/R/F1, ROC-AUC, calibration in one line
 print(report.total_cost_usd)      # what producing those judgements cost
