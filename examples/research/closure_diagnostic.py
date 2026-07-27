@@ -97,6 +97,20 @@ FAST_SUBSET: frozenset[str] = frozenset({"fodors_zagat", "dblp_acm", "tiny_fixtu
 
 SEED = 0
 
+#: Largest output cluster the BCubed / pairwise metrics will be computed over.
+#:
+#: This is not a tuning knob, it is a tractability wall, and hitting it IS the
+#: finding. ``calculate_bcubed_precision`` is O(sum(size**2)) and
+#: ``calculate_pairwise_metrics`` materialises C(size, 2) pairs, so a single
+#: 40k-record component costs ~1.6e9 comparisons and ~8e8 pairs -- it does not
+#: finish. Transitive closure at a low threshold on a large corpus produces
+#: exactly that: measured on ``dblp_scholar``, a grid point that chains most of
+#: the corpus into one component. The cheap parts of the diagnostic -- the
+#: rejected-inside COUNT, the cluster-size distribution -- are O(judgements) and
+#: are always reported; only the quality metrics are skipped, as ``None``, with
+#: the giant component's size recorded so the omission is legible.
+MAX_SCORED_CLUSTER = 2_000
+
 #: ``score_type`` is NOT persisted in the judgement log (see the v4 row schema).
 #: The reconstruction fills this placeholder purely to satisfy the required
 #: ``PairwiseJudgement`` field: nothing this script touches -- ``predicted_match``,
@@ -132,8 +146,10 @@ class ClustererFinding(BaseModel):
             evidence.
         by_cluster_size: ``(size, n_clusters, n_rejected_inside)`` rows -- **(b)**,
             the distribution over cluster size.
-        bcubed_f1: BCubed F1 of the completed partition against gold.
-        pairwise_f1: Pairwise F1 of the completed partition against gold.
+        bcubed_f1: BCubed F1 of the completed partition against gold, or ``None``
+            when the clustering exceeds :data:`MAX_SCORED_CLUSTER` (an
+            intractable giant component -- itself the finding).
+        pairwise_f1: Pairwise F1 of the completed partition, same ``None`` rule.
     """
 
     clusterer: str
@@ -144,8 +160,8 @@ class ClustererFinding(BaseModel):
     rejected_inside_rate: float | None
     incluster_contamination: float | None
     by_cluster_size: list[tuple[int, int, int]]
-    bcubed_f1: float
-    pairwise_f1: float
+    bcubed_f1: float | None
+    pairwise_f1: float | None
 
 
 class SweepPoint(BaseModel):
@@ -181,11 +197,11 @@ class SweepPoint(BaseModel):
     closure_clusters: int
     closure_largest: int
     closure_rejected_inside: int
-    closure_bcubed_f1: float
+    closure_bcubed_f1: float | None
     correlation_clusters: int
     correlation_largest: int
     correlation_rejected_inside: int
-    correlation_bcubed_f1: float
+    correlation_bcubed_f1: float | None
 
 
 class BenchmarkFinding(BaseModel):
@@ -325,13 +341,28 @@ def diagnose(
         for size in sorted(clusters_by_size)
     ]
 
-    metrics = Clusterer(threshold=threshold).evaluate(
-        complete_partition(clusters, all_ids), truth_clusters
-    )
+    largest = max(sizes, default=0)
+    bcubed_f1: float | None = None
+    pairwise_f1: float | None = None
+    if largest <= MAX_SCORED_CLUSTER:
+        metrics = Clusterer(threshold=threshold).evaluate(
+            complete_partition(clusters, all_ids), truth_clusters
+        )
+        bcubed_f1 = metrics["bcubed"]["f1"]
+        pairwise_f1 = metrics["pairwise"]["f1"]
+    else:
+        logger.warning(
+            "  %s @ t=%.2f: largest cluster is %d records (> %d) -- BCubed/pairwise "
+            "skipped (O(size^2)); the rejected-inside count is still exact.",
+            label,
+            threshold,
+            largest,
+            MAX_SCORED_CLUSTER,
+        )
     return ClustererFinding(
         clusterer=label,
         n_clusters=len(clusters),
-        largest_cluster=max(sizes, default=0),
+        largest_cluster=largest,
         n_incluster_pairs=n_incluster_pairs,
         n_rejected_inside=n_rejected_inside,
         rejected_inside_rate=n_rejected_inside / n_rejected if n_rejected else None,
@@ -339,8 +370,8 @@ def diagnose(
             n_rejected_inside / n_incluster_pairs if n_incluster_pairs else None
         ),
         by_cluster_size=by_cluster_size,
-        bcubed_f1=metrics["bcubed"]["f1"],
-        pairwise_f1=metrics["pairwise"]["f1"],
+        bcubed_f1=bcubed_f1,
+        pairwise_f1=pairwise_f1,
     )
 
 
@@ -422,12 +453,27 @@ def tune_threshold(
         all_ids: Every train record id.
         grid: Candidate thresholds.
 
+    A grid point whose clustering exceeds :data:`MAX_SCORED_CLUSTER` is
+    **disqualified**, not scored: it is intractable to score *and* it is not an
+    operating point anyone would choose (it declares thousands of records one
+    entity). If every point is disqualified the highest threshold wins, being the
+    most conservative merge.
+
     Returns:
         The best-scoring threshold.
     """
-    best_threshold, best_f1 = grid[0], -1.0
+    best_threshold, best_f1 = grid[-1], -1.0
     for threshold in grid:
         clusters = Clusterer(threshold=threshold).cluster(judgements)
+        largest = max((len(cluster) for cluster in clusters), default=0)
+        if largest > MAX_SCORED_CLUSTER:
+            logger.info(
+                "  threshold=%.2f -> DISQUALIFIED (largest train cluster %d > %d)",
+                threshold,
+                largest,
+                MAX_SCORED_CLUSTER,
+            )
+            continue
         metrics = Clusterer(threshold=threshold).evaluate(
             complete_partition(clusters, all_ids), truth_clusters
         )
@@ -624,12 +670,17 @@ def to_markdown(findings: list[BenchmarkFinding]) -> str:
             f"{f.closure.n_rejected_inside:,} | "
             f"{'n/a' if rate is None else f'{rate:.4f}'} | "
             f"{f.correlation.n_rejected_inside:,} | "
-            f"{f.closure.bcubed_f1:.4f} | {f.correlation.bcubed_f1:.4f} | "
+            f"{_f1(f.closure.bcubed_f1)} | {_f1(f.correlation.bcubed_f1)} | "
             f"{'n/a' if worst is None else f'{worst.threshold:.2f}'} | "
             f"{'n/a' if worst is None else f'{worst.closure_rejected_inside:,}'} | "
             f"{'n/a' if worst is None else f'{worst.correlation_rejected_inside:,}'} |"
         )
     return "\n".join(lines)
+
+
+def _f1(value: float | None) -> str:
+    """Format an F1, or ``giant`` when the clustering was too large to score."""
+    return "giant" if value is None else f"{value:.4f}"
 
 
 def main() -> None:
@@ -656,11 +707,11 @@ def main() -> None:
 
     findings: list[BenchmarkFinding] = []
     for name in select_benchmarks(fast=args.fast, only=args.only):
-        print(f"[run] {name}: {args.method} (offline, $0) ...")
+        print(f"[run] {name}: {args.method} (offline, $0) ...", flush=True)
         try:
             finding = run_benchmark(name, method=args.method, seed=args.seed, log_dir=args.log_dir)
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
-            print(f"[fail] {name}: {type(exc).__name__}: {exc}")
+            print(f"[fail] {name}: {type(exc).__name__}: {exc}", flush=True)
             continue
         findings.append(finding)
         print(
@@ -668,15 +719,23 @@ def main() -> None:
             f"rejected={finding.n_rejected:,} "
             f"rejected-inside closure={finding.closure.n_rejected_inside:,} "
             f"corr={finding.correlation.n_rejected_inside:,} "
-            f"({finding.seconds:.1f}s)"
+            f"({finding.seconds:.1f}s)",
+            flush=True,
         )
+        # Persist after EVERY benchmark, not once at the end: the large datasets
+        # take minutes, and a crash or a kill on the last one must not throw away
+        # the ones already measured.
+        write_findings(findings, args.out)
 
     print("\n" + to_markdown(findings))
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps([f.model_dump() for f in findings], indent=2, sort_keys=True) + "\n"
-    )
+    write_findings(findings, args.out)
     print(f"\nwrote {args.out}")
+
+
+def write_findings(findings: list[BenchmarkFinding], out: Path) -> None:
+    """Persist the findings measured so far to a tracked JSON path."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps([f.model_dump() for f in findings], indent=2, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

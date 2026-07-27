@@ -70,6 +70,7 @@ from langres.core.method_registry import get_method  # noqa: E402
 from langres.data.data_profile import DataProfileReport  # noqa: E402
 from langres.data.fixed_split_pair_benchmark import (  # noqa: E402
     FixedSplitPairBenchmark,
+    HonestPairEval,
     evaluate_fixed_split_honest,
 )
 from langres.data.registry import BenchmarkEntry, get_benchmark, list_benchmarks  # noqa: E402
@@ -116,8 +117,35 @@ class PublishedResult(BaseModel):
 
 
 #: Published pair-F1 per benchmark, populated ONLY from numbers recorded in this
-#: repository (see :class:`PublishedResult`). Absent = not recorded here.
-PUBLISHED_SOTA: dict[str, PublishedResult] = {}
+#: repository (see :class:`PublishedResult`). Absent = not recorded here, so that
+#: benchmark simply has no saturation verdict -- which is reported, never silently
+#: read as "unsaturated". Four of the nine loadable sets are in that position:
+#: ``dblp_scholar``, ``walmart_amazon``, ``wdc_computers`` and ``febrl_person``
+#: have **no** published F1 written down anywhere in this repo, and
+#: ``tiny_fixture`` is explicitly not a benchmark
+#: (``datasets/tiny_fixture/ATTRIBUTION.md``).
+PUBLISHED_SOTA: dict[str, PublishedResult] = {
+    "abt_buy": PublishedResult(
+        f1=0.893,
+        system="Ditto (Li et al., VLDB 2021)",
+        source="data/benchmarks/phase1/PHASE1_RESULTS.md:8 (Ditto F1 column)",
+    ),
+    "amazon_google": PublishedResult(
+        f1=0.756,
+        system="Ditto (Li et al., VLDB 2021)",
+        source="data/benchmarks/phase1/PHASE1_RESULTS.md:7 (Ditto F1 column)",
+    ),
+    "dblp_acm": PublishedResult(
+        f1=0.98,
+        system="reported SOTA (DeepMatcher family)",
+        source="src/langres/data/datasets/dblp_acm/ATTRIBUTION.md:8",
+    ),
+    "fodors_zagat": PublishedResult(
+        f1=1.00,
+        system="ZeroER (Wu et al., SIGMOD 2020)",
+        source="docs/research/20260701_er_seam_audit.md:41",
+    ),
+}
 
 
 class BenchmarkProfile(BaseModel):
@@ -130,8 +158,13 @@ class BenchmarkProfile(BaseModel):
         loadable: Whether the dataset ships in-repo at all.
         loaded: Whether ``load()`` actually succeeded here.
         load_error: The failure, when it did not.
-        ships_in_wheel: Whether ANY of the dataset's data files survive the PyPI
-            wheel exclude list -- reproduction status, not a quality signal.
+        wheel_loadable: Whether a ``pip install langres`` can load this dataset at
+            all -- ``True`` only when the dataset vendors data files and
+            ``pyproject.toml`` excludes **none** of them. Reproduction status, not
+            a quality signal. ``abt_buy``/``amazon_google`` ship their
+            ``peeters_sampled_test.csv`` pair set but not their corpus tables, so
+            they are partially shipped and NOT loadable.
+        n_files_shipped: Dataset data files that survive the exclude list.
         excluded_files: The dataset files ``pyproject.toml`` drops from the wheel.
         n_records: Corpus size.
         n_clusters: Gold equivalence classes (singletons included).
@@ -166,7 +199,8 @@ class BenchmarkProfile(BaseModel):
     loadable: bool
     loaded: bool
     load_error: str | None = None
-    ships_in_wheel: bool
+    wheel_loadable: bool
+    n_files_shipped: int
     excluded_files: list[str]
     n_records: int | None = None
     n_clusters: int | None = None
@@ -205,8 +239,11 @@ def wheel_exclusions() -> list[str]:
     return [str(pattern) for pattern in excludes]
 
 
-def wheel_status(name: str, patterns: list[str]) -> tuple[bool, list[str]]:
+def wheel_status(name: str, patterns: list[str]) -> tuple[bool, int, list[str]]:
     """Which of a dataset's data files survive the wheel's exclude list.
+
+    ``.md`` files (ATTRIBUTION / SOURCE) are ignored: they always ship and never
+    make a dataset loadable.
 
     Args:
         name: Registry name; the dataset directory is
@@ -214,14 +251,16 @@ def wheel_status(name: str, patterns: list[str]) -> tuple[bool, list[str]]:
         patterns: The exclude globs from :func:`wheel_exclusions`.
 
     Returns:
-        ``(ships_in_wheel, excluded_files)`` -- ``ships_in_wheel`` is ``True``
-        when at least one data file is NOT excluded. A dataset with no directory
-        at all (``opensanctions``) reports ``(False, [])``: nothing ships because
-        nothing is vendored.
+        ``(wheel_loadable, n_shipped, excluded_files)``. ``wheel_loadable`` is
+        ``True`` only when the dataset vendors data files and **none** are
+        excluded -- a partially-shipped dataset still raises
+        ``BenchmarkDataNotFoundError`` on ``load()``, so "some files ship" is not
+        the useful predicate. A dataset with no directory (``opensanctions``)
+        reports ``(False, 0, [])``: nothing ships because nothing is vendored.
     """
     directory = REPO_ROOT / "src" / "langres" / "data" / "datasets" / name
     if not directory.is_dir():
-        return False, []
+        return False, 0, []
     excluded: list[str] = []
     shipped = 0
     for path in sorted(directory.rglob("*")):
@@ -232,10 +271,10 @@ def wheel_status(name: str, patterns: list[str]) -> tuple[bool, list[str]]:
             excluded.append(relative)
         else:
             shipped += 1
-    return shipped > 0, excluded
+    return shipped > 0 and not excluded, shipped, excluded
 
 
-def measure_saturation(entry: BenchmarkEntry, schema: type[Any]) -> Any | None:
+def measure_saturation(entry: BenchmarkEntry, schema: type[Any]) -> HonestPairEval | None:
     """Grade ``rapidfuzz`` on the dataset's fixed literature split, honestly.
 
     Uniform probe, not per-dataset wiring: a loader module is asked for
@@ -303,10 +342,7 @@ def structural_caveats(profile: BenchmarkProfile) -> list[str]:
         caveats.append("one-to-one")
     if profile.max_cluster_size is not None and profile.max_cluster_size >= LARGE_COMPONENT:
         caveats.append("large-component")
-    if (
-        profile.vocab_min_coverage is not None
-        and profile.vocab_min_coverage < LEXICAL_GAP_COVERAGE
-    ):
+    if profile.vocab_min_coverage is not None and profile.vocab_min_coverage < LEXICAL_GAP_COVERAGE:
         caveats.append("lexical-gap")
     return sorted(caveats)
 
@@ -329,14 +365,15 @@ def profile_entry(entry: BenchmarkEntry, patterns: list[str]) -> BenchmarkProfil
         dataset cannot hide the other nine -- and so "excluded from this install"
         stays distinguishable from "actually broken" via ``ships_in_wheel``.
     """
-    ships, excluded = wheel_status(entry.name, patterns)
+    wheel_loadable, n_shipped, excluded = wheel_status(entry.name, patterns)
     profile = BenchmarkProfile(
         name=entry.name,
         task=entry.task,
         domain=entry.domain,
         loadable=entry.loadable,
         loaded=False,
-        ships_in_wheel=ships,
+        wheel_loadable=wheel_loadable,
+        n_files_shipped=n_shipped,
         excluded_files=excluded,
     )
     if not entry.loadable:
@@ -384,11 +421,15 @@ def profile_entry(entry: BenchmarkEntry, patterns: list[str]) -> BenchmarkProfil
         ]
         profile.vocab_min_coverage = min(coverages) if coverages else None
 
-    try:
-        evaluation = measure_saturation(entry, bench.schema)
-    except Exception as exc:  # noqa: BLE001 - a missing split must not kill the row
-        logger.warning("%s: saturation measurement failed: %s", entry.name, exc)
-        evaluation = None
+    # ``schema`` is on every registered loader but not on the ``Benchmark``
+    # protocol, so it is probed rather than assumed.
+    schema = getattr(bench, "schema", None)
+    evaluation: HonestPairEval | None = None
+    if schema is not None:
+        try:
+            evaluation = measure_saturation(entry, schema)
+        except Exception as exc:  # noqa: BLE001 - a missing split must not kill the row
+            logger.warning("%s: saturation measurement failed: %s", entry.name, exc)
     if evaluation is not None:
         profile.rapidfuzz_f1 = evaluation.honest.f1
         profile.rapidfuzz_threshold = evaluation.derived_threshold
@@ -419,7 +460,7 @@ def to_markdown(profiles: list[BenchmarkProfile]) -> str:
                 [
                     p.name,
                     p.task,
-                    "yes" if p.ships_in_wheel else "no",
+                    "yes" if p.wheel_loadable else "no",
                     _num(p.n_records, ",d"),
                     _num(p.positive_pairs, ",d"),
                     _num(p.prevalence, ".2e"),
@@ -429,7 +470,7 @@ def to_markdown(profiles: list[BenchmarkProfile]) -> str:
                     _num(p.vocab_min_coverage, ".3f"),
                     _num(p.rapidfuzz_f1, ".4f"),
                     _num(p.published_f1, ".4f"),
-                    {True: "YES", False: "no", None: "?"}[p.saturated],
+                    _verdict(p.saturated),
                     ", ".join(p.caveats) or "-",
                 ]
             )
@@ -441,6 +482,13 @@ def to_markdown(profiles: list[BenchmarkProfile]) -> str:
 def _num(value: float | int | None, spec: str) -> str:
     """Format a number, or ``n/a`` when it is absent."""
     return "n/a" if value is None else format(value, spec)
+
+
+def _verdict(saturated: bool | None) -> str:
+    """Render the saturation verdict; ``?`` means "cannot be decided", never "no"."""
+    if saturated is None:
+        return "?"
+    return "YES" if saturated else "no"
 
 
 def main() -> None:
