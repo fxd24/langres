@@ -61,6 +61,7 @@ import importlib  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import tomllib  # noqa: E402
+from collections.abc import Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -92,6 +93,12 @@ LARGE_COMPONENT = 10
 #: Below this shared-token coverage the two sides barely share a vocabulary, so a
 #: lexical method is measuring the encoding gap rather than entity resolution.
 LEXICAL_GAP_COVERAGE = 0.5
+
+#: Below this share of gold pairs being cross-source, a cross-source pipeline is
+#: chasing a recall ceiling it cannot reach, and every recall/PC/F1 number on the
+#: set is bounded by the labeling rather than by the method. 0.95 -- i.e. flag it
+#: as soon as more than one gold pair in twenty is structurally unreachable.
+CAPPED_RECALL_CEILING = 0.95
 
 #: Repo root, resolved from this file, so the script runs from any cwd.
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -188,6 +195,9 @@ class BenchmarkProfile(BaseModel):
         vocab_jaccard: Type-level vocabulary overlap between the two sources.
         vocab_min_coverage: The lower of the two occurrence-weighted token
             coverages -- what a string comparator actually experiences.
+        cross_source_ceiling: The share of gold pairs a cross-source candidate
+            set can ever contain (see :func:`cross_source_ceiling`) -- a hard
+            recall ceiling no blocker can lift.
         rapidfuzz_f1: Honest pair F1 on the dataset's fixed literature test split
             (threshold derived on train). ``None`` when no fixed split ships --
             or when the measurement failed, which ``saturation_error``
@@ -227,6 +237,7 @@ class BenchmarkProfile(BaseModel):
     mean_field_len: float | None = None
     vocab_jaccard: float | None = None
     vocab_min_coverage: float | None = None
+    cross_source_ceiling: float | None = None
     rapidfuzz_f1: float | None = None
     saturation_error: str | None = None
     rapidfuzz_threshold: float | None = None
@@ -364,12 +375,57 @@ def structural_caveats(profile: BenchmarkProfile) -> list[str]:
         caveats.append("large-component")
     if profile.vocab_min_coverage is not None and profile.vocab_min_coverage < LEXICAL_GAP_COVERAGE:
         caveats.append("lexical-gap")
+    if (
+        profile.cross_source_ceiling is not None
+        and profile.cross_source_ceiling < CAPPED_RECALL_CEILING
+    ):
+        caveats.append("capped-recall")
     return sorted(caveats)
 
 
 def _section(report: DataProfileReport, kind: str) -> Any | None:
     """The first section of ``kind`` in ``report``, or ``None`` if absent."""
     return next((s for s in report.sections if s.kind == kind), None)
+
+
+def cross_source_ceiling(corpus: Sequence[Any], gold_clusters: Sequence[set[str]]) -> float | None:
+    """The share of gold pairs a **cross-source** candidate set can ever contain.
+
+    A two-source linkage pipeline pairs A-records against B-records, so it can
+    never emit a pair whose two records come from the same side. Any gold cluster
+    spanning 3+ records emits such pairs, and every one of them is unreachable --
+    a **recall ceiling below 1.0 that no blocker, however good, can lift**. It
+    bounds every recall/PC/F1 number measured on the dataset, so it belongs
+    beside the saturation verdict rather than being rediscovered per experiment.
+
+    This is the same phenomenon as ``dblp_scholar``'s 37-record component (§5),
+    measured portfolio-wide: there it is severe enough (0.3977) to have been
+    mistaken for a blocking failure.
+
+    Args:
+        corpus: The loaded records (each carrying a ``source`` field).
+        gold_clusters: The gold partition.
+
+    Returns:
+        ``cross_source_gold_pairs / all_gold_pairs``, or ``None`` for a corpus
+        with no ``source`` field (nothing two-sided to bound) or no gold pairs.
+    """
+    source_of = {
+        record.id: getattr(record, "source", None)
+        for record in corpus
+        if getattr(record, "source", None) is not None
+    }
+    if not source_of:
+        return None
+    total = cross = 0
+    for cluster in gold_clusters:
+        members = sorted(cluster)
+        for i, left in enumerate(members):
+            for right in members[i + 1 :]:
+                total += 1
+                if source_of.get(left) != source_of.get(right):
+                    cross += 1
+    return cross / total if total else None
 
 
 def profile_entry(entry: BenchmarkEntry, patterns: list[str]) -> BenchmarkProfile:
@@ -402,11 +458,13 @@ def profile_entry(entry: BenchmarkEntry, patterns: list[str]) -> BenchmarkProfil
 
     try:
         bench = get_benchmark(entry.name)
+        corpus, gold_clusters, _gold_pairs = bench.load()
         report = DataProfileReport.from_benchmark(bench)
     except Exception as exc:  # noqa: BLE001 - one broken loader must not hide the rest
         profile.load_error = f"{type(exc).__name__}: {exc}"
         return profile
     profile.loaded = True
+    profile.cross_source_ceiling = cross_source_ceiling(corpus, gold_clusters)
 
     label = _section(report, "label_structure")
     if label is not None:
@@ -476,9 +534,10 @@ def to_markdown(profiles: list[BenchmarkProfile]) -> str:
     """The annotation table: one row per registered benchmark."""
     header = (
         "| benchmark | task | wheel | records | gold pairs | prevalence | max cluster | "
-        "sep AUC | vocab J | min cover | rapidfuzz F1 | published F1 | saturated | caveats |"
+        "sep AUC | vocab J | min cover | x-src ceiling | rapidfuzz F1 | published F1 | "
+        "saturated | caveats |"
     )
-    lines = [header, "|" + "---|" * 14]
+    lines = [header, "|" + "---|" * 15]
     for p in profiles:
         lines.append(
             "| "
@@ -494,6 +553,7 @@ def to_markdown(profiles: list[BenchmarkProfile]) -> str:
                     _num(p.separability_auc, ".3f"),
                     _num(p.vocab_jaccard, ".3f"),
                     _num(p.vocab_min_coverage, ".3f"),
+                    _num(p.cross_source_ceiling, ".4f"),
                     _num(p.rapidfuzz_f1, ".4f"),
                     _num(p.published_f1, ".4f"),
                     _verdict(p.saturated),

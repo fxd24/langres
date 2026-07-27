@@ -18,13 +18,16 @@ from pathlib import Path
 import pytest
 
 from examples.research.portfolio_profile import (
+    CAPPED_RECALL_CEILING,
     LARGE_COMPONENT,
+    LEXICAL_GAP_COVERAGE,
     PUBLISHED_SOTA,
     REPO_ROOT,
     SATURATION_MARGIN,
     TINY_GOLD_PAIRS,
     BenchmarkProfile,
     _verdict,
+    cross_source_ceiling,
     structural_caveats,
     to_markdown,
     wheel_exclusions,
@@ -131,6 +134,40 @@ class TestStructuralCaveats:
     def test_lexical_gap_is_flagged(self) -> None:
         assert "lexical-gap" in structural_caveats(_profile(vocab_min_coverage=0.1))
 
+    def test_capped_recall_is_flagged(self) -> None:
+        assert "capped-recall" in structural_caveats(_profile(cross_source_ceiling=0.84))
+        assert "capped-recall" not in structural_caveats(_profile(cross_source_ceiling=1.0))
+
+
+class TestCrossSourceCeiling:
+    """The ceiling a cross-source candidate set can never exceed."""
+
+    class _Rec:
+        def __init__(self, rid: str, source: str) -> None:
+            self.id = rid
+            self.source = source
+
+    def test_pure_one_to_one_labels_have_no_ceiling(self) -> None:
+        corpus = [self._Rec("a1", "A"), self._Rec("b1", "B")]
+        assert cross_source_ceiling(corpus, [{"a1", "b1"}]) == 1.0
+
+    def test_a_three_record_cluster_emits_an_unreachable_pair(self) -> None:
+        # {a1, b1, b2} -> 3 gold pairs, of which b1-b2 is intra-source and no
+        # cross-source candidate set can ever contain it.
+        corpus = [self._Rec("a1", "A"), self._Rec("b1", "B"), self._Rec("b2", "B")]
+        assert cross_source_ceiling(corpus, [{"a1", "b1", "b2"}]) == pytest.approx(2 / 3)
+
+    def test_a_corpus_without_a_source_field_has_no_ceiling_to_report(self) -> None:
+        class _Plain:
+            def __init__(self, rid: str) -> None:
+                self.id = rid
+
+        assert cross_source_ceiling([_Plain("1"), _Plain("2")], [{"1", "2"}]) is None
+
+    def test_no_gold_pairs_is_none_not_zero(self) -> None:
+        corpus = [self._Rec("a1", "A"), self._Rec("b1", "B")]
+        assert cross_source_ceiling(corpus, [{"a1"}, {"b1"}]) is None
+
     def test_missing_measurements_produce_no_caveats(self) -> None:
         # An unloaded benchmark must not be silently branded; absent != bad.
         assert structural_caveats(_profile(loaded=False)) == []
@@ -164,12 +201,13 @@ class TestSaturationRule:
         the annotation with a green suite -- exactly what this module's docstring
         says it is here to prevent.
         """
-        assert (SATURATION_MARGIN, TINY_GOLD_PAIRS, LARGE_COMPONENT, LEXICAL_GAP_COVERAGE) == (
-            0.02,
-            200,
-            10,
-            0.5,
-        )
+        assert (
+            SATURATION_MARGIN,
+            TINY_GOLD_PAIRS,
+            LARGE_COMPONENT,
+            LEXICAL_GAP_COVERAGE,
+            CAPPED_RECALL_CEILING,
+        ) == (0.02, 200, 10, 0.5, 0.95)
 
     def test_verdict_renders_unknown_as_a_question_not_a_no(self) -> None:
         assert _verdict(None) == "?"
