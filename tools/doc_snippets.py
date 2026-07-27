@@ -298,10 +298,16 @@ def check_examples_reference(snippet: Snippet, *, examples_shipped: bool) -> str
     )
 
 
-def run_snippet(snippet: Snippet, *, interpreter: Path, workdir: Path) -> SnippetResult:
-    """Execute one snippet verbatim with ``interpreter`` inside ``workdir``."""
+def run_snippet(
+    snippet: Snippet, *, interpreter: Path, workdir: Path, prefix: str = ""
+) -> SnippetResult:
+    """Execute one snippet verbatim with ``interpreter`` inside ``workdir``.
+
+    ``prefix`` is the code of the earlier passing python blocks in the same
+    document -- see :func:`run` for why the page, not the block, is the unit.
+    """
     script = workdir / "snippet.py"
-    script.write_text(snippet.code, encoding="utf-8")
+    script.write_text(prefix + snippet.code, encoding="utf-8")
     proc = subprocess.run(
         [str(interpreter), str(script)],
         cwd=workdir,
@@ -351,8 +357,22 @@ def run(
     workdir: Path,
     examples_shipped: bool,
 ) -> list[SnippetResult]:
-    """Check and execute ``snippets``, returning one result each."""
+    """Check and execute ``snippets``, returning one result each.
+
+    **The page is the unit, not the block.** A tutorial legitimately builds up a
+    session -- README defines ``records`` in one block and uses it in the next
+    three -- so each python block runs with the code of the earlier *passing*
+    python blocks in the same document prepended. That is what a reader who
+    follows the page top to bottom actually executes.
+
+    Running each block in isolation instead would report ``NameError: records``
+    on every continuation block: a wall of failures the document does not have,
+    which buries the failures it does. A failing block is not added to the
+    prefix (its bindings did not happen), and an exempted block is excluded --
+    the prefix is only what a bare install actually ran.
+    """
     results: list[SnippetResult] = []
+    prefixes: dict[str, str] = {}
     for number, snippet in enumerate(snippets):
         path_failure = check_examples_reference(snippet, examples_shipped=examples_shipped)
         if path_failure is not None:
@@ -369,7 +389,11 @@ def run(
         # none of them may write into the repo.
         cell = workdir / f"snippet-{number:03d}"
         cell.mkdir()
-        results.append(run_snippet(snippet, interpreter=interpreter, workdir=cell))
+        prefix = prefixes.get(snippet.doc, "")
+        result = run_snippet(snippet, interpreter=interpreter, workdir=cell, prefix=prefix)
+        if result.status == "pass":
+            prefixes[snippet.doc] = prefix + snippet.code
+        results.append(result)
     return results
 
 
