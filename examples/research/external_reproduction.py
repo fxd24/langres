@@ -530,9 +530,19 @@ Sudowoodo at **99.11** and UniBlocker at **100.00**, with STransformer alone at
 **93.75**. We measure **100.00** (`all-MiniLM-L6-v2`) and **99.11 / PQ 20.83**
 (`all-mpnet-base-v2`) — landing on their *other three* rows rather than their
 STransformer one. **We have no verified explanation for why their STransformer
-underperforms every other method in their own table here**; a plausible but untested
-one is a serialization difference on a 5-field record where the phone number is nearly
-a unique key.
+underperforms every other method in their own table here.**
+
+One observation worth recording, explicitly as a **hypothesis we did not test**:
+UniBlocker's Table 2 lists `fodors-zagats_homo` as **6 attributes** where our schema
+exposes **5** (Section E). The shipped CSV's sixth non-`id` column is `class` — and
+`class` is *a cluster id shared by matching records* (`fodors_zagat/SOURCE.md`). langres
+excludes it, so nothing here is contaminated. But **any method that serialized that
+column would be reading the answer key**, which is one way a table could show three
+methods at 99–100% and a fourth, differently-plumbed one at 93.75%. We are not
+asserting that happened — we cannot see their preprocessing — only that the attribute
+count differs and that the extra column is a label. It is also the reason `fodors_zagat`
+should not be used to rank blockers regardless: it is already flagged saturated in
+`20260727_portfolio_annotation.md`.
 
 ### Do not read the product benchmarks as langres winning
 
