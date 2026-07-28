@@ -77,7 +77,46 @@ from typing import Literal, get_args
 #: method's identity) without either importing the other. It previously existed
 #: as three copies of the same literal (``method_registry`` + two in
 #: ``embeddings``), which is exactly how a default drifts.
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+#:
+#: **Chosen from measurement, over the OSI-licensed field only.** langres ships
+#: under Apache-2.0, so a default may not carry a use-restricted licence: it
+#: would push terms onto every user who never chose them. That rules out the
+#: ladder's strongest overall model, ``google/embeddinggemma-300m`` (Gemma Terms
+#: of Use — a prohibited-use policy that survives redistribution, and *not* OSI),
+#: which stays a documented opt-in. Among the OSI field, ``intfloat/e5-base-v2``
+#: (MIT) is ahead of the previous default ``all-MiniLM-L6-v2`` on **3 of the 5**
+#: benchmarks, and behind on **none** — mean per-record candidate recall at
+#: k=20, bootstrapped by gold cluster (``docs/research/20260727_embedder_ladder.md``):
+#:
+#: =============== ========= ====================== =========
+#: benchmark         Δ recall   95% CI                clusters
+#: =============== ========= ====================== =========
+#: wdc_computers     +0.1528   [+0.1254, +0.1797]         877
+#: abt_buy           +0.0324   [+0.0216, +0.0451]       1,012
+#: walmart_amazon    +0.0159   [+0.0078, +0.0246]         846
+#: amazon_google     +0.0056   [-0.0002, +0.0116]         995  (spans 0)
+#: fodors_zagat      +0.0000   [+0.0000, +0.0000]         112  (saturated)
+#: =============== ========= ====================== =========
+#:
+#: **It is measured BARE, and must ship bare — do not add a prompt here.**
+#: E5's model card documents an asymmetric ``"query: "`` / ``"passage: "``
+#: recipe, so the reflex on reading this constant is to wire one up. Don't: the
+#: checkpoint ships **no** ``config_sentence_transformers.json`` (it is a
+#: ``.no_exist`` entry in the Hub cache), so it registers no prompts, and every
+#: row above was produced by the ladder's ``prompt_arm="none"`` — neither side
+#: prefixed. e5-base-v2 has no ``documented`` arm in the ladder at all. Adding
+#: the model-card prefixes would therefore ship a configuration **nobody
+#: measured**, whose sign is unknown, while claiming the numbers above. If the
+#: recipe is worth having, measure it first: add a ``documented_arm`` to this
+#: model's ``ModelSpec`` in ``examples/research/embedder_ladder.py`` and re-run.
+#: (Driving only one half is worse than neither, which is why
+#: ``VectorBlocker`` warns on it — see ``core/blockers/vector.py``.)
+#:
+#: Two consequences worth knowing before changing this again: the ladder ranks
+#: models on **blocking** candidate recall, not end-to-end F1; and the field is
+#: **7 of the 14** models in the ladder — the 7 with rows at ``metric_revision``
+#: 1. This is the best measured model, not a survey of every model that exists.
+DEFAULT_EMBEDDING_MODEL = "intfloat/e5-base-v2"
 
 #: The form of a backbone reference, and the sole input to routing.
 BackboneKind = Literal["api", "endpoint", "hf", "local"]
