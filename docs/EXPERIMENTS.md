@@ -426,6 +426,100 @@ threshold = derive_threshold(scores, labels, method="youden")   # or "percentile
 band and report on **held-out test** so the threshold isn't tuned on the pairs it's
 measured on — see `examples/research/m4_calibration.py` for the honest held-out version.
 
+### …or let `fit()` do it: `fit(derive_threshold=True)`
+
+The snippet above is the primitive. If your labels are id-keyed, the model can
+derive and apply the cut itself, holding out for you:
+
+```python
+resolver.fit(records, pairs=labeled_pairs, split=0.3, seed=0, derive_threshold=True)
+
+print(resolver.fit_report_.to_markdown())
+# - Threshold: 0.8824 (derived from 0.5000 by youden on 18 labeled pairs,
+#                      chosen on train, held-out, applied to the clusterer)
+#
+# ## Threshold selection (chosen on train)
+# - incumbent 0.5000: selection F1 0.5217, held-out F1 0.5714
+# - derived 0.8824 — KEPT: selection F1 1.0000, held-out F1 1.0000
+```
+
+It is **opt-in**: the default leaves the constructed threshold alone, which is the
+right no-data fallback. What it changes is that a user who *does* have labels no
+longer resolves at a constant nobody measured.
+
+**It derives, then races — it does not just apply.** A derived cut is not
+automatically a better cut. Youden's J maximizes `tpr - fpr`, which is flat
+across a wide separating gap, so on cleanly-separated data it happily returns a
+cut that ties on `train` and is *worse* on unseen pairs. We measured exactly
+that: held-out pair-F1 **1.0000 → 0.8000** on a fixture where `0.5` was already
+optimal. So the candidate has to beat the incumbent's pair-F1 to be applied; a
+tie keeps the incumbent, and `fit_report_.threshold_fit.source` reads
+`"declined"` with the rejected candidate still reported:
+
+```
+# - Threshold: 0.5000 (kept: the cut derived from 16 labeled pairs 0.8824
+#                      did not beat it on train)
+```
+
+**The race runs on `train`, never on `valid`.** Picking the winner on the
+held-out split would make that split a selection set and silently downgrade the
+reported P/R/F1 from a held-out estimate to an optimistic one. `train` was
+already spent deriving the candidate, so selecting there costs no further
+honesty — and both `held_out_f1` values in the report stay clean. The residual
+gap, stated rather than hidden: a cut chosen on `train` can still fail to
+generalise; selecting there bounds the risk, it does not remove it. A three-way
+derive/select/report split would close it, and is deliberately left as follow-on
+work — at the label counts this targets (a handful of corrections out of a review
+loop) three splits would make every number noise.
+
+Five more things worth knowing:
+
+- **It needs `pairs=`, not `labels=`.** `pairs=` is what carries the
+  entity-disjoint `split=`. With a split, the cut is derived on `train` and the
+  report's P/R/F1 grade it on `valid`, which the cut never saw. Without one the
+  cut is still derived — and the report says `IN-SAMPLE`, and computes no
+  metrics at all, because an in-sample number here would only flatter the cut.
+- **It fits matchers that have no fit hook.** `WeightedAverageMatcher`,
+  `RapidfuzzMatcher` and the **score-only** LLM judges have nothing to train, so
+  `fit(pairs=...)` refuses them — but their *threshold* is a real fittable
+  parameter, and those are exactly the pipelines with nothing else to fit.
+  A *decision-based* judge is the exception and is refused: an
+  `LLMMatcher(response_parser="binary_yes_no")` emits an explicit `decision`, and
+  `predicted_match` gives that precedence over the score, so no cut you fit could
+  change what `resolve()` does. Note the refusal happens after the labeled pairs
+  are scored on the classic path, so on a paid judge it costs those calls before
+  it fails.
+- **It knows where your model keeps its cut.** A classic four-slot model writes
+  `clusterer.threshold`; a research recipe / `from_topology` chain has no
+  clusterer at all and writes its terminal `ThresholdSelect`.
+  `fit_report_.threshold_fit.applied_to` says which.
+- **Youden's J is symmetric in cost; ER usually is not.** It maximizes
+  `tpr - fpr`, weighting a false merge exactly as badly as a false split. In
+  entity resolution a false merge propagates through transitive closure and can
+  poison a whole cluster, while a false split leaves two records that can still
+  be merged later. If that asymmetry matters to you, treat the derived cut as a
+  starting point and move it **up**, or call `derive_threshold` yourself with
+  `method="percentile"`. (The race uses pair-F1, which inherits the same
+  symmetry.)
+- **On an explicit `_ops` chain, deriving costs a full pass over `data`.** A
+  chain's Source owns retrieval, so — unlike a classic model, which scores only
+  the labeled candidates — it must run over every record. It runs the *prefix*
+  ending at the fitted `ThresholdSelect`, not the whole chain: anything
+  downstream of the cut (a reranker `Score`, say) is skipped, both because it
+  cannot influence a threshold applied before it and because its scores would
+  overwrite the ones the cut actually reads. So budget for every `Score` *above*
+  the fitted cut, and none below it. Cheap for a local scorer; with a paid
+  `Score` in that prefix, size `budget_usd` for it.
+
+Needs the `[trained]` extra (scikit-learn). On a core-only install it raises a
+directed `ImportError` rather than quietly keeping the default — identical code
+must not produce a different threshold depending on which extras are installed.
+
+The derived threshold survives `save`/`load`; its **provenance does not**
+(`fit_report_` is a fit-time artifact and is never serialized). Keep
+`fit_report_.model_dump_json()` beside the artifact if you need to show where the
+number came from.
+
 ## Budget monitoring (`SpendMonitor`, ≤ $5)
 
 ```python

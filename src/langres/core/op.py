@@ -609,12 +609,25 @@ class ClusterStage(ABC, Generic[SchemaT]):
     Clustering is the equivalence selection — the point where the table of scored
     pairs collapses into id clusters. Because that selection is not approximable
     (THEORY §8), a ``ClusterStage`` is inherently a *named heuristic*: it carries
-    an :attr:`algorithm` (default ``"transitive_closure"``) and stamps
-    :attr:`is_heuristic` = ``True`` into its :attr:`label`. It is not an
-    :class:`Op` because its output carrier is clusters, not pairs.
+    an :attr:`algorithm` and stamps :attr:`is_heuristic` = ``True`` into its
+    :attr:`label`. It is not an :class:`Op` because its output carrier is
+    clusters, not pairs.
+
+    ``algorithm`` defaults to ``"transitive_closure"`` because that is what the
+    shipped default :class:`~langres.core.clusterer.Clusterer` does — **the
+    default is not a recommendation.** ``"pivot"``
+    (:class:`~langres.core.clusterers.correlation.CorrelationClusterer`) measures
+    better on the benchmark portfolio (``docs/research/20260727_closure_diagnostic.md``:
+    higher BCubed F1 at 36 of 45 scored grid points, tied at 9, worse at 0, with
+    9 unscorable because closure's component was too large to score). Subclasses
+    that adapt a concrete clusterer should *derive* this name from the clusterer
+    they hold rather than accept the default — as
+    :class:`~langres.core.op_adapters.ClustererStage` does.
 
     Args:
-        algorithm: The named clustering heuristic (default ``"transitive_closure"``).
+        algorithm: The named clustering heuristic. Defaults to
+            ``"transitive_closure"`` (what the shipped default clusterer does),
+            not to the best-measured one.
 
     Raises:
         ValueError: If ``algorithm`` is not a known clustering heuristic.

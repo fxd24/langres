@@ -19,11 +19,12 @@ pivot-split chains that must stay separate -- and it would still pass both golde
 ``CorrelationClusterer`` through the spine. This is that test.
 
 The fixture is the classic over-merge chain: ``a-b`` and ``b-c`` both clear the
-threshold, but there is NO direct ``a-c`` edge. Pivot clustering keeps ``{a, b}``
-and ``{c}`` apart; transitive closure (the trap) would merge all three into
-``{a, b, c}``. The test asserts the real spine helper reproduces the pivot split
-and NOT the transitive-closure merge, so a revert of ``_closure_clusterer`` to a
-hardcoded ``Clusterer`` turns it red.
+threshold, but there is NO direct ``a-c`` edge. Pivot clustering keeps ``c`` out
+of ``{a, b}`` (and, being unmerged, ``c`` is absent from the output entirely --
+the same shape the base clusterer gives an unmerged record); transitive closure
+(the trap) would merge all three into ``{a, b, c}``. The test asserts the real
+spine helper reproduces the pivot split and NOT the transitive-closure merge, so
+a revert of ``_closure_clusterer`` to a hardcoded ``Clusterer`` turns it red.
 """
 
 from __future__ import annotations
@@ -49,9 +50,9 @@ def _sorted(clusters: list[set[str]]) -> list[list[str]]:
 def _chain_pairs() -> Pairs[CompanySchema]:
     """A scored ``Pairs`` for the over-merge chain a-b, b-c (NO direct a-c edge).
 
-    Both edges score 0.9 (>= the 0.8 threshold). Pivot clustering splits this into
-    ``{a, b}`` / ``{c}``; transitive closure merges it into ``{a, b, c}`` -- the
-    exact input that distinguishes the two clustering algorithms.
+    Both edges score 0.9 (>= the 0.8 threshold). Pivot clustering yields ``{a, b}``
+    with ``c`` left unmerged (and so absent); transitive closure merges it into
+    ``{a, b, c}`` -- the exact input that distinguishes the two algorithms.
     """
     store = {rid: CompanySchema(id=rid, name=rid) for rid in ("a", "b", "c")}
     rows = [
@@ -106,7 +107,10 @@ def test_cluster_matches_legacy_clusterer_owned_cut(correlation_model: Resolver)
     got = correlation_model._cluster(pairs)
 
     assert _sorted(got) == _sorted(legacy)
-    assert _sorted(got) == [["a", "b"], ["c"]]  # pivot split, NOT the merged chain
+    # Pivot split, NOT the merged chain. Stranded ``c`` is absent rather than a
+    # ``{"c"}`` singleton -- the pivot clusterer matches the base clusterer's
+    # output shape (see tests/core/clusterers/test_correlation_clusterer.py).
+    assert _sorted(got) == [["a", "b"]]
 
 
 def test_the_trap_would_produce_the_wrong_merged_chain(correlation_model: Resolver) -> None:
@@ -126,4 +130,4 @@ def test_the_trap_would_produce_the_wrong_merged_chain(correlation_model: Resolv
     # The real W3-d path avoids it (stays a pivot clusterer).
     got = correlation_model._cluster(pairs)
     assert _sorted(got) != _sorted(trap)
-    assert _sorted(got) == [["a", "b"], ["c"]]
+    assert _sorted(got) == [["a", "b"]]

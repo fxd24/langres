@@ -166,12 +166,12 @@ class ClustererFinding(BaseModel):
         clusterer: ``"closure"`` (transitive closure) or ``"correlation"`` (pivot).
         n_clusters: Output clusters, as the clusterer returned them. Records with
             no accepted edge are absent (neither clusterer emits a cluster per
-            unmatched record), but **size-1 clusters do occur and are counted**:
-            ``Clusterer`` adds an accepted pair as a graph edge, so a self-pair
-            (``left_id == right_id``, which `VectorBlocker` does emit -- 43 of them
-            on ``amazon_google``'s test split) becomes a self-loop and hence a
-            one-node component; ``CorrelationClusterer`` strands a node whose only
-            neighbour an earlier pivot already consumed. Singletons contribute
+            unmatched record). **Size-1 clusters can still occur under
+            ``Clusterer``**: it adds an accepted pair as a graph edge, so a
+            self-pair (``left_id == right_id``) becomes a self-loop and hence a
+            one-node component. ``CorrelationClusterer`` produces none -- it skips
+            self-pairs outright, and it drops a node left stranded when an earlier
+            pivot had already consumed its only neighbour. Singletons contribute
             ``C(1, 2) = 0`` to ``n_incluster_pairs``, so they cannot affect
             ``n_rejected_inside`` or the contamination rate -- they only widen the
             cluster-count denominators.
@@ -733,10 +733,12 @@ def _components_from_verdicts(rows: list[dict[str, Any]]) -> list[set[str]]:
     node enters only via an accepted edge, so a record with no accepted pair is
     absent rather than emitted as a singleton -- but an accepted **self-pair**
     (``left_id == right_id``) does yield a one-node component, because ``Clusterer``
-    feeds it to ``nx.add_edge(x, x)`` as a self-loop. That is not hypothetical:
-    ``VectorBlocker`` emits 43 accepted self-pairs on ``amazon_google``'s test
-    split. Reproducing it is what keeps this check exact rather than approximately
-    right; a version that dropped singletons would fail on that benchmark alone.
+    feeds it to ``nx.add_edge(x, x)`` as a self-loop. No shipped blocker emits a
+    self-pair (``AllPairsBlocker`` pairs only positions ``i < j``;
+    ``VectorBlocker._neighbor_columns`` drops the anchor by identity), so this is a
+    convention this reimplementation matches rather than a case the portfolio
+    exercises -- reproducing it keeps the check exact against ``Clusterer``'s
+    contract, not against any observed benchmark row.
 
     Args:
         rows: Judged log rows (``verdict`` not ``None``).

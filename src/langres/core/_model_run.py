@@ -508,6 +508,53 @@ class ModelRun(ModelState):
             return _run_stages(records, [self._chain_source(), *self._explicit_body(log=log)])
         return _run_stages(records, self._stages(log=log))
 
+    def _prethreshold_pairs(self, records: list[Any]) -> Pairs[Any]:
+        """Scored rows as this model's match cut *sees* them -- that cut not applied.
+
+        What a threshold fit has to score against: every row the cut will judge,
+        **including the ones the current cut rejects**. Deriving from
+        :meth:`_scored_pairs` instead would be a subtle, self-confirming bug on an
+        explicit chain -- its ``ThresholdSelect`` has already deleted every row
+        below today's threshold, so the "derived" cut could only ever recover the
+        cut that produced the sample.
+
+        It runs Source + body **truncated at** the terminal
+        :class:`~langres.core.op.ThresholdSelect` (the one
+        :meth:`_chain_threshold_select` names, and the one a fit writes to):
+        every Op *before* it -- including an upstream ``TopKSelect`` or ``Score``
+        -- runs, and nothing after it does. The rows are then exactly what that
+        cut would have been handed.
+
+        Truncating rather than *removing* the select is load-bearing. A ``Score``
+        after a ``Select`` is supported topology (that is what a reranker is:
+        ``Source -> ScoreA -> ThresholdSelect -> ScoreB -> ClusterStage``). If the
+        select were merely filtered out and the rest still ran, ``ScoreB`` would
+        overwrite the score column, and the fit would derive a cut from ``ScoreB``
+        values and write it into a select that thresholds ``ScoreA`` values -- a
+        silent scale mismatch. Consequently this measures the chain *up to* the
+        fitted cut; ops downstream of it are not exercised by the fit.
+
+        **Explicit ``_ops`` chains only**, which is why there is no classic
+        branch here: a four-slot model's cut lives on the clusterer and is
+        applied at :meth:`_cluster`, never inside the scoring chain, so it has no
+        pre-threshold/post-threshold distinction to draw -- and its fit path
+        scores only the *labeled* candidates rather than the whole corpus.
+        :meth:`_chain_source` raises if this is called without a chain.
+
+        ``records`` are normalized first, exactly as :meth:`_dedupe_explicit` and
+        :meth:`execute` do -- a chain Source is handed typed entities, never the
+        raw dicts a caller passed to ``fit``.
+
+        No ``log=``: this is a fit-time measurement pass, not a user-facing
+        resolve, so its judgements are not flywheel signal. Scoring still runs
+        through the same spend-capped seam as inference.
+        """
+        fitted_select = self._chain_threshold_select()
+        body = self._explicit_body()
+        upto = next((i for i, op in enumerate(body) if op is fitted_select), len(body))
+        _schema, normalized = normalize_records(records, self._chain_source_schema())
+        return _run_stages(normalized, [self._chain_source(), *body[:upto]])
+
     def _judgements(
         self, records: list[Any], *, log: JudgementLog | None = None
     ) -> Iterator[PairwiseJudgement]:
@@ -1052,12 +1099,37 @@ class ModelRun(ModelState):
         :class:`~langres.core.op_adapters.ClustererStage` clustering over the
         survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
         The output is whatever the (zeroed) equivalence clusterer returns over
-        the selected edges: the base connected-components
-        :class:`~langres.core.clusterer.Clusterer` emits only multi-record
-        clusters (an isolated record never enters the graph), whereas a pivot
-        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` can
-        leave a singleton behind -- a record with a qualifying edge whose only
-        neighbours an earlier pivot already claimed.
+        the selected edges. **For judgements with DISTINCT ids, both shipped
+        clusterers return the same shape** -- multi-record clusters only, an
+        unmerged record simply absent. Two caveats, both real:
+
+        * **Self-pairs break the tie, in the base clusterer's favour.** A
+          ``left_id == right_id`` judgement that clears the threshold makes the
+          base Clusterer call ``nx.add_edge(x, x)``, and networkx returns ``{x}``
+          -- a one-node component -- whereas
+          :class:`~langres.core.clusterers.correlation.CorrelationClusterer`
+          skips self-pairs outright and emits nothing. Left as-is deliberately --
+          teaching the base clusterer to drop them is a behaviour change to the
+          DEFAULT path. Neither shipped blocker produces this input, so reaching
+          it takes duplicate ids or a custom blocker.
+        * **Nothing here enforces the shape.** It is a property of the two
+          shipped implementations, not an invariant of this method: a custom
+          :class:`~langres.core.clusterer.Clusterer` subclass that emits a
+          one-node cluster has it passed straight through
+          (``ClustererStage.forward`` returns the clusterer's output unchanged,
+          and ``_cluster`` normalizes nothing).
+
+        The two shipped ones reach the distinct-id shape differently, which is
+        worth knowing when reading either one's source. The base
+        connected-components
+        :class:`~langres.core.clusterer.Clusterer` gets it for free -- an isolated
+        record never enters the graph. A pivot
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` has a
+        second way to strand a record -- one *with* a qualifying edge whose only
+        neighbours an earlier pivot already claimed -- which forms a one-node
+        ``{node}`` cluster mid-algorithm, so it drops those explicitly rather than
+        handing a caller who swapped the clusterer a different output shape for
+        the same meaning.
 
         Args:
             records: Raw records (dicts) in a stable list order.
