@@ -28,7 +28,10 @@ Design decisions, each load-bearing:
   seed 0 and 58 held-out pairs at seeds 1-2. Numbers off 58 pairs are noise.
   So the split here is the benchmark's own ``Benchmark.split`` -- whole gold
   clusters to one side, so no entity and no match pair straddles the boundary --
-  and the two corpora are blocked, scored and graded independently.
+  and the two corpora are blocked, scored and graded independently. Every cell
+  still records what ``align_pairs(split=0.3)`` *would* have held out
+  (``align_split_train`` / ``align_split_valid``), so this design choice is
+  justified by data in the tracked artifact rather than by a claim.
 * **The race is untouched.** ``_select_threshold`` selects on ``train`` and
   never reads ``valid``; the ``split=`` argument only affects what ``fit``
   *reports*. So running ``fit(..., split=None)`` on the train corpus gives the
@@ -88,7 +91,7 @@ from typing import Any, Protocol, cast  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from langres.core.models import PairwiseJudgement  # noqa: E402
-from langres.curation.harvest import LabeledPair  # noqa: E402
+from langres.curation.harvest import LabeledPair, align_pairs  # noqa: E402
 from langres.data.benchmark import Benchmark, gold_pairs_from_clusters  # noqa: E402
 from langres.eval import get_benchmark, list_benchmarks  # noqa: E402
 from langres.methods import BlockingBenchmark, make_resolver_factory  # noqa: E402
@@ -130,6 +133,12 @@ class CellResult(BaseModel):
         n_train_records / n_test_records: The two disjoint corpora.
         n_train_pairs: Labeled blocked candidates the race derived + selected on.
         n_test_pairs: Blocked candidates on the held-out corpus (the grading set).
+        align_split_train / align_split_valid: what ``align_pairs(split=0.3)``
+            would have held out of ``n_train_pairs`` -- the measurement behind
+            "the split trap". Not used for any number above; recorded because a
+            design choice justified by a degeneracy should carry the degeneracy
+            as data rather than as a claim. ``align_split_valid`` near 0 (or
+            near ``n_train_pairs``, i.e. inverted) is the trap firing.
         n_test_gold_blocked: Gold pairs among ``n_test_pairs`` (0 makes F1 vacuous).
         incumbent_threshold: The 0.5 default.
         derived_threshold: Youden's J on the train corpus's labeled pairs.
@@ -156,6 +165,8 @@ class CellResult(BaseModel):
     n_test_records: int
     n_train_pairs: int
     n_test_pairs: int
+    align_split_train: int
+    align_split_valid: int
     n_test_gold_blocked: int
     incumbent_threshold: float
     derived_threshold: float
@@ -260,7 +271,14 @@ def run_cell(
     # 1. Derive + race, on the train corpus only. split=None because the held-out
     #    estimate comes from the DISJOINT CORPUS below, not from a slice of this
     #    label set -- see the module docstring's "split trap".
-    train_labels = gold_labels_for_candidates(resolver.candidates(train_data), gold_pairs)
+    train_candidates = resolver.candidates(train_data)
+    train_labels = gold_labels_for_candidates(train_candidates, gold_pairs)
+    # The split trap, measured rather than asserted: what fit(split=0.3) WOULD
+    # have held out of this same label set. Free here (the candidates are already
+    # blocked), and it is the evidence for grading on a disjoint corpus instead.
+    trap = align_pairs(train_candidates, train_labels, split=0.3, seed=seed)
+    align_split_train, align_split_valid = len(trap.train.labels), len(trap.valid.labels)
+    del train_candidates, trap
     resolver.fit(train_data, pairs=train_labels, split=None, seed=seed, derive_threshold=True)
     fit = resolver.fit_report_.threshold_fit
     if fit is None or fit.previous is None or fit.candidate is None:
@@ -296,6 +314,8 @@ def run_cell(
         n_test_records=len(test_records),
         n_train_pairs=len(train_labels),
         n_test_pairs=len(judgements),
+        align_split_train=align_split_train,
+        align_split_valid=align_split_valid,
         n_test_gold_blocked=len(test_gold_blocked),
         incumbent_threshold=incumbent,
         derived_threshold=derived,
@@ -377,6 +397,30 @@ def to_markdown(results: list[CellResult]) -> str:
     return "\n".join(lines)
 
 
+def to_split_trap_markdown(results: list[CellResult]) -> str:
+    """Render the split-trap table: what ``align_pairs(split=0.3)`` would hold out.
+
+    One row per (benchmark, seed) -- the split reads only the labeled candidate
+    graph, which is the same for both methods (same blocker, same k), so the
+    method column would be a duplicated row.
+    """
+    header = "| benchmark | seed | labeled pairs | align train | align valid | valid share (want ~0.30) |"
+    lines = [header, "|" + "---|" * 6]
+    seen: set[tuple[str, int]] = set()
+    for r in results:
+        key = (r.benchmark, r.seed)
+        if key in seen:
+            continue
+        seen.add(key)
+        total = r.align_split_train + r.align_split_valid
+        share = "n/a" if total == 0 else f"{r.align_split_valid / total:.4f}"
+        lines.append(
+            f"| {r.benchmark} | {r.seed} | {total:,} | {r.align_split_train:,} | "
+            f"{r.align_split_valid:,} | {share} |"
+        )
+    return "\n".join(lines)
+
+
 def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
     """Registry-driven selection: every loadable entry, or a narrowed subset.
 
@@ -450,7 +494,9 @@ def main() -> None:
     for name in select_benchmarks(fast=args.fast, only=args.only):
         print(f"[run] {name}: {' '.join(args.methods)} ($0 spend) ...", flush=True)
         try:
-            results.extend(run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds)))
+            results.extend(
+                run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds))
+            )
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
             # ``exception`` (not ``error``): a benchmark that drops out is absent
             # from both the table and the tracked JSON, so the traceback in the
@@ -465,6 +511,9 @@ def main() -> None:
 
     print()
     print(to_markdown(results))
+    print()
+    print("The split trap -- what fit(pairs=..., split=0.3) would have held out:")
+    print(to_split_trap_markdown(results))
     print()
     print(f"[out] {out}")
     if failures:
