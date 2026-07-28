@@ -81,8 +81,8 @@ DEFAULT_THRESHOLDS: Mapping[ScoreType, float] = MappingProxyType(
     }
 )
 # Completeness (every ``ScoreType`` has an entry) is gated by
-# ``tests/core/test_score_type.py`` — a missing family would otherwise surface as
-# a ``KeyError`` in a user's first ``dedupe()``.
+# ``tests/core/test_score_type_defaults.py`` — a missing family would otherwise
+# surface as a ``KeyError`` in a user's first ``dedupe()``.
 
 
 def resolve_threshold(threshold: float | None, score_type: ScoreType) -> float:
