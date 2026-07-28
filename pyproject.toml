@@ -156,8 +156,10 @@ build-backend = "hatchling.build"
 # in the git repository only -- they were ~14.1 MB of the 15.6 MB uncompressed
 # wheel. Loading an excluded dataset from a pip/uv install raises
 # BenchmarkDataNotFoundError (langres/data/_benchmark_utils.py) pointing at a
-# git checkout. Still bundled: tiny_fixture (synthetic), febrl_person
-# (synthetic, BSD-3), fodors_zagat (small), and the peeters_sampled_test.csv
+# git checkout. Still bundled: tiny_fixture (synthetic), febrl_person and
+# febrl_dedup (synthetic FEBRL4/FEBRL3, BSD-3 -- febrl_dedup is the only
+# deduplication benchmark, so excluding it would leave a pip install with no
+# runnable target for dedupe()), fodors_zagat (small), and the peeters_sampled_test.csv
 # pair sets (id/label triples only -- no third-party record text, and the
 # replication seam's sampling stays inspectable from the wheel).
 #

@@ -38,8 +38,11 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from langres.data.benchmark import Benchmark
 
-#: The evaluation task shape. All current entries are cross-source *linkage*
-#: benchmarks; ``dedup`` is reserved for single-source dedup datasets.
+#: The evaluation task shape: cross-source ``linkage`` (two record sets, matches
+#: are all cross-source) or single-source ``dedup`` (one record set partitioned
+#: into entities — what ``dedupe()`` does). The two are scored differently, so a
+#: dedup dataset must never be registered as ``linkage`` to reuse a bipartite
+#: metric path; see :mod:`langres.data.febrl_dedup`.
 BenchmarkTask = Literal["linkage", "dedup"]
 
 #: Optional-dependency package -> the extra that ships it, for actionable errors.
@@ -301,6 +304,26 @@ register(
         loader_symbol="WdcComputersBenchmark",
     )
 )
+# ---------------------------------------------------------------------------
+# The single-source DEDUPLICATION benchmark. Every entry above is a cross-source
+# linkage task, which left ``dedupe()`` — langres's primary shipped verb — with
+# nothing to be measured on. FEBRL3 is the classic intra-source dedup dataset:
+# one 5000-record table, clusters of size 1–6, gold given as entity membership
+# rather than a transitive closure. Same generator and licence clearance as the
+# ``febrl_person`` FEBRL4 linkage entry above.
+# ---------------------------------------------------------------------------
+
+register(
+    BenchmarkEntry(
+        name="febrl_dedup",
+        task="dedup",
+        domain="person",
+        loadable=True,
+        module_path="langres.data.febrl_dedup",
+        loader_symbol="FebrlDedupBenchmark",
+    )
+)
+
 register(
     BenchmarkEntry(
         name="opensanctions",
