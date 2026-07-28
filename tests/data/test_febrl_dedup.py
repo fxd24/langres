@@ -89,7 +89,7 @@ def test_cross_source_filter_cannot_be_applied_to_this_corpus() -> None:
     corpus, _clusters, _pairs = load_febrl_dedup()
     from langres.core.models import ERCandidate
 
-    candidate = ERCandidate(left=corpus[0], right=corpus[1], score=1.0)
+    candidate = ERCandidate(left=corpus[0], right=corpus[1], score=1.0, blocker_name="test")
     with pytest.raises(AttributeError):
         _bu.cross_source([candidate])
 

@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### `dedupe()` finally has a benchmark (`febrl_dedup`)
+
+`BenchmarkTask` declared `Literal["linkage", "dedup"]`, but all ten registered
+benchmarks were `task="linkage"` — so every number langres published was about
+cross-source linkage, while `dedupe()`, the primary shipped verb, was unmeasured.
+
+- **Registered `febrl_dedup` (FEBRL3), the first `task="dedup"` entry.** One
+  5000-record table, 2000 entities, gold clusters of size **1–6** (835
+  singletons), 6538 gold pairs. It is the only entry where a cluster can exceed
+  two records, so it is the only one that can distinguish a correct merge from an
+  over-merge. Ships in the wheel — synthetic, no PII, `recordlinkage`
+  BSD-3-Clause / upstream ANUOS 1.1, no NonCommercial term (the same clearance
+  that admitted FEBRL4 and excluded CC-BY-NC OpenSanctions).
+- **Gold is entity membership, not a transitive closure.** The vendored truth is
+  `record_id,cluster_id`, so it carries none of the fusion artifacts that
+  closure-derived gold inherits from its link file (this repo's DBLP-Scholar
+  37-record component). The fixture's generation step *asserts* the upstream
+  `recordlinkage` pair index equals the within-entity pairs exactly (6538 = 6538).
+- **Ids are opaque (`r0000`..).** Upstream `rec-<N>-org` / `rec-<N>-dup-<K>` ids
+  encode the entity number, which would leak the label into the record dict.
+- **`_benchmark_utils.sweep_blocking_k` takes `cross_source_only=`** (default
+  `True`, behaviour-preserving). The cross-source filter is a *linkage*
+  assumption; a single-source corpus has no `source` to filter on.
+- **Measured end-to-end** on the held-out test split (1490 records / 597
+  clusters, `seed=0`, $0 offline): `rapidfuzz` BCubed F1 **0.9956**
+  (P 0.9977 / R 0.9935), cluster-pairwise F1 0.9923, against an all-singletons
+  sanity floor of 0.5721. `embedding_cosine` reaches BCubed F1 0.6984 but
+  cluster-pairwise F1 **0.0247** — its false positives chain multi-record
+  clusters into giant components, a failure mode that is structurally invisible
+  on a linkage benchmark whose every gold cluster is a pair. Blocking
+  Pair-Completeness 0.9552 at the pinned `k=50` caps recall before any matcher
+  runs. See `docs/BENCHMARKS.md` §2a.
+
 ### The better clusterer is now reachable (`clusterer=` opt-in)
 
 `CorrelationClusterer` measured better than the default transitive-closure
