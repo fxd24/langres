@@ -76,6 +76,12 @@ warning::
 
     uv run python examples/research/threshold_default_study.py --fast --out tmp/fast.json
 
+``--render`` reprints every table from an existing artifact without measuring
+anything, so the write-up's tables are regenerated rather than transcribed::
+
+    uv run python examples/research/threshold_default_study.py \\
+        --render examples/research/results/threshold_default_study.json
+
 ``print`` is allowed in examples (this is an operator tool).
 """
 
@@ -498,6 +504,22 @@ def write_results(results: list[CellResult], out: Path) -> None:
     out.write_text(json.dumps([r.model_dump() for r in results], indent=2, sort_keys=True) + "\n")
 
 
+def read_results(path: Path) -> list[CellResult]:
+    """Load a previously written artifact back into :class:`CellResult` rows."""
+    return [CellResult.model_validate(row) for row in json.loads(path.read_text())]
+
+
+def print_tables(results: list[CellResult]) -> None:
+    """Print every table this study reports, in the order the write-up uses them."""
+    print(to_markdown(results))
+    print()
+    print("Would a better CONSTANT do just as well? The between-dataset spread:")
+    print(to_spread_markdown(results))
+    print()
+    print("The split trap -- what fit(pairs=..., split=0.3) would have held out:")
+    print(to_split_trap_markdown(results))
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -515,8 +537,22 @@ def main() -> None:
             "which would otherwise replace the full-portfolio artifact with a subset"
         ),
     )
+    parser.add_argument(
+        "--render",
+        type=Path,
+        default=None,
+        help=(
+            "print every table from an EXISTING results artifact and exit -- runs "
+            "nothing, measures nothing. This is how the write-up's tables are "
+            "regenerated from the tracked JSON instead of copied by hand"
+        ),
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.render is not None:
+        print_tables(read_results(args.render))
+        return
 
     if args.out is None and (args.fast or args.only):
         parser.error(
@@ -547,13 +583,7 @@ def main() -> None:
         write_results(results, out)
 
     print()
-    print(to_markdown(results))
-    print()
-    print("Would a better CONSTANT do just as well? The between-dataset spread:")
-    print(to_spread_markdown(results))
-    print()
-    print("The split trap -- what fit(pairs=..., split=0.3) would have held out:")
-    print(to_split_trap_markdown(results))
+    print_tables(results)
     print()
     print(f"[out] {out}")
     if failures:
