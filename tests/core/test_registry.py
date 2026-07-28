@@ -1,18 +1,26 @@
 """Unit tests for the component/schema registry (M0 Wave 1)."""
 
-import pytest
-from pydantic import BaseModel
+from pathlib import Path
 
+import pytest
+from pydantic import BaseModel, ConfigDict
+
+from langres.core import registry as registry_module
 from langres.core.registry import (
+    OpSerializer,
     SchemaNotRegistered,
     UnknownComponentType,
     UnknownModelType,
+    UnknownOpType,
     get_component,
     get_model,
+    get_op_serializer,
     get_schema,
     model_type_name,
     register,
     register_model,
+    register_op,
+    register_op_serializer,
     register_schema,
 )
 
@@ -162,3 +170,255 @@ class TestRegisterModel:
 
         with pytest.raises(UnknownComponentType):
             get_component("test_namespace_isolation")
+
+
+class _StrictOpConfig(BaseModel):
+    """The parameter envelope ``@register_op`` demands: closed and strictly typed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    factor: float = 1.0
+
+
+class TestRegisterOpValidation:
+    """``@register_op`` is a fail-closed contract; each rule rejects at decoration time.
+
+    These guardrails are what stop a saved chain from naming a class whose
+    parameter envelope is open or loosely typed — without them an artifact could
+    smuggle unvalidated keys straight into ``from_config``.
+    """
+
+    def test_requires_from_config(self) -> None:
+        with pytest.raises(TypeError, match="from_config"):
+
+            @register_op("test_op_no_from_config")
+            class _NoFromConfig:
+                config_model = _StrictOpConfig
+                config: dict[str, object] = {"factor": 1.0}
+
+    def test_requires_config(self) -> None:
+        with pytest.raises(TypeError, match=r"requires _NoConfig\.config"):
+
+            @register_op("test_op_no_config")
+            class _NoConfig:
+                config_model = _StrictOpConfig
+
+                @classmethod
+                def from_config(cls, config: dict[str, object]) -> "_NoConfig":
+                    return cls()
+
+    def test_requires_a_pydantic_config_model(self) -> None:
+        with pytest.raises(TypeError, match="config_model to be a "):
+
+            @register_op("test_op_no_config_model")
+            class _NoConfigModel:
+                config: dict[str, object] = {"factor": 1.0}
+                config_model = dict  # not a BaseModel subclass
+
+                @classmethod
+                def from_config(cls, config: dict[str, object]) -> "_NoConfigModel":
+                    return cls()
+
+    def test_requires_extra_forbid(self) -> None:
+        class _OpenConfig(BaseModel):
+            model_config = ConfigDict(strict=True)
+
+        with pytest.raises(TypeError, match="extra='forbid'"):
+
+            @register_op("test_op_extra_allowed")
+            class _OpenOp:
+                config: dict[str, object] = {}
+                config_model = _OpenConfig
+
+                @classmethod
+                def from_config(cls, config: dict[str, object]) -> "_OpenOp":
+                    return cls()
+
+    def test_requires_strict(self) -> None:
+        class _LooseConfig(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+        with pytest.raises(TypeError, match="strict=True"):
+
+            @register_op("test_op_not_strict")
+            class _LooseOp:
+                config: dict[str, object] = {}
+                config_model = _LooseConfig
+
+                @classmethod
+                def from_config(cls, config: dict[str, object]) -> "_LooseOp":
+                    return cls()
+
+
+class TestRegisteredOpSerializer:
+    """What the serializer built by ``@register_op`` actually does."""
+
+    def test_dump_reads_a_mapping_config_property(self) -> None:
+        @register_op("test_op_mapping_config")
+        class _MappingOp:
+            config_model = _StrictOpConfig
+
+            def __init__(self, factor: float = 2.0) -> None:
+                self.factor = factor
+
+            @property
+            def config(self) -> dict[str, object]:
+                return {"factor": self.factor}
+
+            @classmethod
+            def from_config(cls, config: dict[str, object]) -> "_MappingOp":
+                return cls(float(config["factor"]))  # type: ignore[arg-type]
+
+        serializer = get_op_serializer("test_op_mapping_config")
+        params, component = serializer.dump(_MappingOp(3.0))
+        assert params == {"factor": 3.0}
+        assert component is None
+
+    def test_dump_reads_a_callable_config_returning_a_model(self) -> None:
+        """``config`` may be a method returning a BaseModel; both dump as plain data."""
+
+        @register_op("test_op_model_config")
+        class _ModelConfigOp:
+            config_model = _StrictOpConfig
+
+            def __init__(self, factor: float = 1.0) -> None:
+                self.factor = factor
+
+            def config(self) -> _StrictOpConfig:
+                return _StrictOpConfig(factor=self.factor)
+
+            @classmethod
+            def from_config(cls, config: dict[str, object]) -> "_ModelConfigOp":
+                return cls(float(config["factor"]))  # type: ignore[arg-type]
+
+        serializer = get_op_serializer("test_op_model_config")
+        params, _ = serializer.dump(_ModelConfigOp(4.0))
+        assert params == {"factor": 4.0}
+
+    def test_validate_params_rejects_unknown_keys(self) -> None:
+        @register_op("test_op_validate")
+        class _ValidatedOp:
+            config_model = _StrictOpConfig
+
+            def __init__(self, factor: float = 1.0) -> None:
+                self.factor = factor
+
+            @property
+            def config(self) -> dict[str, object]:
+                return {"factor": self.factor}
+
+            @classmethod
+            def from_config(cls, config: dict[str, object]) -> "_ValidatedOp":
+                return cls(float(config["factor"]))  # type: ignore[arg-type]
+
+        serializer = get_op_serializer("test_op_validate")
+        assert serializer.validate_params is not None
+        assert serializer.validate_params({"factor": 2.0}) == {"factor": 2.0}
+        with pytest.raises(ValueError, match="smuggled"):
+            serializer.validate_params({"factor": 2.0, "smuggled": True})
+
+    def test_load_rebuilds_from_validated_params(self) -> None:
+        @register_op("test_op_load")
+        class _LoadableOp:
+            config_model = _StrictOpConfig
+
+            def __init__(self, factor: float = 1.0) -> None:
+                self.factor = factor
+
+            @property
+            def config(self) -> dict[str, object]:
+                return {"factor": self.factor}
+
+            @classmethod
+            def from_config(cls, config: dict[str, object]) -> "_LoadableOp":
+                return cls(float(config["factor"]))  # type: ignore[arg-type]
+
+        serializer = get_op_serializer("test_op_load")
+        restored = serializer.load({"factor": 5.0}, None, Path("."))
+        assert isinstance(restored, _LoadableOp)
+        assert restored.factor == 5.0
+
+    def test_load_rejects_a_component_it_cannot_own(self) -> None:
+        """A ``@register_op`` Op is component-free; a spec carrying one is corrupt."""
+
+        @register_op("test_op_rejects_component")
+        class _ComponentFreeOp:
+            config_model = _StrictOpConfig
+
+            @property
+            def config(self) -> dict[str, object]:
+                return {}
+
+            @classmethod
+            def from_config(cls, config: dict[str, object]) -> "_ComponentFreeOp":
+                return cls()
+
+        serializer = get_op_serializer("test_op_rejects_component")
+        with pytest.raises(ValueError, match="component-free"):
+            serializer.load({}, object(), Path("."))
+
+
+class TestOpSerializerRegistration:
+    @staticmethod
+    def _dump(op: object) -> tuple[dict[str, object], object | None]:
+        return {}, None
+
+    @staticmethod
+    def _load(params: dict[str, object], component: object | None, state_dir: Path) -> object:
+        return object()
+
+    def test_duplicate_role_is_rejected(self) -> None:
+        class _RoleA:
+            pass
+
+        class _RoleB:
+            pass
+
+        register_op_serializer(
+            OpSerializer(role="test_dup_role", op_type=_RoleA, dump=self._dump, load=self._load)
+        )
+        with pytest.raises(ValueError, match="already registered"):
+            register_op_serializer(
+                OpSerializer(role="test_dup_role", op_type=_RoleB, dump=self._dump, load=self._load)
+            )
+
+    def test_duplicate_op_type_is_rejected(self) -> None:
+        """One class, one serializer — a second would silently shadow the first."""
+
+        class _SharedOp:
+            pass
+
+        register_op_serializer(
+            OpSerializer(
+                role="test_dup_type_a", op_type=_SharedOp, dump=self._dump, load=self._load
+            )
+        )
+        with pytest.raises(ValueError, match="already has a registered serializer"):
+            register_op_serializer(
+                OpSerializer(
+                    role="test_dup_type_b", op_type=_SharedOp, dump=self._dump, load=self._load
+                )
+            )
+
+
+class TestTrustedLazyOpRoles:
+    """The closed trusted-role map may import one module; it never trusts the result."""
+
+    def test_a_trusted_module_that_does_not_register_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Point a role at a real, importable module that registers no serializer.
+        # Importing it must not leave the role resolvable: the lookup fails closed
+        # rather than handing back something the module never claimed.
+        monkeypatch.setitem(
+            registry_module._LAZY_OP_SERIALIZER_MODULES,
+            "test_trusted_but_silent",
+            "langres.core.score_type",
+        )
+        with pytest.raises(UnknownOpType, match="did not register role"):
+            get_op_serializer("test_trusted_but_silent")
+
+    def test_an_unknown_role_imports_nothing_and_fails_closed(self) -> None:
+        with pytest.raises(UnknownOpType) as exc:
+            get_op_serializer("no_such_op_role_123")
+        assert "no_such_op_role_123" in str(exc.value)

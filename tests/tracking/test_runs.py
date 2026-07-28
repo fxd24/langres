@@ -11,6 +11,7 @@ fan-out, failure path).
 
 from __future__ import annotations
 
+import decimal
 import json
 import logging
 import os
@@ -749,3 +750,70 @@ class TestCaptureRun:
             pass
         record = RunStore(path).read()[0]
         assert "http://mlflow/run/1" in record.artifacts.values()
+
+
+# ---------------------------------------------------------------------------
+# A run snapshot is immutable and JSON-safe.
+#
+# A RunContext is the recipe half of the durable record of what ran, and
+# `compute_recipe_id` content-addresses it. If a caller could mutate a snapshot
+# after the id was computed, the id would no longer describe the object; if a
+# snapshot could hold a set or a NaN, the record would not round-trip through
+# JSON at all. Both are enforced at validation time.
+# ---------------------------------------------------------------------------
+
+
+class TestRunSnapshotsAreImmutable:
+    def test_popitem_is_refused(self) -> None:
+        context = _context(tags={"stage": "eval"})
+        with pytest.raises(TypeError, match="run snapshots are immutable"):
+            context.tags.popitem()
+
+    def test_in_place_union_is_refused(self) -> None:
+        context = _context(tags={"stage": "eval"})
+        with pytest.raises(TypeError, match="run snapshots are immutable"):
+            context.tags |= {"stage": "smuggled"}
+
+    def test_nested_mappings_are_frozen_too(self) -> None:
+        """Freezing only the top level would leave the interesting part mutable."""
+        context = _context(resolver_config={"matcher": {"threshold": 0.5}})
+        assert context.resolver_config is not None
+        with pytest.raises(TypeError, match="run snapshots are immutable"):
+            context.resolver_config["matcher"]["threshold"] = 0.9
+
+
+class TestRunSnapshotsMustBeJsonValues:
+    def test_a_set_is_refused(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="sets are not supported"):
+            _context(resolver_config={"kinds": {"a", "b"}})
+
+    def test_a_non_finite_decimal_is_refused(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="finite numeric values"):
+            _context(resolver_config={"cost": decimal.Decimal("NaN")})
+
+
+class TestDatasetFingerprintCanonicalization:
+    """The fingerprint normalizes what is unordered and preserves what is not."""
+
+    def test_a_finite_decimal_is_canonicalized_not_rejected(self) -> None:
+        fingerprint = dataset_fingerprint([{"price": decimal.Decimal("1.50")}], [])
+        assert fingerprint == dataset_fingerprint([{"price": decimal.Decimal("1.50")}], [])
+
+    def test_a_non_finite_decimal_cannot_be_fingerprinted(self) -> None:
+        with pytest.raises(ValueError, match="must be finite"):
+            dataset_fingerprint([{"price": decimal.Decimal("Infinity")}], [])
+
+    def test_ordinary_list_order_is_content_not_noise(self) -> None:
+        """A token sequence is ordered data; reordering it is a different dataset.
+
+        Contrast the set-of-clusters case, where list order is a graph-traversal
+        artifact and *is* normalized away.
+        """
+        assert dataset_fingerprint([{"tokens": ["a", "b"]}], []) != dataset_fingerprint(
+            [{"tokens": ["b", "a"]}], []
+        )
+
+    def test_cluster_order_is_noise_and_is_normalized_away(self) -> None:
+        assert dataset_fingerprint([[{"a"}, {"b"}]], []) == dataset_fingerprint(
+            [[{"b"}, {"a"}]], []
+        )

@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -32,7 +32,13 @@ from langres.core.op_adapters import (
     GroupwiseMatcherScore,
     MatcherScore,
 )
-from langres.core.registry import register, register_op
+from langres.core.registry import (
+    OpSerializer,
+    get_op_serializer,
+    register,
+    register_op,
+    register_op_serializer,
+)
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult
 from langres.core.serialization import ArtifactManifest, ComponentSpec, OpSpec
@@ -626,3 +632,143 @@ def test_registered_custom_op_rejects_unknown_params_before_from_config(tmp_path
             ),
             state_dir=tmp_path,
         )
+
+
+# --------------------------------------------------------------------------
+# The fail-closed guards on the OpSpec seam.
+#
+# `rebuild_op` validates the role/component envelope before it constructs
+# anything, and re-checks the Stage contract after. Each guard below is the
+# thing that turns a malformed or hostile manifest into a loud error instead of
+# a half-built pipeline, so each is asserted on its own.
+# --------------------------------------------------------------------------
+
+
+def _dump_nothing(op: object) -> tuple[dict[str, object], object | None]:
+    return {}, None
+
+
+def _passthrough_params(params: dict[str, object]) -> dict[str, object]:
+    return dict(params)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "blocker_source",
+        "comparator_score",
+        "matcher_score",
+        "calibrator_score",
+        "clusterer_stage",
+    ],
+)
+def test_builtin_loader_refuses_to_build_around_a_missing_component(
+    role: str, tmp_path: Path
+) -> None:
+    """Every component-bearing built-in role rejects a `None` component.
+
+    This is the layer beneath `rebuild_op`'s envelope check: `load` is reachable
+    directly through `get_op_serializer(role)`, which is exactly what a custom-Op
+    author holds. Without the guard a built-in stage would be constructed around
+    `None` and fail much later, far from the malformed manifest that caused it.
+    """
+    serializer = get_op_serializer(role)
+    with pytest.raises(ValueError, match="requires a nested component"):
+        serializer.load({}, None, tmp_path)
+
+
+def test_calibrator_score_serializer_round_trips_its_nested_calibrator(tmp_path: Path) -> None:
+    """`calibrator_score` carries the fitted calibrator as its nested component.
+
+    The dump must hand back the calibrator itself (the artifact layer serializes it
+    through the component registry and its sidecar), and the load must rebuild a
+    CalibratorScore around whatever it is given back.
+    """
+    from langres.core.op_adapters import CalibratorScore
+
+    class _FittedCalibrator:
+        def transform(self, scores: list[float]) -> list[float]:
+            return scores
+
+    calibrator = _FittedCalibrator()
+    serializer = get_op_serializer("calibrator_score")
+
+    params, component = serializer.dump(CalibratorScore(calibrator))  # type: ignore[arg-type]
+    assert params == {}
+    assert component is calibrator
+
+    restored = serializer.load(params, calibrator, tmp_path)
+    assert isinstance(restored, CalibratorScore)
+    assert restored.calibrator is calibrator
+
+
+def test_rebuild_op_fails_closed_when_a_role_has_no_param_schema(tmp_path: Path) -> None:
+    """No registered `validate_params` means no way to prove the params are safe."""
+
+    class _SchemalessStage:
+        pass
+
+    def _load(params: dict[str, object], component: object | None, state_dir: Path) -> object:
+        return _SchemalessStage()
+
+    register_op_serializer(
+        OpSerializer(
+            role="persist_v2_schemaless",
+            op_type=_SchemalessStage,
+            dump=_dump_nothing,
+            load=_load,
+        )
+    )
+    with pytest.raises(ValueError, match="no registered parameter schema"):
+        rebuild_op(OpSpec(role="persist_v2_schemaless", params={}), state_dir=tmp_path)
+
+
+def test_op_spec_rejects_a_component_the_role_never_declared() -> None:
+    """A serializer that hands back a component must have declared a slot for it.
+
+    Otherwise `op_spec` would silently drop the component on save and the stage
+    would reload without it.
+    """
+
+    class _LeakyStage:
+        pass
+
+    def _dump_leaky(op: object) -> tuple[dict[str, object], object | None]:
+        return {}, object()
+
+    def _load(params: dict[str, object], component: object | None, state_dir: Path) -> object:
+        return _LeakyStage()
+
+    register_op_serializer(
+        OpSerializer(
+            role="persist_v2_leaky",
+            op_type=_LeakyStage,
+            dump=_dump_leaky,
+            load=_load,
+            validate_params=_passthrough_params,
+        )
+    )
+    with pytest.raises(TypeError, match="declares no component_slot"):
+        op_spec(cast(Stage, _LeakyStage()))
+
+
+def test_rebuild_op_rejects_a_rebuilt_object_that_is_not_a_stage(tmp_path: Path) -> None:
+    """A registered serializer cannot smuggle a non-Stage into the chain."""
+
+    class _NotAStage:
+        pass
+
+    def _load(params: dict[str, object], component: object | None, state_dir: Path) -> object:
+        return _NotAStage()
+
+    register_op_serializer(
+        OpSerializer(
+            role="persist_v2_not_a_stage",
+            op_type=_NotAStage,
+            dump=_dump_nothing,
+            load=_load,
+            validate_params=_passthrough_params,
+        )
+    )
+    with pytest.raises(TypeError, match="not a Source/Op/ClusterStage/Finalize"):
+        rebuild_op(OpSpec(role="persist_v2_not_a_stage", params={}), state_dir=tmp_path)
