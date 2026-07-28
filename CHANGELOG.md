@@ -4,8 +4,9 @@
 
 ### The default embedding model is now `intfloat/e5-base-v2`
 
-**This changes results, and it invalidates saved vector indexes.** Read the
-migration note below before upgrading if you have one on disk.
+**This changes results for any index built against the default.** Saved
+artifacts are *not* invalidated — they reload on the model they were saved with —
+so read the migration note below before re-embedding anything.
 
 `DEFAULT_EMBEDDING_MODEL` moves from `all-MiniLM-L6-v2` to `intfloat/e5-base-v2`
 (MIT). The embedder ladder (`docs/research/20260727_embedder_ladder.md`) measured
