@@ -16,9 +16,11 @@ shipped behaviour said another and no test would notice.
   lives on the stdlib leaf, so it adds no import-graph edge.
 - **`MethodSpec` inherits from its own `score_type`.** Omitting
   `default_threshold` fills it from the family; set it explicitly only to
-  *override*. Seven specs previously spelled out the same two literals, so a
+  *override*. Eight specs previously spelled out the same two literals, so a
   change to a family's cut would have moved some and silently left the rest.
-  The resolved value for all 13 registered methods is unchanged.
+  **The wiring itself changed no value** — all 13 registered methods resolved to
+  exactly what they had before; the constant that then moves does so as a
+  separate, measured change (below).
 - **Wired at the front doors**: `FuzzyString`, `VectorLLMCascade`, the four
   `architectures/retrieval.py` recipes, and `Reranker.for_schema`. An explicit
   `threshold=` is returned untouched, including one that happens to equal the

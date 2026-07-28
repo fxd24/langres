@@ -124,9 +124,9 @@ class MethodSpec(BaseModel):
             :data:`~langres.core.score_type.DEFAULT_THRESHOLDS`, which is where
             a family's shipped cut is written down. Set it explicitly only to
             *override* the family -- a per-method deviation someone should have
-            to justify. Before this defaulted from the family, seven specs each
-            spelled out the same two literals, and a change to the family's cut
-            would have moved some of them and silently left the rest behind.
+            to justify. Before this defaulted from the family, **eight** specs
+            each spelled out the same two literals, and a change to the family's
+            cut would have moved some of them and silently left the rest behind.
         default_model: The underlying model id when the caller names none --
             the value stamped on results as ``model`` (``None`` for judges
             with no model at all, e.g. pure-string similarity).
