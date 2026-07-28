@@ -1176,6 +1176,57 @@ class TestRecommendationSplitsOnLicence:
         assert not LADDER._is_osi(LADDER.ModelSpec("someone/new-model"))
         assert LADDER.ModelSpec("someone/new-model").license == "unknown"
 
+    def test_a_missing_interval_is_not_reported_as_a_tie(self) -> None:
+        """``merge_rows`` clears ``vs_reference_*`` when the reference is remeasured.
+
+        Every challenger then has zero wins for the same reason it has zero
+        losses: nothing was compared. Saying "the measurement cannot tell them
+        apart" turns that gap into a finding of equivalence, and then into a
+        reason to keep the default.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=None,
+                vs_reference_ci_low=None,
+                vs_reference_ci_high=None,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot rank them at all" in section
+        assert "missing measurement, not a tie" in section
+        assert "cannot tell them apart" not in section
+
+    def test_a_real_zero_win_field_still_recommends_keeping_the_default(self) -> None:
+        """The control: a challenger that WAS compared and did not win.
+
+        Without this, a check that always reported "missing measurement" would
+        pass the test above while destroying the recommendation it guards.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.02,
+                vs_reference_ci_high=0.04,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "cannot rank them at all" not in section
+
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()

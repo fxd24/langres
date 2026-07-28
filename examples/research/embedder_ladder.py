@@ -1354,6 +1354,28 @@ def _render_recommendation(
                 found.append(row)
         return found
 
+    def has_comparison(model: str) -> bool:
+        """Whether ``model`` has ANY usable interval against the reference.
+
+        ``wins()`` returning empty has two completely different causes that look
+        identical downstream: the model was compared and did not win, or it was
+        never compared at all. ``merge_rows()`` deliberately clears every
+        challenger's ``vs_reference_*`` when the reference is remeasured (they are
+        stale until rerun), and a prompt-arm-only partial run can produce an ``ok``
+        model with no ``none``-arm row, so the second case is routine rather than
+        theoretical. Reading it as "the measurement cannot tell them apart" turns a
+        missing number into a finding of equivalence. (Cross-model review.)
+        """
+        return any(
+            r.model == model
+            and r.k == headline_k
+            and r.prompt_arm == "none"
+            and r.vs_reference_delta is not None
+            and r.vs_reference_ci_low is not None
+            and r.vs_reference_ci_high is not None
+            for r in ok
+        )
+
     measured = sorted({row.model for row in ok})
     candidates = [name for name in models if name != REFERENCE_MODEL and name in measured]
     osi = [name for name in candidates if _is_osi(MODELS_BY_NAME.get(name) or ModelSpec(name))]
@@ -1434,14 +1456,34 @@ def _render_recommendation(
             for name in osi
         ]
         best_count, _best_delta, best_name = max(ranked)
-        if best_count == 0:
+        compared = [name for name in osi if has_comparison(name)]
+        if not compared:
             out.append(
-                f"\n**No OSI-licensed model beats `{REFERENCE_MODEL}` on any benchmark "
-                "with an interval clear of zero.** The measured recommendation is "
-                "therefore to **keep the current default** — not because the "
-                "challengers are bad, but because on this evidence the measurement "
-                "cannot tell them apart, and 'indistinguishable' is not a reason to "
-                "move.\n"
+                f"\n**No OSI-licensed challenger currently carries an interval against "
+                f"`{REFERENCE_MODEL}`, so this sweep cannot rank them at all.** That is "
+                "a **missing measurement, not a tie**: the comparison fields are "
+                "cleared for every challenger whenever the reference is remeasured, and "
+                "a run that skipped the no-instruction arm never produces them. Re-run "
+                "the challengers against the current reference before reading anything "
+                "into this section — and in particular do not read it as a reason to "
+                "keep the default, which is a claim this state cannot support.\n"
+            )
+        elif best_count == 0:
+            out.append(
+                f"\n**None of the {len(compared)} compared OSI-licensed model(s) beats "
+                f"`{REFERENCE_MODEL}` on any benchmark with an interval clear of zero.** "
+                "The measured recommendation is therefore to **keep the current "
+                "default** — not because the challengers are bad, but because on this "
+                "evidence the measurement cannot tell them apart, and "
+                "'indistinguishable' is not a reason to move."
+                + (
+                    ""
+                    if len(compared) == len(osi)
+                    else f" Note this covers {len(compared)} of the {len(osi)} OSI "
+                    "models in the table above; the rest carry no interval and are "
+                    "not part of that statement."
+                )
+                + "\n"
             )
         else:
             out.append(
@@ -1584,10 +1626,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "(`embedder_ladder.py::_assert_cache_matches_checkpoint`); a mismatch aborts "
         "the run and names the namespace file to delete. A namespace written *before* "
         "that check existed carries no canary and has therefore never been verified "
-        "against anything, so it is refused rather than adopted silently — every "
-        "namespace behind this table is in that state. Pass `--trust-existing-cache` "
-        "to vouch for one: it pins the canary once, and every later run is checked "
-        "normally. Putting the revision in the "
+        "against anything, so it is refused rather than adopted silently. Pass "
+        "`--trust-existing-cache` to vouch for one: it pins the canary once, and "
+        "every later run is checked normally — which is exactly why **this document "
+        "does not state which namespaces are in which state**. The rows carry no "
+        "cache-verification field, so the renderer cannot see it, and the supported "
+        "adoption path changes it between runs: a sentence claiming every namespace "
+        "is unverified would be made false by the very next `--trust-existing-cache` "
+        "run and would keep asserting it. The live answer is in the cache directory "
+        "itself — a namespace holding the canary row has been pinned; one without it "
+        "has not — and a run that meets an unpinned namespace says so and exits 3. "
+        "Putting the revision in the "
         "namespace instead would invalidate every cached vector to close the same "
         "hazard, and would still only answer *is this the same Hub commit* — the "
         "canary answers *does this checkpoint still produce these vectors*, which is "
