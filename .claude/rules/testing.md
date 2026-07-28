@@ -73,10 +73,16 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - **Why two floors is not the "two numbers drift" disease.** The thing that rots
   is the include *list*, and there is only one of it. The floors differ because the
   two gates measure genuinely different data: the per-PR job excludes the slow ML
-  tests, so paths covered only by them read as uncovered there. Measured on one
-  tree, 2026-07-28: full suite **98.05%**, fast suite **97.87%** — the slow tests
-  are worth only **0.18pp** of this include list, so the fast measurement is a close
-  proxy, not a different quantity wearing the same name.
+  tests, so paths covered only by them read as uncovered there.
+  The lower floor is **structural, not tuned**: the per-PR selection
+  (`not integration and not slow and not finetune`) differs from `test-full`'s
+  (`not integration and not finetune`) *only* by `not slow`, so its tests are a
+  strict **subset**. Coverage is monotone in tests executed and both gates score
+  the same include list (same denominator), so **full-suite coverage ≥ fast-suite
+  coverage, always** — the per-PR gate can never demand what the authoritative one
+  does not already meet. The observed gap is small, which is why 97.5 is close
+  rather than slack: measured on one tree, 2026-07-28, full suite **98.05%** vs
+  fast suite **97.87%** — **0.18pp**.
 - **Timings, measured 2026-07-28** (the previous "~10min" claim was stale by 4x and
   was the justification for keeping the contract gate off PRs entirely):
   `test-full` **~38–41 min**, the per-PR `test` job **~6 min**, the gate step

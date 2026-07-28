@@ -142,14 +142,27 @@ jobs:
       # gates measure different data: this job deliberately excludes the slow ML
       # tests, so paths covered only by them read as uncovered here.
       #
-      # MEASURED on the same tree, 2026-07-28:
+      # The lower floor is STRUCTURAL, not tuned to an observation. This job's
+      # selection is `not integration and not slow and not finetune`;
+      # `test-full`'s is `not integration and not finetune`. They are identical
+      # except for `not slow`, so the tests run here are a strict SUBSET of the
+      # tests run there. Coverage is monotone in tests executed -- running more
+      # tests can only cover more lines -- and both gates score the same include
+      # list, hence the same denominator. Therefore, on the same tree:
+      #
+      #     full-suite coverage  >=  fast-suite coverage,   ALWAYS.
+      #
+      # So this gate can never demand something the authoritative gate does not
+      # already meet, and a number that clears 98 on `test-full` cannot be failed
+      # here for having been measured on less data.
+      #
+      # The observed gap is small, which is why 97.5 is close rather than
+      # slack. MEASURED on the same tree, 2026-07-28:
       #   full suite (test-full)   98.05%
       #   fast suite (this job)    97.87%
       #   difference                0.18pp
-      # The slow tests are worth only 0.18pp of THIS include list -- so the fast
-      # measurement is a close proxy for the real one, not a different quantity
-      # wearing the same name. 97.5 is that 97.87 with the same conservative
-      # rounding-down the 98 floor gets, leaving ~0.37pp of working room.
+      # 97.5 is that 97.87 with the same conservative rounding-down the 98 floor
+      # gets, leaving ~0.37pp of working room.
       #
       # This floor is a per-PR EARLY WARNING; `test-full`'s 98 remains the
       # authoritative contract floor. If this one fires, the contract slipped --
