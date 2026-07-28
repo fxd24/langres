@@ -1563,6 +1563,42 @@ class ERModel(ModelRun, ModelPersistence):
             _row_key(row): row.to_judgement() for row in scored.rows if row.score_type is not None
         }
         _refuse_deciders(judgement_by_pair.values())
+        if scored.rows and not judgement_by_pair:
+            # Every row is UNSCORED (``score_type is None``) -- a blocker
+            # similarity, which ``PairRow.predicted_match`` deliberately refuses
+            # to threshold ("only a SCORED row's score is a judge score"). It
+            # returns ``self.decision``, i.e. ``None``, so ThresholdSelect drops
+            # every such row *whatever* value is fitted. Deriving here would
+            # report a measured, applied cut for a fit that cannot change one
+            # pair -- the same silently-inert failure as ``_refuse_deciders``,
+            # reached from the other side.
+            raise ValueError(
+                "fit(derive_threshold=True) cannot fit a threshold for this chain: "
+                "its rows carry no judge score (score_type is None -- the score "
+                "column holds a blocker similarity). PairRow.predicted_match will "
+                "not threshold an unscored row, so ThresholdSelect drops all of "
+                "them regardless of the cut and this fit would be silently inert. "
+                "Add a Score (e.g. MatcherScore) to the chain before the "
+                "ThresholdSelect."
+            )
+        cluster_cut = self._chain_cluster_stage().clusterer.threshold
+        if cluster_cut:
+            # A chain can gate TWICE: the ThresholdSelect this fit writes, and the
+            # nested clusterer, which "keeps thresholding on the projected
+            # judgements". Fitting only the first would let a winning cut of 0.80
+            # be reported as applied while a clusterer cut of 0.90 still rejects
+            # every pair between them -- a held-out improvement resolve() never
+            # realizes. The shipped research recipes build this stage
+            # threshold-free for exactly that reason; refuse rather than silently
+            # fit one of two gates.
+            raise ValueError(
+                "fit(derive_threshold=True) cannot fit this chain: its ClusterStage "
+                f"clusterer carries its own threshold ({cluster_cut}), so the chain "
+                "gates twice and fitting the ThresholdSelect alone would report an "
+                "improvement that resolve() cannot deliver. Build the stage "
+                "threshold-free -- ClustererStage(Clusterer(threshold=0.0)) -- and "
+                "let the ThresholdSelect own the match cut."
+            )
         aligned = align_pairs(scored.to_candidates(), pairs, split=split, seed=seed)
 
         judgements = [

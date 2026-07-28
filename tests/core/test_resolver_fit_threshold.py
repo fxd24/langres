@@ -711,16 +711,20 @@ def test_the_classic_seam_also_reports_no_metrics_when_nothing_was_judged() -> N
     assert "No held-out pair P/R/F1 computed for this fit." in report.to_markdown()
 
 
-def test_a_score_less_chain_reports_no_held_out_metrics() -> None:
-    """Empty judgements must read as "not computed", never as a table of zeros.
+def test_a_score_less_chain_refuses_to_derive() -> None:
+    """A blocker similarity is not a judge score, and a cut on it governs nothing.
 
-    A chain need not contain a ``Score``: cutting on the blocker's own similarity
-    is permitted topology, and every row then carries ``score_type=None``. The
-    metrics gate used to test ``aligned.valid.candidates`` instead of the
-    judgements themselves, and ``classify_pairs([], gold, t)`` does not return
-    ``None`` -- it returns a real ``PairMetrics`` of zeros with ``fn=len(gold)``.
-    That printed a fully-populated "Held-out pair metrics" table of 0.0000 for a
-    fit that measured nothing.
+    A chain need not contain a ``Score``, and its rows then carry a blocker
+    similarity with ``score_type=None``. ``PairRow.predicted_match`` deliberately
+    refuses to threshold such a row ("only a SCORED row's ``score`` is a judge
+    score") and returns ``self.decision`` -- ``None`` -- so ``ThresholdSelect``
+    drops *every* row whatever value is fitted.
+
+    An earlier version of this test asserted that such a fit merely reported no
+    held-out metrics. That was the wrong bar: the fit still stamped
+    ``source="derived"`` and an applied threshold for something that cannot
+    change one pair at resolve time. A measured-looking number attached to an
+    inert change is exactly what this feature exists to prevent, so it raises.
     """
     records, pairs = _dataset()
     model = ERModel.from_topology(
@@ -730,17 +734,31 @@ def test_a_score_less_chain_reports_no_held_out_metrics() -> None:
             ClustererStage(Clusterer(threshold=0.0)),
         ]
     )
-    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
-    report = model.fit_report_
-    assert report is not None and report.threshold_fit is not None
-    # The cut really was fitted -- the blocker's similarity is a usable score...
-    assert report.threshold_fit.source in {"derived", "declined"}
-    assert report.n_valid > 0  # ...and a held-out split really did exist...
-    # ...but no judgement was ever produced, so there is nothing to grade.
-    assert report.metrics is None
-    assert report.threshold_fit.previous is not None
-    assert report.threshold_fit.previous.held_out_f1 is None
-    assert "No held-out pair P/R/F1 computed for this fit." in report.to_markdown()
+    with pytest.raises(ValueError, match="no judge score"):
+        model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+
+
+def test_a_chain_that_gates_twice_refuses_to_derive() -> None:
+    """Fitting one of two gates would report an improvement resolve() cannot deliver.
+
+    An explicit chain can cut twice: at its ``ThresholdSelect`` and again at the
+    nested clusterer, which keeps thresholding the projected judgements. Lowering
+    the select to a winning 0.80 while a clusterer cut of 0.90 still rejects
+    everything between them yields a held-out "improvement" that never reaches
+    ``resolve()``. The shipped research recipes build the stage threshold-free for
+    this reason; a chain that does not is refused rather than half-fitted.
+    """
+    records, pairs = _dataset()
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            MatcherScore(_matcher(), out_space="heuristic"),
+            ThresholdSelect(0.9),
+            ClustererStage(Clusterer(threshold=0.9)),
+        ]
+    )
+    with pytest.raises(ValueError, match="gates twice"):
+        model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
 
 
 def test_threshold_seam_reports_where_each_topology_keeps_its_cut() -> None:
