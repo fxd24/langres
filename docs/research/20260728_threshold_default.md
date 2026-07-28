@@ -255,14 +255,19 @@ because the race is what `fit` actually does.
 **Seed stability.** No benchmark×scorer flips its `kept` verdict across seeds
 except `tiny_fixture`/`rapidfuzz` (derived, derived, declined) — and that is the
 1-gold-pair fixture again. The *cut itself* is less stable than the verdict, and
-the spread depends on the scorer: across the three seeds the largest range is
-`walmart_amazon`/`rapidfuzz` at **0.0384** (0.5206 / 0.5538 / 0.5590), then
-`abt_buy`/`rapidfuzz` at 0.0205; every `embedding_cosine` cell sits at ≤0.0067,
-with `dblp_acm`/`rapidfuzz` the tightest heuristic case at 0.0037 (0.6917 /
-0.6952 / 0.6954). So "the derived cut is reproducible to ~±0.005" holds for the
-cosine family and for some string cells, but **not** as a general claim — a
-single benchmark's three seeds can disagree by ~0.04, which matters if anyone
-were to lift one derived number and hard-code it.
+how much depends on the scorer. Per-cell spread across the three seeds:
+
+| scorer | min spread | max spread | cells > 0.01 |
+|---|---|---|---|
+| `embedding_cosine` | 0.0000 (`fodors_zagat`, `tiny_fixture`) | **0.0067** (`abt_buy`) | 0 of 9 |
+| `rapidfuzz` | 0.0000 (`febrl_person` — identical at all 3 seeds) | **0.0384** (`walmart_amazon`, 0.5206 / 0.5538 / 0.5590) | 3 of 9 |
+
+So the cosine family is reproducible to well under ±0.005, and most `rapidfuzz`
+cells are too — but three are not (`wdc_computers` 0.0097, `abt_buy` 0.0205,
+`walmart_amazon` 0.0384). "Derived cuts are stable to ~±0.005" was in an earlier
+draft of this section, generalised from one benchmark; it is wrong by ~8× at the
+tail. That matters for anyone tempted to lift a single derived number and
+hard-code it — the thing §5 argues against on other grounds too.
 
 ### 2.2 Was the race right when it declined?
 
