@@ -13,6 +13,15 @@ module's top level. A bare ``import langres`` must not pull mlflow/wandb/trackio
 the adapters eagerly from this shim would defeat it.
 """
 
+# NOT `# pragma: no cover`, unlike the sibling W2 shims (see core/harvest.py).
+# Those are pure `from X import Y` redirects that own no contract and cannot
+# fail in isolation. This one is different in kind: `__getattr__` below carries
+# real conditional resolution -- a lazy-adapter branch and an unknown-name
+# `AttributeError` branch -- and behavior excluded from the gate is behavior a
+# regression can break silently. It is covered by
+# tests/core/test_trackers_backcompat_shim.py instead, which also pins
+# `_LAZY_ADAPTERS` against the real module's adapter table so the two cannot
+# drift apart. Goes away with this file in the W2 sweep.
 from typing import TYPE_CHECKING, Any
 
 from langres.tracking.trackers import (

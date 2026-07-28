@@ -8,7 +8,12 @@ Run identity/persistence is observability, not ER modelling, so it now lives in
 re-exports these names).
 """
 
-from langres.tracking.runs import (
+# `# pragma: no cover`, as on every other W2 shim (see core/harvest.py): a
+# re-export owns no contract. `langres.tracking.runs` is itself inside the
+# `langres.core` contract coverage gate, so measuring this redirect would book a
+# miss against code already covered at its real home. Goes away with this file
+# in the W2 sweep.
+from langres.tracking.runs import (  # pragma: no cover
     RunContext,
     RunRecord,
     RunStore,
@@ -21,7 +26,7 @@ from langres.tracking.runs import (
     resolve_store,
 )
 
-__all__ = [
+__all__ = [  # pragma: no cover
     "RunContext",
     "RunRecord",
     "RunStore",
