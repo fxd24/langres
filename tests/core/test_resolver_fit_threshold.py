@@ -35,8 +35,9 @@ from langres.core.clusterer import Clusterer
 from langres.core.matchers import RapidfuzzMatcher
 from langres.core.metrics import classify_pairs
 from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.op import ThresholdSelect, TopKSelect
+from langres.core.op import ClusterStage, ThresholdSelect, TopKSelect
 from langres.core.op_adapters import BlockerSource, ClustererStage, MatcherScore
+from langres.core.pairs import Pairs
 from langres.core.resolver import ERModel, Resolver
 from langres.curation.harvest import LabeledPair, align_pairs, warn_if_silver_only
 from langres.training.fit_report import FitReport, ThresholdCandidate, ThresholdFit
@@ -736,6 +737,36 @@ def test_a_score_less_chain_refuses_to_derive() -> None:
     )
     with pytest.raises(ValueError, match="no judge score"):
         model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+
+
+def test_a_custom_cluster_stage_has_no_second_gate_to_conflict_with() -> None:
+    """The double-gate refusal must not fire on a stage that carries no threshold.
+
+    ``ClusterStage`` is a public topology contract; only the ``ClustererStage``
+    adapter wraps a legacy ``Clusterer`` and its threshold. A custom stage has no
+    independent cut, so absence reads as "no second gate", not "unknown" -- and
+    reading the attribute off the contract rather than the adapter would have
+    been an ``AttributeError`` here.
+    """
+
+    class _PairwiseStage(ClusterStage[Any]):
+        """Minimal custom stage: one cluster per surviving pair, no threshold."""
+
+        def forward(self, pairs: Pairs[Any]) -> list[set[str]]:
+            return [{row.left_id, row.right_id} for row in pairs.rows]
+
+    records, pairs = _dataset()
+    model = ERModel.from_topology(
+        ops=[
+            BlockerSource(AllPairsBlocker(schema=CompanySchema)),
+            MatcherScore(_matcher(), out_space="heuristic"),
+            ThresholdSelect(_DEFAULT_THRESHOLD),
+            _PairwiseStage(),
+        ]
+    )
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert model.fit_report_ is not None and model.fit_report_.threshold_fit is not None
+    assert model.fit_report_.threshold_fit.source == "derived"
 
 
 def test_a_chain_that_gates_twice_refuses_to_derive() -> None:
