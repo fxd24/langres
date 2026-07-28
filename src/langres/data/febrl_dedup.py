@@ -140,10 +140,18 @@ ACHIEVED_PC_AT_DEFAULT_K = 0.9552
 GATE_MET = ACHIEVED_PC_AT_DEFAULT_K >= DEDUP_RECALL_GATE
 
 #: Pair-Completeness floor the slow blocking test asserts at
-#: :data:`DEFAULT_DEDUP_BLOCKING_K`. Set ~2.5pp under the measured value — below
-#: the gate on purpose (see :data:`ACHIEVED_PC_AT_DEFAULT_K`), but far enough
-#: above the k=30 measurement (0.9440) that a real blocking regression, a broken
-#: ``embed_text``, or a silently-reintroduced cross-source filter still trips it.
+#: :data:`DEFAULT_DEDUP_BLOCKING_K`. Deliberately below the gate — see
+#: :data:`ACHIEVED_PC_AT_DEFAULT_K` for why re-asserting 0.95 would test the CI
+#: runner rather than the data.
+#:
+#: **What it can actually catch**, since a floor nobody has seen fail is a
+#: hypothesis, not a safety net: it sits between the k=10 (0.9137) and k=30
+#: (0.9440) measurements, so it trips on a *gross* blocking failure — a broken
+#: ``embed_text``, a corrupted fixture, or a cross-source filter silently
+#: reintroduced here (which would read ≈0.0, since no two records share a
+#: source). It does **not** police small drift in ``k``; nothing needs it to,
+#: because ``test_benchmark_exposes_pinned_config`` pins ``blocking_k`` against
+#: :data:`DEFAULT_DEDUP_BLOCKING_K` directly.
 PC_REGRESSION_FLOOR = 0.93
 
 #: Candidate Clusterer thresholds swept when racing methods on FEBRL3 dedup.

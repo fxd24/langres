@@ -240,9 +240,12 @@ def test_blocking_pair_completeness_holds_its_regression_floor() -> None:
     Asserts :data:`PC_REGRESSION_FLOOR` rather than :data:`DEDUP_RECALL_GATE`
     deliberately: the measured 0.9552 clears the 0.95 gate by less than the known
     cross-platform MiniLM spread (``febrl_person`` measured over 1.6pp), so
-    asserting the gate would test the CI runner, not the dataset. The floor still
-    sits above the k=30 measurement (0.9440), so a genuine blocking regression —
-    or a cross-source filter silently reintroduced here — trips it.
+    asserting the gate would test the CI runner, not the dataset. The floor sits
+    between the k=10 (0.9137) and k=30 (0.9440) measurements, so what it catches
+    is a *gross* failure — a broken ``embed_text``, a corrupted fixture, or a
+    cross-source filter reintroduced here (≈0.0, since no two records share a
+    source). Small ``k`` drift is pinned separately, by
+    ``test_benchmark_exposes_pinned_config``.
     """
     corpus, gold_clusters, _pairs = load_febrl_dedup()
     recalls = sweep_blocking_k(corpus, gold_clusters, ks=(DEFAULT_DEDUP_BLOCKING_K,))
