@@ -151,6 +151,41 @@ constant graded on those cells.
 
 @@VERDICT@@
 
+### Reading the `heuristic` row: it is not instability
+
+The obvious guess — that rapidfuzz has no single constant because every dataset
+wants a different one — is **wrong here, and the table says so**. Its
+leave-one-out constants agree closely (§6): drop any one dataset and the choice
+barely moves. PR #250's derived cuts spanned 0.174–0.695, which made
+non-generalization the expected outcome; the *fixed*-constant question turns out
+to have a different answer than the *derived*-cut question did.
+
+What kills it is clause (2), not clause (1). One constant, chosen without seeing
+the dataset it is graded on, **helps on most of the portfolio and reliably
+damages `abt_buy`** — on every seed, with the 95% interval entirely below zero.
+That is not noise and it is not a tie; it is a predictable loss for a whole class
+of data (short, noisy product titles where a high string-similarity bar
+throws away true matches faster than it removes false ones).
+
+**The conventions agree, so this does not rest on the denominator.** The
+end-to-end (all-gold) table in §5 shows `abt_buy` losing by the same margins with
+intervals just as clearly below zero, and `febrl_dedup`'s mild losses harden
+there rather than softening. If anything the end-to-end view is *less* favourable
+to shipping a constant than the blocked-gold view the verdict is computed on.
+
+A default that improves the median while predictably harming a known dataset
+class is not a default — it is a recommendation with an undisclosed victim.
+Clause (2) was pre-registered precisely so this case could not be argued away
+after the fact by pointing at a healthy median. So `heuristic` keeps `0.5`, and
+the honest guidance for it is unchanged: **derive the cut from labels** (PR
+#250's seam, `derive_threshold`), which the ladder in §6 shows is worth
+substantially more than any constant anyway.
+
+Note also what the ladder shows about the incumbent: on the harder product
+benchmarks `0.5` is not a mild compromise, it is close to worthless. The reason
+to leave it in place is that nothing free and *safe* beats it, not that it is
+good.
+
 ## 9. What was measured vs. what was inferred
 
 **Measured** (this artifact, held-out, multi-seed, with intervals):
