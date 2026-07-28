@@ -683,6 +683,36 @@ changing the default model hard."* Design note:
 
 ### Fixed
 
+- **Retracted a fabricated `~12.5x` speedup claim on `LLMMatcher.forward_async`.**
+  The docstring advertised `~4 requests/second` sequential vs `~50
+  requests/second` async. Neither figure survives contact with the code: the
+  `_RateLimiter` is constructed *only* inside `forward_async`, so the sequential
+  `forward` has no RPM cap at all (its rate is per-call latency), while
+  `forward_async`'s own default `rpm_limit=250` caps it at 250 RPM = **4.17
+  req/s** — it cannot reach 50 req/s, and 4.17 was the number being quoted as
+  the *baseline*. `12.5` was simply `50/4`. The docstring now states what is
+  true — async overlaps request latency, and the rate limiter is the binding
+  ceiling — with **no** replacement ratio, because none has been measured.
+  Anyone who sized a job on the old number should re-derive it from
+  `rpm_limit`. The same claim is retracted in
+  `examples/research/phase2_full_pipeline.py`, whose ETA also divided by
+  requests-per-*second* while reporting minutes (60x under).
+- **Ruff was enforcing almost nothing.** `[tool.ruff.lint] select` *replaces*
+  ruff's default rule set rather than extending it, so listing only the two
+  print bans silently disabled `E4`/`E7`/`E9`/`F` — all of pyflakes included —
+  and `ruff check .` passed on 167 real violations. Now `extend-select`. The
+  latent bug this surfaced in shipped code: `core/_exports/_flywheel.py` and
+  `core/_exports/_training.py` each imported the same names **twice** — once
+  from the canonical module and once from a `# TEMPORARY` W2 back-compat shim
+  (`langres.core.review` / `.judgement_log` / `.harvest` / `.fit_report`).
+  **Nothing resolved differently at runtime** — the shims re-export, so every
+  duplicated binding is `is`-identical, and the two pairs happened to shadow in
+  *opposite* directions (the shim won for `JudgementLog`/`LoggingMatcher`/
+  `align_pairs`, the canonical module won for `ReviewItem`/`ReviewQueue`/
+  `select_for_review`/`FitReport`). The hazard was the pending shim deletion,
+  not current behaviour: importing those shim modules at all means deleting
+  them raises `ImportError` and breaks `langres.core` at import time. Only the
+  canonical imports remain.
 - **`langres.__version__` no longer drifts from the released version.** It was a
   hardcoded string (still `"0.2.0"` in the published 0.3.0 wheel, while pip
   metadata correctly said 0.3.0); it now resolves from the installed package
