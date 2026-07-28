@@ -1308,8 +1308,22 @@ class ERModel(ModelRun, ModelPersistence):
                 valid_gold=gold_pairs,
             )
 
+        # ``if judgements``, not ``if aligned.valid.candidates`` -- the same
+        # convention as ``_described`` above and ``_fit_chain_threshold`` below,
+        # for the same reason: ``classify_pairs([], gold, t)`` returns a real
+        # PairMetrics of zeros with ``fn=len(gold)``, never None, so an empty
+        # judgement list renders as a fully-populated table of 0.0000 for a fit
+        # that measured nothing.
+        #
+        # No matcher langres ships can trigger it here (every one yields exactly
+        # one judgement per candidate -- an abstention is a judgement with
+        # ``score=None``, not a skipped yield). But ``Matcher`` is a documented
+        # bring-your-own extension point with nothing enforcing that cardinality,
+        # and a custom matcher that skips a candidate reproduces it exactly. All
+        # three sites read the same way so the next reader cannot mistake a
+        # divergence for a deliberate one.
         metrics: PairMetrics | None = None
-        if aligned.valid.candidates:
+        if judgements:
             metrics = classify_pairs(judgements, gold_pairs, self.clusterer.threshold)
 
         return FitReport.build(

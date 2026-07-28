@@ -183,6 +183,35 @@ class _CountingMatcher:
             )
 
 
+class _SkippingMatcher:
+    """A matcher that scores the labeled pairs but yields nothing for held-out ones.
+
+    No matcher langres ships behaves this way -- every one yields exactly one
+    judgement per candidate, and an abstention is a judgement with ``score=None``
+    rather than a skipped yield. But ``Matcher`` is a documented bring-your-own
+    extension point and nothing enforces that cardinality, so this is the shape a
+    custom matcher can legitimately take. It exists to make the classic seam's
+    empty-judgement behaviour observable instead of assumed.
+    """
+
+    def __init__(self, skip_ids: set[str]) -> None:
+        self.skip_ids = skip_ids
+
+    def forward(self, candidates: Iterator[ERCandidate[Any]]) -> Iterator[PairwiseJudgement]:
+        for candidate in candidates:
+            if candidate.left.id in self.skip_ids or candidate.right.id in self.skip_ids:
+                continue
+            same = candidate.left.name.split()[0] == candidate.right.name.split()[0]
+            yield PairwiseJudgement(
+                left_id=candidate.left.id,
+                right_id=candidate.right.id,
+                score=0.9 if same else 0.1,
+                score_type="heuristic",
+                decision_step="skipping_stub",
+                provenance={},
+            )
+
+
 class _DecidingMatcher:
     """A matcher that both decides and ranks -- the case a threshold cannot govern."""
 
@@ -645,6 +674,41 @@ def test_explicit_chain_without_a_threshold_select_refuses_to_derive() -> None:
     with pytest.raises(ValueError, match="contains no ThresholdSelect"):
         model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
     assert counting.calls == 0
+
+
+def test_the_classic_seam_also_reports_no_metrics_when_nothing_was_judged() -> None:
+    """The classic path uses the same gate as the chain path, for the same reason.
+
+    ``classify_pairs([], gold, t)`` returns a real ``PairMetrics`` of zeros with
+    ``fn=len(gold)``, never ``None``. A matcher that yields no judgement for the
+    held-out candidates must therefore produce "not computed", not a
+    fully-populated table of ``0.0000``. Nothing langres ships behaves this way,
+    but ``Matcher`` is a bring-your-own extension point that permits it -- and
+    this keeps all three sites (``_described``, classic, chain) on one convention
+    rather than leaving one to drift.
+    """
+    records, pairs = _dataset()
+    model = _classic()
+    aligned = align_pairs(
+        # Same split the fit will take, so the ids skipped below are exactly the
+        # held-out ones -- the train side stays fully scored and derivable.
+        _classic()._candidates(records).to_candidates(),
+        pairs,
+        split=_SPLIT,
+        seed=_SEED,
+    )
+    held_out_ids = {str(c.left.id) for c in aligned.valid.candidates} | {
+        str(c.right.id) for c in aligned.valid.candidates
+    }
+    assert held_out_ids  # the split really did hold something out
+    model.module = _SkippingMatcher(held_out_ids)  # type: ignore[assignment]
+
+    model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    report = model.fit_report_
+    assert report is not None
+    assert report.n_valid > 0  # a held-out split existed...
+    assert report.metrics is None  # ...but nothing was judged on it
+    assert "No held-out pair P/R/F1 computed for this fit." in report.to_markdown()
 
 
 def test_a_score_less_chain_reports_no_held_out_metrics() -> None:
