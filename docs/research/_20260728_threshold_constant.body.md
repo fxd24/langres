@@ -5,12 +5,16 @@
 > printed by `examples/research/threshold_constant_sweep.py --render` and spliced
 > in by `tools/render_threshold_constant_writeup.py`. Edit the body, re-run the
 > tool. Three PRs on 2026-07-28 shipped factual errors and **every one was in
-> hand-typed prose sitting beside a correct generated table**, which is why this
-> document has no hand-typed numbers in it.
+> hand-typed prose sitting beside a correct generated table**, which is why
+> **no number produced by this study is typed by hand anywhere in this
+> document** — every one arrives in a generated table. (The prose does cite two
+> figures from *other* documents, `45 of 54` from PR #250 below; both were
+> checked against their source.)
 
-- **Date**: 2026-07-28
+- **Date**: 2026-07-28 (checkpoint-transfer run, §7, completed 2026-07-29)
 - **Harness**: `examples/research/threshold_constant_sweep.py` (committed before the run)
-- **Artifact**: `examples/research/results/threshold_constant_sweep.json`
+- **Artifacts**: `examples/research/results/threshold_constant_sweep.json` (the
+  portfolio) and `…_sweep.e5.json` (the checkpoint-transfer variant, §7)
 - **Spend**: $0. Every scorer swept here is free and offline.
 
 ## 1. The question, and why it was still open
