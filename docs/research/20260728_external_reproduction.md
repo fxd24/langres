@@ -227,26 +227,55 @@ One set of embeddings, three recalls, one thing changed at a time. `paper` is di
 
 ## G. Verdict
 
-**Yes. On every benchmark where our ground truth matches a paper's, we land within
-0.7–1.5 pp of the published value for the same candidate budget — with one outlier we
-cannot explain, on which we instead match three *other* methods in the same table.**
+**Two different answers, and they must not be run together.**
 
-### The two benchmarks that settle it
+1. **Does the harness compute the literature's quantity? Yes, and this part is
+   unconditional** — it is arithmetic on candidate sets, which needs no assumption
+   about anyone's gold pairs.
+2. **Do we reproduce their recall? Every such comparison here lands within
+   0.7–1.5 pp, but all of them are conditional on an assumption we cannot verify:**
+   that our gold pairs correspond to theirs. Neither paper publishes a pair list.
 
-A PC comparison is clean only when our gold set matches the paper's, which rules out
-the three product benchmarks. Two remain, and they carry the verdict:
+The second answer is the one a reader wants and the weaker one. Read it as *"our
+numbers are where theirs are, if the two ground truths are the same ground truth"* —
+not as a settled reproduction.
 
-- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1)** — the strongest datapoint
-  here. Every quantity lines up before any measurement: |A| = 2,616, |B| = 64,263,
-  gold = 5,347 pairs — *identical* to their Table 4 `#Matches` — and at their K = 150
-  our candidate set is 150 x 2,616 = 392,400 against their printed `392.4k`. Same
-  tables, same gold, same budget, same metric. We measure **98.82%** against their
-  published **98.1%**: a 0.72 pp difference, with an *untrained* embedder against
-  their *trained* Autoencoder.
-- **`dblp_acm` vs UniBlocker Table 3, STransformer column.** Our gold is 2,220 against
-  their 2,224 (-0.18%), and the STransformer column is the same checkpoint we ran. At
-  their k = 1 we measure **96.76 / PQ 82.11** against their **95.28 / 81.00** — 1.48 pp
-  and 1.11 pp above, on a bound only 4 pairs wide.
+### What is unconditional
+
+None of this depends on whose gold pairs are whose:
+
+- **The candidate-set construction is exactly theirs.** On `dblp_scholar` at
+  DeepBlocker's K = 150, |A| = 2,616 and |B| = 64,263 match their Table 4, and our
+  candidate set is 150 x 2,616 = **392,400** against their printed **`392.4k`**. That
+  is `C = ∪_a topK(a → B)` reproduced to the pair.
+- **`PQ = hits / (k * |A|)` is their formula.** Recomputing UniBlocker's own printed
+  PC/PQ from it reproduces their PQ to 2 dp on five of six rows, and on
+  `fodors-zagats` only if |A| = 533 rather than the 553 their Table 2 prints — i.e.
+  the check is sharp enough to find a typo in their table.
+- **The `score_blocking` crosscheck** (Section F) is langres-internal on both sides,
+  so it needs no paper at all: it reproduces the embedder ladder's published recalls
+  *and* candidate counts to every printed digit.
+
+### What is conditional — including the rows that look cleanest
+
+- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1).** Our raw gold is 5,347
+  pairs, *the same count* as their Table 4 `#Matches`, and at their K = 150 we measure
+  **98.82%** against their published **98.1%** — 0.72 pp, with an *untrained* embedder
+  against their *trained* Autoencoder. **An equal count is not an identical pair set.**
+  Recall over our 5,347 pairs bounds nothing about recall over a *different* 5,347
+  pairs. What the equal count does buy is narrower: it removes "they scored more pairs
+  than we did" as an explanation. It does not establish that we scored the same ones.
+- **`dblp_acm` vs UniBlocker Table 3, STransformer column.** Same checkpoint, and at
+  their k = 1 we measure **96.76 / PQ 82.11** against their **95.28 / 81.00**. The
+  interval here is 4 pairs wide — but that width is itself computed *under* the nesting
+  assumption, so a narrow interval is not independent evidence.
+
+**`fodors_zagat` proves the protocol but not the model.** Its gold count is identical
+(112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
+(20.83 and 21.01). That is arithmetic rather than luck — it pins |A| = 533 and confirms
+`PQ = hits / (k * |A|)` — so it belongs in the unconditional list above: it is evidence
+about the *harness*. It is not evidence about the model, because our PC there sits
+5.4 pp above their STransformer row (see below).
 
 **`fodors_zagat` proves the protocol but not the model.** Its gold set is identical
 (112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
@@ -278,9 +307,10 @@ Four are consistent outright. `dblp_acm` misses by 1.3 pp on a bound only 4 pair
 **This whole table is conditional on `G_ours` nesting inside `G_theirs`, which we
 argue from provenance and cannot verify** (Section B2's note). Neither paper publishes
 its pair list. If that nesting fails, the intervals are not bounds and this count is
-not 4 of 6. The two benchmarks the verdict actually rests on are the ones that do not
-need it: `dblp_scholar`, where the gold *count* is DeepBlocker's own 5,347, and
-`dblp_acm`, where the interval is 4 pairs wide and we clear their value either way.
+not 4 of 6. **No row escapes this, including the ones where the counts match** — an
+equal count is not an identical pair set, and a narrow interval is narrow only under
+the same assumption that produced it. What survives unconditionally is the
+candidate-set arithmetic and the PQ formula check, not any PC comparison.
 
 `fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
 theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
@@ -396,18 +426,24 @@ measurement that the ceiling accounts for the whole distance to the published li
 ### What this does and does not license
 
 It licenses saying: **langres's blocking harness measures the same quantity the
-blocking literature measures.** Four of six published values for the same checkpoint
-are reachable from what we measured; `dblp_acm` misses by 1.3 pp; and on
-`dblp_scholar` — where our gold set is *exactly* DeepBlocker's 5,347 pairs and our
-candidate set is *exactly* their 392,400 — we land 0.72 pp from their published recall.
-Nothing in these results is consistent with a
-semantic bug in the harness — a wrong split, a wrong pair set or a wrong metric would
-not produce agreement at this resolution across six benchmarks and two protocols.
+blocking literature measures.** That claim rests on the unconditional evidence above —
+the candidate set is theirs to the pair (392,400 at K=150 on `dblp_scholar`), the PQ
+formula is theirs to 2 dp, and the internal `score_blocking` crosscheck reproduces the
+embedder ladder digit-for-digit. A wrong split, a wrong metric or a wrong candidate-set
+convention could not survive those checks.
 
-It does **not** license quoting the `abt_buy` / `amazon_google` / `walmart_amazon`
-numbers as beating anyone, nor comparing any number here to the embedder ladder's —
-different metric, different candidate set, different gold set (Section F). And it does
-not settle `fodors_zagat`, where we cannot explain their STransformer row.
+It licenses saying, **with the assumption stated**: our recall sits 0.7–1.5 pp from the
+published values wherever a comparison is possible, and four of six published values
+for the same checkpoint are reachable from what we measured. Every one of those
+statements is conditional on our gold pairs corresponding to theirs — an assumption
+argued from provenance and **verified nowhere**, on any benchmark, including the ones
+whose counts match.
+
+It does **not** license calling this a settled reproduction of anyone's recall, nor
+quoting the `abt_buy` / `amazon_google` / `walmart_amazon` numbers as beating anyone,
+nor comparing any number here to the embedder ladder's — different metric, different
+candidate set, different gold set (Section F). And it does not settle `fodors_zagat`,
+where we cannot explain their STransformer row.
 
 ### What would raise the confidence further, cheaply
 

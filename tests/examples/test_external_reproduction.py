@@ -146,6 +146,46 @@ def test_full_render_keeps_the_verdict(harness: ModuleType, rows: list[dict[str,
     assert "4 of 6" in rendered
 
 
+def test_a_cell_remeasured_at_a_reduced_k_does_not_count_as_present(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """Every key present is not the same as every measurement present.
+
+    ``--k-max 20`` on one cell keeps all 16 keys while destroying the k=150
+    number the verdict quotes, so the gate has to look at the measurement.
+    """
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    truncated = [
+        dict(r, k_max=20, pc=r["pc"][:20], pq=r["pq"][:20])
+        if r["benchmark"] == "dblp_scholar"
+        else r
+        for r in rows
+    ]
+
+    rendered = harness.render(truncated, reference)
+
+    assert "this is a **partial** render" in rendered
+    assert "98.82" not in rendered
+
+
+def test_k_at_pc90_reports_the_depth_actually_searched(harness: ModuleType) -> None:
+    """A row capped below the UniBlocker budget must not claim k=100 was searched."""
+    assert harness._searched_to({"k_max": 150}) == ">100"
+    assert harness._searched_to({"k_max": 100}) == ">100"
+    assert harness._searched_to({"k_max": 20}) == ">20"
+
+
+def test_committed_crosscheck_cells_are_unique(harness: ModuleType) -> None:
+    """The merge keys on this tuple, so a duplicate would mean silent cell loss."""
+    checks = json.loads(harness.CROSSCHECK_PATH.read_text())
+    keys = [
+        (c["benchmark"], c["model"], c.get("model_revision"), c["k"], c.get("metric_revision"))
+        for c in checks
+    ]
+
+    assert len(keys) == len(set(keys))
+
+
 def test_crosscheck_entries_cover_only_benchmarks_the_report_measures(
     harness: ModuleType, rows: list[dict[str, Any]]
 ) -> None:
