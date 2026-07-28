@@ -77,10 +77,16 @@ concurrency:
 
 jobs:
   # Fast per-PR tests: everything EXCEPT the ~76 slow embedding/ML tests (they
-  # load heavy torch models and dominate wall-time). Coverage is collected but
-  # NOT gated here (`--cov-fail-under=0` overrides the pyproject default),
-  # because the excluded slow tests are the only cover for some ML paths -- the
-  # coverage floors are enforced on `test-full` below.
+  # load heavy torch models and dominate wall-time).
+  #
+  # Coverage here is gated on ONE number and not the other:
+  #   - the REPO-WIDE floor is NOT enforced (`--cov-fail-under=0` overrides the
+  #     pyproject default), because the excluded slow tests are the only cover
+  #     for some ML paths, so a repo-wide number measured here would be wrong.
+  #   - the `langres.core` CONTRACT floor IS enforced, at a lower early-warning
+  #     97.5 -- see the long comment on that step below for why the fast-suite
+  #     number is a close proxy (measured: 0.18pp under the full suite).
+  # The authoritative contract floor (98) still runs on `test-full`.
   test:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

@@ -13,14 +13,18 @@ module's top level. A bare ``import langres`` must not pull mlflow/wandb/trackio
 the adapters eagerly from this shim would defeat it.
 """
 
-# `# pragma: no cover`, as on every other W2 shim (see core/harvest.py): a
-# re-export owns no contract. `langres.tracking.trackers` is itself inside the
-# `langres.core` contract coverage gate (at 100%), so measuring this redirect
-# would book a miss against code already covered at its real home. Goes away
-# with this file in the W2 sweep.
-from typing import TYPE_CHECKING, Any  # pragma: no cover
+# NOT `# pragma: no cover`, unlike the sibling W2 shims (see core/harvest.py).
+# Those are pure `from X import Y` redirects that own no contract and cannot
+# fail in isolation. This one is different in kind: `__getattr__` below carries
+# real conditional resolution -- a lazy-adapter branch and an unknown-name
+# `AttributeError` branch -- and behavior excluded from the gate is behavior a
+# regression can break silently. It is covered by
+# tests/core/test_trackers_backcompat_shim.py instead, which also pins
+# `_LAZY_ADAPTERS` against the real module's adapter table so the two cannot
+# drift apart. Goes away with this file in the W2 sweep.
+from typing import TYPE_CHECKING, Any
 
-from langres.tracking.trackers import (  # pragma: no cover
+from langres.tracking.trackers import (
     ExperimentTracker,
     MultiTracker,
     NoOpTracker,
@@ -31,7 +35,7 @@ from langres.tracking.trackers import (  # pragma: no cover
 if TYPE_CHECKING:
     from langres.tracking.trackers import MlflowTracker, TrackioTracker, WandbTracker
 
-__all__ = [  # pragma: no cover
+__all__ = [
     "ExperimentTracker",
     "MultiTracker",
     "NoOpTracker",
@@ -40,12 +44,10 @@ __all__ = [  # pragma: no cover
 ]
 
 #: The lazily-resolved adapter names, mirroring the real module's ``__getattr__``.
-_LAZY_ADAPTERS = frozenset(  # pragma: no cover
-    {"MlflowTracker", "WandbTracker", "TrackioTracker"}
-)
+_LAZY_ADAPTERS = frozenset({"MlflowTracker", "WandbTracker", "TrackioTracker"})
 
 
-def __getattr__(name: str) -> Any:  # pragma: no cover
+def __getattr__(name: str) -> Any:
     """Resolve the backend adapters through the new module, keeping them lazy."""
     if name in _LAZY_ADAPTERS:
         import langres.tracking.trackers as _trackers

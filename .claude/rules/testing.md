@@ -34,12 +34,15 @@ code. Verify as you go.** Read before writing tests or running the suite.
 - Mark slow tests with `@pytest.mark.slow`, integration tests with `@pytest.mark.integration`
   - **Mark any heavy test `@pytest.mark.slow`** (loads embedding/ML models, runs
     torch inference, etc.). CI runs the **fast** subset (`not slow`) on every
-    PR; the **slow** tests + the coverage gates run on **every merge to main
-    (push)** + **on demand** (`workflow_dispatch`) via the `test-full` job. So
-    per-PR CI does not gate coverage or exercise slow ML paths — mislabeling a
-    heavy test as fast slows every PR, and the coverage floors are verified on
-    each merge to main, not per-PR. Run the full suite locally
-    (`uv run pytest`) before merging a change to ML/embedding code.
+    PR; the **slow** tests run on **every merge to main (push)** + **on demand**
+    (`workflow_dispatch`) via the `test-full` job. So per-PR CI does not exercise
+    slow ML paths — mislabeling a heavy test as fast slows every PR. Run the full
+    suite locally (`uv run pytest`) before merging a change to ML/embedding code.
+  - **Coverage is gated in both places, but not on the same numbers** — see the
+    two-gate table below. The *contract* floor runs on **every PR** (early
+    warning, 97.5) and authoritatively on **each merge** (98). The *repo-wide*
+    90% floor is enforced only on `test-full`, because the fast suite omits the
+    slow tests that are the only cover for some ML paths.
 - Run tests: `uv run pytest` (pre-push hook runs non-slow, non-integration tests automatically)
 - Check coverage: `uv run pytest --cov`; keep `core/**` in the 95–100% tier
   (the repo-wide gate is a relaxed 90% floor — see `pyproject.toml`)
