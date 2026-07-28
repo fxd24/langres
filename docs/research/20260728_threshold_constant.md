@@ -20,10 +20,12 @@
 
 ## 1. The question, and why it was still open
 
-`langres` ships six front doors that cut matches at a hard-coded `0.5`
-(`FuzzyString`, `VectorLLMCascade`, and the four `architectures/retrieval.py`
-recipes). `MethodSpec.default_threshold` has existed alongside them the whole
-time — declared per method, documented, and read by **nothing**.
+`langres` ships six front doors that hard-code a `0.5` match cut (`FuzzyString`,
+`VectorLLMCascade`, and the four `architectures/retrieval.py` recipes) — though
+strictly only four of them *cut* at it: `RetrieveLLM` and `RetrieveRerankLLM`
+declare the number and never read it, which is its own bug and is dealt with
+separately (§9). `MethodSpec.default_threshold` has existed alongside all six the
+whole time — declared per method, documented, and read by **nothing**.
 
 PR #250 (`docs/research/20260728_threshold_default.md`) measured that *deriving*
 the cut from labels beats `0.5` in 45 of 54 cells, and recommended fixing the
@@ -557,8 +559,17 @@ class is not a default — it is a recommendation with an undisclosed victim.
 Clause (2) was pre-registered precisely so this case could not be argued away
 after the fact by pointing at a healthy median. So `heuristic` keeps `0.5`, and
 the honest guidance for it is unchanged: **derive the cut from labels** (PR
-#250's seam, `derive_threshold`), which the ladder in §6 shows is worth
-substantially more than any constant anyway.
+#250's seam, `derive_threshold`).
+
+**But read the ladder in §6 carefully before concluding that labels simply
+dominate — they do not, and an earlier draft of this sentence said they did.**
+Compare its `F1@LOBO` and `F1@derived` columns: the *rejected* constant scores
+**higher than the label-derived cut on 5 of the 9 benchmarks**, for both
+families. Neither approach dominates this portfolio. What makes deriving the
+right advice here is not that it wins on average — it is *where* it wins: on
+`abt_buy`, the single benchmark whose harm vetoes the constant, the derived cut
+beats both the constant and `0.5`. Labels buy you the case a constant cannot
+cover, which is a different and more useful claim than "labels are better".
 
 Note also what the ladder shows about the incumbent: on the harder product
 benchmarks `0.5` is not a mild compromise, it is close to worthless. The reason
@@ -591,11 +602,21 @@ document as covering it:
   codebase already declared, now honoured instead of ignored. Sweeping it costs
   paid completions on every benchmark and is a separate study.
 - **`prob_fs` / `prob_rf`.** Untouched, for the reason in §2.
-- **`RetrieveRerank`'s family tag.** It cuts a *cross-encoder's* score but is
-  tagged `heuristic` because `Rerank`'s `out_space` defaults to it. That is a
-  coarse tag covering two different scales; a constant justified on rapidfuzz
-  scores is not thereby justified on cross-encoder scores. Called out in the
-  class docstring.
+- **The emitted `score_type` tags do not match the families used to resolve the
+  defaults**, and review caught this study leaning on the tag as if it did.
+  `RetrieveRerank` cuts a *cross-encoder's* score but is tagged `heuristic`
+  (`Rerank`'s `out_space` default). Worse for this document: the `Retrieve` op
+  stamps its rows `heuristic` too (`resources/retrieve.py:174`, hard-coded), even
+  though they are cosines and `Retrieve` resolves its default against `sim_cos`.
+  The constant is justified by **what the score is** — these really are embedding
+  cosines, which is what was swept — not by the tag, and an earlier draft of the
+  `Retrieve` docstring wrongly claimed the op emitted `sim_cos`.
+
+  So one coarse tag currently covers three different scales (rapidfuzz ratios,
+  cross-encoder scores, cosines). Nothing here justifies a *cross-encoder*
+  constant, and none was set. Fixing the tags means changing a resource's emitted
+  contract, which is a separate change from a threshold default; it is recorded
+  here and in both class docstrings rather than quietly worked around.
 
 ## 10. Reproducing
 

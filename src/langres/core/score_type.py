@@ -73,14 +73,19 @@ ConfidenceSource: TypeAlias = Literal[
 #:    was catastrophic: normalized embeddings put nearly every candidate pair
 #:    above it, so it accepted almost everything the blocker proposed.
 #: 2. **Measured, and deliberately left alone** — ``heuristic`` stays ``0.5``.
-#:    A better constant exists *on average* and its leave-one-out selection is
+#:    A better constant exists *on the median* and its leave-one-out selection is
 #:    stable, but it reliably **damages** ``abt_buy`` (every seed, interval
-#:    entirely below zero) while helping the rest. A default that improves the
-#:    median while predictably harming a known data class is a recommendation
-#:    with an undisclosed victim, so the pre-registered ship rule rejects it. The
-#:    honest guidance for this family is to derive the cut from labels
-#:    (``langres.training.calibration.derive_threshold``), which measured far
-#:    better than any constant anyway.
+#:    entirely below zero, and ``febrl_dedup`` mildly too) while helping the other
+#:    seven. A default that improves the median while predictably harming a known
+#:    data class is a recommendation with an undisclosed victim, so the
+#:    pre-registered ship rule rejects it. The honest guidance for this family is
+#:    to derive the cut from labels
+#:    (``langres.training.calibration.derive_threshold``) — **not** because
+#:    deriving beats any constant everywhere (measured: it does not; the rejected
+#:    constant actually scores higher on 5 of 9 benchmarks) but because deriving
+#:    is what rescues the case a constant cannot. On ``abt_buy`` — the very
+#:    benchmark that vetoes the constant — the derived cut beats both the
+#:    constant and ``0.5``.
 #: 3. **Not measured — status quo, not a finding.** ``prob_llm``,
 #:    ``prob_group_llm`` (a paid completion per score, so a portfolio grid sweep
 #:    is a real invoice), and ``calibrated_prob`` / ``prob_fs`` / ``prob_rf``

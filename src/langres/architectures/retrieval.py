@@ -297,9 +297,19 @@ class Retrieve(_ResearchRecipe):
     """Embed, retrieve nearest neighbours, threshold, and cluster.
 
     ``threshold=None`` (the default) cuts at the ``"sim_cos"`` family's shipped
-    value from :data:`~langres.core.score_type.DEFAULT_THRESHOLDS` -- the
-    ``Retrieve`` op tags its cosine similarities ``"sim_cos"``, so that is the
-    family whose scale the cut lives on.
+    value from :data:`~langres.core.score_type.DEFAULT_THRESHOLDS`, because the
+    scores being cut here *are* embedding cosine similarities and that is the
+    scale the constant was measured on.
+
+    **Known inconsistency, disclosed rather than silently relied on:** the
+    :class:`~langres.resources.op_adapters.Retrieve` op stamps those rows
+    ``score_type="heuristic"`` (``resources/retrieve.py:174``), not
+    ``"sim_cos"`` -- the tag is hard-coded and not parameterizable. So the family
+    used to resolve this default is chosen from what the score **is**, not from
+    the tag the op happens to emit. That mismatch is the same coarse-tag problem
+    called out on :class:`RetrieveRerank` below (which stamps a *cross-encoder*
+    score ``"heuristic"`` too), and fixing it means changing a resource's emitted
+    contract -- a separate change with its own blast radius, not a threshold one.
 
     **That default is a floor, not a tuning, and you are choosing the scale it
     sits on.** ``embedder=`` is required here, and a cosine cut belongs to the

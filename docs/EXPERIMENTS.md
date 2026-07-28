@@ -469,8 +469,11 @@ Full per-benchmark table, the caveats, and what deriving does *not* fix:
 > **kept `0.5`** — a better constant exists for it on the median, but it reliably
 > damages `abt_buy`, so the rule rejected it. The practical consequence is the
 > section you are reading: for string-similarity scores there is no free constant
-> that is safe, and deriving from labels is worth substantially more than any
-> constant anyway.
+> that is *safe*. Note the honest scoreboard, though — deriving does **not**
+> simply dominate a constant: on that study's ladder the rejected constant scores
+> higher than the derived cut on 5 of 9 benchmarks. What deriving buys is the
+> case a constant cannot cover (it wins on `abt_buy`, the benchmark that vetoes
+> the constant), not a uniform improvement.
 > [`docs/research/20260728_threshold_constant.md`](research/20260728_threshold_constant.md).
 
 > **Do not trust the report's held-out numbers on a *dense* label set.** That

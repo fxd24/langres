@@ -1422,9 +1422,7 @@ def main() -> None:
                 "cells' intervals under the new number. Re-run with "
                 f"--resamples {partial.bootstrap_resamples}, or start a fresh --out."
             )
-        stale_embedder = sorted(
-            {c.embedder for c in partial.cells if c.embedder != args.embedder}
-        )
+        stale_embedder = sorted({c.embedder for c in partial.cells if c.embedder != args.embedder})
         if stale_embedder:
             parser.error(
                 f"{scratch} holds cells measured with embedder(s) {stale_embedder}, but "
