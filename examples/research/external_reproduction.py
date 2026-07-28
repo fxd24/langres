@@ -519,8 +519,10 @@ clears the same bar.
 ## Reading order
 
 Section **C** first. The gold-set sizes decide which comparisons are meaningful: on
-three benchmarks our gold set is a strict subset of the papers', and on those a higher
-PC is *expected* and is not evidence of anything.
+three benchmarks our gold set holds *fewer pairs* than the papers report, and **if**
+ours nest inside theirs — argued from provenance, verified nowhere, since neither
+paper publishes a pair list — then a higher PC on those is *expected* and is not
+evidence of anything. Section B2 carries that assumption in full.
 """
 
 VERDICT = """
@@ -580,13 +582,6 @@ None of this depends on whose gold pairs are whose:
 `PQ = hits / (k * |A|)` — so it belongs in the unconditional list above: it is evidence
 about the *harness*. It is not evidence about the model, because our PC there sits
 5.4 pp above their STransformer row (see below).
-
-**`fodors_zagat` proves the protocol but not the model.** Its gold set is identical
-(112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
-(20.83 and 21.01). That is arithmetic rather than luck — it pins |A| = 533 and confirms
-`PQ = hits / (k * |A|)` — so it is strong evidence the *harness* computes their
-quantity. It is not evidence about the model, because our PC there sits 5.4 pp above
-their STransformer row (see below).
 
 ### The like-for-like test: 4 of 6 published values land inside our bound
 
@@ -741,12 +736,20 @@ the distance to the literature, not a demonstrated one.
 
 ### What this does and does not license
 
-It licenses saying: **langres's blocking harness measures the same quantity the
-blocking literature measures.** That claim rests on the unconditional evidence above —
-the candidate set is theirs to the pair (392,400 at K=150 on `dblp_scholar`), the PQ
-formula is theirs to 2 dp, and the internal `score_blocking` crosscheck reproduces the
-embedder ladder digit-for-digit. A wrong split, a wrong metric or a wrong candidate-set
-convention could not survive those checks.
+It licenses saying: **langres builds the literature's candidate set and computes the
+literature's formulas.** That is what the unconditional evidence above shows — the
+candidate set is theirs to the pair (392,400 at K=150 on `dblp_scholar`), the PQ
+formula reconciles with their printed values to 2 dp, and the internal `score_blocking`
+crosscheck is self-consistent digit-for-digit.
+
+**It does not license "so our ground truth must be right".** Be exact about what those
+three checks can and cannot see: `|C| = K * |A|` checks candidate-set *cardinality*,
+the PQ reconciliation is arithmetic on *their* printed numbers, and the ladder
+crosscheck compares two of *our* implementations on *our* data. **A wrong gold split —
+a different pair set with the same table sizes and the same match count — passes all
+three unchanged.** They exclude a wrong candidate-set convention and a wrong metric.
+They cannot exclude a wrong pair set, and nothing in this study can, because no paper
+publishes one.
 
 It licenses saying, **with the assumption stated and the spread stated**: on
 `dblp_scholar` and `dblp_acm` our recall sits 0.7–1.5 pp from the published value, and
@@ -833,9 +836,12 @@ def _select_generation(rows: Sequence[dict[str, Any]], label: str) -> list[dict[
         if len(group) == 1:
             selected.append(group[0])
             continue
-        pinned = [r for r in group if r.get("model_revision") == MODEL_REVISIONS.get(model)]
-        legacy = [r for r in group if r.get("model_revision") is None]
-        chosen = pinned or legacy
+        # Only the CURRENT pin is a positive selection. Falling back to a legacy row
+        # here would silently render an arbitrarily old measurement whenever the
+        # group holds several non-current generations -- the group already has more
+        # than one row at this point, so the "single row present" fallback does not
+        # apply and the policy says drop.
+        chosen = [r for r in group if r.get("model_revision") == MODEL_REVISIONS.get(model)]
         if len(chosen) != 1:
             logger.warning(
                 "%s: %s x %s holds %d generations and none is the current pin -- "
@@ -890,13 +896,31 @@ VERDICT_CROSSCHECKS = ("abt_buy", "amazon_google")
 #: before the prose is emitted, so a re-pin that moves a number downgrades the
 #: report instead of letting fixed text assert a value nobody re-read.
 _MPNET = "sentence-transformers/all-mpnet-base-v2"
+_MINILM = "all-MiniLM-L6-v2"
 VERDICT_CLAIMS: tuple[tuple[str, str, int, str, float], ...] = (
     ("dblp_scholar", _MPNET, 150, "pc", 98.82),
     ("dblp_acm", _MPNET, 1, "pc", 96.76),
     ("dblp_acm", _MPNET, 1, "pq", 82.11),
     ("fodors_zagat", _MPNET, 2, "pc", 99.11),
     ("fodors_zagat", _MPNET, 1, "pq", 20.83),
-    ("fodors_zagat", "all-MiniLM-L6-v2", 2, "pc", 100.00),
+    ("fodors_zagat", _MINILM, 2, "pc", 100.00),
+    # The wdc_computers sentence in "What could still be wrong" quotes all four.
+    ("wdc_computers", _MINILM, 100, "pc", 89.66),
+    ("wdc_computers", _MPNET, 100, "pc", 87.02),
+    ("wdc_computers", _MINILM, 150, "pc", 93.00),
+    ("wdc_computers", _MPNET, 150, "pc", 91.58),
+)
+
+#: Figures :data:`VERDICT` quotes out of the *crosscheck* artifact, as
+#: ``(benchmark, k, field, percent)``. The Section F attribution paragraph and the
+#: ladder-agreement table both hard-code these, so they need the same gate as the
+#: row values -- a re-run of either named crosscheck must not leave fixed prose
+#: asserting the old delta.
+VERDICT_CROSSCHECK_CLAIMS: tuple[tuple[str, int, str, float], ...] = (
+    ("amazon_google", 20, "paper", 95.80),
+    ("amazon_google", 20, "paper_direction_closure_gold", 80.43),
+    ("amazon_google", 20, "langres_score_blocking", 81.08),
+    ("abt_buy", 20, "langres_score_blocking", 93.68),
 )
 
 
@@ -1204,6 +1228,22 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
             "`score_blocking` prints for the same model at the same k."
         )
         add("")
+        if any(c.get("model_revision") is None for c in checks):
+            add(
+                '> **On "one set of embeddings", for the committed artifacts.** This '
+                "crosscheck is a *separate invocation* from the sweep, and both predate "
+                "the revision pin, so neither records which checkpoint it loaded. What "
+                "makes them the same weights is not the code admitting `None == None` — "
+                "it is that the machine that produced both holds exactly **one** cached "
+                "snapshot of `all-mpnet-base-v2` "
+                "(`e8c3b32edf5434bc2275fc9bab85f82640a19130`), which is also what its "
+                "`refs/main` points at, so there was no other weight set available to "
+                "either run. That is evidence about this machine, not a guarantee from "
+                "the artifact. Every run from here on records its revision and the "
+                "admission rule compares it, so this note applies only to the artifacts "
+                "committed with this study."
+            )
+            add("")
         add(
             "| benchmark | model | k | paper protocol | + closure gold | "
             "`score_blocking` shape | total delta |"
@@ -1244,6 +1284,14 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         ("<quoted value>", f"{b} x {m} @k={k}: {value:.2f}")
         for b, m, k, field, value in VERDICT_CLAIMS
         if not _claim_holds(rows, b, m, k, field, value)
+    }
+    missing |= {
+        ("<quoted crosscheck>", f"{b} k={k} {field}: {value:.2f}")
+        for b, k, field, value in VERDICT_CROSSCHECK_CLAIMS
+        if not any(
+            c["benchmark"] == b and c["k"] == k and abs(c[field] * 100 - value) < 0.005
+            for c in checks
+        )
     }
     if missing:
         logger.warning(

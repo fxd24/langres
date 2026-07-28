@@ -253,6 +253,30 @@ def test_an_unpinned_model_is_not_disk_cached(harness: ModuleType, tmp_path: Pat
     assert type(embedder).__name__ == "SentenceTransformerEmbedder"
 
 
+def test_every_crosscheck_number_the_verdict_quotes_is_checked(harness: ModuleType) -> None:
+    """The crosscheck half of the registry must describe the committed artifact."""
+    checks = json.loads(harness.CROSSCHECK_PATH.read_text())
+
+    for benchmark, k, field, value in harness.VERDICT_CROSSCHECK_CLAIMS:
+        assert any(
+            c["benchmark"] == benchmark and c["k"] == k and abs(c[field] * 100 - value) < 0.005
+            for c in checks
+        ), f"{benchmark} k={k} {field} is no longer {value}"
+
+
+def test_a_legacy_row_is_not_chosen_when_a_stale_pin_is_also_present(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """Two non-current generations means drop, even if one of them is the legacy row."""
+    one = next(r for r in rows if r["model"] in harness.MODEL_REVISIONS)
+    legacy = dict(one)
+    stale = dict(one, model_revision="c" * 40)
+
+    selected = harness._select_generation([legacy, stale], "probe")
+
+    assert selected == []
+
+
 def test_committed_crosscheck_cells_are_unique(harness: ModuleType) -> None:
     """The merge keys on this tuple, so a duplicate would mean silent cell loss."""
     checks = json.loads(harness.CROSSCHECK_PATH.read_text())

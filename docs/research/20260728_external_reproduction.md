@@ -72,8 +72,10 @@ clears the same bar.
 ## Reading order
 
 Section **C** first. The gold-set sizes decide which comparisons are meaningful: on
-three benchmarks our gold set is a strict subset of the papers', and on those a higher
-PC is *expected* and is not evidence of anything.
+three benchmarks our gold set holds *fewer pairs* than the papers report, and **if**
+ours nest inside theirs — argued from provenance, verified nowhere, since neither
+paper publishes a pair list — then a higher PC on those is *expected* and is not
+evidence of anything. Section B2 carries that assumption in full.
 
 ## A. UniBlocker protocol: smallest k reaching PC >= 90%
 
@@ -219,6 +221,8 @@ The two benchmarks the verdict rests on, `dblp_acm` and `dblp_scholar`, are **4 
 
 One set of embeddings, three recalls, one thing changed at a time. `paper` is directional `A -> B` scored against the raw positive list. `+closure gold` keeps that candidate set and swaps in the transitive closure. `score_blocking` additionally swaps directional retrieval for the symmetric pooled kNN with same-source pairs dropped. The last column is the whole difference between what a paper would print and what `score_blocking` prints for the same model at the same k.
 
+> **On "one set of embeddings", for the committed artifacts.** This crosscheck is a *separate invocation* from the sweep, and both predate the revision pin, so neither records which checkpoint it loaded. What makes them the same weights is not the code admitting `None == None` — it is that the machine that produced both holds exactly **one** cached snapshot of `all-mpnet-base-v2` (`e8c3b32edf5434bc2275fc9bab85f82640a19130`), which is also what its `refs/main` points at, so there was no other weight set available to either run. That is evidence about this machine, not a guarantee from the artifact. Every run from here on records its revision and the admission rule compares it, so this note applies only to the artifacts committed with this study.
+
 | benchmark | model | k | paper protocol | + closure gold | `score_blocking` shape | total delta |
 |---|---|---:|---:|---:|---:|---:|
 | `dblp_acm` | `sentence-transformers/all-mpnet-base-v2` | 20 | 99.55 | 99.55 | 99.14 | -0.41 |
@@ -281,13 +285,6 @@ None of this depends on whose gold pairs are whose:
 `PQ = hits / (k * |A|)` — so it belongs in the unconditional list above: it is evidence
 about the *harness*. It is not evidence about the model, because our PC there sits
 5.4 pp above their STransformer row (see below).
-
-**`fodors_zagat` proves the protocol but not the model.** Its gold set is identical
-(112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
-(20.83 and 21.01). That is arithmetic rather than luck — it pins |A| = 533 and confirms
-`PQ = hits / (k * |A|)` — so it is strong evidence the *harness* computes their
-quantity. It is not evidence about the model, because our PC there sits 5.4 pp above
-their STransformer row (see below).
 
 ### The like-for-like test: 4 of 6 published values land inside our bound
 
@@ -442,12 +439,20 @@ the distance to the literature, not a demonstrated one.
 
 ### What this does and does not license
 
-It licenses saying: **langres's blocking harness measures the same quantity the
-blocking literature measures.** That claim rests on the unconditional evidence above —
-the candidate set is theirs to the pair (392,400 at K=150 on `dblp_scholar`), the PQ
-formula is theirs to 2 dp, and the internal `score_blocking` crosscheck reproduces the
-embedder ladder digit-for-digit. A wrong split, a wrong metric or a wrong candidate-set
-convention could not survive those checks.
+It licenses saying: **langres builds the literature's candidate set and computes the
+literature's formulas.** That is what the unconditional evidence above shows — the
+candidate set is theirs to the pair (392,400 at K=150 on `dblp_scholar`), the PQ
+formula reconciles with their printed values to 2 dp, and the internal `score_blocking`
+crosscheck is self-consistent digit-for-digit.
+
+**It does not license "so our ground truth must be right".** Be exact about what those
+three checks can and cannot see: `|C| = K * |A|` checks candidate-set *cardinality*,
+the PQ reconciliation is arithmetic on *their* printed numbers, and the ladder
+crosscheck compares two of *our* implementations on *our* data. **A wrong gold split —
+a different pair set with the same table sizes and the same match count — passes all
+three unchanged.** They exclude a wrong candidate-set convention and a wrong metric.
+They cannot exclude a wrong pair set, and nothing in this study can, because no paper
+publishes one.
 
 It licenses saying, **with the assumption stated and the spread stated**: on
 `dblp_scholar` and `dblp_acm` our recall sits 0.7–1.5 pp from the published value, and
