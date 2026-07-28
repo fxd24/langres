@@ -1,0 +1,54 @@
+{
+  "lfm2_natively_implemented": true,
+  "probe_texts": [
+    "Sony STR-DH550 5.2 Channel 4K AV Receiver",
+    "Cuisinart DCC-3200 14-cup programmable coffee maker"
+  ],
+  "remote_code": {
+    "trust_remote_code=False": {
+      "cosine_between_unrelated_records": 0.9999997546872389,
+      "declared_auto_model": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel",
+      "from_checkpoint_code": false,
+      "instantiated_class": "transformers.models.lfm2.modeling_lfm2.Lfm2Model",
+      "max_abs_prompt_shift": 0.0,
+      "trust_remote_code": false
+    },
+    "trust_remote_code=True": {
+      "cosine_between_unrelated_records": 0.16935350536442162,
+      "declared_auto_model": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel",
+      "from_checkpoint_code": true,
+      "instantiated_class": "transformers_modules.LiquidAI.LFM2_dot_5_hyphen_Embedding_hyphen_350M.f35ae2c91d687658dbf1f2b449382f0b019b9808.modeling_lfm2_bidirectional.Lfm2BidirectionalModel",
+      "max_abs_prompt_shift": 0.07630134467035532,
+      "trust_remote_code": true
+    }
+  },
+  "transformers_version": "4.57.6",
+  "weight_loading": {
+    "LiquidAI/LFM2.5-Encoder-230M": {
+      "AutoModel": {
+        "class": "Lfm2BidirectionalModel",
+        "missing_keys": 132,
+        "two_load_max_drift": 0.17028185725212097,
+        "unexpected_keys": 132
+      },
+      "AutoModelForMaskedLM": {
+        "class": "Lfm2BidirectionalForMaskedLM",
+        "missing_keys": 0,
+        "unexpected_keys": 0
+      }
+    },
+    "LiquidAI/LFM2.5-Encoder-350M": {
+      "AutoModel": {
+        "class": "Lfm2BidirectionalModel",
+        "missing_keys": 148,
+        "two_load_max_drift": 0.16817328333854675,
+        "unexpected_keys": 148
+      },
+      "AutoModelForMaskedLM": {
+        "class": "Lfm2BidirectionalForMaskedLM",
+        "missing_keys": 0,
+        "unexpected_keys": 0
+      }
+    }
+  }
+}
