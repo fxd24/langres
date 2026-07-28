@@ -59,6 +59,7 @@ import argparse
 import json
 import logging
 import random
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -128,6 +129,28 @@ class ModelSpec:
     #: already answers the question, and a second flavour of the same negative is
     #: not worth the queue time.
     documented_arm: tuple[str | None, str] | None = None
+    #: The licence identifier **the checkpoint itself declares**, read from its
+    #: own model card (the ``license:`` key in the README front matter, which is
+    #: what the Hub API's ``cardData.license`` summarises). Not remembered, not
+    #: inferred from the publisher: this repo has already been wrong twice in
+    #: opposite directions about a dataset licence it did not read.
+    #:
+    #: It is a first-class field rather than a footnote because langres is
+    #: Apache-2.0, so a ladder that ranks checkpoints without stating whether the
+    #: winner may be shipped as a default is ranking on the wrong axis.
+    license: str = "unknown"
+
+
+#: Licences that are OSI-approved, so a langres default carrying one adds no
+#: use restriction on top of Apache-2.0. Deliberately an ALLOW list: an unknown
+#: or new licence must read as "not clearly OSI" and require a human to look,
+#: rather than passing by absence from a deny list.
+OSI_APPROVED_LICENSES: frozenset[str] = frozenset({"apache-2.0", "mit", "bsd-3-clause"})
+
+
+def _is_osi(spec: ModelSpec) -> bool:
+    """Whether ``spec``'s declared licence is on the OSI allow list."""
+    return spec.license in OSI_APPROVED_LICENSES
 
 
 #: Listed in roughly ascending expected size so a truncated sweep still covers
@@ -142,23 +165,30 @@ class ModelSpec:
 #: instruction-following at all. When time is short, run
 #: ``google/embeddinggemma-300m`` and a ``Qwen/Qwen3-Embedding-*`` tier before
 #: finishing the ladder — they are the ones that make the axis mean anything.
+#:
+#: Every ``license=`` below was read from that checkpoint's own model card on
+#: 2026-07-27 (README front matter / Hub ``cardData.license``). Exactly one is
+#: not OSI: ``google/embeddinggemma-300m`` ships under the **Gemma Terms of
+#: Use**, which carries a prohibited-use policy that survives redistribution —
+#: a use restriction Apache-2.0 does not have.
 MODELS: tuple[ModelSpec, ...] = (
-    ModelSpec("all-MiniLM-L6-v2"),
-    ModelSpec("all-MiniLM-L12-v2"),
-    ModelSpec("BAAI/bge-small-en-v1.5"),
-    ModelSpec("all-mpnet-base-v2"),
-    ModelSpec("BAAI/bge-base-en-v1.5"),
-    ModelSpec("intfloat/e5-base-v2"),
-    ModelSpec("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True),
-    ModelSpec("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True),
+    ModelSpec("all-MiniLM-L6-v2", license="apache-2.0"),
+    ModelSpec("all-MiniLM-L12-v2", license="apache-2.0"),
+    ModelSpec("BAAI/bge-small-en-v1.5", license="mit"),
+    ModelSpec("all-mpnet-base-v2", license="apache-2.0"),
+    ModelSpec("BAAI/bge-base-en-v1.5", license="mit"),
+    ModelSpec("intfloat/e5-base-v2", license="mit"),
+    ModelSpec("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, license="apache-2.0"),
+    ModelSpec("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True, license="apache-2.0"),
     # Prefixes read from the checkpoint's own config_sentence_transformers.json
     # (Retrieval-document / Retrieval-query), not from memory or a model card.
     ModelSpec(
         "google/embeddinggemma-300m",
         documented_arm=("title: none | text: ", "task: search result | query: "),
+        license="gemma",
     ),
-    ModelSpec("BAAI/bge-large-en-v1.5"),
-    ModelSpec("mixedbread-ai/mxbai-embed-large-v1"),
+    ModelSpec("BAAI/bge-large-en-v1.5", license="mit"),
+    ModelSpec("mixedbread-ai/mxbai-embed-large-v1", license="apache-2.0"),
     # Qwen3's own recipe is query-side only (its "document" prompt is ""), and
     # its query instruction is about retrieving WEB SEARCH PASSAGES, not matching
     # entities -- so this arm measures "the documented recipe applied outside its
@@ -170,12 +200,36 @@ MODELS: tuple[ModelSpec, ...] = (
             "Instruct: Given a web search query, retrieve relevant passages that "
             "answer the query\nQuery:",
         ),
+        license="apache-2.0",
     ),
-    ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8),
-    ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4),
+    ModelSpec("Qwen/Qwen3-Embedding-4B", dtype="float16", batch_size=8, license="apache-2.0"),
+    ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4, license="apache-2.0"),
 )
 
 MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
+
+
+def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
+    """Every model this document is accountable for: :data:`MODELS` plus whatever ran.
+
+    ``--models`` accepts a checkpoint outside the fixed tuple (``main()`` falls
+    back to a bare :class:`ModelSpec`), so the tuple alone is not the ladder. The
+    coverage denominator already accounted for that; the "What did not run"
+    enumeration did not, and iterated ``MODELS`` — so a failed custom checkpoint
+    produced "14 of the 15 models" above a table that could not name the
+    fifteenth, and a partially measured one escaped grid validation entirely
+    while the report was free to conclude "every model, benchmark and prompt arm
+    was measured".
+
+    One function so the denominator and the enumeration cannot disagree: they
+    were two expressions of the same set, and only one of them got fixed.
+    Derived from the ROWS, including stale and failed ones — a run that went
+    badly must not shrink the ladder it was measured against. (Cross-model
+    review.)
+    """
+    extra = sorted({row.model for row in rows} - set(MODELS_BY_NAME))
+    return [*MODELS, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
+
 
 #: ``fodors_zagat`` is the never-regress floor (small, long-solved); the other
 #: four are the working set. This portfolio is a **documented prior, not a
@@ -271,9 +325,12 @@ class LadderRow:
     #: a metric CHANGES MEANING, so the report can refuse to print two definitions
     #: in one column. Rows below ``METRIC_REVISION`` are re-run, not re-rendered.
     metric_revision: int = 0
-    #: Mean **per-record** recall difference (instruct minus none) for this model
-    #: on this benchmark, with its paired-bootstrap CI (by gold cluster). Only on
-    #: ``instruct`` rows at ``CI_K``. The point estimate is the same statistic the
+    #: Mean **per-record** recall difference (this row's arm minus ``none``) for
+    #: this model on this benchmark, with its paired-bootstrap CI (by gold
+    #: cluster). Set on prompted rows at ``CI_K`` — ``instruct`` (query side only)
+    #: and ``documented`` (the checkpoint's own document AND query prefixes, so
+    #: the corpus index is rebuilt). The two are not the same experiment; only
+    #: ``instruct`` isolates the query side. The point estimate is the statistic the
     #: interval bounds — deliberately NOT the difference of the two aggregate
     #: recalls, which is a different number (they disagreed by 34% on
     #: walmart_amazon). An interval spanning 0 means the delta is not
@@ -586,7 +643,299 @@ def write_reference(path: Path, store: dict[str, RecallByRecord]) -> None:
     path.write_text(json.dumps(payload, indent=0, sort_keys=True) + "\n")
 
 
-def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_size: int) -> Any:
+#: Text encoded once per model per run to prove the warm cache still belongs to
+#: the checkpoint that is loaded now. Content is irrelevant — only that it is
+#: fixed forever, so the entry written on the first run is the one compared
+#: against on every later one.
+_CANARY_TEXT = "langres embedder-ladder cache canary"
+
+#: A second probe, long enough to be cut by any realistic truncation boundary.
+#:
+#: One short string cannot see an INPUT-SELECTIVE change. Halving a checkpoint's
+#: ``max_seq_length`` leaves a five-token probe bit-identical while every long
+#: record's vector moves — so the check would pass and the ladder would publish
+#: rows mixing two checkpoints, which is the exact failure the canary exists to
+#: stop. ~1024 words is past the 128/256/512-token limits sentence-transformers
+#: checkpoints actually use, so this probe is truncated by all of them and its
+#: vector moves when the cut moves. Deterministic and fixed forever, like the
+#: short one: the entry written on the first run is what later runs compare to.
+#: (Cross-model review.)
+_CANARY_LONG_TEXT = " ".join(f"canary{i}" for i in range(1024))
+
+
+def _vector_affecting_runtime(embedder: Any) -> str:
+    """Runtime knobs that change vectors but are NOT in the cache key.
+
+    ``DiskCachedEmbedder._embedder_discriminator`` covers ``prompt_name`` /
+    ``truncate_dim`` / ``prompts``. ``max_seq_length`` is the one it does not,
+    and it is the input-selective one: change it and short texts are untouched
+    while long ones are re-cut.
+
+    Folding it into the canary *text* — rather than adding storage — means a
+    changed value changes the cache KEY, so the partition holds vectors with no
+    canary under the new key and the legacy gate already built refuses it. Reuse
+    of that refusal is the point: a second, parallel staleness check would be a
+    second thing to keep correct.
+
+    Duck-typed over an *absent* knob: an embedder that exposes no
+    ``max_seq_length`` yields ``None``, which is stable across runs (so it
+    cannot cause a spurious refusal) and is honest — it says the probe cannot
+    see that knob, which is what the long probe above is for.
+
+    A checkpoint that FAILS TO LOAD is not that case, and this function
+    deliberately does not catch it. Swallowing the load error would substitute
+    ``max_seq_length=None``, which is a DIFFERENT canary key, so a model with a
+    populated cache would be refused as stale — reporting a corrupt cache for
+    what is really a missing checkpoint or a broken dependency, and exiting
+    with the integrity code that makes `run_ladder.sh` abort the whole sweep
+    instead of recording one model failure. Let the load error out: the caller
+    in ``evaluate_model_on_benchmark`` records it as the model failure it is.
+    (Cross-model review.)
+    """
+    model = None
+    getter = getattr(embedder, "_get_model", None)
+    if callable(getter):
+        model = getter()
+    if model is None:
+        model = getattr(embedder, "model", embedder)
+    value = getattr(model, "max_seq_length", None)
+    if value is None:
+        value = getattr(embedder, "max_seq_length", None)
+    return f"max_seq_length={value!r}"
+
+
+def _canary_texts(embedder: Any) -> tuple[str, ...]:
+    """The probe texts pinned in each partition: one short, one truncation-length.
+
+    Both carry :func:`_vector_affecting_runtime`, so the pair identifies the
+    checkpoint *and* the runtime configuration it was measured under.
+    """
+    fingerprint = _vector_affecting_runtime(embedder)
+    return (
+        f"{_CANARY_TEXT} [{fingerprint}]",
+        f"{_CANARY_LONG_TEXT} [{fingerprint}]",
+    )
+
+
+#: How far a cached canary vector may sit from a freshly encoded one before the
+#: cache is declared stale. Generous on purpose: run-to-run float noise (device,
+#: batch composition, BLAS version) is ~1e-6 on normalized vectors, while a
+#: different checkpoint moves them by order 1e-1. Anything between those is not
+#: a case worth guessing about — it is a case worth stopping on.
+_CANARY_TOLERANCE = 1e-4
+
+
+#: Exit code reserved for a cache-integrity refusal, so the shell driver can tell
+#: it apart from a model that died. `run_ladder.sh` treats a generic non-zero exit
+#: as "the process was killed" and records a failure row -- which DELETES every
+#: previously measured row for that model and commits the deletion. An integrity
+#: refusal must never take that path: nothing is wrong with the recorded rows, the
+#: cache is what is suspect. 3 because 1 is an uncaught exception and 2 is argparse.
+EXIT_CACHE_INTEGRITY = 3
+
+#: Sentinel for "every partition", distinct from ``None`` -- which is itself a
+#: real prompt value (the unprompted partition) and cannot double as "all".
+_ANY_PROMPT: Any = object()
+
+
+class StaleEmbeddingCacheError(RuntimeError):
+    """The cached vectors were produced by a different checkpoint than the loaded one."""
+
+
+def _cache_entry_count(db_path: Path, prompt: str | None = _ANY_PROMPT) -> int:
+    """How many vectors ``db_path`` holds; 0 if it does not exist yet.
+
+    Read directly rather than via ``cache_info()``, which reports hit/miss
+    *counters for this process* and is therefore 0 for a cache written last week.
+
+    Args:
+        prompt: Count only the rows written under this prompt. The cache stores
+            the prompt per row, and the key is ``(text, prompt)`` — so each prompt
+            is its own partition and has to be vouched for on its own. Defaults to
+            ``_ANY_PROMPT``, meaning every row regardless of partition.
+    """
+    import sqlite3
+
+    if not db_path.exists():
+        return 0
+    with sqlite3.connect(db_path) as conn:
+        if prompt is _ANY_PROMPT:
+            return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
+        # `IS` rather than `=`: SQL equality against NULL is NULL, never true, so
+        # `prompt = NULL` would count zero rows in the unprompted partition --
+        # the largest one -- and report every cache as empty.
+        row = conn.execute("SELECT COUNT(*) FROM embeddings WHERE prompt IS ?", (prompt,))
+        return int(row.fetchone()[0])
+
+
+def _canary_is_cached(
+    cached: Any, db_path: Path, prompt: str | None = None, texts: Sequence[str] = ()
+) -> bool:
+    """Are ALL the canaries already in ``db_path``, *without* putting them there?
+
+    Asking by encoding would answer the question by changing it: a legacy
+    namespace would gain a canary row on the very run that refuses it, and the
+    NEXT run would then find a canary present and pass — so re-running would
+    bypass the refusal. The refusal has to be idempotent, which means reading the
+    key rather than writing it.
+
+    Uses ``DiskCachedEmbedder._hash_text``, which is private, on purpose: the
+    whole point is to ask for *the exact key the cache would use*, including its
+    embedder discriminator. Re-deriving it here would be a second implementation
+    of the key, free to drift from the first — the failure mode this file keeps
+    arguing against.
+    """
+    import sqlite3
+
+    if not db_path.exists():
+        return False
+    # ALL, not any: a partition pinned before a probe existed has never been
+    # verified against what that probe covers, which is the definition of legacy
+    # the refusal already uses. Reading it as pinned would grandfather in exactly
+    # the vectors the new probe was added to check.
+    with sqlite3.connect(db_path) as conn:
+        for text in texts:
+            key = cached._hash_text(text, prompt)
+            row = conn.execute("SELECT 1 FROM embeddings WHERE text_hash = ?", (key,)).fetchone()
+            if row is None:
+                return False
+    return True
+
+
+def _assert_cache_matches_checkpoint(
+    base: Any,
+    cached: Any,
+    namespace: str,
+    cache_dir: Path,
+    *,
+    adopt_legacy: bool = False,
+    prompts: Sequence[str | None] = (None,),
+) -> None:
+    """Stop the run if the warm cache no longer agrees with the loaded checkpoint.
+
+    The namespace is keyed on model name + dtype, **not** on a Hub revision. So
+    if a checkpoint is re-uploaded under the same name, the namespace still hits:
+    the run would read the NEW checkpoint's ``parameter_count``/``embedding_dim``
+    while reusing the OLD checkpoint's vectors, and publish a row mixing the two.
+
+    Putting the revision in the namespace would close that — and invalidate every
+    cached vector in the ladder to do it. This closes it without re-encoding
+    anything: encode one fixed canary through the cache (served from disk on a
+    warm run) and through the base embedder (always fresh), and compare. They can
+    only disagree if the cached vectors came from something the loaded model no
+    longer is.
+
+    That is deliberately a *stronger* check than a revision pin rather than a
+    cheaper one. A revision pin answers "is this the same Hub commit"; this
+    answers "does this checkpoint still produce these vectors", which is the
+    property the measurements actually depend on. It therefore also catches
+    drift a revision cannot see — a sentence-transformers upgrade that changes
+    pooling, a tokenizer fix, a different dtype path on a new device.
+
+    **A cache that predates the canary cannot be vouched for, and must not pass
+    silently.** On such a cache the canary simply *misses*: it is encoded fresh
+    from the checkpoint loaded right now, written to the otherwise-unvouched
+    database, and then compared against another fresh encoding of itself. It
+    always matches — while every corpus vector beside it may still belong to a
+    different checkpoint. That is the same defect this function exists to close,
+    reintroduced one level up, so the entry count is read *before* the canary is
+    written: a non-empty namespace with no canary in it is refused outright.
+
+    Args:
+        adopt_legacy: Vouch for an existing unverified namespace instead of
+            refusing it (``--trust-existing-cache``). This exists because the
+            refusal above is otherwise retroactive: every namespace written
+            before this check — 1.8 GB and hours of encoding, for the ladder as
+            it stands — has no canary and would demand a full re-measure of a
+            cache the operator knows is current. It vouches **once**: the canary
+            written during adoption pins the checkpoint, so the next run is
+            checked normally. It is a human assertion, and it is logged as one.
+
+    Raises:
+        StaleEmbeddingCacheError: Naming the namespace file to delete. Deliberately
+            fatal rather than a warning: the failure it guards against is one that
+            publishes a plausible number, and a warning scrolls past.
+    """
+    import numpy as np
+
+    db_path = cache_dir / f"{namespace}.db"
+
+    # One partition per prompt, because the cache key is (text, prompt): an
+    # unprompted canary says nothing about the prompt-keyed entries the `instruct`
+    # and `documented` arms read back. A change that touches only explicit prompt
+    # handling -- `include_prompt`, prompt-token pooling -- leaves bare embeddings
+    # identical and would sail past a canary that only ever asks for the bare one.
+    # (Cross-model review.)
+    for prompt in dict.fromkeys(prompts):
+        # A partition is "cold" only when it is EMPTY. A partition that already
+        # holds corpus vectors but no canary is legacy in exactly the sense the
+        # namespace-level gate means -- and it is reachable even on a namespace
+        # whose unprompted canary is present, because that canary was pinned
+        # before this loop existed and vouches only for its own partition.
+        # Treating it as cold would pin a fresh canary over stale prompted
+        # vectors and accept them forever. Same gate, same remedy, per partition.
+        # (Cross-model review.)
+        canaries = _canary_texts(base)
+        populated = _cache_entry_count(db_path, prompt)
+        if populated > 0 and not _canary_is_cached(cached, db_path, prompt, canaries):
+            if not adopt_legacy:
+                raise StaleEmbeddingCacheError(
+                    f"the embedding cache for namespace {namespace!r} holds {populated} "
+                    f"vectors under prompt={prompt!r} with no canary for that prompt: "
+                    f"they were written before this check existed, so nothing has ever "
+                    f"verified them against a checkpoint, and a run using them would "
+                    f"publish rows mixing two checkpoints. Delete {db_path} and "
+                    f"re-measure this model; the cache it writes will be checked from "
+                    f"its first run onward. If you know this cache was written by the "
+                    f"checkpoint loaded now, pass --trust-existing-cache to adopt it -- "
+                    f"that vouches for it once and pins the canary from then on."
+                )
+            logger.warning(
+                "--trust-existing-cache: adopting %d unverified vectors under prompt=%r "
+                "in namespace %r. Nothing verified this; you did.",
+                populated,
+                prompt,
+                namespace,
+            )
+            cached.encode(list(canaries), prompt=prompt)
+            continue
+
+        for text in canaries:
+            from_cache = np.asarray(cached.encode([text], prompt=prompt)[0], dtype=np.float64)
+            fresh = np.asarray(base.encode([text], prompt=prompt)[0], dtype=np.float64)
+
+            if from_cache.shape != fresh.shape:
+                drift: float = float("inf")
+            elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
+                # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False**
+                # -- so the guard would ACCEPT a cache it cannot compare and the ladder
+                # would publish rows computed from non-finite vectors. Unstable half
+                # precision on some devices and a truncated cached blob both produce
+                # this. Treat it as maximal drift: unusable is not equal.
+                drift = float("inf")
+            else:
+                drift = float(np.abs(from_cache - fresh).max())
+
+            if drift > _CANARY_TOLERANCE:
+                raise StaleEmbeddingCacheError(
+                    f"the embedding cache for namespace {namespace!r} was written by a "
+                    f"different checkpoint than the one loaded now (canary vectors for "
+                    f"prompt={prompt!r}, probe of {len(text)} chars, differ by "
+                    f"{drift:.3g} > {_CANARY_TOLERANCE:g}). "
+                    f"Every cached vector in it is suspect, so continuing would publish "
+                    f"rows mixing two checkpoints. Delete {db_path} and re-measure."
+                )
+
+
+def _build_embedder(
+    spec: ModelSpec,
+    cache_dir: Path,
+    device: str | None,
+    batch_size: int,
+    *,
+    adopt_legacy_cache: bool = False,
+    prompts: Sequence[str | None] = (None,),
+) -> Any:
     """A disk-cached embedder for ``spec``.
 
     The cache is keyed on (text, prompt) and namespaced per model, which makes a
@@ -605,8 +954,19 @@ def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_
     # The cache namespace carries the dtype: half-precision vectors are DIFFERENT
     # vectors, and reusing a float32 cache entry for a float16 run would silently
     # publish a number the run never computed.
+    #
+    # It does NOT carry a Hub revision. Adding one would invalidate every cached
+    # vector in the ladder, so the re-upload hazard is caught by measurement
+    # instead: `_assert_cache_matches_checkpoint` re-encodes one fixed canary and
+    # stops the run if the warm cache disagrees with the loaded model. That needs
+    # no revision, costs one short encode, and catches drift a revision cannot
+    # see (a pooling change, a tokenizer fix, a different dtype path).
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
-    return base, DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    _assert_cache_matches_checkpoint(
+        base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache, prompts=prompts
+    )
+    return base, cached
 
 
 def _registered_prompts(base_embedder: Any) -> list[str]:
@@ -632,10 +992,14 @@ def build_prompted_index(
 
     Returns ``(index, corpus vectors, build seconds, texts encoded)``.
 
-    The prefix is applied by plain string concatenation rather than
-    sentence-transformers' ``prompt=`` because ``FAISSIndex.create_index`` takes
-    no prompt at all — the document-side gap this run reports. The two are
-    equivalent for the checkpoints measured here, verified rather than assumed:
+    The prefix is applied by plain string concatenation rather than by binding
+    ``prompt_name=`` on the embedder. **Not because the latter does not work** —
+    it does, and ``tests/core/blockers/test_asymmetric_prompt_recipe.py`` proves
+    the two produce identical results — but because these rows must keep
+    reproducing the table measured before that recipe was documented. An earlier
+    version of this docstring called it a product gap; that claim is corrected in
+    the report. The two are equivalent for the checkpoints measured here,
+    verified rather than assumed:
     sentence-transformers applies a prompt as ``prompt + text``
     (``sentence_transformers/base/model.py:560``) and only excludes its tokens
     from pooling when ``include_prompt=False``
@@ -650,8 +1014,10 @@ def build_prompted_index(
     build the query vectors — so on a documented arm the query would come out as
     ``query_prompt + document_prompt + text``, a double-prefixed recipe no model
     card describes, and the arm's recall would measure something nobody asked
-    for. Reaching behind ``create_index`` is not elegance; it is the same
-    document-side product gap surfacing a second time, on the read path.
+    for. Reaching behind ``create_index`` is not elegance; it is the cost of
+    hand-prefixing the corpus instead of using ``prompt_name=``, which does not
+    have this problem because the prefix lives on the embedder, not in the
+    snapshotted text.
     """
     from langres.core.indexes.vector_index import FAISSIndex
 
@@ -680,6 +1046,7 @@ def evaluate_model_on_benchmark(
     device: str | None,
     batch_size: int,
     reference: dict[str, RecallByRecord] | None = None,
+    adopt_legacy_cache: bool = False,
 ) -> tuple[list[LadderRow], dict[str, RecallByRecord]]:
     """Measure one model on one benchmark.
 
@@ -713,13 +1080,34 @@ def evaluate_model_on_benchmark(
         schema = type(corpus[0])
         records = [record.model_dump() for record in corpus]
 
-        base, embedder = _build_embedder(spec, cache_dir, device, batch_size)
+        # Every prompt partition this run will READ has to be the one the canary
+        # vouches for. The document side is prefixed into the text by
+        # `build_prompted_index`, so it lands in the bare partition; the query side
+        # travels as `encode(prompt=...)` and gets its own cache key per arm.
+        base, embedder = _build_embedder(
+            spec,
+            cache_dir,
+            device,
+            batch_size,
+            adopt_legacy_cache=adopt_legacy_cache,
+            prompts=[None, *(query for _doc, query in prompt_arms.values() if query)],
+        )
 
         # Force the load HERE, before any arm runs, so a checkpoint that cannot
         # load at all is one failure row rather than one per arm.
         parameter_count = base.parameter_count
         embedding_dim = base.embedding_dim
         prompts = _registered_prompts(base)
+    except StaleEmbeddingCacheError:
+        # NOT a result. Every other exception here is a fact about the model --
+        # it did not load, it ran out of memory -- and recording it as a failure
+        # row is the honest thing. A cache-integrity refusal is a fact about the
+        # HARNESS, and turning it into a row is actively destructive: `main()`
+        # persists that row and `merge_rows()` voids every previously recorded
+        # cell for this (model, benchmark), so a refusal would DELETE good
+        # measurements from the tracked jsonl. `run_ladder.sh` would then see
+        # exit 0 and commit the deletion. Let it out. (Cross-model review.)
+        raise
     except Exception as exc:  # noqa: BLE001 - a failure IS a result, never a skip
         logger.exception("model %s failed on %s", spec.name, benchmark)
         return (
@@ -875,9 +1263,12 @@ def _attach_intervals(
 
     Two comparisons, both paired per record and resampled by gold cluster:
 
-    - **prompt arm**: instruct minus none, same model, same index. The only thing
-      that differs is the query encoding, so this is as clean a paired test as
-      the harness can make.
+    - **prompt arm**: this arm minus ``none``, same model. What differs depends on
+      the arm and they are NOT the same experiment: ``instruct`` changes the query
+      encoding only, against the same bare-document index; ``documented`` also
+      applies the checkpoint's document prefix, so the corpus vectors are rebuilt
+      and the delta is document-plus-query vs. neither. Both are paired per record
+      the same way; only ``instruct`` is a query-only test.
     - **vs. the shipped default**: this model minus ``REFERENCE_MODEL`` in the
       same arm. Left unset when the reference has not been measured on this
       benchmark — an absent interval is a fact, an invented one is not.
@@ -1021,6 +1412,462 @@ def _excludes_zero(low: float | None, high: float | None) -> bool:
     return low is not None and high is not None and not (low <= 0.0 <= high)
 
 
+def _render_recommendation(
+    ok: Sequence[LadderRow],
+    ladder: Sequence[str],
+    benchmarks: Sequence[str],
+    headline_k: int,
+) -> list[str]:
+    """The recommendation, split by licence and derived entirely from the rows.
+
+    Two separate questions, deliberately not merged into one ranking:
+
+    1. **What is the best model measured here?** Answered by the table above,
+       which does not care about licences.
+    2. **What may langres ship as a default?** langres is Apache-2.0, so a
+       checkpoint under a use-restricted licence can be a *documented opt-in*
+       with its terms stated, but not a silent default. That is a licence fact,
+       not a measurement, so the two are reported side by side rather than
+       collapsed into a single "winner".
+
+    Nothing here is hand-written except the licence identifiers on
+    :data:`MODELS`, which were read from the model cards. The winners, the
+    counts, and the coverage denominator all come from ``ok``.
+    """
+
+    def wins(model: str) -> list[LadderRow]:
+        """Benchmarks where ``model`` beats the reference with the CI clear of 0."""
+        found = []
+        for benchmark in benchmarks:
+            row = next(
+                (
+                    r
+                    for r in ok
+                    if r.model == model
+                    and r.benchmark == benchmark
+                    and r.k == headline_k
+                    and r.prompt_arm == "none"
+                    and r.vs_reference_delta is not None
+                    and r.vs_reference_delta > 0
+                    and _excludes_zero(r.vs_reference_ci_low, r.vs_reference_ci_high)
+                ),
+                None,
+            )
+            if row is not None:
+                found.append(row)
+        return found
+
+    def has_comparison(model: str) -> bool:
+        """Whether ``model`` has ANY usable interval against the reference.
+
+        ``wins()`` returning empty has two completely different causes that look
+        identical downstream: the model was compared and did not win, or it was
+        never compared at all. ``merge_rows()`` deliberately clears every
+        challenger's ``vs_reference_*`` when the reference is remeasured (they are
+        stale until rerun), and a prompt-arm-only partial run can produce an ``ok``
+        model with no ``none``-arm row, so the second case is routine rather than
+        theoretical. Reading it as "the measurement cannot tell them apart" turns a
+        missing number into a finding of equivalence. (Cross-model review.)
+        """
+        return comparable_count(model) > 0
+
+    def evidence_phrase(model: str) -> str:
+        """What this sweep measured about ``model`` vs the reference, in three states.
+
+        Won / compared-and-did-not-win / never-compared are three different
+        claims, and the first version of this collapsed the last two into
+        "measured ahead on: no benchmark" — which reads as a result and is not
+        one. Shared by the restricted and unclassified sections deliberately:
+        they had the identical defect and only one of them got fixed, because
+        the branch was written twice. One phrasing, one place to be wrong.
+        (Cross-model review.)
+        """
+        won = wins(model)
+        if won:
+            return (
+                f"Measured ahead of `{REFERENCE_MODEL}` on: "
+                + ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
+                + "."
+            )
+        if has_comparison(model):
+            return (
+                f"**This sweep measured no benchmark where it beats `{REFERENCE_MODEL}` "
+                "with an interval clear of zero**, so nothing here recommends it."
+            )
+        return (
+            f"**It carries no interval against `{REFERENCE_MODEL}` at this metric "
+            "revision**, so this sweep makes no performance claim about it in either "
+            "direction — that is a missing measurement, not a verdict."
+        )
+
+    def comparable_benchmarks(model: str) -> set[str]:
+        """Which benchmarks ``model`` actually has an interval on.
+
+        The denominator matters as much as the numerator. "1 of 5" read off a
+        model with intervals on two benchmarks is not the same claim as "1 of 5"
+        from a model compared on all five, and ranking the two against each other
+        compares different experiments. Returned as a SET rather than a count
+        because "how many did each have" cannot answer "which did they share",
+        and it is the shared ones a winner has to be chosen on. (Cross-model
+        review.)
+        """
+        return {
+            benchmark
+            for benchmark in benchmarks
+            if any(
+                r.model == model
+                and r.benchmark == benchmark
+                and r.k == headline_k
+                and r.prompt_arm == "none"
+                and r.vs_reference_delta is not None
+                and r.vs_reference_ci_low is not None
+                and r.vs_reference_ci_high is not None
+                for r in ok
+            )
+        }
+
+    def comparable_count(model: str) -> int:
+        """How many benchmarks ``model`` has an interval on."""
+        return len(comparable_benchmarks(model))
+
+    measured = sorted({row.model for row in ok})
+    candidates = [name for name in ladder if name != REFERENCE_MODEL and name in measured]
+    osi = [name for name in candidates if _is_osi(MODELS_BY_NAME.get(name) or ModelSpec(name))]
+    # Three buckets, not two. Failing an ALLOW list means "not shown to be OSI",
+    # which is not the same claim as "shown to be restricted" — and a ``--models``
+    # checkpoint outside ``MODELS`` gets the ``ModelSpec`` default ``"unknown"``,
+    # so lumping it in with Gemma would print a licence verdict about a model
+    # whose card nobody read. Unknown is a gap in the evidence; it keeps the
+    # model out of the default candidates (the allow list is what fails closed)
+    # but it earns a "verify this" line, not an accusation.
+    unclassified = [
+        name
+        for name in candidates
+        if name not in osi and (MODELS_BY_NAME.get(name) or ModelSpec(name)).license == "unknown"
+    ]
+    restricted = [name for name in candidates if name not in osi and name not in unclassified]
+
+    out: list[str] = []
+    out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
+    out.append(
+        f"\n**{len(measured)} of the {len(ladder)} models in the ladder have a row at "
+        f"metric revision {METRIC_REVISION}.** Everything below is a statement about "
+        "those and only those; the rest are named under 'What did not run'. A "
+        "recommendation drawn from a partial field is still a recommendation, but it "
+        "is not a survey — do not read the absence of a model here as evidence "
+        "against it.\n"
+        "\n**This document does not change `DEFAULT_EMBEDDING_MODEL`.** It states what "
+        "was measured and what the licences are; the default is a human decision.\n"
+    )
+
+    out.append("\n### The OSI-licensed field — the only candidates for a default\n")
+    out.append(
+        f"\nlangres ships under Apache-2.0. A default that carries a use-restricted "
+        f"licence pushes that restriction onto every user who never chose it, so the "
+        f"candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed "
+        f"models — including the incumbent, `{REFERENCE_MODEL}` "
+        f"({(MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)).license}).\n"
+    )
+    if not osi:
+        out.append(
+            "\n**No OSI-licensed challenger has a row at this metric revision**, so "
+            "this sweep has nothing to say about replacing the default. That is a gap "
+            "in the measurement, not a verdict on the incumbent.\n"
+        )
+    else:
+        out.append("\n| model | licence | benchmarks beaten (CI clear of 0) | best Δ | on |\n")
+        out.append("|---|---|---:|---:|---|\n")
+        for name in osi:
+            spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            won = wins(name)
+            # The denominator is the benchmarks this model was COMPARED on, not
+            # every benchmark in the sweep. Printing "0 of 5" for a model with no
+            # intervals makes a missing experiment look like five losses -- the
+            # same row a genuinely beaten model gets.
+            comparable = comparable_count(name)
+            if not comparable:
+                out.append(f"| `{name}` | {spec.license} | not compared | — | — |\n")
+            elif won:
+                best = max(won, key=lambda r: r.vs_reference_delta or 0.0)
+                out.append(
+                    f"| `{name}` | {spec.license} | {len(won)} of {comparable} | "
+                    f"{best.vs_reference_delta:+.4f} | {best.benchmark} |\n"
+                )
+            else:
+                out.append(f"| `{name}` | {spec.license} | 0 of {comparable} | — | — |\n")
+        compared = [name for name in osi if has_comparison(name)]
+        # The set of benchmarks EVERY compared model has an interval on. Raw win
+        # counts are not comparable across different coverage -- 2 wins out of 5
+        # attempts outranks 1 out of 1 purely by having had more chances -- so the
+        # ranking runs on the shared subset, where every model faced the same
+        # benchmarks. A partial rerun is the normal way coverage diverges, so this
+        # is not a corner case. (Cross-model review.)
+        common = (
+            set.intersection(*(comparable_benchmarks(name) for name in compared))
+            if compared
+            else set()
+        )
+
+        # Rank on wins first, then on the largest single win, then on the name so
+        # the file is byte-stable across re-renders. A tie broken by name alone
+        # would silently promote a model for being alphabetically early.
+        #
+        # Only COMPARED models are ranked. An uncompared model entering with zero
+        # wins is indistinguishable from one that lost every benchmark, so it
+        # would silently pad the field a "best candidate" is declared best of.
+        def common_wins(model: str) -> list[LadderRow]:
+            return [row for row in wins(model) if row.benchmark in common]
+
+        ranked = [
+            (
+                len(common_wins(name)),
+                max((r.vs_reference_delta or 0.0) for r in common_wins(name))
+                if common_wins(name)
+                else 0.0,
+                name,
+            )
+            for name in compared
+        ]
+        best_count, best_delta, best_name = max(ranked) if ranked else (0, 0.0, "")
+        # `name` is in the sort tuple for byte-stability across re-renders, which
+        # makes `max` pick the lexicographically greatest model on an exact tie --
+        # a winner with no measurement behind it. Detect the tie on the MEASURED
+        # part of the key only and report it, rather than letting the tiebreak
+        # silently decide. (Cross-model review.)
+        co_winners = [
+            name for count, delta, name in ranked if (count, delta) == (best_count, best_delta)
+        ]
+
+        # Wins on benchmarks OUTSIDE the shared set. They cannot enter the ranking
+        # -- that is the whole point of the shared set -- but they are still
+        # CI-clear wins sitting in the table above, so a sentence saying no model
+        # beat the reference "on any benchmark" would contradict it.
+        # A shared-set zero is not one state. An interval of [-0.12, -0.08] is a
+        # CLEAR LOSS -- the measurement distinguished the models perfectly well,
+        # in the incumbent's favour -- while [-0.02, 0.04] is genuinely
+        # inconclusive. Calling the first "cannot tell them apart" describes the
+        # opposite of what was measured. Both justify keeping the incumbent, and
+        # for opposite reasons, so the sentence has to say which. (Cross-model
+        # review.)
+        def loses_clearly(model: str) -> bool:
+            return any(
+                row.model == model
+                and row.benchmark in common
+                and row.k == headline_k
+                and row.prompt_arm == "none"
+                and row.vs_reference_ci_high is not None
+                and row.vs_reference_ci_high < 0
+                for row in ok
+            )
+
+        def ties_exactly(model: str) -> bool:
+            """Every shared interval is a degenerate ``[0, 0]``.
+
+            ``_ci`` already reads that as *certainty of a zero effect* rather
+            than "spans zero" -- ``fodors_zagat`` produces it for real, because
+            both arms hit recall 1.0 on every record. Folding it into
+            "inconclusive" would give the opposite evidential explanation for a
+            benchmark that measured the models as exactly equal. (Cross-model
+            review.)
+            """
+            shared = [
+                row
+                for row in ok
+                if row.model == model
+                and row.benchmark in common
+                and row.k == headline_k
+                and row.prompt_arm == "none"
+            ]
+            return bool(shared) and all(
+                row.vs_reference_ci_low == 0.0 and row.vs_reference_ci_high == 0.0 for row in shared
+            )
+
+        clear_losers = [name for name in compared if loses_clearly(name)]
+        exact_ties = [name for name in compared if name not in clear_losers and ties_exactly(name)]
+        exclusive_winners = sorted(
+            {name for name in compared if any(row.benchmark not in common for row in wins(name))}
+        )
+        if not compared:
+            out.append(
+                f"\n**No OSI-licensed challenger currently carries an interval against "
+                f"`{REFERENCE_MODEL}`, so this sweep cannot rank them at all.** That is "
+                "a **missing measurement, not a tie**: the comparison fields are "
+                "cleared for every challenger whenever the reference is remeasured, and "
+                "a run that skipped the no-instruction arm never produces them. Re-run "
+                "the challengers against the current reference before reading anything "
+                "into this section — and in particular do not read it as a reason to "
+                "keep the default, which is a claim this state cannot support.\n"
+            )
+        elif not common:
+            out.append(
+                f"\n**The {len(compared)} compared OSI-licensed models share no common "
+                "benchmark, so no winner is named.** Each was measured against "
+                f"`{REFERENCE_MODEL}` on a different subset, and a win count taken "
+                "across different subsets is not a ranking — a model with more "
+                "benchmarks simply has more chances to win one. The per-model rows "
+                "above still stand individually; re-run the challengers on a shared "
+                "set before comparing them to each other.\n"
+            )
+        elif best_count == 0 and exclusive_winners:
+            out.append(
+                f"\n**No compared OSI-licensed model beats `{REFERENCE_MODEL}` on the "
+                f"{len(common)} shared benchmark(s) — but "
+                f"{', '.join(f'`{name}`' for name in exclusive_winners)} does win "
+                "elsewhere, on a benchmark outside the shared set.** No default "
+                "recommendation is made here. Keeping the default would need those "
+                "wins to be absent, and they are not; promoting on them would need "
+                "them to be comparable, and they are not either — the other models "
+                "were never measured there. Re-run the field on a common set to "
+                "settle it.\n"
+            )
+        elif best_count == 0:
+            # Three DISJOINT reasons a model failed to beat the reference, reported
+            # separately because they are different evidential claims: a measured
+            # loss, a measured exact equality, and no measurement able to separate
+            # them at all. An earlier version made these mutually exclusive
+            # branches, so one clear loser swept every exact tie into "intervals
+            # spanning zero" -- asserting uncertainty about the one state the
+            # measurement actually resolved. Partition, then say each part.
+            # (Cross-model review.)
+            inconclusive = [
+                name for name in compared if name not in clear_losers and name not in exact_ties
+            ]
+            parts: list[str] = []
+            if clear_losers:
+                parts.append(
+                    f"for {len(clear_losers)} of them "
+                    f"({', '.join(f'`{name}`' for name in clear_losers)}) that is a "
+                    "**measured loss**, not an absence of evidence: at least one "
+                    "shared interval sits entirely below zero"
+                )
+            if exact_ties:
+                parts.append(
+                    f"for {len(exact_ties)} of them "
+                    f"({', '.join(f'`{name}`' for name in exact_ties)}) every shared "
+                    "interval is a degenerate `[0, 0]`: the measurement did not fail "
+                    "to separate them, it **resolved them as exactly equal** (both "
+                    "arms scoring identically on every record, as `fodors_zagat` "
+                    "does) — a result, not a gap"
+                )
+            if inconclusive:
+                parts.append(
+                    f"for {len(inconclusive)} of them "
+                    f"({', '.join(f'`{name}`' for name in inconclusive)}) the answer is "
+                    "genuinely inconclusive — not because the challengers are bad, but "
+                    "because on this evidence the measurement cannot tell them apart: "
+                    "every shared interval spans zero, and 'indistinguishable' is not a "
+                    "reason to move"
+                )
+            out.append(
+                f"\n**None of the {len(compared)} compared OSI-licensed model(s) beats "
+                f"`{REFERENCE_MODEL}` on any of the {len(common)} shared benchmark(s) "
+                "with an interval clear of zero.** "
+                "The measured recommendation is therefore to **keep the current "
+                "default**"
+                + (
+                    f" — {'; '.join(parts)}. None of those states is a reason to move."
+                    if parts
+                    else "."
+                )
+                + (
+                    ""
+                    if len(compared) == len(osi)
+                    else f" Note this covers {len(compared)} of the {len(osi)} OSI "
+                    "models in the table above; the rest carry no interval and are "
+                    "not part of that statement."
+                )
+                + "\n"
+            )
+        elif len(co_winners) > 1:
+            out.append(
+                f"\n**No single best OSI-licensed candidate: "
+                f"{', '.join(f'`{name}`' for name in sorted(co_winners))} tie exactly** "
+                f"— same {best_count} win(s) on the {len(common)} shared benchmark(s) "
+                f"and the same best Δ ({best_delta:+.4f}). Naming one of them would be "
+                "reporting the sort order, not a measurement. Break the tie with "
+                "something this table does not carry — cost, licence, memory, latency "
+                "— or on more benchmarks.\n"
+            )
+        else:
+            out.append(
+                f"\n**Best OSI-licensed candidate: `{best_name}`**, ahead of "
+                f"`{REFERENCE_MODEL}` on {best_count} of the {len(common)} benchmark(s) "
+                f"all {len(compared)} compared models share, with the interval clear of "
+                "zero. The count is taken on that shared set on purpose: raw win "
+                "counts across different coverage are not a ranking, since a model "
+                "measured on more benchmarks has more chances to win one. Read it "
+                "against the same model's row in the table above before adopting it — "
+                "that row reports the model's OWN coverage — because a win on some "
+                "benchmarks and a loss on others is the normal shape here, and both "
+                "columns count only the wins."
+                + (
+                    ""
+                    if len(compared) == len(osi) and common == set(benchmarks)
+                    else (
+                        f" **Best of {len(compared)} of the {len(osi)} OSI models**, on "
+                        f"{len(common)} of the {len(benchmarks)} benchmarks — the rest "
+                        "carry no interval at this revision and were not in the "
+                        "running, so this is the best of what was measured, not of the "
+                        "field."
+                    )
+                )
+                + "\n"
+            )
+
+    out.append("\n### Use-restricted checkpoints — documented opt-in, never a silent default\n")
+    if not restricted:
+        out.append(
+            "\nNo measured model declares a licence that was read and found non-OSI, so "
+            "this section has no entries at this metric revision.\n"
+        )
+    else:
+        for name in restricted:
+            spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            # Licence decides the MECHANISM; measurement decides whether anything
+            # is recommended. Fusing them emitted "Recommended as a documented
+            # opt-in" off the licence bucket alone. (Cross-model review.)
+            consequence = (
+                "**Recommended as a documented opt-in**"
+                if wins(name)
+                else "If you use it anyway, the documented opt-in is the required "
+                "exposure mechanism"
+            )
+            out.append(
+                f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
+                f"{evidence_phrase(name)} {consequence}: a user who names it accepts its "
+                "terms; a user who names nothing must not be given them. Anyone shipping "
+                "it must read the checkpoint's own licence — in Gemma's case a "
+                "prohibited-use policy that survives redistribution, which Apache-2.0 "
+                "does not impose.\n"
+                f"\n  ```python\n"
+                f"  # opt in explicitly, having read the licence\n"
+                f'  SentenceTransformerEmbedder("{name}")\n'
+                f"  ```\n"
+            )
+
+    if unclassified:
+        out.append("\n### Unclassified licences — verify before shipping, in either direction\n")
+        out.append(
+            "\nThese ran, but no licence identifier was recorded for them, so this "
+            "document makes **no claim** about their terms. Not OSI-approved *as far as "
+            "this file knows* is a statement about this file, not about the checkpoint: "
+            "an unread licence is as likely to be Apache-2.0 as it is to be restricted. "
+            "They are excluded from the default candidates above because the allow list "
+            "fails closed — absence of evidence keeps a model out — and that exclusion is "
+            "reversible the moment someone reads the model card and records the "
+            "identifier on `MODELS`.\n"
+        )
+        for name in unclassified:
+            out.append(
+                f"\n- **`{name}` — licence not recorded.** {evidence_phrase(name)} Read "
+                "the checkpoint's own model card before shipping it anywhere, then add "
+                "the identifier to `MODELS` so the next run classifies it instead of "
+                "deferring again.\n"
+            )
+
+    return out
+
+
 def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     """Render the markdown report from rows measured at the CURRENT metric revision.
 
@@ -1043,6 +1890,11 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             name,
         ),
     )
+    # The ONE ladder set: the coverage denominator, the "what did not run" table
+    # and the grid check all read it, so they cannot disagree about which models
+    # this document is accountable for.
+    ladder_specs = _ladder_specs(rows)
+    ladder_names = [spec.name for spec in ladder_specs]
 
     out: list[str] = []
     out.append("# Embedder ladder: which embedding model at which parameter count\n")
@@ -1051,6 +1903,82 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "measured by that script at metric revision "
         f"**{METRIC_REVISION}**; re-running it regenerates this file from "
         "`20260727_embedder_ladder_rows.jsonl`.\n"
+    )
+
+    # Provenance, derived from the rows rather than typed. A number whose
+    # producing command is not written down cannot be sourced later, and an
+    # unsourceable number is one that eventually has to be retracted.
+    measured_ks = sorted({row.k for row in ok})
+    out.append("\n## How to reproduce these numbers\n")
+    out.append(
+        "\n```bash\n"
+        "# every model, committing and pushing after each one\n"
+        "bash examples/research/run_ladder.sh\n"
+        "\n# or one model / a subset (space-separated)\n"
+        'LADDER_MODELS="intfloat/e5-base-v2" bash examples/research/run_ladder.sh\n'
+        "\n# render this file from the existing rows, measuring nothing\n"
+        "uv run python examples/research/embedder_ladder.py --render-only\n"
+        "```\n"
+    )
+    out.append(
+        f"\n**$0 — no paid API and no key.** Not offline, though: the first run of a "
+        "checkpoint downloads it from the Hugging Face Hub "
+        "(`SentenceTransformerEmbedder` leaves `local_files_only` false), and `uv run` "
+        "may resolve dependencies. With networking disabled and a cold cache the "
+        "script records failure rows rather than reproducing this table. Once the "
+        "checkpoints and the embedding cache are warm, a re-render is genuinely "
+        "offline. Metric revision "
+        f"**{METRIC_REVISION}**; `k` values `{measured_ks}`; benchmarks "
+        + ", ".join(f"`{b}`" for b in benchmarks)
+        + ". Every row records its own `model`, `benchmark`, `k`, `prompt_arm`, "
+        "`metric_revision`, `parameter_count` and `embedding_dim`, so a table cell "
+        "can always be traced to the row that produced it.\n"
+    )
+    out.append(
+        "\n> **Checkpoints are pinned by name only, and the cache is checked rather "
+        "than trusted.** The rows record `parameter_count` and `embedding_dim`, "
+        "**not** a Hub revision, and the embedding cache is namespaced on model name "
+        "+ dtype (`embedder_ladder.py::_build_embedder`) — also not a revision. Left "
+        "there, an upstream re-upload under the same name would let a warm re-run "
+        "read the **new** checkpoint's metadata while reusing the **old** "
+        "checkpoint's vectors and publish a row mixing the two, with nothing in the "
+        "row revealing it. So every run re-encodes a fixed set of canary probes and "
+        "compares each to its cached entry "
+        "(`embedder_ladder.py::_assert_cache_matches_checkpoint`); a mismatch aborts "
+        "the run and names the namespace file to delete. **There are two probes and "
+        "both are required** — a short string, and one of ~1024 words that every "
+        "realistic `max_seq_length` truncates, because a short probe alone cannot see "
+        "an input-selective change such as a shortened truncation limit. Both probe "
+        "texts also carry the model's `max_seq_length`, so changing it changes the "
+        "cache key and the namespace reads as unpinned rather than silently matching. "
+        "Consequently a namespace holding *a* canary row is not necessarily pinned: "
+        "one written by an earlier, single-probe version of this check is missing the "
+        "long probe and is deliberately refused as legacy. A namespace written "
+        "*before* the check existed carries no canary at all and has therefore never "
+        "been verified against anything, so it too is refused rather than adopted "
+        "silently. Pass "
+        "`--trust-existing-cache` to vouch for one: it pins the canary once, and "
+        "every later run is checked normally — which is exactly why **this document "
+        "does not state which namespaces are in which state**. The rows carry no "
+        "cache-verification field, so the renderer cannot see it, and the supported "
+        "adoption path changes it between runs: a sentence claiming every namespace "
+        "is unverified would be made false by the very next `--trust-existing-cache` "
+        "run and would keep asserting it. The live answer is in the cache directory "
+        "itself — a namespace holding **all** the current probe rows has been pinned; "
+        "one missing any of them has not — and a run that meets an unpinned namespace "
+        "says so and exits 3. "
+        "Putting the revision in the "
+        "namespace instead would invalidate every cached vector to close the same "
+        "hazard, and would still only answer *is this the same Hub commit* — the "
+        "canary answers *does this checkpoint still produce these vectors*, which is "
+        "what the measurements depend on, and so also catches a pooling change, a "
+        "tokenizer fix, or a different dtype path.\n"
+    )
+    out.append(
+        "\nRequires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS "
+        "(`run_ladder.sh` defaults both when unset): torch, faiss and scikit-learn "
+        "each bundle a `libomp.dylib`, and with two runtimes loaded the sweep "
+        "deadlocks at 0% CPU rather than failing.\n"
     )
     if stale:
         pending = sorted({row.model for row in stale})
@@ -1112,6 +2040,43 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "mean.** Pick the model against the data you actually have; the "
             "per-benchmark tables below are the unit of decision.\n"
         )
+        # The arm these headline numbers came from, and the half-driven arm they
+        # were once wrongly attributed to. Both derived from the rows: a
+        # correction that hand-types the number it corrects is the same defect.
+        instruct_row = next(
+            (
+                r
+                for r in ok
+                if r.model == model
+                and r.benchmark == high_row.benchmark
+                and r.k == headline_k
+                and r.prompt_arm == "instruct"
+            ),
+            None,
+        )
+        out.append(
+            "\n**Both of those numbers come from the `none` arm — neither the query "
+            "side nor the document side carries a prompt.** `render_report` filters "
+            "`prompt_arm == 'none'` for this comparison and the section heading below "
+            "says `no instruction`. That is langres's **default** configuration: a "
+            "`VectorBlocker` with no `query_prompt` over an embedder with no "
+            "`prompt_name`. The headline is therefore a statement about the two models "
+            "as they ship, not about a half-driven one.\n"
+        )
+        if instruct_row is not None and instruct_row.prompt_delta is not None:
+            out.append(
+                "\n> **Correction — supersedes the merged #239 PR body.** That body "
+                "said: *'Every number below, including the "
+                f"**{high:+.4f}** on `{high_row.benchmark}`, was measured with only the "
+                "query side driven.'* **That is false**, by the arm filter cited above. "
+                "The genuinely half-driven arm is `instruct`, and on "
+                f"`{high_row.benchmark}` it moves `{model}` by "
+                f"**{instruct_row.prompt_delta:+.4f}** "
+                f"{_ci(instruct_row.prompt_delta_ci_low, instruct_row.prompt_delta_ci_high)} "
+                "— a different number, from a different table. The correction runs in "
+                "the direction that makes the headline **stronger**, not weaker: it was "
+                "measured in the configuration langres actually ships.\n"
+            )
 
     out.append("\n## How to read this (please read before quoting a number)\n")
     out.append(
@@ -1297,7 +2262,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out.append(f"\n## Does an instruction prompt help? (k={headline_k})\n")
     out.append(
-        "\nSame model, same `k`, same index — only the query side is re-encoded with "
+        "\n**This paragraph describes the `instruct` arm only.** For it: same model, "
+        "same `k`, same index — only the query side is re-encoded with "
         f"a single fixed instruction (`{INSTRUCTION!r}`). This is deliberately **one** "
         "instruction for every model, so it answers 'does a task instruction on the "
         "query help', not 'is each model at its documented best'. The `own prompt "
@@ -1346,8 +2312,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     )
     out.append(
         "\n**`Δ per-record` is the statistic the interval bounds** — the mean "
-        "per-record recall difference (instruct minus none), resampled by gold "
-        "cluster via `langres.experiments.statistics.paired_entity_bootstrap`; "
+        "per-record recall difference (**this arm** minus `none`), resampled by gold "
+        "cluster via `langres.experiments.statistics.paired_entity_bootstrap`. "
+        "**Which sides moved depends on the arm, and they are not the same "
+        "experiment**: `instruct` re-encodes the *query* side only, against the "
+        "same bare-document index as `none`; `documented` applies the checkpoint's "
+        "own document prefix too, so `build_prompted_index` rebuilds the corpus "
+        "vectors and its Δ is **document-plus-query vs. neither**. Reading a "
+        "`documented` Δ as a query-only effect overstates what the query "
+        "instruction did. It is also the more useful number, because it is the "
+        "configuration the model card actually describes. Resampling is identical "
+        "for both — "
         "never by pair row, because pair rows inside one entity are dependent and "
         "resampling them produces intervals that are far too tight. It is "
         "deliberately **not** the difference of the two aggregate `recall` columns "
@@ -1397,24 +2372,62 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                     f"{'n/a' if d_auc is None else f'{d_auc:+.4f}'} |\n"
                 )
 
-    out.append("\n### Finding: langres's blocking path has no document-side prompt\n")
+    out.append("\n### The asymmetric recipe, and how to drive it (corrected)\n")
     out.append(
-        "\nMeasuring the `documented` arm surfaced a gap in the library, not in this "
-        "harness. `VectorBlocker(query_prompt=...)` prefixes the **query** side; the "
-        "index is built by `VectorIndex.create_index(texts)`, whose signature takes "
-        "no prompt at all (`src/langres/core/indexes/vector_index.py`). So the "
-        "asymmetric recipe an instruction-trained checkpoint documents is not "
-        "expressible through the blocking API: a caller can reach it only by "
-        "combining two objects — an embedder constructed with a document "
-        "`prompt_name` and a blocker constructed with a matching `query_prompt` — "
-        "which no documentation describes and nothing checks for agreement.\n"
-        "\nThis harness works around it by prefixing the corpus text itself. That is "
-        "exactly equivalent **for these checkpoints**, verified rather than assumed: "
-        "sentence-transformers applies a prompt as `prompt + text`, and excludes its "
-        "tokens from pooling only when the checkpoint sets `include_prompt=false`, "
-        "which neither of these does. A checkpoint that did set it would need the "
-        "real API. **The gap is reported, not fixed here** — closing it changes a "
-        "core contract and belongs in its own change.\n"
+        "\n> **Correction.** An earlier version of this section was headed *'langres's "
+        "blocking path has no document-side prompt'* and said the asymmetric recipe was "
+        "**'not expressible through the blocking API'**. That is **false**. It is "
+        "expressible today, with no API change — the defect was that nothing documented "
+        "it and nothing checked it.\n"
+        "\n`create_index(texts)` indeed takes no prompt argument, but the document-side "
+        "prompt does not travel through that argument: it is bound to the **embedder** "
+        "the index owns. `SentenceTransformerEmbedder` forwards `prompts=` and "
+        "`prompt_name=` into the `SentenceTransformer` constructor as "
+        "`default_prompt_name` (`src/langres/core/embeddings.py`), and "
+        "sentence-transformers resolves an `encode(prompt=None)` call back to that "
+        "default (`base/model.py`, `_resolve_prompt`). So every text `create_index` "
+        "encodes already carries the document prefix. `search_all(query_prompt=...)` "
+        "then passes an **explicit** prompt, which takes precedence over the default — "
+        "queries get the query prefix, documents keep the document prefix.\n"
+        "\nThat is the whole asymmetric recipe, and it is verified rather than argued: "
+        "`tests/core/blockers/test_asymmetric_prompt_recipe.py` builds it through the "
+        "shipped API and asserts it is **byte-identical** to this harness's "
+        "prefix-the-corpus-by-hand workaround, with two controls — dropping the "
+        "document prompt changes the result, and dropping the query prompt changes the "
+        "result. (A `query_prompt` that silently did nothing already shipped here once "
+        "and made every prompt cell read `0.0000`.)\n"
+        "\n```python\n"
+        "embedder = SentenceTransformerEmbedder(\n"
+        '    "google/embeddinggemma-300m",\n'
+        "    prompts={\n"
+        '        "document": "title: none | text: ",\n'
+        '        "query": "task: search result | query: ",\n'
+        "    },\n"
+        '    prompt_name="document",   # <- the DOCUMENT side, applied by create_index\n'
+        ")\n"
+        "blocker = VectorBlocker(\n"
+        "    vector_index=FAISSIndex(embedder),\n"
+        '    query_prompt="task: search result | query: ",  # <- the QUERY side\n'
+        "    schema=MySchema,\n"
+        '    text_field="name",\n'
+        ")\n"
+        "```\n"
+        "\n**What was actually broken, and is fixed in the same change as this "
+        "correction:**\n"
+        "\n- Nothing checked that the two sides agree. Setting the embedder's "
+        "`prompt_name` and forgetting the blocker's `query_prompt` is silently *worse* "
+        "than setting neither: `search_all(query_prompt=None)` reuses the cached corpus "
+        "vectors as queries, so the queries are encoded with the **document** prefix. "
+        "`VectorBlocker` now warns on exactly that combination.\n"
+        "- `QdrantHybridIndex.search_all` accepted `query_prompt` and **discarded** it, "
+        "so sweeping the axis over that index returned a flat, meaningless result "
+        "instead of an error. It now raises.\n"
+        "\nThis harness still prefixes the corpus text itself, because it must reproduce "
+        "rows measured before the recipe was documented. That is exactly equivalent "
+        "**for these checkpoints**, verified rather than assumed: sentence-transformers "
+        "applies a prompt as `prompt + text`, and excludes its tokens from pooling only "
+        "when the checkpoint sets `include_prompt=false`, which neither of these does. "
+        "A checkpoint that did set it would need the real API above.\n"
     )
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
@@ -1467,6 +2480,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                 f"{_fmt(row.ci_clusters)} |\n"
             )
 
+    out.extend(_render_recommendation(ok, ladder_names, benchmarks, headline_k))
+
     out.append("\n## The recall/cost frontier (every k)\n")
     out.append(
         "\nRecall is bought with `k`. This is the table that makes an "
@@ -1494,10 +2509,11 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     measured = {row.model for row in ok}
     stale_models = {row.model for row in stale}
     failed_models = {row.model for row in failures}
-    never = [spec for spec in MODELS if spec.name not in measured]
+    never = [spec for spec in ladder_specs if spec.name not in measured]
+    ladder_size = len(ladder_specs)
     if never:
         out.append(
-            f"\n**{len(never)} of the {len(MODELS)} models in the ladder have no usable "
+            f"\n**{len(never)} of the {ladder_size} models in the ladder have no usable "
             f"row at metric revision {METRIC_REVISION}.** The `state` column says why "
             "for each — this table cannot speak about any of them.\n"
         )
@@ -1520,7 +2536,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # exactly that: one missing (benchmark x arm) cell while the report declared
     # every model, benchmark and arm measured.
     gaps: list[str] = []
-    for spec in MODELS:
+    for spec in ladder_specs:
         if spec.name not in measured:
             continue
         cells = {(row.benchmark, row.prompt_arm, row.k) for row in ok if row.model == spec.name}
@@ -1607,6 +2623,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE_PATH)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
+    parser.add_argument(
+        "--trust-existing-cache",
+        action="store_true",
+        help=(
+            "Adopt an existing cache namespace that has never been verified against "
+            "a checkpoint, instead of refusing it. Use only when you know the cache "
+            "was written by the checkpoint that is loaded now: it vouches once, then "
+            "the canary it pins is checked normally on every later run."
+        ),
+    )
     parser.add_argument("--device", default=None, help="torch device, e.g. mps / cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--headline-k", type=int, default=20)
@@ -1625,6 +2651,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.report.write_text(render_report(rows, headline_k=args.headline_k))
         logger.info("rendered %d rows to %s", len(rows), args.report)
         return
+
+    # Vouching is per cache, so it has to be asked for per cache. `--models`
+    # defaults to the WHOLE ladder, so a bare `--trust-existing-cache` would
+    # silently bless every unverified namespace it met -- six of them, as the
+    # cache stands -- from a flag documented as vouching for one. Requiring an
+    # explicit single `--models` makes the operator name what they are vouching
+    # for, which is the whole content of the assertion. (Cross-model review.)
+    if args.trust_existing_cache and len(args.models) != 1:
+        parser.error(
+            "--trust-existing-cache vouches for ONE cache, so it requires exactly one "
+            f"--models NAME (got {len(args.models)}). Adopting a namespace asserts that "
+            "its vectors came from the checkpoint loaded now; that is a claim about a "
+            "specific model, and it is not one you can make for the whole ladder at once."
+        )
 
     arms = {name: PROMPT_ARMS[name] for name in args.prompts}
 
@@ -1646,6 +2686,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 device=args.device,
                 batch_size=args.batch_size,
                 reference=reference,
+                adopt_legacy_cache=args.trust_existing_cache,
             )
             fresh.extend(rows)
             reference_updates.update(updates)
@@ -1671,4 +2712,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except StaleEmbeddingCacheError as exc:
+        # A distinct code, not a traceback: `run_ladder.sh` must be able to tell
+        # "the cache is suspect" (leave every recorded row alone) apart from "the
+        # process died" (record a failure row, which erases them).
+        logger.error("%s", exc)
+        sys.exit(EXIT_CACHE_INTEGRITY)

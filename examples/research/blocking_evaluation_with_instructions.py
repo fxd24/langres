@@ -6,9 +6,24 @@ demonstrating the impact of disk caching and instruction prompts:
 2. Qdrant with dense + sparse vectors (hybrid search with RRF fusion)
 3. Qdrant with client-side Jina CrossEncoder reranking (fast, quality reranking)
 
-All approaches use the same Qwen3 embedding model with:
-- **DiskCachedEmbedder**: Persistent caching for instant re-runs
-- **Instruction prompts**: Task-specific instructions for improved matching quality
+All three arms use the same Qwen3 embedding model and **DiskCachedEmbedder**
+(persistent caching for instant re-runs), but they do **NOT** share a prompt
+regime, and the comparison is not readable without knowing that:
+
+- FAISS and the CrossEncoder arm receive ``EMBEDDING_INSTRUCTION`` on the query
+  side;
+- the **Qdrant hybrid arm is UNPROMPTED**. It reaches the index through
+  ``search_all()``, which serves queries from the dense vectors cached at
+  ``create_index()`` time -- so a query prompt can never reach the encoder.
+  ``QdrantHybridIndex.search_all`` now raises rather than accepting one silently.
+
+So every "vs Hybrid" delta below moves *two* things at once (index type AND
+prompt regime) and cannot be attributed to either. The printed tables label each
+arm with its regime and mark those deltas confounded; the saved JSON separates
+``confounded_deltas`` from ``prompt_regime_matched_deltas``. Nothing here
+measures what an instruction prompt is worth -- no two arms share an index. The
+experiment that does hold the index fixed is
+``examples/research/embedder_ladder.py``.
 
 Dataset: 1,741 real-world funder organization names with ground truth labels.
 
@@ -34,7 +49,8 @@ Trade-off analysis:
 
 Performance improvements:
 - DiskCachedEmbedder: Second run is ~100x faster (instant cache lookup)
-- Instruction prompts: Expected +1-5% quality improvement
+- Instruction prompts: NOT measured here (see above -- no two arms share an
+  index). Measured in examples/research/embedder_ladder.py.
 - Jina reranker: 10-15x faster than Qwen3 reranker (4-6 minutes vs 1 hour)
 - ONNX backend: Additional 2-3x speedup for inference
 
@@ -91,6 +107,25 @@ EMBEDDING_INSTRUCTION = (
     "Instruct: Find duplicate organization names accounting for "
     "acronyms, abbreviations, and spelling variations\nQuery: "
 )
+
+#: Ranking label for the hybrid arm. It carries "(unprompted)" because this arm
+#: is the only one without ``EMBEDDING_INSTRUCTION`` -- ``search_all`` answers
+#: from vectors cached at ``create_index`` time, so a query prompt cannot reach
+#: the encoder. Putting the regime in the LABEL means it travels with the value
+#: into every ranking, printed table and saved JSON, instead of living in a
+#: caveat the reader has to go and find.
+HYBRID_ARM_LABEL = "Qdrant Hybrid (unprompted)"
+
+#: Console row labels for the three arms in the KEY INSIGHTS block. Every row
+#: carries its prompt regime, not just the hybrid one: a reader comparing three
+#: numbers needs to know which arm changed the index and which changed the
+#: prompt. The comparison table above them is footnoted for the same reason, but
+#: this block prints separately and a footnote 400 lines up does not travel with
+#: it. ``_ARM_COLUMN`` is the width they pad to, so the values still line up.
+FAISS_ROW_LABEL = "FAISS (dense-only, prompted):"
+HYBRID_ROW_LABEL = "Qdrant Hybrid (dense+sparse, unprompted):"
+CROSSENCODER_ROW_LABEL = "Jina CrossEncoder (full attn, prompted):"
+_ARM_COLUMN = 42
 
 
 class OrganizationSchema(BaseModel):
@@ -170,19 +205,18 @@ def setup_faiss_blocker(
     """
     logger.info("Setting up FAISS blocker (dense-only with instructions)...")
 
-    # FAISS index with cosine similarity and instruction prompts
-    faiss_index = FAISSIndex(
-        embedder=dense_embedder,
-        metric="cosine",
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
-    )
+    # FAISS index with cosine similarity.
+    faiss_index = FAISSIndex(embedder=dense_embedder, metric="cosine")
 
-    # VectorBlocker with FAISS
+    # VectorBlocker with FAISS. `query_prompt` belongs HERE, not on the index:
+    # no VectorIndex constructor has ever accepted it, so this script raised
+    # TypeError on its first setup call until that was corrected.
     blocker = VectorBlocker(
         schema_factory=lambda x: OrganizationSchema(**x),
         text_field_extractor=lambda x: x.name,
         vector_index=faiss_index,
         k_neighbors=K_NEIGHBORS,
+        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     logger.info(f"FAISS blocker ready (k={K_NEIGHBORS}, metric=cosine, with instructions)")
@@ -202,12 +236,23 @@ def setup_qdrant_hybrid_blocker(
     Returns:
         VectorBlocker configured with Qdrant hybrid index
     """
-    logger.info("Setting up Qdrant blocker (dense + sparse hybrid with instructions)...")
+    logger.info(
+        "Setting up Qdrant blocker (dense + sparse hybrid, NO query instruction -- "
+        "this arm is the unprompted baseline; see the comment below)..."
+    )
 
     # Sparse embedder (BM25)
     sparse_embedder = FastEmbedSparseEmbedder(model_name=SPARSE_MODEL)
 
-    # Qdrant hybrid index with RRF fusion and instruction prompts
+    # Qdrant hybrid index with RRF fusion.
+    #
+    # **This arm carries NO query-side instruction, and that is deliberate.**
+    # `VectorBlocker.stream` reaches this index through `search_all`, which
+    # answers from the dense vectors cached at `create_index` time -- the prompt
+    # can never reach the encoder. It used to be accepted and silently discarded,
+    # which is how an un-instructed arm ends up published in an "with
+    # instructions" comparison; `QdrantHybridIndex.search_all` now raises rather
+    # than pretend. Read this row as the hybrid baseline, not as hybrid+instruct.
     qdrant_index = QdrantHybridIndex(
         client=qdrant_client,
         collection_name="funder_names_hybrid_instructions_eval",
@@ -215,7 +260,6 @@ def setup_qdrant_hybrid_blocker(
         sparse_embedder=sparse_embedder,
         fusion="RRF",  # Reciprocal Rank Fusion
         prefetch_limit=PREFETCH_LIMIT,
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     # VectorBlocker with Qdrant hybrid
@@ -228,7 +272,7 @@ def setup_qdrant_hybrid_blocker(
 
     logger.info(
         f"Qdrant hybrid blocker ready (k={K_NEIGHBORS}, prefetch={PREFETCH_LIMIT}, "
-        f"fusion=RRF, sparse={SPARSE_MODEL}, with instructions)"
+        f"fusion=RRF, sparse={SPARSE_MODEL}, query_prompt=None -- UNPROMPTED)"
     )
     return blocker
 
@@ -272,7 +316,6 @@ def evaluate_crossencoder_blocking(
         sparse_embedder=sparse_embedder,
         fusion="RRF",  # Reciprocal Rank Fusion
         prefetch_limit=CROSSENCODER_PREFETCH,  # Fetch MORE for client-side reranking
-        query_prompt=EMBEDDING_INSTRUCTION,  # Apply instructions to queries
     )
 
     # Build index
@@ -291,8 +334,12 @@ def evaluate_crossencoder_blocking(
         query_text = entity["name"]
         query_id = entity["id"]
 
-        # Get top-N candidates from hybrid search
-        distances, indices = qdrant_index.search(query_text, k=CROSSENCODER_PREFETCH)
+        # Get top-N candidates from hybrid search. Unlike `search_all`, `search`
+        # encodes the queries it is handed, so the instruction DOES reach the
+        # dense embedder here (`hybrid_vector_index.py`, `search`).
+        distances, indices = qdrant_index.search(
+            query_text, k=CROSSENCODER_PREFETCH, query_prompt=EMBEDDING_INSTRUCTION
+        )
 
         # Collect candidate texts (skip self-matches)
         for idx in indices:
@@ -511,8 +558,13 @@ def print_comparison_table(
     ]
 
     # Header
-    print(f"{'Metric':<25} {'FAISS':>15} {'Hybrid':>15} {'Jina CE':>15} {'Best':>15}")
+    print(f"{'Metric':<25} {'FAISS':>15} {'Hybrid*':>15} {'Jina CE':>15} {'Best':>15}")
     print("-" * 120)
+    # The regime belongs beside the numbers, not only in the saved JSON. Without
+    # it, a reader of stdout attributes the hybrid column to the instruction --
+    # under a banner that says the run uses instruction prompts.
+    print("* Hybrid is UNPROMPTED (search_all cannot apply a query prompt);")
+    print("  FAISS and Jina CE are prompted. 'Hybrid vs' deltas mix index + prompt regime.")
 
     for label, key, unit in metrics:
         # Handle section headers
@@ -616,14 +668,14 @@ def save_results(
     # Calculate rankings
     recall_scores = [
         ("FAISS", faiss_results["recall"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["recall"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["recall"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["recall"]),
     ]
     recall_ranking = [name for name, _ in sorted(recall_scores, key=lambda x: x[1], reverse=True)]
 
     precision_scores = [
         ("FAISS", faiss_results["precision"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["precision"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["precision"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["precision"]),
     ]
     precision_ranking = [
@@ -632,7 +684,7 @@ def save_results(
 
     speed_scores = [
         ("FAISS", faiss_results["indexing_time_seconds"]),
-        ("Qdrant Hybrid", qdrant_hybrid_results["indexing_time_seconds"]),
+        (HYBRID_ARM_LABEL, qdrant_hybrid_results["indexing_time_seconds"]),
         ("Jina CrossEncoder", qdrant_crossencoder_results["indexing_time_seconds"]),
     ]
     speed_ranking = [name for name, _ in sorted(speed_scores, key=lambda x: x[1])]
@@ -651,7 +703,18 @@ def save_results(
             "k_neighbors": K_NEIGHBORS,
             "prefetch_limit": PREFETCH_LIMIT,
             "crossencoder_prefetch": CROSSENCODER_PREFETCH,
-            "embedding_instruction": EMBEDDING_INSTRUCTION,
+            # Per-arm, NOT one global key. The arms do not share a prompt regime:
+            # the hybrid arm reaches its index through `search_all`, which answers
+            # from vectors cached at `create_index` time, so a query prompt cannot
+            # reach the encoder there. Recording a single `embedding_instruction`
+            # would tell a downstream reader that every arm was prompted, which is
+            # how a delta that mixes an index change with a prompt-regime change
+            # gets read as a pure index result.
+            "query_prompt_by_arm": {
+                "faiss_dense_only": EMBEDDING_INSTRUCTION,
+                "qdrant_hybrid": None,
+                "jina_crossencoder": EMBEDDING_INSTRUCTION,
+            },
         },
         "caching": {
             "cache_dir": str(CACHE_DIR),
@@ -671,6 +734,50 @@ def save_results(
             "jina_crossencoder": qdrant_crossencoder_results,
         },
         "comparison": {
+            # Which of the deltas below are NOT like-for-like, and in how many
+            # ways each. `qdrant_hybrid` is unprompted while the other two arms
+            # are prompted, so any delta with one foot in each camp moves an index
+            # AND a prompt regime at once. The crossencoder arm also RETRIEVES
+            # DEEPER before it reranks (CROSSENCODER_PREFETCH=100 vs
+            # PREFETCH_LIMIT=20 -- both cut to K_NEIGHBORS=20), so a gold pair
+            # sitting at rank 21-100 is reachable for that arm and unreachable for
+            # the others: depth alone can move recall, with no reranker credit
+            # due. Named here rather than left for the reader to infer, because a
+            # delta that looks like every other delta will be read like every
+            # other delta -- and an UNDER-counted confound is the more dangerous
+            # error, since naming two makes the list read as complete.
+            "confounded_deltas": {
+                "hybrid_vs_faiss": (
+                    "index change + prompt regime change (hybrid unprompted, FAISS prompted)"
+                ),
+                "crossencoder_vs_hybrid": (
+                    "reranker + prompt regime change (hybrid unprompted, crossencoder "
+                    f"prompted) + retrieval depth ({CROSSENCODER_PREFETCH} vs "
+                    f"{PREFETCH_LIMIT} candidates before the cut to {K_NEIGHBORS})"
+                ),
+                "crossencoder_vs_faiss": (
+                    "index change + reranker + retrieval depth "
+                    f"({CROSSENCODER_PREFETCH} vs {K_NEIGHBORS} retrieved); the prompt "
+                    "regime is the one thing that DOES match"
+                ),
+            },
+            # Deliberately NOT called "like_for_like": this delta matches on the
+            # PROMPT REGIME only (both arms prompted). It still moves the index
+            # backend, adds a reranker, and retrieves deeper -- so it is not a
+            # clean single-variable comparison either. It is only free of the
+            # prompt confound, which is why it appears in `confounded_deltas` too.
+            "prompt_regime_matched_deltas": ["crossencoder_vs_faiss"],
+            # The depth every arm is finally cut to, beside the depth each one
+            # searched to get there. Without both numbers "prefetch=100" reads as
+            # "returns 100", and the deltas look like they compare different k.
+            "retrieval_depth_by_arm": {
+                "faiss": {"retrieved": K_NEIGHBORS, "reported": K_NEIGHBORS},
+                "qdrant_hybrid": {"retrieved": PREFETCH_LIMIT, "reported": K_NEIGHBORS},
+                "qdrant_crossencoder": {
+                    "retrieved": CROSSENCODER_PREFETCH,
+                    "reported": K_NEIGHBORS,
+                },
+            },
             "recall_ranking": recall_ranking,
             "precision_ranking": precision_ranking,
             "speed_ranking": speed_ranking,
@@ -721,7 +828,7 @@ def save_results(
                 "best_f1": max(
                     [
                         ("FAISS", faiss_results["f1"]),
-                        ("Qdrant Hybrid", qdrant_hybrid_results["f1"]),
+                        (HYBRID_ARM_LABEL, qdrant_hybrid_results["f1"]),
                         ("Jina CrossEncoder", qdrant_crossencoder_results["f1"]),
                     ],
                     key=lambda x: x[1],
@@ -741,7 +848,11 @@ def main() -> None:
     """Run blocking evaluation comparing FAISS vs Qdrant hybrid vs Jina CrossEncoder."""
     print("=" * 120)
     print("BLOCKING EVALUATION: FAISS vs Qdrant Hybrid vs Jina CrossEncoder")
-    print("With DiskCachedEmbedder and Instruction Prompts")
+    print("With DiskCachedEmbedder and Instruction Prompts on 2 of 3 arms")
+    print(f"  prompted:   FAISS, Jina CrossEncoder  ({EMBEDDING_INSTRUCTION!r})")
+    print("  UNPROMPTED: Qdrant Hybrid -- search_all() serves queries from vectors")
+    print("              cached at create_index() time, so a prompt cannot reach")
+    print("              the encoder. Deltas against it mix index + prompt regime.")
     print("=" * 120)
     print(f"\nDataset: Funder organization names")
     print(f"Dense model: {DENSE_MODEL}")
@@ -810,7 +921,7 @@ def main() -> None:
     )
 
     qdrant_hybrid_results = evaluate_blocking_recall(
-        qdrant_hybrid_blocker, entities, gold_pairs, gold_clusters, "Qdrant Hybrid"
+        qdrant_hybrid_blocker, entities, gold_pairs, gold_clusters, HYBRID_ARM_LABEL
     )
 
     # Log cache performance after second evaluation
@@ -852,21 +963,39 @@ def main() -> None:
     print("KEY INSIGHTS & RECOMMENDATIONS")
     print("=" * 120)
 
+    # What the per-row tags mean, said once. "prompt-matched" is the dangerous
+    # one: it reads as "clean", and it is only clean on the PROMPT axis -- the
+    # arms still differ by backend, by reranker, and by how deep each searched
+    # before cutting to the same k. A tag that names one controlled variable
+    # implies the others were controlled too, so spell out what is still moving.
+    print(
+        f"\n   Reading the tags: 'confounded' = the two arms differ in prompt regime\n"
+        f"   ({HYBRID_ROW_LABEL.rstrip(':')} is the only unprompted arm) AND in backend.\n"
+        f"   'prompt-matched' = same prompt regime only -- backend, reranker and\n"
+        f"   retrieval depth still differ (FAISS/Hybrid search {K_NEIGHBORS}/"
+        f"{PREFETCH_LIMIT}, CrossEncoder\n"
+        f"   searches {CROSSENCODER_PREFETCH} before every arm is cut to "
+        f"{K_NEIGHBORS}), so a gold pair at\n"
+        f"   rank {K_NEIGHBORS + 1}-{CROSSENCODER_PREFETCH} is reachable for one arm "
+        f"and not the others.\n"
+        f"   No delta below is a single-variable comparison."
+    )
+
     # Recall comparison
     print("\n📊 RECALL (% of true duplicates found):")
     faiss_recall = faiss_results["recall"] * 100
     hybrid_recall = qdrant_hybrid_results["recall"] * 100
     crossenc_recall = qdrant_crossencoder_results["recall"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_recall:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_recall:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_recall:.2f}% "
-        f"({hybrid_recall - faiss_recall:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_recall:.2f}% "
+        f"({hybrid_recall - faiss_recall:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_recall:.2f}% "
-        f"({crossenc_recall - faiss_recall:+.2f}pp vs FAISS, "
-        f"{crossenc_recall - hybrid_recall:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_recall:.2f}% "
+        f"({crossenc_recall - faiss_recall:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_recall - hybrid_recall:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # Precision comparison
@@ -875,15 +1004,15 @@ def main() -> None:
     hybrid_precision = qdrant_hybrid_results["precision"] * 100
     crossenc_precision = qdrant_crossencoder_results["precision"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_precision:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_precision:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_precision:.2f}% "
-        f"({hybrid_precision - faiss_precision:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_precision:.2f}% "
+        f"({hybrid_precision - faiss_precision:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_precision:.2f}% "
-        f"({crossenc_precision - faiss_precision:+.2f}pp vs FAISS, "
-        f"{crossenc_precision - hybrid_precision:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_precision:.2f}% "
+        f"({crossenc_precision - faiss_precision:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_precision - hybrid_precision:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # F1 comparison
@@ -892,14 +1021,15 @@ def main() -> None:
     hybrid_f1 = qdrant_hybrid_results["f1"] * 100
     crossenc_f1 = qdrant_crossencoder_results["f1"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_f1:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_f1:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_f1:.2f}% "
-        f"({hybrid_f1 - faiss_f1:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_f1:.2f}% "
+        f"({hybrid_f1 - faiss_f1:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_f1:.2f}% "
-        f"({crossenc_f1 - faiss_f1:+.2f}pp vs FAISS, {crossenc_f1 - hybrid_f1:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_f1:.2f}% "
+        f"({crossenc_f1 - faiss_f1:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_f1 - hybrid_f1:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # Performance comparison
@@ -908,13 +1038,13 @@ def main() -> None:
     hybrid_time = qdrant_hybrid_results["indexing_time_seconds"]
     crossenc_time = qdrant_crossencoder_results["indexing_time_seconds"]
 
-    print(f"   FAISS (dense-only):              {faiss_time:.2f}s")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_time:.2f}s")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_time:.2f}s "
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_time:.2f}s "
         f"({hybrid_time / faiss_time:.1f}x slower)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_time:.2f}s "
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_time:.2f}s "
         f"({crossenc_time / faiss_time:.1f}x slower than FAISS, "
         f"{crossenc_time / hybrid_time:.1f}x vs Hybrid)"
     )
@@ -935,14 +1065,26 @@ def main() -> None:
 
     best_f1 = max(faiss_f1, hybrid_f1, crossenc_f1)
     if crossenc_f1 == best_f1:
+        # An ARM won, and an arm is not a mechanism. This one differs from the
+        # hybrid arm in three ways at once -- reranker, prompt regime, retrieval
+        # depth -- so crediting cross-attention picks one of the three by
+        # narrative. The saved JSON records all three under `confounded_deltas`;
+        # the console must not claim more than the JSON does. (Cross-model review.)
         print(
-            "   ✅ Jina CrossEncoder achieved best F1 score - full cross-attention "
-            "provides deepest understanding of query-document relevance"
+            "   ✅ Jina CrossEncoder arm achieved best F1 score. This run CANNOT "
+            "attribute that to cross-attention: against the hybrid arm it changes "
+            f"three things together — reranker, prompt regime ({HYBRID_ARM_LABEL} is "
+            f"unprompted), and retrieval depth ({CROSSENCODER_PREFETCH} vs "
+            f"{PREFETCH_LIMIT} retrieved before reranking). Any of the three could "
+            "produce this. To isolate the reranker, run both arms prompted at the "
+            "same depth."
         )
     elif hybrid_f1 == best_f1:
         print(
-            "   ✅ Qdrant Hybrid achieved best F1 score - keyword matching improves "
-            "recall without reranking overhead"
+            "   ✅ Qdrant Hybrid achieved best F1 score. This run CANNOT attribute that "
+            "to keyword matching: the hybrid arm is also the only unprompted one, so "
+            "index and prompt regime moved together. To separate them, run the hybrid "
+            "arm against FAISS with neither side prompted."
         )
     else:
         print("   ⚠️  FAISS achieved best F1 score - simpler approach may be sufficient")
@@ -950,13 +1092,16 @@ def main() -> None:
     # CrossEncoder vs Hybrid comparison
     if crossenc_precision > hybrid_precision + 1.0:
         print(
-            f"   ✅ CrossEncoder significantly improved precision over Hybrid "
-            f"(+{crossenc_precision - hybrid_precision:.2f}pp) - reranking adds value"
+            f"   ✅ CrossEncoder arm has higher precision than the hybrid arm "
+            f"(+{crossenc_precision - hybrid_precision:.2f}pp). Arm-level result, NOT "
+            "'reranking adds value': the two arms differ in reranker, prompt regime "
+            "and retrieval depth simultaneously (see the confound legend above)."
         )
     else:
         print(
-            "   ⚠️  CrossEncoder did not significantly improve precision over Hybrid - "
-            "hybrid may be better trade-off"
+            "   ⚠️  CrossEncoder arm did not improve precision over the hybrid arm by "
+            "more than 1pp — and since the two differ in three ways at once, that is "
+            "not evidence about reranking either."
         )
 
     print("\n   Use Case Recommendations:")
@@ -966,7 +1111,11 @@ def main() -> None:
         "   • Jina CrossEncoder: Maximum quality via reranking, moderate cost (10-15x faster than ColBERT)"
     )
     print("   • DiskCachedEmbedder: Essential for iteration - second run is ~100x faster")
-    print("   • Instruction prompts: Expected +1-5% quality improvement")
+    print(
+        "   • Instruction prompts: this run does not measure their effect -- no two "
+        "arms here share an index. `examples/research/embedder_ladder.py` does, "
+        "holding the index fixed; see docs/research/20260727_embedder_ladder.md."
+    )
 
     print("\n=" * 120)
     print("✅ Evaluation complete!")

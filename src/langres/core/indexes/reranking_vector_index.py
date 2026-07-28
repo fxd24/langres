@@ -51,7 +51,20 @@ class QdrantHybridRerankingIndex:
     3. Fusion: Combine dense + sparse results (RRF or DBSF)
     4. Rerank: Late-interaction (ColBERT/ColPali) on fused results
 
-    Implements VectorIndex protocol for compatibility with existing blockers.
+    **Partial** ``VectorIndex`` conformance, same as its non-reranking sibling
+    :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex` and for
+    the same reason: ``create_index`` and ``search_all`` match the protocol, but
+    ``search`` accepts ``str | list[str]`` where the protocol accepts
+    ``str | list[str] | np.ndarray``. Hybrid retrieval needs the query *text* —
+    the sparse side has to encode it — so the missing branch is a real capability
+    difference, not an oversight to widen away. A static checker is right to
+    reject assigning this class to a ``VectorIndex``-typed name.
+
+    This docstring previously claimed plain "Implements VectorIndex protocol",
+    which was false and which nothing could contradict. The conformance of every
+    index is now asserted twice: under mypy in
+    ``langres/core/indexes/__init__.py``, and at runtime in
+    ``tests/core/indexes/test_vector_index_conformance.py``.
 
     The index owns all three embedders and manages the complete lifecycle:
     1. create_index(texts) - Preprocessing: embed and upload to Qdrant
@@ -385,6 +398,29 @@ class QdrantHybridRerankingIndex:
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
+        # In search_all the dense side is served from vectors cached at
+        # create_index() time and the sparse side always encodes with prompt=None,
+        # so the RERANKING embedder is the only stage a query_prompt can reach. If
+        # that embedder ignores prompts -- FastEmbed's late-interaction models do,
+        # and say so -- then no stage sees the prompt and the argument is a silent
+        # no-op: a prompt sweep returns identical numbers at every setting, which
+        # reads as "the prompt does not help". That is the same failure
+        # QdrantHybridIndex.search_all now refuses, and it was reachable here via
+        # that refusal's own suggested alternative. Default True, so an unknown or
+        # duck-typed embedder is trusted rather than broken. (Cross-model review.)
+        if query_prompt is not None and not getattr(
+            self.reranking_embedder, "honours_prompt", True
+        ):
+            raise NotImplementedError(
+                f"{type(self).__name__}.search_all() cannot apply a query_prompt with "
+                f"{type(self.reranking_embedder).__name__} as the reranking embedder: it "
+                "ignores prompts, the dense side is served from vectors cached at "
+                "create_index() time, and the sparse side always encodes unprompted -- "
+                "so no stage would see the prompt. Refusing instead of silently "
+                "ignoring it. Use FAISSIndex, which re-encodes the query side, or give "
+                "this index a reranking embedder that honours prompts."
+            )
+
         # Reuse search() with cached dense embeddings (performance optimization)
         return self.search(
             self._corpus_texts,
@@ -431,12 +467,33 @@ class FakeHybridRerankingVectorIndex:
         # Deduplication
         distances, indices = index.search_all(k=2)
         # Returns: distances=(3,2), indices=(3,2)
+
+    Note:
+        ``search_all(query_prompt=...)`` is **refused by default**, mirroring
+        :class:`QdrantHybridRerankingIndex` under the reranking embedder that
+        actually ships. Pass ``reranking_honours_prompt=True`` to stand in for a
+        prompt-honouring one.
     """
 
-    def __init__(self) -> None:
-        """Initialize FakeHybridRerankingVectorIndex."""
+    def __init__(self, reranking_honours_prompt: bool = False) -> None:
+        """Initialize FakeHybridRerankingVectorIndex.
+
+        Args:
+            reranking_honours_prompt: Whether the reranking embedder this double
+                stands in for honours ``prompt``. Defaults to ``False`` because
+                that is what the documented production configuration does:
+                :class:`~langres.core.embeddings.FastEmbedLateInteractionEmbedder`
+                declares ``honours_prompt = False``, and it is the only
+                late-interaction embedder that ships. A double that accepted a
+                prompt the real index refuses would let a
+                ``VectorBlocker(query_prompt=...)`` test pass here and fail on
+                the production index — the fidelity gap the refusal exists to
+                close. Set ``True`` to exercise the prompt-honouring branch.
+                (Cross-model review.)
+        """
         self._n_samples: int | None = None
         self._texts: list[str] | None = None
+        self.reranking_honours_prompt = reranking_honours_prompt
 
     def create_index(self, texts: list[str]) -> None:
         """Record corpus size for generating valid indices.
@@ -490,8 +547,14 @@ class FakeHybridRerankingVectorIndex:
 
         Args:
             k: Number of neighbors per corpus item.
-            query_prompt: Optional instruction prompt (accepted for protocol
-                parity with the real index and VectorBlocker; fake ignores it).
+            query_prompt: Refused unless this double was built with
+                ``reranking_honours_prompt=True``, mirroring
+                :meth:`QdrantHybridRerankingIndex.search_all`.
+
+        Raises:
+            RuntimeError: If called before ``create_index()``.
+            NotImplementedError: If ``query_prompt`` is not ``None`` and this
+                double stands in for a reranking embedder that ignores prompts.
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -499,6 +562,21 @@ class FakeHybridRerankingVectorIndex:
         """
         if self._n_samples is None:
             raise RuntimeError("Index not built. Call create_index() first.")
+        if query_prompt is not None and not self.reranking_honours_prompt:
+            # Same fidelity rule as FakeHybridVectorIndex, one step conditional:
+            # the real index refuses a prompt no stage can apply, and which
+            # stage can apply one depends on the reranking embedder. A double
+            # that always accepted would let a VectorBlocker(query_prompt=...)
+            # test pass on the fake and fail on the production index.
+            raise NotImplementedError(
+                "FakeHybridRerankingVectorIndex.search_all() rejects query_prompt to "
+                "match QdrantHybridRerankingIndex.search_all() under a reranking "
+                "embedder that ignores prompts -- the shipped "
+                "FastEmbedLateInteractionEmbedder does, and the dense side is served "
+                "from cached vectors while the sparse side encodes unprompted, so no "
+                "stage would see it. Build this double with "
+                "reranking_honours_prompt=True to stand in for one that does."
+            )
 
         # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
         indices = np.zeros((self._n_samples, k), dtype=np.int64)

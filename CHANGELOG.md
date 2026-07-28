@@ -54,6 +54,62 @@ pipeline. It mitigates *chaining*; it does **not** consume negative evidence —
 rejected edges are discarded before pivoting, exactly as the base `Clusterer`
 discards them.
 
+### Asymmetric retrieval prompts: a silent discard is now a loud failure — **breaking**
+
+- **`QdrantHybridIndex.search_all()` now raises `NotImplementedError` when passed
+  a `query_prompt`**, where it previously accepted the argument and discarded it.
+  If you never passed `query_prompt`, nothing changes. If you did, **you were
+  already getting results the prompt never influenced** — `search_all()` answers
+  from the dense vectors cached at `create_index()` time, so the prompt could
+  never reach the encoder. The failure mode this hid is a prompt sweep returning
+  *identical* numbers at every setting, which reads as "the instruction does not
+  help"; this repo published exactly that table once. Use `FAISSIndex` (it
+  re-encodes the query side) or call `search(query_texts, k, query_prompt=...)`
+  directly, which does encode. **`QdrantHybridRerankingIndex` is not the escape
+  hatch it looks like**: in *its* `search_all()` the dense side is cached and the
+  sparse side is unprompted, so only the reranking embedder could see the prompt
+  — and the documented production one, `FastEmbedLateInteractionEmbedder`,
+  declares `honours_prompt = False`. It therefore refuses too (below), and the
+  exception message says so rather than handing you the next exception.
+  `FakeHybridVectorIndex.search_all()` rejects it too, so a test double can no
+  longer accept what the real index refuses.
+- **`QdrantHybridRerankingIndex.search_all()` now raises `NotImplementedError`
+  when passed a `query_prompt` and its reranking embedder does not honour
+  prompts.** The check reads `honours_prompt`, defaulting to `True`, so an
+  unknown or duck-typed reranker is trusted rather than broken; only an embedder
+  that *declares* it ignores prompts is refused. Pass a prompt-honouring
+  reranker and the call works unchanged.
+  **`FakeHybridRerankingVectorIndex` mirrors this by default**: it now takes
+  `reranking_honours_prompt` (default `False`, matching the reranker that
+  actually ships) and refuses a `query_prompt` in `search_all()` unless you pass
+  `True`. Previously the double accepted a prompt the production index rejects,
+  so a `VectorBlocker(query_prompt=...)` test could pass on the fake and fail on
+  the real index. Unprompted calls are unaffected.
+- **`VectorBlocker` now warns when only one half of an asymmetric recipe is
+  driven** — an embedder binding a `prompt_name` whose prefix is *not* the
+  query-side one, with no `query_prompt` on the blocker. `search_all()` reuses
+  the prompted corpus vectors as queries, so both sides carry the document
+  prefix — *worse* than prompting neither side, since the queries get a prefix
+  the checkpoint never intended for them. Binding the **query** prefix on both
+  sides is a different thing entirely: that is the documented symmetric recipe
+  (`intfloat/e5-base-v2` asks for it by name) and stays silent. The check
+  compares resolved prefix *values*, not prompt names, and is duck-typed —
+  degrading to silence for indexes that expose no embedder, because
+  `VectorIndex` is a public structural protocol.
+- Documented the two-sided recipe where users actually meet it: a worked example
+  on `VectorBlocker` and on `SentenceTransformerEmbedder.prompt_name`. The
+  document side rides on the embedder (`prompt_name` → `default_prompt_name`);
+  the query side is `VectorBlocker(query_prompt=...)`. **`create_index` is
+  unchanged** — the recipe already worked, and `VectorIndex` has external
+  implementers a required new kwarg would break.
+- `QdrantHybridIndex` and `QdrantHybridRerankingIndex` no longer claim to
+  implement `VectorIndex`. Their `search()` accepts `str | list[str]` against the
+  protocol's `str | list[str] | np.ndarray`, so a type checker correctly rejects
+  the assignment; a hybrid index cannot serve a pure-vector query because the
+  sparse side must encode the text. Conformance is now pinned twice — under mypy
+  in `langres/core/indexes/__init__.py` and at runtime in
+  `tests/core/indexes/test_vector_index_conformance.py`.
+
 ### Research execution foundation
 
 - Added the canonical Resources / Operations / Recipes vocabulary, four named

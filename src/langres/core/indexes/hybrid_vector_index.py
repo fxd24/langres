@@ -7,7 +7,11 @@ Key features:
 - Dense + sparse vector storage in single collection
 - RRF or DBSF fusion for result combination
 - Native batch operations via Qdrant client
-- Implements VectorIndex protocol for consistency
+- Implements VectorIndex **apart from** ``search``, which cannot accept the
+  protocol's ``np.ndarray`` branch: hybrid retrieval needs the query *text* for
+  the sparse side. See the class docstring; the exact conformance of every index
+  is asserted in ``langres/core/indexes/__init__.py`` and in
+  ``tests/core/indexes/test_vector_index_conformance.py``.
 """
 
 import logging
@@ -40,8 +44,30 @@ class QdrantHybridIndex:
     """Qdrant-backed hybrid index with dense + sparse vectors.
 
     Combines semantic (dense) and keyword (sparse) search using Qdrant's
-    fusion capabilities. Implements VectorIndex protocol for compatibility
-    with existing blockers.
+    fusion capabilities.
+
+    **Partial** ``VectorIndex`` conformance — stated precisely, because this
+    docstring used to claim it outright and that claim was false:
+
+    - ``create_index`` and ``search_all`` match the protocol.
+    - ``search`` does **not**. The protocol accepts
+      ``str | list[str] | np.ndarray``; this class accepts ``str | list[str]``
+      only. A hybrid index cannot serve a pure-vector query, because the sparse
+      side has to encode the *text* — so this is a real capability difference,
+      not an oversight to widen away. A static checker is right to reject
+      assigning this class to a ``VectorIndex``-typed name: a narrower parameter
+      type is not substitutable.
+
+    Practically this is fine, because ``VectorBlocker`` only ever hands it text.
+    The point of writing it down is that the previous blanket claim was checked
+    by nothing; ``tests/core/indexes/test_vector_index_conformance.py`` now
+    compares these signatures against the protocol and fails if either side
+    moves — including if this class is later widened to conform, at which point
+    this paragraph is the thing that is out of date.
+
+    The protocol's ``np.ndarray`` branch is the "pre-computed embeddings" path;
+    this class exposes that capability as the private ``_dense_embeddings``
+    argument on :meth:`search` instead, used by :meth:`search_all`.
 
     The index owns both embedders and manages the complete lifecycle:
     1. create_index(texts) - Preprocessing: embed and upload to Qdrant
@@ -326,15 +352,30 @@ class QdrantHybridIndex:
 
         Args:
             k: Number of nearest neighbors to return per corpus item.
-            query_prompt: Optional instruction prompt for query encoding.
-                Typically None for deduplication (symmetric encoding).
-                Default: None.
+            query_prompt: **Not supported here.** ``None`` is the only accepted
+                value; anything else raises. See below.
 
         Returns:
             Tuple of (distances, indices), both shape (N, k) where N = corpus size.
 
         Raises:
             RuntimeError: If search_all() is called before create_index().
+            NotImplementedError: If ``query_prompt`` is not ``None``. This method
+                serves queries from the dense vectors cached at ``create_index``
+                time, so a query-side prompt cannot reach the encoder. It used to
+                accept the argument and **discard** it, which is worse than
+                refusing it: sweeping the axis over this index returned a flat,
+                identical result at every prompt instead of an error, and a flat
+                result reads as "the prompt does not help". langres has already
+                published one table of exact ``0.0000`` deltas from precisely
+                this shape of no-op (``FAISSIndex.search_all``, fixed in #239).
+                Use :class:`~langres.core.indexes.vector_index.FAISSIndex`, which
+                re-encodes the query side, or call ``search(query_texts, k,
+                query_prompt=...)`` directly, which does encode.
+                :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`
+                is **not** a drop-in alternative: its ``search_all`` refuses the
+                same argument whenever its reranking embedder ignores prompts,
+                which the production ``FastEmbedLateInteractionEmbedder`` does.
 
         Note:
             Performance optimization: Reuses cached dense embeddings from create_index(),
@@ -343,13 +384,27 @@ class QdrantHybridIndex:
         """
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
+        if query_prompt is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__}.search_all() cannot apply a query_prompt: it "
+                "serves queries from the dense vectors cached at create_index() time, "
+                "so the prompt would never reach the encoder. Refusing instead of "
+                "silently ignoring it, because an ignored prompt makes a prompt sweep "
+                "return identical numbers at every setting -- which reads as 'the "
+                "prompt does not help'. Use FAISSIndex, which re-encodes the query "
+                "side, or call search(query_texts, k, query_prompt=...) directly, "
+                "which does encode. QdrantHybridRerankingIndex is NOT a drop-in "
+                "alternative: in its search_all() the dense side is cached and the "
+                "sparse side is unprompted, so only its reranking embedder could see "
+                "the prompt -- and the production one (FastEmbedLateInteractionEmbedder) "
+                "ignores prompts outright, which is why that index refuses too."
+            )
 
-        # Reuse search() with cached dense embeddings (performance optimization)
-        # query_prompt is passed through but not used (we use cached embeddings)
+        # Reuse search() with cached dense embeddings (performance optimization).
+        # No query_prompt to forward: the guard above rejects every non-None value.
         return self.search(
             self._corpus_texts,
             k,
-            query_prompt=query_prompt,
             _dense_embeddings=self._cached_dense_embeddings,
         )
 
@@ -449,7 +504,13 @@ class FakeHybridVectorIndex:
 
         Args:
             k: Number of neighbors per corpus item.
-            query_prompt: Optional instruction prompt (ignored by fake implementation).
+            query_prompt: Must be ``None``. Mirrors
+                :meth:`QdrantHybridIndex.search_all`, which **raises** rather than
+                discard a prompt it cannot apply.
+
+        Raises:
+            RuntimeError: If called before ``create_index()``.
+            NotImplementedError: If ``query_prompt`` is not ``None``.
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -457,6 +518,18 @@ class FakeHybridVectorIndex:
         """
         if self._n_samples is None:
             raise RuntimeError("Index not built. Call create_index() first.")
+        if query_prompt is not None:
+            # A fake that ACCEPTS what the real index REJECTS is worse than no
+            # fake: a VectorBlocker(query_prompt=...) test passes here and then
+            # fails on QdrantHybridIndex, so the double hides exactly the
+            # prompt-discard defect this pair of raises exists to surface.
+            raise NotImplementedError(
+                "FakeHybridVectorIndex.search_all() rejects query_prompt to match "
+                "QdrantHybridIndex.search_all(), which cannot apply one: it serves "
+                "queries from the dense vectors cached at create_index() time. A "
+                "fake that silently accepted it would let a test pass on the double "
+                "and fail on the real index."
+            )
 
         # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
         indices = np.zeros((self._n_samples, k), dtype=np.int64)

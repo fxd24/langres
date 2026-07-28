@@ -511,8 +511,31 @@ class SentenceTransformerEmbedder:
                 ``prompts`` mapping (its ``config_sentence_transformers.json``,
                 e.g. EmbeddingGemma's ``"query"`` / ``"document"``), applied when
                 :meth:`encode` is called without an explicit ``prompt``.
+
+                **This is the DOCUMENT side of an asymmetric retrieval recipe.**
+                It is forwarded as ``default_prompt_name``, and
+                sentence-transformers resolves an ``encode(prompt=None)`` call
+                back to it — so every text a ``VectorIndex.create_index`` encodes
+                through this embedder carries the prefix, even though
+                ``create_index`` itself takes no prompt argument. The query side
+                is a *separate* knob on the blocker,
+                :class:`~langres.core.blockers.vector.VectorBlocker`'s
+                ``query_prompt``, passed explicitly at search time and therefore
+                taking precedence over this default.
+
+                Setting this and **not** setting ``query_prompt`` applies this
+                prefix to **both** sides, because ``search_all`` reuses the cached
+                corpus vectors as queries. If the prefix is a *document* one that
+                is worse than prompting neither side, and ``VectorBlocker`` warns;
+                if it is the query-side prefix (e.g. ``prompt_name="query"``) that
+                is the documented **symmetric** recipe and is accepted in silence.
+                The full worked recipe is in that class's docstring, and whether
+                it helps is measured in
+                ``docs/research/20260727_embedder_ladder.md``.
             prompts: Extra ``{name: prefix}`` prompts to register on the loaded
-                model, for checkpoints that ship none.
+                model, for checkpoints that ship none. Needed only when the
+                checkpoint does not already register the name you pass as
+                ``prompt_name``.
 
         Note:
             The model is NOT loaded during __init__. It will be loaded
@@ -1016,6 +1039,18 @@ class FastEmbedLateInteractionEmbedder:
     # Registry key, mirrored as a class attribute so the Resolver's uniform
     # serialization helper can discover the type name (see resolver.py).
     type_name: ClassVar[str] = "fastembed_late_interaction_embedder"
+
+    #: ``encode()`` accepts ``prompt`` and **ignores** it -- FastEmbed's
+    #: late-interaction (ColBERT) models have no prompt support, so the argument
+    #: exists only for signature compatibility (see the note in ``encode``).
+    #:
+    #: Declared rather than left implicit because an ignored prompt is invisible:
+    #: it makes a prompt sweep return identical numbers at every setting, which
+    #: reads as "the prompt does not help" instead of "the prompt never arrived".
+    #: That exact confusion already cost this repo a published table. Callers that
+    #: are *about* to rely on the prompt read this flag and refuse instead;
+    #: ``QdrantHybridRerankingIndex.search_all`` is the one that does.
+    honours_prompt: ClassVar[bool] = False
 
     def __init__(self, model_name: str = "colbert-ir/colbertv2.0"):
         """Initialize FastEmbed late-interaction embedder.

@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).parents[2]
 LADDER_PATH = ROOT / "examples" / "research" / "embedder_ladder.py"
@@ -218,6 +219,458 @@ class TestDocumentSidePrefix:
 
         assert embedder.seen[0] == texts
         assert index._corpus_texts == texts
+
+
+class _PromptSensitiveEmbedder:
+    """Bare and prompted encodes drift independently.
+
+    Models the real hazard: a change to explicit prompt handling that leaves
+    un-prompted embeddings byte-identical.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self) -> None:
+        self.prompt_scale = 1.0
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        scale = 1.0 if prompt is None else self.prompt_scale
+        return np.array([[scale * (len(t) + i) for i in range(4)] for t in texts], dtype=np.float32)
+
+
+class _SwappableEmbedder:
+    """A $0 embedder whose vectors change when ``weights`` is reassigned.
+
+    Stands in for a checkpoint re-uploaded under the same Hub name: same object
+    identity, same namespace, different numbers out.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self, weights: float = 1.0) -> None:
+        self.weights = weights
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        rendered = [(prompt or "") + text for text in texts]
+        return np.array(
+            [[self.weights * (len(t) + i) for i in range(4)] for t in rendered], dtype=np.float32
+        )
+
+
+class _RetunableEmbedder:
+    """Only LONG inputs change when ``max_seq_length`` moves.
+
+    Models the input-selective hazard a single short probe cannot see: the
+    checkpoint truncates at ``max_seq_length``, so shortening it leaves a
+    five-token text bit-identical while every long record is re-cut.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self, max_seq_length: int = 512) -> None:
+        self.max_seq_length = max_seq_length
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        cut = [((prompt or "") + text)[: self.max_seq_length] for text in texts]
+        return np.array([[float(len(t) + i) for i in range(4)] for t in cut], dtype=np.float32)
+
+
+class TestStaleCacheCanary:
+    """The cache namespace omits the Hub revision; this is what covers that.
+
+    A namespace keyed on model name + dtype still hits after an upstream
+    re-upload, so a warm re-run would read the NEW checkpoint's metadata while
+    serving the OLD checkpoint's vectors — publishing a row that mixes two
+    checkpoints with nothing in the row to reveal it.
+    """
+
+    def _cached(self, embedder: Any, tmp_path: Path) -> Any:
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        return DiskCachedEmbedder(embedder, cache_dir=tmp_path, namespace="canary_ns")
+
+    def test_shortening_max_seq_length_is_caught(self, tmp_path: Path) -> None:
+        """A short probe alone cannot see this, so the check must not rest on one.
+
+        The knob rides in the canary TEXT, so a changed value changes the cache
+        key: the partition then holds vectors with no canary under the new key
+        and the legacy gate refuses it — the same refusal, reused.
+        """
+        embedder = _RetunableEmbedder(max_seq_length=512)
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+        cached.encode(["a corpus record that is long enough to be affected " * 40])
+
+        embedder.max_seq_length = 128
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+
+    def test_a_dead_checkpoint_is_a_model_failure_not_a_cache_refusal(self) -> None:
+        """A checkpoint that cannot load must not be reported as a corrupt cache.
+
+        Swallowing the load error substitutes ``max_seq_length=None``, which is
+        a DIFFERENT canary key, so a model with a populated cache is refused as
+        stale. That exits with the integrity code, and the shell driver treats
+        that as "abort the whole sweep" rather than "record one model failure"
+        -- so a missing checkpoint or a broken dependency would stop every other
+        model and blame the cache for it.
+        """
+
+        class _DeadCheckpoint:
+            def _get_model(self) -> object:
+                raise OSError("checkpoint not found on disk")
+
+        with pytest.raises(OSError, match="checkpoint not found"):
+            LADDER._vector_affecting_runtime(_DeadCheckpoint())
+
+    def test_an_embedder_with_no_max_seq_length_still_yields_a_fingerprint(self) -> None:
+        """Control: an ABSENT knob is not a failure and must stay duck-typed.
+
+        The propagation above must not turn "this embedder does not expose
+        ``max_seq_length``" into an error -- that is the case the long probe
+        exists for, and every fake in this file is in it.
+        """
+
+        class _NoKnob:
+            pass
+
+        assert LADDER._vector_affecting_runtime(_NoKnob()) == "max_seq_length=None"
+
+    def test_an_unchanged_max_seq_length_still_passes(self, tmp_path: Path) -> None:
+        """Control: folding the knob into the key must not refuse every warm run."""
+        embedder = _RetunableEmbedder(max_seq_length=512)
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+        cached.encode(["a corpus record"])
+
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+
+    def test_a_cold_cache_agrees_with_the_checkpoint(self, tmp_path: Path) -> None:
+        """Control: the check must not fire on the ordinary first run."""
+        embedder = _SwappableEmbedder()
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+    def test_a_warm_cache_from_the_same_checkpoint_still_agrees(self, tmp_path: Path) -> None:
+        """Control: a *warm* cache must stay silent, or the check is unusable.
+
+        Without this, a check that simply always raised on a populated cache
+        would pass the test below and fail every real re-run.
+        """
+        embedder = _SwappableEmbedder()
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+    def test_a_re_uploaded_checkpoint_aborts_the_run(self, tmp_path: Path) -> None:
+        """The failure this exists to catch, actually caught."""
+        embedder = _SwappableEmbedder(weights=1.0)
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        embedder.weights = 2.0  # the same name now serves different weights
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+        # The message has to be actionable on its own: whoever hits this is
+        # mid-sweep and needs the path, not a description of the hazard.
+        assert "canary_ns.db" in str(excinfo.value)
+
+    def test_a_cache_written_before_the_canary_existed_is_refused(self, tmp_path: Path) -> None:
+        """The hole the canary would otherwise have on its very first run.
+
+        On a pre-existing cache the canary simply *misses*: it is encoded fresh
+        from whatever checkpoint is loaded now, written into the unvouched
+        database, and then compared against another fresh encoding of itself. It
+        always matches, while every corpus vector beside it may belong to a
+        different checkpoint — the same defect the check exists to close,
+        reintroduced one level up. (Caught by cross-model review.)
+        """
+        embedder = _SwappableEmbedder()
+        # A cache with real entries and no canary: exactly what every namespace
+        # written before this check looks like.
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text", "another corpus text"])
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+        assert "before this check existed" in str(excinfo.value)
+        assert "canary_ns.db" in str(excinfo.value)
+
+    def test_the_refusal_is_not_bypassed_by_running_it_again(self, tmp_path: Path) -> None:
+        """A refused run must leave the namespace exactly as it found it.
+
+        The first draft asked "is the canary here?" by *encoding* it, which
+        answers the question by changing it: the refused run deposited a canary,
+        so the second run found one present and sailed through. A refusal you get
+        past by running it twice is not a refusal.
+        """
+        embedder = _SwappableEmbedder()
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text"])
+        entries_before = LADDER._cache_entry_count(tmp_path / "canary_ns.db")
+
+        for _attempt in range(2):
+            with pytest.raises(LADDER.StaleEmbeddingCacheError):
+                LADDER._assert_cache_matches_checkpoint(
+                    embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+                )
+
+        assert LADDER._cache_entry_count(tmp_path / "canary_ns.db") == entries_before
+
+    def test_a_non_finite_canary_is_maximal_drift_not_agreement(self, tmp_path: Path) -> None:
+        """``NaN > tolerance`` is **False**, so a NaN would be read as agreement.
+
+        Unstable half precision on some devices and a truncated cached blob both
+        produce this. Without the explicit finiteness branch the guard accepts a
+        cache it could not compare, and the ladder publishes rows computed from
+        non-finite vectors.
+        """
+        embedder = _SwappableEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        embedder.weights = float("nan")
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+    def test_adopting_a_legacy_cache_vouches_once_and_keeps_checking(self, tmp_path: Path) -> None:
+        """``--trust-existing-cache`` is a one-time assertion, not an off switch.
+
+        The refusal above is retroactive: every namespace written before the
+        canary existed would demand a full re-measure of a cache the operator may
+        know is current. So adoption exists — but if it also disabled the check
+        from then on, it would be an off switch wearing a one-time label, and the
+        namespace would go unverified forever. This is the test that tells those
+        two apart.
+        """
+        embedder = _SwappableEmbedder(weights=1.0)
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text"])
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, adopt_legacy=True
+        )
+
+        # Adoption pinned the canary, so a later run needs no flag...
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        # ...and a checkpoint swap after adoption is still caught.
+        embedder.weights = 2.0
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+
+class TestIntegrityRefusalIsNotAResult:
+    """A cache refusal must abort, never become a ``status="failed"`` row.
+
+    Every other exception in that handler is a fact about the *model* — it did
+    not load, it ran out of memory — and recording it as a failure row is honest.
+    A cache-integrity refusal is a fact about the *harness*, and turning it into a
+    row is destructive: ``main()`` persists the row and ``merge_rows()`` voids
+    every previously recorded cell for that (model, benchmark), so the refusal
+    would DELETE good measurements from the tracked jsonl — and ``run_ladder.sh``
+    would see exit 0 and commit the deletion.
+    """
+
+    def _evaluate(self, monkeypatch: pytest.MonkeyPatch, exc: Exception) -> Any:
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise exc
+
+        monkeypatch.setattr(LADDER, "_load_benchmark", lambda _name: _boom())
+        return LADDER.evaluate_model_on_benchmark(
+            LADDER.ModelSpec("irrelevant"),
+            "fodors_zagat",
+            k_values=[1],
+            prompt_arms={"none": (None, None)},
+            cache_dir=Path("unused"),
+            device=None,
+            batch_size=1,
+        )
+
+    def test_a_stale_cache_error_escapes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            self._evaluate(monkeypatch, LADDER.StaleEmbeddingCacheError("stale"))
+
+    def test_an_ordinary_model_failure_is_still_recorded_as_a_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Control: without this, "re-raise everything" would pass the test above.
+
+        A model that genuinely fails to load must still produce a failure row —
+        that is the harness's whole no-silent-skip rule.
+        """
+        rows, _updates = self._evaluate(monkeypatch, RuntimeError("no such checkpoint"))
+
+        assert [row.status for row in rows] == ["failed"]
+        assert "no such checkpoint" in (rows[0].error or "")
+
+
+class TestIntegrityRefusalReachesTheDriver:
+    """The abort has to survive the process boundary, or the deletion just moves.
+
+    ``run_ladder.sh`` treats any non-zero exit as "the process died" and calls
+    ``record_process_failure``, which removes every existing row for the model and
+    commits the replacement. Re-raising inside Python therefore was not enough on
+    its own: the refusal exited non-zero and the driver deleted the good rows
+    anyway. The exit CODE is the whole signal.
+    """
+
+    def test_the_reserved_code_is_not_one_the_interpreter_already_uses(self) -> None:
+        # 1 is an uncaught exception, 2 is argparse. Colliding with either would
+        # make the driver treat a genuine crash as an integrity refusal.
+        assert LADDER.EXIT_CACHE_INTEGRITY not in (0, 1, 2)
+
+    def test_the_driver_special_cases_that_exact_code(self) -> None:
+        """The two halves are in different languages; nothing else pins them together.
+
+        A test on the Python side alone would keep passing if someone changed
+        ``EXIT_CACHE_INTEGRITY`` and left the shell comparing against 3.
+        """
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert f"if [ $code -eq {LADDER.EXIT_CACHE_INTEGRITY} ]" in driver
+        # And it must bail before the row-deleting path, not after it.
+        assert driver.index(f"$code -eq {LADDER.EXIT_CACHE_INTEGRITY}") < driver.index(
+            'record_process_failure "$model"'
+        )
+
+
+class TestPromptedCachePartitions:
+    """The cache key is (text, prompt); an unprompted canary vouches for one slice.
+
+    The ``instruct`` and ``documented`` arms read prompt-keyed entries. A change
+    that touches only explicit prompt handling — ``include_prompt``, prompt-token
+    pooling — leaves bare embeddings byte-identical, so a canary that only ever
+    asks for the bare vector passes while the prompted vectors it did not look at
+    came from the old behaviour.
+    """
+
+    def _cached(self, embedder: Any, tmp_path: Path) -> Any:
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        return DiskCachedEmbedder(embedder, cache_dir=tmp_path, namespace="canary_ns")
+
+    def test_drift_confined_to_the_prompted_path_is_caught(self, tmp_path: Path) -> None:
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder,
+            self._cached(embedder, tmp_path),
+            "canary_ns",
+            tmp_path,
+            prompts=[None, "query: "],
+        )
+
+        # Bare embeddings unchanged; only the prompted path moves.
+        embedder.prompt_scale = 5.0
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder,
+                self._cached(embedder, tmp_path),
+                "canary_ns",
+                tmp_path,
+                prompts=[None, "query: "],
+            )
+        assert "query: " in str(excinfo.value)
+
+    def test_a_populated_prompt_partition_without_its_canary_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Reachable even on a namespace whose UNPROMPTED canary is present.
+
+        That canary was pinned before per-prompt canaries existed and vouches
+        only for its own partition. Treating a populated prompt partition as
+        merely "cold" would pin a fresh canary over stale prompted vectors and
+        accept them forever — the vacuous-canary defect again, one partition
+        over. (Cross-model review.)
+        """
+        embedder = _PromptSensitiveEmbedder()
+        # An upgraded namespace: unprompted canary pinned, prompted corpus
+        # vectors present from an older run, no prompted canary.
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+        self._cached(embedder, tmp_path).encode(["corpus text"], prompt="query: ")
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder,
+                self._cached(embedder, tmp_path),
+                "canary_ns",
+                tmp_path,
+                prompts=[None, "query: "],
+            )
+        assert "query: " in str(excinfo.value)
+
+    def test_an_empty_prompt_partition_is_cold_and_simply_pinned(self, tmp_path: Path) -> None:
+        """Control: adding an arm must not be mistaken for a stale partition.
+
+        Without this, "refuse any partition lacking a canary" would pass the test
+        above and make every newly added prompt arm unrunnable.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder,
+            self._cached(embedder, tmp_path),
+            "canary_ns",
+            tmp_path,
+            prompts=[None, "query: "],
+        )
+
+    def test_counting_the_unprompted_partition_uses_IS_not_equals(self, tmp_path: Path) -> None:
+        """``prompt = NULL`` is NULL in SQL, never true.
+
+        With ``=`` the unprompted partition — the largest one — counts zero and
+        every cache reports as empty, silently disabling the gate above.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        self._cached(embedder, tmp_path).encode(["a", "b"])
+
+        assert LADDER._cache_entry_count(tmp_path / "canary_ns.db", None) == 2
+
+    def test_the_bare_canary_alone_does_not_notice(self, tmp_path: Path) -> None:
+        """Control: this is the hole, demonstrated.
+
+        Without it the test above could pass for the wrong reason — e.g. if the
+        fake's bare output moved too — and would not show that the prompted
+        partition is what added the coverage.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+
+        embedder.prompt_scale = 5.0
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
 
 
 class TestPersistence:
@@ -486,7 +939,10 @@ class TestReport:
         assert "not measured against the current" in section
 
     def test_rows_from_an_older_metric_revision_are_excluded_and_named(self) -> None:
-        # Two definitions of the same metric must never share a column.
+        # Two definitions of the same metric must never share a column. The
+        # property is that no stale NUMBER reaches a measurement table -- not
+        # that the name is unmentionable: "What did not run" naming it, with the
+        # reason, is the accounting that keeps the exclusion visible.
         rows = [
             _cell("current", "none"),
             _cell(
@@ -495,8 +951,56 @@ class TestReport:
         ]
         report = LADDER.render_report(rows)
         assert "legacy" in report.split("## Models that were measured")[0]
-        assert "`legacy`" not in report.split("## Models that were measured")[1]
         assert "older metric definition" in report
+
+        body = report.split("## Models that were measured")[1]
+        tables, did_not_run = body.split("## What did not run")
+        # No stale row in any measurement table.
+        assert "`legacy`" not in tables
+        # ...and it is still accounted for, with the reason.
+        assert "| `legacy` | measured under an older metric revision" in did_not_run
+
+    def test_a_failed_custom_checkpoint_is_counted_and_then_named(self) -> None:
+        """The denominator and the enumeration must describe the same ladder.
+
+        ``--models`` accepts a checkpoint outside ``MODELS``. The coverage
+        denominator counted it while "What did not run" iterated ``MODELS``, so
+        the report said "N of the N+1 models" above a table that could not name
+        the extra one — a promise the section could not keep.
+        """
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            LADDER.LadderRow(
+                model="someone/custom-checkpoint",
+                benchmark="bench",
+                prompt_arm="-",
+                k=0,
+                status="failed",
+                metric_revision=LADDER.METRIC_REVISION,
+                error="OSError: gated repo",
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        did_not_run = report.split("## What did not run")[1]
+
+        assert "| `someone/custom-checkpoint` | **failed**" in did_not_run
+        # The two counts are the same ladder: 14 fixed + this one.
+        assert "of the 15 models in the ladder have a row" in report
+        assert "of the 15 models in the ladder have no usable row" in did_not_run
+
+    def test_a_partially_measured_custom_checkpoint_is_grid_checked(self) -> None:
+        """The grid check iterated ``MODELS`` too, so a custom model escaped it.
+
+        Without this, a custom checkpoint measured on one benchmark could leave
+        the report concluding "every model, benchmark and prompt arm was
+        measured".
+        """
+        rows = [_cell("someone/custom-checkpoint", "none")]
+        report = LADDER.render_report(rows)
+        did_not_run = report.split("## What did not run")[1]
+
+        assert "Every model, benchmark and prompt arm" not in did_not_run
+        assert "| `someone/custom-checkpoint` | benchmarks" in did_not_run
 
     def test_a_failed_model_is_a_row_in_the_report_not_a_silent_gap(self) -> None:
         rows = [
@@ -684,3 +1188,589 @@ class TestReport:
 
         assert "**failed**" in row
         assert "not run" not in row
+
+
+class TestRecommendationSplitsOnLicence:
+    """The recommendation must not let a use-restricted checkpoint read as a default.
+
+    langres is Apache-2.0. ``google/embeddinggemma-300m`` is the best-measured
+    model on some benchmarks *and* the only non-OSI licence in the ladder, so a
+    recommendation that ranked purely on recall would name it as the default
+    candidate. The split is the whole point of the section, and a bug in it looks
+    exactly like a correct recommendation.
+    """
+
+    @staticmethod
+    def _rows() -> list[Any]:
+        """Gemma clearly ahead of the reference; one OSI model modestly ahead."""
+        return [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "google/embeddinggemma-300m",
+                "none",
+                vs_reference_delta=0.20,
+                vs_reference_ci_low=0.17,
+                vs_reference_ci_high=0.23,
+            ),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.03,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.05,
+            ),
+        ]
+
+    def _section(self) -> str:
+        report = LADDER.render_report(self._rows())
+        start = report.index("## Recommendation")
+        return report[start : report.index("## The recall/cost frontier")]
+
+    def test_the_restricted_model_is_not_in_the_default_candidate_table(self) -> None:
+        osi_table = self._section().split("### Use-restricted")[0]
+
+        assert "`BAAI/bge-small-en-v1.5` | mit" in osi_table
+        assert "google/embeddinggemma-300m" not in osi_table
+
+    def test_the_best_osi_candidate_is_named_and_is_not_the_best_model(self) -> None:
+        """The larger delta belongs to the restricted model; it must not win here."""
+        section = self._section()
+
+        assert "**Best OSI-licensed candidate: `BAAI/bge-small-en-v1.5`**" in section
+
+    def test_the_restricted_model_is_named_with_its_licence_and_as_an_opt_in(self) -> None:
+        restricted = self._section().split("### Use-restricted")[1]
+
+        assert "`google/embeddinggemma-300m` — licence `gemma`" in restricted
+        assert "NOT OSI-approved" in restricted
+        assert "documented opt-in" in restricted
+        # The measurement is still reported -- excluding it from the default
+        # table must not hide that it won.
+        assert "+0.2000" in restricted
+
+    def test_a_restricted_model_with_no_win_is_not_recommended(self) -> None:
+        """A licence classification is not a performance finding.
+
+        "Recommended as a documented opt-in" fired off the licence bucket alone,
+        so a checkpoint that was compared and beat the reference nowhere still
+        read as recommended. Documented opt-in is the exposure MECHANISM its
+        licence requires; whether anything is recommended is a question only the
+        measurement answers.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "google/embeddinggemma-300m",
+                "none",
+                vs_reference_delta=-0.05,
+                vs_reference_ci_low=-0.08,
+                vs_reference_ci_high=-0.02,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        restricted = section.split("### Use-restricted")[1]
+
+        assert "Recommended as a documented opt-in" not in restricted
+        assert "measured no benchmark where it beats" in restricted
+        assert "required exposure mechanism" in restricted
+        # The licence statement itself is unchanged -- this is about the verdict.
+        assert "NOT OSI-approved" in restricted
+
+    def test_a_restricted_model_that_was_never_compared_says_so(self) -> None:
+        """Control on the other side: no interval is not a measured loss either."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("google/embeddinggemma-300m", "none", vs_reference_delta=None),
+        ]
+        report = LADDER.render_report(rows)
+        restricted = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Use-restricted")[1]
+
+        assert "carries no interval" in restricted
+        assert "missing measurement, not a verdict" in restricted
+        assert "Recommended as a documented opt-in" not in restricted
+
+    def test_a_restricted_model_that_did_win_is_still_recommended(self) -> None:
+        """Control: gating on evidence must not suppress a real recommendation."""
+        restricted = self._section().split("### Use-restricted")[1]
+
+        assert "**Recommended as a documented opt-in**" in restricted
+
+    def test_a_restricted_model_is_not_described_as_merely_unverified(self) -> None:
+        """The two buckets must not collapse into each other.
+
+        A licence that WAS read and is not OSI is a finding; keeping it in the
+        hedged "someone should look at this" section would understate it.
+        """
+        section = self._section()
+
+        assert "### Unclassified licences" not in section
+        assert "google/embeddinggemma-300m" in section.split("### Use-restricted")[1]
+
+    def test_an_unread_licence_is_reported_as_unverified_not_as_restricted(self) -> None:
+        """``--models`` accepts a checkpoint outside ``MODELS``; it gets ``"unknown"``.
+
+        Failing an allow list means "not shown to be OSI". Printing that as
+        "licence `unknown`, which is NOT OSI-approved" under a heading reading
+        *use-restricted* asserts two things the run never measured: that the
+        terms were read, and that they restrict use.
+        """
+        rows = [
+            *self._rows(),
+            _cell(
+                "someone/brand-new-model",
+                "none",
+                vs_reference_delta=0.07,
+                vs_reference_ci_low=0.04,
+                vs_reference_ci_high=0.10,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        osi_table, rest = section.split("### Use-restricted")
+        restricted, unclassified = rest.split("### Unclassified licences")
+
+        # Kept out of the default candidates -- the allow list fails closed.
+        assert "someone/brand-new-model" not in osi_table
+        # ...but never accused.
+        assert "someone/brand-new-model" not in restricted
+        assert "`someone/brand-new-model` — licence not recorded." in unclassified
+        assert "NOT OSI-approved" not in unclassified
+        # The measurement still survives the hedge.
+        assert "+0.0700" in unclassified
+
+    def test_an_uncompared_unclassified_model_is_not_reported_as_measured(self) -> None:
+        """The unclassified section had the SAME defect as the restricted one.
+
+        It said "Measured ahead of `<ref>` on: no benchmark" whether the model
+        was compared and did not win or was never compared at all. Fixing one
+        section and not its sibling is the failure mode that made the two share
+        one phrasing helper.
+        """
+        rows = [
+            *self._rows(),
+            _cell("someone/brand-new-model", "none", vs_reference_delta=None),
+        ]
+        report = LADDER.render_report(rows)
+        unclassified = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Unclassified licences")[1]
+
+        assert "carries no interval" in unclassified
+        assert "missing measurement, not a verdict" in unclassified
+        assert "Measured ahead" not in unclassified
+
+    def test_a_compared_unclassified_model_that_never_wins_says_so(self) -> None:
+        """The middle state: compared, beat nothing. Not the same as uncompared."""
+        rows = [
+            *self._rows(),
+            _cell(
+                "someone/brand-new-model",
+                "none",
+                vs_reference_delta=-0.04,
+                vs_reference_ci_low=-0.07,
+                vs_reference_ci_high=-0.01,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        unclassified = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Unclassified licences")[1]
+
+        assert "measured no benchmark where it beats" in unclassified
+        assert "carries no interval" not in unclassified
+
+    def test_an_unknown_licence_is_not_treated_as_OSI(self) -> None:
+        """The allow list must fail closed: absence is not approval.
+
+        A deny list would let a checkpoint added tomorrow, with a licence nobody
+        classified, walk into the default-candidate table.
+        """
+        assert not LADDER._is_osi(LADDER.ModelSpec("someone/new-model"))
+        assert LADDER.ModelSpec("someone/new-model").license == "unknown"
+
+    def test_a_missing_interval_is_not_reported_as_a_tie(self) -> None:
+        """``merge_rows`` clears ``vs_reference_*`` when the reference is remeasured.
+
+        Every challenger then has zero wins for the same reason it has zero
+        losses: nothing was compared. Saying "the measurement cannot tell them
+        apart" turns that gap into a finding of equivalence, and then into a
+        reason to keep the default.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=None,
+                vs_reference_ci_low=None,
+                vs_reference_ci_high=None,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot rank them at all" in section
+        assert "missing measurement, not a tie" in section
+        assert "cannot tell them apart" not in section
+
+    def test_a_real_zero_win_field_still_recommends_keeping_the_default(self) -> None:
+        """The control: a challenger that WAS compared and did not win.
+
+        Without this, a check that always reported "missing measurement" would
+        pass the test above while destroying the recommendation it guards.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.02,
+                vs_reference_ci_high=0.04,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "cannot rank them at all" not in section
+
+    def test_an_uncompared_challenger_does_not_pad_the_field(self) -> None:
+        """A model with no intervals is 'not compared', never '0 of 5'.
+
+        Zero wins has two causes -- beaten on every benchmark, or never
+        compared -- and they render identically unless the table says so. The
+        second silently enlarges the field a 'best candidate' is declared best
+        of, which is a stronger claim than the data supports.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.03,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.05,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                vs_reference_delta=None,
+                vs_reference_ci_low=None,
+                vs_reference_ci_high=None,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        table = section.split("### Use-restricted")[0]
+
+        uncompared_row = next(line for line in table.splitlines() if "e5-base-v2" in line)
+        assert "not compared" in uncompared_row
+        assert "0 of" not in uncompared_row
+        # The winner is still named -- withholding the finding would be the
+        # opposite error -- but the claim is scoped to what was measured.
+        assert "**Best OSI-licensed candidate: `BAAI/bge-small-en-v1.5`**" in section
+        assert "Best of 1 of the 2 OSI models" in section
+
+    def test_the_winner_is_chosen_on_the_shared_benchmark_set(self) -> None:
+        """More coverage must not win by having had more chances.
+
+        A model with 2 wins from 5 attempts outranks one with 1 from 1 on raw
+        counts alone, which ranks the size of the experiment rather than the
+        model. The ranking therefore runs on the benchmarks every compared model
+        shares.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            # Broad: two wins, but only ONE of them on the shared benchmark.
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            # Narrow: compared only on "a", and wins it by more.
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        # On the shared set {"a"} both have one win, and e5 wins it by more.
+        assert "**Best OSI-licensed candidate: `intfloat/e5-base-v2`**" in section
+        assert "1 of the 1 benchmark(s) all 2 compared models share" in section
+
+    def test_no_shared_benchmark_means_no_winner_is_named(self) -> None:
+        """Disjoint coverage is not a ranking problem to solve, it is no ranking."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "share no common benchmark, so no winner is named" in section
+        assert "Best OSI-licensed candidate" not in section
+
+    def test_a_win_outside_the_shared_set_blocks_the_keep_the_default_verdict(self) -> None:
+        """The shared-set ranking must not erase a CI-clear win from the table.
+
+        ``best_count`` counts only the shared benchmarks, so a challenger winning
+        on a benchmark the others were never measured on scores zero — and the
+        old sentence then said no model beats the reference "on any benchmark",
+        contradicting the row directly above it.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            # Shared benchmark "a": no one wins it.
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            # ...but e5 wins "b" outright, and bge was never measured there.
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "does win" in section and "outside the shared set" in section
+        assert "`intfloat/e5-base-v2`" in section
+        assert "keep the current default" not in section
+
+    def test_an_exact_tie_names_no_winner(self) -> None:
+        """``name`` is in the sort key for byte-stability, not to break ties.
+
+        Letting ``max`` resolve an exact tie reports the sort order as if it were
+        a measurement.
+        """
+        tied = dict(
+            vs_reference_delta=0.05,
+            vs_reference_ci_low=0.03,
+            vs_reference_ci_high=0.07,
+        )
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("BAAI/bge-small-en-v1.5", "none", **tied),
+            _cell("intfloat/e5-base-v2", "none", **tied),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "No single best OSI-licensed candidate" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        assert "`intfloat/e5-base-v2`" in section
+        assert "**Best OSI-licensed candidate:" not in section
+
+    def test_a_clear_loss_is_not_called_indistinguishable(self) -> None:
+        """An interval entirely below zero distinguished the models perfectly.
+
+        It just did so in the incumbent's favour. Reporting it as "the
+        measurement cannot tell them apart" states the opposite of the finding,
+        while reaching the same recommendation -- which is how a wrong reason
+        survives review.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=-0.10,
+                vs_reference_ci_low=-0.12,
+                vs_reference_ci_high=-0.08,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "**measured loss**" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        assert "cannot tell them apart" not in section
+        # The recommendation itself is unchanged -- only its reason.
+        assert "keep the current default" in section
+
+    def test_an_interval_spanning_zero_is_still_called_inconclusive(self) -> None:
+        """The control: without it, always saying 'measured loss' would pass."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=-0.01,
+                vs_reference_ci_low=-0.03,
+                vs_reference_ci_high=0.02,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "**measured loss**" not in section
+
+    def test_an_exact_zero_interval_is_a_result_not_a_gap(self) -> None:
+        """``[0, 0]`` is certainty of a zero effect, which ``_ci`` already says.
+
+        ``fodors_zagat`` produces it for real -- both arms hit recall 1.0 on
+        every record -- so calling it "the measurement cannot tell them apart"
+        gives the opposite evidential reading of a benchmark that measured the
+        models as exactly equal.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=0.0,
+                vs_reference_ci_high=0.0,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "resolved them as exactly equal" in section
+        assert "cannot tell them apart" not in section
+        assert "keep the current default" in section
+
+    def test_an_exact_tie_survives_a_clear_loser_in_the_same_field(self) -> None:
+        """The three states are a partition, not a priority order.
+
+        Reporting them as mutually exclusive branches meant one model with an
+        interval below zero swept every exact tie into "intervals spanning
+        zero" -- asserting uncertainty about the one comparison the measurement
+        actually resolved.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=0.0,
+                vs_reference_ci_high=0.0,
+            ),
+            _cell(
+                "all-MiniLM-L12-v2",
+                "none",
+                vs_reference_delta=-0.08,
+                vs_reference_ci_low=-0.11,
+                vs_reference_ci_high=-0.05,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "measured loss" in section
+        assert "`all-MiniLM-L12-v2`" in section
+        assert "resolved them as exactly equal" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        # The exact tie must NOT be described as inconclusive.
+        assert "cannot tell them apart" not in section
+
+    def test_a_wide_interval_around_zero_is_still_inconclusive(self) -> None:
+        """Control: the exact-tie branch must not swallow real uncertainty."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=-0.05,
+                vs_reference_ci_high=0.05,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "resolved them as exactly equal" not in section
+
+    def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
+        """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
+        section = self._section()
+
+        assert f"of the {len(LADDER.MODELS)} models in the ladder" in section
+        assert "**3 of the" in section

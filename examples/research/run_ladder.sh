@@ -32,6 +32,20 @@
 # Usage:
 #   bash examples/research/run_ladder.sh [PID_TO_WAIT_FOR]
 #
+# Environment:
+#   LADDER_MODELS                 space-separated subset to sweep
+#   LADDER_DEVICE                 pin a torch device (default: let ST choose)
+#   LADDER_TRUST_EXISTING_CACHE   set to exactly 1 to forward
+#                                 --trust-existing-cache to the harness, vouching
+#                                 for an embedding cache that predates the
+#                                 integrity canary. Requires LADDER_MODELS to name
+#                                 exactly ONE model: vouching is a claim about a
+#                                 specific checkpoint's vectors, so a sweep cannot
+#                                 make it. An env var and not a flag because this
+#                                 script's only positional argument is a wait PID
+#                                 -- `--trust-existing-cache` passed here would be
+#                                 silently read as one.
+#
 # Run from the repository root.
 
 set -u -o pipefail
@@ -47,6 +61,11 @@ BENCHMARKS="fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon"
 
 mkdir -p "$LOG_DIR"
 
+# The full ladder, in the deliberate order documented above. Override with
+# LADDER_MODELS (space-separated) to drive a subset -- e.g. re-measuring only the
+# models stranded at an older metric revision, which is a real and recurring
+# need and otherwise invites editing this list in place and forgetting to
+# restore it.
 MODELS=(
   "all-MiniLM-L6-v2"
   "google/embeddinggemma-300m"
@@ -63,8 +82,72 @@ MODELS=(
   "Qwen/Qwen3-Embedding-4B"
   "Qwen/Qwen3-Embedding-8B"
 )
+if [ -n "${LADDER_MODELS:-}" ]; then
+  # shellcheck disable=SC2206  # word splitting is the interface here
+  MODELS=(${LADDER_MODELS})
+fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# `${VAR:+...}` tests only that the variable is NON-EMPTY, so
+# LADDER_TRUST_EXISTING_CACHE=0 / false / a typo would all have forwarded
+# --trust-existing-cache -- silently adopting unverified vectors on precisely the
+# run where the operator was trying to turn adoption OFF. An exact value, checked
+# once, and anything else is a hard error rather than a quiet "no": a misspelt
+# opt-in that reads as "off" is how a gate stops firing without anyone noticing.
+# (Cross-model review.)
+TRUST_ARG=()
+case "${LADDER_TRUST_EXISTING_CACHE:-}" in
+  "") ;;
+  1) TRUST_ARG=(--trust-existing-cache)
+     # The harness requires exactly one --models per invocation before it will
+     # adopt a cache, and this loop hands it exactly one -- per model, N times
+     # over. So the Python safeguard passes on every child while the DRIVER
+     # blesses the whole ladder: six unverified namespaces from a flag documented
+     # as vouching for one. The safeguard has to exist at the level that chooses
+     # the model list, which is here. (Cross-model review.)
+     if [ ${#MODELS[@]} -ne 1 ]; then
+       log "LADDER_TRUST_EXISTING_CACHE=1 vouches for ONE cache, but this run sweeps"
+       log "  ${#MODELS[@]} models. Adopting a namespace asserts its vectors came from"
+       log "  the checkpoint loaded now -- a claim about a specific model, not one you"
+       log "  can make for a whole ladder at once. Re-run as:"
+       log "    LADDER_MODELS='<one model>' LADDER_TRUST_EXISTING_CACHE=1 $0"
+       exit 2
+     fi
+     log "LADDER_TRUST_EXISTING_CACHE=1 -- vouching for ${MODELS[0]}'s cache this run" ;;
+  *) log "LADDER_TRUST_EXISTING_CACHE must be exactly 1 or unset (got '${LADDER_TRUST_EXISTING_CACHE}')"
+     exit 2 ;;
+esac
+
+# `.env` is gitignored, so a fresh checkout or a worktree does not have one and
+# `uv run --env-file .env` exits 2 before the harness starts. This sweep is $0
+# and keyless -- so a missing `.env` must not stop it. (Keyless is not the same as
+# offline: with cold `uv` or Hugging Face caches this still needs the network to
+# resolve dependencies and download checkpoints. It is offline only once those
+# caches are warm.) Pass
+# the flag only when the file is actually there.
+ENV_FILE_ARG=()
+if [ -f .env ]; then
+  ENV_FILE_ARG=(--env-file .env)
+else
+  log "no .env in this checkout -- running without one (this sweep is \$0 and keyless)"
+fi
+
+# The OpenMP settings are NOT optional, and making `.env` optional above is
+# exactly what exposed that: torch, faiss and scikit-learn each bundle their own
+# `libomp.dylib`, and with two runtimes loaded a sweep DEADLOCKS in
+# `__kmp_join_barrier` -- the process sits at 0% CPU forever rather than failing,
+# so the failure path below never fires and the sweep simply stops. Observed on
+# `all-mpnet-base-v2` after three models had already succeeded, which is what
+# makes it worth pinning rather than hoping.
+#
+# `docs/FRICTION_LOG.md` documents these as `.env` contents. Defaulting them
+# HERE (only when unset, so `.env` and the caller still win) is what makes the
+# script correct on a checkout that has no `.env` -- otherwise "it runs without
+# one" is true right up until it hangs.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export KMP_DUPLICATE_LIB_OK="${KMP_DUPLICATE_LIB_OK:-1}"
+log "OMP_NUM_THREADS=$OMP_NUM_THREADS KMP_DUPLICATE_LIB_OK=$KMP_DUPLICATE_LIB_OK"
 
 # ---------------------------------------------------------------------------
 # 1. Wait for any in-flight sweep. NOT optional: a second `uv run` in this
@@ -137,10 +220,33 @@ for model in "${MODELS[@]}"; do
   # host without it exit non-zero -- and the failure path below then DELETES
   # that model's previously measured rows and commits the deletion. Set
   # LADDER_DEVICE only to override deliberately.
-  uv run --env-file .env python examples/research/embedder_ladder.py \
+  uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
     --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+    ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?
+
+  # A cache-integrity refusal is NOT a model failure, and must not be recorded as
+  # one: record_process_failure deletes every existing row for the model and the
+  # commit below ships the deletion. Nothing is wrong with those rows -- the cache
+  # is what is suspect -- so stop the sweep and leave the tracked artifacts
+  # untouched. The harness reserves this code for exactly that
+  # (embedder_ladder.py::EXIT_CACHE_INTEGRITY). (Cross-model review.)
+  if [ $code -eq 3 ]; then
+    log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
+    log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
+    log "  Delete that model's cache namespace and re-run, or re-run this driver as"
+    # LADDER_MODELS is not optional in this suggestion: trust requires exactly one
+    # model, and this message normally fires mid-sweep where MODELS is all 14. The
+    # earlier version omitted it, so the advertised recovery command hit the
+    # single-model guard and exited 2 -- an unusable escape hatch printed at the
+    # exact moment it is needed. (Cross-model review.)
+    log "    LADDER_MODELS='$model' LADDER_TRUST_EXISTING_CACHE=1 $0"
+    log "  -- if you know the cache matches the loaded checkpoint. (The driver takes"
+    log "  no such flag: its only positional argument is a wait PID, so"
+    log "  --trust-existing-cache would be read as one.)"
+    exit 3
+  fi
 
   if [ $code -ne 0 ]; then
     log "$model exited $code -- recording a failure row and continuing"
