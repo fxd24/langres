@@ -1610,7 +1610,30 @@ def _render_recommendation(
                 for row in ok
             )
 
+        def ties_exactly(model: str) -> bool:
+            """Every shared interval is a degenerate ``[0, 0]``.
+
+            ``_ci`` already reads that as *certainty of a zero effect* rather
+            than "spans zero" -- ``fodors_zagat`` produces it for real, because
+            both arms hit recall 1.0 on every record. Folding it into
+            "inconclusive" would give the opposite evidential explanation for a
+            benchmark that measured the models as exactly equal. (Cross-model
+            review.)
+            """
+            shared = [
+                row
+                for row in ok
+                if row.model == model
+                and row.benchmark in common
+                and row.k == headline_k
+                and row.prompt_arm == "none"
+            ]
+            return bool(shared) and all(
+                row.vs_reference_ci_low == 0.0 and row.vs_reference_ci_high == 0.0 for row in shared
+            )
+
         clear_losers = [name for name in compared if loses_clearly(name)]
+        exact_ties = [name for name in compared if name not in clear_losers and ties_exactly(name)]
         exclusive_winners = sorted(
             {name for name in compared if any(row.benchmark not in common for row in wins(name))}
         )
@@ -1670,10 +1693,28 @@ def _render_recommendation(
                     )
                     if clear_losers
                     else (
-                        " — not because the challengers are bad, but because on this "
-                        "evidence the measurement cannot tell them apart: every shared "
-                        "interval spans zero, and 'indistinguishable' is not a reason "
-                        "to move."
+                        (
+                            f" — and for {len(exact_ties)} of them "
+                            f"({', '.join(f'`{name}`' for name in exact_ties)}) every "
+                            "shared interval is a degenerate `[0, 0]`: the measurement "
+                            "did not fail to separate them, it **resolved them as "
+                            "exactly equal** (both arms scoring identically on every "
+                            "record, as `fodors_zagat` does). That is a result, not a "
+                            "gap — and it is not a reason to move either."
+                            + (
+                                ""
+                                if len(exact_ties) == len(compared)
+                                else " The rest have intervals spanning zero and are "
+                                "genuinely inconclusive."
+                            )
+                        )
+                        if exact_ties
+                        else (
+                            " — not because the challengers are bad, but because on "
+                            "this evidence the measurement cannot tell them apart: "
+                            "every shared interval spans zero, and 'indistinguishable' "
+                            "is not a reason to move."
+                        )
                     )
                 )
                 + (
@@ -1847,12 +1888,21 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "there, an upstream re-upload under the same name would let a warm re-run "
         "read the **new** checkpoint's metadata while reusing the **old** "
         "checkpoint's vectors and publish a row mixing the two, with nothing in the "
-        "row revealing it. So every run re-encodes one fixed canary string and "
-        "compares it to the cached entry "
+        "row revealing it. So every run re-encodes a fixed set of canary probes and "
+        "compares each to its cached entry "
         "(`embedder_ladder.py::_assert_cache_matches_checkpoint`); a mismatch aborts "
-        "the run and names the namespace file to delete. A namespace written *before* "
-        "that check existed carries no canary and has therefore never been verified "
-        "against anything, so it is refused rather than adopted silently. Pass "
+        "the run and names the namespace file to delete. **There are two probes and "
+        "both are required** — a short string, and one of ~1024 words that every "
+        "realistic `max_seq_length` truncates, because a short probe alone cannot see "
+        "an input-selective change such as a shortened truncation limit. Both probe "
+        "texts also carry the model's `max_seq_length`, so changing it changes the "
+        "cache key and the namespace reads as unpinned rather than silently matching. "
+        "Consequently a namespace holding *a* canary row is not necessarily pinned: "
+        "one written by an earlier, single-probe version of this check is missing the "
+        "long probe and is deliberately refused as legacy. A namespace written "
+        "*before* the check existed carries no canary at all and has therefore never "
+        "been verified against anything, so it too is refused rather than adopted "
+        "silently. Pass "
         "`--trust-existing-cache` to vouch for one: it pins the canary once, and "
         "every later run is checked normally — which is exactly why **this document "
         "does not state which namespaces are in which state**. The rows carry no "
@@ -1860,8 +1910,9 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "adoption path changes it between runs: a sentence claiming every namespace "
         "is unverified would be made false by the very next `--trust-existing-cache` "
         "run and would keep asserting it. The live answer is in the cache directory "
-        "itself — a namespace holding the canary row has been pinned; one without it "
-        "has not — and a run that meets an unpinned namespace says so and exits 3. "
+        "itself — a namespace holding **all** the current probe rows has been pinned; "
+        "one missing any of them has not — and a run that meets an unpinned namespace "
+        "says so and exits 3. "
         "Putting the revision in the "
         "namespace instead would invalidate every cached vector to close the same "
         "hazard, and would still only answer *is this the same Hub commit* — the "

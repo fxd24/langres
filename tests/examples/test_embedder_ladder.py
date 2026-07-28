@@ -1509,6 +1509,53 @@ class TestRecommendationSplitsOnLicence:
         assert "cannot tell them apart" in section
         assert "**measured loss**" not in section
 
+    def test_an_exact_zero_interval_is_a_result_not_a_gap(self) -> None:
+        """``[0, 0]`` is certainty of a zero effect, which ``_ci`` already says.
+
+        ``fodors_zagat`` produces it for real -- both arms hit recall 1.0 on
+        every record -- so calling it "the measurement cannot tell them apart"
+        gives the opposite evidential reading of a benchmark that measured the
+        models as exactly equal.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=0.0,
+                vs_reference_ci_high=0.0,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "resolved them as exactly equal" in section
+        assert "cannot tell them apart" not in section
+        assert "keep the current default" in section
+
+    def test_a_wide_interval_around_zero_is_still_inconclusive(self) -> None:
+        """Control: the exact-tie branch must not swallow real uncertainty."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=-0.05,
+                vs_reference_ci_high=0.05,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "resolved them as exactly equal" not in section
+
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()
