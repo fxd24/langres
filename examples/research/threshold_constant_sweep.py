@@ -1059,11 +1059,12 @@ def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
         constant = _select_constant(_mean_by_benchmark(base_eligible))
         variant_argmax = _select_constant(_mean_by_benchmark(var_eligible))
         index = GRID.index(constant)
-        harmed = 0
+        # Counted over the SELECTION-ELIGIBLE cells only, because that is the set
+        # the rule below judges. Counting all cells here and eligible ones there
+        # would put two different denominators in one sentence.
+        harmed = sum(1 for c in var_eligible if c.ci_hi_blocked[index] < 0)
         for cell in var_cells:
             delta = cell.f1_blocked[index] - cell.shipped_f1_blocked
-            if cell.ci_hi_blocked[index] < 0:
-                harmed += 1
             lines.append(
                 f"| `{family}` | {cell.benchmark} | {cell.seed} | {constant:.2f} | "
                 f"{cell.shipped_f1_blocked:.4f} | {cell.f1_blocked[index]:.4f} | "
@@ -1087,7 +1088,8 @@ def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
             f"Median per-benchmark Δ on the variant checkpoint {median_delta:+.4f}; "
             f"significantly worse than 0.5 on "
             f"{', '.join(worse) if worse else 'no benchmark'} "
-            f"({harmed} of {len(var_cells)} cells). Diagnostic, not a veto: the "
+            f"({harmed} of {len(var_eligible)} eligible cells). "
+            f"Diagnostic, not a veto: the "
             f"argmax moves {moved:.2f} across checkpoints "
             f"({constant:.2f} -> {variant_argmax:.2f})."
         )
