@@ -603,9 +603,10 @@ def main() -> None:
                 results.append(result)
                 write_results(results, scratch)
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
-            # ``exception`` (not ``error``): a benchmark that drops out is absent
-            # from both the table and the tracked JSON, so the traceback in the
-            # run log is the ONLY record of why.
+            # ``exception`` (not ``error``): a benchmark that drops out leaves no
+            # row anywhere -- and the tracked artifact is not written at all once
+            # anything has failed -- so the traceback in the run log is the ONLY
+            # record of why.
             logger.exception("%s: run_benchmark raised", name)
             print(f"[fail] {name}: {type(exc).__name__}: {exc}", flush=True)
             failures.append(f"{name} ({type(exc).__name__})")
