@@ -34,7 +34,12 @@ jobs:
         with:
           languages: python
           # security-extended adds lower-severity/precision queries on top of
-          # the default suite; still advisory (not a required check).
+          # the default suite. `Analyze (python)` IS a required check on PRs
+          # into main (branch protection) -- it runs on every such PR, so it
+          # can be required without deadlocking. Findings themselves land in
+          # Security -> Code scanning and do not fail the job; what this gate
+          # catches is the job failing outright, e.g. the codeql-action version
+          # mismatch that this pin exists to prevent.
           queries: security-extended
 
       - name: Perform CodeQL analysis
