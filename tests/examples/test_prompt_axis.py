@@ -10,6 +10,7 @@ a hypothesis, not a safety net, so each failure shape is exercised here.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -188,3 +189,75 @@ def test_cell_complete_requires_every_arm_and_k() -> None:
     assert not harness._cell_complete(rows, spec, "abt_buy", recipes, [20, 50])
     # A different benchmark has nothing recorded at all.
     assert not harness._cell_complete(rows, spec, "amazon_google", recipes, [20])
+
+    # Dropping the cell first is what stops a crashed rerun from LOOKING
+    # complete: merging one fresh arm into the stale ones would leave every
+    # (arm, k) key present, so --resume would skip a cell built from two runs.
+    survivors = harness._drop_cell(rows, spec, "abt_buy")
+    assert survivors == []
+    assert not harness._cell_complete(survivors, spec, "abt_buy", recipes, [20])
+
+
+def test_drop_cell_only_removes_the_named_cell() -> None:
+    """Clearing one cell must not disturb another model's or benchmark's rows."""
+    spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
+    other = harness.MODELS_BY_NAME["BAAI/bge-base-en-v1.5"]
+
+    def row(model: str, benchmark: str) -> object:
+        return harness.Row(
+            model=model,
+            benchmark=benchmark,
+            arm="none",
+            kind="baseline",
+            k=20,
+            document_prompt=None,
+            query_prompt=None,
+            note="",
+            candidate_recall=1.0,
+            candidate_precision=1.0,
+            reduction_ratio=1.0,
+            total_candidates=1,
+            reachable_ceiling=1.0,
+            recall_of_reachable=1.0,
+            doc_shift_vs_none=0.0,
+            query_shift_vs_none=0.0,
+            doc_query_cosine=1.0,
+            pair_jaccard_vs_none=1.0,
+        )
+
+    rows = [
+        row(spec.name, "abt_buy"),
+        row(spec.name, "amazon_google"),
+        row(other.name, "abt_buy"),
+    ]
+    kept = harness._drop_cell(rows, spec, "abt_buy")
+    assert {(r.model, r.benchmark) for r in kept} == {
+        (spec.name, "amazon_google"),
+        (other.name, "abt_buy"),
+    }
+
+
+def test_every_model_pins_the_revision_it_was_measured_on() -> None:
+    """A published row must name the weights that produced it.
+
+    Loading by bare repo name is what let the study cite one commit while
+    `refs/main` resolved to another -- real here, not hypothetical: two Qwen3
+    snapshots and three MiniLM snapshots sit in the local HF cache.
+    """
+    for spec in harness.MODELS:
+        assert len(spec.revision) == 40, spec.name
+        assert set(spec.revision) <= set("0123456789abcdef"), spec.name
+
+
+def test_the_default_sweep_is_exactly_the_benchmarks_that_were_measured() -> None:
+    """The documented command must reproduce the committed artifact, not extend it.
+
+    `walmart_amazon` sat in this default while the committed rows covered four
+    benchmarks, so a default `--resume` run would have silently added a fifth
+    and rewritten the report.
+    """
+    rows_path = ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl"
+    measured = {
+        json.loads(line)["benchmark"] for line in rows_path.read_text().splitlines() if line.strip()
+    }
+    assert set(harness.BENCHMARKS) == measured
