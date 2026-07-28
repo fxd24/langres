@@ -40,13 +40,24 @@ and carries a prohibited-use policy that survives redistribution. langres is
 Apache-2.0; a default may not push terms onto users who never chose them. It
 stays a documented opt-in: `SentenceTransformerEmbedder("google/embeddinggemma-300m")`.
 
-**The new default ships with no prompt, on purpose.** E5's model card documents
-an asymmetric `"query: "` / `"passage: "` recipe, but the checkpoint registers no
-prompts (it ships no `config_sentence_transformers.json`) and **every number
-above was measured bare** — the ladder's `prompt_arm="none"`, with no
-`documented` arm for this model at all. Wiring the model-card prefixes in would
-ship a configuration nobody measured under the measured numbers' banner, so it is
-left off and pinned by test. Measure it in the ladder first if you want it.
+**The new default ships with no prompt, on purpose — and this is an open
+question, not a settled one.** E5's model card asks for a prefix and warns that
+omitting one degrades the model. For a *symmetric* task like ER the card's recipe
+is `"query: "` on **both** sides (semantic-similarity guidance), not the
+`"query: "`/`"passage: "` retrieval pair — a shape `VectorBlocker` already
+documents and accepts without warning.
+
+It still ships bare, because **every number above was measured bare**: the
+ladder's `prompt_arm="none"`, `registered_prompts: []` (the checkpoint ships no
+`config_sentence_transformers.json`, so nothing was applied implicitly either),
+and no `documented` arm for this model at all. Switching the recipe on would put
+a configuration nobody measured behind those numbers.
+
+The two facts set a floor rather than conflicting: **e5-base-v2 beat the previous
+default by the margins above while running in the configuration its own card
+calls degraded.** The prefix is uncollected upside, and collecting it is a
+measurement job — add a symmetric arm to the ladder and re-run, then move the
+constant's configuration and its numbers together. Pinned by test meanwhile.
 
 **Migration.** A **normally saved artifact keeps working** — `Resolver.save` /
 `FAISSIndex.config()` serialize the embedder you built with, so `load` rebuilds

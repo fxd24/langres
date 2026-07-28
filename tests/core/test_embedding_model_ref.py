@@ -107,19 +107,22 @@ def test_parameter_count_sums_the_loaded_weights(monkeypatch) -> None:
 def test_the_default_embedder_ships_with_no_prompt_recipe() -> None:
     """The default must stay in the configuration the ladder measured: BARE.
 
-    ``intfloat/e5-base-v2``'s model card documents an asymmetric
-    ``"query: "`` / ``"passage: "`` recipe, so the standing temptation is to
-    wire one into the default. Every number backing this default
-    (``docs/research/20260727_embedder_ladder.md``) was measured in the
-    ladder's ``prompt_arm="none"`` — neither side prefixed — and the checkpoint
-    ships no ``config_sentence_transformers.json``, so it registers no prompts
-    of its own. e5-base-v2 has no ``documented`` arm in the ladder at all.
+    ``intfloat/e5-base-v2``'s model card asks for a prefix and warns that
+    omitting one degrades the model (README FAQ 1). For a *symmetric* task like
+    ER the card's recipe is ``"query: "`` on **both** sides (L2692) — not the
+    ``"query: "``/``"passage: "`` retrieval pair (L2690) — and
+    ``VectorBlocker`` already accepts that shape without warning. So the
+    standing temptation is to wire it into the default.
 
-    So a prompt appearing here would ship an **unmeasured** configuration under
-    the measured numbers' banner, and half of one (``prompt_name`` without the
-    blocker's ``query_prompt``) is actively worse than neither — the case
-    ``VectorBlocker`` warns about. Measure it in the ladder first, then change
-    this test with the rows to back it.
+    Don't do it here first. Every number backing this default
+    (``docs/research/20260727_embedder_ladder.md``) was measured at
+    ``prompt_arm="none"`` — neither side prefixed, ``registered_prompts: []``,
+    and no ``documented`` arm for this model at all. The symmetric recipe is
+    **unmeasured**, so switching it on would put a configuration nobody measured
+    behind those numbers. That the model still won while degraded makes the
+    measured margin a floor, not a reason to leave the upside uncollected —
+    measure a symmetric arm in the ladder, then change this test together with
+    the rows that justify it.
     """
     embedder = SentenceTransformerEmbedder()
 

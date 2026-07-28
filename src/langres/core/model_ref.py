@@ -98,19 +98,44 @@ from typing import Literal, get_args
 #: fodors_zagat      +0.0000   [+0.0000, +0.0000]         112  (saturated)
 #: =============== ========= ====================== =========
 #:
-#: **It is measured BARE, and must ship bare — do not add a prompt here.**
-#: E5's model card documents an asymmetric ``"query: "`` / ``"passage: "``
-#: recipe, so the reflex on reading this constant is to wire one up. Don't: the
-#: checkpoint ships **no** ``config_sentence_transformers.json`` (it is a
-#: ``.no_exist`` entry in the Hub cache), so it registers no prompts, and every
-#: row above was produced by the ladder's ``prompt_arm="none"`` — neither side
-#: prefixed. e5-base-v2 has no ``documented`` arm in the ladder at all. Adding
-#: the model-card prefixes would therefore ship a configuration **nobody
-#: measured**, whose sign is unknown, while claiming the numbers above. If the
-#: recipe is worth having, measure it first: add a ``documented_arm`` to this
-#: model's ``ModelSpec`` in ``examples/research/embedder_ladder.py`` and re-run.
-#: (Driving only one half is worse than neither, which is why
-#: ``VectorBlocker`` warns on it — see ``core/blockers/vector.py``.)
+#: **It is measured BARE, and ships bare — deliberately, and this is a known
+#: open question rather than a settled one.** E5's model card asks for a prefix
+#: and says so bluntly: *"Do I need to add the prefix 'query: ' and 'passage: '
+#: to input texts? Yes, this is how the model is trained, otherwise you will see
+#: a performance degradation."* (README FAQ 1, L2685-2687, read from the
+#: checkpoint's own card). Note **which** prefix, though — the card's next lines
+#: split by task shape: ``"query: "``/``"passage: "`` for *asymmetric* retrieval
+#: (L2690), but ``"query: "`` **on both sides** for *symmetric* tasks such as
+#: semantic similarity and paraphrase retrieval (L2692). Entity resolution is
+#: symmetric — records against records, with no "passage" side — so the recipe
+#: this model would want here is the **symmetric** one, not the retrieval one.
+#: ``core/blockers/vector.py`` already documents that shape and accepts it
+#: without warning (``prompt_name="query"``, ``query_prompt`` unset).
+#:
+#: So why bare? Because **the ladder measured bare**, and the numbers above are
+#: only claimable for the configuration that produced them. Every e5 row carries
+#: ``registered_prompts: []`` and ``prompt_arm="none"``; the checkpoint ships no
+#: ``config_sentence_transformers.json`` at all (a ``.no_exist`` entry in the Hub
+#: cache), so nothing was applied implicitly either, and e5-base-v2 has no
+#: ``documented`` arm in the ladder. The symmetric recipe is therefore
+#: **unmeasured here**, and shipping it would put a configuration nobody measured
+#: behind the numbers above.
+#:
+#: The two facts together are not a conflict — they set a floor: e5-base-v2 beat
+#: the previous default by the margins above **while running in the configuration
+#: its own card calls degraded**. The measured win is a lower bound, and the
+#: prefix is upside that has not been collected.
+#:
+#: **To collect it, measure it — don't just switch it on.** Add a symmetric arm
+#: (``"query: "`` bound on both sides) for this model in
+#: ``examples/research/embedder_ladder.py`` and re-run; if it wins, change this
+#: constant's configuration and these numbers together. The ladder's own boxed
+#: warning is the reason for the caution: a query-side prefix *hurt* several
+#: models there, and e5's measured ``instruct`` arm — a generic instruction on
+#: the query side only, which is neither recipe — moved nothing measurable on any
+#: of the five (four intervals span 0; ``fodors_zagat`` is exactly 0).
+#: (Driving a *document* prefix without the matching query side is worse than
+#: neither; ``VectorBlocker`` warns on exactly that.)
 #:
 #: Two consequences worth knowing before changing this again: the ladder ranks
 #: models on **blocking** candidate recall, not end-to-end F1; and the field is
