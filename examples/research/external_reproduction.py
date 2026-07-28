@@ -99,7 +99,9 @@ class BenchSpec:
 
 BENCHMARKS: dict[str, BenchSpec] = {
     # A-side is the table the papers query with; sizes are asserted on load.
-    "fodors_zagat": BenchSpec("langres.data.er_benchmarks", "load_fodors_zagat", "fodors", 533, 331),
+    "fodors_zagat": BenchSpec(
+        "langres.data.er_benchmarks", "load_fodors_zagat", "fodors", 533, 331
+    ),
     "abt_buy": BenchSpec("langres.data.abt_buy", "load_abt_buy", "abt", 1081, 1092),
     "amazon_google": BenchSpec(
         "langres.data.amazon_google", "load_amazon_google", "amazon", 1363, 3226
@@ -241,9 +243,7 @@ def measure(
     cumulative = np.cumsum(hits)
 
     pc = (cumulative / gold_n).tolist()
-    pq = [
-        float(cumulative[k - 1]) / float(k * len(records_a)) for k in range(1, k_eff + 1)
-    ]
+    pq = [float(cumulative[k - 1]) / float(k * len(records_a)) for k in range(1, k_eff + 1)]
 
     def _map_at(cap: int) -> float:
         cap = min(cap, k_eff)
@@ -331,10 +331,7 @@ def crosscheck(
     ids_a = [str(r.id) for r in records_a]
     ids_b = [str(r.id) for r in records_b]
     directional_pairs = {
-        frozenset({ids_a[i], ids_b[int(j)]})
-        for i, row in enumerate(neigh_a)
-        for j in row
-        if j >= 0
+        frozenset({ids_a[i], ids_b[int(j)]}) for i, row in enumerate(neigh_a) for j in row if j >= 0
     }
 
     # Symmetric: one pooled index, every record queries it (score_blocking's shape).
@@ -349,9 +346,7 @@ def crosscheck(
         for j in row
         if j >= 0 and int(j) != i
     }
-    symmetric_pairs = {
-        p for p in symmetric_pairs if len({source_of[x] for x in p}) == 2
-    }
+    symmetric_pairs = {p for p in symmetric_pairs if len({source_of[x] for x in p}) == 2}
 
     closure_gold = {
         frozenset({a, b})
@@ -562,9 +557,7 @@ def _write_row(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     key = (row["benchmark"], row["model"], row["metric_revision"])
     kept = [
-        r
-        for r in _load_rows(path)
-        if (r["benchmark"], r["model"], r["metric_revision"]) != key
+        r for r in _load_rows(path) if (r["benchmark"], r["model"], r["metric_revision"]) != key
     ]
     kept.append(row)
     kept.sort(key=lambda r: (r["benchmark"], r["model"]))
@@ -709,9 +702,7 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     add("| benchmark | model | " + " | ".join(f"k={k}" for k in ks) + " |")
     add("|---|---|" + "---:|" * len(ks))
     for row in rows:
-        cells = [
-            _fmt(row["pc"][k - 1] * 100, 1) if k <= row["k_max"] else "-" for k in ks
-        ]
+        cells = [_fmt(row["pc"][k - 1] * 100, 1) if k <= row["k_max"] else "-" for k in ks]
         add(f"| `{row['benchmark']}` | `{row['model']}` | " + " | ".join(cells) + " |")
     add("")
     add("## E. Serialization actually used")
@@ -782,7 +773,7 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         "Zeakis, Papadakis, Skoutas, Koubarakis, PVLDB 16(9), 2023. "
         "[arXiv:2304.12329](https://arxiv.org/abs/2304.12329) *(retrieved 2026-07-28)*. "
         "This is UniBlocker's citation [63] for STransformer being \"the best blocking "
-        "solution with pre-trained embeddings\", and it benchmarks sentence-transformer "
+        'solution with pre-trained embeddings", and it benchmarks sentence-transformer '
         "models for blocking on these same datasets. **We quote no number from it**: "
         "its blocking recall is published only as plots (Figure 3), and reading values "
         "off a figure is not a citation. Its protocol also differs — it queries with "
@@ -844,9 +835,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise SystemExit(f"unknown benchmark: {benchmark}")
             for model in args.models:
                 logger.info("measuring %s x %s", benchmark, model)
-                row = measure(
-                    benchmark, model, cache_dir=args.cache_dir, k_max=args.k_max
-                )
+                row = measure(benchmark, model, cache_dir=args.cache_dir, k_max=args.k_max)
                 _write_row(args.rows, row)
                 logger.info(
                     "%s x %s: k@PC90=%s PC=%.4f mAP=%.4f",
