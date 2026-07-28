@@ -77,7 +77,7 @@ does). All ship in-repo (`loadable=True`) except OpenSanctions.
 
 | Benchmark | Task | Domain | Why it's in the portfolio |
 | --- | --- | --- | --- |
-| `febrl_dedup` | **dedup** | person | **The deduplication target (FEBRL3).** One 5000-record table, 2000 entities, **clusters of size 1–6** (835 singletons) — the only entry where a cluster can exceed two records, so it is the only one that can tell a correct merge from an over-merge. Gold is entity **membership**, not the transitive closure of a link file, so it carries none of that construction's fusion artifacts. Blocking PC 0.9552 at the pinned `k=50`. **Caveat:** synthetic (ANU generator + injected corruptions), so its corruptions are typo/OCR/field-swap shaped and do not stand in for real-world messiness; and 42% of records are non-duplicated, which puts the all-singletons sanity floor at BCubed F1 0.5721 — read `delta_above_floor`, not the raw BCubed. |
+| `febrl_dedup` | **dedup** | person | **The deduplication target (FEBRL3).** One 5000-record table, 2000 entities, **clusters of size 1–6** (835 singletons) — the only entry where a cluster can exceed two records, so it is the only one that can tell a correct merge from an over-merge. Gold is entity **membership**, not the transitive closure of a link file, so it carries none of that construction's fusion artifacts. Blocking PC 0.9552 at the pinned `k=50`. **Caveat:** synthetic (ANU generator + injected corruptions), so its corruptions are typo/OCR/field-swap shaped and do not stand in for real-world messiness; and the entity/record ratio puts the all-singletons sanity floor at BCubed F1 0.5721 — read `delta_above_floor`, not the raw BCubed. |
 | `fodors_zagat` | linkage | restaurant | **Saturated regression guard.** Tiny, easy, blocking Pair-Completeness ≥ 0.99 — the "nothing should ever regress here" floor. |
 | `abt_buy` | linkage | product | **Product regression guard.** Short, noisy product titles; a standard DeepMatcher band to hold the line against. |
 | `amazon_google` | linkage | product | **Hard product guard.** Unsaturated — blocking PC ~0.84 caps recall, so it separates weak from strong scorers (used as the discrimination check). |
@@ -121,10 +121,13 @@ $0 and offline — clusterer threshold tuned on **train** only:
 Two things to read here, both of which a size-2-clusters linkage benchmark
 cannot show you:
 
-1. **The sanity floor is 0.5721.** 42% of FEBRL3 records are non-duplicated, so
-   a resolver that merges *nothing* already scores BCubed F1 0.5721. `rapidfuzz`'s
-   `delta_above_floor` is +0.4235; `embedding_cosine`'s is only +0.1263. The raw
-   BCubed number alone would flatter both.
+1. **The sanity floor is 0.5721** — a resolver that merges *nothing* scores that.
+   All-singletons BCubed precision is 1.0 and its recall is exactly
+   `n_clusters / n_records`, so the floor is `2r/(1+r)` with `r = 597/1490 =
+   0.4007` on this split. `rapidfuzz`'s `delta_above_floor` is +0.4235;
+   `embedding_cosine`'s is only +0.1263. The raw BCubed number alone would
+   flatter both. (The ratio is high because 835 of the 2000 entities — 42% of
+   *entities*, 17% of *records* — are genuinely non-duplicated people.)
 2. **`embedding_cosine` collapses under transitive closure** — BCubed F1 0.6984
    but cluster-pairwise F1 **0.0247**. Its pair-level F1 (0.7240) looks merely
    mediocre; what the cluster view exposes is that its false positives *chain*

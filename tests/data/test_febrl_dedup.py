@@ -255,9 +255,10 @@ def test_dedupe_is_evaluable_end_to_end_with_cluster_metrics() -> None:
 
     Uses the $0 offline ``rapidfuzz`` matcher, so this costs nothing and needs no
     key. The assertion is against ``sanity_floor_f1`` — the BCubed F1 of
-    predicting all singletons — because on a corpus that is 42% singletons a
-    do-nothing resolver already scores 0.57, and an absolute threshold would hide
-    that. Beating the floor is the honest claim.
+    predicting all singletons — not an absolute number: all-singletons precision
+    is 1.0 and its recall is ``n_clusters / n_records``, so a do-nothing resolver
+    already scores ``2r/(1+r)`` = 0.5721 on this split (597/1490). An absolute
+    threshold would hide that. Beating the floor is the honest claim.
     """
     from langres.benchmarks.runner import run_methods
 
