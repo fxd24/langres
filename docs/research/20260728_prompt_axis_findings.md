@@ -38,8 +38,8 @@ intervals are paired bootstraps resampled **by gold cluster**.
    *other* arm clears zero on all three — Qwen3 with **our** text in its
    template — which is the whole subject of line 3.) **`intfloat/e5-base-v2` is
    not in that list**: its effects are real-looking one interval at a time and
-   do not survive correcting for multiplicity — see the next section, which is
-   the one place this document's answer changed.
+   do not survive correcting for multiplicity — see §4's opening subsection,
+   which is the one place this document's answer changed.
 2. **"Documented" is NOT sufficient — this is the trap.** Gemma's `clustering`
    template is every bit as official as its retrieval one and costs **−0.3183**
    Δ per-record recall on `wdc_computers`. Anyone skimming for "use the official
