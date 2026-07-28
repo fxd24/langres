@@ -84,6 +84,21 @@ K_VALUES: tuple[int, ...] = (5, 10, 20, 50)
 HEADLINE_K = 20
 SEED = 0
 
+#: Bootstrap replicates per comparison. Well above the library default of 1000,
+#: and the reason is the multiplicity correction rather than the intervals.
+#: Holm tests at `alpha/m` -- as low as 0.0125 here -- and a p-value estimated
+#: from B replicates carries Monte-Carlo error `sqrt(p(1-p)/B)`: at p≈0.02 that
+#: is 0.0044 with B=1000, a third of the threshold being tested, so the verdict
+#: would be decided by the draw rather than by the data. At B=20000 it is
+#: 0.0010. Nothing below `2/(B+1)` is observable either, and that floor must sit
+#: under the smallest threshold or strong effects cannot be separated from
+#: merely-significant ones. Costs ~2 min for the largest comparison; the
+#: embedding cache means a re-run pays this and almost nothing else.
+BOOTSTRAP_SAMPLES = 20000
+
+#: Family-wise error rate for the Holm correction.
+ALPHA = 0.05
+
 #: The four benchmarks the committed study measured. `walmart_amazon` was in this
 #: default but was never run, so the documented command did not reproduce the
 #: committed artifact -- it silently added a fifth, unmeasured benchmark and
@@ -393,6 +408,20 @@ class Row:
     delta_per_record_recall: float | None = None
     ci_low: float | None = None
     ci_high: float | None = None
+    #: Achieved significance level from the SAME replicates as the interval, so
+    #: `p_value <= t` means "the 1-t percentile interval excludes zero" at every
+    #: `t` -- which is what Holm reads and what an interval alone cannot answer.
+    #: An earlier draft recovered this by turning an interval endpoint into a
+    #: standard error and assuming normality; that is calibrated at 0.95 and
+    #: nowhere else, i.e. not at any level Holm actually tests at, so the
+    #: retraction it produced rested on numbers the method could not supply.
+    #: (Found by automated review on PR #252.)
+    p_value: float | None = None
+    #: Monte-Carlo error of `p_value`. A verdict within a few of these of its
+    #: Holm threshold is resolution-limited, not settled, and the report says so
+    #: rather than presenting the draw's noise as a finding.
+    p_value_standard_error: float | None = None
+    bootstrap_samples: int | None = None
     n_clusters: int | None = None
     parameter_count: int | None = None
     embedding_dim: int | None = None
@@ -593,7 +622,7 @@ def _paired_interval(
         )
         for record_id in shared
     )
-    return paired_entity_bootstrap(observations, seed=SEED)
+    return paired_entity_bootstrap(observations, seed=SEED, samples=BOOTSTRAP_SAMPLES)
 
 
 def _build_embedder(
@@ -888,6 +917,9 @@ def evaluate_model_on_benchmark(
                         row.delta_per_record_recall = interval.observed_difference
                         row.ci_low = interval.lower
                         row.ci_high = interval.upper
+                        row.p_value = interval.p_value
+                        row.p_value_standard_error = interval.p_value_standard_error
+                        row.bootstrap_samples = interval.samples
                         row.n_clusters = interval.n_clusters
                 arm_rows.append(row)
             rows.extend(arm_rows)
@@ -931,40 +963,48 @@ def read_rows(path: Path) -> list[Row]:
 def merge_rows(existing: Iterable[Row], fresh: Iterable[Row]) -> list[Row]:
     """Fresh cells replace old ones with the same (model, benchmark, arm, k).
 
-    Raises if the merged set would hold more than one checkpoint revision for a
-    single model. ``_cell_complete`` already refuses to *resume* a cell whose
-    revision moved, so a re-run recomputes it -- but that guard is per cell, and
-    a resume restricted to a subset (``--benchmarks``/``--models``) recomputes
-    only the cells it was pointed at. The rest keep the old revision's numbers,
-    and the merged file then mixes two checkpoints under one model name with
-    nothing on the surface to show it. A per-model check over the *whole* merged
-    set is the one place that can see that.
+    Deliberately does **not** enforce single-provenance. A sweep is mixed for
+    most of its life: it rewrites one ``(model, benchmark)`` at a time, so from
+    the first flush until the last the file legitimately holds new rows beside
+    not-yet-recomputed old ones. An earlier version raised here, which meant a
+    revision bump made every flush fail -- and because the check ran *before*
+    ``write_rows``, each failure discarded an arm that had just been computed.
+    A guard that destroys the results it was written to protect is worse than no
+    guard. (Found by automated review on PR #252.)
 
-    It raises rather than dropping the stale side: which revision is the one you
-    meant is a question about intent, and this function cannot answer it. An
-    earlier draft of this harness resolved a similar ambiguity by deleting rows,
-    and destroyed measured data three review rounds running. Naming the conflict
-    and stopping costs one re-run; guessing costs the study.
+    Enforcement lives at the two points where a mixed file is actually wrong:
+    :func:`find_mixed_provenance` at the end of a run, and
+    :func:`_assert_rows_match_declaration` before anything is published.
     """
     merged = {(row.model, row.benchmark, row.arm, row.k): row for row in existing}
     merged.update({(row.model, row.benchmark, row.arm, row.k): row for row in fresh})
-
-    by_model: dict[str, set[str | None]] = {}
-    for row in merged.values():
-        by_model.setdefault(row.model, set()).add(row.revision)
-    mixed = {model: revs for model, revs in by_model.items() if len(revs) > 1}
-    if mixed:
-        detail = "; ".join(
-            f"{model}: {sorted(str(rev) for rev in revs)}" for model, revs in sorted(mixed.items())
-        )
-        raise ValueError(
-            "refusing to merge rows measured on different checkpoints of the same "
-            f"model -- {detail}. Nothing was written or deleted. Re-run the stale "
-            "cells (drop --resume, or point --models/--benchmarks at them) so every "
-            "row for a model comes from one revision."
-        )
-
     return sorted(merged.values(), key=lambda r: (r.model, r.benchmark, r.arm, r.k))
+
+
+def find_mixed_provenance(rows: Iterable[Row]) -> dict[str, list[str]]:
+    """Models carrying more than one checkpoint revision, if any.
+
+    ``_cell_complete`` refuses to *resume* a cell whose revision moved, so a
+    re-run recomputes it -- but it decides one cell at a time, and a run narrowed
+    with ``--benchmarks``/``--models`` only recomputes what it was pointed at.
+    The rest keep the old checkpoint's numbers, and the file then holds two sets
+    of weights under one model name with nothing on the surface to show it. Only
+    a pass over the whole set can see that.
+
+    Reports rather than resolves. Which revision was meant is a question about
+    intent that this cannot answer, and an earlier draft of this harness resolved
+    a similar ambiguity by deleting rows -- destroying measured data three review
+    rounds running. Callers name the conflict and stop; nothing here removes a
+    measurement.
+    """
+    by_model: dict[str, set[str | None]] = {}
+    for row in rows:
+        by_model.setdefault(row.model, set()).add(row.revision)
+    return {
+        model: sorted(str(revision) for revision in revisions)
+        for model, revisions in sorted(by_model.items())
+        if len(revisions) > 1
+    }
 
 
 def write_rows(rows: Sequence[Row], path: Path) -> None:
@@ -1074,46 +1114,33 @@ def _interval(row: Row) -> str:
     return f"[{row.ci_low:+.4f}, {row.ci_high:+.4f}]{marker}"
 
 
-ALPHA = 0.05
+def _row_p_value(row: Row) -> float | None:
+    """The p-value Holm should use for this comparison.
 
-#: Two-sided z for the 95% percentile intervals the rows carry.
-_Z_95 = 1.959963984540054
+    Read from the row, where it was written by the same bootstrap draw that
+    produced the interval beside it -- so ``p <= t`` means "the ``1-t`` percentile
+    interval excludes zero" at every ``t``, including the ``alpha/m`` levels the
+    correction actually tests at.
 
-
-def _approximate_p_value(delta: float, ci_low: float, ci_high: float) -> float | None:
-    """A two-sided p-value recovered from one bootstrap interval.
-
-    ``None`` when no test is possible: the arm changed no record's recall on this
-    benchmark, so ``delta`` and both bounds are exactly zero and the bootstrap has
-    no support to resample. Those cells are counted and named in the report rather
-    than silently treated as null results.
-
-    **This is an approximation, and the exact route was unavailable.** Holm needs
-    p-values; the rows carry 95% percentile intervals. Recomputing the bootstrap
-    at each Holm threshold would be exact, but the replicate distributions were
-    not retained and re-measuring costs the whole sweep. So the interval is read
-    as a normal one: ``SE`` is the distance from the estimate to the bound
-    **facing zero**, divided by ``z_.975``. Using only the zero-facing side is
-    deliberate -- it is the side that decides exclusion, and it avoids assuming
-    the percentile interval is symmetric.
-
-    Two consequences worth stating because they are checkable rather than
-    reassuring. A bound resting exactly on zero yields ``z = z_.975`` and
-    therefore ``p = 0.05`` exactly, so such a cell fails every Holm threshold in
-    a family of more than one comparison -- the boundary cells drop out by
-    arithmetic, not by a judgement call about them. And an interval that spans
-    zero yields ``p > 0.05``, so the correction can only ever remove claims the
-    uncorrected reading made, never add one.
+    A *degenerate* comparison -- the arm changed no record's recall, so the
+    estimate and both interval bounds are exactly zero -- is **not** dropped. It
+    is a genuine non-rejection and returns ``p = 1.0``, keeping it in its family.
+    Omitting it instead made the Holm denominator depend on the observed result:
+    a family was size 3 or size 4 according to whether an arm happened to move
+    the saturated benchmark, which is a data-dependent family size and invalid
+    however well the p-values are calibrated. (Found by automated review on
+    PR #252.) ``None`` is reserved for a comparison that was never measured.
     """
-    if delta == 0.0 and ci_low == 0.0 and ci_high == 0.0:
+    if row.delta_per_record_recall is None or row.ci_low is None or row.ci_high is None:
         return None
-    if delta == 0.0:
+    if row.delta_per_record_recall == 0.0 and row.ci_low == 0.0 and row.ci_high == 0.0:
         return 1.0
-    facing = ci_low if delta > 0.0 else ci_high
-    standard_error = abs(delta - facing) / _Z_95
-    if standard_error == 0.0:  # pragma: no cover - an interval of zero width
-        return 0.0
-    return math.erfc(abs(delta) / standard_error / math.sqrt(2.0))
+    return row.p_value
+
+
+def _is_degenerate(row: Row) -> bool:
+    """No record's recall moved, so there is nothing for the bootstrap to resample."""
+    return row.delta_per_record_recall == 0.0 and row.ci_low == 0.0 and row.ci_high == 0.0
 
 
 def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
@@ -1135,8 +1162,38 @@ def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
     return rejected
 
 
+def _resolution_limited(
+    headline: Sequence[Row],
+    verdicts: dict[tuple[str, str, str], tuple[float | None, bool]],
+    margin: float = 3.0,
+) -> list[tuple[str, str, str]]:
+    """Verdicts close enough to their Holm threshold that the draw size decided them.
+
+    Every p-value here is estimated from a finite number of replicates and carries
+    Monte-Carlo error. A comparison whose p sits within a few of those of the
+    threshold it is being tested against has not been settled by the data -- it
+    has been settled by how many times the bootstrap happened to resample. Naming
+    those is the difference between a correction that reports its own resolution
+    and one that launders sampling noise into a finding.
+    """
+    by_family: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for (model, arm, benchmark), (p_value, _) in verdicts.items():
+        if p_value is not None:
+            by_family.setdefault((model, arm), []).append((benchmark, p_value))
+    errors = {(row.model, row.arm, row.benchmark): row.p_value_standard_error for row in headline}
+    limited: list[tuple[str, str, str]] = []
+    for (model, arm), family in by_family.items():
+        total = len(family)
+        for index, (benchmark, p_value) in enumerate(sorted(family, key=lambda item: item[1])):
+            threshold = ALPHA / (total - index)
+            error = errors.get((model, arm, benchmark))
+            if error and abs(p_value - threshold) < margin * error:
+                limited.append((model, arm, benchmark))
+    return sorted(limited)
+
+
 def _multiplicity(rows: Sequence[Row]) -> dict[tuple[str, str, str], tuple[float | None, bool]]:
-    """Per ``(model, arm, benchmark)``: its approximate p-value and its Holm verdict.
+    """Per ``(model, arm, benchmark)``: its p-value and its Holm verdict.
 
     **The family is one ``(model, arm)`` across benchmarks**, which is the unit
     the claims are stated in -- "this recipe helps this checkpoint" is a claim
@@ -1144,18 +1201,22 @@ def _multiplicity(rows: Sequence[Row]) -> dict[tuple[str, str, str], tuple[float
     row is exposed to. It is declared here rather than left implicit because the
     choice changes the answer: correcting over the whole sweep instead would be
     stricter, and the report prints that sensitivity check next to this one.
+
+    **Every measured benchmark stays in its family**, including the ones an arm
+    left untouched (``p = 1``). The family size is therefore fixed by the design
+    -- how many benchmarks were measured -- and not by which of them happened to
+    move.
     """
     verdicts: dict[tuple[str, str, str], tuple[float | None, bool]] = {}
     families: dict[tuple[str, str], dict[str, float]] = {}
     for row in rows:
         if row.k != HEADLINE_K or row.arm == "none":
             continue
-        if row.ci_low is None or row.ci_high is None or row.delta_per_record_recall is None:
+        p_value = _row_p_value(row)
+        if p_value is None:
             continue
-        p_value = _approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
         verdicts[(row.model, row.arm, row.benchmark)] = (p_value, False)
-        if p_value is not None:
-            families.setdefault((row.model, row.arm), {})[row.benchmark] = p_value
+        families.setdefault((row.model, row.arm), {})[row.benchmark] = p_value
     for (model, arm), family in families.items():
         for benchmark in _holm(family):
             p_value, _ = verdicts[(model, arm, benchmark)]
@@ -1327,21 +1388,33 @@ def render_report(rows: Sequence[Row]) -> str:
         "one model share a baseline and a corpus."
     )
     add("")
+    samples = next((row.bootstrap_samples for row in headline if row.bootstrap_samples), None)
     add(
-        "**The p-values are approximate and the exact route was unavailable.** Holm "
-        "needs p-values; the rows carry percentile intervals, and the bootstrap "
-        "replicates were not retained. Each p is recovered by reading the interval "
-        "as normal, scaling from the bound **facing zero** only -- the side that "
-        "decides exclusion -- so no symmetry is assumed. Two properties follow by "
-        "arithmetic rather than judgement: an interval that spans zero yields "
-        "p>0.05, so correction can only remove claims and never add one; and a "
-        "bound resting *exactly* on zero yields p=0.05 exactly, so it fails every "
-        "Holm threshold in a family of more than one."
+        "**The p-values come from the same bootstrap draw as the intervals**, as the "
+        "*achieved significance level* -- `2 * min(P(diff* <= 0), P(diff* >= 0))` over "
+        f"the {samples or '?'} replicates, with the usual `(count+1)/(B+1)` correction. "
+        "That is the percentile interval **inverted**, so `p <= t` means "
+        '"the `1-t` percentile interval over this draw excludes zero" at *every* `t`, '
+        "which is what makes it legitimate to read at the `α/m` levels Holm tests at. "
+        "(An earlier version recovered p by turning an interval endpoint into a "
+        "standard error and assuming normality. That is pinned to agree at 0.95 and "
+        "uncalibrated everywhere else -- including at every level Holm actually uses. "
+        "Found by automated review on PR #252.)"
+    )
+    add("")
+    add(
+        "**Every measured benchmark stays in its family, including the ones an arm "
+        "left untouched** (`p = 1`). Dropping them would make the Holm denominator "
+        "depend on the observed result -- a family of 3 or of 4 according to whether "
+        "an arm happened to move the saturated benchmark -- and a data-dependent "
+        "family size is invalid however well the p-values are calibrated. So every "
+        "family here has **m = 4** and the thresholds are 0.0125 / 0.0167 / 0.025 / "
+        "0.05. (Also found by automated review on PR #252.)"
     )
     add("")
 
     testable = {key: value for key, value in verdicts.items() if value[0] is not None}
-    untestable = len(verdicts) - len(testable)
+    degenerate = [row for row in headline if row.arm != "none" and _is_degenerate(row)]
     boundary = sorted(
         (row.model, row.arm, row.benchmark)
         for row in headline
@@ -1355,30 +1428,43 @@ def render_report(rows: Sequence[Row]) -> str:
         if row.arm != "none" and not _spans_zero(row)
     }
     survives = {key for key, (_, rejected) in testable.items() if rejected}
-    where = sorted({key[2] for key, value in verdicts.items() if value[0] is None})
+    where = sorted({row.benchmark for row in degenerate})
     add(
-        f"- **{len(testable)}** comparisons were testable; **{untestable}** were not "
-        "-- the arm changed no record's recall on that benchmark, so the estimate "
-        "and both bounds are exactly zero and the bootstrap has no support. They "
-        f"fall entirely on {', '.join(f'`{b}`' for b in where)}, which every model "
-        "already solves at recall 1.0000 with no prompt."
+        f"- **{len(testable)}** comparisons entered the correction. **{len(degenerate)}** "
+        "of them moved no record's recall at all, so the estimate and both bounds are "
+        f"exactly zero; they carry `p = 1` and are retained. They fall entirely on "
+        f"{', '.join(f'`{b}`' for b in where)}, which every model already solves at "
+        "recall 1.0000 with no prompt."
     )
     named = ", ".join(f"`{model.split('/')[-1]}`/`{arm}`/{bench}" for model, arm, bench in boundary)
     add(
-        f"- **{len(boundary)}** testable comparisons rest a bound *exactly* on zero "
-        f"({named or 'none'}). They read p=0.05, which fails every Holm threshold "
-        "in a family of more than one, so none of them is counted as an effect -- "
-        "and none was counted uncorrected either, since an interval closing on zero "
-        "does not exclude it."
+        f"- **{len(boundary)}** comparisons rest a bound *exactly* on zero "
+        f"({named or 'none'}). An interval closing on zero does not exclude it, so "
+        "none of them counted as an effect before the correction either."
     )
     add(
         f"- Read uncorrected, **{len(excluded_zero)}** intervals exclude zero. After "
         f"Holm, **{len(survives)}** survive -- **{len(excluded_zero - survives)}** are "
         "withdrawn."
     )
+
+    limited = _resolution_limited(headline, verdicts)
+    add(
+        f"- **{len(limited)}** verdicts sit within 3 Monte-Carlo standard errors of "
+        "their own Holm threshold"
+        + (
+            ": "
+            + ", ".join(f"`{m.split('/')[-1]}`/`{a}`/{b}" for m, a, b in limited)
+            + ". Those are decided by the size of the bootstrap draw as much as by the "
+            "data, and more replicates -- not more argument -- is what would settle them."
+            if limited
+            else ". Every verdict below is separated from its threshold by more than "
+            "the draw's own noise, so none of them is an artefact of the replicate count."
+        )
+    )
     add("")
-    add("| model | arm | benchmark | Δ per-record | 95% CI | approx p | Holm α=0.05 |")
-    add("|---|---|---|---:|---|---:|---|")
+    add("| model | arm | benchmark | Δ per-record | 95% CI | p | ± MC | Holm α=0.05 |")
+    add("|---|---|---|---:|---|---:|---:|---|")
     for row in sorted(headline, key=lambda r: (r.model, r.arm, r.benchmark)):
         verdict = verdicts.get((row.model, row.arm, row.benchmark))
         if verdict is None or verdict[0] is None:
@@ -1386,10 +1472,11 @@ def render_report(rows: Sequence[Row]) -> str:
         key = (row.model, row.arm, row.benchmark)
         if key not in excluded_zero and not verdict[1]:
             continue
+        mc = "-" if row.p_value_standard_error is None else f"{row.p_value_standard_error:.4f}"
         add(
             f"| `{row.model}` | `{row.arm}` | {row.benchmark} "
             f"| {_fmt(row.delta_per_record_recall)} | {_interval(row)} "
-            f"| {verdict[0]:.3g} | {'**holds**' if verdict[1] else 'withdrawn'} |"
+            f"| {verdict[0]:.3g} | {mc} | {'**holds**' if verdict[1] else 'withdrawn'} |"
         )
     add("")
 
@@ -1495,9 +1582,35 @@ def main() -> int:
                 # spend minutes per arm and a crash must not cost the whole cell.
                 rows = merge_rows(read_rows(args.rows), arm_rows)
                 write_rows(rows, args.rows)
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(render_report(read_rows(args.rows)))
             logger.info("wrote rows -> %s", args.rows)
+            # Best-effort mid-sweep render. Until the last cell lands, the file
+            # still holds rows from the previous study, and the publish guard is
+            # right to refuse them -- but refusing must not end the run. An
+            # earlier version let that exception propagate, so a revision or
+            # prompt change made every rerun die on its first completed cell.
+            # (Found by automated review on PR #252.)
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                args.report.write_text(render_report(read_rows(args.rows)))
+            except ValueError as error:
+                logger.info("report not regenerated yet -- sweep still in progress: %s", error)
+
+    # Enforce at completion, where a mixed file really is wrong.
+    final_rows = read_rows(args.rows)
+    mixed = find_mixed_provenance(final_rows)
+    if mixed:
+        logger.error(
+            "rows hold more than one checkpoint per model: %s. Every row is safely "
+            "on disk and nothing was deleted -- re-run the stale cells so each "
+            "model comes from one revision.",
+            "; ".join(f"{model}: {revisions}" for model, revisions in mixed.items()),
+        )
+        return 1
+    try:
+        args.report.write_text(render_report(final_rows))
+    except ValueError as error:
+        logger.error("rows are complete but cannot be published: %s", error)
+        return 1
     return 0
 
 

@@ -349,27 +349,30 @@ def test_merging_replaces_only_the_rows_it_actually_recomputed() -> None:
     assert by_key[(other.name, "abt_buy")].candidate_recall == 1.0
 
 
-def test_merging_two_checkpoints_of_one_model_raises_and_keeps_every_row() -> None:
-    """A partial re-run must not leave two checkpoints under one model name.
+def test_two_checkpoints_of_one_model_are_reported_without_blocking_the_write() -> None:
+    """The mixed-provenance check must not be the thing that loses the run.
 
-    ``_cell_complete`` refuses to *resume* a cell whose revision moved, but it
-    decides one cell at a time: a run narrowed with ``--benchmarks`` recomputes
-    only what it was pointed at, and the rest keep the old checkpoint's numbers.
-    The merged file then reports two sets of weights under one model heading with
-    nothing on the surface to show it. Only a check over the whole merged set can
-    see that, so this is where it lives.
+    A sweep is mixed for most of its life -- it rewrites one (model, benchmark)
+    at a time. An earlier version raised inside ``merge_rows``, which ran *before*
+    ``write_rows``, so after a revision bump every flush failed and each failure
+    discarded an arm that had just been computed. A guard that destroys the
+    results it exists to protect is worse than no guard.
     """
     spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
     stale = dataclasses.replace(_row(spec.name, "amazon_google"), revision="0" * 40)
     rows = [_row(spec.name, "abt_buy"), stale]
 
-    with pytest.raises(ValueError, match="different checkpoints"):
-        harness.merge_rows(rows, [])
+    # The merge itself always succeeds and never drops a measurement.
+    merged = harness.merge_rows(rows, [])
+    assert len(merged) == 2
 
-    # It reports the conflict; it does not resolve it by throwing a side away.
-    # An earlier draft resolved a similar ambiguity by deleting, and destroyed
+    # The conflict is reported, named, and left for a human to resolve -- an
+    # earlier draft resolved a similar ambiguity by deleting, and destroyed
     # measured rows three review rounds running.
-    assert rows[1].revision == "0" * 40
+    mixed = harness.find_mixed_provenance(merged)
+    assert set(mixed) == {spec.name}
+    assert mixed[spec.name] == sorted(["0" * 40, spec.revision])
+    assert harness.find_mixed_provenance([_row(spec.name, "abt_buy")]) == {}
 
 
 def test_rendering_refuses_numbers_measured_under_a_different_prompt() -> None:
@@ -405,55 +408,60 @@ def test_the_committed_rows_still_match_the_harness_that_describes_them() -> Non
     assert harness.render_report(rows)
 
 
-def test_correcting_for_multiplicity_can_only_remove_claims() -> None:
-    """An interval spanning zero must not become an effect under any correction.
+def test_the_p_value_is_read_from_the_draw_not_recovered_from_the_interval() -> None:
+    """Holm must read a p-value the bootstrap produced, not one extrapolated from a bound.
 
-    The recovered p-value is a function of the interval, so this is worth pinning
-    rather than assuming: if a spanning interval could read p<=0.05 the whole
-    section would be able to *invent* significance, which is the opposite of what
-    a correction is for.
+    An earlier version turned the interval's zero-facing endpoint into a standard
+    error and applied a normal tail. That construction agrees with the interval at
+    0.95 by design and is uncalibrated at every other level -- which is every level
+    Holm tests at (``alpha/m`` … ``alpha``). The p-value now comes from the same
+    replicate distribution as the interval, so it is meaningful at any threshold.
     """
-    assert harness._approximate_p_value(0.01, -0.02, 0.04) > 0.05
-    assert harness._approximate_p_value(-0.01, -0.04, 0.02) > 0.05
-    # And a wide margin still reads as strong, so the test above is not vacuous.
-    assert harness._approximate_p_value(0.10, 0.09, 0.11) < 1e-30
+    assert not hasattr(harness, "_approximate_p_value"), (
+        "the uncalibrated estimator must not survive alongside the real one"
+    )
+    row = dataclasses.replace(
+        _row("BAAI/bge-base-en-v1.5", "abt_buy", arm="official_query_instruction"),
+        delta_per_record_recall=0.0093,
+        ci_low=0.0039,
+        ci_high=0.0157,
+        p_value=0.0007,
+    )
+    assert harness._row_p_value(row) == 0.0007
 
 
-def test_a_bound_resting_exactly_on_zero_reads_exactly_alpha() -> None:
-    """The knife-edge case is decided by arithmetic, not by a judgement call."""
-    assert harness._approximate_p_value(0.0152, 0.0, 0.031) == pytest.approx(0.05, abs=1e-12)
-    assert harness._approximate_p_value(-0.0152, -0.031, 0.0) == pytest.approx(0.05, abs=1e-12)
-    # p = alpha fails every Holm threshold once the family has more than one member.
-    assert harness._holm({"a": 0.05}) == {"a"}
-    assert harness._holm({"a": 0.05, "b": 0.5}) == set()
+def test_a_zero_effect_stays_in_its_family_instead_of_shrinking_it() -> None:
+    """The Holm denominator must not depend on what the data happened to do.
 
-
-def test_a_boundary_cell_is_found_structurally_not_by_comparing_p_to_alpha() -> None:
-    """The first version of this section reported zero boundary cells. There are four.
-
-    It classified them with ``p == 0.05``, and the recovered p lands on
-    0.05000000000000004 -- so the count printed 0 and the list printed empty,
-    which reads as "no boundary cases here" over four of them. The bound itself
-    is stored exactly, so that is what the classifier reads now.
+    A comparison where no record's recall moved is a genuine non-rejection, not an
+    absent one. Dropping it made a family size 3 or 4 according to whether an arm
+    happened to move the saturated benchmark -- a data-dependent family size, which
+    is invalid however well the p-values are calibrated.
     """
-    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
-    testable = [
-        row
-        for row in rows
-        if row.k == harness.HEADLINE_K
-        and row.arm != "none"
-        and harness._approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
-        is not None
-    ]
-    structural = [row for row in testable if harness._on_boundary(row)]
-    assert len(structural) == 4
-    by_float_equality = [
-        row
-        for row in testable
-        if harness._approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
-        == harness.ALPHA
-    ]
-    assert by_float_equality == [], "the discarded classifier would have to be blind here"
+    degenerate = dataclasses.replace(
+        _row("BAAI/bge-base-en-v1.5", "fodors_zagat"),
+        delta_per_record_recall=0.0,
+        ci_low=0.0,
+        ci_high=0.0,
+        p_value=None,
+    )
+    assert harness._is_degenerate(degenerate)
+    assert harness._row_p_value(degenerate) == 1.0
+
+    # p=1 never rejects, but it does occupy a slot -- which is the entire point.
+    assert harness._holm({"a": 0.02, "b": 0.3, "c": 0.4}) == {"a"}
+    assert harness._holm({"a": 0.02, "b": 0.3, "c": 0.4, "d": 1.0}) == set()
+
+
+def test_an_unmeasured_comparison_is_absent_rather_than_counted_as_null() -> None:
+    """No measurement is not the same as no effect, and must not fill a family slot."""
+    unmeasured = dataclasses.replace(
+        _row("BAAI/bge-base-en-v1.5", "abt_buy"),
+        delta_per_record_recall=None,
+        ci_low=None,
+        ci_high=None,
+    )
+    assert harness._row_p_value(unmeasured) is None
 
 
 def test_holm_stops_at_the_first_failure_instead_of_testing_each_alone() -> None:
@@ -466,23 +474,43 @@ def test_holm_stops_at_the_first_failure_instead_of_testing_each_alone() -> None
     assert harness._holm({"a": 0.049}) == {"a"}
 
 
-def test_the_saturated_benchmark_produces_no_testable_comparison() -> None:
-    """No variation means no test -- not a null result, and not a silent zero."""
-    assert harness._approximate_p_value(0.0, 0.0, 0.0) is None
+def test_every_family_has_the_same_size_on_the_real_rows() -> None:
+    """The invariant that makes the correction valid, checked against the artifact.
+
+    Family size must be a property of the design -- how many benchmarks were
+    measured -- and not of the results. If one family is smaller than another,
+    something dropped a comparison for having a particular outcome.
+    """
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
     verdicts = harness._multiplicity(rows)
-    untestable = {key for key, (p_value, _) in verdicts.items() if p_value is None}
-    assert untestable, "the guard has to be seen firing on the real rows"
-    assert {benchmark for _, _, benchmark in untestable} == {"fodors_zagat"}
+    sizes: dict[tuple[str, str], int] = {}
+    for model, arm, _ in verdicts:
+        sizes[(model, arm)] = sizes.get((model, arm), 0) + 1
+    assert sizes, "the correction has to be seen running on the real rows"
+    assert set(sizes.values()) == {len(harness.BENCHMARKS)}
 
 
-def test_holm_withdraws_exactly_the_three_e5_documented_comparisons() -> None:
+def test_nothing_holds_that_did_not_already_exclude_zero() -> None:
+    """A correction removes claims; it must never be able to add one."""
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    verdicts = harness._multiplicity(rows)
+    headline = {
+        (r.model, r.arm, r.benchmark): r
+        for r in rows
+        if r.k == harness.HEADLINE_K and r.arm != "none"
+    }
+    held = {key for key, (_, rejected) in verdicts.items() if rejected}
+    assert held, "a vacuous pass here would hide the property entirely"
+    for key in held:
+        assert not harness._spans_zero(headline[key]), key
+
+
+def test_holm_withdraws_exactly_the_e5_documented_comparisons() -> None:
     """Pin the retraction: the correction changed the study's answer, and by how much.
 
-    e5's documented arms are the only claims multiplicity costs us. Its whole
-    family fails at Holm's *first* step (smallest p 0.0221 against a 0.0167
-    threshold), so no e5 documented comparison survives -- which is why the
-    headline is "three of four instruction-trained models", not four.
+    e5's documented arms are the only claims multiplicity costs us -- both its
+    families fail at Holm's *first* step -- which is why the headline reads
+    "three of four instruction-trained models", not four.
     """
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
     verdicts = harness._multiplicity(rows)
@@ -490,7 +518,6 @@ def test_holm_withdraws_exactly_the_three_e5_documented_comparisons() -> None:
     excluded_zero = {(r.model, r.arm, r.benchmark) for r in headline if not harness._spans_zero(r)}
     held = {key for key, (_, rejected) in verdicts.items() if rejected}
     assert len(excluded_zero) == 40
-    assert len(held) == 37
     assert excluded_zero - held == {
         ("intfloat/e5-base-v2", "official_asymmetric", "abt_buy"),
         ("intfloat/e5-base-v2", "official_symmetric", "amazon_google"),
