@@ -131,6 +131,19 @@ grading on the disjoint corpus is a *stronger* held-out estimate than the one
   benchmark (see `20260727_portfolio_annotation.md`), so none of this speaks to
   single-source deduplication.
 
+**Status: this is an exploratory run, published as such.** `docs/REPRODUCIBILITY.md`
+reserves a *clean* claim for one carrying committed source plus the relevant lock,
+environment, dataset/test and model revisions; the tracked artifact here records
+cell metrics only. In particular the blocker loads the mutable alias
+`all-MiniLM-L6-v2` without pinning a resolved Hub revision, so if a later re-run
+disagrees with this table there is no way to separate model drift from code, data
+or environment drift. That is a real limit on what these numbers can settle, and
+it is stated rather than papered over — the same doc says exploratory runs are
+useful but must not be relabelled clean after the fact. It is proportionate here
+because the conclusion rests on a direction — the derived cut never losing on any
+of the 8 real benchmarks, at any seed, for either scorer — plus a two-cell
+exception with an identified cause, not on any single decimal being reproducible.
+
 ---
 
 ## 2. The result
@@ -412,11 +425,23 @@ quietly absorb it.
 
 ## 5. The six hard-coded `0.5`s — a proposal, not a change
 
-### 5.1 It is not six sites, it is fourteen
+### 5.1 It is not six sites, it is seventeen
 
-`grep -rn "threshold.*= 0\.5" src/langres` finds the same decision cut, spelled as
-the same literal, at **fourteen** independent places — and every one of them means
-"a pair whose score reaches this is a match":
+The count needs care, because the constant is spelled three different ways and no
+single search finds all of it. `grep -rn "threshold.*= 0\.5" src/langres` returns
+**17** hits, but that set is simultaneously too wide and too narrow:
+
+- **Two hits are a different concept** and are excluded by name, not by pattern:
+  `core/adapters/glinker.py:47` is a *blocking* cut ("minimum entity-match
+  confidence to emit a **candidate**" — an earlier pipeline stage), and
+  `core/matchers/fellegi_sunter.py:146` is `agreement_threshold`, a per-*field*
+  agreement cut feeding the EM model rather than a pair decision.
+- **Two sites the grep misses**: `core/method_registry.py:538,545` spell it
+  `default_threshold=0.5` with no space, which the pattern above cannot see.
+  These are the `"string"` and `"embedding"` method specs.
+
+What remains is **seventeen declared defaults that all mean "a pair whose score
+reaches this is a match"** (15 of the grep's hits, plus the 2 it missed):
 
 | where | sites | what it defaults |
 |---|---|---|
@@ -426,9 +451,18 @@ the same literal, at **fourteen** independent places — and every one of them m
 | `core/clusterer.py` | 1 | `Clusterer(threshold=0.5)` |
 | `core/matchers/rapidfuzz.py` | 1 | `RapidfuzzMatcher` |
 | `core/matchers/embedding_score.py` | 1 | `EmbeddingScoreMatcher` |
-| `core/method_registry.py` | 3 | `MethodSpec.default_threshold` field default + `"string"` + `"embedding"` |
-| `curation/labelers.py` | 2 | the fake labeler's cut, the LLM teacher's cut |
+| `core/method_registry.py` | 3 | `MethodSpec.default_threshold` field default + the `"string"` and `"embedding"` specs |
+| `curation/labelers.py` | 3 | `FakeLabeler`, `TeacherLabeler.__init__`, `TeacherLabeler.from_env` |
 | `report/eval_report.py` | 2 | the tearsheet's operating point |
+
+Docstring examples that merely *show* `threshold=0.5` (`core/clusterer.py:128`,
+`core/resolver.py:491`, `core/matchers/cascade_judge.py:129`) are not counted:
+they illustrate a default rather than declare one.
+
+That the inventory takes this much care is itself part of the argument for naming
+the constant. Three spellings across nine files is precisely the state in which a
+value gets updated in eight places and missed in the ninth — and this section got
+it wrong twice before the search was run properly.
 
 `architectures/reranker.py` is the instructive exception: `Reranker.for_schema`
 takes `threshold: float` with **no default at all**. One architecture in the same
@@ -497,15 +531,17 @@ should default to `0.7`.
 
    Then have the six architectures, `Clusterer`, the two ranker matchers and
    `MethodSpec.default_threshold` reference it. The win is not DRY — it is that
-   the caveat gets stated **once, where the value lives**, instead of fourteen
+   the caveat gets stated **once, where the value lives**, instead of seventeen
    times or (as today) nowhere.
 
 2. **Do not sweep in what is not a match cut by the same authority.** The
-   `report/eval_report.py` pair is a *display* operating point and the
-   `curation/labelers.py` pair belongs to the labeling loop; they are the same
+   `report/eval_report.py` pair is a *display* operating point and the three
+   `curation/labelers.py` cuts belong to the labeling loop; they are the same
    concept but a different owner, and collapsing them into one import would tie
    the report and curation packages to a core constant for no benefit. Leave
-   them, with a comment pointing at the constant.
+   them, with a comment pointing at the constant. The two genuinely different
+   cuts found in §5.1 — GLiNER's candidate-emission confidence and
+   Fellegi–Sunter's field-agreement cut — stay out entirely.
 
 3. **The constant is the floor, not the fix.** The data says the real defect is
    that *one* number serves two score families. The seam for per-family defaults

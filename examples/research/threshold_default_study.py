@@ -70,11 +70,15 @@ Run (offline, $0)::
     uv run python examples/research/threshold_default_study.py   # portfolio -> tracked JSON
 
 A narrowed run must name its own ``--out``: the write replaces the file
-wholesale, so pointing ``--fast``/``--only`` at the canonical artifact would
-shrink the tracked portfolio result to the subset. The CLI refuses rather than
-warning::
+wholesale, so pointing a subset at the canonical artifact would shrink the
+tracked portfolio result. The CLI refuses rather than warning, and it decides
+by checking the three inputs that define the matrix (benchmarks, methods,
+seeds) rather than by listing the flags that narrow it::
 
     uv run python examples/research/threshold_default_study.py --fast --out tmp/fast.json
+
+``--methods`` is restricted to the zero-spend family: this study claims $0, and
+a paid scorer would silently build a billed client from the environment.
 
 ``--render`` reprints every table from an existing artifact without measuring
 anything, so the write-up's tables are regenerated rather than transcribed::
@@ -95,6 +99,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
+import statistics  # noqa: E402
 import time  # noqa: E402
 from collections.abc import Iterator  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -106,7 +111,11 @@ from langres.core.models import PairwiseJudgement  # noqa: E402
 from langres.curation.harvest import LabeledPair, align_pairs  # noqa: E402
 from langres.data.benchmark import Benchmark, gold_pairs_from_clusters  # noqa: E402
 from langres.eval import get_benchmark, list_benchmarks  # noqa: E402
-from langres.methods import BlockingBenchmark, make_resolver_factory  # noqa: E402
+from langres.methods import (  # noqa: E402
+    ZERO_SPEND_METHODS,
+    BlockingBenchmark,
+    make_resolver_factory,
+)
 from langres.metrics.metrics import classify_pairs  # noqa: E402
 
 logger = logging.getLogger("threshold_default_study")
@@ -436,10 +445,12 @@ def to_spread_markdown(results: list[CellResult]) -> str:
         cuts = sorted(threshold for _seed, threshold in by_benchmark.values())
         if not cuts:
             continue
-        median = cuts[len(cuts) // 2]
+        # statistics.median, not cuts[n // 2]: on an even-sized subset the latter
+        # returns the upper-middle cut, which would overstate the typical value in
+        # a narrowed run's table under a column labeled "median".
         lines.append(
-            f"| {method} | {len(cuts)} | {cuts[0]:.4f} | {median:.4f} | {cuts[-1]:.4f} | "
-            f"{cuts[-1] - cuts[0]:.4f} |"
+            f"| {method} | {len(cuts)} | {cuts[0]:.4f} | {statistics.median(cuts):.4f} | "
+            f"{cuts[-1]:.4f} | {cuts[-1] - cuts[0]:.4f} |"
         )
     return "\n".join(lines)
 
@@ -578,10 +589,35 @@ def main() -> None:
         print_tables(read_results(args.render))
         return
 
-    if args.out is None and (args.fast or args.only):
+    # This script advertises "$0 spend" in its docstring and in every progress
+    # line. That promise has to be enforced, not just written down: --methods is
+    # free text, and a paid scorer would reach make_resolver_factory with
+    # llm_client=None, whereupon LLMMatcher lazily builds a real, billed client
+    # from the environment. Refuse instead of billing.
+    paid = [m for m in args.methods if m not in ZERO_SPEND_METHODS]
+    if paid:
         parser.error(
-            "--fast/--only measure a subset and the write replaces the whole file, "
-            f"which would reduce {CANONICAL_OUT} to just those benchmarks. "
+            f"{', '.join(paid)} is not a zero-spend method and this study claims $0. "
+            f"Choose from: {', '.join(ZERO_SPEND_METHODS)}."
+        )
+
+    # The canonical artifact may only be written by a run that measured the WHOLE
+    # matrix. Checking the three inputs that DEFINE the matrix -- benchmarks,
+    # methods, seeds -- rather than blacklisting the flags that narrow it: any
+    # future narrowing flag must move one of these three, so this cannot silently
+    # rot open the way an enumerated "--fast/--only" guard did (--methods rapidfuzz
+    # and --seeds 0 both sailed past that one and would have replaced the tracked
+    # 54-cell portfolio with 27 or 18 cells).
+    is_full_sweep = (
+        not args.fast
+        and not args.only
+        and tuple(args.methods) == DEFAULT_METHODS
+        and tuple(args.seeds) == DEFAULT_SEEDS
+    )
+    if args.out is None and not is_full_sweep:
+        parser.error(
+            "a narrowed run measures a subset and the write replaces the whole file, "
+            f"which would reduce {CANONICAL_OUT} to just what was measured. "
             "Pass an explicit --out (e.g. --out tmp/threshold_subset.json)."
         )
     out: Path = args.out if args.out is not None else CANONICAL_OUT
@@ -594,9 +630,11 @@ def main() -> None:
     # hazard the --fast/--only guard above refuses: a subset silently replacing
     # the portfolio, indistinguishable afterwards from a complete run.
     scratch = out.with_name(out.name + ".partial")
+    selected = select_benchmarks(fast=args.fast, only=args.only)
+    expected_cells = len(selected) * len(args.methods) * len(args.seeds)
     results: list[CellResult] = []
     failures: list[str] = []
-    for name in select_benchmarks(fast=args.fast, only=args.only):
+    for name in selected:
         print(f"[run] {name}: {' '.join(args.methods)} ($0 spend) ...", flush=True)
         try:
             for result in run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds)):
@@ -620,6 +658,14 @@ def main() -> None:
         # a complete one to either a human or a CI step.
         print(f"[fail] {len(failures)} benchmark(s) did not complete: {', '.join(failures)}")
         print(f"[partial] {len(results)} cell(s) kept at {scratch}; {out} NOT updated")
+        raise SystemExit(1)
+
+    # No failure was reported AND the matrix is full: the two are checked
+    # separately because "nothing raised" and "everything was measured" are
+    # different claims, and only the second is what the artifact asserts.
+    if len(results) != expected_cells:
+        print(f"[fail] measured {len(results)} cells, expected {expected_cells}")
+        print(f"[partial] kept at {scratch}; {out} NOT updated")
         raise SystemExit(1)
 
     write_results(results, out)
