@@ -460,6 +460,19 @@ regressions that a plain derive-and-apply would have shipped.
 Full per-benchmark table, the caveats, and what deriving does *not* fix:
 [`docs/research/20260728_threshold_default.md`](research/20260728_threshold_default.md).
 
+> **"Then why not just ship a better constant?"** That question got its own
+> follow-up study, because the first one measured the *derived* cut and never a
+> shared replacement constant — so its medians were a prior, not a finding.
+> Sweeping a **fixed** constant per score family (same portfolio, corpus-disjoint
+> splits, leave-one-benchmark-out selection, pre-registered ship rule) landed
+> split: `sim_cos`'s shipped default moved `0.5` → **`0.90`**, while `heuristic`
+> **kept `0.5`** — a better constant exists for it on the median, but it reliably
+> damages `abt_buy`, so the rule rejected it. The practical consequence is the
+> section you are reading: for string-similarity scores there is no free constant
+> that is safe, and deriving from labels is worth substantially more than any
+> constant anyway.
+> [`docs/research/20260728_threshold_constant.md`](research/20260728_threshold_constant.md).
+
 > **Do not trust the report's held-out numbers on a *dense* label set.** That
 > study also found that `align_pairs`' entity-disjoint split — which assigns
 > whole union-find components — holds out **zero** pairs in 26 of 27

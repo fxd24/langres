@@ -120,9 +120,7 @@ class TestTheShippedConstantsArePinnedToTheirEvidence:
             ("prob_rf", 0.5),
         ],
     )
-    def test_the_unmeasured_families_record_the_status_quo(
-        self, family: str, value: float
-    ) -> None:
+    def test_the_unmeasured_families_record_the_status_quo(self, family: str, value: float) -> None:
         """NOT findings: paid-per-score LLM families, and fitted matchers.
 
         Pinned so that a future sweep changing one is a deliberate, visible edit

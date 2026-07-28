@@ -44,6 +44,54 @@ shipped behaviour said another and no test would notice.
   paid completion per score and is a separate study. Pass `threshold=0.5` for the
   previous behaviour.
 
+### MEASURED: the `sim_cos` default moves `0.5` → `0.90`; `heuristic` deliberately stays
+
+A new $0/offline study — harness `examples/research/threshold_constant_sweep.py`,
+artifacts under `examples/research/results/`, write-up
+`docs/research/20260728_threshold_constant.md` (**every table in it is generated
+from the committed artifacts**, none transcribed) — swept a *fixed* constant per
+score family across the benchmark portfolio. Held out by **corpus** (whole gold
+clusters), selected **leave-one-benchmark-out** so the reported number is
+out-of-sample w.r.t. the dataset, 3 seeds, 95% intervals from a paired bootstrap
+resampled **by gold cluster** (never by dependent pair rows), against an exact
+oracle. The ship rule was **pre-registered in the harness** before any number
+existed, and the verdict is computed by applying it to the artifact.
+
+This is the measurement PR #250 recommended and explicitly did *not* perform: it
+scored the label-*derived* cut, never a shared replacement constant, so the
+medians of those derived cuts were a documented prior, not a finding.
+
+- **`sim_cos`: `0.5` → `0.90`.** Every selection-eligible benchmark and seed
+  improves, with all 95% intervals entirely above zero. `0.5` was not a mildly
+  mistuned cut on a cosine scale — normalized embeddings put nearly every
+  candidate pair above it, so it accepted almost everything the blocker proposed
+  and precision collapsed. **Affects `Retrieve` (and `RetrieveRerank`'s
+  retrieval stage) when you pass no `threshold=`**; an explicit value is
+  untouched. Two registered methods (`embedding`, `embedding_cosine`) also now
+  *declare* `0.90`, though `MethodSpec.default_threshold` still has no runtime
+  reader.
+- **It is a floor, not a tuning, and it was chosen for safety across encoders.**
+  A cosine cut belongs to the *encoder*, not the family tag, and every benchmark
+  loader pins `all-MiniLM-L6-v2` while `DEFAULT_EMBEDDING_MODEL` is
+  `intfloat/e5-base-v2`. So the whole protocol was re-run on the shipped default
+  and the constant graded **in both directions**: `0.90` never harms on
+  e5-base-v2, while e5's own (higher) selection carried back *significantly*
+  harms `abt_buy`. `0.90` is the value safe on both. If you have labels, derive
+  the cut instead (`langres.training.calibration.derive_threshold`).
+- **`heuristic` stays `0.5` — measured and rejected, not skipped.** The sweep
+  *did* find a stable constant (`0.74`; leave-one-out spread only `0.03`, so the
+  usual "every dataset wants a different cut" explanation is wrong here). It
+  fails the pre-registered rule's clause (2): it helps most of the portfolio and
+  reliably **damages `abt_buy` on every seed**, interval entirely below zero.
+  Both F1 conventions agree, so it does not rest on the denominator. A default
+  that lifts the median while predictably harming a known data class is a
+  recommendation with an undisclosed victim.
+- **Not measured, and unchanged**: `prob_llm` / `prob_group_llm` (a paid
+  completion per score — a portfolio grid sweep is a real invoice) and
+  `calibrated_prob` / `prob_fs` / `prob_rf` (*fitted* matchers a label-free user
+  cannot run at all, so "best out-of-the-box constant" is not the same question).
+  Their entries record the status quo, not a finding.
+
 ### Three `threshold` parameters that silently did nothing now say so
 
 A knob that quietly ignores you is worse than no knob: users tune it, see nothing

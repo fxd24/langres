@@ -245,6 +245,19 @@ calls per score and `prob_fs` / `prob_rf` come from fitted matchers a label-free
 user cannot run at all, so their entries record the status quo rather than a
 finding.
 
+**Measured does not mean changed, and that distinction is the point.** Of the two
+swept families only `sim_cos` got a new constant (`0.90` — `0.5` accepts nearly
+every pair on a normalized-embedding cosine). `heuristic` *kept* `0.5` even
+though a better-on-median constant exists, because it reliably harms one
+benchmark and the study's pre-registered rule rejects a default with a
+predictable victim. So the three states an entry can be in — measured-and-changed,
+measured-and-deliberately-kept, and never-measured — are documented per family in
+the `DEFAULT_THRESHOLDS` docstring and pinned against literals in
+`tests/core/test_score_type_defaults.py`. Note also that a `sim_cos` cut lives on
+the *encoder's* scale, so the shipped value is the one measured safe across
+checkpoints rather than the best on any single one; with labels, prefer
+`langres.training.calibration.derive_threshold`.
+
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 
 ### Explicit topology authoring and execution
