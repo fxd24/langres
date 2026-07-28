@@ -1774,3 +1774,235 @@ class TestRecommendationSplitsOnLicence:
 
         assert f"of the {len(LADDER.MODELS)} models in the ladder" in section
         assert "**3 of the" in section
+
+
+# ---------------------------------------------------------------------------
+# Silently-wrong checkpoints
+#
+# Every case below was MEASURED on the LFM2.5 checkpoints on 2026-07-29, and
+# every one of them loads, embeds, and returns finite unit-norm vectors. None
+# raises without these guards, so the failure mode is a published number rather
+# than a crash -- which is why they are tested instead of trusted.
+# ---------------------------------------------------------------------------
+
+
+def _fake_auto_model(qualname: str, module: str, auto_map: dict[str, str] | None) -> Any:
+    """An object shaped like a loaded ``auto_model``, with a controllable class identity."""
+    cls = type(qualname, (), {"__module__": module})
+    cls.__qualname__ = qualname
+    instance = cls()
+    instance.config = SimpleNamespace(auto_map=auto_map, model_type="lfm2")
+    return instance
+
+
+class TestDeclaredArchitecture:
+    """``trust_remote_code`` + a natively implemented ``model_type`` is the trap."""
+
+    def test_the_native_class_winning_over_the_declared_one_is_refused(self) -> None:
+        # Measured: LFM2.5-Embedding-350M without trust_remote_code loads the
+        # native CAUSAL Lfm2Model. It pools the CLS token, causal attention makes
+        # that token a function of itself alone, and every text in the corpus
+        # collapses to one vector -- cos(two unrelated products) == 1.0000.
+        auto_model = _fake_auto_model(
+            "Lfm2Model",
+            "transformers.models.lfm2.modeling_lfm2",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Embedding-350M", trust_remote_code=True)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="auto_map.AutoModel"):
+            LADDER._assert_declared_architecture(spec, auto_model)
+
+    def test_the_declared_remote_class_passes(self) -> None:
+        auto_model = _fake_auto_model(
+            "Lfm2BidirectionalModel",
+            "transformers_modules.LiquidAI.LFM2_5.abc123.modeling_lfm2_bidirectional",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Embedding-350M", trust_remote_code=True)
+
+        LADDER._assert_declared_architecture(spec, auto_model)
+
+    def test_a_right_named_class_from_the_wrong_place_is_still_refused(self) -> None:
+        """Name-matching alone would pass a native class that happened to agree."""
+        auto_model = _fake_auto_model(
+            "Lfm2BidirectionalModel",
+            "transformers.models.lfm2.modeling_lfm2",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError):
+            LADDER._assert_declared_architecture(
+                LADDER.ModelSpec("x", trust_remote_code=True), auto_model
+            )
+
+    def test_a_checkpoint_declaring_no_auto_map_is_not_constrained(self) -> None:
+        """The ordinary case: BertModel for e5-base-v2, no auto_map, nothing to check."""
+        auto_model = _fake_auto_model("BertModel", "transformers.models.bert.modeling_bert", None)
+
+        LADDER._assert_declared_architecture(LADDER.ModelSpec("intfloat/e5-base-v2"), auto_model)
+
+
+class _FakeAutoClass:
+    """Stands in for ``transformers.AutoModel`` / ``AutoModelForMaskedLM``."""
+
+    def __init__(self, missing: list[str], backbone: Any | None) -> None:
+        self._missing = missing
+        self._backbone = backbone
+        self.__name__ = "FakeAutoClass"
+
+    def from_pretrained(self, name: str, **kwargs: Any) -> tuple[Any, dict[str, list[str]]]:
+        model = SimpleNamespace(base_model_prefix="lfm2")
+        model.base_model = model if self._backbone is None else self._backbone
+        return model, {"missing_keys": self._missing, "unexpected_keys": []}
+
+
+class TestPreflightBackbone:
+    """``from_pretrained`` reports a total key mismatch as a WARNING and carries on."""
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, **classes: Any) -> None:
+        monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(**classes))
+
+    def test_randomly_initialised_weights_stop_the_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Measured: AutoModel on LFM2.5-Encoder-350M matched ZERO of the
+        # checkpoint's 148 tensors (missing=148, unexpected=148) because they are
+        # stored under the MaskedLM wrapper's `lfm2.` prefix. The model then
+        # embeds happily; two independent loads simply disagree.
+        self._install(monkeypatch, AutoModel=_FakeAutoClass(["layers.0.conv.conv.weight"], None))
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Encoder-350M", trust_remote_code=True)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="randomly initialised"):
+            LADDER._preflight_backbone(spec)
+
+    def test_a_clean_load_returns_the_recovered_backbone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backbone = SimpleNamespace(name="the real weights")
+        self._install(monkeypatch, AutoModelForMaskedLM=_FakeAutoClass([], backbone))
+        spec = LADDER.ModelSpec(
+            "LiquidAI/LFM2.5-Encoder-350M",
+            trust_remote_code=True,
+            backbone_auto_class="AutoModelForMaskedLM",
+        )
+
+        assert LADDER._preflight_backbone(spec) is backbone
+
+    def test_a_wrapper_exposing_no_distinct_backbone_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Substituting the wrapper for itself would leave the random weights in place."""
+        self._install(monkeypatch, AutoModelForMaskedLM=_FakeAutoClass([], None))
+        spec = LADDER.ModelSpec(
+            "x", trust_remote_code=True, backbone_auto_class="AutoModelForMaskedLM"
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="no distinct base_model"):
+            LADDER._preflight_backbone(spec)
+
+    def test_an_ordinary_checkpoint_pays_no_extra_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Custom loading code is what gets the prefix wrong; the rest need no probe."""
+        self._install(monkeypatch)  # any attribute access would raise AttributeError
+
+        assert LADDER._preflight_backbone(LADDER.ModelSpec("intfloat/e5-base-v2")) is None
+
+
+class _ConstantEmbedder:
+    """Returns the same vector whatever the prompt -- the shipped-bug signature."""
+
+    def __init__(self, *, responds_to_prompt: bool) -> None:
+        self._responds = responds_to_prompt
+
+    def encode(self, texts: Any, prompt: str | None = None) -> np.ndarray:
+        shift = 0.25 if (prompt and self._responds) else 0.0
+        return np.array([[1.0 + shift, 2.0, 3.0]] * len(texts))
+
+
+class TestPromptIsLive:
+    """langres has shipped a silently discarded ``query_prompt`` before."""
+
+    def test_a_prompt_that_moves_nothing_stops_the_run(self) -> None:
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="reached nothing"):
+            LADDER._assert_prompt_is_live(
+                _ConstantEmbedder(responds_to_prompt=False), [None, "query: "]
+            )
+
+    def test_a_prompt_that_moves_the_vector_passes(self) -> None:
+        LADDER._assert_prompt_is_live(_ConstantEmbedder(responds_to_prompt=True), [None, "query: "])
+
+    def test_an_unprompted_arm_has_nothing_to_assert(self) -> None:
+        LADDER._assert_prompt_is_live(_ConstantEmbedder(responds_to_prompt=False), [None])
+
+
+class TestOneReferenceModel:
+    """``--reference-model`` makes the baseline a property of the RUN, the delta of the ROW."""
+
+    def test_two_baselines_in_one_file_are_refused(self) -> None:
+        rows = [
+            _cell("a", "none", vs_reference_delta=0.01, reference_model="all-MiniLM-L6-v2"),
+            _cell("b", "none", vs_reference_delta=0.02, reference_model="intfloat/e5-base-v2"),
+        ]
+
+        with pytest.raises(ValueError, match="2 different baselines"):
+            LADDER._assert_one_reference_model(rows)
+
+    def test_rendering_under_a_different_baseline_is_refused(self) -> None:
+        """The numbers would not change -- only the label above them."""
+        row = _cell("a", "none", vs_reference_delta=0.01, reference_model="intfloat/e5-base-v2")
+
+        with pytest.raises(ValueError, match="relabel the delta column"):
+            LADDER._assert_one_reference_model([row])
+
+    def test_rows_predating_the_field_are_read_as_the_default_baseline(self) -> None:
+        """The 300 committed 2026-07-27 rows carry None and were measured against it."""
+        row = _cell("a", "none", vs_reference_delta=0.01)
+        assert row.reference_model is None
+
+        LADDER._assert_one_reference_model([row])
+
+    def test_rows_without_a_delta_constrain_nothing(self) -> None:
+        LADDER._assert_one_reference_model([_cell("a", "none")])
+
+
+class TestLfm25Specs:
+    """The shipped-default blocker, asserted rather than left to a doc sentence."""
+
+    def test_every_lfm_checkpoint_is_recorded_as_non_osi(self) -> None:
+        # LFM Open License v1.0 §5(a)-(b) condition Commercial Use on not
+        # exceeding a $10,000,000 annual-revenue Threshold (§3). Apache-2.0 has no
+        # such restriction, so these must never read as safe for a default.
+        lfm = [spec for spec in LADDER.EXTRA_SPECS if spec.name.startswith("LiquidAI/")]
+
+        assert len(lfm) == 3
+        assert all(spec.license == "lfm1.0" for spec in lfm)
+        assert not any(LADDER._is_osi(spec) for spec in lfm)
+
+    def test_the_base_encoders_are_flagged_as_not_retrieval_tuned(self) -> None:
+        by_name = {spec.name: spec for spec in LADDER.EXTRA_SPECS}
+
+        assert by_name["LiquidAI/LFM2.5-Embedding-350M"].tuned_for_retrieval
+        assert not by_name["LiquidAI/LFM2.5-Encoder-350M"].tuned_for_retrieval
+        assert not by_name["LiquidAI/LFM2.5-Encoder-230M"].tuned_for_retrieval
+
+    def test_the_base_encoders_declare_the_class_that_owns_their_weights(self) -> None:
+        by_name = {spec.name: spec for spec in LADDER.EXTRA_SPECS}
+
+        assert by_name["LiquidAI/LFM2.5-Encoder-350M"].backbone_auto_class == "AutoModelForMaskedLM"
+        assert by_name["LiquidAI/LFM2.5-Encoder-230M"].backbone_auto_class == "AutoModelForMaskedLM"
+        # The tuned checkpoint loads correctly through the normal path.
+        assert by_name["LiquidAI/LFM2.5-Embedding-350M"].backbone_auto_class is None
+
+    def test_the_embedding_checkpoint_carries_its_own_trained_prefixes(self) -> None:
+        """Read from its config_sentence_transformers.json, not from the card prose."""
+        spec = LADDER.MODELS_BY_NAME["LiquidAI/LFM2.5-Embedding-350M"]
+
+        assert spec.documented_arm == ("document: ", "query: ")
+
+    def test_the_extra_specs_stay_out_of_the_standing_ladder(self) -> None:
+        """Adding them to MODELS would enlarge the 2026-07-27 ladder's denominator."""
+        assert not {spec.name for spec in LADDER.EXTRA_SPECS} & {s.name for s in LADDER.MODELS}
+        assert "LiquidAI/LFM2.5-Embedding-350M" in LADDER.MODELS_BY_NAME

@@ -139,6 +139,39 @@ class ModelSpec:
     #: Apache-2.0, so a ladder that ranks checkpoints without stating whether the
     #: winner may be shipped as a default is ranking on the wrong axis.
     license: str = "unknown"
+    #: The ``transformers`` auto class that actually holds this checkpoint's
+    #: weights, when ``AutoModel`` — the class sentence-transformers uses — does
+    #: **not**. ``None`` means the normal path is correct, which is the case for
+    #: every checkpoint here except the LFM2.5 base encoders.
+    #:
+    #: This exists because of a measured silent failure, not a hypothetical one.
+    #: ``LiquidAI/LFM2.5-Encoder-350M`` stores its tensors under the MaskedLM
+    #: wrapper's ``lfm2.`` prefix, and its remote ``Lfm2BidirectionalModel``
+    #: expects them unprefixed, so ``AutoModel.from_pretrained`` matches **zero**
+    #: of the checkpoint's 148 tensors (``missing=148 unexpected=148``) and
+    #: randomly initialises the entire backbone. transformers logs that as a
+    #: warning, not an error: the model then loads, embeds, and returns finite,
+    #: unit-norm, prompt-responsive, *random* vectors. Measuring it would have
+    #: published a low score for a network that was never loaded.
+    #:
+    #: Naming the class here recovers the real weights via
+    #: ``base_model``, which strips the prefix using the wrapper's own
+    #: ``base_model_prefix`` — so this is one generic line, not a per-checkpoint
+    #: key-renaming table. ``_preflight_backbone`` verifies the result loaded
+    #: cleanly (``missing_keys == []``) rather than trusting it.
+    backbone_auto_class: str | None = None
+    #: Whether this checkpoint was **trained to produce sentence embeddings**.
+    #: ``False`` marks a base masked-LM encoder that ships no pooling
+    #: configuration, so sentence-transformers attaches an *untrained* mean
+    #: pooling head over it.
+    #:
+    #: Such a model is not comparable with a retrieval-tuned one, and this flag
+    #: exists so a reader cannot mistake its score for "this backbone is bad".
+    #: The ladder report refuses to rank across this boundary; the base encoders
+    #: are measured into their own artifact, against the tuned checkpoint that
+    #: shares their backbone, where the delta means "what retrieval tuning
+    #: bought" instead of "which model is better".
+    tuned_for_retrieval: bool = True
 
 
 #: Licences that are OSI-approved, so a langres default carrying one adds no
@@ -206,7 +239,60 @@ MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4, license="apache-2.0"),
 )
 
-MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
+#: Checkpoints this harness knows how to configure but that are **not** part of
+#: the standing ladder above. Kept separate on purpose: adding them to ``MODELS``
+#: would enlarge the 2026-07-27 ladder's coverage denominator and make its report
+#: enumerate three models that sweep never intended to measure. They are measured
+#: into their own artifacts (``--rows``/``--report``/``--reference``), and
+#: ``MODELS_BY_NAME`` carries their full spec so ``--models`` resolves the
+#: licence, prompts and loading path rather than falling back to a bare
+#: ``ModelSpec``.
+#:
+#: All three declare ``license: other`` / ``license_name: lfm1.0`` on their own
+#: model cards, verified on 2026-07-29 against each repo's ``LICENSE`` file (not
+#: the card summary): the LFM Open License v1.0 conditions Commercial Use on not
+#: exceeding a **$10,000,000 annual revenue Threshold** (§3 defines it, §5(a)–(b)
+#: condition the grant on it). That is a use restriction Apache-2.0 does not
+#: have, so ``lfm1.0`` is deliberately absent from ``OSI_APPROVED_LICENSES``.
+EXTRA_SPECS: tuple[ModelSpec, ...] = (
+    # The retrieval-tuned one, and the only like-for-like comparison here. Its
+    # prompts are read from its own `config_sentence_transformers.json`
+    # ("query: " / "document: "), not from the model card prose. Note the pooling
+    # is CLS (`1_Pooling/config.json`: pooling_mode_cls_token) with
+    # `include_prompt: true`, which is what makes `build_prompted_index`'s
+    # hand-prefixing equivalent to binding `prompt_name=`.
+    ModelSpec(
+        "LiquidAI/LFM2.5-Embedding-350M",
+        trust_remote_code=True,
+        documented_arm=("document: ", "query: "),
+        license="lfm1.0",
+    ),
+    # Base masked-LM encoders. NOT embedding models: they ship no pooling config,
+    # so sentence-transformers attaches an untrained mean-pooling head. Both need
+    # `backbone_auto_class` or `AutoModel` silently randomises every weight.
+    ModelSpec(
+        "LiquidAI/LFM2.5-Encoder-350M",
+        trust_remote_code=True,
+        backbone_auto_class="AutoModelForMaskedLM",
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+    ModelSpec(
+        "LiquidAI/LFM2.5-Encoder-230M",
+        trust_remote_code=True,
+        backbone_auto_class="AutoModelForMaskedLM",
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+)
+
+MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in (*MODELS, *EXTRA_SPECS)}
+
+#: The ladder THIS run is accountable for — the denominator of "what did not
+#: run". Defaults to the standing :data:`MODELS`; ``main()`` rebinds it from
+#: ``--models`` so a run measuring a different set into its own artifact does not
+#: report the standing ladder's absent models as gaps in it.
+LADDER: tuple[ModelSpec, ...] = MODELS
 
 
 def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
@@ -227,8 +313,9 @@ def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
     badly must not shrink the ladder it was measured against. (Cross-model
     review.)
     """
-    extra = sorted({row.model for row in rows} - set(MODELS_BY_NAME))
-    return [*MODELS, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
+    known = {spec.name for spec in LADDER}
+    extra = sorted({row.model for row in rows} - known)
+    return [*LADDER, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
 
 
 #: ``fodors_zagat`` is the never-regress floor (small, long-solved); the other
@@ -279,10 +366,25 @@ METRIC_REVISION = 1
 #: file, and a CI at every `k` would quadruple it to answer the same question.
 CI_K = 20
 
-#: The baseline every model's delta is measured against: langres's current
-#: `DEFAULT_EMBEDDING_MODEL` (`core/model_ref.py`). A ladder's decision-relevant
-#: question is "is this better than what ships today?", so the default IS the
-#: baseline. This sweep does not change that default.
+#: The baseline every model's delta is measured against. A ladder's
+#: decision-relevant question is "is this better than what ships today?", so the
+#: shipped default is the natural baseline. This sweep does not change that
+#: default.
+#:
+#: **This constant is the 2026-07-27 ladder's baseline, and it is no longer the
+#: shipped default.** That sweep ran when `DEFAULT_EMBEDDING_MODEL` was
+#: `all-MiniLM-L6-v2`; the default is now `intfloat/e5-base-v2`
+#: (`core/model_ref.py`, set by the sweep itself). The value is deliberately NOT
+#: updated in place: every `vs_reference_*` number in
+#: `20260727_embedder_ladder_rows.jsonl` was computed against this model, and
+#: re-pointing the constant would relabel that column without recomputing it —
+#: two baselines in one column, which is the exact failure `METRIC_REVISION`
+#: exists to prevent.
+#:
+#: A run that wants a different baseline passes `--reference-model` and writes to
+#: its own `--rows`/`--reference` pair. `LadderRow.reference_model` records which
+#: baseline produced each delta, and `_assert_one_reference_model` refuses to
+#: render a file that mixes two.
 REFERENCE_MODEL = "all-MiniLM-L6-v2"
 
 
@@ -350,6 +452,15 @@ class LadderRow:
     #: The honest denominator: it is NOT the record count, because pair rows
     #: inside one entity are dependent.
     ci_clusters: int | None = None
+    #: Which baseline ``vs_reference_delta`` is measured against. Recorded per
+    #: row, not inferred from the module constant at render time, because
+    #: ``--reference-model`` makes that constant a property of the RUN while the
+    #: delta is a property of the ROW. Rendering a file whose rows were measured
+    #: against one baseline while the flag names another would silently relabel
+    #: the column; ``_assert_one_reference_model`` refuses instead. ``None`` on
+    #: rows carrying no reference delta, and on rows measured before this field
+    #: existed (they are all ``all-MiniLM-L6-v2``, which is the default).
+    reference_model: str | None = None
     #: Saturation is measured by a SEPARATE stream; never restate it as measured here.
     saturation: str = "not measured here"
     error: str | None = None
@@ -578,6 +689,36 @@ def paired_interval(baseline: RecallByRecord, candidate: RecallByRecord) -> Any 
         for record_id in shared
     )
     return paired_entity_bootstrap(observations, seed=SEED)
+
+
+def _assert_one_reference_model(rows: Sequence[LadderRow]) -> None:
+    """Refuse to render a file whose deltas are against more than one baseline.
+
+    ``--reference-model`` makes the baseline a property of the RUN, while
+    ``vs_reference_delta`` is a property of the ROW. Nothing else stops a rows
+    file measured against one baseline from being re-rendered under a flag naming
+    another — the numbers would not change, only the label above them, and the
+    report would read as a comparison nobody performed.
+
+    Rows written before ``reference_model`` existed carry ``None`` and are taken
+    at their word as :data:`REFERENCE_MODEL`'s default value, which is what they
+    were measured against.
+    """
+    seen = {row.reference_model or "all-MiniLM-L6-v2" for row in rows if row.vs_reference_delta}
+    if not seen:
+        return
+    if len(seen) > 1:
+        raise ValueError(
+            f"these rows carry deltas against {len(seen)} different baselines "
+            f"({sorted(seen)}). One report cannot label one column with two baselines; "
+            f"re-measure the odd ones out, or split them into separate --rows files."
+        )
+    if (only := seen.pop()) != REFERENCE_MODEL:
+        raise ValueError(
+            f"these rows were measured against {only!r}, but this run's reference model is "
+            f"{REFERENCE_MODEL!r}. Rendering would relabel the delta column without "
+            f"recomputing it. Pass --reference-model {only!r}, or re-measure."
+        )
 
 
 def _reference_key(benchmark: str, arm: str) -> str:
@@ -927,6 +1068,138 @@ def _assert_cache_matches_checkpoint(
                 )
 
 
+class SilentlyWrongCheckpointError(RuntimeError):
+    """A checkpoint loaded successfully but not as its own config declares.
+
+    Distinct from "it did not load": these are the cases that produce finite,
+    plausible, **wrong** vectors and no error. A low score from one of them reads
+    as a fact about the model, so the run must stop instead of publishing it.
+    """
+
+
+def _assert_declared_architecture(spec: ModelSpec, auto_model: Any) -> None:
+    """The class that got instantiated must be the one the config's ``auto_map`` names.
+
+    ``trust_remote_code`` plus a ``model_type`` that transformers *also*
+    implements natively is a silent-wrong-vectors trap, and it is live on every
+    LFM2.5 checkpoint measured here. All three declare
+    ``model_type: "lfm2"`` — natively implemented in transformers 4.57.6 as a
+    **causal decoder** — while pointing ``auto_map.AutoModel`` at their own
+    bidirectional class. Measured on 2026-07-29 with
+    ``LiquidAI/LFM2.5-Embedding-350M``:
+
+    - ``trust_remote_code=True``  → ``Lfm2BidirectionalModel`` (remote), and a
+      prefix's hidden states change when later tokens change, i.e. bidirectional.
+    - ``trust_remote_code=False`` → ``transformers.models.lfm2.Lfm2Model``, the
+      native **causal** class. No exception, no warning. Because this checkpoint
+      pools the CLS (first) token and causal attention makes that token a
+      function of itself alone, *every text in the corpus collapses to the same
+      vector*: two unrelated products scored ``cos = 1.0000`` and the prompt
+      arms differed by exactly ``0``.
+
+    So the failure is not "slightly degraded". It is a constant embedding,
+    reported as a blocking recall, attributed to the model.
+    """
+    declared = (getattr(auto_model.config, "auto_map", None) or {}).get("AutoModel")
+    if not declared:
+        return
+    expected = declared.rsplit(".", 1)[-1]
+    actual = type(auto_model)
+    if actual.__qualname__ != expected or "transformers_modules" not in actual.__module__:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name} declares auto_map.AutoModel={declared!r}, but the loaded class is "
+            f"{actual.__module__}.{actual.__qualname__}. transformers implements this "
+            f"model_type ({auto_model.config.model_type!r}) natively, so it silently used its "
+            f"own class instead of the checkpoint's — a different attention pattern producing "
+            f"finite, plausible, WRONG vectors. Set trust_remote_code=True for this spec."
+        )
+
+
+def _preflight_backbone(spec: ModelSpec) -> Any | None:
+    """Verify the checkpoint's weights actually load, and recover them if needed.
+
+    ``from_pretrained`` reports a checkpoint/architecture key mismatch as a log
+    **warning** and carries on with randomly initialised tensors, which is a
+    silent wrong answer wearing the shape of a result. Measured on 2026-07-29,
+    ``AutoModel.from_pretrained("LiquidAI/LFM2.5-Encoder-350M")`` matched **zero**
+    of the checkpoint's 148 tensors — ``missing=148, unexpected=148``, the whole
+    backbone randomised — because the tensors are stored under the MaskedLM
+    wrapper's ``lfm2.`` prefix. The resulting model is finite, unit-norm and
+    prompt-responsive; two independent loads simply disagree, which is the only
+    externally visible symptom.
+
+    ``missing_keys`` is checked exactly rather than against a tolerance: the two
+    ordinary control checkpoints (``all-MiniLM-L6-v2``, ``intfloat/e5-base-v2``)
+    both report ``missing=0 unexpected=0``, so any missing key is a real signal
+    and no threshold is needed.
+
+    Returns:
+        The correctly loaded backbone module when ``spec.backbone_auto_class``
+        names one to substitute, else ``None``. Runs only for
+        ``trust_remote_code`` checkpoints — custom loading code is what gets the
+        prefix wrong, and an extra load for every ordinary model would be a cost
+        with no risk to buy off.
+    """
+    if not spec.trust_remote_code:
+        return None
+
+    import transformers
+
+    auto_class = getattr(transformers, spec.backbone_auto_class or "AutoModel")
+    model, info = auto_class.from_pretrained(
+        spec.name, trust_remote_code=True, output_loading_info=True
+    )
+    missing = sorted(info.get("missing_keys", []))
+    if missing:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name} loaded via {auto_class.__name__} with {len(missing)} randomly "
+            f"initialised tensor(s) — the checkpoint's weights were NOT used for them "
+            f"(e.g. {missing[:3]}). transformers reports this as a warning and returns a "
+            f"usable model, so measuring it would publish a score for a network that was "
+            f"never loaded. If the weights live under a wrapper, set "
+            f"ModelSpec.backbone_auto_class to the class that owns them."
+        )
+    if spec.backbone_auto_class is None:
+        return None
+    backbone = model.base_model
+    if backbone is model:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: {auto_class.__name__} exposes no distinct base_model "
+            f"(base_model_prefix={model.base_model_prefix!r}), so there is no backbone to "
+            f"substitute for the randomly initialised one."
+        )
+    return backbone
+
+
+def _assert_prompt_is_live(base: Any, prompts: Sequence[str | None]) -> None:
+    """A prompted encode must actually move the vector.
+
+    langres has already shipped a bug where ``query_prompt`` was silently
+    discarded, and a prompt sweep over it would have returned identical rows at
+    every setting while reading as a finding about instructions. The same
+    signature appears when a checkpoint loads under the wrong architecture: a
+    CLS-pooled model under causal attention ignores the prompt *exactly*, which
+    is how ``LFM2.5-Embedding-350M`` without ``trust_remote_code`` measured
+    ``max|prompted - bare| == 0``.
+
+    An exact ``0`` is the assertion, not a tolerance: two different token
+    sequences through a working encoder never produce bit-identical vectors, and
+    a tolerance here would have to guess how small a real shift may be.
+    """
+    named = [prompt for prompt in prompts if prompt]
+    if not named:
+        return
+    bare = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    for prompt in named:
+        shifted = np.asarray(base.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
+        if shifted.shape != bare.shape or float(np.abs(shifted - bare).max()) == 0.0:
+            raise SilentlyWrongCheckpointError(
+                f"encoding with prompt={prompt!r} produced a vector identical to the bare "
+                f"one, so the prompt reached nothing. Every prompt arm would report the "
+                f"bare arm's numbers under a different name."
+            )
+
+
 def _build_embedder(
     spec: ModelSpec,
     cache_dir: Path,
@@ -951,6 +1224,26 @@ def _build_embedder(
         trust_remote_code=spec.trust_remote_code,
         dtype=spec.dtype,  # type: ignore[arg-type]
     )
+
+    # Everything below runs BEFORE the first encode, and the order is the point:
+    # a substituted backbone has to be in place before any vector — canary,
+    # prompt probe or corpus — is computed or cached, or the cache would be
+    # vouched for by the model that is about to be replaced.
+    backbone = _preflight_backbone(spec)
+    st_model = base._get_model()
+    if backbone is not None:
+        transformer = st_model[0]
+        backbone.to(st_model.device)
+        backbone.eval()
+        transformer.auto_model = backbone
+        logger.info(
+            "%s: substituted the correctly loaded backbone from %s "
+            "(AutoModel randomises every weight for this checkpoint)",
+            spec.name,
+            spec.backbone_auto_class,
+        )
+    _assert_declared_architecture(spec, st_model[0].auto_model)
+    _assert_prompt_is_live(base, prompts)
     # The cache namespace carries the dtype: half-precision vectors are DIFFERENT
     # vectors, and reusing a float32 cache entry for a float16 run would silently
     # publish a number the run never computed.
@@ -961,7 +1254,15 @@ def _build_embedder(
     # stops the run if the warm cache disagrees with the loaded model. That needs
     # no revision, costs one short encode, and catches drift a revision cannot
     # see (a pooling change, a tokenizer fix, a different dtype path).
-    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
+    # The substituted backbone joins dtype in the namespace for the same reason:
+    # vectors from the randomly initialised `AutoModel` load and vectors from the
+    # recovered weights are DIFFERENT vectors for the same (model, dtype), and a
+    # run that adopted the former under `--trust-existing-cache` would publish
+    # numbers no checkpoint produced. The canary catches this unaided; the
+    # namespace makes it impossible to vouch for by mistake.
+    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}" + (
+        f"__{spec.backbone_auto_class}" if spec.backbone_auto_class else ""
+    )
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
     _assert_cache_matches_checkpoint(
         base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache, prompts=prompts
@@ -1307,6 +1608,7 @@ def _attach_intervals(
                 row.vs_reference_ci_low = interval.lower
                 row.vs_reference_ci_high = interval.upper
                 row.ci_clusters = interval.n_clusters
+                row.reference_model = REFERENCE_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -1878,6 +2180,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     hurt separability for the base-size models" gets read off a table where half
     the rows carry a known one-directional scoring artefact.
     """
+    _assert_one_reference_model(rows)
     stale = [row for row in rows if row.metric_revision < METRIC_REVISION]
     current = [row for row in rows if row.metric_revision >= METRIC_REVISION]
     ok = [row for row in current if row.status == "ok"]
@@ -2612,6 +2915,13 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the sweep for the requested models and regenerate the report."""
+    # Rebound rather than threaded through: `REFERENCE_MODEL` and the ladder set
+    # are read at ~30 sites, almost all inside the report's prose, and a
+    # half-threaded parameter would print one baseline in the tables and another
+    # in the sentences above them. Declared here because `--reference-model`
+    # reads the current value as its default.
+    global REFERENCE_MODEL, LADDER
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", nargs="*", default=[m.name for m in MODELS])
     parser.add_argument("--benchmarks", nargs="*", default=list(BENCHMARKS))
@@ -2635,6 +2945,27 @@ def main(argv: Sequence[str] | None = None) -> None:
             "the canary it pins is checked normally on every later run."
         ),
     )
+    parser.add_argument(
+        "--ladder-models",
+        nargs="*",
+        default=[m.name for m in MODELS],
+        help=(
+            "The models this ARTIFACT is accountable for — the denominator of 'what did "
+            "not run'. Distinct from --models, which is what this one invocation measures: "
+            "the driver sweeps one model per process, and a coverage denominator taken "
+            "from that would read as a complete ladder of one."
+        ),
+    )
+    parser.add_argument(
+        "--reference-model",
+        default=REFERENCE_MODEL,
+        help=(
+            "The baseline every model's delta is measured against. Defaults to the "
+            "2026-07-27 ladder's baseline. A run using a different one MUST also use its "
+            "own --rows and --reference paths: the sidecar and the recorded deltas are "
+            "both keyed to it, and mixing two baselines in one file is refused at render."
+        ),
+    )
     parser.add_argument("--device", default=None, help="torch device, e.g. mps / cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--headline-k", type=int, default=20)
@@ -2646,6 +2977,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    REFERENCE_MODEL = args.reference_model
+    LADDER = tuple(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in args.ladder_models)
 
     if args.render_only:
         rows = read_rows(args.rows)

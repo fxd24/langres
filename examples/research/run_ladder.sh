@@ -34,6 +34,19 @@
 #
 # Environment:
 #   LADDER_MODELS                 space-separated subset to sweep
+#   LADDER_ARTIFACT               path PREFIX for this study's three tracked
+#                                 artifacts (default:
+#                                 docs/research/20260727_embedder_ladder), which
+#                                 become <prefix>_rows.jsonl, <prefix>.md and
+#                                 <prefix>_reference_recall.json. Set it together
+#                                 with LADDER_MODELS and LADDER_REFERENCE_MODEL
+#                                 to run a separate study without touching the
+#                                 standing ladder's files.
+#   LADDER_REFERENCE_MODEL        baseline every delta is measured against
+#                                 (default: the harness's own, all-MiniLM-L6-v2).
+#                                 Changing it REQUIRES a fresh LADDER_ARTIFACT:
+#                                 the sidecar is keyed by it and the harness
+#                                 refuses to render a file mixing two baselines.
 #   LADDER_DEVICE                 pin a torch device (default: let ST choose)
 #   LADDER_TRUST_EXISTING_CACHE   set to exactly 1 to forward
 #                                 --trust-existing-cache to the harness, vouching
@@ -53,11 +66,36 @@ set -u -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
-ROWS="docs/research/20260727_embedder_ladder_rows.jsonl"
-REPORT="docs/research/20260727_embedder_ladder.md"
-REFERENCE="docs/research/20260727_embedder_ladder_reference_recall.json"
+# One artifact set per (model list, reference model). Overridable together so a
+# study with a different baseline gets its own rows/report/sidecar: the sidecar
+# is keyed by the reference model and the recorded deltas are labelled with it,
+# so pointing LADDER_REFERENCE_MODEL at a new baseline while writing the default
+# files would produce a rows file the harness then refuses to render. Defaults
+# reproduce the 2026-07-27 ladder exactly.
+ARTIFACT="${LADDER_ARTIFACT:-docs/research/20260727_embedder_ladder}"
+ROWS="${ARTIFACT}_rows.jsonl"
+REPORT="${ARTIFACT}.md"
+REFERENCE="${ARTIFACT}_reference_recall.json"
 LOG_DIR="tmp/ladder_logs"
 BENCHMARKS="fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon"
+
+# Empty = the harness's own default (the 2026-07-27 baseline, all-MiniLM-L6-v2).
+REFERENCE_MODEL_ARG=()
+if [ -n "${LADDER_REFERENCE_MODEL:-}" ]; then
+  # Caught here rather than 40 minutes later at the first render: a new baseline
+  # written into the standing ladder's rows file mixes two baselines in one
+  # column, which the harness refuses -- AFTER the sweep has already spent the
+  # compute and committed the rows.
+  if [ -z "${LADDER_ARTIFACT:-}" ]; then
+    log() { echo "[$(date '+%H:%M:%S')] $*"; }
+    log "LADDER_REFERENCE_MODEL is set but LADDER_ARTIFACT is not."
+    log "  Every vs-reference delta is labelled with the baseline that produced it, and"
+    log "  the sidecar is keyed by it, so a new baseline needs its own artifact set."
+    log "  Re-run with e.g. LADDER_ARTIFACT=docs/research/<date>_<study>"
+    exit 2
+  fi
+  REFERENCE_MODEL_ARG=(--reference-model "$LADDER_REFERENCE_MODEL")
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -222,6 +260,9 @@ for model in "${MODELS[@]}"; do
   # LADDER_DEVICE only to override deliberately.
   uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
     --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+    --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
+    --ladder-models "${MODELS[@]}" \
+    ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
     ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?
@@ -251,8 +292,14 @@ for model in "${MODELS[@]}"; do
   if [ $code -ne 0 ]; then
     log "$model exited $code -- recording a failure row and continuing"
     record_process_failure "$model" "$code"
-    # Re-render so the failure is visible in the report too.
+    # Re-render so the failure is visible in the report too. The paths and the
+    # ladder set must match the measuring call above: rendering the DEFAULT
+    # artifact here would rewrite the 2026-07-27 ladder's report from a different
+    # study's rows.
     uv run python examples/research/embedder_ladder.py --render-only \
+      --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
+      --ladder-models "${MODELS[@]}" \
+      ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
       >> "$LOG_DIR/$safe.log" 2>&1
   fi
 
@@ -272,7 +319,7 @@ for model in "${MODELS[@]}"; do
     # the NEXT model's --only commit bundle them under the wrong message. A
     # bare `&& log` would swallow exactly that.
     if ! git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
-      -m "results(embedder-ladder): $model" \
+      -m "results($(basename "$ARTIFACT")): $model" \
       -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code."
     then
       log "FATAL: commit failed for $model. Results are staged but NOT durable; stopping."
