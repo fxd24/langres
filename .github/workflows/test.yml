@@ -56,6 +56,13 @@ env:
   # never under `core/*`, so it was never in this contract tier.
   CONTRACT_COVERAGE_INCLUDE: "src/langres/core/*,src/langres/metrics/*,src/langres/curation/anchor_store.py,src/langres/curation/canonicalizer.py,src/langres/curation/harvest.py,src/langres/curation/review.py,src/langres/tracking/judgement_log.py,src/langres/tracking/runs.py,src/langres/tracking/trackers/*,src/langres/training/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py"
 
+# Least-privilege GITHUB_TOKEN. The repo default is `write`, so without this
+# block every job here gets a read-write token it never uses (checkout + pytest only read; the Codecov upload authenticates
+# with CODECOV_TOKEN, not the workflow token).
+# Flagged by OpenSSF Scorecard (TokenPermissions, high).
+permissions:
+  contents: read
+
 concurrency:
   # `pull_request`: one group per PR ref, so a new push supersedes the previous
   # run (`cancel-in-progress` below) -- the usual minute-saving behaviour.
@@ -95,16 +102,25 @@ jobs:
         python-version: ["3.13"]
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.32"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          # setup-uv v9's one breaking change: `prune-cache` now defaults to
+          # false (upstream is easing load on PyPI). Held at the pre-v9 `true`
+          # here so this bump changes no CI behaviour: `uv sync --all-extras`
+          # pulls the torch/faiss/litellm stack, and keeping those wheels across
+          # the repo's 7 job caches would dwarf today's 503 MB total against
+          # GitHub's 10 GB per-repo cap -- LRU eviction would then cost more
+          # than the re-downloads pruning saves. Revisit by measuring one
+          # unpruned run, not by assuming.
+          prune-cache: true
 
       - name: Install dependencies
         # --all-extras: the non-slow suite still exercises VectorBlocker/
@@ -190,14 +206,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.32"
           python-version: "3.13"
           enable-cache: true
+          prune-cache: true
 
       - name: Install dependencies (core only -- no [semantic]/[llm] extras)
         run: uv sync
@@ -259,14 +276,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.32"
           python-version: "3.13"
           enable-cache: true
+          prune-cache: true
 
       # Bare `uv sync` (no extras): tools/doc_snippets.py is stdlib-only and
       # builds its own clean venv for the snippets. Installing extras here would
@@ -305,16 +323,17 @@ jobs:
         python-version: ["3.13"]
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.32"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          prune-cache: true
 
       - name: Install dependencies
         # --no-extra finetune: same rationale as the `test` job -- the QLoRA
@@ -433,16 +452,17 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.24"
+          version: "0.11.32"
           python-version: "3.13"
           enable-cache: true
+          prune-cache: true
 
       - name: Install dependencies (incl. the [finetune] training stack)
         run: uv sync --all-extras
