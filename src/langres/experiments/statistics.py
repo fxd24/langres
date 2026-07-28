@@ -40,6 +40,21 @@ class BootstrapInterval(BaseModel):
     status: Literal["available", "insufficient"]
     reason: str | None = None
 
+    #: Two-sided achieved significance level, from the **same replicates** as the
+    #: interval. ``p_value <= a`` if and only if the ``1 - a`` percentile interval
+    #: over this draw excludes zero, so a caller may compare it against a level
+    #: other than ``confidence_level`` -- which is what a multiplicity correction
+    #: needs and what an interval alone cannot supply. ``None`` when ``status`` is
+    #: ``"insufficient"``. See :func:`paired_entity_bootstrap` for the estimator.
+    p_value: float | None = None
+
+    #: Monte-Carlo standard error of :attr:`p_value` -- ``sqrt(p (1 - p) / samples)``.
+    #: The p-value is itself an estimate from a finite draw, so a decision taken
+    #: within a few of these of a threshold is resolution-limited rather than
+    #: settled, and raising ``samples`` is what resolves it. ``None`` alongside a
+    #: ``None`` p-value.
+    p_value_standard_error: float | None = None
+
 
 class SplitInstability(BaseModel):
     """Sensitivity across split seeds, intentionally not a population CI."""
@@ -72,6 +87,41 @@ def _percentile(values: list[float], probability: float) -> float:
         return ordered[lower]
     fraction = position - lower
     return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _achieved_significance_level(bootstrap_differences: list[float]) -> float:
+    """Two-sided p-value obtained by *inverting* the percentile interval.
+
+    The percentile interval at level ``1 - a`` excludes zero exactly when fewer
+    than ``a / 2`` of the replicates fall on zero's far side. Reading that
+    backwards gives the smallest ``a`` at which the interval would exclude zero:
+
+        ``p = 2 * min( P(diff* <= 0), P(diff* >= 0) )``
+
+    which is what this returns, with the usual ``(count + 1) / (samples + 1)``
+    correction so a p-value is never reported as exactly zero -- with ``B``
+    replicates nothing smaller than ``2 / (B + 1)`` is observable, and claiming
+    ``0`` would assert a precision the draw does not have.
+
+    **Why this and not a normal tail.** A caller correcting for multiplicity
+    needs the tail probability at levels *other* than the one the interval was
+    cut at (Holm tests at ``a/m`` … ``a``). Recovering those by turning an
+    interval endpoint into a standard error and assuming normality is an
+    extrapolation: it is pinned to agree at the published level and is
+    uncalibrated everywhere else, which is precisely where the correction reads
+    it. This estimator instead comes from the replicate distribution itself, so
+    ``p_value <= t`` is equivalent to "the ``1 - t`` percentile interval over
+    this same draw excludes zero" at *every* ``t``, by construction.
+
+    It inherits the percentile method's limits -- no bias or acceleration
+    correction (BCa would give both) -- but it is coherent with the intervals
+    reported alongside it, which the normal shortcut is not.
+    """
+    samples = len(bootstrap_differences)
+    at_or_below = sum(1 for difference in bootstrap_differences if difference <= 0.0)
+    at_or_above = sum(1 for difference in bootstrap_differences if difference >= 0.0)
+    tail = min(at_or_below, at_or_above)
+    return min(1.0, 2.0 * (tail + 1) / (samples + 1))
 
 
 def paired_entity_bootstrap(
@@ -143,6 +193,7 @@ def paired_entity_bootstrap(
     standard_error = (
         statistics.stdev(bootstrap_differences) if len(bootstrap_differences) > 1 else 0.0
     )
+    p_value = _achieved_significance_level(bootstrap_differences)
     return BootstrapInterval(
         observed_difference=observed_difference,
         lower=_percentile(bootstrap_differences, alpha),
@@ -153,6 +204,8 @@ def paired_entity_bootstrap(
         n_clusters=len(cluster_ids),
         samples=samples,
         status="available",
+        p_value=p_value,
+        p_value_standard_error=math.sqrt(p_value * (1.0 - p_value) / len(bootstrap_differences)),
     )
 
 

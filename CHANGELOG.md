@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### `paired_entity_bootstrap` now reports a p-value, so results can be corrected for multiplicity
+
+A study that publishes many intervals needs a multiplicity correction, and every
+correction (Holm, Bonferroni, Šidák) tests at levels *other* than the one the
+interval was cut at. A 95% interval cannot answer "does this exclude zero at
+1.25%", so callers were left recovering a tail from an interval endpoint under an
+assumed normal shape — an extrapolation that is pinned to agree at 0.95 and is
+uncalibrated at exactly the levels a correction reads.
+
+- **`BootstrapInterval.p_value`** — the two-sided *achieved significance level*,
+  computed from the **same replicates** as the interval:
+  `2 * min(P(diff* <= 0), P(diff* >= 0))` with the standard `(count + 1) / (B + 1)`
+  correction. This is the percentile interval inverted, so `p_value <= t` is
+  equivalent to "the `1 - t` percentile interval over this draw excludes zero" at
+  *every* `t` — the coherence property, tested at six levels. `None` when
+  `status="insufficient"`.
+- **`BootstrapInterval.p_value_standard_error`** — `sqrt(p (1 - p) / samples)`.
+  The p-value is an estimate from a finite draw; a decision taken within a few of
+  these of a threshold is resolution-limited, not settled, and raising `samples`
+  is the lever. Nothing below `2 / (B + 1)` is observable, so the estimator floors
+  there rather than reporting `0` and asserting a precision the draw lacks.
+- Both fields are additive with defaults; existing callers and stored intervals
+  are unaffected, and no existing number changes.
+
 ### `dedupe()` finally has a benchmark (`febrl_dedup`)
 
 `BenchmarkTask` declared `Literal["linkage", "dedup"]`, but all ten registered
