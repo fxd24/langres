@@ -48,17 +48,47 @@ above was measured bare** — the ladder's `prompt_arm="none"`, with no
 ship a configuration nobody measured under the measured numbers' banner, so it is
 left off and pinned by test. Measure it in the ladder first if you want it.
 
-**Migration — if you have a saved vector index, it will not load.** The
-dimension changes 384 → 768, so an index built with the old default is
-incompatible with a freshly-constructed default embedder, and even at equal
-dimension the vectors would be from a different model. Either re-embed your
-corpus, or pin the old model explicitly and change nothing:
+**Migration.** A **normally saved artifact keeps working** — `Resolver.save` /
+`FAISSIndex.config()` serialize the embedder you built with, so `load` rebuilds
+*that* embedder (still `all-MiniLM-L6-v2`) and `load_state` restores the stored
+vectors verbatim without re-embedding. Do **not** discard those.
+
+What does change:
+
+- **Anything that rebuilds an index against the new default** now produces
+  768-dim vectors from a different model. Recall changes as measured above, and
+  such an index cannot be compared against, or mixed with, 384-dim vectors from
+  the old default.
+- **A `DiskCachedEmbedder` cache is re-encoded once** — see the entry below;
+  before that fix the same cache would have silently served the old model's
+  vectors.
+
+To keep the previous behaviour exactly, name the old model:
 
 ```python
 from langres.core.embeddings import SentenceTransformerEmbedder
 
 embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")   # previous default
 ```
+
+### Fixed: `DiskCachedEmbedder` could serve a different model's vectors
+
+`_embedder_discriminator()` covered `prompt_name` / `truncate_dim` / `prompts`
+but **not the model**, and `namespace` defaults to `"default"` — so the ordinary
+`DiskCachedEmbedder(embedder=SentenceTransformerEmbedder(), cache_dir=...)` wrote
+every model's vectors into one `default.db` keyed on the bare text. Swapping the
+wrapped model then hit those entries and returned the **previous** model's
+vectors, at the previous model's dimensionality: silently on a fully warm cache,
+and as a ragged 384/768 stack on a partially warm one.
+
+The model now forms part of the key — the `ModelRef` where there is one, so a
+`revision` pin counts too. **Existing caches written by a named model are
+re-encoded once**; caches from an embedder with no model identity (e.g.
+`FakeEmbedder`) still hit, as before.
+
+Changing `DEFAULT_EMBEDDING_MODEL` in the same release is what turned this latent
+hazard into a live one — every user of the default would have kept reading
+MiniLM vectors without touching a line of their own code.
 
 Affected defaults: `SentenceTransformerEmbedder()`,
 `Resolver.from_schema(..., matcher="embedding")`, `VectorLLMCascade(embedder=...)`,
