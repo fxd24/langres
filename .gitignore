@@ -237,9 +237,3 @@ artifacts/
 # Transient per-agent git worktrees (orchestration scratch)
 .claude/worktrees/
 .gstack/
-
-# In-progress research sweeps. A study harness persists each cell here as it
-# lands and promotes to the tracked artifact only once the sweep is complete,
-# so a *.partial beside a result file is by definition an unfinished run and
-# must never be committed as if it were the finished one.
-*.json.partial

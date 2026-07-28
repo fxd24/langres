@@ -614,13 +614,19 @@ def main() -> None:
         and tuple(args.methods) == DEFAULT_METHODS
         and tuple(args.seeds) == DEFAULT_SEEDS
     )
-    if args.out is None and not is_full_sweep:
+    # Keyed on the DESTINATION, not on whether --out was passed. Guarding
+    # "args.out is None" protected only the default path, so naming the canonical
+    # file explicitly (--methods rapidfuzz --out examples/.../threshold_default_study.json)
+    # walked straight through and overwrote the 54-cell portfolio with 27 cells --
+    # the exact shrinkage the guard exists to refuse. Resolved on both sides so an
+    # absolute or ./-prefixed spelling of the same file cannot slip past.
+    out: Path = args.out if args.out is not None else CANONICAL_OUT
+    if out.resolve() == CANONICAL_OUT.resolve() and not is_full_sweep:
         parser.error(
             "a narrowed run measures a subset and the write replaces the whole file, "
             f"which would reduce {CANONICAL_OUT} to just what was measured. "
-            "Pass an explicit --out (e.g. --out tmp/threshold_subset.json)."
+            "Send it elsewhere (e.g. --out tmp/threshold_subset.json)."
         )
-    out: Path = args.out if args.out is not None else CANONICAL_OUT
 
     # Durability and publication are deliberately two different files. Cells are
     # persisted to the scratch path as they land (the large datasets take minutes
@@ -629,6 +635,13 @@ def main() -> None:
     # sweep has succeeded. Writing partial results straight to ``out`` is the same
     # hazard the --fast/--only guard above refuses: a subset silently replacing
     # the portfolio, indistinguishable afterwards from a complete run.
+    # Deliberately NOT gitignored. A sweep costs ~40 minutes and usually runs in a
+    # transient worktree; if the checkpoint were ignored it would be invisible to
+    # `git status --untracked-files=all`, which is the check this repo relies on to
+    # notice unsaved work before a worktree is reclaimed. An interrupted run should
+    # show up there and force a decision -- commit it, copy it out, or discard it
+    # knowingly -- rather than disappear silently. The ".partial" suffix, not an
+    # ignore rule, is what stops it being mistaken for the finished artifact.
     scratch = out.with_name(out.name + ".partial")
     selected = select_benchmarks(fast=args.fast, only=args.only)
     expected_cells = len(selected) * len(args.methods) * len(args.seeds)
