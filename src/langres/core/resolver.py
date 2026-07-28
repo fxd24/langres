@@ -1581,7 +1581,12 @@ class ERModel(ModelRun, ModelPersistence):
                 "Add a Score (e.g. MatcherScore) to the chain before the "
                 "ThresholdSelect."
             )
-        cluster_cut = self._chain_cluster_stage().clusterer.threshold
+        # ``getattr``: ClusterStage is the abstract contract and carries no
+        # clusterer; only the ClustererStage adapter wraps a legacy one. A custom
+        # ClusterStage has no second threshold to conflict with, so absent means
+        # "no independent cut", not "unknown".
+        cluster_cut = getattr(self._chain_cluster_stage(), "clusterer", None)
+        cluster_cut = None if cluster_cut is None else cluster_cut.threshold
         if cluster_cut:
             # A chain can gate TWICE: the ThresholdSelect this fit writes, and the
             # nested clusterer, which "keeps thresholding on the projected
