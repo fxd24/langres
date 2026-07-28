@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from examples.research.portfolio_profile import (
+    CANONICAL_OUT,
     CAPPED_RECALL_CEILING,
     LARGE_COMPONENT,
     LEXICAL_GAP_COVERAGE,
@@ -127,7 +128,8 @@ class TestStructuralCaveats:
     def test_large_component_does_not_fire_on_a_dedup_corpus(self) -> None:
         # The rule reads a big cluster as a two-source closure artifact. In a
         # dedup set a 10-record entity is ordinary, so firing there would brand a
-        # healthy dataset -- and the portfolio's stated next gap IS a dedup set.
+        # healthy dataset -- and `febrl_dedup` is now registered as task="dedup",
+        # so this scoping guards a real entry rather than a hypothetical one.
         dedup = _profile(task="dedup", max_cluster_size=LARGE_COMPONENT * 5)
         assert "large-component" not in structural_caveats(dedup)
 
@@ -221,6 +223,37 @@ class TestReporting:
         lines = table.splitlines()
         assert len(lines) == 4  # header + separator + two rows
         assert "n/a" in table  # unmeasured cells are honest, not zeroed
+
+
+def test_canonical_artifact_covers_every_registered_benchmark() -> None:
+    """The tracked ``portfolio_profile.json`` must not fall behind the registry.
+
+    ``docs/research/20260727_portfolio_annotation.md`` names this file as its raw
+    data, so a benchmark registered without regenerating it leaves the published
+    annotation describing a portfolio that no longer exists — silently, because
+    nothing re-derives the file. That is exactly what happened when
+    ``febrl_dedup`` landed: the artifact still listed ten linkage entries while
+    the annotation's §7 concluded the portfolio had no dedup benchmark, and a
+    reviewer caught it rather than CI.
+
+    This gate can genuinely fail — it would have, before the regeneration — and
+    the fix is one command: ``uv run python examples/research/portfolio_profile.py``.
+    """
+    import json
+
+    profiled = {row["name"] for row in json.loads((REPO_ROOT / CANONICAL_OUT).read_text())}
+    registered = {entry.name for entry in list_benchmarks()}
+    missing = registered - profiled
+    assert not missing, (
+        f"{CANONICAL_OUT} is stale: {sorted(missing)} registered but not profiled. "
+        "Regenerate it with `uv run python examples/research/portfolio_profile.py` "
+        "and re-read docs/research/20260727_portfolio_annotation.md, which cites it "
+        "as its raw data."
+    )
+    assert not profiled - registered, (
+        f"{CANONICAL_OUT} profiles {sorted(profiled - registered)}, which are no "
+        "longer registered; regenerate it."
+    )
 
 
 @pytest.mark.slow

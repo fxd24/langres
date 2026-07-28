@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### `dedupe()` finally has a benchmark (`febrl_dedup`)
+
+`BenchmarkTask` declared `Literal["linkage", "dedup"]`, but all ten registered
+benchmarks were `task="linkage"` — so every number langres published was about
+cross-source linkage, while `dedupe()`, the primary shipped verb, was unmeasured.
+
+- **Registered `febrl_dedup` (FEBRL3), the first `task="dedup"` entry.** One
+  5000-record table, 2000 entities, gold clusters of size **1–6** (835
+  singletons), 6538 gold pairs. It is the only **single-source** entry: records
+  carry no `source` field, so nothing can partition its candidates, and
+  intra-source pairs are the matches rather than noise. Ships in the wheel —
+  synthetic, no PII, `recordlinkage`
+  BSD-3-Clause / upstream ANUOS 1.1, no NonCommercial term (the same clearance
+  that admitted FEBRL4 and excluded CC-BY-NC OpenSanctions).
+- **Gold is entity membership, not a transitive closure.** The vendored truth is
+  `record_id,cluster_id`, so it carries none of the fusion artifacts that
+  closure-derived gold inherits from its link file (this repo's DBLP-Scholar
+  37-record component). The fixture's generation step *asserts* the upstream
+  `recordlinkage` pair index equals the within-entity pairs exactly (6538 = 6538).
+- **Ids are opaque (`r0000`..).** Upstream `rec-<N>-org` / `rec-<N>-dup-<K>` ids
+  encode the entity number, which would leak the label into the record dict.
+- **`_benchmark_utils.sweep_blocking_k` takes `cross_source_only=`** (default
+  `True`, behaviour-preserving). That filter is a *blocking-recall diagnostic*,
+  not part of scoring — `run_methods` has never filtered candidates by source on
+  any dataset — and a single-source corpus has no `source` to filter on.
+- **`examples/research/results/portfolio_profile.json` regenerated** (11 entries,
+  tasks `['dedup', 'linkage']`) and `docs/research/20260727_portfolio_annotation.md`
+  updated: its §7 named "no registered dedup benchmark" as the portfolio's largest
+  gap, which is what this change closes.
+- **Measured end-to-end** on the held-out test split (1490 records / 597
+  clusters, `seed=0`, $0 offline): `rapidfuzz` BCubed F1 **0.9956**
+  (P 0.9977 / R 0.9935), cluster-pairwise F1 0.9923, against an all-singletons
+  sanity floor of 0.5721. `embedding_cosine` reaches BCubed F1 0.6984 but
+  cluster-pairwise F1 **0.0247** — its false positives chain records into giant
+  components, which its pair-level F1 (0.7240) prices as merely mediocre. (Note
+  over-merging is *not* hidden by pair-sized gold; what multi-record gold adds is
+  the ability to charge for **under**-merging a 6-record entity.) Blocking
+  Pair-Completeness 0.9552 at the pinned `k=50` caps recall before any matcher
+  runs. See `docs/BENCHMARKS.md` §2a.
 ### The default embedding model is now `intfloat/e5-base-v2`
 
 **This changes results for any index built against the default.** Saved
