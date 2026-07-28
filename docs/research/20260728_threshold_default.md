@@ -239,7 +239,18 @@ have shipped six real held-out regressions on two benchmarks as "improvements".
 
 ## 3. Should the default flip?
 
-<!-- DECISION -->
+### 3.1 The measured half: yes, deriving earns its keep
+
+On the evidence above, a user who has id-keyed labels and does **not** derive is
+leaving a lot on the table — up to +0.89 pair-F1, and never less than zero on any
+real benchmark at any seed. The two negative cells are a 12-record fixture with a
+single held-out gold pair; treating them as a portfolio-level "it loses
+sometimes" would be the same vacuous-zero mistake the closure diagnostic warns
+about (`20260727_closure_diagnostic.md` §3.1). **If the question is "when asked,
+should `fit` derive?", the answer is an unambiguous yes, and #241's race is what
+makes it safe** — it declined 7 times and was right 7 times.
+
+### 3.2 "Flip the default" is not a one-character change
 
 ### 3.2 "Flip the default" is not a one-character change
 
@@ -276,6 +287,29 @@ different answers:
    removed `matcher="auto"` — "naming a model is the user's job, not a
    heuristic's".
 
+### 3.3 The recommendation, and what was *not* done
+
+**`derive_threshold` was left at `False`. This PR changes no default and no
+behavior.** Not because the measurement was weak — it is the strongest result
+this study could have produced — but because the two questions in §3.2 have
+different answers and the second one is a product decision. Three options, with
+the costs each actually carries:
+
+| option | what a user gets | cost / risk | reversal |
+|---|---|---|---|
+| **A. Leave it opt-in** (what this PR does) | Nothing changes. The measurement now exists to point users at, and `docs/EXPERIMENTS.md` can say "measured: up to +0.89, never worse on a real benchmark". | Users who never read the docs keep resolving at `0.5`. The out-of-the-box case (no labels at all) is untouched either way — `derive_threshold` cannot help it. | n/a |
+| **B. Tri-state** `bool \| None = None` — derive when `pairs=` is given | Every labelled `fit` gets a measured cut without asking. | Three residual costs, all verified: `fit(pairs=…)` starts **requiring `[trained]`**; it starts **raising** for decider matchers; and it **silently moves the threshold** of every existing supervised-fit caller. Also the shape of implicit behaviour W4 deleted with `matcher="auto"`. | One-line revert, but any model saved in between carries the moved cut. |
+| **C. Fix the constant instead** (§5) | Every user, **including those with no labels**, starts from a cut that is at least in the right decade for their score family. | Needs its own measurement per family (this study measures the *derived* cut, not a fixed replacement — see the caveat in §5.2). Changes output for existing no-argument users. | One-line revert. |
+
+**Recommended: A now, C next, B only as a deliberate 0.4 API change.** C is where
+the leverage is — it is the only one of the three that touches the case the
+opening complaint is actually about ("out of the box, langres uses a magic
+constant"), because `derive_threshold` by construction only ever helps a user who
+already has labels.
+
+This also follows the precedent this repo set two days earlier, in the same area:
+*"The measurement is the deliverable. Changing the default is a separate PR."*
+
 ---
 
 ## 4. The split trap — a finding about #241's *reporting* path
@@ -292,7 +326,48 @@ pair. Both rules are right. But a k-NN candidate graph over a real corpus is
 essentially **one giant component** — every record is a neighbour of a neighbour
 — so there is nothing left to assign:
 
-<!-- SPLIT TRAP TABLE -->
+| benchmark | seed | labeled pairs | align train | align valid | valid share (asked for 0.30) |
+|---|---|---|---|---|---|
+| abt_buy | 0 | 21,233 | 21,233 | 0 | 0.0000 |
+| abt_buy | 1 | 21,118 | 21,118 | 0 | 0.0000 |
+| abt_buy | 2 | 21,365 | 21,365 | 0 | 0.0000 |
+| amazon_google | 0 | 117,039 | 117,039 | 0 | 0.0000 |
+| amazon_google | 1 | 116,391 | 116,391 | 0 | 0.0000 |
+| amazon_google | 2 | 116,482 | 116,482 | 0 | 0.0000 |
+| dblp_acm | 0 | 12,746 | 12,746 | 0 | 0.0000 |
+| dblp_acm | 1 | 12,681 | 12,681 | 0 | 0.0000 |
+| dblp_acm | 2 | 12,708 | 12,679 | 29 | 0.0023 |
+| dblp_scholar | 0 | 1,738,080 | 1,738,080 | 0 | 0.0000 |
+| dblp_scholar | 1 | 1,735,460 | 1,735,460 | 0 | 0.0000 |
+| dblp_scholar | 2 | 1,734,987 | 1,734,987 | 0 | 0.0000 |
+| febrl_person | 0 | 9,990 | 9,990 | 0 | 0.0000 |
+| febrl_person | 1 | 9,920 | 9,920 | 0 | 0.0000 |
+| febrl_person | 2 | 9,970 | 9,970 | 0 | 0.0000 |
+| fodors_zagat | 0 | 2,422 | 2,422 | 0 | 0.0000 |
+| fodors_zagat | 1 | 2,431 | 2,431 | 0 | 0.0000 |
+| fodors_zagat | 2 | 2,454 | 2,454 | 0 | 0.0000 |
+| tiny_fixture | 0 | 28 | 28 | 0 | 0.0000 |
+| tiny_fixture | 1 | 28 | 28 | 0 | 0.0000 |
+| tiny_fixture | 2 | 26 | 26 | 0 | 0.0000 |
+| walmart_amazon | 0 | 615,690 | 615,690 | 0 | 0.0000 |
+| walmart_amazon | 1 | 614,841 | 614,841 | 0 | 0.0000 |
+| walmart_amazon | 2 | 614,615 | 614,615 | 0 | 0.0000 |
+| wdc_computers | 0 | 112,037 | 112,037 | 0 | 0.0000 |
+| wdc_computers | 1 | 111,377 | 111,377 | 0 | 0.0000 |
+| wdc_computers | 2 | 111,850 | 111,850 | 0 | 0.0000 |
+
+**26 of 27 rows hold out nothing at all.** The single exception, `dblp_acm`
+seed 2, holds out 29 pairs of 12,708 — 0.23 % where 30 % was requested. The
+effect is not scale-dependent: it fires identically at 26 labeled pairs
+(`tiny_fixture`) and at 1.7 million (`dblp_scholar`). It is about **connectivity**,
+not size.
+
+An earlier by-hand probe on the *full* corpora (before this study switched to
+grading on a disjoint corpus) also produced the inverted case — `fit(split=0.3)`
+returning `n_train=58, n_valid=18,127` on `dblp_acm` seed 0, i.e. 99.7 % held
+out. That probe is not in the tracked artifact (different corpus scope: full vs.
+the 70 % train split measured above), so treat it as an observation, not as one
+of the numbers in the table.
 
 Measured directly rather than inferred: every cell records what
 `align_pairs(split=0.3)` *would* have held out of the same label set the race
@@ -350,7 +425,34 @@ package already treats "we do not know your score scale" as "you must tell us".
 
 The optimum is not one number, and it is not near `0.5`:
 
-<!-- DERIVED RANGE -->
+| method | benchmarks | min derived t | median | max derived t | spread |
+|---|---|---|---|---|---|
+| embedding_cosine | 9 | 0.8090 | 0.8634 | 0.9451 | **0.1361** |
+| rapidfuzz | 9 | 0.1744 | 0.5590 | 0.6952 | **0.5209** |
+
+(One value per dataset — the lowest seed's cut — so the spread is measured
+*between* datasets, not across seeds of the same one. Regenerate with `--render`.)
+
+This is the answer to the strongest objection this study faces: *"the derived cut
+only wins because `0.5` is a bad constant; a better constant per score family
+would capture the same gain with no labels."* The objection is **half right, and
+the halves split by family**:
+
+- **For `embedding_cosine` it is right.** Nine datasets, spread 0.14, median
+  0.863 — a fixed default in that band would land close to the derived cut
+  everywhere, with no labels. `0.5` is not merely unmeasured here; it is off by
+  ~0.35 on a scale where the discriminating region is ~0.1 wide, which is why the
+  incumbent F1s in §2 are 0.0025–0.22 while the derived ones are 0.03–0.95.
+- **For `rapidfuzz` it is wrong.** Spread 0.52 across a 0.17–0.70 range — a 4×
+  ratio. There is no constant that is simultaneously right for `abt_buy` (0.17)
+  and `dblp_acm` (0.70); a heuristic string score's scale depends on the schema's
+  field count and fill rate, not just on the metric. This family needs
+  derivation, and it is the family the `0.5` default was presumably chosen for.
+
+**Caveat, stated because it is the kind that gets skipped:** this study measured
+the *derived* cut, not a fixed replacement constant. "A default near 0.86 would
+land close to the derived cut" is an inference from the spread, not a measured
+arm. Before changing any default, run the fixed-constant arm.
 
 That is not noise between benchmarks — it is a **score-family** effect, and the
 codebase already knows it. `MethodSpec.default_threshold` exists precisely because
