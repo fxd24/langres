@@ -41,12 +41,14 @@ intervals are paired bootstraps resampled **by gold cluster**.
    take away the wrong instruction. You must use the checkpoint's *retrieval*
    template, and you must verify it on your data.
 3. **Writing your own instruction is not the lever.** A raw ER sentence used as a
-   bare prefix is reliably harmful (up to **−0.1038**). Putting our ER task text
-   inside the checkpoint's own template is a **coin flip**: it helped Qwen3
-   (+0.0388) and cost Gemma **−0.1589** — and it never beat the model's own
-   default *on candidate recall*, even when that default describes *web search*.
-   Take the checkpoint's
-   retrieval prompt; do not author a better one. (§4.2 has the three tiers.)
+   bare prefix hurt **4 of the 5** checkpoints (up to **−0.1038**) — though *not*
+   all of them: EmbeddingGemma is significantly **positive** under it on
+   `amazon_google` (+0.0118), which is why the rule is "not the lever", not
+   "never do it". Putting our ER task text inside the checkpoint's own template
+   is a **coin flip**: it helped Qwen3 (+0.0388) and cost Gemma **−0.1589** — and
+   it never beat the model's own default *on candidate recall*, even when that
+   default describes *web search*. Take the checkpoint's retrieval prompt; do not
+   author a better one. (§4.2 has the three tiers.)
 4. **The effect is strongly model-specific**, which is why nothing here is
    averaged. The clean demonstration is `er_symmetric`, the one arm that really
    is **one identical string on both sides for every model**
@@ -312,8 +314,8 @@ the checkpoint's own default; it ties on `abt_buy` and is clearly worse on
 This answers the underlying question better than the positive result does. Our
 ER instruction — *"Find records that describe the same real-world entity as: "* —
 is a genuinely better *description* of blocking than "retrieve relevant passages
-that answer the query". It describes the task correctly. It is also, on the
-models where it matters most, **actively harmful**:
+that answer the query". It describes the task correctly. It is also, on **four of
+the five** checkpoints, **actively harmful** — and on the fifth, helpful:
 
 | model | benchmark | `er_symmetric` Δ recall | 95% CI |
 |---|---|---:|---|
@@ -323,6 +325,18 @@ models where it matters most, **actively harmful**:
 | `all-MiniLM-L6-v2` (control) | wdc_computers | **−0.0632** | [−0.0830, −0.0440] |
 | `intfloat/e5-base-v2` | abt_buy | **−0.0436** | [−0.0564, −0.0314] |
 | `google/embeddinggemma-300m` | wdc_computers | +0.0004 | [−0.0131, +0.0149] |
+| `google/embeddinggemma-300m` | amazon_google | **+0.0118** | [+0.0046, +0.0196] |
+
+> **The last row is the counter-example, and it is kept deliberately.** Our raw
+> ER sentence is *significantly positive* for EmbeddingGemma on `amazon_google`.
+> An earlier draft of this table stopped at the five negatives and labelled the
+> tier "reliably harmful" — which reads as a universal law and is not what the
+> rows say. The honest statement is **4 of 5 checkpoints**, with Gemma the
+> exception. It does not rescue the recommendation (Gemma's *documented*
+> retrieval prompt beats its raw-sentence arm on all three unsaturated
+> benchmarks), but a rule stated as universal when the data is 4-of-5 is the kind
+> of overreach this document exists to avoid. (Caught by automated review on
+> PR #252.)
 
 **The lever is the checkpoint's trained prefix, not better English.** That is the
 measured claim, and it is all the data supports.
@@ -352,7 +366,7 @@ distinction, and it is the more useful result:
 |---|---|---|
 | Use the checkpoint's **documented retrieval prompt** | **Reliable win.** Significantly positive on ≥1 benchmark for all four instruction-trained models; never significantly negative. | On `wdc_computers`: Gemma +0.0394, bge +0.1224, Qwen3 +0.0646 (all exclude 0). e5 is the weakest case — its `wdc_computers` +0.0152 closes on zero, so its evidence is `abt_buy` +0.0069 [+0.0010, +0.0128]. |
 | Substitute **your own task text into its template shape** | **Coin flip, and model-specific.** Never beat the model's own default on candidate recall. | Qwen3 +0.0388 (helped, and the only non-documented arm clear of zero on 3/3); Gemma **−0.1589** (hurt badly) |
-| Use a **raw English sentence outside any template** | **Reliably harmful.** | −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`) |
+| Use a **raw English sentence outside any template** | **Harmful on 4 of the 5 checkpoints — not universally.** | Hurt: −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`). **Exception: EmbeddingGemma**, which is *significantly positive* on `amazon_google` (+0.0118 [+0.0046, +0.0196]) and neutral on `wdc_computers` (+0.0004, spans 0). |
 
 So the answer to *"can we pick good ones rather than guessing?"* is: **yes, by
 taking the checkpoint's own retrieval prompt — not by writing a better one.**

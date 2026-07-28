@@ -380,6 +380,16 @@ class Row:
     n_clusters: int | None = None
     parameter_count: int | None = None
     embedding_dim: int | None = None
+    # Provenance: WHICH weights and WHICH prompt strings produced this row.
+    #
+    # Without these, `--resume` matched on (arm, k) alone, so changing a pinned
+    # revision or editing a prompt's text left every old cell looking complete
+    # and the report silently kept measurements of the previous study under the
+    # new definition. `None` means "recorded before this field existed", which
+    # `_cell_complete` treats as NOT complete -- unknown provenance must not
+    # count as matching provenance. (Found by automated review on PR #252.)
+    revision: str | None = None
+    recipe_fingerprint: str | None = None
     license: str = "unknown"
     osi_approved: bool = False
     seconds: float = 0.0
@@ -585,12 +595,18 @@ def _build_embedder(
 
     from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
 
-    revision = _resolve_checkpoint_revision(spec)
+    revision, checkpoint_path = _resolve_checkpoint_revision(spec)
     kwargs: dict[str, Any] = {}
     if document_prompt:
         kwargs = {"prompts": {"document": document_prompt}, "prompt_name": "document"}
     base = SentenceTransformerEmbedder(
-        spec.name,
+        # Load the resolved snapshot DIRECTORY, not the bare repo name. Comparing
+        # `spec.revision` against whatever `main` points at only detects drift --
+        # it cannot survive it, so once upstream advanced, the documented "fetch
+        # the pinned revision" remedy was impossible and the study became
+        # unreproducible. Loading the path pins the weights for real.
+        # (Found by automated review on PR #252.)
+        checkpoint_path,
         batch_size=spec.batch_size,
         normalize_embeddings=True,
         dtype=spec.dtype,  # type: ignore[arg-type]
@@ -611,11 +627,11 @@ def _build_embedder(
     return cached
 
 
-def _resolve_checkpoint_revision(spec: ModelSpec) -> str:
-    """The commit the repo name actually resolves to, refused if it is not the pinned one.
+def _resolve_checkpoint_revision(spec: ModelSpec) -> tuple[str, str]:
+    """Fetch the study's pinned commit and return ``(revision, local snapshot path)``.
 
-    The harness loads every model by its *mutable* repo name, so "which weights
-    ran" was not pinned by anything: a cold re-run after an upstream update would
+    The harness used to load every model by its *mutable* repo name, so "which
+    weights ran" was pinned by nothing: a re-run after an upstream update would
     silently measure different weights under the same ``model`` value, and
     ``--resume`` would merge the two into one table.
 
@@ -627,19 +643,26 @@ def _resolve_checkpoint_revision(spec: ModelSpec) -> str:
     revision still registers no prompts, so the measurements and the documented
     formats stand -- but nothing in the harness had established that.)
 
-    (Found by automated review on PR #252.)
+    Resolution asks for ``spec.revision`` explicitly rather than comparing it
+    against ``main`` afterwards. Comparing only *detects* drift; it cannot
+    survive it, so the moment upstream moved, the pinned revision could still be
+    sitting in the cache while the run aborted and the study became impossible to
+    reproduce. Asking for the commit works whether or not ``main`` has moved.
+
+    (Found by automated review on PR #252, across two rounds.)
     """
     from huggingface_hub import snapshot_download
 
-    resolved = Path(snapshot_download(spec.name, local_files_only=True)).name
-    if resolved != spec.revision:
+    try:
+        path = snapshot_download(spec.name, revision=spec.revision, local_files_only=True)
+    except Exception as exc:  # noqa: BLE001 -- any resolution failure is the same story
         raise RuntimeError(
-            f"{spec.name} resolves to revision {resolved}, but this study is pinned to "
-            f"{spec.revision}. The published numbers describe the pinned weights. Either "
-            f"fetch the pinned revision or update ModelSpec.revision AND re-run the sweep "
-            f"-- do not publish a table whose rows were produced by weights it does not name."
-        )
-    return resolved
+            f"{spec.name} revision {spec.revision} is not in the local HF cache "
+            f"({type(exc).__name__}). This study's numbers describe that commit. Fetch it "
+            f"(`huggingface_hub.snapshot_download('{spec.name}', revision='{spec.revision}')`) "
+            f"rather than measuring whatever `main` currently points at."
+        ) from exc
+    return spec.revision, path
 
 
 def _assert_cache_matches_checkpoint(base: Any, cached: Any, texts: Sequence[str]) -> None:
@@ -805,6 +828,8 @@ def evaluate_model_on_benchmark(
                     license=spec.license,
                     osi_approved=spec.osi_approved,
                     seconds=time.perf_counter() - started,
+                    revision=spec.revision,
+                    recipe_fingerprint=_recipe_fingerprint(recipe),
                 )
                 if k == HEADLINE_K and baseline_recall is not None:
                     arm_recall = _per_record_recall(pairs, gold_clusters)
@@ -884,13 +909,54 @@ def _cell_complete(
     per-record recall, so a partially-resumed cell would have no baseline to
     compare against. Re-running an incomplete cell is cheap anyway -- the
     document and query vectors come back from the on-disk embedding cache.
+
+    Completeness includes **provenance**, not just coverage. Matching on
+    ``(arm, k)`` alone meant a changed checkpoint revision or an edited prompt
+    string left the old cell looking complete, so the report kept measurements
+    of the previous study under the new definition. A row whose ``revision`` or
+    ``recipe_fingerprint`` is absent or different is not a hit -- unknown
+    provenance is treated as *not* matching, never as matching. (The committed
+    rows predate these fields, so ``--resume`` recomputes them rather than
+    asserting a provenance that was never recorded; the vectors come from the
+    embedding cache, so this costs little.) (Found by automated review on
+    PR #252.)
     """
+    want = {(recipe.arm, k): _recipe_fingerprint(recipe) for recipe in recipes for k in k_values}
     have = {
         (row.arm, row.k)
         for row in existing
-        if row.model == spec.name and row.benchmark == benchmark
+        if row.model == spec.name
+        and row.benchmark == benchmark
+        and row.revision == spec.revision
+        and want.get((row.arm, row.k)) == row.recipe_fingerprint
     }
-    return all((recipe.arm, k) in have for recipe in recipes for k in k_values)
+    return set(want) <= have
+
+
+def _recipe_fingerprint(recipe: Recipe) -> str:
+    """A stable hash of the two prompt strings -- what actually defines the treatment."""
+    import hashlib
+
+    payload = f"{recipe.document_prompt!r}\x00{recipe.query_prompt!r}"
+    return hashlib.blake2b(payload.encode(), digest_size=8).hexdigest()
+
+
+def _benchmark_order(rows: Sequence[Row]) -> list[str]:
+    """Benchmarks present in ``rows``: the known ones in declared order, then any extras."""
+    present = {row.benchmark for row in rows}
+    return [b for b in BENCHMARKS if b in present] + sorted(present - set(BENCHMARKS))
+
+
+def _cell(text: str) -> str:
+    """Text made safe for one GitHub-Flavoured Markdown table cell.
+
+    Backticks do NOT protect a pipe from GFM's table parser -- it splits columns
+    before it looks at inline code -- and EmbeddingGemma's own prompts contain
+    literal pipes (``title: none | text: ``). Rendering them raw silently split
+    those rows into extra, misaligned cells. (Found by automated review on PR
+    #252.)
+    """
+    return text.replace("\n", " ").replace("|", "\\|")
 
 
 def _fmt(value: float | None, digits: int = 4) -> str:
@@ -927,7 +993,7 @@ def render_report(rows: Sequence[Row]) -> str:
     add("| model | licence | source of its documented prompt |")
     add("|---|---|---|")
     for spec in MODELS:
-        source = PROMPT_SOURCES.get(spec.name, "-").replace("\n", " ")
+        source = _cell(PROMPT_SOURCES.get(spec.name, "-"))
         add(f"| `{spec.name}` | {spec.license} | {source} |")
     add("")
 
@@ -937,8 +1003,8 @@ def render_report(rows: Sequence[Row]) -> str:
     add("|---|---|---|---|---|---|")
     for spec in MODELS:
         for recipe in spec.recipes:
-            doc = "-" if recipe.document_prompt is None else f"`{recipe.document_prompt!r}`"
-            query = "-" if recipe.query_prompt is None else f"`{recipe.query_prompt!r}`"
+            doc = "-" if recipe.document_prompt is None else f"`{_cell(recipe.document_prompt)}`"
+            query = "-" if recipe.query_prompt is None else f"`{_cell(recipe.query_prompt)}`"
             add(
                 f"| `{spec.name}` | `{recipe.arm}` | {recipe.kind} | {doc} | {query} "
                 f"| {recipe.note} |"
@@ -987,7 +1053,12 @@ def render_report(rows: Sequence[Row]) -> str:
             "| doc shift | query shift | doc·query | pair J | candidates |"
         )
         add("|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
-        for benchmark in BENCHMARKS:
+        # Order by BENCHMARKS, but render every benchmark actually present in the
+        # rows. Iterating BENCHMARKS alone dropped any benchmark reached via
+        # `--benchmarks` from every headline table while still writing its rows --
+        # a measurement paid for and then hidden. (Found by automated review on
+        # PR #252.)
+        for benchmark in _benchmark_order(model_rows):
             bench_rows = [row for row in model_rows if row.benchmark == benchmark]
             for row in sorted(bench_rows, key=lambda r: (r.kind != "baseline", r.arm)):
                 add(
@@ -1035,10 +1106,26 @@ def main() -> int:
         args.report.write_text(render_report(read_rows(args.rows)))
         return 0
 
+    # Reject an unknown --arms BEFORE anything touches --rows. `_drop_cell` clears
+    # a cell up front so a crashed rerun looks partial, which means a typo like
+    # `--arms offical_asymmetric` would otherwise select nothing, clear every
+    # requested cell, evaluate nothing, and exit 0 -- silently deleting committed
+    # measurements. Validation has to precede the first write, not the first
+    # evaluation. (Found by automated review on PR #252, on the fix that
+    # introduced the hazard.)
+    if args.arms is not None:
+        known = {recipe.arm for spec in MODELS for recipe in spec.recipes}
+        unknown = sorted(set(args.arms) - known)
+        if unknown:
+            parser.error(f"unknown arm(s): {', '.join(unknown)}. Known arms: {sorted(known)}")
+
     for name in args.models:
         spec = MODELS_BY_NAME[name]
         recipes = [r for r in spec.recipes if args.arms is None or r.arm in args.arms]
-        if recipes and recipes[0].arm != "none":
+        if not recipes:
+            logger.info("skipping %s -- no requested arm applies to it", spec.name)
+            continue
+        if recipes[0].arm != "none":
             recipes = [next(r for r in spec.recipes if r.arm == "none"), *recipes]
         for benchmark in args.benchmarks:
             if args.resume and _cell_complete(

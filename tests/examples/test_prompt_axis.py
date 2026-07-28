@@ -9,6 +9,7 @@ a hypothesis, not a safety net, so each failure shape is exercised here.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
 import sys
@@ -180,6 +181,8 @@ def test_cell_complete_requires_every_arm_and_k() -> None:
             query_shift_vs_none=0.0,
             doc_query_cosine=1.0,
             pair_jaccard_vs_none=1.0,
+            revision=spec.revision,
+            recipe_fingerprint=harness._recipe_fingerprint(recipe),
         )
         for recipe in recipes
         for k in (20,)
@@ -190,12 +193,50 @@ def test_cell_complete_requires_every_arm_and_k() -> None:
     # A different benchmark has nothing recorded at all.
     assert not harness._cell_complete(rows, spec, "amazon_google", recipes, [20])
 
+    # Provenance is part of completeness. Rows measured on OTHER weights, or
+    # under a since-edited prompt string, must not satisfy resume -- otherwise
+    # the report keeps the previous study's numbers under the new definition.
+    other_weights = [dataclasses.replace(r, revision="0" * 40) for r in rows]
+    assert not harness._cell_complete(other_weights, spec, "abt_buy", recipes, [20])
+
+    edited_prompt = [dataclasses.replace(r, recipe_fingerprint="deadbeef") for r in rows]
+    assert not harness._cell_complete(edited_prompt, spec, "abt_buy", recipes, [20])
+
+    # And a row recorded before provenance existed counts as unknown, not as a
+    # match -- the committed rows are exactly this case.
+    legacy = [dataclasses.replace(r, revision=None, recipe_fingerprint=None) for r in rows]
+    assert not harness._cell_complete(legacy, spec, "abt_buy", recipes, [20])
+
     # Dropping the cell first is what stops a crashed rerun from LOOKING
     # complete: merging one fresh arm into the stale ones would leave every
     # (arm, k) key present, so --resume would skip a cell built from two runs.
     survivors = harness._drop_cell(rows, spec, "abt_buy")
     assert survivors == []
     assert not harness._cell_complete(survivors, spec, "abt_buy", recipes, [20])
+
+
+def test_a_typo_in_arms_is_refused_before_anything_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--arms offical_asymmetric` must not silently erase committed cells.
+
+    `_drop_cell` clears a cell up front so a crashed rerun looks partial. That
+    made an unknown arm name destructive: it selected nothing, cleared every
+    requested cell, evaluated nothing and exited 0.
+    """
+    rows_path = tmp_path / "rows.jsonl"
+    # Real committed-looking content, so the assertion is about DATA SURVIVING,
+    # not merely about the exit code. An empty file would pass trivially.
+    original = (ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl").read_text()
+    rows_path.write_text(original)
+
+    monkeypatch.setattr(
+        sys, "argv", ["prompt_axis", "--arms", "offical_asymmetric", "--rows", str(rows_path)]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        harness.main()
+    assert excinfo.value.code != 0
+    assert rows_path.read_text() == original, "a typo in --arms destroyed committed rows"
 
 
 def test_drop_cell_only_removes_the_named_cell() -> None:
