@@ -929,9 +929,41 @@ def read_rows(path: Path) -> list[Row]:
 
 
 def merge_rows(existing: Iterable[Row], fresh: Iterable[Row]) -> list[Row]:
-    """Fresh cells replace old ones with the same (model, benchmark, arm, k)."""
+    """Fresh cells replace old ones with the same (model, benchmark, arm, k).
+
+    Raises if the merged set would hold more than one checkpoint revision for a
+    single model. ``_cell_complete`` already refuses to *resume* a cell whose
+    revision moved, so a re-run recomputes it -- but that guard is per cell, and
+    a resume restricted to a subset (``--benchmarks``/``--models``) recomputes
+    only the cells it was pointed at. The rest keep the old revision's numbers,
+    and the merged file then mixes two checkpoints under one model name with
+    nothing on the surface to show it. A per-model check over the *whole* merged
+    set is the one place that can see that.
+
+    It raises rather than dropping the stale side: which revision is the one you
+    meant is a question about intent, and this function cannot answer it. An
+    earlier draft of this harness resolved a similar ambiguity by deleting rows,
+    and destroyed measured data three review rounds running. Naming the conflict
+    and stopping costs one re-run; guessing costs the study.
+    """
     merged = {(row.model, row.benchmark, row.arm, row.k): row for row in existing}
     merged.update({(row.model, row.benchmark, row.arm, row.k): row for row in fresh})
+
+    by_model: dict[str, set[str | None]] = {}
+    for row in merged.values():
+        by_model.setdefault(row.model, set()).add(row.revision)
+    mixed = {model: revs for model, revs in by_model.items() if len(revs) > 1}
+    if mixed:
+        detail = "; ".join(
+            f"{model}: {sorted(str(rev) for rev in revs)}" for model, revs in sorted(mixed.items())
+        )
+        raise ValueError(
+            "refusing to merge rows measured on different checkpoints of the same "
+            f"model -- {detail}. Nothing was written or deleted. Re-run the stale "
+            "cells (drop --resume, or point --models/--benchmarks at them) so every "
+            "row for a model comes from one revision."
+        )
+
     return sorted(merged.values(), key=lambda r: (r.model, r.benchmark, r.arm, r.k))
 
 
@@ -1016,7 +1048,56 @@ def _interval(row: Row) -> str:
     return f"[{row.ci_low:+.4f}, {row.ci_high:+.4f}]{marker}"
 
 
+def _assert_rows_match_declaration(rows: Sequence[Row]) -> None:
+    """Refuse to render numbers that were not measured under the prompts we print.
+
+    The report's "Where each prompt came from" and "The arms" tables are rendered
+    from ``MODELS`` -- today's specs -- while every number below them comes from
+    the rows file. Nothing in the layout couples the two, so editing a prompt
+    string or bumping a checkpoint and re-rendering without re-measuring produces
+    a document that *describes* one experiment and *reports* another, with no
+    visible seam. That is the failure this study was warned about: a caption and
+    a measurement drifting apart silently.
+
+    So before rendering, every row must carry provenance, and that provenance
+    must equal the spec and recipe the prose is about. Absent provenance fails --
+    a row that cannot say what produced it cannot be shown to agree.
+    """
+    problems: list[str] = []
+    for row in rows:
+        spec = MODELS_BY_NAME.get(row.model)
+        if spec is None:
+            problems.append(f"{row.model}/{row.benchmark}/{row.arm}: model is not declared")
+            continue
+        recipe = next((r for r in spec.recipes if r.arm == row.arm), None)
+        if recipe is None:
+            problems.append(f"{row.model}/{row.benchmark}/{row.arm}: arm is not declared")
+            continue
+        if row.revision != spec.revision:
+            problems.append(
+                f"{row.model}/{row.benchmark}/{row.arm}: measured on revision "
+                f"{row.revision!r}, report describes {spec.revision!r}"
+            )
+        want = _recipe_fingerprint(recipe)
+        if row.recipe_fingerprint != want:
+            problems.append(
+                f"{row.model}/{row.benchmark}/{row.arm}: measured under prompt "
+                f"fingerprint {row.recipe_fingerprint!r}, report describes {want!r}"
+            )
+    if problems:
+        shown = sorted(set(problems))
+        detail = "\n  ".join(shown[:10])
+        more = f"\n  ... and {len(shown) - 10} more" if len(shown) > 10 else ""
+        raise ValueError(
+            "refusing to render: these rows do not match the prompts and checkpoints "
+            f"the report describes.\n  {detail}{more}\n"
+            "Re-measure the affected cells, or render from the rows file that matches "
+            "this harness. Nothing was written."
+        )
+
+
 def render_report(rows: Sequence[Row]) -> str:
+    _assert_rows_match_declaration(rows)
     lines: list[str] = []
     add = lines.append
     add("# Do instruction prompts help embedding blockers? Per model, per benchmark")

@@ -46,6 +46,34 @@ def _recipe(document: str | None, query: str | None, arm: str = "test") -> objec
     )
 
 
+def _row(model: str, benchmark: str, arm: str = "none") -> object:
+    """A Row carrying the provenance the harness would really have recorded."""
+    spec = harness.MODELS_BY_NAME[model]
+    recipe = next(r for r in spec.recipes if r.arm == arm)
+    return harness.Row(
+        model=model,
+        benchmark=benchmark,
+        arm=arm,
+        kind=recipe.kind,
+        k=20,
+        document_prompt=recipe.document_prompt,
+        query_prompt=recipe.query_prompt,
+        note=recipe.note,
+        candidate_recall=1.0,
+        candidate_precision=1.0,
+        reduction_ratio=1.0,
+        total_candidates=1,
+        reachable_ceiling=1.0,
+        recall_of_reachable=1.0,
+        doc_shift_vs_none=0.0,
+        query_shift_vs_none=0.0,
+        doc_query_cosine=1.0,
+        pair_jaccard_vs_none=1.0,
+        revision=spec.revision,
+        recipe_fingerprint=harness._recipe_fingerprint(recipe),
+    )
+
+
 BASE = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
 MOVED = np.array([[0.8, 0.6], [0.6, 0.8]], dtype=np.float32)
 OTHER = np.array([[0.6, 0.8], [0.8, 0.6]], dtype=np.float32)
@@ -304,34 +332,12 @@ def test_merging_replaces_only_the_rows_it_actually_recomputed() -> None:
     spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
     other = harness.MODELS_BY_NAME["BAAI/bge-base-en-v1.5"]
 
-    def row(model: str, benchmark: str) -> object:
-        return harness.Row(
-            model=model,
-            benchmark=benchmark,
-            arm="none",
-            kind="baseline",
-            k=20,
-            document_prompt=None,
-            query_prompt=None,
-            note="",
-            candidate_recall=1.0,
-            candidate_precision=1.0,
-            reduction_ratio=1.0,
-            total_candidates=1,
-            reachable_ceiling=1.0,
-            recall_of_reachable=1.0,
-            doc_shift_vs_none=0.0,
-            query_shift_vs_none=0.0,
-            doc_query_cosine=1.0,
-            pair_jaccard_vs_none=1.0,
-        )
-
     rows = [
-        row(spec.name, "abt_buy"),
-        row(spec.name, "amazon_google"),
-        row(other.name, "abt_buy"),
+        _row(spec.name, "abt_buy"),
+        _row(spec.name, "amazon_google"),
+        _row(other.name, "abt_buy"),
     ]
-    fresh = dataclasses.replace(rows[0], candidate_recall=0.5, revision=spec.revision)
+    fresh = dataclasses.replace(rows[0], candidate_recall=0.5)
     merged = harness.merge_rows(rows, [fresh])
 
     # Same number of rows: a rerun replaces, it never removes.
@@ -341,6 +347,62 @@ def test_merging_replaces_only_the_rows_it_actually_recomputed() -> None:
     # The measurements that were NOT recomputed survive untouched.
     assert by_key[(spec.name, "amazon_google")].candidate_recall == 1.0
     assert by_key[(other.name, "abt_buy")].candidate_recall == 1.0
+
+
+def test_merging_two_checkpoints_of_one_model_raises_and_keeps_every_row() -> None:
+    """A partial re-run must not leave two checkpoints under one model name.
+
+    ``_cell_complete`` refuses to *resume* a cell whose revision moved, but it
+    decides one cell at a time: a run narrowed with ``--benchmarks`` recomputes
+    only what it was pointed at, and the rest keep the old checkpoint's numbers.
+    The merged file then reports two sets of weights under one model heading with
+    nothing on the surface to show it. Only a check over the whole merged set can
+    see that, so this is where it lives.
+    """
+    spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
+    stale = dataclasses.replace(_row(spec.name, "amazon_google"), revision="0" * 40)
+    rows = [_row(spec.name, "abt_buy"), stale]
+
+    with pytest.raises(ValueError, match="different checkpoints"):
+        harness.merge_rows(rows, [])
+
+    # It reports the conflict; it does not resolve it by throwing a side away.
+    # An earlier draft resolved a similar ambiguity by deleting, and destroyed
+    # measured rows three review rounds running.
+    assert rows[1].revision == "0" * 40
+
+
+def test_rendering_refuses_numbers_measured_under_a_different_prompt() -> None:
+    """The prose and the numbers must not be free to drift apart.
+
+    The report prints "The arms" from today's ``MODELS`` and the results from the
+    rows file. Nothing in the layout couples them, so an edited prompt string and
+    a re-render -- with no re-measurement -- yields a document that describes one
+    experiment and reports another.
+    """
+    spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
+    good = _row(spec.name, "abt_buy")
+    assert harness.render_report([good])  # the check is not simply always-on
+
+    edited = dataclasses.replace(good, recipe_fingerprint="deadbeefdeadbeef")
+    with pytest.raises(ValueError, match="prompt fingerprint"):
+        harness.render_report([edited])
+
+    moved = dataclasses.replace(good, revision="0" * 40)
+    with pytest.raises(ValueError, match="report describes"):
+        harness.render_report([moved])
+
+    unknown = dataclasses.replace(good, revision=None, recipe_fingerprint=None)
+    with pytest.raises(ValueError, match="refusing to render"):
+        harness.render_report([unknown])
+
+
+def test_the_committed_rows_still_match_the_harness_that_describes_them() -> None:
+    """The published artifact regenerates -- the guard passes on real data, not only toys."""
+    rows_path = ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl"
+    rows = harness.read_rows(rows_path)
+    assert len(rows) == 400
+    assert harness.render_report(rows)
 
 
 def test_every_model_pins_the_revision_it_was_measured_on() -> None:
