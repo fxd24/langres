@@ -290,6 +290,94 @@ def measure(
     }
 
 
+def crosscheck(
+    benchmark: str,
+    model_name: str,
+    k: int,
+    *,
+    cache_dir: Path,
+) -> dict[str, Any]:
+    """Attribute the gap between the published protocol and langres's own.
+
+    Three recalls off the *same* embeddings, changing one thing at a time:
+
+    ``paper``
+        directional ``A -> B`` top-k, scored against the raw positive list.
+        This is what DeepBlocker and UniBlocker report.
+    ``paper_direction_closure_gold``
+        the same candidate set, scored against the transitive closure. Isolates
+        the gold-set definition.
+    ``langres_score_blocking``
+        symmetric top-k over the pooled corpus with same-source pairs dropped,
+        scored against the closure. This is what
+        :func:`langres.optimize.score_blocking` reports.
+
+    Any difference between the first and the last is protocol, not model.
+    """
+    from langres.core.blockers.vector import concat_comparable_fields
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    spec = BENCHMARKS[benchmark]
+    records_a, records_b, raw_gold, clusters = _load(spec)
+    corpus = records_a + records_b
+    texts = [concat_comparable_fields(r) for r in corpus]
+
+    embedder = _build_embedder(model_name, cache_dir)
+
+    # Directional: index B, query A.
+    directional = FAISSIndex(embedder=embedder, metric="cosine")
+    directional.create_index(texts[len(records_a) :])
+    _d, neigh_a = directional.search(texts[: len(records_a)], min(k, len(records_b)))
+    ids_a = [str(r.id) for r in records_a]
+    ids_b = [str(r.id) for r in records_b]
+    directional_pairs = {
+        frozenset({ids_a[i], ids_b[int(j)]})
+        for i, row in enumerate(neigh_a)
+        for j in row
+        if j >= 0
+    }
+
+    # Symmetric: one pooled index, every record queries it (score_blocking's shape).
+    pooled = FAISSIndex(embedder=embedder, metric="cosine")
+    pooled.create_index(texts)
+    _d2, neigh_all = pooled.search_all(min(k + 1, len(corpus)))
+    ids_all = [str(r.id) for r in corpus]
+    source_of = {str(r.id): str(getattr(r, "source")) for r in corpus}
+    symmetric_pairs = {
+        frozenset({ids_all[i], ids_all[int(j)]})
+        for i, row in enumerate(neigh_all)
+        for j in row
+        if j >= 0 and int(j) != i
+    }
+    symmetric_pairs = {
+        p for p in symmetric_pairs if len({source_of[x] for x in p}) == 2
+    }
+
+    closure_gold = {
+        frozenset({a, b})
+        for cluster in clusters
+        if len(cluster) >= 2
+        for i, a in enumerate(sorted(cluster))
+        for b in sorted(cluster)[i + 1 :]
+    }
+
+    def _recall(cands: set[frozenset[str]], gold: set[frozenset[str]]) -> float:
+        return len(cands & gold) / len(gold) if gold else 0.0
+
+    return {
+        "benchmark": benchmark,
+        "model": model_name,
+        "k": k,
+        "paper": _recall(directional_pairs, raw_gold),
+        "paper_direction_closure_gold": _recall(directional_pairs, closure_gold),
+        "langres_score_blocking": _recall(symmetric_pairs, closure_gold),
+        "n_candidates_directional": len(directional_pairs),
+        "n_candidates_symmetric": len(symmetric_pairs),
+        "gold_raw": len(raw_gold),
+        "gold_closure": len(closure_gold),
+    }
+
+
 # --------------------------------------------------------------------------
 # Rendering
 # --------------------------------------------------------------------------
@@ -462,9 +550,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Re-render the tables from existing rows, measuring nothing.",
     )
+    parser.add_argument(
+        "--crosscheck",
+        type=int,
+        default=None,
+        metavar="K",
+        help=(
+            "Instead of the sweep, attribute the published-protocol vs "
+            "score_blocking gap at this k and write the crosscheck JSON."
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.crosscheck is not None:
+        results = [
+            crosscheck(b, m, args.crosscheck, cache_dir=args.cache_dir)
+            for b in args.benchmarks
+            for m in args.models
+        ]
+        path = RESEARCH_DIR / "20260728_external_reproduction_crosscheck.json"
+        path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
+        logger.info("wrote %s", path)
+        return 0
 
     if not args.render_only:
         for benchmark in args.benchmarks:
