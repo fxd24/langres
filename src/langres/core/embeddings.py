@@ -776,7 +776,9 @@ class FakeEmbedder:
 
         Args:
             embedding_dim: Dimensionality of fake embeddings to produce.
-                Default: 384 (matches all-MiniLM-L6-v2).
+                Default: 384. An arbitrary, stable size — it deliberately does
+                **not** track :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`
+                (now 768-dim), since nothing about a fake embedder needs to.
             normalize_embeddings: L2-normalize embeddings to unit vectors.
                 Default: True (matches SentenceTransformerEmbedder behavior).
         """
