@@ -402,6 +402,38 @@ def to_markdown(results: list[CellResult]) -> str:
     return "\n".join(lines)
 
 
+def to_spread_markdown(results: list[CellResult]) -> str:
+    """Per method: the range of derived cuts across benchmarks.
+
+    The answer to the strongest objection this study faces -- "the derived cut
+    only wins because 0.5 is a bad constant; a *better* constant per score family
+    would capture the same gain with no labels." That objection survives a narrow
+    spread and dies on a wide one, so the spread is the evidence, not the deltas.
+    """
+    header = "| method | benchmarks | min derived t | median | max derived t | spread |"
+    lines = [header, "|" + "---|" * 6]
+    for method in sorted({r.method for r in results}):
+        # One value per benchmark -- the LOWEST seed's cut -- so a 3-seed
+        # benchmark does not outvote a 1-seed one and the spread is measured
+        # BETWEEN datasets, not across seeds of the same dataset.
+        by_benchmark: dict[str, tuple[int, float]] = {}
+        for r in results:
+            if r.method != method:
+                continue
+            current = by_benchmark.get(r.benchmark)
+            if current is None or r.seed < current[0]:
+                by_benchmark[r.benchmark] = (r.seed, r.derived_threshold)
+        cuts = sorted(threshold for _seed, threshold in by_benchmark.values())
+        if not cuts:
+            continue
+        median = cuts[len(cuts) // 2]
+        lines.append(
+            f"| {method} | {len(cuts)} | {cuts[0]:.4f} | {median:.4f} | {cuts[-1]:.4f} | "
+            f"{cuts[-1] - cuts[0]:.4f} |"
+        )
+    return "\n".join(lines)
+
+
 def to_split_trap_markdown(results: list[CellResult]) -> str:
     """Render the split-trap table: what ``align_pairs(split=0.3)`` would hold out.
 
@@ -516,6 +548,9 @@ def main() -> None:
 
     print()
     print(to_markdown(results))
+    print()
+    print("Would a better CONSTANT do just as well? The between-dataset spread:")
+    print(to_spread_markdown(results))
     print()
     print("The split trap -- what fit(pairs=..., split=0.3) would have held out:")
     print(to_split_trap_markdown(results))
