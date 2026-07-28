@@ -23,7 +23,45 @@ is the deliverable; changing a default is a separate PR.*
 
 ---
 
-<!-- TLDR -->
+## 0. TL;DR
+
+**54 cells** — 9 loadable benchmarks × 2 $0 scorers × seeds 0/1/2 — every number
+graded on a corpus-disjoint held-out split.
+
+- **(a) The derived cut beats `0.5` almost everywhere.** 45 cells improve, 7 tie
+  exactly (the race declined, so the threshold did not move), **2 lose**. The two
+  losses are both `tiny_fixture` + `rapidfuzz`, whose held-out corpus is **3
+  records containing 1 gold pair** — an F1 that can only be `0.0` or `1.0`. On
+  the **8 real benchmarks the derived cut never loses at any seed for either
+  scorer**, and the wins are not marginal: +0.42 (dblp_acm/rapidfuzz), +0.66
+  (dblp_acm/cosine), +0.82 (febrl_person/cosine), +0.89 (fodors_zagat/cosine).
+- **(b) The race earns its seat.** It declined 7 times, and in **6 of those 7 the
+  derived cut really was worse held-out** (the 7th was an exact tie, which the
+  tie-keeps-incumbent rule handles). It has never once declined a cut that would
+  have helped. It is not infallible in the other direction — it *kept* two cuts
+  that lost — but both are the 1-gold-pair fixture, and #241 already documents
+  that selecting on `train` "bounds the risk, it does not remove it". This is
+  that residual, observed.
+- **(c) So: yes to deriving — but "flip the default" is not a one-character
+  change, and this PR does not make it.** `derive_threshold: bool = False →
+  True` makes **six documented call shapes raise**, starting with the plain
+  `fit(records)` no-op and every `fit(…, method=…)`; the repo's own suite would
+  go red on the first test. The measured answer and the API change are different
+  decisions — see §3.
+- **(d) The most actionable finding is not about the flag at all.** For
+  `embedding_cosine` the derived cut lands in **0.809–0.945 (median 0.863) across
+  all nine datasets** — a spread of 0.14. `0.5` is not merely unmeasured there,
+  it is *nowhere near* right, and a per-family default in that band would help
+  every user **with no labels at all**. For `rapidfuzz` the same spread is
+  **0.174–0.695** (0.52, a 4× range), so no constant works and that family
+  genuinely needs derivation. One number cannot serve both — which is exactly
+  what `MethodSpec.default_threshold` already exists to express, and exactly what
+  the six architectures bypass.
+- **(e) A separate defect, found by trying the obvious design first: the split
+  trap.** `align_pairs(split=0.3)` returns an **empty `valid` in 26 of 27
+  (benchmark, seed) rows** on this label set — 0 held-out pairs, not 30 %. So
+  `FitReport.metrics` / `ThresholdCandidate.held_out_f1` are not trustworthy on a
+  dense label set, and nothing warns. §4.
 
 ---
 
@@ -97,7 +135,105 @@ grading on the disjoint corpus is a *stronger* held-out estimate than the one
 
 ## 2. The result
 
-<!-- MAIN TABLE -->
+Seeds 0, 1, 2. `incumbent t` is the shipped `0.5`; `derived t` is Youden's J on
+the train corpus's labeled pairs; `kept` is `threshold_fit.source`; `Δ F1` is the
+held-out pair-F1 of the cut that *won* minus that of `0.5` — i.e. exactly what
+switching would buy. Regenerate with
+`--render examples/research/results/threshold_default_study.json`.
+
+| benchmark | method | seed | train pairs | test pairs | held-out gold | incumbent t | incumbent F1 | derived t | derived F1 | kept | Δ F1 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| abt_buy | rapidfuzz | 0 | 21,233 | 9,003 | 310 | 0.50 | 0.0625 | 0.1744 | 0.0730 | derived | +0.0106 |
+| abt_buy | rapidfuzz | 1 | 21,118 | 9,143 | 309 | 0.50 | 0.0630 | 0.1949 | 0.0716 | derived | +0.0086 |
+| abt_buy | rapidfuzz | 2 | 21,365 | 8,816 | 309 | 0.50 | 0.0642 | 0.1874 | 0.0754 | derived | +0.0112 |
+| abt_buy | embedding_cosine | 0 | 21,233 | 9,003 | 310 | 0.50 | 0.0666 | 0.8361 | 0.2301 | derived | +0.1635 |
+| abt_buy | embedding_cosine | 1 | 21,118 | 9,143 | 309 | 0.50 | 0.0654 | 0.8304 | 0.2255 | derived | +0.1602 |
+| abt_buy | embedding_cosine | 2 | 21,365 | 8,816 | 309 | 0.50 | 0.0677 | 0.8294 | 0.2567 | derived | +0.1890 |
+| amazon_google | rapidfuzz | 0 | 117,039 | 48,811 | 420 | 0.50 | 0.0149 | 0.3136 | 0.0231 | derived | +0.0081 |
+| amazon_google | rapidfuzz | 1 | 116,391 | 49,194 | 420 | 0.50 | 0.0149 | 0.3136 | 0.0225 | derived | +0.0077 |
+| amazon_google | rapidfuzz | 2 | 116,482 | 49,093 | 420 | 0.50 | 0.0159 | 0.3085 | 0.0230 | derived | +0.0071 |
+| amazon_google | embedding_cosine | 0 | 117,039 | 48,811 | 420 | 0.50 | 0.0171 | 0.8139 | 0.2803 | derived | +0.2633 |
+| amazon_google | embedding_cosine | 1 | 116,391 | 49,194 | 420 | 0.50 | 0.0169 | 0.8125 | 0.2456 | derived | +0.2286 |
+| amazon_google | embedding_cosine | 2 | 116,482 | 49,093 | 420 | 0.50 | 0.0170 | 0.8125 | 0.2502 | derived | +0.2333 |
+| dblp_acm | rapidfuzz | 0 | 12,746 | 5,381 | 665 | 0.50 | 0.3972 | 0.6952 | 0.8163 | derived | +0.4191 |
+| dblp_acm | rapidfuzz | 1 | 12,681 | 5,466 | 665 | 0.50 | 0.3910 | 0.6917 | 0.7899 | derived | +0.3989 |
+| dblp_acm | rapidfuzz | 2 | 12,708 | 5,477 | 662 | 0.50 | 0.3972 | 0.6954 | 0.7885 | derived | +0.3913 |
+| dblp_acm | embedding_cosine | 0 | 12,746 | 5,381 | 665 | 0.50 | 0.2200 | 0.9018 | 0.8825 | derived | +0.6625 |
+| dblp_acm | embedding_cosine | 1 | 12,681 | 5,466 | 665 | 0.50 | 0.2169 | 0.9041 | 0.8802 | derived | +0.6633 |
+| dblp_acm | embedding_cosine | 2 | 12,708 | 5,477 | 662 | 0.50 | 0.2157 | 0.9010 | 0.8537 | derived | +0.6380 |
+| dblp_scholar | rapidfuzz | 0 | 1,738,080 | 730,714 | 4,729 | 0.50 | 0.0344 | 0.4858 | 0.0324 | **declined** | +0.0000 |
+| dblp_scholar | rapidfuzz | 1 | 1,735,460 | 731,910 | 4,670 | 0.50 | 0.0332 | 0.4891 | 0.0317 | **declined** | +0.0000 |
+| dblp_scholar | rapidfuzz | 2 | 1,734,987 | 733,264 | 4,689 | 0.50 | 0.0335 | 0.4870 | 0.0316 | **declined** | +0.0000 |
+| dblp_scholar | embedding_cosine | 0 | 1,738,080 | 730,714 | 4,729 | 0.50 | 0.0129 | 0.8360 | 0.3245 | derived | +0.3117 |
+| dblp_scholar | embedding_cosine | 1 | 1,735,460 | 731,910 | 4,670 | 0.50 | 0.0127 | 0.8390 | 0.3276 | derived | +0.3149 |
+| dblp_scholar | embedding_cosine | 2 | 1,734,987 | 733,264 | 4,689 | 0.50 | 0.0127 | 0.8390 | 0.3286 | derived | +0.3159 |
+| febrl_person | rapidfuzz | 0 | 9,990 | 4,180 | 149 | 0.50 | 0.9521 | 0.5963 | 1.0000 | derived | +0.0479 |
+| febrl_person | rapidfuzz | 1 | 9,920 | 4,186 | 150 | 0.50 | 0.9434 | 0.5963 | 1.0000 | derived | +0.0566 |
+| febrl_person | rapidfuzz | 2 | 9,970 | 4,231 | 149 | 0.50 | 0.9460 | 0.5963 | 1.0000 | derived | +0.0540 |
+| febrl_person | embedding_cosine | 0 | 9,990 | 4,180 | 149 | 0.50 | 0.0688 | 0.8090 | 0.8926 | derived | +0.8238 |
+| febrl_person | embedding_cosine | 1 | 9,920 | 4,186 | 150 | 0.50 | 0.0692 | 0.8107 | 0.8846 | derived | +0.8154 |
+| febrl_person | embedding_cosine | 2 | 9,970 | 4,231 | 149 | 0.50 | 0.0680 | 0.8107 | 0.8734 | derived | +0.8054 |
+| fodors_zagat | rapidfuzz | 0 | 2,422 | 1,014 | 33 | 0.50 | 0.1164 | 0.6725 | 0.5299 | derived | +0.4135 |
+| fodors_zagat | rapidfuzz | 1 | 2,431 | 1,004 | 33 | 0.50 | 0.1107 | 0.6725 | 0.5688 | derived | +0.4581 |
+| fodors_zagat | rapidfuzz | 2 | 2,454 | 977 | 33 | 0.50 | 0.1121 | 0.6762 | 0.5357 | derived | +0.4237 |
+| fodors_zagat | embedding_cosine | 0 | 2,422 | 1,014 | 33 | 0.50 | 0.0630 | 0.9018 | 0.9254 | derived | +0.8623 |
+| fodors_zagat | embedding_cosine | 1 | 2,431 | 1,004 | 33 | 0.50 | 0.0636 | 0.9018 | 0.9524 | derived | +0.8887 |
+| fodors_zagat | embedding_cosine | 2 | 2,454 | 977 | 33 | 0.50 | 0.0653 | 0.9018 | 0.9355 | derived | +0.8701 |
+| ⚠ tiny_fixture | rapidfuzz | 0 | 28 | 3 | **1** | 0.50 | 1.0000 | 0.6319 | 0.0000 | derived | **−1.0000** |
+| ⚠ tiny_fixture | rapidfuzz | 1 | 28 | 3 | **1** | 0.50 | 1.0000 | 0.6319 | 0.0000 | derived | **−1.0000** |
+| ⚠ tiny_fixture | rapidfuzz | 2 | 26 | 3 | **1** | 0.50 | 1.0000 | 0.6214 | 1.0000 | **declined** | +0.0000 |
+| ⚠ tiny_fixture | embedding_cosine | 0 | 28 | 3 | **1** | 0.50 | 0.5000 | 0.9451 | 1.0000 | derived | +0.5000 |
+| ⚠ tiny_fixture | embedding_cosine | 1 | 28 | 3 | **1** | 0.50 | 0.5000 | 0.9451 | 1.0000 | derived | +0.5000 |
+| ⚠ tiny_fixture | embedding_cosine | 2 | 26 | 3 | **1** | 0.50 | 0.5000 | 0.9451 | 1.0000 | derived | +0.5000 |
+| walmart_amazon | rapidfuzz | 0 | 615,690 | 259,587 | 325 | 0.50 | 0.0083 | 0.5590 | 0.0112 | derived | +0.0028 |
+| walmart_amazon | rapidfuzz | 1 | 614,841 | 260,526 | 325 | 0.50 | 0.0087 | 0.5206 | 0.0097 | derived | +0.0011 |
+| walmart_amazon | rapidfuzz | 2 | 614,615 | 260,465 | 324 | 0.50 | 0.0091 | 0.5538 | 0.0119 | derived | +0.0029 |
+| walmart_amazon | embedding_cosine | 0 | 615,690 | 259,587 | 325 | 0.50 | 0.0025 | 0.8634 | 0.0336 | derived | +0.0311 |
+| walmart_amazon | embedding_cosine | 1 | 614,841 | 260,526 | 325 | 0.50 | 0.0025 | 0.8633 | 0.0332 | derived | +0.0307 |
+| walmart_amazon | embedding_cosine | 2 | 614,615 | 260,465 | 324 | 0.50 | 0.0025 | 0.8633 | 0.0323 | derived | +0.0299 |
+| wdc_computers | rapidfuzz | 0 | 112,037 | 47,359 | 308 | 0.50 | 0.0272 | 0.4142 | 0.0218 | **declined** | +0.0000 |
+| wdc_computers | rapidfuzz | 1 | 111,377 | 47,639 | 310 | 0.50 | 0.0291 | 0.4056 | 0.0222 | **declined** | +0.0000 |
+| wdc_computers | rapidfuzz | 2 | 111,850 | 47,421 | 312 | 0.50 | 0.0283 | 0.4045 | 0.0216 | **declined** | +0.0000 |
+| wdc_computers | embedding_cosine | 0 | 112,037 | 47,359 | 308 | 0.50 | 0.0129 | 0.8725 | 0.0485 | derived | +0.0356 |
+| wdc_computers | embedding_cosine | 1 | 111,377 | 47,639 | 310 | 0.50 | 0.0129 | 0.8671 | 0.0417 | derived | +0.0287 |
+| wdc_computers | embedding_cosine | 2 | 111,850 | 47,421 | 312 | 0.50 | 0.0131 | 0.8730 | 0.0471 | derived | +0.0340 |
+
+⚠ `tiny_fixture` is a **12-record smoke fixture**, not an ER benchmark. Its
+held-out corpus is 3 records with **one** gold pair, so its F1 is a coin flip
+between `0.0` and `1.0` and its ±1.0000 deltas carry no evidential weight in
+either direction. It is kept in the table rather than dropped, because dropping
+the only cells that lose would be exactly the wrong instinct — but it should not
+be read as a benchmark result. (The harness refuses a cell with **zero** blocked
+gold pairs; a corpus with one is the smallest thing it will still report.)
+
+### 2.1 Counted
+
+| outcome | cells | where |
+|---|---|---|
+| derived cut kept **and** better held-out | **45** | every scorer on all 8 real benchmarks, at every seed, except the 7 declines below |
+| race declined → threshold unmoved, Δ exactly 0 | **7** | dblp_scholar/rapidfuzz ×3, wdc_computers/rapidfuzz ×3, tiny_fixture/rapidfuzz seed 2 |
+| derived cut kept **and** worse held-out | **2** | tiny_fixture/rapidfuzz seeds 0–1 (1 gold pair) |
+
+**Seed stability.** No benchmark×scorer flips its `kept` verdict across seeds
+except `tiny_fixture`/`rapidfuzz` (derived, derived, declined) — and that is the
+1-gold-pair fixture again. Derived cuts are stable to ~±0.005 between seeds
+(e.g. dblp_acm/rapidfuzz 0.6952 / 0.6917 / 0.6954).
+
+### 2.2 Was the race right when it declined?
+
+| declined cell | incumbent F1 | derived F1 (not applied) | declining was… |
+|---|---|---|---|
+| dblp_scholar/rapidfuzz s0 | 0.0344 | 0.0324 | correct |
+| dblp_scholar/rapidfuzz s1 | 0.0332 | 0.0317 | correct |
+| dblp_scholar/rapidfuzz s2 | 0.0335 | 0.0316 | correct |
+| wdc_computers/rapidfuzz s0 | 0.0272 | 0.0218 | correct |
+| wdc_computers/rapidfuzz s1 | 0.0291 | 0.0222 | correct |
+| wdc_computers/rapidfuzz s2 | 0.0283 | 0.0216 | correct |
+| tiny_fixture/rapidfuzz s2 | 1.0000 | 1.0000 | a tie — incumbent kept by rule |
+
+**7 declines, 0 mistakes.** The race never refused a cut that would have helped.
+That is the number that matters for #241's design: a plain derive-and-apply would
+have shipped six real held-out regressions on two benchmarks as "improvements".
 
 ---
 
