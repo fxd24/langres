@@ -563,7 +563,8 @@ from langres.data import list_benchmarks, get_benchmark
 
 for entry in list_benchmarks():
     print(entry.name, entry.task, entry.loadable)
-    # fodors_zagat linkage True / amazon_google linkage True / abt_buy linkage True / ...
+    # name-sorted: abt_buy linkage True / amazon_google linkage True /
+    # dblp_acm linkage True / ... / febrl_dedup dedup True / ...
 
 bench = get_benchmark("fodors_zagat")   # loads just this one dataset
 ```

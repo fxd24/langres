@@ -105,6 +105,10 @@ SHIPPED_NON_PY_FILES = frozenset(
         "data/datasets/tiny_fixture/train.csv",
         "data/datasets/tiny_fixture/valid.csv",
         "data/datasets/tiny_fixture/test.csv",
+        # -- synthetic FEBRL3, full (BSD-3, no PII) -- the dedup benchmark ---
+        "data/datasets/febrl_dedup/SOURCE.md",
+        "data/datasets/febrl_dedup/records.csv",
+        "data/datasets/febrl_dedup/gold_clusters.csv",
         # -- synthetic FEBRL4 subset (BSD-3, no PII) ------------------------
         "data/datasets/febrl_person/SOURCE.md",
         "data/datasets/febrl_person/person_a.csv",

@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Any
 
 from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.model_ref import ModelRef
+from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL, ModelRef
 
 
 def test_sentence_transformer_config_round_trips_full_model_ref_and_runtime() -> None:
@@ -102,3 +102,35 @@ def test_parameter_count_sums_the_loaded_weights(monkeypatch) -> None:
     embedder = SentenceTransformerEmbedder(model_name="org/model")
 
     assert embedder.parameter_count == 1_234_567
+
+
+def test_the_default_embedder_ships_with_no_prompt_recipe() -> None:
+    """The default must stay in the configuration the ladder measured: BARE.
+
+    ``intfloat/e5-base-v2``'s model card asks for a prefix and warns that
+    omitting one degrades the model (README FAQ 1). For a *symmetric* task like
+    ER the card's recipe is ``"query: "`` on **both** sides (L2692) — not the
+    ``"query: "``/``"passage: "`` retrieval pair (L2690) — and
+    ``VectorBlocker`` already accepts that shape without warning. So the
+    standing temptation is to wire it into the default.
+
+    Don't do it here first. Every number backing this default
+    (``docs/research/20260727_embedder_ladder.md``) was measured at
+    ``prompt_arm="none"`` — neither side prefixed, ``registered_prompts: []``,
+    and no ``documented`` arm for this model at all. The symmetric recipe is
+    **unmeasured**, so switching it on would put a configuration nobody measured
+    behind those numbers. That the model still won while degraded makes the
+    measured margin a floor, not a reason to leave the upside uncollected —
+    measure a symmetric arm in the ladder, then change this test together with
+    the rows that justify it.
+    """
+    embedder = SentenceTransformerEmbedder()
+
+    assert embedder.model_name == DEFAULT_EMBEDDING_MODEL == "intfloat/e5-base-v2"
+    assert embedder.prompt_name is None
+    assert not embedder.prompts
+
+    # The serialized config must not smuggle one back in either.
+    config = embedder.config()
+    assert config.prompt_name is None
+    assert not config.prompts

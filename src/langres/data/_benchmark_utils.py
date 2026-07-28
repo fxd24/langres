@@ -100,8 +100,9 @@ def read_csv_rows(package: str, filename: str) -> list[dict[str, str]]:
             "langres from a git checkout:\n"
             "    git clone https://github.com/fxd24/langres\n"
             "    pip install -e ./langres  # or, inside the checkout: uv sync\n"
-            "Datasets whose data IS bundled: tiny_fixture (loads on a core install), "
-            "fodors_zagat and febrl_person (their loaders need the [semantic] extra)."
+            "Datasets whose data IS bundled: tiny_fixture and febrl_dedup (both load "
+            "on a core install), fodors_zagat and febrl_person (their loaders need "
+            "the [semantic] extra)."
         ) from exc
     reader = csv.DictReader(text.splitlines())
     return [dict(row) for row in reader]
@@ -125,15 +126,16 @@ def sweep_blocking_k(
     *,
     text_field: str,
     ks: tuple[int, ...],
+    cross_source_only: bool = True,
 ) -> dict[int, float]:
-    """Measure cross-source Pair-Completeness of vector blocking across ``ks``.
+    """Measure Pair-Completeness of vector blocking across ``ks``.
 
     Builds the FAISS index once over ``text_field`` and reuses it across every
     ``k`` (only ``k_neighbors`` changes), so the corpus is embedded a single
-    time. For each ``k`` the candidates are filtered to cross-source pairs before
-    recall is measured via :func:`~langres.core.metrics.evaluate_blocking`.
-    ``candidate_recall`` *is* Pair-Completeness (the fraction of gold match pairs
-    surfaced as candidates), which is what the blocking gate is defined on.
+    time. For each ``k`` recall is measured via
+    :func:`~langres.core.metrics.evaluate_blocking`; ``candidate_recall`` *is*
+    Pair-Completeness (the fraction of gold match pairs surfaced as candidates),
+    which is what the blocking gate is defined on.
 
     Args:
         corpus: Combined record list for the dataset.
@@ -144,9 +146,15 @@ def sweep_blocking_k(
         text_field: Attribute name holding each record's blocking text (e.g.
             ``"embed_text"``).
         ks: Neighbor counts to sweep.
+        cross_source_only: Restrict candidates to cross-source pairs before
+            measuring (the default, and correct for every *linkage* benchmark:
+            its true matches are all cross-source, so intra-source pairs are
+            noise). A single-source **dedup** corpus must pass ``False`` — its
+            records carry no ``source`` field to compare, and an intra-source
+            pair is exactly what a match is there.
 
     Returns:
-        Mapping of ``k`` to cross-source Pair-Completeness.
+        Mapping of ``k`` to Pair-Completeness.
     """
     # Lazy [semantic] import (kept out of module scope): only this k-sweep needs
     # the vector stack, so importing it here keeps the module faiss-free for the
@@ -171,10 +179,17 @@ def sweep_blocking_k(
             text_field=text_field,
             k_neighbors=k,
         )
-        candidates = cross_source(list(blocker.stream(records)))
+        candidates = list(blocker.stream(records))
+        if cross_source_only:
+            candidates = cross_source(candidates)
         recall = evaluate_blocking(candidates, gold_clusters).candidate_recall
         recalls[k] = recall
-        logger.info("blocking k=%d -> cross-source recall=%.4f", k, recall)
+        logger.info(
+            "blocking k=%d -> %srecall=%.4f",
+            k,
+            "cross-source " if cross_source_only else "",
+            recall,
+        )
     return recalls
 
 

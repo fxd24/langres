@@ -38,8 +38,17 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from langres.data.benchmark import Benchmark
 
-#: The evaluation task shape. All current entries are cross-source *linkage*
-#: benchmarks; ``dedup`` is reserved for single-source dedup datasets.
+#: The evaluation task shape: cross-source ``linkage`` (two record sets, matches
+#: are all cross-source) or single-source ``dedup`` (one record set partitioned
+#: into entities — what ``dedupe()`` does).
+#:
+#: **This is descriptive metadata, not scoring dispatch.** Nothing in
+#: :mod:`langres.benchmarks.runner` reads it, and there is no bipartite metric
+#: path to select: both task values get the same pair and cluster tracks.
+#: Its consumers are discovery (:func:`list_benchmarks`) and the research
+#: profiler, which scopes its ``large-component`` caveat to ``linkage`` because a
+#: big cluster means something different in a dedup corpus. Set it truthfully so
+#: those readers are not misled — not because a metric switch depends on it.
 BenchmarkTask = Literal["linkage", "dedup"]
 
 #: Optional-dependency package -> the extra that ships it, for actionable errors.
@@ -301,6 +310,27 @@ register(
         loader_symbol="WdcComputersBenchmark",
     )
 )
+# ---------------------------------------------------------------------------
+# The single-source DEDUPLICATION benchmark. Every entry above is a cross-source
+# linkage task, which left ``dedupe()`` — langres's primary shipped verb — with
+# nothing to be measured on. FEBRL3 is the classic intra-source dedup dataset:
+# one 5000-record table (no ``source`` field to partition candidates by),
+# clusters of size 1–6, gold given as entity membership rather than as the
+# transitive closure of a pair file. Same generator and licence clearance as the
+# ``febrl_person`` FEBRL4 linkage entry above.
+# ---------------------------------------------------------------------------
+
+register(
+    BenchmarkEntry(
+        name="febrl_dedup",
+        task="dedup",
+        domain="person",
+        loadable=True,
+        module_path="langres.data.febrl_dedup",
+        loader_symbol="FebrlDedupBenchmark",
+    )
+)
+
 register(
     BenchmarkEntry(
         name="opensanctions",

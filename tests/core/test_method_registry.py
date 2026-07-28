@@ -225,7 +225,7 @@ class TestBuiltinSpecs:
 
     def test_embedding_reports_the_pinned_embedder_as_its_model(self) -> None:
         spec = get_method("embedding")
-        assert spec.default_model == DEFAULT_EMBEDDING_MODEL == "all-MiniLM-L6-v2"
+        assert spec.default_model == DEFAULT_EMBEDDING_MODEL == "intfloat/e5-base-v2"
         # Its model slot is the blocker's embedder: in-process kinds, no API.
         assert spec.accepted_kinds == {"hf", "local"}
 

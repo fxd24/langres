@@ -1,0 +1,41 @@
+[
+  {
+    "benchmark": "dblp_acm",
+    "gold_closure": 2220,
+    "gold_raw": 2220,
+    "k": 20,
+    "langres_score_blocking": 0.9914414414414414,
+    "metric_revision": 1,
+    "model": "sentence-transformers/all-mpnet-base-v2",
+    "n_candidates_directional": 52320,
+    "n_candidates_symmetric": 31754,
+    "paper": 0.9954954954954955,
+    "paper_direction_closure_gold": 0.9954954954954955
+  },
+  {
+    "benchmark": "abt_buy",
+    "gold_closure": 1044,
+    "gold_raw": 1028,
+    "k": 20,
+    "langres_score_blocking": 0.9367816091954023,
+    "metric_revision": 1,
+    "model": "sentence-transformers/all-mpnet-base-v2",
+    "n_candidates_directional": 21620,
+    "n_candidates_symmetric": 10897,
+    "paper": 0.9737354085603113,
+    "paper_direction_closure_gold": 0.9588122605363985
+  },
+  {
+    "benchmark": "amazon_google",
+    "gold_closure": 1390,
+    "gold_raw": 1167,
+    "k": 20,
+    "langres_score_blocking": 0.8107913669064748,
+    "metric_revision": 1,
+    "model": "sentence-transformers/all-mpnet-base-v2",
+    "n_candidates_directional": 27260,
+    "n_candidates_symmetric": 22886,
+    "paper": 0.9580119965724079,
+    "paper_direction_closure_gold": 0.8043165467625899
+  }
+]

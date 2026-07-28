@@ -450,7 +450,8 @@ class SentenceTransformerEmbedder:
 
     Note:
         Common models and their dimensions:
-        - "all-MiniLM-L6-v2": 384 dim (fast, good quality)
+        - "intfloat/e5-base-v2": 768 dim (the default; best measured OSI model)
+        - "all-MiniLM-L6-v2": 384 dim (fast, the previous default)
         - "all-mpnet-base-v2": 768 dim (slower, better quality)
         - "all-MiniLM-L12-v2": 384 dim (medium speed/quality)
 
@@ -484,7 +485,11 @@ class SentenceTransformerEmbedder:
 
         Args:
             model_name: Name of the sentence-transformers model to use.
-                Default: "all-MiniLM-L6-v2" (fast, good quality baseline).
+                Default: :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`
+                ("intfloat/e5-base-v2", 768-dim, MIT) — the best OSI-licensed
+                model measured in ``docs/research/20260727_embedder_ladder.md``.
+                It is measured and shipped **without** a prompt; see that
+                constant before adding one.
             batch_size: Number of texts to encode per batch.
                 Default: 32. Use 128+ for GPU with sufficient memory.
             show_progress_bar: Display encoding progress for large datasets.
@@ -771,7 +776,9 @@ class FakeEmbedder:
 
         Args:
             embedding_dim: Dimensionality of fake embeddings to produce.
-                Default: 384 (matches all-MiniLM-L6-v2).
+                Default: 384. An arbitrary, stable size — it deliberately does
+                **not** track :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`
+                (now 768-dim), since nothing about a fake embedder needs to.
             normalize_embeddings: L2-normalize embeddings to unit vectors.
                 Default: True (matches SentenceTransformerEmbedder behavior).
         """
@@ -1400,13 +1407,35 @@ class DiskCachedEmbedder:
         it is actually a mapping, and serialized sorted — dict order is not part
         of its meaning, so it must not be part of the key.
 
-        Returns ``""`` when none of them is set, so every cache written before
-        these knobs existed still hits. That is deliberate: closing the hazard
-        must not cost a full re-encode for the overwhelmingly common unset case.
+        **The model itself is the setting that changes the vectors most, and it
+        used to be missing here.** ``namespace`` defaults to ``"default"``, so
+        the ordinary
+        ``DiskCachedEmbedder(embedder=SentenceTransformerEmbedder(), cache_dir=...)``
+        wrote every model's vectors into one ``default.db`` keyed on the bare
+        text. Swapping the wrapped model — including by upgrading langres, since
+        that moved :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL` — then
+        hit those entries and served the *previous* model's vectors under the new
+        one, at the previous model's dimensionality. A fully warm cache did this
+        silently; a partially warm one produced a ragged 384/768 stack. The model
+        ref is preferred over the bare name because it also pins ``revision``: the
+        same name at a different Hub revision is a different checkpoint and must
+        not share entries.
+
+        Returns ``""`` only for an embedder with **no** model identity and none of
+        the knobs set — a ``FakeEmbedder`` and the like — so caches written by
+        those still hit. A cache written by a *named* model does not: it is
+        re-encoded once, which is the price of no longer being silently wrong.
         """
         prompt_name = getattr(self.embedder, "prompt_name", None)
         truncate_dim = getattr(self.embedder, "truncate_dim", None)
         prompts = getattr(self.embedder, "prompts", None)
+        # `model_ref` first (it carries `revision`), then the bare name. Both are
+        # read defensively: the wrapped embedder is structurally typed and need
+        # not carry either.
+        model = getattr(self.embedder, "model_ref", None) or getattr(
+            self.embedder, "model_name", None
+        )
+        identity = "" if model is None else str(model)
         # A mapping only — the wrapped embedder is structurally typed, so an
         # unrelated `prompts` attribute of some other shape must not become the
         # cache key (nor raise from a key-derivation function). `Mapping`, not
@@ -1414,9 +1443,12 @@ class DiskCachedEmbedder:
         # mapping, and narrowing to the concrete type would silently drop it
         # from the key — the fail-open this check exists to prevent.
         registered = sorted(prompts.items()) if isinstance(prompts, Mapping) else []
-        if prompt_name is None and truncate_dim is None and not registered:
+        if prompt_name is None and truncate_dim is None and not registered and not identity:
             return ""
-        return f"|||NAME|||{prompt_name}|||DIM|||{truncate_dim}|||PROMPTS|||{registered!r}"
+        return (
+            f"|||MODEL|||{identity}|||NAME|||{prompt_name}"
+            f"|||DIM|||{truncate_dim}|||PROMPTS|||{registered!r}"
+        )
 
     def _hash_text(self, text: str, prompt: str | None = None) -> str:
         """Generate cache key from text, prompt, and the embedder's own settings.
