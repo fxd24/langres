@@ -734,25 +734,50 @@ def save_results(
             "jina_crossencoder": qdrant_crossencoder_results,
         },
         "comparison": {
-            # Which of the deltas below are NOT like-for-like. `qdrant_hybrid` is
-            # unprompted while the other two arms are prompted, so any delta with
-            # one foot in each camp moves an index AND a prompt regime at once and
-            # cannot be attributed to either alone. Named here rather than left for
-            # the reader to infer from `query_prompt_by_arm`, because a delta that
-            # looks like every other delta will be read like every other delta.
+            # Which of the deltas below are NOT like-for-like, and in how many
+            # ways each. `qdrant_hybrid` is unprompted while the other two arms
+            # are prompted, so any delta with one foot in each camp moves an index
+            # AND a prompt regime at once. The crossencoder arm also RETRIEVES
+            # DEEPER before it reranks (CROSSENCODER_PREFETCH=100 vs
+            # PREFETCH_LIMIT=20 -- both cut to K_NEIGHBORS=20), so a gold pair
+            # sitting at rank 21-100 is reachable for that arm and unreachable for
+            # the others: depth alone can move recall, with no reranker credit
+            # due. Named here rather than left for the reader to infer, because a
+            # delta that looks like every other delta will be read like every
+            # other delta -- and an UNDER-counted confound is the more dangerous
+            # error, since naming two makes the list read as complete.
             "confounded_deltas": {
                 "hybrid_vs_faiss": (
                     "index change + prompt regime change (hybrid unprompted, FAISS prompted)"
                 ),
                 "crossencoder_vs_hybrid": (
-                    "reranker + prompt regime change (hybrid unprompted, crossencoder prompted)"
+                    "reranker + prompt regime change (hybrid unprompted, crossencoder "
+                    f"prompted) + retrieval depth ({CROSSENCODER_PREFETCH} vs "
+                    f"{PREFETCH_LIMIT} candidates before the cut to {K_NEIGHBORS})"
+                ),
+                "crossencoder_vs_faiss": (
+                    "index change + reranker + retrieval depth "
+                    f"({CROSSENCODER_PREFETCH} vs {K_NEIGHBORS} retrieved); the prompt "
+                    "regime is the one thing that DOES match"
                 ),
             },
             # Deliberately NOT called "like_for_like": this delta matches on the
             # PROMPT REGIME only (both arms prompted). It still moves the index
-            # backend and adds a reranker, so it is not a clean single-variable
-            # comparison either -- it is only free of the prompt confound above.
+            # backend, adds a reranker, and retrieves deeper -- so it is not a
+            # clean single-variable comparison either. It is only free of the
+            # prompt confound, which is why it appears in `confounded_deltas` too.
             "prompt_regime_matched_deltas": ["crossencoder_vs_faiss"],
+            # The depth every arm is finally cut to, beside the depth each one
+            # searched to get there. Without both numbers "prefetch=100" reads as
+            # "returns 100", and the deltas look like they compare different k.
+            "retrieval_depth_by_arm": {
+                "faiss": {"retrieved": K_NEIGHBORS, "reported": K_NEIGHBORS},
+                "qdrant_hybrid": {"retrieved": PREFETCH_LIMIT, "reported": K_NEIGHBORS},
+                "qdrant_crossencoder": {
+                    "retrieved": CROSSENCODER_PREFETCH,
+                    "reported": K_NEIGHBORS,
+                },
+            },
             "recall_ranking": recall_ranking,
             "precision_ranking": precision_ranking,
             "speed_ranking": speed_ranking,
@@ -937,6 +962,24 @@ def main() -> None:
     print("\n" + "=" * 120)
     print("KEY INSIGHTS & RECOMMENDATIONS")
     print("=" * 120)
+
+    # What the per-row tags mean, said once. "prompt-matched" is the dangerous
+    # one: it reads as "clean", and it is only clean on the PROMPT axis -- the
+    # arms still differ by backend, by reranker, and by how deep each searched
+    # before cutting to the same k. A tag that names one controlled variable
+    # implies the others were controlled too, so spell out what is still moving.
+    print(
+        f"\n   Reading the tags: 'confounded' = the two arms differ in prompt regime\n"
+        f"   ({HYBRID_ROW_LABEL.rstrip(':')} is the only unprompted arm) AND in backend.\n"
+        f"   'prompt-matched' = same prompt regime only -- backend, reranker and\n"
+        f"   retrieval depth still differ (FAISS/Hybrid search {K_NEIGHBORS}/"
+        f"{PREFETCH_LIMIT}, CrossEncoder\n"
+        f"   searches {CROSSENCODER_PREFETCH} before every arm is cut to "
+        f"{K_NEIGHBORS}), so a gold pair at\n"
+        f"   rank {K_NEIGHBORS + 1}-{CROSSENCODER_PREFETCH} is reachable for one arm "
+        f"and not the others.\n"
+        f"   No delta below is a single-variable comparison."
+    )
 
     # Recall comparison
     print("\n📊 RECALL (% of true duplicates found):")

@@ -12,11 +12,21 @@
   never reach the encoder. The failure mode this hid is a prompt sweep returning
   *identical* numbers at every setting, which reads as "the instruction does not
   help"; this repo published exactly that table once. Use `FAISSIndex` (it
-  re-encodes the query side), `QdrantHybridRerankingIndex` (its reranking pass
-  encodes queries with the prompt), or call
-  `search(query_texts, k, query_prompt=...)` directly. The exception message
-  names all three. `FakeHybridVectorIndex.search_all()` rejects it too, so a test
-  double can no longer accept what the real index refuses.
+  re-encodes the query side) or call `search(query_texts, k, query_prompt=...)`
+  directly, which does encode. **`QdrantHybridRerankingIndex` is not the escape
+  hatch it looks like**: in *its* `search_all()` the dense side is cached and the
+  sparse side is unprompted, so only the reranking embedder could see the prompt
+  — and the documented production one, `FastEmbedLateInteractionEmbedder`,
+  declares `honours_prompt = False`. It therefore refuses too (below), and the
+  exception message says so rather than handing you the next exception.
+  `FakeHybridVectorIndex.search_all()` rejects it too, so a test double can no
+  longer accept what the real index refuses.
+- **`QdrantHybridRerankingIndex.search_all()` now raises `NotImplementedError`
+  when passed a `query_prompt` and its reranking embedder does not honour
+  prompts.** The check reads `honours_prompt`, defaulting to `True`, so an
+  unknown or duck-typed reranker is trusted rather than broken; only an embedder
+  that *declares* it ignores prompts is refused. Pass a prompt-honouring
+  reranker and the call works unchanged.
 - **`VectorBlocker` now warns when only one half of an asymmetric recipe is
   driven** — an embedder binding a `prompt_name` whose prefix is *not* the
   query-side one, with no `query_prompt` on the blocker. `search_all()` reuses

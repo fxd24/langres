@@ -370,9 +370,12 @@ class QdrantHybridIndex:
                 published one table of exact ``0.0000`` deltas from precisely
                 this shape of no-op (``FAISSIndex.search_all``, fixed in #239).
                 Use :class:`~langres.core.indexes.vector_index.FAISSIndex`, which
-                re-encodes the query side, or
-                :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`,
-                whose reranking pass encodes queries with the prompt.
+                re-encodes the query side, or call ``search(query_texts, k,
+                query_prompt=...)`` directly, which does encode.
+                :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`
+                is **not** a drop-in alternative: its ``search_all`` refuses the
+                same argument whenever its reranking embedder ignores prompts,
+                which the production ``FastEmbedLateInteractionEmbedder`` does.
 
         Note:
             Performance optimization: Reuses cached dense embeddings from create_index(),

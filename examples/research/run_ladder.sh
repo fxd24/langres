@@ -35,12 +35,16 @@
 # Environment:
 #   LADDER_MODELS                 space-separated subset to sweep
 #   LADDER_DEVICE                 pin a torch device (default: let ST choose)
-#   LADDER_TRUST_EXISTING_CACHE   forward --trust-existing-cache to the harness,
-#                                 vouching for an embedding cache that predates
-#                                 the integrity canary. An env var and not a flag
-#                                 because this script's only positional argument
-#                                 is a wait PID -- `--trust-existing-cache` passed
-#                                 here would be silently read as one.
+#   LADDER_TRUST_EXISTING_CACHE   set to exactly 1 to forward
+#                                 --trust-existing-cache to the harness, vouching
+#                                 for an embedding cache that predates the
+#                                 integrity canary. Requires LADDER_MODELS to name
+#                                 exactly ONE model: vouching is a claim about a
+#                                 specific checkpoint's vectors, so a sweep cannot
+#                                 make it. An env var and not a flag because this
+#                                 script's only positional argument is a wait PID
+#                                 -- `--trust-existing-cache` passed here would be
+#                                 silently read as one.
 #
 # Run from the repository root.
 
@@ -96,7 +100,21 @@ TRUST_ARG=()
 case "${LADDER_TRUST_EXISTING_CACHE:-}" in
   "") ;;
   1) TRUST_ARG=(--trust-existing-cache)
-     log "LADDER_TRUST_EXISTING_CACHE=1 -- vouching for existing caches this run" ;;
+     # The harness requires exactly one --models per invocation before it will
+     # adopt a cache, and this loop hands it exactly one -- per model, N times
+     # over. So the Python safeguard passes on every child while the DRIVER
+     # blesses the whole ladder: six unverified namespaces from a flag documented
+     # as vouching for one. The safeguard has to exist at the level that chooses
+     # the model list, which is here. (Cross-model review.)
+     if [ ${#MODELS[@]} -ne 1 ]; then
+       log "LADDER_TRUST_EXISTING_CACHE=1 vouches for ONE cache, but this run sweeps"
+       log "  ${#MODELS[@]} models. Adopting a namespace asserts its vectors came from"
+       log "  the checkpoint loaded now -- a claim about a specific model, not one you"
+       log "  can make for a whole ladder at once. Re-run as:"
+       log "    LADDER_MODELS='<one model>' LADDER_TRUST_EXISTING_CACHE=1 $0"
+       exit 2
+     fi
+     log "LADDER_TRUST_EXISTING_CACHE=1 -- vouching for ${MODELS[0]}'s cache this run" ;;
   *) log "LADDER_TRUST_EXISTING_CACHE must be exactly 1 or unset (got '${LADDER_TRUST_EXISTING_CACHE}')"
      exit 2 ;;
 esac
