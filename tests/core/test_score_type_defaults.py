@@ -224,6 +224,36 @@ class TestInertThresholdIsLoudNotSilent:
             ]
         assert outputs[0] == outputs[1] == outputs[2]
 
+    def test_rapidfuzz_matcher_threshold_is_inert_too(self) -> None:
+        """The third decorative knob in the PR #250 inventory, pinned as behaviour.
+
+        ``RapidfuzzMatcher`` range-checks and stores ``threshold`` and then never
+        reads it -- it is a *ranker*, so the caller's cut decides. Verified by
+        construction as well as by output: ``method_registry._build_rapidfuzz``
+        passes no threshold at all, and the class has no ``config``/``from_config``
+        that could round-trip one.
+        """
+        from langres.core.matchers.rapidfuzz import RapidfuzzMatcher
+        from langres.core.models import ERCandidate
+
+        def _score_at(threshold: float) -> float:
+            matcher: RapidfuzzMatcher[Any] = RapidfuzzMatcher(
+                field_extractors={"name": (lambda e: str(e.name), 1.0)},
+                threshold=threshold,
+            )
+            candidate: ERCandidate[Any] = ERCandidate(
+                left=_ThresholdDefaultsRecord(id="a", name="Acme Corporation"),
+                right=_ThresholdDefaultsRecord(id="b", name="Acme Corp"),
+                blocker_name="test",
+            )
+            judgement = next(iter(matcher.forward(iter([candidate]))))
+            assert judgement.score is not None
+            return judgement.score
+
+        # A threshold above AND below the pair's similarity: if the knob were
+        # read at all, at least one of these would differ.
+        assert _score_at(0.0) == _score_at(0.5) == _score_at(1.0)
+
     def test_a_scoring_recipe_is_NOT_threshold_invariant(self) -> None:
         """The control: without it, the test above would pass on a broken pipeline."""
         outputs = {
