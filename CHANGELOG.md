@@ -21,6 +21,13 @@ shipped behaviour said another and no test would notice.
   **The wiring itself changed no value** — all 13 registered methods resolved to
   exactly what they had before; the constant that then moves does so as a
   separate, measured change (below).
+
+  To be precise about what was fixed: `MethodSpec.default_threshold` still has no
+  runtime reader (a front door has a score *family*, not a method name, so it
+  resolves through `DEFAULT_THRESHOLDS` directly). What changed is that the field
+  and the shipped behaviour now derive from the **same** map, so they can no
+  longer disagree — and a test asserts every registered method matches its
+  family, which is the thing that was previously unobservable.
 - **Wired at the front doors**: `FuzzyString`, `VectorLLMCascade`, the four
   `architectures/retrieval.py` recipes, and `Reranker.for_schema`. An explicit
   `threshold=` is returned untouched, including one that happens to equal the
