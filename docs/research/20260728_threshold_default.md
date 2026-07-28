@@ -126,7 +126,45 @@ different answers:
 
 ## 4. The split trap — a finding about #241's *reporting* path
 
-<!-- SPLIT TRAP -->
+This study's first design fed every blocked candidate to
+`fit(pairs=…, split=0.3)` and read the held-out numbers `fit` printed. Those
+numbers were unusable, and the reason generalises past this harness.
+
+`align_pairs`' entity-disjoint split is a union-find over the two ids of each
+**labeled** pair, and it assigns *whole components* to `valid` (a row-random
+split would leak an entity across the boundary; assigning components cannot). It
+also refuses to empty `train`, skipping any component that would swallow every
+pair. Both rules are right. But a k-NN candidate graph over a real corpus is
+essentially **one giant component** — every record is a neighbour of a neighbour
+— so there is nothing left to assign:
+
+<!-- SPLIT TRAP TABLE -->
+
+Measured directly rather than inferred: every cell records what
+`align_pairs(split=0.3)` *would* have held out of the same label set the race
+used (`align_split_train` / `align_split_valid` in the JSON).
+
+**What this does and does not mean.**
+
+- It does **not** invalidate the race. Selection happens on `train`; `split=`
+  changes only what `FitReport` reports. A cut derived with `split=0.3` and one
+  derived with `split=None` differ only in how many labeled pairs the derivation
+  saw.
+- It **does** mean `FitReport.metrics` and `ThresholdCandidate.held_out_f1` are
+  not trustworthy at this label scale — not because they are computed wrongly,
+  but because the split that feeds them can silently return an empty, a
+  three-pair, or an *inverted* `valid`. `FitReport` already reports `n_valid`, so
+  the evidence is there; nothing warns.
+- The feature's own docstrings scope it to "a handful of corrections out of a
+  review loop", where components are sparse and the split behaves. The trap
+  appears when the label set is dense — which is exactly what a user gets if they
+  label a blocked candidate dump, and exactly what the fully-supervised regime in
+  §1 is.
+
+Worth its own follow-up: `align_pairs` could report the achieved valid fraction
+(or warn when it lands far from the requested `split`), the same way
+`GoldCoverage` makes blocking's leak visible instead of letting held-out metrics
+quietly absorb it.
 
 ---
 
