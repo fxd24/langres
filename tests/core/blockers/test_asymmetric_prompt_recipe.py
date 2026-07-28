@@ -26,7 +26,7 @@ import zlib
 import numpy as np
 import pytest
 
-from langres.core.blockers.vector import VectorBlocker
+from langres.core.blockers.vector import _QUERY_SIDE_PROMPT_NAMES, VectorBlocker
 from langres.core.indexes.vector_index import FAISSIndex, FakeVectorIndex
 
 DOCUMENT_PROMPT = "title: none | text: "
@@ -273,6 +273,41 @@ class TestCoherenceWarning:
             )
 
         assert _blocker_warnings(caplog) == []
+
+    def test_silent_for_the_documented_symmetric_query_prefix_recipe(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``prompt_name="query"`` with no ``query_prompt`` is symmetric, not broken.
+
+        ``intfloat/e5-base-v2``'s model card: *"Use 'query: ' prefix for symmetric
+        tasks such as semantic similarity, paraphrase retrieval"*. Everything gets
+        the query prefix and ``search_all`` compares those vectors to each other —
+        which is exactly what happens here. e5-base-v2 is in this repo's own
+        embedder ladder, so the warning would fire on a correct, documented setup.
+        """
+        embedder = _PrefixEmbedder(prompt_name="query", prompts={"query": QUERY_PROMPT})
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+        index.create_index(list(TEXTS))
+
+        with caplog.at_level(logging.WARNING, logger=BLOCKER_LOGGER):
+            VectorBlocker(
+                vector_index=index,
+                schema_factory=lambda record: record,
+                text_field_extractor=lambda entity: str(entity["name"]),
+                k_neighbors=3,
+            )
+
+        assert _blocker_warnings(caplog) == []
+
+    def test_the_symmetric_exemption_is_exactly_one_name(self) -> None:
+        """Guard the premise: an exemption that widened would mute the warning.
+
+        The check above passes for *any* prompt name the exemption covers, so on
+        its own it cannot tell "we exempt the query side" from "we exempt
+        everything". This pins the set — the same reason
+        ``NOT_VECTOR_INDEX_CLAIMANTS`` is written out rather than derived.
+        """
+        assert _QUERY_SIDE_PROMPT_NAMES == frozenset({"query"})
 
     def test_an_index_without_an_embedder_is_not_an_error(
         self, caplog: pytest.LogCaptureFixture

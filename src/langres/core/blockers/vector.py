@@ -37,6 +37,23 @@ from langres.core.serialization import ComponentSpec, SerializableState
 logger = logging.getLogger(__name__)
 
 
+#: Bound prompt names that mean "this prefix belongs on the QUERY side".
+#:
+#: Binding one of these index-wide and leaving ``query_prompt`` unset is a
+#: coherent **symmetric** recipe, not half an asymmetric one: every record is
+#: encoded with the query prefix and ``search_all`` compares those vectors to
+#: each other. ``intfloat/e5-base-v2``'s model card says so in as many words --
+#: *"Use 'query: ' prefix for symmetric tasks such as semantic similarity,
+#: paraphrase retrieval"* (verified against the card, 2026-07-28) -- and
+#: e5-base-v2 is one of the models in this repo's own embedder ladder. Warning
+#: on it would fire on a documented, correct configuration.
+#:
+#: An allow-list, and a one-element one: ``"query"`` is what
+#: ``SentenceTransformer.encode_query`` binds, so it is the name the library
+#: itself reserves for the query side. Any other name is unknowable from here.
+_QUERY_SIDE_PROMPT_NAMES = frozenset({"query"})
+
+
 def _document_prompt_name(vector_index: Any) -> str | None:
     """The document-side prompt bound to whatever embedder ``vector_index`` owns.
 
@@ -488,7 +505,11 @@ class VectorBlocker(Blocker[SchemaT]):
         # so a half-configured recipe is silent -- and one direction of it is
         # actively wrong, not merely incomplete. See the class docstring.
         document_prompt = _document_prompt_name(vector_index)
-        if document_prompt is not None and query_prompt is None:
+        if (
+            document_prompt is not None
+            and query_prompt is None
+            and document_prompt not in _QUERY_SIDE_PROMPT_NAMES
+        ):
             logger.warning(
                 "VectorBlocker: the index's embedder binds a document-side prompt "
                 "(prompt_name=%r) but this blocker sets no query_prompt. search_all() "
