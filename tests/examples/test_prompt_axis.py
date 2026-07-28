@@ -405,6 +405,108 @@ def test_the_committed_rows_still_match_the_harness_that_describes_them() -> Non
     assert harness.render_report(rows)
 
 
+def test_correcting_for_multiplicity_can_only_remove_claims() -> None:
+    """An interval spanning zero must not become an effect under any correction.
+
+    The recovered p-value is a function of the interval, so this is worth pinning
+    rather than assuming: if a spanning interval could read p<=0.05 the whole
+    section would be able to *invent* significance, which is the opposite of what
+    a correction is for.
+    """
+    assert harness._approximate_p_value(0.01, -0.02, 0.04) > 0.05
+    assert harness._approximate_p_value(-0.01, -0.04, 0.02) > 0.05
+    # And a wide margin still reads as strong, so the test above is not vacuous.
+    assert harness._approximate_p_value(0.10, 0.09, 0.11) < 1e-30
+
+
+def test_a_bound_resting_exactly_on_zero_reads_exactly_alpha() -> None:
+    """The knife-edge case is decided by arithmetic, not by a judgement call."""
+    assert harness._approximate_p_value(0.0152, 0.0, 0.031) == pytest.approx(0.05, abs=1e-12)
+    assert harness._approximate_p_value(-0.0152, -0.031, 0.0) == pytest.approx(0.05, abs=1e-12)
+    # p = alpha fails every Holm threshold once the family has more than one member.
+    assert harness._holm({"a": 0.05}) == {"a"}
+    assert harness._holm({"a": 0.05, "b": 0.5}) == set()
+
+
+def test_a_boundary_cell_is_found_structurally_not_by_comparing_p_to_alpha() -> None:
+    """The first version of this section reported zero boundary cells. There are four.
+
+    It classified them with ``p == 0.05``, and the recovered p lands on
+    0.05000000000000004 -- so the count printed 0 and the list printed empty,
+    which reads as "no boundary cases here" over four of them. The bound itself
+    is stored exactly, so that is what the classifier reads now.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    testable = [
+        row
+        for row in rows
+        if row.k == harness.HEADLINE_K
+        and row.arm != "none"
+        and harness._approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
+        is not None
+    ]
+    structural = [row for row in testable if harness._on_boundary(row)]
+    assert len(structural) == 4
+    by_float_equality = [
+        row
+        for row in testable
+        if harness._approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
+        == harness.ALPHA
+    ]
+    assert by_float_equality == [], "the discarded classifier would have to be blind here"
+
+
+def test_holm_stops_at_the_first_failure_instead_of_testing_each_alone() -> None:
+    """Step-down, not per-hypothesis: a failure blocks every larger p behind it."""
+    # m=3, thresholds 0.0167 / 0.025 / 0.05. The third p would pass its own
+    # threshold in isolation; Holm must not reach it, because the second fails.
+    assert harness._holm({"a": 0.001, "b": 0.03, "c": 0.04}) == {"a"}
+    assert harness._holm({"a": 0.001, "b": 0.02, "c": 0.04}) == {"a", "b", "c"}
+    # A family of one is simply the uncorrected test.
+    assert harness._holm({"a": 0.049}) == {"a"}
+
+
+def test_the_saturated_benchmark_produces_no_testable_comparison() -> None:
+    """No variation means no test -- not a null result, and not a silent zero."""
+    assert harness._approximate_p_value(0.0, 0.0, 0.0) is None
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    verdicts = harness._multiplicity(rows)
+    untestable = {key for key, (p_value, _) in verdicts.items() if p_value is None}
+    assert untestable, "the guard has to be seen firing on the real rows"
+    assert {benchmark for _, _, benchmark in untestable} == {"fodors_zagat"}
+
+
+def test_holm_withdraws_exactly_the_three_e5_documented_comparisons() -> None:
+    """Pin the retraction: the correction changed the study's answer, and by how much.
+
+    e5's documented arms are the only claims multiplicity costs us. Its whole
+    family fails at Holm's *first* step (smallest p 0.0221 against a 0.0167
+    threshold), so no e5 documented comparison survives -- which is why the
+    headline is "three of four instruction-trained models", not four.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    verdicts = harness._multiplicity(rows)
+    headline = [r for r in rows if r.k == harness.HEADLINE_K and r.arm != "none"]
+    excluded_zero = {
+        (r.model, r.arm, r.benchmark) for r in headline if not harness._spans_zero(r)
+    }
+    held = {key for key, (_, rejected) in verdicts.items() if rejected}
+    assert len(excluded_zero) == 40
+    assert len(held) == 37
+    assert excluded_zero - held == {
+        ("intfloat/e5-base-v2", "official_asymmetric", "abt_buy"),
+        ("intfloat/e5-base-v2", "official_symmetric", "amazon_google"),
+        ("intfloat/e5-base-v2", "official_symmetric", "wdc_computers"),
+    }
+    # Every documented-arm claim that survives belongs to one of the other three.
+    documented = {"official_retrieval", "official_query_instruction", "official_query_instruct"}
+    assert {model for model, arm, _ in held if arm in documented} == {
+        "google/embeddinggemma-300m",
+        "BAAI/bge-base-en-v1.5",
+        "Qwen/Qwen3-Embedding-0.6B",
+    }
+
+
 def test_every_model_pins_the_revision_it_was_measured_on() -> None:
     """A published row must name the weights that produced it.
 

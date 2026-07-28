@@ -1040,12 +1040,127 @@ def _fmt(value: float | None, digits: int = 4) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+def _spans_zero(row: Row) -> bool:
+    return row.ci_low is None or row.ci_high is None or row.ci_low <= 0.0 <= row.ci_high
+
+
+def _on_boundary(row: Row) -> bool:
+    """A testable comparison with a bound resting *exactly* on zero.
+
+    Detected from the stored bound, not from ``p == 0.05``. The p-value hits
+    0.05 only up to float round-off, so an equality test on it counted **none**
+    of the four real boundary cells and printed "0 sit on the boundary" -- a
+    check reporting all-clear because it could not see the thing it was for.
+    """
+    return row.ci_low == 0.0 or row.ci_high == 0.0
+
+
+def _holm_cell(row: Row, verdict: tuple[float | None, bool] | None) -> str:
+    if verdict is None:
+        return "-"
+    p_value, rejected = verdict
+    if p_value is None:
+        return "n/a"
+    if rejected:
+        return "**holds**"
+    return "-" if _spans_zero(row) else "withdrawn"
+
+
 def _interval(row: Row) -> str:
     if row.ci_low is None or row.ci_high is None:
         return "-"
     spans_zero = row.ci_low <= 0.0 <= row.ci_high
     marker = " (spans 0)" if spans_zero else " **"
     return f"[{row.ci_low:+.4f}, {row.ci_high:+.4f}]{marker}"
+
+
+ALPHA = 0.05
+
+#: Two-sided z for the 95% percentile intervals the rows carry.
+_Z_95 = 1.959963984540054
+
+
+def _approximate_p_value(delta: float, ci_low: float, ci_high: float) -> float | None:
+    """A two-sided p-value recovered from one bootstrap interval.
+
+    ``None`` when no test is possible: the arm changed no record's recall on this
+    benchmark, so ``delta`` and both bounds are exactly zero and the bootstrap has
+    no support to resample. Those cells are counted and named in the report rather
+    than silently treated as null results.
+
+    **This is an approximation, and the exact route was unavailable.** Holm needs
+    p-values; the rows carry 95% percentile intervals. Recomputing the bootstrap
+    at each Holm threshold would be exact, but the replicate distributions were
+    not retained and re-measuring costs the whole sweep. So the interval is read
+    as a normal one: ``SE`` is the distance from the estimate to the bound
+    **facing zero**, divided by ``z_.975``. Using only the zero-facing side is
+    deliberate -- it is the side that decides exclusion, and it avoids assuming
+    the percentile interval is symmetric.
+
+    Two consequences worth stating because they are checkable rather than
+    reassuring. A bound resting exactly on zero yields ``z = z_.975`` and
+    therefore ``p = 0.05`` exactly, so such a cell fails every Holm threshold in
+    a family of more than one comparison -- the boundary cells drop out by
+    arithmetic, not by a judgement call about them. And an interval that spans
+    zero yields ``p > 0.05``, so the correction can only ever remove claims the
+    uncorrected reading made, never add one.
+    """
+    if delta == 0.0 and ci_low == 0.0 and ci_high == 0.0:
+        return None
+    if delta == 0.0:
+        return 1.0
+    facing = ci_low if delta > 0.0 else ci_high
+    standard_error = abs(delta - facing) / _Z_95
+    if standard_error == 0.0:  # pragma: no cover - an interval of zero width
+        return 0.0
+    return math.erfc(abs(delta) / standard_error / math.sqrt(2.0))
+
+
+def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
+    """Keys Holm's step-down rejects at family-wise ``alpha``.
+
+    Holm sorts the family ascending and rejects ``H(i)`` while
+    ``p(i) <= alpha / (m - i + 1)``, stopping at the first failure. It is
+    uniformly at least as powerful as Bonferroni and needs no independence
+    assumption, which matters here: the arms of one model share a baseline and a
+    corpus, so their comparisons are strongly dependent.
+    """
+    ordered = sorted(p_values.items(), key=lambda item: item[1])
+    total = len(ordered)
+    rejected: set[str] = set()
+    for index, (key, p_value) in enumerate(ordered):
+        if p_value > alpha / (total - index):
+            break
+        rejected.add(key)
+    return rejected
+
+
+def _multiplicity(rows: Sequence[Row]) -> dict[tuple[str, str, str], tuple[float | None, bool]]:
+    """Per ``(model, arm, benchmark)``: its approximate p-value and its Holm verdict.
+
+    **The family is one ``(model, arm)`` across benchmarks**, which is the unit
+    the claims are stated in -- "this recipe helps this checkpoint" is a claim
+    about a row of the results table, and it is the multiplicity a reader of that
+    row is exposed to. It is declared here rather than left implicit because the
+    choice changes the answer: correcting over the whole sweep instead would be
+    stricter, and the report prints that sensitivity check next to this one.
+    """
+    verdicts: dict[tuple[str, str, str], tuple[float | None, bool]] = {}
+    families: dict[tuple[str, str], dict[str, float]] = {}
+    for row in rows:
+        if row.k != HEADLINE_K or row.arm == "none":
+            continue
+        if row.ci_low is None or row.ci_high is None or row.delta_per_record_recall is None:
+            continue
+        p_value = _approximate_p_value(row.delta_per_record_recall, row.ci_low, row.ci_high)
+        verdicts[(row.model, row.arm, row.benchmark)] = (p_value, False)
+        if p_value is not None:
+            families.setdefault((row.model, row.arm), {})[row.benchmark] = p_value
+    for (model, arm), family in families.items():
+        for benchmark in _holm(family):
+            p_value, _ = verdicts[(model, arm, benchmark)]
+            verdicts[(model, arm, benchmark)] = (p_value, True)
+    return verdicts
 
 
 def _assert_rows_match_declaration(rows: Sequence[Row]) -> None:
@@ -1138,6 +1253,7 @@ def render_report(rows: Sequence[Row]) -> str:
     add("")
 
     headline = [row for row in rows if row.k == HEADLINE_K]
+    verdicts = _multiplicity(rows)
     add(f"## Effect on candidate recall at k={HEADLINE_K}")
     add("")
     add(
@@ -1176,9 +1292,9 @@ def render_report(rows: Sequence[Row]) -> str:
         add("")
         add(
             "| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI "
-            "| doc shift | query shift | doc·query | pair J | candidates |"
+            "| Holm | doc shift | query shift | doc·query | pair J | candidates |"
         )
-        add("|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
+        add("|---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|")
         # Order by BENCHMARKS, but render every benchmark actually present in the
         # rows. Iterating BENCHMARKS alone dropped any benchmark reached via
         # `--benchmarks` from every headline table while still writing its rows --
@@ -1190,11 +1306,104 @@ def render_report(rows: Sequence[Row]) -> str:
                 add(
                     f"| {benchmark} | `{row.arm}` | {row.kind} | {row.candidate_recall:.4f} "
                     f"| {_fmt(row.delta_per_record_recall)} | {_interval(row)} "
+                    f"| {_holm_cell(row, verdicts.get((row.model, row.arm, row.benchmark)))} "
                     f"| {row.doc_shift_vs_none:.4g} | {row.query_shift_vs_none:.4g} "
                     f"| {row.doc_query_cosine:.4f} | {_fmt(row.pair_jaccard_vs_none, 3)} "
                     f"| {row.total_candidates} |"
                 )
         add("")
+
+    add("## What survives correcting for multiplicity")
+    add("")
+    add(
+        "Every interval above is a separate 95% interval, and this sweep contains "
+        f"{sum(1 for row in headline if row.arm != 'none')} of them. Read one at a "
+        "time each controls its own error rate; read as a set -- which is how a "
+        "claim like *\"this recipe helps this checkpoint\"* is actually read -- they "
+        "do not. So each `(model, arm)` row of the tables above is treated as one "
+        "**family** across benchmarks and corrected with **Holm's step-down** at "
+        "family-wise α=0.05. Holm is uniformly at least as powerful as Bonferroni "
+        "and assumes nothing about dependence, which matters because the arms of "
+        "one model share a baseline and a corpus."
+    )
+    add("")
+    add(
+        "**The p-values are approximate and the exact route was unavailable.** Holm "
+        "needs p-values; the rows carry percentile intervals, and the bootstrap "
+        "replicates were not retained. Each p is recovered by reading the interval "
+        "as normal, scaling from the bound **facing zero** only -- the side that "
+        "decides exclusion -- so no symmetry is assumed. Two properties follow by "
+        "arithmetic rather than judgement: an interval that spans zero yields "
+        "p>0.05, so correction can only remove claims and never add one; and a "
+        "bound resting *exactly* on zero yields p=0.05 exactly, so it fails every "
+        "Holm threshold in a family of more than one."
+    )
+    add("")
+
+    testable = {key: value for key, value in verdicts.items() if value[0] is not None}
+    untestable = len(verdicts) - len(testable)
+    boundary = sorted(
+        (row.model, row.arm, row.benchmark)
+        for row in headline
+        if row.arm != "none"
+        and (row.model, row.arm, row.benchmark) in testable
+        and _on_boundary(row)
+    )
+    excluded_zero = {
+        (row.model, row.arm, row.benchmark)
+        for row in headline
+        if row.arm != "none" and not _spans_zero(row)
+    }
+    survives = {key for key, (_, rejected) in testable.items() if rejected}
+    where = sorted({key[2] for key, value in verdicts.items() if value[0] is None})
+    add(
+        f"- **{len(testable)}** comparisons were testable; **{untestable}** were not "
+        "-- the arm changed no record's recall on that benchmark, so the estimate "
+        "and both bounds are exactly zero and the bootstrap has no support. They "
+        f"fall entirely on {', '.join(f'`{b}`' for b in where)}, which every model "
+        "already solves at recall 1.0000 with no prompt."
+    )
+    named = ", ".join(f"`{model.split('/')[-1]}`/`{arm}`/{bench}" for model, arm, bench in boundary)
+    add(
+        f"- **{len(boundary)}** testable comparisons rest a bound *exactly* on zero "
+        f"({named or 'none'}). They read p=0.05, which fails every Holm threshold "
+        "in a family of more than one, so none of them is counted as an effect -- "
+        "and none was counted uncorrected either, since an interval closing on zero "
+        "does not exclude it."
+    )
+    add(
+        f"- Read uncorrected, **{len(excluded_zero)}** intervals exclude zero. After "
+        f"Holm, **{len(survives)}** survive -- **{len(excluded_zero - survives)}** are "
+        "withdrawn."
+    )
+    add("")
+    add("| model | arm | benchmark | Δ per-record | 95% CI | approx p | Holm α=0.05 |")
+    add("|---|---|---|---:|---|---:|---|")
+    for row in sorted(headline, key=lambda r: (r.model, r.arm, r.benchmark)):
+        verdict = verdicts.get((row.model, row.arm, row.benchmark))
+        if verdict is None or verdict[0] is None:
+            continue
+        key = (row.model, row.arm, row.benchmark)
+        if key not in excluded_zero and not verdict[1]:
+            continue
+        add(
+            f"| `{row.model}` | `{row.arm}` | {row.benchmark} "
+            f"| {_fmt(row.delta_per_record_recall)} | {_interval(row)} "
+            f"| {verdict[0]:.3g} | {'**holds**' if verdict[1] else 'withdrawn'} |"
+        )
+    add("")
+
+    study_wide = _holm(
+        {"|".join(key): p_value for key, (p_value, _) in testable.items() if p_value is not None}
+    )
+    add(
+        "**Sensitivity to the family choice.** Correcting instead over the whole "
+        f"sweep as one family of {len(testable)} would leave **{len(study_wide)}** "
+        f"comparisons standing rather than {len(survives)}. That is the stricter "
+        "reading, and it is reported here so the per-`(model, arm)` choice above is "
+        "visible as a choice rather than assumed."
+    )
+    add("")
 
     add("## Every k")
     add("")
