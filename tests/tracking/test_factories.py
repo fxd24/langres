@@ -66,7 +66,7 @@ class TestCreateWandbTracker:
                 mock_run = MagicMock()
                 mock_wandb.init.return_value = mock_run
 
-                run = create_wandb_tracker()
+                create_wandb_tracker()
 
                 # Verify wandb.init called with env settings
                 mock_wandb.init.assert_called_once_with(

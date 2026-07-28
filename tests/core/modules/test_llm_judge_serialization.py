@@ -17,7 +17,6 @@ import pytest
 from langres.core.matchers.llm_judge import (
     DEFAULT_PROMPT,
     LLMMatcher,
-    LLMMatcher,
     render_default_prompt,
 )
 from langres.core.registry import get_component

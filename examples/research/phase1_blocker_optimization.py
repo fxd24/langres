@@ -170,7 +170,7 @@ def main() -> None:
         )
 
         logger.info(f"  🔹 Qdrant collection: {collection_name}")
-        logger.info(f"  🔹 Building index (may be slow on first run)...")
+        logger.info("  🔹 Building index (may be slow on first run)...")
 
         # Build index (creates/caches embeddings)
         index.create_index(texts)
@@ -216,7 +216,7 @@ def main() -> None:
                 "MRR": report.ranking.mrr,
                 "NDCG@10": report.ranking.ndcg_at_10,
                 "Median_Rank": report.rank_distribution.median,
-                f"Optimal_K_95%": optimal_k,
+                "Optimal_K_95%": optimal_k,
                 "Candidates": report.candidates.total,
                 "Missed": report.candidates.missed_matches,
                 "False_Pos": report.candidates.false_positives,

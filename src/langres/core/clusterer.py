@@ -6,7 +6,7 @@ judgements into entity clusters using graph algorithms (connected components).
 """
 
 from collections.abc import Iterator
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 import networkx as nx
 

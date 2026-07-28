@@ -236,7 +236,7 @@ docs = [
 # 7-day supply-chain quarantine: resolution only picks packages published at
 # least 7 days ago, giving time for malicious uploads to be caught and
 # yanked. Roll this forward with `make upgrade-deps`.
-exclude-newer = "2026-07-08"
+exclude-newer = "2026-07-21"
 # To block a known-bad version, uncomment and set:
 # constraint-dependencies = ["somepkg!=1.2.3"]
 
@@ -293,8 +293,15 @@ line-length = 100
 extend-include = ["*.ipynb"]
 
 [tool.ruff.lint]
-# Enable flake8-print rules to ban print statements (except in examples/)
-select = ["T201", "T203"]
+# `extend-select`, NOT `select`. `select` REPLACES ruff's default rule set
+# (E4/E7/E9/F -- pycodestyle errors + the whole of pyflakes), so the previous
+# `select = ["T201", "T203"]` silently disabled every default rule and left
+# `ruff check .` enforcing nothing but the print bans: undefined names (F821),
+# unused imports (F401) and f-strings missing placeholders (F541) all passed.
+# `extend-select` keeps the defaults and ADDS the flake8-print rules on top.
+# Verify with `ruff check --show-settings . | grep -A20 rules.enabled` -- the
+# enabled list must contain more than T201/T203.
+extend-select = ["T201", "T203"]
 
 [tool.ruff.lint.per-file-ignores]
 # Allow print statements in examples and notebooks

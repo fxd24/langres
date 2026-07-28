@@ -10,7 +10,10 @@ from langres.core import CompanySchema, ERCandidate, PairwiseJudgement, Resolver
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy name visible to `mypy --strict`
     # without pulling litellm into a bare `import langres`.
-    from langres.core.matchers.llm_judge import LLMMatcher
+    # The F401 below is deliberate: "unused" is the point. The name is
+    # re-exported lazily via LAZY_SYMBOLS, not by this import; deleting it
+    # would blind `mypy --strict` to the lazy symbol.
+    from langres.core.matchers.llm_judge import LLMMatcher  # noqa: F401
 
 __all__ = [
     "CompanySchema",

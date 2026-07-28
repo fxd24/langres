@@ -69,7 +69,6 @@ from langres.core.comparators import StringComparator
 from langres.curation.harvest import (
     Correction,
     CorrectionLog,
-    LabeledPair,
     derive_threshold_from_pairs,
     harvest_labeled_pairs,
 )

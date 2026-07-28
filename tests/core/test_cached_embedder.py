@@ -10,10 +10,8 @@ Tests cover:
 
 import logging
 import sqlite3
-from pathlib import Path
 
 import numpy as np
-import pytest
 
 from langres.core.embeddings import DiskCachedEmbedder, FakeEmbedder
 

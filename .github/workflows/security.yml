@@ -12,6 +12,12 @@ on:
     - cron: "0 8 * * 1"
   workflow_dispatch:
 
+# Least-privilege GITHUB_TOKEN. The repo default is `write`, so without this
+# block every job here gets a read-write token it never uses (pip-audit + guarddog only read the synced env).
+# Flagged by OpenSSF Scorecard (TokenPermissions, high).
+permissions:
+  contents: read
+
 jobs:
   security:
     # Standard GitHub runner: free with unlimited minutes on public repos.
@@ -20,13 +26,22 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.28"
+          version: "0.11.32"
           enable-cache: true
+          # setup-uv v9's one breaking change: `prune-cache` now defaults to
+          # false (upstream is easing load on PyPI). Held at the pre-v9 `true`
+          # here so this bump changes no CI behaviour: `uv sync --all-extras`
+          # pulls the torch/faiss/litellm stack, and keeping those wheels across
+          # the repo's 7 job caches would dwarf today's 503 MB total against
+          # GitHub's 10 GB per-repo cap -- LRU eviction would then cost more
+          # than the re-downloads pruning saves. Revisit by measuring one
+          # unpruned run, not by assuming.
+          prune-cache: true
 
       - name: Install dependencies
         # --all-extras: scan the [semantic]/[llm] extras' dependencies (torch,

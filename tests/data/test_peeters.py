@@ -18,7 +18,6 @@ from langres.core.metrics import classify_pairs
 from langres.data import peeters as P
 from langres.data.peeters import (
     DOMAIN_COMPLEX_FORCE_PRODUCT_PREFIX,
-    PeetersReplicationSpec,
     get_peeters_replication,
     gold_match_pairs,
     judgements_from_answers,

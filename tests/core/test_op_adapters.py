@@ -12,7 +12,6 @@ behavior-equivalent to the legacy ``Resolver.resolve`` path.
 from collections.abc import Iterator
 
 import pytest
-from pydantic import BaseModel
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
 from langres.core.clusterer import Clusterer
