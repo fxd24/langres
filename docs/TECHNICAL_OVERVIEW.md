@@ -1173,7 +1173,11 @@ seed** (0). The diagnostic says a matcher with a different error profile — a
 decider LLM in particular — "could move the numbers", and that the *ordering*
 surviving is "a hypothesis, not a measurement". The chaining mechanism is
 structural and scorer-independent; these magnitudes are not, so do not read them
-as a measurement of a paid LLM pipeline.
+as a measurement of a paid LLM pipeline. Those runs also **predate the singleton
+drop described above**, so a re-run could report different cluster *counts* for
+pivot — but none of the numbers in this table can move, since a size-1 cluster
+contributes zero pairs and the harness restores unlisted ids via
+`complete_partition` before scoring.
 
 The 3,776 is the **portfolio** total, not one dataset's; the 39.8% is a rate over
 `amazon_google`'s in-cluster pairs, not a share of the 3,776. The largest effect is

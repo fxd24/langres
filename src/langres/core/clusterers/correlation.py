@@ -69,7 +69,11 @@ class CorrelationClusterer(Clusterer):
     with a different error profile -- a decider LLM in particular -- "could move
     the numbers", and that the *ordering* surviving is "a hypothesis, not a
     measurement" (§4). The chaining mechanism is structural and
-    scorer-independent; the magnitudes above are not.
+    scorer-independent; the magnitudes above are not. Those runs also **predate
+    the singleton drop below**, so a re-run could report different cluster
+    *counts* for pivot -- but no metric quoted here can move, since a size-1
+    cluster contributes ``C(1, 2) = 0`` pairs and the harness restores unlisted
+    ids via ``complete_partition`` before scoring.
 
     Opt in via the ``clusterer=`` argument of the architectures that expose one --
     :class:`~langres.architectures.fuzzy_string.FuzzyString`,
