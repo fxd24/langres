@@ -151,6 +151,26 @@ constant graded on those cells.
 
 @@VERDICT@@
 
+### Reading the `sim_cos` row: the incumbent was the bug
+
+For cosine similarity the result is not marginal. In the leave-one-out table
+(§4), **every selection-eligible cell improves, and every 95% interval sits
+entirely above zero** — there is no benchmark, and no seed, where the constant
+loses. The `capture` column shows it recovers most of the headroom an *oracle
+with test labels* could reach.
+
+The reason is visible in the `F1@0.50` column: `0.5` is not a mildly
+mistuned cut on a cosine scale, it is a catastrophic one. Normalized embeddings
+put almost every candidate pair above `0.5`, so the threshold accepts nearly
+everything the blocker proposed and precision collapses. Several benchmarks score
+in the low hundredths. This is less "we found a better constant" than "the shipped
+constant was never on the right scale", which is exactly the failure mode a
+per-family default exists to prevent.
+
+That is also why this is the family where wiring the default mattered most: the
+same `0.5` is defensible for a `heuristic` score and indefensible for a cosine,
+and a single global constant cannot be both.
+
 ### Reading the `heuristic` row: it is not instability
 
 The obvious guess — that rapidfuzz has no single constant because every dataset
