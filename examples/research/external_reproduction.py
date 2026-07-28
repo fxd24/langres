@@ -845,18 +845,47 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         cells = [_fmt(row["pc"][k - 1] * 100, 1) if k <= row["k_max"] else "-" for k in ks]
         add(f"| `{row['benchmark']}` | `{row['model']}` | " + " | ".join(cells) + " |")
     add("")
-    add("## E. Serialization actually used")
+    add("## E. Serialization actually used, and whether it matches theirs")
     add("")
-    add("| benchmark | fields joined | first A record (truncated) |")
-    add("|---|---|---|")
+    add(
+        "Both papers concatenate attribute *values* (DeepBlocker §3.1; UniBlocker §5.1), "
+        "which is what `concat_comparable_fields` does — every non-`id` string field of "
+        "the schema, space-joined, empties skipped, no case folding. What can still "
+        "differ is *which attributes the shipped CSV has at all*, so the field count is "
+        "compared against each paper's `#Attr` below. **Where those disagree we are "
+        "serializing a different record than they did**, and the comparison for that "
+        "benchmark is correspondingly weaker."
+    )
+    add("")
+    add(
+        "| benchmark | fields joined | ours | DeepBlocker #Attr | UniBlocker #Attr | "
+        "first A record (truncated) |"
+    )
+    add("|---|---|---:|---:|---:|---|")
     seen.clear()
     for row in rows:
         if row["benchmark"] in seen:
             continue
         seen.add(row["benchmark"])
+        names = PAPER_NAMES.get(row["benchmark"], {})
         fields = ", ".join(f"`{f}`" for f in row["serialization_fields"])
-        sample = row["serialization_sample_a"].replace("|", "\\|")[:110]
-        add(f"| `{row['benchmark']}` | {fields} | {sample} |")
+        db_attr = deep_sets.get(names.get("deepblocker", ""), {}).get("attrs")
+        ub_attr = uni_pos.get(names.get("uniblocker", ""), {}).get("attrs")
+        sample = row["serialization_sample_a"].replace("|", "\\|")[:100]
+        add(
+            f"| `{row['benchmark']}` | {fields} | {len(row['serialization_fields'])} | "
+            f"{db_attr if db_attr else '-'} | {ub_attr if ub_attr else '-'} | {sample} |"
+        )
+    add("")
+    add(
+        "The two benchmarks the verdict rests on, `dblp_acm` and `dblp_scholar`, are "
+        "**4 attributes on all three sides** — so on exactly the benchmarks where the "
+        "gold sets also line up, the serialized record is the same shape too. The "
+        "product benchmarks are where they diverge: our `amazon_google` has 3 fields "
+        "against their 4 (the DeepMatcher release carries no `description`), our "
+        "`abt_buy` 3 against UniBlocker's 2, our `walmart_amazon` 5 against "
+        "DeepBlocker's 6."
+    )
     add("")
 
     crosscheck_path = RESEARCH_DIR / "20260728_external_reproduction_crosscheck.json"
