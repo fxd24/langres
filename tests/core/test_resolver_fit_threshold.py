@@ -739,6 +739,27 @@ def test_a_score_less_chain_refuses_to_derive() -> None:
         model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
 
 
+def test_an_explicit_chain_without_a_split_says_in_sample() -> None:
+    """The chain seam owes the same honesty as the classic one when there is no valid.
+
+    With ``split=None`` every labeled pair is train, so the cut and any score
+    would share rows. The fit still runs -- a measured cut beats an unmeasured
+    one -- but it must report no held-out metrics and label itself IN-SAMPLE in
+    capitals rather than let an in-sample number pass for a held-out estimate.
+    """
+    records, pairs = _dataset()
+    model = _explicit()
+    model.fit(records, pairs=pairs, split=None, seed=_SEED, derive_threshold=True)
+    report = model.fit_report_
+    assert report is not None and report.threshold_fit is not None
+    assert report.threshold_fit.source == "derived"
+    assert report.threshold_fit.held_out is False
+    assert report.threshold_fit.candidate is not None
+    assert report.threshold_fit.candidate.held_out_f1 is None
+    assert report.metrics is None
+    assert "IN-SAMPLE" in report.to_markdown()
+
+
 def test_a_custom_cluster_stage_has_no_second_gate_to_conflict_with() -> None:
     """The double-gate refusal must not fire on a stage that carries no threshold.
 
