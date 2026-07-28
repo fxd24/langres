@@ -85,15 +85,34 @@ fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# `${VAR:+...}` tests only that the variable is NON-EMPTY, so
+# LADDER_TRUST_EXISTING_CACHE=0 / false / a typo would all have forwarded
+# --trust-existing-cache -- silently adopting unverified vectors on precisely the
+# run where the operator was trying to turn adoption OFF. An exact value, checked
+# once, and anything else is a hard error rather than a quiet "no": a misspelt
+# opt-in that reads as "off" is how a gate stops firing without anyone noticing.
+# (Cross-model review.)
+TRUST_ARG=()
+case "${LADDER_TRUST_EXISTING_CACHE:-}" in
+  "") ;;
+  1) TRUST_ARG=(--trust-existing-cache)
+     log "LADDER_TRUST_EXISTING_CACHE=1 -- vouching for existing caches this run" ;;
+  *) log "LADDER_TRUST_EXISTING_CACHE must be exactly 1 or unset (got '${LADDER_TRUST_EXISTING_CACHE}')"
+     exit 2 ;;
+esac
+
 # `.env` is gitignored, so a fresh checkout or a worktree does not have one and
 # `uv run --env-file .env` exits 2 before the harness starts. This sweep is $0
-# and offline -- it needs no key -- so a missing `.env` must not stop it. Pass
+# and keyless -- so a missing `.env` must not stop it. (Keyless is not the same as
+# offline: with cold `uv` or Hugging Face caches this still needs the network to
+# resolve dependencies and download checkpoints. It is offline only once those
+# caches are warm.) Pass
 # the flag only when the file is actually there.
 ENV_FILE_ARG=()
 if [ -f .env ]; then
   ENV_FILE_ARG=(--env-file .env)
 else
-  log "no .env in this checkout -- running without one (this sweep is \$0/offline)"
+  log "no .env in this checkout -- running without one (this sweep is \$0 and keyless)"
 fi
 
 # The OpenMP settings are NOT optional, and making `.env` optional above is
@@ -185,7 +204,7 @@ for model in "${MODELS[@]}"; do
   # LADDER_DEVICE only to override deliberately.
   uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
     --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
-    ${LADDER_TRUST_EXISTING_CACHE:+--trust-existing-cache} \
+    ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?
 

@@ -523,12 +523,15 @@ class SentenceTransformerEmbedder:
                 ``query_prompt``, passed explicitly at search time and therefore
                 taking precedence over this default.
 
-                Setting this and **not** setting ``query_prompt`` leaves queries
-                encoded with the *document* prefix (``search_all`` reuses the
-                cached corpus vectors), which is worse than prompting neither
-                side; ``VectorBlocker`` warns on that combination. The full worked
-                recipe is in that class's docstring, and whether it helps is
-                measured in ``docs/research/20260727_embedder_ladder.md``.
+                Setting this and **not** setting ``query_prompt`` applies this
+                prefix to **both** sides, because ``search_all`` reuses the cached
+                corpus vectors as queries. If the prefix is a *document* one that
+                is worse than prompting neither side, and ``VectorBlocker`` warns;
+                if it is the query-side prefix (e.g. ``prompt_name="query"``) that
+                is the documented **symmetric** recipe and is accepted in silence.
+                The full worked recipe is in that class's docstring, and whether
+                it helps is measured in
+                ``docs/research/20260727_embedder_ladder.md``.
             prompts: Extra ``{name: prefix}`` prompts to register on the loaded
                 model, for checkpoints that ship none. Needed only when the
                 checkpoint does not already register the name you pass as

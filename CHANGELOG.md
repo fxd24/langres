@@ -18,12 +18,16 @@
   names all three. `FakeHybridVectorIndex.search_all()` rejects it too, so a test
   double can no longer accept what the real index refuses.
 - **`VectorBlocker` now warns when only one half of an asymmetric recipe is
-  driven** — an embedder carrying a document-side `prompt_name` with no
-  `query_prompt` on the blocker. That combination is *worse* than prompting
-  neither side: `search_all()` reuses the document-prompted corpus vectors as
-  queries, so queries carry the **document** prefix. The check is duck-typed and
-  degrades to silence for indexes that expose no embedder, because `VectorIndex`
-  is a public structural protocol.
+  driven** — an embedder binding a `prompt_name` whose prefix is *not* the
+  query-side one, with no `query_prompt` on the blocker. `search_all()` reuses
+  the prompted corpus vectors as queries, so both sides carry the document
+  prefix — *worse* than prompting neither side, since the queries get a prefix
+  the checkpoint never intended for them. Binding the **query** prefix on both
+  sides is a different thing entirely: that is the documented symmetric recipe
+  (`intfloat/e5-base-v2` asks for it by name) and stays silent. The check
+  compares resolved prefix *values*, not prompt names, and is duck-typed —
+  degrading to silence for indexes that expose no embedder, because
+  `VectorIndex` is a public structural protocol.
 - Documented the two-sided recipe where users actually meet it: a worked example
   on `VectorBlocker` and on `SentenceTransformerEmbedder.prompt_name`. The
   document side rides on the embedder (`prompt_name` → `default_prompt_name`);

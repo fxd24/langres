@@ -361,11 +361,20 @@ class VectorBlocker(Blocker[SchemaT]):
         )
         ```
 
-        Setting ``prompt_name`` and forgetting ``query_prompt`` is **worse than
-        prompting neither side**: ``search_all`` then reuses the
-        document-prompted corpus vectors as the queries, so the queries get the
-        *document* prefix. This constructor logs a warning for exactly that
-        combination. Measured evidence for whether the recipe helps at all is in
+        Setting ``prompt_name`` and leaving ``query_prompt`` unset does not
+        half-apply the recipe — it applies the bound prefix to **both** sides,
+        because ``search_all`` reuses the prompted corpus vectors as the queries.
+        Whether that is wrong depends on which prefix is bound:
+
+        - a prefix that differs from the query-side one (a *document* prefix) is
+          **worse than prompting neither side**, since the queries then carry a
+          prefix the checkpoint never intended for them. This constructor warns;
+        - a prefix that *is* the query-side one is a coherent **symmetric**
+          recipe — ``intfloat/e5-base-v2`` documents exactly that for symmetric
+          tasks — and is accepted in silence.
+
+        The warning compares the resolved prefix values, not the prompt name.
+        Measured evidence for whether the asymmetric recipe helps at all is in
         ``docs/research/20260727_embedder_ladder.md``.
 
     Example (testing with fakes):
