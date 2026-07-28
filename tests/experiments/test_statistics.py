@@ -165,12 +165,21 @@ def test_the_resolution_floor_falls_as_samples_rise() -> None:
     assert large.p_value == pytest.approx(2 / 8001)
 
 
-def test_the_monte_carlo_error_of_the_p_value_is_reported() -> None:
-    """A p-value near a threshold is resolution-limited; the caller needs to see that."""
+def test_the_monte_carlo_error_treats_the_p_value_as_a_doubled_proportion() -> None:
+    """A p-value near a threshold is resolution-limited; the caller needs to see that.
+
+    The p-value is a tail proportion **doubled** for two-sidedness, so its
+    standard error is `2 * sqrt(q(1-q)/B)` with `q = p/2`, i.e.
+    `sqrt(p(2-p)/B)`. Using the ordinary `sqrt(p(1-p)/B)` of a proportion
+    understates it by ~40% at `p ~ 0.02` -- precisely where correction thresholds
+    sit, so the error term would be smallest exactly where it is relied on most.
+    """
     result = paired_entity_bootstrap(_shifted(0.019), samples=2000, seed=13)
     assert result.p_value is not None and result.p_value_standard_error is not None
-    expected = math.sqrt(result.p_value * (1 - result.p_value) / 2000)
+    expected = math.sqrt(result.p_value * (2 - result.p_value) / 2000)
     assert result.p_value_standard_error == pytest.approx(expected)
+    naive = math.sqrt(result.p_value * (1 - result.p_value) / 2000)
+    assert result.p_value_standard_error > naive, "the understating formula must not return"
     # More replicates, tighter estimate -- the lever a caller actually has.
     bigger = paired_entity_bootstrap(_shifted(0.019), samples=8000, seed=13)
     assert bigger.p_value_standard_error is not None

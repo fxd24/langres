@@ -48,11 +48,18 @@ class BootstrapInterval(BaseModel):
     #: ``"insufficient"``. See :func:`paired_entity_bootstrap` for the estimator.
     p_value: float | None = None
 
-    #: Monte-Carlo standard error of :attr:`p_value` -- ``sqrt(p (1 - p) / samples)``.
+    #: Monte-Carlo standard error of :attr:`p_value` -- ``sqrt(p (2 - p) / samples)``.
     #: The p-value is itself an estimate from a finite draw, so a decision taken
     #: within a few of these of a threshold is resolution-limited rather than
     #: settled, and raising ``samples`` is what resolves it. ``None`` alongside a
     #: ``None`` p-value.
+    #:
+    #: Note the ``2 - p`` rather than the ``1 - p`` of an ordinary proportion: the
+    #: p-value is a tail proportion **doubled** for two-sidedness, and doubling a
+    #: statistic doubles its standard error. Writing ``p (1 - p)`` here understates
+    #: the error by ~40% at ``p ~ 0.02``, which is exactly the region where a
+    #: correction's thresholds sit and where an understated error would report a
+    #: coin-flip as a settled verdict.
     p_value_standard_error: float | None = None
 
 
@@ -205,7 +212,7 @@ def paired_entity_bootstrap(
         samples=samples,
         status="available",
         p_value=p_value,
-        p_value_standard_error=math.sqrt(p_value * (1.0 - p_value) / len(bootstrap_differences)),
+        p_value_standard_error=math.sqrt(p_value * (2.0 - p_value) / len(bootstrap_differences)),
     )
 
 
