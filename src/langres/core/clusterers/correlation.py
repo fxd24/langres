@@ -17,7 +17,7 @@ classic "chaining" failure, while a genuinely well-connected group (e.g. a
 clique where every pair was directly compared and matched) still merges fully,
 same as the base Clusterer.
 
-Measured on the 9-benchmark portfolio in
+Measured on the 9-benchmark linkage portfolio in
 ``docs/research/20260727_closure_diagnostic.md`` and **recommended** as a result;
 opt in with ``FuzzyString(clusterer=CorrelationClusterer())``, or the same
 argument on ``VectorLLMCascade`` / the four retrieval recipes (``Reranker``
@@ -46,7 +46,7 @@ class CorrelationClusterer(Clusterer):
 
     **It has now been benchmarked, and it is the recommended choice.** It is
     still not the default -- that is a deliberate product decision, not an
-    absence of evidence. On the 9-benchmark portfolio
+    absence of evidence. On the 9-benchmark linkage portfolio
     (``docs/research/20260727_closure_diagnostic.md``), against the default
     transitive-closure ``Clusterer`` over the identical judgement set:
 

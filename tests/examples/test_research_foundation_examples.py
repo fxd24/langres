@@ -266,6 +266,9 @@ paths = [
     "examples/research/reprice_tokens.py",
     "examples/research/hub_lifecycle.py",
     "examples/research/official_paid_proof.py",
+    # Its docstring advertises `--render-only` as needing no extras, which is
+    # only true while nothing heavy is imported at module scope.
+    "examples/research/external_reproduction.py",
 ]
 sys.path.insert(0, "examples/research")
 for path in paths:

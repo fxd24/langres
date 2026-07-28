@@ -1,0 +1,164 @@
+{
+  "_README": [
+    "Published numbers transcribed by hand from the primary PDFs, for the external",
+    "reproduction run in examples/research/external_reproduction.py.",
+    "",
+    "RULE: every value in this file was read off a table in a PDF that was downloaded",
+    "and converted with `pdftotext -layout`. Nothing here is recalled from memory or",
+    "copied from a secondary source. Each entry names the table it came from so a",
+    "reader can check it. Where a paper's own numbers are internally inconsistent",
+    "(see `_arithmetic_check`), that is recorded rather than silently corrected."
+  ],
+  "papers": {
+    "deepblocker": {
+      "title": "Deep Learning for Blocking in Entity Matching: A Design Space Exploration",
+      "authors": "Thirumuruganathan, Li, Tang, Ouzzani, Govind, Paulsen, Fung, Doan",
+      "venue": "PVLDB 14(11): 2459-2472, 2021",
+      "pdf": "https://vldb.org/pvldb/vol14/p2459-thirumuruganathan.pdf",
+      "retrieved": "2026-07-28",
+      "recall_definition": "Section 5, 'Methods' (p.2466): 'recall is measured as |G intersect C|/|G|, and candidate set size ratio (CSSR) is measured as |C|/|A x B|', where G is the set of true matches between tables A and B. This is pair completeness over the FULL gold set.",
+      "candidate_set_definition": "Section 5.1 (p.2466): 'K = 10 means that each tuple in Table A is paired with 10 tuples in Table B with the highest cosine scores'. So C = union over a in A of topK(a -> B), and |C| = K * |A|.",
+      "serialization": "Section 3.1 (p.2461): 'Given two tables A and B, we first convert each tuple into a string by concatenating all of its attribute values.'",
+      "vector_pairing": "Section 5 setup (p.2466): 'all eight solutions use top-k cosine similarity for the vector pairing module' and 'We used the well-known FAISS library for top-k cosine search'.",
+      "_arithmetic_check": "|C| in Table 6 equals K * |A| for every row we can check: 50*1363=68,150~68.2k; 20*2554=51,080~51.1k; 150*2616=392,400=392.4k; 5*2616=13,080~13.1k; 20*1081=21,620~21.6k; 20*1363=27,260~27.3k; 5*2554=12,770~12.8k. This independently confirms the candidate-set convention above.",
+      "table_4_datasets": {
+        "_caption": "Table 4: Datasets for our experiments (p.2465). Columns: Table A, Table B, #Matches, #Attr.",
+        "Amazon-Google1": {"type": "structured", "table_a": 1363, "table_b": 3226, "matches": 1300, "attrs": 4},
+        "Walmart-Amazon1": {"type": "structured", "table_a": 2554, "table_b": 22074, "matches": 1154, "attrs": 6},
+        "DBLP-Google1": {"type": "structured", "table_a": 2616, "table_b": 64263, "matches": 5347, "attrs": 4},
+        "DBLP-ACM1": {"type": "structured", "table_a": 2616, "table_b": 2294, "matches": 2224, "attrs": 4},
+        "Amazon-Google2": {"type": "textual", "table_a": 1363, "table_b": 3226, "matches": 1300, "attrs": 2},
+        "Walmart-Amazon2": {"type": "textual", "table_a": 2554, "table_b": 22074, "matches": 1154, "attrs": 2},
+        "Abt-Buy": {"type": "textual", "table_a": 1081, "table_b": 1092, "matches": 1097, "attrs": 3},
+        "DBLP-ACM2": {"type": "textual", "table_a": 2616, "table_b": 2294, "matches": 2224, "attrs": 4}
+      },
+      "table_6_best_dl": {
+        "_caption": "Table 6: Comparing with existing state-of-the-art non-DL solutions (p.2469). The 'DL' columns are the best DL method: Autoencoder for structured/dirty, Hybrid for textual. Recall is in percent.",
+        "_method_note": "Neither Autoencoder nor Hybrid is an off-the-shelf sentence encoder: both are trained per dataset on fastText word vectors (Table 3, p.2465). A zero-shot sentence-transformer is a DIFFERENT method, so a gap here is a method gap, not necessarily a harness gap.",
+        "rows": [
+          {"dataset": "Amazon-Google1", "k": 50, "cand": "68.2k", "recall_pct": 97.1},
+          {"dataset": "Walmart-Amazon1", "k": 20, "cand": "51.1k", "recall_pct": 92.2},
+          {"dataset": "DBLP-Google1", "k": 150, "cand": "392.4k", "recall_pct": 98.1},
+          {"dataset": "DBLP-ACM1", "k": 5, "cand": "13.1k", "recall_pct": 99.6},
+          {"dataset": "Amazon-Google2", "k": 20, "cand": "27.3k", "recall_pct": 70.5},
+          {"dataset": "Walmart-Amazon2", "k": 5, "cand": "12.8k", "recall_pct": 68.7},
+          {"dataset": "Abt-Buy", "k": 20, "cand": "21.6k", "recall_pct": 87.2},
+          {"dataset": "Amazon-Google3", "k": 50, "cand": "68.2k", "recall_pct": 97.1},
+          {"dataset": "Walmart-Amazon3", "k": 10, "cand": "25.5k", "recall_pct": 88.0},
+          {"dataset": "DBLP-Google2", "k": 150, "cand": "392.4k", "recall_pct": 98.1},
+          {"dataset": "DBLP-ACM2", "k": 5, "cand": "13.1k", "recall_pct": 99.6}
+        ]
+      }
+    },
+    "uniblocker": {
+      "title": "Towards Universal Dense Blocking for Entity Resolution",
+      "authors": "Wang, Lin, Han, Chen, Cao, Sun",
+      "venue": "arXiv:2404.14831",
+      "pdf": "https://arxiv.org/pdf/2404.14831",
+      "retrieved": "2026-07-28",
+      "recall_definition": "Section 4.2: 'Pair completeness (also known as recall), is the fraction of true matched pairs identified: PC = |C intersect M|/|M|' and 'Pair quality (also called precision) ... PQ = |C intersect M|/|C|'.",
+      "protocol": "Section 4.2: 'for cardinality-based methods using k-nearest neighbor (kNN) search, we establish an upper bound on k of 100 as a comparison budget and check the candidates in nearest neighbor order. We evaluate the blockers based on whether they can achieve pair completeness greater than 90%.' Table 3 caption: 'K is the number of nearest neighbors needed to reach the reported PC'.",
+      "map_definition": "Section 4.2: 'mAP, which is the area under the precision-recall curve (AUC-PR), is calculated as sum_i (R_i - R_{i-1}) P_i where R_i and P_i represent PC and PQ at k = i.'",
+      "serialization": "Section 5.1: 'In terms of dense blocking baselines, we only serialized record values for effectiveness, using FAISS as the indexer.'",
+      "stransformer_identity": "INFERENCE (flagged as such, not a quote): Section 5.1 says 'We chose to use the all-mpnet-base-v2 from STransformer [49] as the initial pre-training weight' and Section 5.2 says 'The performance of STransformer, which served as our initialized model for pre-training, is detailed in Table 3.' Together these imply STransformer = sentence-transformers/all-mpnet-base-v2, zero-shot. The paper never writes that identity in one sentence.",
+      "_arithmetic_check": "PQ = PC*|M| / (K*|A|) reproduces the paper's own PQ to 2dp on abt-buy_homo (13*1081; 7.07), amazon-google (13*1363; 6.64), walmart-amazon_homo (27*2554; 1.51), dblp-acm (1*2616; 81.00) and fodors-zagats (2*533; 9.85). This confirms C = union over a in A of topK(a -> B) and |C| = K*|A|, same convention as DeepBlocker. Two rows do NOT reconcile: dblp-scholar (computed 23.77 vs printed 23.38) and, for fodors-zagats, only if |A|=533 rather than the 553 printed in their Table 2 (Fodors has 533 rows) -- i.e. their Table 2 fodors count looks like a typo.",
+      "table_2_datasets": {
+        "_caption": "Table 2: Datasets of our proposed benchmark. Columns: Size (|A|, |B|), # Attr., # Pos.",
+        "fodors-zagats_homo": {"size": "553, 331", "attrs": "6", "pos": 112, "_note": "553 appears to be a typo for 533; see _arithmetic_check"},
+        "dblp-acm": {"size": "2616, 2294", "attrs": "4", "pos": 2224},
+        "dblp-scholar": {"size": "2616, 64263", "attrs": "4", "pos": 5438},
+        "abt-buy_homo": {"size": "1081, 1092", "attrs": "2", "pos": 1098},
+        "walmart-amazon_homo": {"size": "2554, 22074", "attrs": "5", "pos": 1154},
+        "amazon-google": {"size": "1363, 3226", "attrs": "4,4", "pos": 1300}
+      },
+      "table_3": {
+        "_caption": "Table 3: Overall results of different dense blocking methods. Each cell is mAP, PC / PQ, K.",
+        "STransformer": {
+          "fodors-zagats_homo": {"map": 53.42, "pc": 93.75, "pq": 9.85, "k": 2},
+          "dblp-acm": {"map": 88.21, "pc": 95.28, "pq": 81.00, "k": 1},
+          "dblp-scholar": {"map": 69.85, "pc": 91.49, "pq": 23.38, "k": 8},
+          "abt-buy_homo": {"map": 42.83, "pc": 90.52, "pq": 7.07, "k": 13},
+          "walmart-amazon_homo": {"map": 30.73, "pc": 90.03, "pq": 1.51, "k": 27},
+          "amazon-google": {"map": 46.20, "pc": 90.46, "pq": 6.64, "k": 13}
+        },
+        "DeepBlocker": {
+          "fodors-zagats_homo": {"map": 60.51, "pc": 100.00, "pq": 21.01, "k": 1},
+          "dblp-acm": {"map": 90.29, "pc": 97.39, "pq": 82.80, "k": 1},
+          "dblp-scholar": {"map": 67.85, "pc": 90.35, "pq": 20.52, "k": 9},
+          "abt-buy_homo": {"map": 43.55, "pc": 90.06, "pq": 1.02, "k": 90},
+          "walmart-amazon_homo": {"map": 39.37, "pc": 90.64, "pq": 2.73, "k": 15},
+          "amazon-google": {"map": 43.98, "pc": 90.15, "pq": 1.12, "k": 77}
+        },
+        "Sudowoodo": {
+          "fodors-zagats_homo": {"map": 59.90, "pc": 99.11, "pq": 20.83, "k": 1},
+          "dblp-acm": {"map": 90.02, "pc": 97.21, "pq": 82.65, "k": 1},
+          "dblp-scholar": {"map": 57.40, "pc": 90.01, "pq": 2.16, "k": 85},
+          "abt-buy_homo": {"map": 69.79, "pc": 90.52, "pq": 15.31, "k": 6},
+          "walmart-amazon_homo": {"map": 44.13, "pc": 90.29, "pq": 4.08, "k": 10},
+          "amazon-google": {"map": 52.29, "pc": 90.23, "pq": 7.17, "k": 12}
+        },
+        "UniBlocker": {
+          "fodors-zagats_homo": {"map": 60.51, "pc": 100.00, "pq": 21.01, "k": 1},
+          "dblp-acm": {"map": 91.88, "pc": 99.19, "pq": 84.33, "k": 1},
+          "dblp-scholar": {"map": 73.12, "pc": 91.55, "pq": 31.19, "k": 6},
+          "abt-buy_homo": {"map": 79.80, "pc": 93.16, "pq": 31.51, "k": 3},
+          "walmart-amazon_homo": {"map": 53.22, "pc": 93.33, "pq": 14.06, "k": 3},
+          "amazon-google": {"map": 62.31, "pc": 90.38, "pq": 17.24, "k": 5}
+        }
+      }
+    },
+    "scblock": {
+      "title": "SC-Block: Supervised Contrastive Blocking within Entity Resolution Pipelines",
+      "authors": "Brinkmann, Shraga, Bizer",
+      "venue": "arXiv:2303.03132v2 (also ESWC 2024)",
+      "pdf": "https://arxiv.org/pdf/2303.03132",
+      "retrieved": "2026-07-28",
+      "why_not_a_reproduction_target": [
+        "Section 6.3: recall is measured 'with respect to the test sets of the datasets', i.e. the denominator is only the test-split positives (206 for A-B, 234 for A-G, 193 for W-A per their Table 1), not the full gold set. Every other paper here uses the full gold set.",
+        "Their 'SBERT' row is a TRAINED blocker ('Using SBERT's framework we train a supervised nearest neighbour blocker'), not an off-the-shelf sentence encoder, so it is not the zero-shot baseline it looks like.",
+        "We could not verify their precision column and do not quote it. Taken as |C & G|/|C| with |C| = k*|A| and a 206-pair test gold, k=5 on A-B would give ~3.8%, but they print 36.2%. A plausible reading (OUR HYPOTHESIS, not their words) is that they restrict the candidate set to pairs that appear in test.csv before computing precision: 206 positives against ~569 retained test pairs would give 36.2%. Either way the definition is not the PQ that DeepBlocker and UniBlocker use, so their precision is not comparable to ours."
+      ],
+      "table_1_datasets": {
+        "_caption": "Table 1: Dataset statistics of the benchmarked datasets.",
+        "A-B": {"a": 1081, "b": 1092, "pos_train": 616, "pos_val": 206, "pos_test": 206, "_total_pos": 1028},
+        "A-G": {"a": 1363, "b": 3266, "pos_train": 699, "pos_val": 234, "pos_test": 234, "_total_pos": 1167, "_note": "b printed as 3,266; every other source says 3,226"},
+        "W-A": {"a": 2554, "b": 22074, "pos_train": 576, "pos_val": 193, "pos_test": 193, "_total_pos": 962}
+      },
+      "table_3_recall_k5_testset_pct": {
+        "_caption": "Table 3: Recall (R) of the candidate sets generated by all nearest neighbour blockers with k = 5 on the test sets.",
+        "SC-Block": {"A-B": 99.5, "A-G": 97.4, "W-A": 95.9},
+        "BM25_3": {"A-B": 98.1, "A-G": 94.4, "W-A": 96.9},
+        "BM25": {"A-B": 92.2, "A-G": 93.6, "W-A": 95.9},
+        "Auto": {"A-B": 75.2, "A-G": 82.5, "W-A": 81.9},
+        "CTT": {"A-B": 77.2, "A-G": 81.6, "W-A": 81.4},
+        "SimCLR": {"A-B": 90.3, "A-G": 91.9, "W-A": 91.2},
+        "BT": {"A-B": 94.7, "A-G": 90.2, "W-A": 92.8},
+        "SBERT_trained": {"A-B": 74.3, "A-G": 29.1, "W-A": 30.6}
+      }
+    },
+    "sudowoodo": {
+      "title": "Sudowoodo: Contrastive Self-supervised Learning for Multi-purpose Data Integration and Preparation",
+      "authors": "Wang, Li, Wang",
+      "venue": "ICDE 2023; arXiv:2207.04122",
+      "pdf": "https://arxiv.org/pdf/2207.04122",
+      "retrieved": "2026-07-28",
+      "table_vii": {
+        "_caption": "TABLE VII: Sudowoodo for blocking. We report the recall score (R) and the number of candidate pairs (#cand).",
+        "_cross_check_note": "Their DL-Block row re-cites DeepBlocker's Table 6 verbatim (87.2/21,600; 97.1/68,200; 99.6/13,100; 98.1/392,400; 92.2/51,100). That independently corroborates our transcription of DeepBlocker Table 6.",
+        "DL-Block": {"AB": {"r": 87.2, "cand": 21600}, "AG": {"r": 97.1, "cand": 68200}, "DA": {"r": 99.6, "cand": 13100}, "DS": {"r": 98.1, "cand": 392400}, "WA": {"r": 92.2, "cand": 51100}},
+        "Sudowoodo": {"AB": {"r": 88.6, "cand": 3276}, "AG": {"r": 97.3, "cand": 48390}, "DA": {"r": 99.6, "cand": 11470}, "DS": {"r": 98.4, "cand": 257052}, "WA": {"r": 95.0, "cand": 44148}}
+      }
+    }
+  },
+  "langres_gold_counts": {
+    "_README": "Measured from the CSVs shipped in src/langres/data/datasets/, for comparison with the papers' #Matches columns. `raw` = the pooled label==1 rows of train/valid/test (or the perfectMapping file); `closure` = the transitive closure of the gold clusters, which is what Benchmark.load() and therefore score_blocking() score against.",
+    "fodors_zagat": {"a": 533, "b": 331, "raw": 112, "closure": 112},
+    "abt_buy": {"a": 1081, "b": 1092, "raw": 1028, "closure": 1044},
+    "amazon_google": {"a": 1363, "b": 3226, "raw": 1167, "closure": 1390},
+    "dblp_acm": {"a": 2616, "b": 2294, "raw": 2220, "closure": 2220},
+    "dblp_scholar": {"a": 2616, "b": 64263, "raw": 5347, "closure": 13763},
+    "walmart_amazon": {"a": 2554, "b": 22074, "raw": 962, "closure": 1092},
+    "wdc_computers": {"a": 2204, "b": 2443, "raw": 986, "closure": 1111},
+    "febrl_person": {"a": 500, "b": 500, "raw": 500, "closure": 500}
+  }
+}

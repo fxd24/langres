@@ -70,21 +70,85 @@ uv run python examples/research/portfolio_race.py --fast --paid --budget 5   # +
 
 ## 2. The datasets, and why each is a target
 
-Every entry is a **cross-source linkage** benchmark (find the pairs across two
-sources that refer to the same entity). All ship in-repo (`loadable=True`) except
-OpenSanctions.
+Entries carry a `task`. Most are **cross-source linkage** (find the pairs across
+two sources that refer to the same entity); `febrl_dedup` is the **single-source
+deduplication** entry (partition one record set into entities — what `dedupe()`
+does). All ship in-repo (`loadable=True`) except OpenSanctions.
 
-| Benchmark | Domain | Why it's in the portfolio |
-| --- | --- | --- |
-| `fodors_zagat` | restaurant | **Saturated regression guard.** Tiny, easy, blocking Pair-Completeness ≥ 0.99 — the "nothing should ever regress here" floor. |
-| `abt_buy` | product | **Product regression guard.** Short, noisy product titles; a standard DeepMatcher band to hold the line against. |
-| `amazon_google` | product | **Hard product guard.** Unsaturated — blocking PC ~0.84 caps recall, so it separates weak from strong scorers (used as the discrimination check). |
-| `dblp_acm` | bibliographic | **Clean, 1:1, gate-passing.** High-quality bibliographic records; blocking PC saturates early. The "does the honest pipeline pass a clean gate" check. |
-| `dblp_scholar` | bibliographic | **Many-to-many bibliographic.** Match graph has clusters > 2 records. **Caveat:** ~60% of gold pairs are *intra-source*, so the cross-source blocking PC reads ~0.39 — a many-to-many closure artifact, **not** a blocking failure (true cross-source recall is ~0.99). Read the loader header before concluding "blocking is bad". |
-| `walmart_amazon` | product | **Harder product.** Long, structured product records; blocking honestly *misses* — highest measured PC ~0.877 (gate not met), recorded in `WALMART_AMAZON_ACHIEVED_PC`. A dataset where the ceiling is a real, documented shortfall. |
-| `wdc_computers` | product | **Title-only, textually hard** — each record is one noisy free-text `title` blob (specs + brand + multilingual retailer fragments). Also exposes a derived **seen/unseen slice** (`wdc_slice_map`) to demonstrate the honest seen → unseen F1 drop at a fixed threshold. |
-| `febrl_person` | person | **Synthetic person set (FEBRL4).** A *second entity type* (not a product/bibliographic record) — the generality check that the pipeline isn't product-shaped. |
-| `opensanctions` | person/org | **External baseline only — not bundled.** CC-BY-NC 4.0 is incompatible with langres's Apache-2.0 license, so it is never vendored; `get_benchmark` raises `ExternalBenchmarkError` pointing at where to fetch it and the published matcher F1 baselines. |
+| Benchmark | Task | Domain | Why it's in the portfolio |
+| --- | --- | --- | --- |
+| `febrl_dedup` | **dedup** | person | **The deduplication target (FEBRL3).** The only **single-source** entry: one 5000-record table, 2000 entities, clusters of size 1–6 (835 singletons). Other benchmarks also have clusters > 2 (`dblp_scholar` reaches 37, `amazon_google` 6), but theirs come from the transitive closure of a cross-source link file; here gold is entity **membership** read directly from the generator, so the multi-record clusters are real entities rather than closure artifacts. Blocking PC 0.9552 at the pinned `k=50`. **Caveat:** synthetic (ANU generator + injected corruptions), so its corruptions are typo/OCR/field-swap shaped and do not stand in for real-world messiness; and the entity/record ratio puts the all-singletons sanity floor at BCubed F1 0.5721 — read `delta_above_floor`, not the raw BCubed. |
+| `fodors_zagat` | linkage | restaurant | **Saturated regression guard.** Tiny, easy, blocking Pair-Completeness ≥ 0.99 — the "nothing should ever regress here" floor. |
+| `abt_buy` | linkage | product | **Product regression guard.** Short, noisy product titles; a standard DeepMatcher band to hold the line against. |
+| `amazon_google` | linkage | product | **Hard product guard.** Unsaturated — blocking PC ~0.84 caps recall, so it separates weak from strong scorers (used as the discrimination check). |
+| `dblp_acm` | linkage | bibliographic | **Clean, 1:1, gate-passing.** High-quality bibliographic records; blocking PC saturates early. The "does the honest pipeline pass a clean gate" check. |
+| `dblp_scholar` | linkage | bibliographic | **Many-to-many bibliographic.** Match graph has clusters > 2 records. **Caveat:** ~60% of gold pairs are *intra-source*, so the cross-source blocking PC reads ~0.39 — a many-to-many closure artifact, **not** a blocking failure (true cross-source recall is ~0.99). Read the loader header before concluding "blocking is bad". |
+| `walmart_amazon` | linkage | product | **Harder product.** Long, structured product records; blocking honestly *misses* — highest measured PC ~0.877 (gate not met), recorded in `WALMART_AMAZON_ACHIEVED_PC`. A dataset where the ceiling is a real, documented shortfall. |
+| `wdc_computers` | linkage | product | **Title-only, textually hard** — each record is one noisy free-text `title` blob (specs + brand + multilingual retailer fragments). Also exposes a derived **seen/unseen slice** (`wdc_slice_map`) to demonstrate the honest seen → unseen F1 drop at a fixed threshold. |
+| `febrl_person` | linkage | person | **Synthetic person set (FEBRL4).** A *second entity type* (not a product/bibliographic record) — the generality check that the pipeline isn't product-shaped. |
+| `opensanctions` | linkage | person/org | **External baseline only — not bundled.** CC-BY-NC 4.0 is incompatible with langres's Apache-2.0 license, so it is never vendored; `get_benchmark` raises `ExternalBenchmarkError` pointing at where to fetch it and the published matcher F1 baselines. |
+
+### 2a. Deduplication, scored on clusters
+
+`dedupe()` is langres's primary shipped verb, and every benchmark above it is a
+linkage task — so until `febrl_dedup` landed, none of the published numbers were
+about deduplication. It races through the *same* harness, with two differences
+that matter:
+
+- **Nothing can filter its candidates by source.** `_benchmark_utils.cross_source`
+  is used by the linkage adapters' **blocking-recall measurement** (`sweep_blocking_k`,
+  Pair-Completeness) — *not* by `run_methods`, which scores whatever the blocker
+  emits on every dataset. So the difference here is not that dedup scoring stopped
+  filtering; it is that FEBRL3 records carry no `source` field at all, so the
+  linkage *diagnostic* is inapplicable and `sweep_blocking_k` must be passed
+  `cross_source_only=False`. Its reported PC is therefore over all pairs, which is
+  the honest denominator for a dedup task and not directly comparable to a linkage
+  benchmark's cross-source-filtered PC.
+- **Cluster metrics, not a pair proxy.** Read `bcubed_f1` /
+  `cluster_pairwise_f1`, never a pair-level F1 relabelled as a dedup score.
+
+```bash
+uv run python -c "
+from langres.benchmarks.runner import run_methods
+from langres.data.registry import get_benchmark
+print(run_methods(get_benchmark('febrl_dedup'), ['rapidfuzz'], seed=0).results[0])"
+```
+
+Measured on the held-out test split (1490 records / 597 gold clusters, `seed=0`),
+$0 and offline — clusterer threshold tuned on **train** only:
+
+| method | threshold | BCubed P | BCubed R | BCubed F1 | cluster-pairwise F1 | pair F1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `rapidfuzz` | 0.6 | 0.9977 | 0.9935 | **0.9956** | 0.9923 | 0.9777 |
+| `embedding_cosine` | 0.8 | 0.5551 | 0.9415 | 0.6984 | **0.0247** | 0.7240 |
+
+Two things to read here:
+
+1. **The sanity floor is 0.5721** — a resolver that merges *nothing* scores that.
+   All-singletons BCubed precision is 1.0 and its recall is exactly
+   `n_clusters / n_records`, so the floor is `2r/(1+r)` with `r = 597/1490 =
+   0.4007` on this split. `rapidfuzz`'s `delta_above_floor` is +0.4235;
+   `embedding_cosine`'s is only +0.1263. The raw BCubed number alone would
+   flatter both. (The ratio is high because 835 of the 2000 entities — 42% of
+   *entities*, 17% of *records* — are genuinely non-duplicated people.)
+2. **`embedding_cosine` collapses under transitive closure** — BCubed F1 0.6984
+   but cluster-pairwise F1 **0.0247**. Its pair-level F1 (0.7240) looks merely
+   mediocre; what the cluster view exposes is that its false positives *chain*
+   records into giant components, which the pair track cannot price.
+
+   To be precise about what gold-cluster size does and does not buy: over-merging
+   is **not** hidden by pair-sized gold — a false edge joining two size-2 entities
+   still yields an oversized predicted component that BCubed and cluster-pairwise
+   both penalise. What multi-record *gold* adds is the opposite direction:
+   **under**-merging. Only a benchmark that contains a 6-record entity can charge
+   a matcher for finding 3 of its 15 within-entity pairs and stopping. On
+   pair-only gold there is no such entity to under-assemble.
+
+`rapidfuzz` scoring 0.9956 is a property of the dataset, not a langres result to
+brag about: FEBRL3 is synthetic, and its ten fields include `date_of_birth` and
+`soc_sec_id`, which are near-unique and only lightly corrupted. It is a *floor*
+("this must never regress"), not a hard target. Note also the blocking ceiling —
+Pair-Completeness 0.9552 at `k=50` — which caps recall before any matcher runs.
 
 ---
 
