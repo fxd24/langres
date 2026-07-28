@@ -196,18 +196,22 @@ Same checkpoint we ran (subject to the identity inference in the preamble), so a
 | `wdc_computers` | `all-MiniLM-L6-v2` | 8.8 | 22.0 | 28.7 | 37.4 | 47.7 | 52.3 | 57.7 | 65.9 | 70.6 | 82.0 | 87.4 | 88.9 | 89.7 | 93.0 |
 | `wdc_computers` | `sentence-transformers/all-mpnet-base-v2` | 9.3 | 20.8 | 26.0 | 33.3 | 41.1 | 44.2 | 49.5 | 56.3 | 62.3 | 76.6 | 83.1 | 85.4 | 87.0 | 91.6 |
 
-## E. Serialization actually used
+## E. Serialization actually used, and whether it matches theirs
 
-| benchmark | fields joined | first A record (truncated) |
-|---|---|---|
-| `abt_buy` | `name`, `description`, `price` | sony turntable pslx350h sony turntable pslx350h belt drive system 33-1/3 and 45 rpm speeds servo speed control |
-| `amazon_google` | `title`, `manufacturer`, `price` | clickart 950 000 premier image pack ( dvd-rom ) broderbund |
-| `dblp_acm` | `title`, `authors`, `venue`, `year` | semantic integration of environmental models for application to global information systems and decision-making |
-| `dblp_scholar` | `title`, `authors`, `venue`, `year` | towards a cooperative transaction model - the cooperative activity model m rusinkiewicz , w klas , t tesch , j |
-| `febrl_person` | `given_name`, `surname`, `street_number`, `address_1`, `address_2`, `suburb`, `postcode`, `state`, `date_of_birth`, `soc_sec_id` | rachael dent 1 knox street lakewood estate byford 4129 vic 19280722 1683994 |
-| `fodors_zagat` | `name`, `addr`, `city`, `phone`, `type` | arnie morton's of chicago 435 s. la cienega blv. los angeles 310/246-1501 american |
-| `walmart_amazon` | `title`, `category`, `brand`, `modelno`, `price` | draper infrared remote transmitter electronics - general draper 121066 58.45 |
-| `wdc_computers` | `title` | "388504-B21 HP Storageworks Internal", "Null" Price 388504-B21" Internal Wholesale 388504-B21 |
+Both papers concatenate attribute *values* (DeepBlocker §3.1; UniBlocker §5.1), which is what `concat_comparable_fields` does — every non-`id` string field of the schema, space-joined, empties skipped, no case folding. What can still differ is *which attributes the shipped CSV has at all*, so the field count is compared against each paper's `#Attr` below. **Where those disagree we are serializing a different record than they did**, and the comparison for that benchmark is correspondingly weaker.
+
+| benchmark | fields joined | ours | DeepBlocker #Attr | UniBlocker #Attr | first A record (truncated) |
+|---|---|---:|---:|---:|---|
+| `abt_buy` | `name`, `description`, `price` | 3 | 3 | 2 | sony turntable pslx350h sony turntable pslx350h belt drive system 33-1/3 and 45 rpm speeds servo spe |
+| `amazon_google` | `title`, `manufacturer`, `price` | 3 | 4 | 4,4 | clickart 950 000 premier image pack ( dvd-rom ) broderbund |
+| `dblp_acm` | `title`, `authors`, `venue`, `year` | 4 | 4 | 4 | semantic integration of environmental models for application to global information systems and decis |
+| `dblp_scholar` | `title`, `authors`, `venue`, `year` | 4 | 4 | 4 | towards a cooperative transaction model - the cooperative activity model m rusinkiewicz , w klas , t |
+| `febrl_person` | `given_name`, `surname`, `street_number`, `address_1`, `address_2`, `suburb`, `postcode`, `state`, `date_of_birth`, `soc_sec_id` | 10 | - | - | rachael dent 1 knox street lakewood estate byford 4129 vic 19280722 1683994 |
+| `fodors_zagat` | `name`, `addr`, `city`, `phone`, `type` | 5 | - | 6 | arnie morton's of chicago 435 s. la cienega blv. los angeles 310/246-1501 american |
+| `walmart_amazon` | `title`, `category`, `brand`, `modelno`, `price` | 5 | 6 | 5 | draper infrared remote transmitter electronics - general draper 121066 58.45 |
+| `wdc_computers` | `title` | 1 | - | - | "388504-B21 HP Storageworks Internal", "Null" Price 388504-B21" Internal Wholesale 388504-B21 |
+
+The two benchmarks the verdict rests on, `dblp_acm` and `dblp_scholar`, are **4 attributes on all three sides** — so on exactly the benchmarks where the gold sets also line up, the serialized record is the same shape too. The product benchmarks are where they diverge: our `amazon_google` has 3 fields against their 4 (the DeepMatcher release carries no `description`), our `abt_buy` 3 against UniBlocker's 2, our `walmart_amazon` 5 against DeepBlocker's 6.
 
 ## F. Where the published protocol and `score_blocking` diverge
 
@@ -221,27 +225,33 @@ One set of embeddings, three recalls, one thing changed at a time. `paper` is di
 
 ## G. Verdict
 
-**Yes, on the benchmarks where the comparison is actually clean — and the ones where
-it is not are exactly the ones where our gold set is smaller than theirs.**
+**Yes. On every benchmark where our ground truth matches a paper's, we land within
+0.7–1.5 pp of the published value for the same candidate budget — with one outlier we
+cannot explain, on which we instead match three *other* methods in the same table.**
 
-### The three benchmarks that settle it
+### The two benchmarks that settle it
 
-A comparison is clean only when our gold set matches the paper's. On three of them it
-effectively does, and those carry the whole verdict:
+A PC comparison is clean only when our gold set matches the paper's, which rules out
+the three product benchmarks. Two remain, and they carry the verdict:
 
-- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1).** Every quantity lines up
-  before any measurement: |A| = 2,616, |B| = 64,263, gold = 5,347 pairs — *identical*
-  to their Table 4 `#Matches` — and at their K = 150 our candidate set is 150 x 2,616
-  = 392,400 against their printed `392.4k`. Same tables, same gold, same budget, same
-  metric. This is the strongest datapoint here, and it is a **near-hit against a
-  trained blocker using an untrained one**.
+- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1)** — the strongest datapoint
+  here. Every quantity lines up before any measurement: |A| = 2,616, |B| = 64,263,
+  gold = 5,347 pairs — *identical* to their Table 4 `#Matches` — and at their K = 150
+  our candidate set is 150 x 2,616 = 392,400 against their printed `392.4k`. Same
+  tables, same gold, same budget, same metric. We measure **98.82%** against their
+  published **98.1%**: a 0.72 pp difference, with an *untrained* embedder against
+  their *trained* Autoencoder.
 - **`dblp_acm` vs UniBlocker Table 3, STransformer column.** Our gold is 2,220 against
   their 2,224 (-0.18%), and the STransformer column is the same checkpoint we ran. At
-  their k = 1 we land slightly *above* their printed PC and PQ.
-- **`fodors_zagat` vs UniBlocker Table 3.** Gold identical at 112 pairs. Our PQ at
-  k = 1 reproduces their printed PQ **to the digit**. That is arithmetic rather than
-  luck — it pins |A| = 533 and confirms `PQ = hits / (k * |A|)` — which is precisely
-  why it is good evidence about the *harness* rather than about the model.
+  their k = 1 we measure **96.76 / PQ 82.11** against their **95.28 / 81.00** — 1.48 pp
+  and 1.11 pp above, on a bound only 4 pairs wide.
+
+**`fodors_zagat` proves the protocol but not the model.** Its gold set is identical
+(112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
+(20.83 and 21.01). That is arithmetic rather than luck — it pins |A| = 533 and confirms
+`PQ = hits / (k * |A|)` — so it is strong evidence the *harness* computes their
+quantity. It is not evidence about the model, because our PC there sits 5.4 pp above
+their STransformer row (see below).
 
 ### The like-for-like test: 4 of 6 published values land inside our bound
 
@@ -263,15 +273,27 @@ measured". For the same checkpoint:
 Four are consistent outright. `dblp_acm` misses by 1.3 pp on a bound only 4 pairs wide
 — that is a real but small residual, not a category error.
 
-`fodors_zagat` is the one genuine outlier, and it is *their* column that is odd, not
-ours: on that benchmark UniBlocker's own table reports DeepBlocker at **100.00**,
+`fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
+theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
+It is *their* column that looks odd rather than ours: UniBlocker's own table reports
+DeepBlocker at **100.00**,
 Sudowoodo at **99.11** and UniBlocker at **100.00**, with STransformer alone at
 **93.75**. We measure **100.00** (`all-MiniLM-L6-v2`) and **99.11 / PQ 20.83**
 (`all-mpnet-base-v2`) — landing on their *other three* rows rather than their
 STransformer one. **We have no verified explanation for why their STransformer
-underperforms every other method in their own table here**; a plausible but untested
-one is a serialization difference on a 5-field record where the phone number is nearly
-a unique key.
+underperforms every other method in their own table here.**
+
+One observation worth recording, explicitly as a **hypothesis we did not test**:
+UniBlocker's Table 2 lists `fodors-zagats_homo` as **6 attributes** where our schema
+exposes **5** (Section E). The shipped CSV's sixth non-`id` column is `class` — and
+`class` is *a cluster id shared by matching records* (`fodors_zagat/SOURCE.md`). langres
+excludes it, so nothing here is contaminated. But **any method that serialized that
+column would be reading the answer key**, which is one way a table could show three
+methods at 99–100% and a fourth, differently-plumbed one at 93.75%. We are not
+asserting that happened — we cannot see their preprocessing — only that the attribute
+count differs and that the extra column is a label. It is also the reason `fodors_zagat`
+should not be used to rank blockers regardless: it is already flagged saturated in
+`20260727_portfolio_annotation.md`.
 
 ### Do not read the product benchmarks as langres winning
 
@@ -345,7 +367,10 @@ measurement that the ceiling accounts for the whole distance to the published li
   FEBRL file is a 500-per-side subset generated by our own script. Their rows are here
   for completeness and have nothing to be compared against. *(Assessment, not a proven
   negative — we searched and found none.)* Worth noting anyway: **`wdc_computers` never
-  reaches 90% PC within k=100 on either model** — it is by a wide margin the hardest
+  reaches 90% PC within k=100 on either model** (89.66 MiniLM, 87.02 mpnet; the
+  `our k@PC90` column reads `>100` for both because it is only searched to k=100). It *does*
+  cross 90% by k=150 — MiniLM ends at 93.00, mpnet at 91.58 — so the committed curves go
+  higher than that column alone suggests. Either way it is by a wide margin the hardest
   benchmark in the registry under this protocol, and its records carry a single `title`
   field with nothing else to key on.
 
@@ -353,9 +378,10 @@ measurement that the ceiling accounts for the whole distance to the published li
 
 It licenses saying: **langres's blocking harness measures the same quantity the
 blocking literature measures.** Four of six published values for the same checkpoint
-are reachable from what we measured; the fifth misses by 1.3 pp; on the two benchmarks
-where the gold set is identical to a paper's we land 0.72–1.32 pp from their published
-recall at their exact candidate budget. Nothing in these results is consistent with a
+are reachable from what we measured; `dblp_acm` misses by 1.3 pp; and on
+`dblp_scholar` — where our gold set is *exactly* DeepBlocker's 5,347 pairs and our
+candidate set is *exactly* their 392,400 — we land 0.72 pp from their published recall.
+Nothing in these results is consistent with a
 semantic bug in the harness — a wrong split, a wrong pair set or a wrong metric would
 not produce agreement at this resolution across six benchmarks and two protocols.
 
