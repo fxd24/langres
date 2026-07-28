@@ -259,14 +259,29 @@ Independently of the measurement, `derive_threshold: bool = False` →
 it is a **precondition checked early**, and six documented paths raise the moment
 it is on. Each is a code read, not a guess:
 
-| call shape | what raises with `derive_threshold=True` | where |
-|---|---|---|
-| `fit(records)` (the sklearn-style no-op) | `ValueError: fit(derive_threshold=True) needs pairs=…` | `resolver.py` (`if derive_threshold and pairs is None`) |
-| `fit(records, labels=[…])` (the pre-existing positional contract) | same `ValueError` — `labels=` carries no split | same guard |
-| `fit(records, method=Bootstrap()/Platt()/…)` | `ValueError: fit(method=…, derive_threshold=True) is not supported` | `resolver.py`, first branch of `fit` |
-| `fit(records, pairs=…)` on a **core-only** install | `ImportError` — `derive_threshold_from_pairs` lazily imports `training.calibration`, which imports scikit-learn at module scope | `curation/harvest.py` → `training/calibration.py` |
-| `fit(records, pairs=…)` with a **decider** matcher (`LLMMatcher(response_parser="binary_yes_no")`) | `ValueError` from `_refuse_deciders` | `resolver.py` |
-| `fit(records, pairs=…)` on an explicit `_ops` chain with no `ThresholdSelect` | `ValueError: found no decision threshold to fit` | `resolver.py::_fit_chain_threshold` |
+| call shape | today | with `derive_threshold=True` | evidence |
+|---|---|---|---|
+| `fit(records)` — the sklearn-style no-op | **OK** | `ValueError: fit(derive_threshold=True) needs pairs=…` | **run** |
+| `fit(records, labels=[…])` on a `SupervisedFitMixin` matcher | **OK** | same `ValueError` — `labels=` carries no split | **run** |
+| `fit(records, pairs=…, method=Platt())` | **OK** | `ValueError: fit(method=…, derive_threshold=True) is not supported` — unconditional, no argument satisfies it | **run** |
+| `fit(records, pairs=…)` on a **core-only** install | OK | `ImportError` — `derive_threshold_from_pairs` lazily imports `training.calibration`, which imports scikit-learn at module scope (`curation/harvest.py:388` → `training/calibration.py:31`) | code read |
+| `fit(records, pairs=…)` with a **decider** matcher (`LLMMatcher(response_parser="binary_yes_no")`) | OK | `ValueError` from `_refuse_deciders` | code read (already documented in `docs/EXPERIMENTS.md`; not run here — reaching the guard costs paid LLM calls) |
+| `fit(records, pairs=…)` on an explicit `_ops` chain with no `ThresholdSelect` | OK | `ValueError: found no decision threshold to fit` | code read (`resolver.py::_fit_chain_threshold`) |
+
+The first three were **executed**, not inferred — each is `OK` today and raises
+under the flip:
+
+```
+with derive_threshold=True (what a flipped default would do to each shape):
+  ValueError  fit(records)
+  ValueError  fit(records, labels=[...]) [supervised matcher]
+  ValueError  fit(records, pairs=PAIRS, method=Platt())
+
+today's default (derive_threshold=False), same shapes:
+  OK          fit(records)
+  OK          fit(records, labels=[...]) [supervised matcher]
+  OK          fit(records, pairs=PAIRS, method=Platt())
+```
 
 This is not breakage imagined against hypothetical users. `grep -rn "\.fit("
 tests examples docs src` finds dozens of call sites in exactly these shapes —

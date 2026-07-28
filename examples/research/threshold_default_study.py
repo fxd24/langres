@@ -28,9 +28,9 @@ Design decisions, each load-bearing:
   **degenerates**, which is a finding in its own right (§ "the split trap" in
   the write-up). ``align_pairs``' entity-disjoint split assigns whole
   union-find components, and a k-NN candidate graph over a real corpus is
-  essentially *one* component: on ``fodors_zagat`` it produced ``n_valid = 0``
-  at every seed, and on ``dblp_acm`` it produced 58/18,127 -- inverted at
-  seed 0 and 58 held-out pairs at seeds 1-2. Numbers off 58 pairs are noise.
+  essentially *one* component, so there is nothing to split: measured across the
+  portfolio, ``align_pairs(split=0.3)`` holds out **zero** pairs in 26 of 27
+  (benchmark, seed) rows, at every scale from 26 labeled pairs to 1.7 million.
   So the split here is the benchmark's own ``Benchmark.split`` -- whole gold
   clusters to one side, so no entity and no match pair straddles the boundary --
   and the two corpora are blocked, scored and graded independently. Every cell
