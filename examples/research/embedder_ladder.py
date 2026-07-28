@@ -654,17 +654,25 @@ def _vector_affecting_runtime(embedder: Any) -> str:
     of that refusal is the point: a second, parallel staleness check would be a
     second thing to keep correct.
 
-    Duck-typed and total. An unreadable knob yields ``None``, which is stable
-    across runs (so it cannot cause a spurious refusal) and is honest: it says
-    the probe cannot see that knob, which is what the long probe above is for.
+    Duck-typed over an *absent* knob: an embedder that exposes no
+    ``max_seq_length`` yields ``None``, which is stable across runs (so it
+    cannot cause a spurious refusal) and is honest — it says the probe cannot
+    see that knob, which is what the long probe above is for.
+
+    A checkpoint that FAILS TO LOAD is not that case, and this function
+    deliberately does not catch it. Swallowing the load error would substitute
+    ``max_seq_length=None``, which is a DIFFERENT canary key, so a model with a
+    populated cache would be refused as stale — reporting a corrupt cache for
+    what is really a missing checkpoint or a broken dependency, and exiting
+    with the integrity code that makes `run_ladder.sh` abort the whole sweep
+    instead of recording one model failure. Let the load error out: the caller
+    in ``evaluate_model_on_benchmark`` records it as the model failure it is.
+    (Cross-model review.)
     """
     model = None
     getter = getattr(embedder, "_get_model", None)
     if callable(getter):
-        try:
-            model = getter()
-        except Exception:  # pragma: no cover - a load failure surfaces at encode
-            model = None
+        model = getter()
     if model is None:
         model = getattr(embedder, "model", embedder)
     value = getattr(model, "max_seq_length", None)
@@ -1671,6 +1679,43 @@ def _render_recommendation(
                 "settle it.\n"
             )
         elif best_count == 0:
+            # Three DISJOINT reasons a model failed to beat the reference, reported
+            # separately because they are different evidential claims: a measured
+            # loss, a measured exact equality, and no measurement able to separate
+            # them at all. An earlier version made these mutually exclusive
+            # branches, so one clear loser swept every exact tie into "intervals
+            # spanning zero" -- asserting uncertainty about the one state the
+            # measurement actually resolved. Partition, then say each part.
+            # (Cross-model review.)
+            inconclusive = [
+                name for name in compared if name not in clear_losers and name not in exact_ties
+            ]
+            parts: list[str] = []
+            if clear_losers:
+                parts.append(
+                    f"for {len(clear_losers)} of them "
+                    f"({', '.join(f'`{name}`' for name in clear_losers)}) that is a "
+                    "**measured loss**, not an absence of evidence: at least one "
+                    "shared interval sits entirely below zero"
+                )
+            if exact_ties:
+                parts.append(
+                    f"for {len(exact_ties)} of them "
+                    f"({', '.join(f'`{name}`' for name in exact_ties)}) every shared "
+                    "interval is a degenerate `[0, 0]`: the measurement did not fail "
+                    "to separate them, it **resolved them as exactly equal** (both "
+                    "arms scoring identically on every record, as `fodors_zagat` "
+                    "does) — a result, not a gap"
+                )
+            if inconclusive:
+                parts.append(
+                    f"for {len(inconclusive)} of them "
+                    f"({', '.join(f'`{name}`' for name in inconclusive)}) the answer is "
+                    "genuinely inconclusive — not because the challengers are bad, but "
+                    "because on this evidence the measurement cannot tell them apart: "
+                    "every shared interval spans zero, and 'indistinguishable' is not a "
+                    "reason to move"
+                )
             out.append(
                 f"\n**None of the {len(compared)} compared OSI-licensed model(s) beats "
                 f"`{REFERENCE_MODEL}` on any of the {len(common)} shared benchmark(s) "
@@ -1678,44 +1723,9 @@ def _render_recommendation(
                 "The measured recommendation is therefore to **keep the current "
                 "default**"
                 + (
-                    (
-                        f" — and for {len(clear_losers)} of them "
-                        f"({', '.join(f'`{name}`' for name in clear_losers)}) that is a "
-                        "**measured loss**, not an absence of evidence: at least one "
-                        "shared interval sits entirely below zero. "
-                        + (
-                            "The rest are genuinely inconclusive, with intervals "
-                            "spanning zero, and 'indistinguishable' is not a reason to "
-                            "move either."
-                            if len(clear_losers) < len(compared)
-                            else "Every compared model is in that position."
-                        )
-                    )
-                    if clear_losers
-                    else (
-                        (
-                            f" — and for {len(exact_ties)} of them "
-                            f"({', '.join(f'`{name}`' for name in exact_ties)}) every "
-                            "shared interval is a degenerate `[0, 0]`: the measurement "
-                            "did not fail to separate them, it **resolved them as "
-                            "exactly equal** (both arms scoring identically on every "
-                            "record, as `fodors_zagat` does). That is a result, not a "
-                            "gap — and it is not a reason to move either."
-                            + (
-                                ""
-                                if len(exact_ties) == len(compared)
-                                else " The rest have intervals spanning zero and are "
-                                "genuinely inconclusive."
-                            )
-                        )
-                        if exact_ties
-                        else (
-                            " — not because the challengers are bad, but because on "
-                            "this evidence the measurement cannot tell them apart: "
-                            "every shared interval spans zero, and 'indistinguishable' "
-                            "is not a reason to move."
-                        )
-                    )
+                    f" — {'; '.join(parts)}. None of those states is a reason to move."
+                    if parts
+                    else "."
                 )
                 + (
                     ""

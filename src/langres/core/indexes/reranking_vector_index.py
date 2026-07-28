@@ -467,12 +467,33 @@ class FakeHybridRerankingVectorIndex:
         # Deduplication
         distances, indices = index.search_all(k=2)
         # Returns: distances=(3,2), indices=(3,2)
+
+    Note:
+        ``search_all(query_prompt=...)`` is **refused by default**, mirroring
+        :class:`QdrantHybridRerankingIndex` under the reranking embedder that
+        actually ships. Pass ``reranking_honours_prompt=True`` to stand in for a
+        prompt-honouring one.
     """
 
-    def __init__(self) -> None:
-        """Initialize FakeHybridRerankingVectorIndex."""
+    def __init__(self, reranking_honours_prompt: bool = False) -> None:
+        """Initialize FakeHybridRerankingVectorIndex.
+
+        Args:
+            reranking_honours_prompt: Whether the reranking embedder this double
+                stands in for honours ``prompt``. Defaults to ``False`` because
+                that is what the documented production configuration does:
+                :class:`~langres.core.embeddings.FastEmbedLateInteractionEmbedder`
+                declares ``honours_prompt = False``, and it is the only
+                late-interaction embedder that ships. A double that accepted a
+                prompt the real index refuses would let a
+                ``VectorBlocker(query_prompt=...)`` test pass here and fail on
+                the production index — the fidelity gap the refusal exists to
+                close. Set ``True`` to exercise the prompt-honouring branch.
+                (Cross-model review.)
+        """
         self._n_samples: int | None = None
         self._texts: list[str] | None = None
+        self.reranking_honours_prompt = reranking_honours_prompt
 
     def create_index(self, texts: list[str]) -> None:
         """Record corpus size for generating valid indices.
@@ -526,8 +547,14 @@ class FakeHybridRerankingVectorIndex:
 
         Args:
             k: Number of neighbors per corpus item.
-            query_prompt: Optional instruction prompt (accepted for protocol
-                parity with the real index and VectorBlocker; fake ignores it).
+            query_prompt: Refused unless this double was built with
+                ``reranking_honours_prompt=True``, mirroring
+                :meth:`QdrantHybridRerankingIndex.search_all`.
+
+        Raises:
+            RuntimeError: If called before ``create_index()``.
+            NotImplementedError: If ``query_prompt`` is not ``None`` and this
+                double stands in for a reranking embedder that ignores prompts.
 
         Returns:
             distances: shape (N, k) where N = corpus size
@@ -535,6 +562,21 @@ class FakeHybridRerankingVectorIndex:
         """
         if self._n_samples is None:
             raise RuntimeError("Index not built. Call create_index() first.")
+        if query_prompt is not None and not self.reranking_honours_prompt:
+            # Same fidelity rule as FakeHybridVectorIndex, one step conditional:
+            # the real index refuses a prompt no stage can apply, and which
+            # stage can apply one depends on the reranking embedder. A double
+            # that always accepted would let a VectorBlocker(query_prompt=...)
+            # test pass on the fake and fail on the production index.
+            raise NotImplementedError(
+                "FakeHybridRerankingVectorIndex.search_all() rejects query_prompt to "
+                "match QdrantHybridRerankingIndex.search_all() under a reranking "
+                "embedder that ignores prompts -- the shipped "
+                "FastEmbedLateInteractionEmbedder does, and the dense side is served "
+                "from cached vectors while the sparse side encodes unprompted, so no "
+                "stage would see it. Build this double with "
+                "reranking_honours_prompt=True to stand in for one that does."
+            )
 
         # Generate deterministic pattern: for item i, neighbors are [i, (i+1)%N, ...]
         indices = np.zeros((self._n_samples, k), dtype=np.int64)

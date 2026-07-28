@@ -1498,3 +1498,56 @@ class TestQueryPromptIsRefusedWhenNoStageCanSeeIt:
         from langres.core.embeddings import FastEmbedLateInteractionEmbedder
 
         assert FastEmbedLateInteractionEmbedder.honours_prompt is False
+
+
+class TestTheFakeRefusesWhatTheRealIndexRefuses:
+    """The double must not accept a prompt the production index rejects.
+
+    A fake that is more permissive than the thing it stands in for turns a
+    fidelity gap into a green test: ``VectorBlocker(query_prompt=...)`` passes
+    against the double and then fails the moment it is pointed at
+    ``QdrantHybridRerankingIndex`` with the reranking embedder that ships.
+    """
+
+    def test_the_default_double_refuses_a_query_prompt(self):
+        index = FakeHybridRerankingVectorIndex()
+        index.create_index(["Apple Inc.", "Microsoft Corp."])
+
+        with pytest.raises(NotImplementedError, match="rejects query_prompt"):
+            index.search_all(k=2, query_prompt="query: ")
+
+    def test_a_prompt_honouring_double_accepts_one(self):
+        """Opting in must actually reach the results, not just skip the raise."""
+        index = FakeHybridRerankingVectorIndex(reranking_honours_prompt=True)
+        index.create_index(["Apple Inc.", "Microsoft Corp."])
+
+        distances, indices = index.search_all(k=2, query_prompt="query: ")
+
+        assert distances.shape == (2, 2)
+        assert indices.shape == (2, 2)
+
+    def test_an_unprompted_search_all_still_works_on_the_default_double(self):
+        """Control: the refusal is about the prompt, not about the double.
+
+        Without this, a guard that raised unconditionally would satisfy the
+        first test while breaking every existing fake-backed dedup test.
+        """
+        index = FakeHybridRerankingVectorIndex()
+        index.create_index(["Apple Inc.", "Microsoft Corp."])
+
+        distances, indices = index.search_all(k=2)
+
+        assert distances.shape == (2, 2)
+        assert indices.shape == (2, 2)
+
+    def test_the_default_matches_the_shipped_production_reranker(self):
+        """Guard the premise: the default is a claim about what ships.
+
+        The double defaults to refusing because the only late-interaction
+        embedder in the package declares it ignores prompts. If that ever stops
+        being true, the default is wrong rather than merely conservative.
+        """
+        from langres.core.embeddings import FastEmbedLateInteractionEmbedder
+
+        assert FastEmbedLateInteractionEmbedder.honours_prompt is False
+        assert FakeHybridRerankingVectorIndex().reranking_honours_prompt is False

@@ -306,6 +306,37 @@ class TestStaleCacheCanary:
         with pytest.raises(LADDER.StaleEmbeddingCacheError):
             LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
 
+    def test_a_dead_checkpoint_is_a_model_failure_not_a_cache_refusal(self) -> None:
+        """A checkpoint that cannot load must not be reported as a corrupt cache.
+
+        Swallowing the load error substitutes ``max_seq_length=None``, which is
+        a DIFFERENT canary key, so a model with a populated cache is refused as
+        stale. That exits with the integrity code, and the shell driver treats
+        that as "abort the whole sweep" rather than "record one model failure"
+        -- so a missing checkpoint or a broken dependency would stop every other
+        model and blame the cache for it.
+        """
+
+        class _DeadCheckpoint:
+            def _get_model(self) -> object:
+                raise OSError("checkpoint not found on disk")
+
+        with pytest.raises(OSError, match="checkpoint not found"):
+            LADDER._vector_affecting_runtime(_DeadCheckpoint())
+
+    def test_an_embedder_with_no_max_seq_length_still_yields_a_fingerprint(self) -> None:
+        """Control: an ABSENT knob is not a failure and must stay duck-typed.
+
+        The propagation above must not turn "this embedder does not expose
+        ``max_seq_length``" into an error -- that is the case the long probe
+        exists for, and every fake in this file is in it.
+        """
+
+        class _NoKnob:
+            pass
+
+        assert LADDER._vector_affecting_runtime(_NoKnob()) == "max_seq_length=None"
+
     def test_an_unchanged_max_seq_length_still_passes(self, tmp_path: Path) -> None:
         """Control: folding the knob into the key must not refuse every warm run."""
         embedder = _RetunableEmbedder(max_seq_length=512)
@@ -1535,6 +1566,43 @@ class TestRecommendationSplitsOnLicence:
         assert "resolved them as exactly equal" in section
         assert "cannot tell them apart" not in section
         assert "keep the current default" in section
+
+    def test_an_exact_tie_survives_a_clear_loser_in_the_same_field(self) -> None:
+        """The three states are a partition, not a priority order.
+
+        Reporting them as mutually exclusive branches meant one model with an
+        interval below zero swept every exact tie into "intervals spanning
+        zero" -- asserting uncertainty about the one comparison the measurement
+        actually resolved.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.0,
+                vs_reference_ci_low=0.0,
+                vs_reference_ci_high=0.0,
+            ),
+            _cell(
+                "all-MiniLM-L12-v2",
+                "none",
+                vs_reference_delta=-0.08,
+                vs_reference_ci_low=-0.11,
+                vs_reference_ci_high=-0.05,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "measured loss" in section
+        assert "`all-MiniLM-L12-v2`" in section
+        assert "resolved them as exactly equal" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        # The exact tie must NOT be described as inconclusive.
+        assert "cannot tell them apart" not in section
 
     def test_a_wide_interval_around_zero_is_still_inconclusive(self) -> None:
         """Control: the exact-tie branch must not swallow real uncertainty."""

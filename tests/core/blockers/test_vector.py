@@ -503,8 +503,15 @@ def test_stream_with_fake_hybrid_reranking_index_end_to_end():
     VectorBlocker.stream() calls ``search_all(k, query_prompt=...)``; before the
     fix this fake lacked ``query_prompt`` and raised TypeError. This exercises the
     full path (search_all + to_similarities) with a query_prompt set.
+
+    The double is built ``reranking_honours_prompt=True`` because that is the
+    configuration this test is about. It used to pass on the DEFAULT double,
+    which stands in for the reranker that ships — and that reranker ignores
+    prompts, so the same blocker raises against the production index. Naming the
+    configuration is what keeps this test from quietly asserting the opposite of
+    what runs. (Cross-model review.)
     """
-    index = FakeHybridRerankingVectorIndex()
+    index = FakeHybridRerankingVectorIndex(reranking_honours_prompt=True)
     blocker = VectorBlocker(
         schema_factory=company_factory,
         text_field_extractor=lambda x: x.name,
@@ -526,6 +533,31 @@ def test_stream_with_fake_hybrid_reranking_index_end_to_end():
     # to_similarities mapped fake distances into [0, 1] similarity scores.
     for candidate in candidates:
         assert 0.0 <= candidate.similarity_score <= 1.0
+
+
+def test_a_query_prompt_fails_on_the_double_that_stands_in_for_what_ships():
+    """The counterpart: the DEFAULT double refuses, because the real index does.
+
+    This is the whole point of the default. ``QdrantHybridRerankingIndex``
+    serves ``search_all`` from cached dense vectors with an unprompted sparse
+    side, so only the reranker could see a ``query_prompt`` — and the shipped
+    ``FastEmbedLateInteractionEmbedder`` declares it ignores prompts. A double
+    that accepted the prompt anyway made this exact blocker configuration look
+    supported.
+    """
+    index = FakeHybridRerankingVectorIndex()
+    blocker = VectorBlocker(
+        schema_factory=company_factory,
+        text_field_extractor=lambda x: x.name,
+        vector_index=index,
+        k_neighbors=2,
+        query_prompt="Represent the company name for retrieval:",
+    )
+    data = [{"id": "c1", "name": "Apple"}, {"id": "c2", "name": "Google"}]
+    index.create_index([d["name"] for d in data])
+
+    with pytest.raises(NotImplementedError, match="rejects query_prompt"):
+        list(blocker.stream(data))
 
 
 # ============================================================================

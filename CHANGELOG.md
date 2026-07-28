@@ -27,6 +27,12 @@
   unknown or duck-typed reranker is trusted rather than broken; only an embedder
   that *declares* it ignores prompts is refused. Pass a prompt-honouring
   reranker and the call works unchanged.
+  **`FakeHybridRerankingVectorIndex` mirrors this by default**: it now takes
+  `reranking_honours_prompt` (default `False`, matching the reranker that
+  actually ships) and refuses a `query_prompt` in `search_all()` unless you pass
+  `True`. Previously the double accepted a prompt the production index rejects,
+  so a `VectorBlocker(query_prompt=...)` test could pass on the fake and fail on
+  the real index. Unprompted calls are unaffected.
 - **`VectorBlocker` now warns when only one half of an asymmetric recipe is
   driven** — an embedder binding a `prompt_name` whose prefix is *not* the
   query-side one, with no `query_prompt` on the blocker. `search_all()` reuses
