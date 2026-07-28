@@ -87,6 +87,41 @@ grading on the disjoint corpus is a *stronger* held-out estimate than the one
 
 <!-- DECISION -->
 
+### 3.2 "Flip the default" is not a one-character change
+
+Independently of the measurement, `derive_threshold: bool = False` →
+`bool = True` cannot be done as written. The flag is not a preference read late;
+it is a **precondition checked early**, and six documented paths raise the moment
+it is on. Each is a code read, not a guess:
+
+| call shape | what raises with `derive_threshold=True` | where |
+|---|---|---|
+| `fit(records)` (the sklearn-style no-op) | `ValueError: fit(derive_threshold=True) needs pairs=…` | `resolver.py` (`if derive_threshold and pairs is None`) |
+| `fit(records, labels=[…])` (the pre-existing positional contract) | same `ValueError` — `labels=` carries no split | same guard |
+| `fit(records, method=Bootstrap()/Platt()/…)` | `ValueError: fit(method=…, derive_threshold=True) is not supported` | `resolver.py`, first branch of `fit` |
+| `fit(records, pairs=…)` on a **core-only** install | `ImportError` — `derive_threshold_from_pairs` lazily imports `training.calibration`, which imports scikit-learn at module scope | `curation/harvest.py` → `training/calibration.py` |
+| `fit(records, pairs=…)` with a **decider** matcher (`LLMMatcher(response_parser="binary_yes_no")`) | `ValueError` from `_refuse_deciders` | `resolver.py` |
+| `fit(records, pairs=…)` on an explicit `_ops` chain with no `ThresholdSelect` | `ValueError: found no decision threshold to fit` | `resolver.py::_fit_chain_threshold` |
+
+This is not hypothetical breakage measured against imagined users: the repo's own
+tests, examples and docs are full of exactly these call shapes — `.fit(records)`
+(6), `.fit(records, labels=…)` (4), `.fit(…, method=…)` (20+ across `Platt`,
+`Bootstrap` and the finetune methods).
+
+So the honest framing of the question is **two** questions, and they have
+different answers:
+
+1. *When a user has id-keyed labels and asks for a cut, is the derived cut better
+   than `0.5`?* — answered by §2.
+2. *Should `fit` derive one without being asked?* — an API change, not a
+   measurement consequence. The only non-breaking shape is a tri-state
+   (`bool | None = None`, "derive when `pairs=` is given"), which still (a) makes
+   `fit(pairs=…)` require `[trained]`, (b) starts raising for decider matchers,
+   and (c) **silently moves the threshold of every existing supervised-fit
+   caller**. And it is the same *shape* of implicit behaviour W4 deleted when it
+   removed `matcher="auto"` — "naming a model is the user's job, not a
+   heuristic's".
+
 ---
 
 ## 4. The split trap — a finding about #241's *reporting* path
