@@ -525,13 +525,13 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     add("")
     add(
         "Protocol: `C = union over a in A of topK(a -> B)`, k capped at 100, "
-        "`PC = |C & G| / |G|`, `PQ = |C & G| / |C|`, "
+        "`PC = |C and G| / |G|`, `PQ = |C and G| / |C|`, "
         "`mAP = sum_k (PC_k - PC_{k-1}) PQ_k`. "
         "`G` is the raw positive list, not the transitive closure."
     )
     add("")
     add(
-        "| benchmark | model | our |G| | paper |G| | our k@PC90 | our PC | our PQ | our mAP | "
+        "| benchmark | model | our gold | paper gold | our k@PC90 | our PC | our PQ | our mAP | "
         "STransformer k | PC | PQ | mAP |"
     )
     add("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
@@ -543,7 +543,8 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
             f"| `{row['benchmark']}` | `{row['model']}` | {row['gold_raw']:,} | "
             f"{pos if pos else '-'} | "
             f"{row['k_at_pc90'] if row['k_at_pc90'] else '>100'} | "
-            f"{_fmt((row['pc_at_k90'] or 0) * 100)} | {_fmt((row['pq_at_k90'] or 0) * 100)} | "
+            f"{_fmt(row['pc_at_k90'] * 100 if row['pc_at_k90'] else None)} | "
+            f"{_fmt(row['pq_at_k90'] * 100 if row['pq_at_k90'] else None)} | "
             f"{_fmt(row['map_at_100'] * 100)} | "
             f"{ref['k'] if ref else '-'} | {_fmt(ref['pc']) if ref else '-'} | "
             f"{_fmt(ref['pq']) if ref else '-'} | {_fmt(ref['map']) if ref else '-'} |"
@@ -556,7 +557,7 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         "not a zero-shot sentence encoder, so a gap here is first of all a method gap."
     )
     add("")
-    add("| benchmark | model | their k | their |C| | our |C| | their recall | our PC |")
+    add("| benchmark | model | their k | their cands | our cands | their recall | our PC |")
     add("|---|---|---:|---:|---:|---:|---:|")
     for row in rows:
         name = PAPER_NAMES.get(row["benchmark"], {}).get("deepblocker")
@@ -575,14 +576,15 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     add(
         "Our gold set is a strict subset of theirs on the product benchmarks "
         "(Section C). We cannot score the pairs we do not have, but we can bound "
-        "the number: the missing `|G_theirs| - |G_ours|` pairs are either all "
+        "the number: the missing `G_theirs - G_ours` pairs are either all "
         "missed (lower bound) or all retrieved (upper bound). Whenever the paper's "
         "value falls inside the bound, the measurement is *consistent* with theirs "
         "and the gold set is a sufficient explanation for the visible difference."
     )
     add("")
     add(
-        "| benchmark | model | k | our PC (our |G|) | their |G| | PC vs their |G|: lower | upper | paper | inside? |"
+        "| benchmark | model | k | our PC (our gold) | their gold | PC vs their gold: lower "
+        "| upper | paper | inside? |"
     )
     add("|---|---|---:|---:|---:|---:|---:|---:|:--:|")
     for row in rows:
@@ -615,7 +617,10 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         "`score_blocking` scores against."
     )
     add("")
-    add("| benchmark | our |A| | our |B| | our raw |G| | our closure |G| | DeepBlocker #Matches | UniBlocker #Pos |")
+    add(
+        "| benchmark | table A | table B | our raw gold | our closure gold | "
+        "DeepBlocker #Matches | UniBlocker #Pos |"
+    )
     add("|---|---:|---:|---:|---:|---:|---:|")
     seen: set[str] = set()
     for row in rows:
