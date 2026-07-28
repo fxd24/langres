@@ -86,12 +86,16 @@ ConfidenceSource: TypeAlias = Literal[
 #:    is what rescues the case a constant cannot. On ``abt_buy`` — the very
 #:    benchmark that vetoes the constant — the derived cut beats both the
 #:    constant and ``0.5``.
-#: 3. **Not measured — status quo, not a finding.** ``prob_llm``,
+#: 3. **Not measured — status quo, not a finding.** ``prob_llm`` /
 #:    ``prob_group_llm`` (a paid completion per score, so a portfolio grid sweep
-#:    is a real invoice), and ``calibrated_prob`` / ``prob_fs`` / ``prob_rf``
-#:    (*fitted* matchers a label-free user cannot run at all, so "best
-#:    out-of-the-box constant" is not even the same question). Change one of
-#:    these only with a measurement behind it.
+#:    is a real invoice), and ``calibrated_prob`` / ``prob_fs`` / ``prob_rf``,
+#:    whose scores come out of a **per-dataset fit** — the scale is re-estimated
+#:    for your data, so "the best shared out-of-the-box constant" is not even the
+#:    same question. (``prob_rf`` additionally needs labels; ``prob_fs`` does
+#:    *not* — ``FellegiSunterMatcher.fit_unlabeled`` runs an unsupervised
+#:    u-estimate plus EM. An earlier version of this note wrongly said neither
+#:    was runnable without labels.) Change one of these only with a measurement
+#:    behind it.
 #:
 #: **A ``sim_cos`` cut is a cut on an encoder's scale, not on the family tag.**
 #: ``0.90`` was selected on the ``all-MiniLM-L6-v2`` every benchmark loader pins,

@@ -136,6 +136,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import argparse  # noqa: E402
+import hashlib  # noqa: E402
 import logging  # noqa: E402
 import statistics  # noqa: E402
 import subprocess  # noqa: E402
@@ -405,7 +406,55 @@ class SweepReport(BaseModel):
     grid: list[float]
     shipped_threshold: float
     bootstrap_resamples: int
+    #: Identity of the code that produced these cells -- see
+    #: :func:`_source_fingerprint`. Optional so artifacts written before it
+    #: existed still load; ``None`` means "unknown", which resume treats as a
+    #: reason to refuse rather than to assume a match.
+    source_fingerprint: str | None = None
     cells: list[CellResult]
+
+
+def _source_fingerprint() -> str:
+    """Identify the code a cell was measured with, for the resume guard.
+
+    ``--resamples`` and ``--embedder`` are validated on resume, but they are only
+    the *arguments*. If the harness, a matcher, a benchmark loader or the input
+    data changed between an interrupted run and its resume, the old cells stay
+    and the remaining ones are measured with different code -- then both are
+    pooled into one artifact attributed to the current source, and the ship rule
+    can select a constant from measurements that were never comparable. Raised in
+    review; this is the identity that makes that detectable.
+
+    Two components, because either alone has a blind spot: the harness file's own
+    hash (catches edits to this script, including uncommitted ones, which a git
+    SHA would miss) and the repo commit (catches changes to `langres` itself,
+    which the harness hash would miss). A dirty worktree is reported as such, so
+    "unknown" never silently reads as "matching".
+
+    Returns:
+        A short opaque string. Never parsed -- only compared for equality.
+    """
+    harness = hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()[:12]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        head = completed.stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        repo = f"{head}{'+dirty' if dirty else ''}"
+    except (OSError, subprocess.CalledProcessError):  # pragma: no cover - no git
+        repo = "nogit"
+    return f"{harness}/{repo}"
 
 
 # --------------------------------------------------------------------------
@@ -1134,8 +1183,13 @@ def to_families_markdown() -> str:
         "sim_cos": ("yes", "local sentence-transformer -- free after one download"),
         "prob_llm": ("no", "every score costs a paid completion"),
         "prob_group_llm": ("no", "every score costs a paid completion"),
-        "prob_fs": ("no", "a FITTED matcher (EM) -- a label-free user cannot run it at all"),
-        "prob_rf": ("no", "a FITTED matcher (labels required) -- same"),
+        # NOT "labels required" for prob_fs -- FellegiSunterMatcher.fit_unlabeled
+        # does an unsupervised u-estimate + EM, so a label-free user CAN run it.
+        # (Review caught the earlier wording; it was simply wrong about the
+        # library.) The real reason it is out of scope is that its scale is
+        # re-fitted per dataset, so "one shipped constant" is not the question.
+        "prob_fs": ("no", "FITTED per dataset (EM) -- its scale is re-estimated, not shared"),
+        "prob_rf": ("no", "a FITTED matcher, labels required -- no label-free path at all"),
     }
     for family in sorted(families):
         answer, why = reasons.get(family, ("?", "unclassified"))
@@ -1289,9 +1343,14 @@ def run_benchmark_isolated(name: str, args: argparse.Namespace, scratch: Path) -
             f"worker for {name} exited {completed.returncode} "
             f"(artifact {'written' if worker_out.exists() else 'missing'})"
         )
-    cells = read_report(worker_out).cells
-    worker_out.unlink()
-    return cells
+    # Deliberately NOT unlinked here. Between this read and the parent's
+    # checkpoint() there is a window in which the worker's artifact would be the
+    # only durable copy of an hour of compute -- and the successful worker has
+    # already removed its own .partial. Deleting it here means a parent that dies
+    # (or a checkpoint() that raises OSError) in that window loses the benchmark
+    # outright. The caller unlinks once the cells are committed; this is the same
+    # "commit before it can disappear" rule the repo learned by losing a paid run.
+    return read_report(worker_out).cells
 
 
 def main() -> None:
@@ -1413,6 +1472,7 @@ def main() -> None:
     # in `git status -uall` and force a decision rather than vanish with the
     # worktree.
     scratch = out.with_name(out.name + ".partial")
+    fingerprint = _source_fingerprint()
     cells: list[CellResult] = []
     if args.resume and scratch.exists():
         partial = read_report(scratch)
@@ -1440,6 +1500,15 @@ def main() -> None:
                 "encoder's scale, so pooling them would compare different scales in one "
                 "table. Re-run with the original --embedder, or start a fresh --out."
             )
+        if partial.source_fingerprint != fingerprint:
+            parser.error(
+                f"{scratch} was measured by source {partial.source_fingerprint!r}, but "
+                f"this run is {fingerprint!r}. The flags match, but the CODE does not -- "
+                "resuming would measure the remaining cells with a different harness, "
+                "matcher, loader or dataset and pool both into one artifact attributed "
+                "to the current source. Re-run the whole sweep to a fresh --out (or "
+                "check out the original revision to finish this one)."
+            )
         cells = partial.cells
         print(f"[resume] {len(cells)} cell(s) already measured in {scratch}", flush=True)
     else:
@@ -1458,6 +1527,7 @@ def main() -> None:
                     grid=list(GRID),
                     shipped_threshold=SHIPPED_THRESHOLD,
                     bootstrap_resamples=args.resamples,
+                    source_fingerprint=fingerprint,
                     cells=cells,
                 ),
                 scratch,
@@ -1503,6 +1573,10 @@ def main() -> None:
                 cells = [c for c in cells if c.benchmark != name]
                 cells.extend(run_benchmark_isolated(name, args, scratch))
                 checkpoint()
+                # Only NOW is the worker's artifact redundant: its cells are in
+                # the parent checkpoint on disk. Unlinking it any earlier opens a
+                # window where a parent crash loses the benchmark entirely.
+                scratch.with_name(f"{scratch.name}.{name}.json").unlink(missing_ok=True)
         except CheckpointError:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
@@ -1515,6 +1589,7 @@ def main() -> None:
         grid=list(GRID),
         shipped_threshold=SHIPPED_THRESHOLD,
         bootstrap_resamples=args.resamples,
+        source_fingerprint=fingerprint,
         cells=cells,
     )
     print()

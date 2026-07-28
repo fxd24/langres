@@ -45,18 +45,28 @@ score family, chosen without access to the dataset it is graded on.**
 | family | methods | measurable at $0? | why |
 |---|---|---|---|
 | `heuristic` | rapidfuzz, string, weighted_average | yes | pure string similarity -- no model, no spend |
-| `prob_fs` | fellegi_sunter | no | a FITTED matcher (EM) -- a label-free user cannot run it at all |
+| `prob_fs` | fellegi_sunter | no | FITTED per dataset (EM) -- its scale is re-estimated, not shared |
 | `prob_group_llm` | select_judge | no | every score costs a paid completion |
 | `prob_llm` | cascade, dspy_judge, llm_judge, prompt_llm, zero_shot_llm | no | every score costs a paid completion |
-| `prob_rf` | random_forest | no | a FITTED matcher (labels required) -- same |
+| `prob_rf` | random_forest | no | a FITTED matcher, labels required -- no label-free path at all |
 | `sim_cos` | embedding, embedding_cosine | yes | local sentence-transformer -- free after one download |
 
 Only two families are in scope, and the boundary is not arbitrary. `prob_llm` /
 `prob_group_llm` bill a paid completion for every score, so a portfolio-wide grid
 sweep over them is a real invoice, not a free one. `prob_fs` / `prob_rf` are
-*fitted* matchers: a user with no labels cannot run them at all, so "the best
-out-of-the-box constant" is not even the same question for them. **Those four
-families are left alone, and this document is not evidence about them.**
+*fitted* matchers whose score scale is re-estimated **per dataset**, so "the best
+shared out-of-the-box constant" is not even the same question for them.
+
+> An earlier draft justified excluding both with "a user with no labels cannot
+> run them at all". Review checked that against the library and it is **false for
+> `prob_fs`**: `FellegiSunterMatcher.fit_unlabeled` performs an unsupervised
+> random-pair u-estimate plus EM. Only `prob_rf` actually requires labels. The
+> exclusion stands — a per-dataset fit is the reason — but the stated reason was
+> wrong, and wrong about a public capability of this library rather than about
+> this study's data.
+
+**Those four families are left alone, and this document is not evidence about
+them.**
 
 ## 3. Protocol
 

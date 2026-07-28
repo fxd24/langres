@@ -37,6 +37,7 @@ from examples.research.threshold_constant_sweep import (
     _exact_oracle,
     _f1,
     _select_constant,
+    _source_fingerprint,
     _worker_command,
     _unit_index,
     dedupe_scores,
@@ -359,13 +360,20 @@ class TestResumeRefusesToPoolIncomparableCells:
     """
 
     @staticmethod
-    def _partial(tmp_path: Any, *, resamples: int, embedder: str | None) -> Any:
+    def _partial(
+        tmp_path: Any,
+        *,
+        resamples: int,
+        embedder: str | None,
+        fingerprint: str | None = None,
+    ) -> Any:
         out = tmp_path / "sweep.json"
         write_report(
             SweepReport(
                 grid=list(GRID),
                 shipped_threshold=0.5,
                 bootstrap_resamples=resamples,
+                source_fingerprint=(_source_fingerprint() if fingerprint is None else fingerprint),
                 cells=[_cell("abt_buy").model_copy(update={"embedder": embedder})],
             ),
             out.with_name(out.name + ".partial"),
@@ -395,6 +403,35 @@ class TestResumeRefusesToPoolIncomparableCells:
         out = self._partial(tmp_path, resamples=1000, embedder="intfloat/e5-base-v2")
         self._run(monkeypatch, out, ["--resamples", "1000"])
         assert "e5-base-v2" in capsys.readouterr().err
+
+    def test_a_different_source_revision_is_refused(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """Matching FLAGS are not matching CODE.
+
+        Resuming across a harness/matcher/loader/data change pools measurements
+        that were never comparable into one artifact attributed to the current
+        source -- and the ship rule then selects from them.
+        """
+        out = self._partial(tmp_path, resamples=1000, embedder=None, fingerprint="deadbeef/oldrev")
+        self._run(monkeypatch, out, ["--resamples", "1000"])
+        assert "deadbeef/oldrev" in capsys.readouterr().err
+
+    def test_an_artifact_predating_the_field_is_refused_not_assumed(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """`None` means UNKNOWN. Unknown must not read as 'matches'."""
+        out = self._partial(tmp_path, resamples=1000, embedder=None, fingerprint=None)
+        # Force the stored value back to None the way an older artifact would have it.
+        partial = out.with_name(out.name + ".partial")
+        partial.write_text(partial.read_text().replace(_source_fingerprint(), ""))
+        monkeypatch.setattr(
+            "sys.argv",
+            ["threshold_constant_sweep.py", "--out", str(out), "--resume", "--resamples", "1000"],
+        )
+        with pytest.raises(SystemExit):
+            main()
+        assert "source" in capsys.readouterr().err
 
     def test_matching_flags_are_not_refused(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
