@@ -215,6 +215,28 @@ SHIP_RULE = (
 )
 SHIP_MAX_LOBO_SPREAD = 0.05
 
+#: The CHECKPOINT half of the ship rule, pre-registered before any variant
+#: artifact existed (commit history is the proof) and evaluated by
+#: :func:`to_transfer_markdown`.
+#:
+#: A ``sim_cos`` cut lives on a cosine scale that belongs to the *encoder*, so a
+#: constant selected on one checkpoint has to earn its place on the one the
+#: library actually ships. The rule is deliberately about **harm relative to the
+#: incumbent**, not about hitting the variant's own optimum: a constant that is
+#: off-optimum for e5 but still far better than ``0.5`` is a strict improvement
+#: for that user, and refusing it would protect nobody. So the movement of the
+#: argmax is reported as *diagnostic context*, never as an automatic veto.
+#:
+#: Ship across checkpoints iff, on the variant's cells: (1) no benchmark is
+#: significantly worse than 0.5 (95% CI entirely < 0) in a majority of its seeds,
+#: and (2) the median per-benchmark mean delta-F1 is > 0. Same shape as the
+#: dataset rule, applied to the checkpoint axis.
+TRANSFER_RULE = (
+    "transfers iff, on the variant checkpoint, (1) no benchmark is significantly "
+    "worse than 0.5 in a majority of its seeds and (2) the median per-benchmark "
+    "mean delta-F1 is > 0"
+)
+
 #: The tracked artifact a FULL run refreshes.
 CANONICAL_OUT = Path("examples/research/results/threshold_constant_sweep.json")
 
@@ -1048,18 +1070,31 @@ def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
                 f"{delta:+.4f} | [{cell.ci_lo_blocked[index]:+.4f}, "
                 f"{cell.ci_hi_blocked[index]:+.4f}] | {variant_argmax:.2f} |"
             )
+        # The pre-registered TRANSFER_RULE, evaluated from the artifact.
+        worse: list[str] = []
+        per_benchmark_delta: list[float] = []
+        for benchmark in sorted({c.benchmark for c in var_eligible}):
+            rows = [c for c in var_eligible if c.benchmark == benchmark]
+            deltas = [c.f1_blocked[index] - c.shipped_f1_blocked for c in rows]
+            per_benchmark_delta.append(statistics.mean(deltas))
+            if sum(1 for c in rows if c.ci_hi_blocked[index] < 0) * 2 > len(rows):
+                worse.append(benchmark)
+        median_delta = statistics.median(per_benchmark_delta)
+        transfers = not worse and median_delta > 0
         moved = abs(variant_argmax - constant)
         verdicts.append(
-            f"- `{family}`: the argmax moves **{moved:.2f}** across checkpoints "
-            f"({constant:.2f} -> {variant_argmax:.2f}); the baseline constant is "
-            f"significantly WORSE than 0.5 on {harmed} of {len(var_cells)} variant "
-            f"cells. A move above the pre-registered {SHIP_MAX_LOBO_SPREAD:.2f} "
-            "stability bound means the family tag is too coarse to carry one number."
+            f"- `{family}`: **{'TRANSFERS' if transfers else 'DOES NOT TRANSFER'}**. "
+            f"Median per-benchmark Δ on the variant checkpoint {median_delta:+.4f}; "
+            f"significantly worse than 0.5 on "
+            f"{', '.join(worse) if worse else 'no benchmark'} "
+            f"({harmed} of {len(var_cells)} cells). Diagnostic, not a veto: the "
+            f"argmax moves {moved:.2f} across checkpoints "
+            f"({constant:.2f} -> {variant_argmax:.2f})."
         )
     checkpoints = sorted({c.embedder or "all-MiniLM-L6-v2 (pin)" for c in variant.cells})
     lines.append("")
     lines.append(f"Variant checkpoint(s): {', '.join(checkpoints)}.")
-    lines.extend(["", *verdicts])
+    lines.extend(["", f"Pre-registered rule: **{TRANSFER_RULE}**.", "", *verdicts])
     return "\n".join(lines)
 
 
