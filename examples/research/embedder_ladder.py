@@ -1357,7 +1357,19 @@ def _render_recommendation(
     measured = sorted({row.model for row in ok})
     candidates = [name for name in models if name != REFERENCE_MODEL and name in measured]
     osi = [name for name in candidates if _is_osi(MODELS_BY_NAME.get(name) or ModelSpec(name))]
-    restricted = [name for name in candidates if name not in osi]
+    # Three buckets, not two. Failing an ALLOW list means "not shown to be OSI",
+    # which is not the same claim as "shown to be restricted" — and a ``--models``
+    # checkpoint outside ``MODELS`` gets the ``ModelSpec`` default ``"unknown"``,
+    # so lumping it in with Gemma would print a licence verdict about a model
+    # whose card nobody read. Unknown is a gap in the evidence; it keeps the
+    # model out of the default candidates (the allow list is what fails closed)
+    # but it earns a "verify this" line, not an accusation.
+    unclassified = [
+        name
+        for name in candidates
+        if name not in osi and (MODELS_BY_NAME.get(name) or ModelSpec(name)).license == "unknown"
+    ]
+    restricted = [name for name in candidates if name not in osi and name not in unclassified]
 
     out: list[str] = []
     out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
@@ -1444,8 +1456,8 @@ def _render_recommendation(
     out.append("\n### Use-restricted checkpoints — documented opt-in, never a silent default\n")
     if not restricted:
         out.append(
-            "\nNo measured model carries a non-OSI licence, so this section has no "
-            "entries at this metric revision.\n"
+            "\nNo measured model declares a licence that was read and found non-OSI, so "
+            "this section has no entries at this metric revision.\n"
         )
     else:
         for name in restricted:
@@ -1467,6 +1479,32 @@ def _render_recommendation(
                 f"  # opt in explicitly, having read the licence\n"
                 f'  SentenceTransformerEmbedder("{name}")\n'
                 f"  ```\n"
+            )
+
+    if unclassified:
+        out.append("\n### Unclassified licences — verify before shipping, in either direction\n")
+        out.append(
+            "\nThese ran, but no licence identifier was recorded for them, so this "
+            "document makes **no claim** about their terms. Not OSI-approved *as far as "
+            "this file knows* is a statement about this file, not about the checkpoint: "
+            "an unread licence is as likely to be Apache-2.0 as it is to be restricted. "
+            "They are excluded from the default candidates above because the allow list "
+            "fails closed — absence of evidence keeps a model out — and that exclusion is "
+            "reversible the moment someone reads the model card and records the "
+            "identifier on `MODELS`.\n"
+        )
+        for name in unclassified:
+            won = wins(name)
+            summary = (
+                ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
+                if won
+                else "no benchmark, with an interval clear of zero"
+            )
+            out.append(
+                f"\n- **`{name}` — licence not recorded.** Measured ahead of "
+                f"`{REFERENCE_MODEL}` on: {summary}. Read the checkpoint's own model "
+                "card before shipping it anywhere, then add the identifier to `MODELS` "
+                "so the next run classifies it instead of deferring again.\n"
             )
 
     return out

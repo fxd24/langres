@@ -1122,6 +1122,51 @@ class TestRecommendationSplitsOnLicence:
         # table must not hide that it won.
         assert "+0.2000" in restricted
 
+    def test_a_restricted_model_is_not_described_as_merely_unverified(self) -> None:
+        """The two buckets must not collapse into each other.
+
+        A licence that WAS read and is not OSI is a finding; keeping it in the
+        hedged "someone should look at this" section would understate it.
+        """
+        section = self._section()
+
+        assert "### Unclassified licences" not in section
+        assert "google/embeddinggemma-300m" in section.split("### Use-restricted")[1]
+
+    def test_an_unread_licence_is_reported_as_unverified_not_as_restricted(self) -> None:
+        """``--models`` accepts a checkpoint outside ``MODELS``; it gets ``"unknown"``.
+
+        Failing an allow list means "not shown to be OSI". Printing that as
+        "licence `unknown`, which is NOT OSI-approved" under a heading reading
+        *use-restricted* asserts two things the run never measured: that the
+        terms were read, and that they restrict use.
+        """
+        rows = [
+            *self._rows(),
+            _cell(
+                "someone/brand-new-model",
+                "none",
+                vs_reference_delta=0.07,
+                vs_reference_ci_low=0.04,
+                vs_reference_ci_high=0.10,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        osi_table, rest = section.split("### Use-restricted")
+        restricted, unclassified = rest.split("### Unclassified licences")
+
+        # Kept out of the default candidates -- the allow list fails closed.
+        assert "someone/brand-new-model" not in osi_table
+        # ...but never accused.
+        assert "someone/brand-new-model" not in restricted
+        assert "`someone/brand-new-model` — licence not recorded." in unclassified
+        assert "NOT OSI-approved" not in unclassified
+        # The measurement still survives the hedge.
+        assert "+0.0700" in unclassified
+
     def test_an_unknown_licence_is_not_treated_as_OSI(self) -> None:
         """The allow list must fail closed: absence is not approval.
 
