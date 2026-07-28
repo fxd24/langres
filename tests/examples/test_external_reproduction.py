@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -185,6 +186,108 @@ def test_every_number_the_verdict_quotes_is_checked_against_the_rows(
         )
 
 
+#: Every decimal in ``VERDICT`` that is NOT one of our measurements, and what it is
+#: instead. Anything not here and not in a claims registry fails the audit below.
+#: Keeping this explicit is the point: an unexplained number in the verdict is
+#: exactly the thing the registry exists to catch.
+_ACCOUNTED_FOR = {
+    # Published values, transcribed from the papers (checked against the reference
+    # JSON by test_published_numbers_in_the_verdict_match_the_reference).
+    "98.1",
+    "95.28",
+    "81.00",
+    "93.75",
+    "90.52",
+    "90.46",
+    "91.49",
+    "90.03",
+    "21.01",
+    "99.11",
+    "100.00",
+    # Differences and spreads derived from figures that ARE registered.
+    "0.72",
+    "1.48",
+    "1.11",
+    "1.3",
+    "5.4",
+    "1.5",
+    "0.7",
+    "15.4",
+    "0.6",
+    "0.18",
+    "4.0",
+    "2.6",
+    # Bound endpoints, each derived from a registered PC at the paper's k.
+    "89.62",
+    "95.99",
+    "84.62",
+    "94.85",
+    "90.88",
+    "92.55",
+    "80.85",
+    "97.49",
+    "96.58",
+    # Ladder-agreement figures, printed as fractions rather than percents.
+    "0.9368",
+    "0.8108",
+    "0.93678",
+    "0.81079",
+    # Rounded restatements of registered figures, printed as fractions: 0.81 is the
+    # registered 81.08 score_blocking recall; 0.90 is the literature's approximate
+    # value, quoted as "~0.90" and not a measurement of ours.
+    "0.81",
+    "0.90",
+    # Published values, transcribed from the papers (second group).
+    "392.4",  # DeepBlocker Table 6 candidate count, in thousands
+    "87.2",  # DeepBlocker Table 6 Abt-Buy recall
+    "60.51",  # UniBlocker Table 3 fodors mAP (the column we cannot reproduce)
+    "23.38",  # UniBlocker's printed dblp-scholar PQ
+    "23.77",  # what their own PC and |C| = 8 x 2616 give instead
+    # A bound endpoint: our abt_buy floor at DeepBlocker's K=20, derived from the
+    # registered abt_buy PC and the two gold counts.
+    "91.25",
+    # Section/version references, not measurements.
+    "4.2",
+    "5.1",
+    "5.2",
+    "3.1",
+}
+
+
+def test_the_verdict_contains_no_unaccounted_number(harness: ModuleType) -> None:
+    """The registry test above is self-referential; this one is not.
+
+    Iterating ``VERDICT_CLAIMS`` can only confirm the entries that are already
+    there — it cannot notice a figure the prose asserts and the registry omits.
+    This audits from the other direction: pull every decimal out of ``VERDICT``
+    and require each to be either a registered measurement of ours or explicitly
+    accounted for as something else.
+    """
+    registered = {f"{c[4]:.2f}" for c in harness.VERDICT_CLAIMS}
+    registered |= {f"{c[4]:.2f}" for c in harness.VERDICT_CROSSCHECK_CLAIMS}
+
+    found = set(re.findall(r"\d+\.\d+", harness.VERDICT))
+    unaccounted = sorted(found - registered - _ACCOUNTED_FOR)
+
+    assert not unaccounted, (
+        f"the verdict quotes {unaccounted} but nothing gates them: register each in "
+        "VERDICT_CLAIMS / VERDICT_CROSSCHECK_CLAIMS, or add it to _ACCOUNTED_FOR "
+        "with a note saying what it is"
+    )
+
+
+def test_published_numbers_in_the_verdict_match_the_reference(harness: ModuleType) -> None:
+    """The papers' figures the verdict repeats must still be what we transcribed."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    stransformer = reference["papers"]["uniblocker"]["table_3"]["STransformer"]
+    deep = {r["dataset"]: r for r in reference["papers"]["deepblocker"]["table_6_best_dl"]["rows"]}
+
+    assert deep["DBLP-Google1"]["recall_pct"] == 98.1
+    assert stransformer["dblp-acm"]["pc"] == 95.28
+    assert stransformer["dblp-acm"]["pq"] == 81.00
+    assert stransformer["fodors-zagats_homo"]["pc"] == 93.75
+
+
 def test_a_moved_measurement_drops_the_verdict(
     harness: ModuleType, rows: list[dict[str, Any]]
 ) -> None:
@@ -257,11 +360,14 @@ def test_every_crosscheck_number_the_verdict_quotes_is_checked(harness: ModuleTy
     """The crosscheck half of the registry must describe the committed artifact."""
     checks = json.loads(harness.CROSSCHECK_PATH.read_text())
 
-    for benchmark, k, field, value in harness.VERDICT_CROSSCHECK_CLAIMS:
+    for benchmark, model, k, field, value in harness.VERDICT_CROSSCHECK_CLAIMS:
         assert any(
-            c["benchmark"] == benchmark and c["k"] == k and abs(c[field] * 100 - value) < 0.005
+            c["benchmark"] == benchmark
+            and c["model"] == model
+            and c["k"] == k
+            and abs(c[field] * 100 - value) < 0.005
             for c in checks
-        ), f"{benchmark} k={k} {field} is no longer {value}"
+        ), f"{benchmark} x {model} k={k} {field} is no longer {value}"
 
 
 def test_a_legacy_row_is_not_chosen_when_a_stale_pin_is_also_present(

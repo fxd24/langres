@@ -35,10 +35,11 @@ that against **their own arithmetic** rather than trusting the prose (see
 
 1. **Direction.** It builds a *symmetric* kNN over the pooled corpus and then drops
    same-source pairs. The papers index table B and query with table A only.
-2. **Gold set.** It scores against the **transitive closure** of the gold clusters
-   (`Benchmark.load()`'s third return). The papers score against the raw positive
-   list. On `dblp_scholar` that is 13,763 pairs versus 5,347 — a 2.6x difference in
-   the denominator alone. Section F attributes the gap to each axis separately.
+2. **Gold set.** It scores against the **transitive closure** of the gold clusters,
+   derived from `Benchmark.load()`'s *second* return (`gold_clusters`); the *third*
+   (`gold_pairs`) is the raw positive list the papers score against. On
+   `dblp_scholar` that is 13,763 pairs versus 5,347 — a 2.6x difference in the
+   denominator alone. Section F attributes the gap to each axis separately.
 
 So these numbers are **not** `score_blocking` output and must not be compared to the
 embedder ladder's. Everything else is langres's: the corpora and loaders from
@@ -371,9 +372,18 @@ candidate count, to every printed digit:
 | `abt_buy` | 0.9368 | 10,897 | 0.93678 / 10,897 |
 | `amazon_google` | 0.8108 | 22,886 | 0.81079 / 22,886 |
 
-(`20260727_embedder_ladder.md`, "Candidate recall at k=20, no instruction".) Two
-independent implementations agreeing to four decimals means the delta below is a real
-protocol difference and not a bug in either.
+(`20260727_embedder_ladder.md`, "Candidate recall at k=20, no instruction".)
+
+**What that agreement does and does not validate.** The two implementations are not
+independent end to end: they share the benchmark corpora, the gold data, the
+serialization, the embedder and the FAISS index. What differs is the candidate
+assembly and the recall computation, so the agreement — to four decimals *and* on
+the exact candidate count — is evidence about **those steps only**: this script's
+symmetric-kNN branch assembles the same pairs and scores them the same way as
+`score_blocking`. It is good evidence that the `score_blocking` side of the delta is
+not a coding mistake. It says **nothing** about the *directional* branch that produces
+the other side, which has no second implementation to agree with, and a defect in a
+shared input would move both sides together and be invisible here.
 
 And the delta is large. On `amazon_google` at k=20 the *same embeddings* give **95.80%**
 under the papers' protocol and **81.08%** under `score_blocking`'s. Section F splits it:

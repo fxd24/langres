@@ -28,10 +28,11 @@ the whole reason this script exists rather than a call to that function:
    corpus and then drops same-source pairs. The papers index table B and query
    with table A only. Those are different candidate sets at the same ``k``.
 2. **Gold set.** ``score_blocking`` scores against the *transitive closure* of
-   the gold clusters (``Benchmark.load()``'s third return), which on a
-   many-to-many benchmark is much larger than the raw positive list -- 13,763 vs
-   5,347 pairs on ``dblp_scholar``. The papers score against the raw positive
-   list. This script uses the raw list and reports both counts.
+   the gold clusters, which it derives from ``Benchmark.load()``'s **second**
+   return (``gold_clusters``) -- not the third (``gold_pairs``), which is the raw
+   positive list and is the one the papers score against. On a many-to-many
+   benchmark the closure is much larger: 13,763 vs 5,347 pairs on
+   ``dblp_scholar``. This script uses the raw list and reports both counts.
 
 Run::
 
@@ -482,10 +483,11 @@ that against **their own arithmetic** rather than trusting the prose (see
 
 1. **Direction.** It builds a *symmetric* kNN over the pooled corpus and then drops
    same-source pairs. The papers index table B and query with table A only.
-2. **Gold set.** It scores against the **transitive closure** of the gold clusters
-   (`Benchmark.load()`'s third return). The papers score against the raw positive
-   list. On `dblp_scholar` that is 13,763 pairs versus 5,347 — a 2.6x difference in
-   the denominator alone. Section F attributes the gap to each axis separately.
+2. **Gold set.** It scores against the **transitive closure** of the gold clusters,
+   derived from `Benchmark.load()`'s *second* return (`gold_clusters`); the *third*
+   (`gold_pairs`) is the raw positive list the papers score against. On
+   `dblp_scholar` that is 13,763 pairs versus 5,347 — a 2.6x difference in the
+   denominator alone. Section F attributes the gap to each axis separately.
 
 So these numbers are **not** `score_blocking` output and must not be compared to the
 embedder ladder's. Everything else is langres's: the corpora and loaders from
@@ -668,9 +670,18 @@ candidate count, to every printed digit:
 | `abt_buy` | 0.9368 | 10,897 | 0.93678 / 10,897 |
 | `amazon_google` | 0.8108 | 22,886 | 0.81079 / 22,886 |
 
-(`20260727_embedder_ladder.md`, "Candidate recall at k=20, no instruction".) Two
-independent implementations agreeing to four decimals means the delta below is a real
-protocol difference and not a bug in either.
+(`20260727_embedder_ladder.md`, "Candidate recall at k=20, no instruction".)
+
+**What that agreement does and does not validate.** The two implementations are not
+independent end to end: they share the benchmark corpora, the gold data, the
+serialization, the embedder and the FAISS index. What differs is the candidate
+assembly and the recall computation, so the agreement — to four decimals *and* on
+the exact candidate count — is evidence about **those steps only**: this script's
+symmetric-kNN branch assembles the same pairs and scores them the same way as
+`score_blocking`. It is good evidence that the `score_blocking` side of the delta is
+not a coding mistake. It says **nothing** about the *directional* branch that produces
+the other side, which has no second implementation to agree with, and a defect in a
+shared input would move both sides together and be invisible here.
 
 And the delta is large. On `amazon_google` at k=20 the *same embeddings* give **95.80%**
 under the papers' protocol and **81.08%** under `score_blocking`'s. Section F splits it:
@@ -891,6 +902,20 @@ def _fmt(value: float | None, digits: int = 2) -> str:
 #: the same as "the checks the prose talks about survived".
 VERDICT_CROSSCHECKS = ("abt_buy", "amazon_google")
 
+#: The exact ``(benchmark, model)`` crosscheck cells committed with this study, which
+#: predate the revision field. They are the *only* cells allowed to be admitted on a
+#: missing ``model_revision``: the argument that they share weights with the sweep is
+#: specific to them (one cached snapshot on the machine that produced both -- see the
+#: note rendered into Section F). Any other unpinned cell is two loads of a moving
+#: Hub ``main`` with no evidence they matched.
+LEGACY_CROSSCHECK_CELLS = frozenset(
+    {
+        ("abt_buy", "sentence-transformers/all-mpnet-base-v2"),
+        ("amazon_google", "sentence-transformers/all-mpnet-base-v2"),
+        ("dblp_acm", "sentence-transformers/all-mpnet-base-v2"),
+    }
+)
+
 #: Every figure :data:`VERDICT` states as a measurement of ours, as
 #: ``(benchmark, model, k, field, percent)``. Checked against the rendered rows
 #: before the prose is emitted, so a re-pin that moves a number downgrades the
@@ -909,6 +934,14 @@ VERDICT_CLAIMS: tuple[tuple[str, str, int, str, float], ...] = (
     ("wdc_computers", _MPNET, 100, "pc", 87.02),
     ("wdc_computers", _MINILM, 150, "pc", 93.00),
     ("wdc_computers", _MPNET, 150, "pc", 91.58),
+    # The six PC values at the papers' own k that drive every printed interval in
+    # the like-for-like table, and therefore the "4 of 6" conclusion. Without these
+    # a re-measure could move a bound while the six headline figures above stayed
+    # put, leaving stale endpoints in fixed prose.
+    ("abt_buy", _MPNET, 13, "pc", 95.72),
+    ("amazon_google", _MPNET, 13, "pc", 94.26),
+    ("dblp_scholar", _MPNET, 8, "pc", 92.43),
+    ("walmart_amazon", _MPNET, 27, "pc", 96.99),
 )
 
 #: Figures :data:`VERDICT` quotes out of the *crosscheck* artifact, as
@@ -916,11 +949,14 @@ VERDICT_CLAIMS: tuple[tuple[str, str, int, str, float], ...] = (
 #: ladder-agreement table both hard-code these, so they need the same gate as the
 #: row values -- a re-run of either named crosscheck must not leave fixed prose
 #: asserting the old delta.
-VERDICT_CROSSCHECK_CLAIMS: tuple[tuple[str, int, str, float], ...] = (
-    ("amazon_google", 20, "paper", 95.80),
-    ("amazon_google", 20, "paper_direction_closure_gold", 80.43),
-    ("amazon_google", 20, "langres_score_blocking", 81.08),
-    ("abt_buy", 20, "langres_score_blocking", 93.68),
+#: The model is part of the identity: the prose attributes these figures to
+#: ``all-mpnet-base-v2`` by name, so a same-valued row from another model must not
+#: satisfy the check.
+VERDICT_CROSSCHECK_CLAIMS: tuple[tuple[str, str, int, str, float], ...] = (
+    ("amazon_google", _MPNET, 20, "paper", 95.80),
+    ("amazon_google", _MPNET, 20, "paper_direction_closure_gold", 80.43),
+    ("amazon_google", _MPNET, 20, "langres_score_blocking", 81.08),
+    ("abt_buy", _MPNET, 20, "langres_score_blocking", 93.68),
 )
 
 
@@ -1206,7 +1242,19 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         raw_checks = _current_revision_only(
             json.loads(crosscheck_path.read_text()), str(crosscheck_path)
         )
-        checks = [c for c in raw_checks if _cell(c) in rendered_cells]
+        # `None == None` is admitted ONLY for the exact cells committed with this
+        # study, whose shared-weights evidence is stated below and is specific to
+        # them. Any other unpinned pair is two separate loads of a moving `main`
+        # with nothing to say they matched, so it is rejected rather than assumed.
+        checks = [
+            c
+            for c in raw_checks
+            if _cell(c) in rendered_cells
+            and (
+                c.get("model_revision") is not None
+                or (c["benchmark"], c["model"]) in LEGACY_CROSSCHECK_CELLS
+            )
+        ]
         orphans = [c for c in raw_checks if _cell(c) not in rendered_cells]
         if orphans:
             logger.warning(
@@ -1286,10 +1334,13 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         if not _claim_holds(rows, b, m, k, field, value)
     }
     missing |= {
-        ("<quoted crosscheck>", f"{b} k={k} {field}: {value:.2f}")
-        for b, k, field, value in VERDICT_CROSSCHECK_CLAIMS
+        ("<quoted crosscheck>", f"{b} x {m} k={k} {field}: {value:.2f}")
+        for b, m, k, field, value in VERDICT_CROSSCHECK_CLAIMS
         if not any(
-            c["benchmark"] == b and c["k"] == k and abs(c[field] * 100 - value) < 0.005
+            c["benchmark"] == b
+            and c["model"] == m
+            and c["k"] == k
+            and abs(c[field] * 100 - value) < 0.005
             for c in checks
         )
     }
