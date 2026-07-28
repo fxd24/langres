@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Any
 
 from langres.core.embeddings import SentenceTransformerEmbedder
-from langres.core.model_ref import ModelRef
+from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL, ModelRef
 
 
 def test_sentence_transformer_config_round_trips_full_model_ref_and_runtime() -> None:
@@ -102,3 +102,32 @@ def test_parameter_count_sums_the_loaded_weights(monkeypatch) -> None:
     embedder = SentenceTransformerEmbedder(model_name="org/model")
 
     assert embedder.parameter_count == 1_234_567
+
+
+def test_the_default_embedder_ships_with_no_prompt_recipe() -> None:
+    """The default must stay in the configuration the ladder measured: BARE.
+
+    ``intfloat/e5-base-v2``'s model card documents an asymmetric
+    ``"query: "`` / ``"passage: "`` recipe, so the standing temptation is to
+    wire one into the default. Every number backing this default
+    (``docs/research/20260727_embedder_ladder.md``) was measured in the
+    ladder's ``prompt_arm="none"`` — neither side prefixed — and the checkpoint
+    ships no ``config_sentence_transformers.json``, so it registers no prompts
+    of its own. e5-base-v2 has no ``documented`` arm in the ladder at all.
+
+    So a prompt appearing here would ship an **unmeasured** configuration under
+    the measured numbers' banner, and half of one (``prompt_name`` without the
+    blocker's ``query_prompt``) is actively worse than neither — the case
+    ``VectorBlocker`` warns about. Measure it in the ladder first, then change
+    this test with the rows to back it.
+    """
+    embedder = SentenceTransformerEmbedder()
+
+    assert embedder.model_name == DEFAULT_EMBEDDING_MODEL == "intfloat/e5-base-v2"
+    assert embedder.prompt_name is None
+    assert not embedder.prompts
+
+    # The serialized config must not smuggle one back in either.
+    config = embedder.config()
+    assert config.prompt_name is None
+    assert not config.prompts

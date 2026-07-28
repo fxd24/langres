@@ -450,7 +450,8 @@ class SentenceTransformerEmbedder:
 
     Note:
         Common models and their dimensions:
-        - "all-MiniLM-L6-v2": 384 dim (fast, good quality)
+        - "intfloat/e5-base-v2": 768 dim (the default; best measured OSI model)
+        - "all-MiniLM-L6-v2": 384 dim (fast, the previous default)
         - "all-mpnet-base-v2": 768 dim (slower, better quality)
         - "all-MiniLM-L12-v2": 384 dim (medium speed/quality)
 
@@ -484,7 +485,11 @@ class SentenceTransformerEmbedder:
 
         Args:
             model_name: Name of the sentence-transformers model to use.
-                Default: "all-MiniLM-L6-v2" (fast, good quality baseline).
+                Default: :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`
+                ("intfloat/e5-base-v2", 768-dim, MIT) — the best OSI-licensed
+                model measured in ``docs/research/20260727_embedder_ladder.md``.
+                It is measured and shipped **without** a prompt; see that
+                constant before adding one.
             batch_size: Number of texts to encode per batch.
                 Default: 32. Use 128+ for GPU with sufficient memory.
             show_progress_bar: Display encoding progress for large datasets.
