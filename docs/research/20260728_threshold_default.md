@@ -31,8 +31,12 @@ graded on a corpus-disjoint held-out split.
 - **(a) `fit(derive_threshold=True)` beats `0.5` almost everywhere.** 45 cells
   improve, 7 tie exactly (the race declined, so the threshold did not move),
   **2 lose**. The two losses are both `tiny_fixture` + `rapidfuzz`, whose
-  held-out corpus is **3 records containing 1 gold pair** — an F1 that can only
-  be `0.0` or `1.0`. On the **8 real benchmarks the shipped outcome never loses
+  held-out corpus is **3 records containing 1 gold pair**, so *recall* is binary
+  and one pair decides the whole metric. (F1 itself is not binary — false
+  positives still move precision, and the artifact shows it: the
+  `tiny_fixture`/`embedding_cosine` rows sit at **0.5000** on that same single
+  gold pair. What makes these cells uninformative is the sample size, not a
+  two-valued metric.) On the **8 real benchmarks the shipped outcome never loses
   at any seed for either scorer**, and the wins are not marginal: +0.42
   (dblp_acm/rapidfuzz), +0.66 (dblp_acm/cosine), +0.82 (febrl_person/cosine),
   +0.86 (fodors_zagat/cosine) — all at **seed 0**, so the four sit on one basis.
@@ -54,19 +58,20 @@ graded on a corpus-disjoint held-out split.
   that residual, observed.
 - **(c) So: yes to deriving — but "flip the default" is not a one-character
   change, and this PR does not make it.** `derive_threshold: bool = False →
-  True` makes **six documented call shapes raise**, starting with the plain
-  `fit(records)` no-op and every `fit(…, method=…)`; the repo's own suite would
-  go red on the first test. The measured answer and the API change are different
-  decisions — see §3.
+  True` makes **three verified call shapes raise** — the plain `fit(records)`
+  no-op, `fit(records, labels=…)`, and every `fit(…, method=…)`; the repo's own
+  suite would go red on the first test. The measured answer and the API change
+  are different decisions — see §3.
 - **(d) The most actionable finding is not about the flag at all.** For
   `embedding_cosine` the derived cut lands in **0.809–0.945 (median 0.863) across
   all nine datasets** — a spread of 0.14. `0.5` is not merely unmeasured there,
   it is *nowhere near* right, and a per-family default in that band would help
   every user **with no labels at all**. For `rapidfuzz` the same spread is
-  **0.174–0.695** (0.52, a 4× range), so no constant works and that family
-  genuinely needs derivation. One number cannot serve both — which is exactly
-  what `MethodSpec.default_threshold` already exists to express, and exactly what
-  the six architectures bypass.
+  **0.174–0.695** (0.52, a 4× range), so a shared constant is a much weaker bet
+  there — though this study cannot rule one out, having measured F1 only at `0.5`
+  and at each dataset's own derived cut (§5.2). One number is unlikely to serve
+  both families — which is exactly what `MethodSpec.default_threshold` already
+  exists to express, and exactly what the six architectures bypass.
 - **(e) A separate defect, found by trying the obvious design first: the split
   trap.** `align_pairs(split=0.3)` returns an **empty `valid` in 26 of 27
   (benchmark, seed) rows** on this label set — 0 held-out pairs, not 30 %. So
@@ -306,19 +311,36 @@ makes it safe** — it declined 7 times and was right 7 times.
 
 Independently of the measurement, `derive_threshold: bool = False` →
 `bool = True` cannot be done as written. The flag is not a preference read late;
-it is a **precondition checked early**, and six documented paths raise the moment
-it is on:
+it is a **precondition checked early**, and **three** call shapes that work today
+raise the moment it is on — every one of them executed, not inferred:
 
 | call shape | today | with `derive_threshold=True` | evidence |
 |---|---|---|---|
 | `fit(records)` — the sklearn-style no-op | **OK** | `ValueError: fit(derive_threshold=True) needs pairs=…` | **run** |
 | `fit(records, labels=[…])` on a `SupervisedFitMixin` matcher | **OK** | same `ValueError` — `labels=` carries no split | **run** |
 | `fit(records, pairs=…, method=Platt())` | **OK** | `ValueError: fit(method=…, derive_threshold=True) is not supported` — unconditional, no argument satisfies it | **run** |
-| `fit(records, pairs=…)` on a **core-only** install | OK | `ImportError` — `derive_threshold_from_pairs` lazily imports `training.calibration`, which imports scikit-learn at module scope (`curation/harvest.py:388` → `training/calibration.py:31`) | code read |
-| `fit(records, pairs=…)` with a **decider** matcher (`LLMMatcher(response_parser="binary_yes_no")`) | OK | `ValueError` from `_refuse_deciders` | code read (already documented in `docs/EXPERIMENTS.md`; not run here — reaching the guard costs paid LLM calls) |
-| `fit(records, pairs=…)` on an explicit `_ops` chain with no `ThresholdSelect` | OK | `ValueError: found no decision threshold to fit` | code read (`resolver.py::_fit_chain_threshold`) |
 
-The first three were **executed**, not inferred — each is `OK` today and raises
+> **Correction.** An earlier version of this table listed **six** shapes, adding
+> three reached by code reading: `fit(pairs=…)` on a core-only install, on a
+> *decider* matcher, and on an `_ops` chain with no `ThresholdSelect`. Those three
+> are **not** regressions from the flip, because they do not work today either.
+> `_fit_from_pairs` refuses `pairs=` outright when the matcher is not a
+> `SupervisedFitMixin` *and* `derive_threshold` is false (`resolver.py:1267`), so
+> for exactly those matchers the call already raises. Run both ways:
+>
+> ```
+> TODAY (derive_threshold=False):
+>   ValueError   fit(pairs=...) on a non-supervised matcher: WeightedAverageMatcher
+>                does not support fit(pairs=...)
+> UNDER THE FLIP (derive_threshold=True):
+>   OK           fit(pairs=...) on a non-supervised matcher
+> ```
+>
+> The flip *legalizes* that shape rather than breaking it. The three rows above
+> stand, and they are enough — the first is the plain no-op `fit(records)`, which
+> the repo's own suite calls — but the honest count is three, not six.
+
+The three were **executed**, not inferred — each is `OK` today and raises
 under the flip:
 
 ```
@@ -440,10 +462,14 @@ used (`align_split_train` / `align_split_valid` in the JSON).
 
 **What this does and does not mean.**
 
-- It does **not** invalidate the race. Selection happens on `train`; `split=`
-  changes only what `FitReport` reports. A cut derived with `split=0.3` and one
-  derived with `split=None` differ only in how many labeled pairs the derivation
-  saw.
+- It does **not** invalidate the race. Selection happens on `train` and never
+  reads `valid`, so no held-out pair ever votes on which cut wins. What `split=`
+  *does* change is how many labeled pairs the derivation saw — pairs moved into
+  `valid` leave `train` — so a cut derived at `split=0.3` and one derived at
+  `split=None` are fit on different samples. (This bullet previously said
+  `split=` "changes only what `FitReport` reports", which contradicted its own
+  next clause. It is only report-only in the degenerate case where `valid` comes
+  back empty — which is 26 of these 27 rows, hence the confusion.)
 - It **does** mean `FitReport.metrics` and `ThresholdCandidate.held_out_f1` are
   not trustworthy at this label scale — not because they are computed wrongly,
   but because the split that feeds them can silently return an empty, a
@@ -479,20 +505,30 @@ single search finds all of it. `grep -rn "threshold.*= 0\.5" src/langres` return
   `default_threshold=0.5` with no space, which the pattern above cannot see.
   These are the `"string"` and `"embedding"` method specs.
 
-What remains is **seventeen declared defaults that all mean "a pair whose score
-reaches this is a match"** (15 of the grep's hits, plus the 2 it missed):
+What remains is **seventeen declared defaults spelled `0.5` for the match
+decision** (15 of the grep's hits, plus the 2 it missed) — though, as the last
+column records, not all seventeen are *effective* cuts:
 
-| where | sites | what it defaults |
-|---|---|---|
-| `architectures/retrieval.py` | 4 | `Retrieve`, `RetrieveRerank`, `RetrieveLLM`, `RetrieveRerankLLM` |
-| `architectures/fuzzy_string.py` | 1 | `FuzzyString` |
-| `architectures/vector_llm_cascade.py` | 1 | `VectorLLMCascade` |
-| `core/clusterer.py` | 1 | `Clusterer(threshold=0.5)` |
-| `core/matchers/rapidfuzz.py` | 1 | `RapidfuzzMatcher` |
-| `core/matchers/embedding_score.py` | 1 | `EmbeddingScoreMatcher` |
-| `core/method_registry.py` | 3 | `MethodSpec.default_threshold` field default + the `"string"` and `"embedding"` specs |
-| `curation/labelers.py` | 3 | `FakeLabeler`, `TeacherLabeler.__init__`, `TeacherLabeler.from_env` |
-| `report/eval_report.py` | 2 | the tearsheet's operating point |
+| where | sites | what it defaults | effective? |
+|---|---|---|---|
+| `architectures/retrieval.py` | 4 | `Retrieve`, `RetrieveRerank`, `RetrieveLLM`, `RetrieveRerankLLM` | yes for the 2 score-carrying recipes; **inert** for `RetrieveLLM`/`RetrieveRerankLLM` (see below) |
+| `architectures/fuzzy_string.py` | 1 | `FuzzyString` | yes |
+| `architectures/vector_llm_cascade.py` | 1 | `VectorLLMCascade` | yes |
+| `core/clusterer.py` | 1 | `Clusterer(threshold=0.5)` | yes |
+| `core/matchers/rapidfuzz.py` | 1 | `RapidfuzzMatcher` | **no** — its own docstring says "stored for compatibility with Optimizer, but not used in `forward()`" |
+| `core/matchers/embedding_score.py` | 1 | `EmbeddingScoreMatcher` | **no** — only picks the `decision_step` label and provenance; the emitted `score` is the raw similarity and the caller's threshold still decides |
+| `core/method_registry.py` | 3 | `MethodSpec.default_threshold` field default + the `"string"` and `"embedding"` specs | yes |
+| `curation/labelers.py` | 3 | `FakeLabeler`, `TeacherLabeler.__init__`, `TeacherLabeler.from_env` | yes |
+| `report/eval_report.py` | 2 | the tearsheet's operating point | yes (display) |
+
+**Two of the seventeen are decorative**, which an earlier version of this section
+asserted they were not ("every one of them means 'a pair whose score reaches this
+is a match'"). `RapidfuzzMatcher.threshold` is never read by `forward`, and
+`EmbeddingScoreMatcher.threshold` changes only a provenance label. That does not
+shrink the consolidation case — a constructor parameter named `threshold`
+defaulting to `0.5` and doing *nothing* is arguably worse than one that works,
+because it silently invites the caller to tune it — but the inventory should say
+which is which rather than flatten them.
 
 Docstring examples that merely *show* `threshold=0.5` (`core/clusterer.py:128`,
 `core/resolver.py:491`, `core/matchers/cascade_judge.py:129`) are not counted:
@@ -529,11 +565,23 @@ the halves split by family**:
   everywhere, with no labels. `0.5` is not merely unmeasured here; it is off by
   ~0.35 on a scale where the discriminating region is ~0.1 wide, which is why the
   incumbent F1s in §2 are 0.0025–0.22 while the derived ones are 0.03–0.95.
-- **For `rapidfuzz` it is wrong.** Spread 0.52 across a 0.17–0.70 range — a 4×
-  ratio. There is no constant that is simultaneously right for `abt_buy` (0.17)
-  and `dblp_acm` (0.70); a heuristic string score's scale depends on the schema's
-  field count and fill rate, not just on the metric. This family needs
-  derivation, and it is the family the `0.5` default was presumably chosen for.
+- **For `rapidfuzz` it is much weaker.** Spread 0.52 across a 0.17–0.70 range — a
+  4× ratio — so *if* a single constant does serve this family, it is nowhere near
+  obvious what it is, and `0.5` sits in the middle of the range rather than near
+  any dataset's optimum. A heuristic string score's scale depends on the schema's
+  field count and fill rate, not just on the metric.
+
+  **Stated precisely, because the stronger version is not supported:** an earlier
+  draft concluded "there is no constant that is simultaneously right for
+  `abt_buy` (0.17) and `dblp_acm` (0.70)". The artifact does not show that. It
+  measures F1 at `0.5` and at each dataset's *own* derived cut — never at a
+  shared alternative constant. Youden's J is flat across a separating gap (the
+  very property that motivates #241's race), so two datasets can have far-apart
+  argmaxes and still both score well at some third value. Ruling a shared
+  constant out requires sweeping F1 over a grid of fixed thresholds per dataset,
+  which this study did not run. What the spread supports is: the derived cut
+  varies far more here than for cosine, and a per-family constant is a *less*
+  promising fix for the string family than for the cosine one.
 
 **Caveat, stated because it is the kind that gets skipped:** this study measured
 the *derived* cut, not a fixed replacement constant. "A default near 0.86 would
@@ -544,10 +592,20 @@ That is not noise between benchmarks — it is a **score-family** effect, and th
 codebase already knows it. `MethodSpec.default_threshold` exists precisely because
 "score scales differ per family, so each method carries its own sane default"
 (the E12 comment), and the four LLM specs already override to `0.7`. The six
-architectures bypass that seam entirely and re-declare `0.5` by hand — including
-`RetrieveLLM` / `RetrieveRerankLLM`, whose `ThresholdSelect` sits *after* a
-`Parse()` of an LLM response, i.e. on the very score family the registry says
-should default to `0.7`.
+architectures bypass that seam entirely and re-declare `0.5` by hand.
+
+**But not `RetrieveLLM` / `RetrieveRerankLLM` — correcting an earlier claim in
+this section.** Their `ThresholdSelect` does sit after a `Parse()` of an LLM
+response, which is what that claim rested on; the mistake was concluding they
+should therefore default to `0.7`. `Parse` emits `ParsedGeneration(decision=True/
+False)` — a *decider*, no score — and `predicted_match` gives `decision`
+precedence, documented in `core/models.py` as "a judge that both decided and
+ranked already made its call, so the threshold never overrides it". So on those
+two recipes the threshold is **inert**, and moving it from `0.5` to `0.7` would
+change nothing at all. The per-family routing argument below applies to the
+score-carrying recipes (`Retrieve`, `RetrieveRerank`, `FuzzyString`,
+`VectorLLMCascade`); for the two LLM recipes the real question is why a decider
+pipeline exposes a `threshold` parameter that cannot affect its output.
 
 ### 5.3 The proposal
 

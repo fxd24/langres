@@ -671,12 +671,16 @@ def main() -> None:
     # truncate an existing checkpoint with this run's first cell, destroying the
     # very cells the comment above promises to protect -- the whole point of the
     # file being visible is lost if the next command silently overwrites it.
-    if scratch.exists():
-        parser.error(
-            f"{scratch} exists: an earlier sweep was interrupted and those cells are "
-            "its only copy. Read it, then move, commit or delete it (or pick a "
-            "different --out) before re-running."
-        )
+    # Both paths, because an interruption between ``staging.write_text`` and
+    # ``os.replace`` leaves the cells in the staging file with no checkpoint
+    # beside it -- refusing only on ``scratch`` would silently overwrite that.
+    for stale in (scratch, scratch.with_name(scratch.name + ".writing")):
+        if stale.exists():
+            parser.error(
+                f"{stale} exists: an earlier sweep was interrupted and those cells are "
+                "its only copy. Read it, then move, commit or delete it (or pick a "
+                "different --out) before re-running."
+            )
     selected = select_benchmarks(fast=args.fast, only=args.only)
     expected_cells = len(selected) * len(args.methods) * len(args.seeds)
     results: list[CellResult] = []
