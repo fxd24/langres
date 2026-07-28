@@ -15,7 +15,7 @@ Key features:
 """
 
 import logging
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 from qdrant_client import QdrantClient
@@ -25,7 +25,6 @@ from qdrant_client.models import (
     FusionQuery,
     PointStruct,
     Prefetch,
-    ScoredPoint,
     SparseVector,
     SparseVectorParams,
     VectorParams,

@@ -350,7 +350,7 @@ def main() -> None:
     print("=" * 90)
     print("BLOCKING EVALUATION: FAISS vs Qdrant Hybrid Search")
     print("=" * 90)
-    print(f"\nDataset: Funder organization names")
+    print("\nDataset: Funder organization names")
     print(f"Embedding model: {MODEL_NAME}")
     print(f"k-neighbors: {K_NEIGHBORS}")
     print()

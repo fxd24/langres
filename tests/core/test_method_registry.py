@@ -23,7 +23,6 @@ import pytest
 from pydantic import BaseModel
 
 from langres.clients.openrouter import DEFAULT_OPENROUTER_MODEL
-from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
 from langres.core.method_registry import (
     DEFAULT_EMBEDDING_MODEL,

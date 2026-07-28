@@ -2,11 +2,15 @@ name: CodeQL
 
 # Static security analysis (free for public repos). Python-only; findings land
 # in the repo's Security tab -> Code scanning.
+# NOTE: `pull_request.branches` filters by TARGET branch, so this list has to
+# track the one in `lint.yml`/`test.yml` -- a PR into a branch missing here gets
+# NO security scan at all, silently. Both integration branches below still exist
+# on the remote, so the drift was a live gap, not a stale entry.
 on:
   push:
-    branches: [main]
+    branches: [main, epic/193-core-algebra]
   pull_request:
-    branches: [main]
+    branches: [main, feat/core-packages, epic/193-core-algebra]
   schedule:
     # Weekly on Monday at 07:00 UTC (between the test-full and security crons)
     - cron: "0 7 * * 1"
@@ -23,17 +27,22 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           languages: python
           # security-extended adds lower-severity/precision queries on top of
-          # the default suite; still advisory (not a required check).
+          # the default suite. `Analyze (python)` IS a required check on PRs
+          # into main (branch protection) -- it runs on every such PR, so it
+          # can be required without deadlocking. Findings themselves land in
+          # Security -> Code scanning and do not fail the job; what this gate
+          # catches is the job failing outright, e.g. the codeql-action version
+          # mismatch that this pin exists to prevent.
           queries: security-extended
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           category: "/language:python"

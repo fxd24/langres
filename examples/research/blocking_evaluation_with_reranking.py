@@ -39,7 +39,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from sentence_transformers import CrossEncoder
@@ -880,7 +879,7 @@ def main() -> None:
     print("=" * 120)
     print("BLOCKING EVALUATION: FAISS vs Qdrant Hybrid vs ColBERT Reranking vs Qwen3 CrossEncoder")
     print("=" * 120)
-    print(f"\nDataset: Funder organization names")
+    print("\nDataset: Funder organization names")
     print(f"Dense model: {DENSE_MODEL}")
     print(f"Sparse model: {SPARSE_MODEL}")
     print(f"ColBERT reranking model: {RERANKING_MODEL}")

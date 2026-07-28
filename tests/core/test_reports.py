@@ -577,8 +577,8 @@ class TestBlockerEvaluationReportImportErrors:
 
     def test_plot_score_distribution_import_error_message(
         self,
-        mock_report: "BlockerEvaluationReport",
-        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that plot_score_distribution ImportError has multi-package-manager instructions."""
         import builtins
@@ -605,8 +605,8 @@ class TestBlockerEvaluationReportImportErrors:
 
     def test_plot_rank_distribution_import_error_message(
         self,
-        mock_report: "BlockerEvaluationReport",
-        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that plot_rank_distribution ImportError has multi-package-manager instructions."""
         import builtins
@@ -633,8 +633,8 @@ class TestBlockerEvaluationReportImportErrors:
 
     def test_plot_recall_curve_import_error_message(
         self,
-        mock_report: "BlockerEvaluationReport",
-        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that plot_recall_curve ImportError has multi-package-manager instructions."""
         import builtins
@@ -661,8 +661,8 @@ class TestBlockerEvaluationReportImportErrors:
 
     def test_plot_all_import_error_message(
         self,
-        mock_report: "BlockerEvaluationReport",
-        monkeypatch: pytest.MonkeyPatch,  # noqa: F821
+        mock_report: "BlockerEvaluationReport",  # noqa: F821
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that plot_all ImportError has multi-package-manager instructions."""
         import builtins
@@ -969,8 +969,8 @@ class TestBlockerEvaluationReportDiagnose:
             id: str
             name: str
 
-        e1 = Entity(id="e1", name="Acme Corp")
-        e2 = Entity(id="e2", name="Acme Corporation")
+        Entity(id="e1", name="Acme Corp")
+        Entity(id="e2", name="Acme Corporation")
         e3 = Entity(id="e3", name="TechCo")
         e4 = Entity(id="e4", name="TechCo Inc")
 
@@ -1001,7 +1001,6 @@ class TestBlockerEvaluationReportDiagnose:
     def test_blocker_evaluation_report_diagnose_respects_limits(self) -> None:
         """Test that diagnose respects n_missed and n_false_positives."""
         from langres.core.analysis import evaluate_blocker_detailed
-        from langres.core.models import ERCandidate
         from pydantic import BaseModel
 
         class Entity(BaseModel):

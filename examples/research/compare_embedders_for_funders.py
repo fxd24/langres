@@ -138,7 +138,7 @@ def main():
         )
 
         logger.info(f"  🔹 Qdrant collection: {collection_name}")
-        logger.info(f"  🔹 Building index (may be slow on first run)...")
+        logger.info("  🔹 Building index (may be slow on first run)...")
 
         # Build index (creates/caches embeddings)
         index.create_index(texts)
@@ -255,7 +255,7 @@ Recommendation:
         winner = df.loc[winner_idx, "Model"]
         logger.info(f"\n  ✨ RECOMMENDED MODEL: {winner}")
         logger.info(
-            f"     Rationale: Achieves ≥95% recall with best separation among high-recall models"
+            "     Rationale: Achieves ≥95% recall with best separation among high-recall models"
         )
     else:
         winner_idx = best_recall_idx

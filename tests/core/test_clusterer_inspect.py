@@ -6,7 +6,6 @@ analysis without ground truth labels.
 
 import logging
 
-import pytest
 
 from langres.core.clusterer import Clusterer
 from langres.core.models import CompanySchema

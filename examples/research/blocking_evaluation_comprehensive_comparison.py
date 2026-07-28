@@ -41,7 +41,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 
@@ -545,16 +544,16 @@ def main() -> None:
     print("=" * 140)
     print("COMPREHENSIVE BLOCKING EVALUATION: Model, Instruction & Architecture Comparison")
     print("=" * 140)
-    print(f"\nDataset: Funder organization names (1,741 entities)")
-    print(f"\nModels:")
+    print("\nDataset: Funder organization names (1,741 entities)")
+    print("\nModels:")
     print(f"  Simple:   {MINILM_MODEL} (384 dims, 22M params, no instruction support)")
     print(f"  Advanced: {QWEN3_MODEL} (1024 dims, 600M params, WITH instruction support)")
     print(f"  Sparse:   {SPARSE_MODEL} (BM25 keyword matching)")
     print(f"  Reranking: {RERANKING_MODEL} (ColBERT late-interaction)")
-    print(f"\nParameters:")
+    print("\nParameters:")
     print(f"  k-neighbors: {K_NEIGHBORS}")
     print(f"  Prefetch limit: {PREFETCH_LIMIT}")
-    print(f"\nCache (Qwen3 only):")
+    print("\nCache (Qwen3 only):")
     print(f"  Directory: {CACHE_DIR}")
     print(f"  Namespace: {CACHE_NAMESPACE}")
     print(f"  Memory size: {MEMORY_CACHE_SIZE:,}")
@@ -762,7 +761,7 @@ def main() -> None:
 
     # A. Sparse Vectors Impact
     print("\n📊 A. IMPACT OF SPARSE VECTORS (Adding BM25)")
-    print(f"   Comparison: FAISS-MiniLM vs Hybrid-MiniLM")
+    print("   Comparison: FAISS-MiniLM vs Hybrid-MiniLM")
     recall_diff = (hybrid_minilm_results["recall"] - faiss_results["recall"]) * 100
     precision_diff = (hybrid_minilm_results["precision"] - faiss_results["precision"]) * 100
     f1_diff = (hybrid_minilm_results["f1"] - faiss_results["f1"]) * 100
@@ -788,7 +787,7 @@ def main() -> None:
 
     # B. Reranking Impact
     print("\n🎯 B. IMPACT OF RERANKING (Adding ColBERT)")
-    print(f"   Comparison: Hybrid-MiniLM vs HybridRerank-MiniLM")
+    print("   Comparison: Hybrid-MiniLM vs HybridRerank-MiniLM")
     recall_diff = (rerank_minilm_results["recall"] - hybrid_minilm_results["recall"]) * 100
     precision_diff = (rerank_minilm_results["precision"] - hybrid_minilm_results["precision"]) * 100
     f1_diff = (rerank_minilm_results["f1"] - hybrid_minilm_results["f1"]) * 100
@@ -817,7 +816,7 @@ def main() -> None:
 
     # C. Model Quality Impact
     print("\n🚀 C. IMPACT OF ADVANCED MODEL (MiniLM vs Qwen3)")
-    print(f"   Comparison: Hybrid-MiniLM vs Hybrid-Qwen3-NoInst")
+    print("   Comparison: Hybrid-MiniLM vs Hybrid-Qwen3-NoInst")
     recall_diff = (hybrid_qwen3_noinst_results["recall"] - hybrid_minilm_results["recall"]) * 100
     precision_diff = (
         hybrid_qwen3_noinst_results["precision"] - hybrid_minilm_results["precision"]
@@ -837,7 +836,7 @@ def main() -> None:
         f"   F1:         {f1_diff:+.2f}pp (from {hybrid_minilm_results['f1'] * 100:.2f}% to {hybrid_qwen3_noinst_results['f1'] * 100:.2f}%)"
     )
     print(f"   Time ratio: {time_ratio:.2f}x slower")
-    print(f"   Model size: 22M params (MiniLM) → 600M params (Qwen3) = 27x larger")
+    print("   Model size: 22M params (MiniLM) → 600M params (Qwen3) = 27x larger")
     if f1_diff > 3:
         print(f"   ✅ Qwen3 significantly outperforms MiniLM (+{f1_diff:.1f}pp F1)")
     else:
@@ -847,8 +846,8 @@ def main() -> None:
 
     # D. Instructions + Reranking on Qwen3
     print("\n💡 D. IMPACT OF INSTRUCTIONS + RERANKING (Qwen3 only)")
-    print(f"   Comparison: Hybrid-Qwen3-NoInst vs HybridRerank-Qwen3-WithInst")
-    print(f"   Note: This shows COMBINED effect of instructions + reranking on Qwen3")
+    print("   Comparison: Hybrid-Qwen3-NoInst vs HybridRerank-Qwen3-WithInst")
+    print("   Note: This shows COMBINED effect of instructions + reranking on Qwen3")
     recall_diff = (
         hybrid_qwen3_inst_results["recall"] - hybrid_qwen3_noinst_results["recall"]
     ) * 100
@@ -885,9 +884,9 @@ def main() -> None:
         f"   Total lookups: {cache_info['hits_hot'] + cache_info['hits_cold'] + cache_info['misses']:,}"
     )
     if cache_info["hit_rate"] > 0.5:
-        print(f"   ✅ Caching is highly effective! Second run will be ~100x faster for embeddings")
+        print("   ✅ Caching is highly effective! Second run will be ~100x faster for embeddings")
     else:
-        print(f"   💡 First run - caching will accelerate subsequent runs")
+        print("   💡 First run - caching will accelerate subsequent runs")
 
     # F. Model Specifications
     print("\n" + "=" * 140)

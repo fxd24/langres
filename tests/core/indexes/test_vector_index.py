@@ -733,7 +733,6 @@ class TestFAISSIndexWithCachedEmbedder:
 
     def test_faiss_index_with_cached_embedder_and_query_prompts(self, tmp_path):
         """Test FAISSIndex with DiskCachedEmbedder using query prompts."""
-        from pathlib import Path
 
         from langres.core.embeddings import DiskCachedEmbedder
 
@@ -780,7 +779,6 @@ class TestFAISSIndexWithCachedEmbedder:
 
     def test_faiss_index_with_cached_embedder_and_precomputed(self, tmp_path):
         """Test FAISSIndex with DiskCachedEmbedder using pre-computed query embeddings."""
-        from pathlib import Path
 
         from langres.core.embeddings import DiskCachedEmbedder
 
