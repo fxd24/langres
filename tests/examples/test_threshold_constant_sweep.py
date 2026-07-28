@@ -20,6 +20,8 @@ No model loads here, so none of it is `slow`.
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -35,6 +37,7 @@ from examples.research.threshold_constant_sweep import (
     _exact_oracle,
     _f1,
     _select_constant,
+    _worker_command,
     _unit_index,
     dedupe_scores,
     lobo_constants,
@@ -421,3 +424,35 @@ class TestResumeRefusesToPoolIncomparableCells:
         assert "definitely_not_a_benchmark" in message
         assert "--resamples" not in message
         assert "embedder" not in message
+
+
+class TestWorkerRelaunchCanRecoverItsOwnPartial:
+    """The parent clears only ``worker_out``, never ``<worker_out>.partial``.
+
+    So the relaunched worker meets the "an earlier sweep was interrupted" guard
+    on its own leftover checkpoint. Without ``--resume`` in the worker argv that
+    guard is a **deadlock**: the benchmark can never be re-measured without
+    manual file surgery, and the cells the guard was protecting are exactly what
+    the retry would have recovered. Found in review.
+    """
+
+    def test_the_worker_argv_asks_to_resume(self) -> None:
+        args = argparse.Namespace(
+            methods=["rapidfuzz"],
+            seeds=[0],
+            resamples=10,
+            embedder=None,
+        )
+        argv = _worker_command("abt_buy", args, Path("out.json"))
+        assert "--resume" in argv
+
+    def test_an_embedder_override_still_reaches_the_worker(self) -> None:
+        """--resume must not have displaced the checkpoint override."""
+        args = argparse.Namespace(
+            methods=["embedding_cosine"],
+            seeds=[0],
+            resamples=10,
+            embedder="intfloat/e5-base-v2",
+        )
+        argv = _worker_command("abt_buy", args, Path("out.json"))
+        assert argv[argv.index("--embedder") + 1] == "intfloat/e5-base-v2"

@@ -100,11 +100,21 @@ Each cell is one `(benchmark, method, seed)`.
    reverse, and `heuristic`'s veto — the one direction that could be sensitive —
    rests on deltas several half-widths below zero on three independent seeds and
    fails safe, since its effect is to keep the incumbent.
-6. **No averaging across benchmarks in any reported number.** Aggregation appears
-   in exactly one place — the LOBO *selection* criterion, which has to reduce the
-   other benchmarks to a single ordering — and it is a median over benchmarks of
-   a mean over seeds, labeled a selection statistic and never reported as
-   performance.
+6. **No cross-benchmark average is ever reported as *performance*.** Every
+   performance figure in this document is per-benchmark, per-seed. Cross-benchmark
+   aggregation does occur, and an earlier draft wrongly said it happened in
+   "exactly one place" — review checked that against the generated tables and it
+   is two, both of which *decide* rather than *report*:
+
+   - the LOBO **selection** criterion, which must reduce the other benchmarks to
+     one ordering to pick a constant; and
+   - the pre-registered **ship** and **transfer** rules, whose clause (3) / (2)
+     is a median per-benchmark mean Δ-F1 — printed in the verdict and transfer
+     tables as the quantity the rule tests.
+
+   Both are medians over benchmarks of a mean over seeds, and both are labeled as
+   decision statistics where they appear. The distinction that matters is
+   decision vs. reporting, not one place vs. two.
 7. **The ship rule was pre-registered** in the harness (`SHIP_RULE`) before the
    numbers were seen, and §6's verdict table is computed from the artifact by
    applying it.
@@ -466,8 +476,12 @@ The two runs agree on the finding that matters and disagree on the number, and
 both halves are load-bearing:
 
 - **They agree that `0.5` is the wrong order of magnitude for a cosine.** On
-  *both* checkpoints, on every benchmark, cutting at `0.5` leaves F1 in the low
-  hundredths. Whatever the right constant is, it is nowhere near `0.5`.
+  *both* checkpoints, `0.5` is beaten on every eligible benchmark, and on most of
+  them it leaves F1 in the low hundredths. (Not *all* of them, and an earlier
+  draft said "every" — review checked it against the tables above: `dblp_acm`
+  sits near 0.22 at the old cut, and the 12-record `tiny_fixture` at 0.50. The
+  direction is unanimous; the magnitude is not.) Whatever the right constant is,
+  it is nowhere near `0.5`.
 - **They disagree about how high.** Each checkpoint's own leave-one-out
   selection is internally rock-solid — and they land in different places. That is
   not noise between two unstable estimates; it is two stable estimates of two
@@ -595,12 +609,19 @@ good.
 **Inferred, not measured** — flagged because it would be easy to read this
 document as covering it:
 
-- **`prob_llm`'s `0.7`.** The registry has declared `0.7` for the LLM families
-  since the field was introduced; wiring `threshold=None` to the registry makes
-  `VectorLLMCascade` actually *use* it, changing its out-of-the-box cut from
-  `0.5` to `0.7`. **That number is not measured here** — it is the value the
-  codebase already declared, now honoured instead of ignored. Sweeping it costs
-  paid completions on every benchmark and is a separate study.
+- **`prob_llm`'s `0.7`.** `0.7` has been the declared LLM-family value since the
+  field was introduced, and `VectorLLMCascade`'s out-of-the-box cut moves from
+  `0.5` to `0.7` to match it. **That number is not measured here** — it is the
+  value the codebase already declared, now honoured instead of ignored. Sweeping
+  it costs paid completions on every benchmark and is a separate study.
+
+  Be precise about the mechanism, because an earlier draft was not: the
+  architecture does **not** read the registry. It calls
+  `resolve_threshold(threshold, "prob_llm")` directly against
+  `DEFAULT_THRESHOLDS`, and `MethodSpec.default_threshold` still has no runtime
+  reader at all — a front door knows its score *family*, not a method *name*.
+  What the change buys is that the registry field and the shipped behaviour are
+  now derived from the same map, so they can no longer silently disagree.
 - **`prob_fs` / `prob_rf`.** Untouched, for the reason in §2.
 - **The emitted `score_type` tags do not match the families used to resolve the
   defaults**, and review caught this study leaning on the tag as if it did.

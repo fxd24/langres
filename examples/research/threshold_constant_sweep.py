@@ -1223,6 +1223,16 @@ def _worker_command(name: str, args: argparse.Namespace, out: Path) -> list[str]
         sys.executable,
         str(Path(__file__).resolve()),
         "--in-process",
+        # ALWAYS resume the worker, even on a first attempt. A worker that died
+        # mid-benchmark leaves its own `<worker_out>.partial`, and the parent
+        # clears only `worker_out` before relaunching -- so without this the
+        # fresh worker hits the "an earlier sweep was interrupted" guard and
+        # refuses, forever, with no way out but manual file surgery. (Found in
+        # review; the guard meant to protect unsaved cells was deadlocking the
+        # retry that would have re-measured them.) With no partial present
+        # `--resume` is a no-op, and a partial written under different flags now
+        # fails the metadata check with a message instead of being pooled.
+        "--resume",
         *override,
         # The parent prints the tables once, over the whole matrix. A worker's
         # single-benchmark tables would be noise ten times over.
@@ -1471,6 +1481,13 @@ def main() -> None:
         print(f"[benchmark] {name} ({where}): {' '.join(args.methods)} ($0 spend)", flush=True)
         try:
             if args.in_process:
+                # Same benchmark-granular resume as the subprocess path below:
+                # drop any cells this benchmark already contributed before
+                # re-measuring it. Without this an interrupted --in-process run
+                # APPENDS a second copy of every finished cell on resume, so
+                # identities duplicate, len(cells) overshoots expected_cells, and
+                # each further resume adds more (found in review).
+                cells = [c for c in cells if c.benchmark != name]
                 for cell in run_benchmark(
                     name,
                     methods=tuple(args.methods),
