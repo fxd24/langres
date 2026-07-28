@@ -953,7 +953,7 @@ in: `clusterer.threshold` for a classic four-slot model, the terminal
 `ThresholdSelect` for an explicit `from_topology` chain (which has no clusterer
 slot). Requires `pairs=` (it carries the entity-disjoint `split`), needs the
 `[trained]` extra, and records provenance in `fit_report_.threshold_fit`
-(`ThresholdFit`: derived / declined / default, both candidates, and which split
+(`ThresholdFit`: derived / declined / not_fitted, both candidates, and which split
 selected). Full walkthrough in `docs/EXPERIMENTS.md`.
 
 Every non-raising path sets `resolver.fit_report_` (an sklearn

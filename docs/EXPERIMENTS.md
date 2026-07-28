@@ -480,9 +480,15 @@ Five more things worth knowing:
   cut is still derived — and the report says `IN-SAMPLE`, and computes no
   metrics at all, because an in-sample number here would only flatter the cut.
 - **It fits matchers that have no fit hook.** `WeightedAverageMatcher`,
-  `RapidfuzzMatcher` and the LLM judges have nothing to train, so
+  `RapidfuzzMatcher` and the **score-only** LLM judges have nothing to train, so
   `fit(pairs=...)` refuses them — but their *threshold* is a real fittable
   parameter, and those are exactly the pipelines with nothing else to fit.
+  A *decision-based* judge is the exception and is refused: an
+  `LLMMatcher(response_parser="binary_yes_no")` emits an explicit `decision`, and
+  `predicted_match` gives that precedence over the score, so no cut you fit could
+  change what `resolve()` does. Note the refusal happens after the labeled pairs
+  are scored on the classic path, so on a paid judge it costs those calls before
+  it fails.
 - **It knows where your model keeps its cut.** A classic four-slot model writes
   `clusterer.threshold`; a research recipe / `from_topology` chain has no
   clusterer at all and writes its terminal `ThresholdSelect`.
@@ -497,9 +503,13 @@ Five more things worth knowing:
   symmetry.)
 - **On an explicit `_ops` chain, deriving costs a full pass over `data`.** A
   chain's Source owns retrieval, so — unlike a classic model, which scores only
-  the labeled candidates — it must run the whole chain over every record. Cheap
-  for a local scorer; with a paid `Score` in a large chain, size `budget_usd`
-  for it.
+  the labeled candidates — it must run over every record. It runs the *prefix*
+  ending at the fitted `ThresholdSelect`, not the whole chain: anything
+  downstream of the cut (a reranker `Score`, say) is skipped, both because it
+  cannot influence a threshold applied before it and because its scores would
+  overwrite the ones the cut actually reads. So budget for every `Score` *above*
+  the fitted cut, and none below it. Cheap for a local scorer; with a paid
+  `Score` in that prefix, size `budget_usd` for it.
 
 Needs the `[trained]` extra (scikit-learn). On a core-only install it raises a
 directed `ImportError` rather than quietly keeping the default — identical code
