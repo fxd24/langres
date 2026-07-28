@@ -31,7 +31,12 @@ from langres.core.score_type import DEFAULT_THRESHOLDS, ScoreType, resolve_thres
 from langres.resources import FakeEmbedder, FakeLLM, FakeReranker
 
 
-class _Record(BaseModel):
+# Module-unique name ON PURPOSE. Binding a schema auto-registers the class
+# GLOBALLY under its bare __name__ (core.registry), so two test modules that
+# both call theirs `_Record` silently share one registration -- and the loser
+# gets the other's class back. That poisoned 14 tests in tests/experiments/
+# when this file was written with the obvious name.
+class _ThresholdDefaultsRecord(BaseModel):
     id: str
     name: str
 
@@ -138,23 +143,30 @@ class TestFrontDoorsResolveTheFamilyDefault:
         assert VectorLLMCascade(llm="openrouter/openai/gpt-4o-mini", threshold=0.5).threshold == 0.5
 
     def test_retrieve_takes_sim_cos(self) -> None:
-        model = Retrieve(embedder=FakeEmbedder(), schema=_Record)
+        model = Retrieve(embedder=FakeEmbedder(), schema=_ThresholdDefaultsRecord)
         assert _built_cut(model) == DEFAULT_THRESHOLDS["sim_cos"]
 
     def test_retrieve_rerank_takes_the_rerank_ops_declared_family(self) -> None:
-        model = RetrieveRerank(embedder=FakeEmbedder(), reranker=FakeReranker(), schema=_Record)
+        model = RetrieveRerank(
+            embedder=FakeEmbedder(), reranker=FakeReranker(), schema=_ThresholdDefaultsRecord
+        )
         assert _built_cut(model) == DEFAULT_THRESHOLDS["heuristic"]
 
     def test_reranker_for_schema_no_longer_requires_a_threshold(self) -> None:
         """It used to demand an explicit number for a score built by the same
         ``WeightedAverageMatcher``, over the same features, as ``FuzzyString``.
         """
-        assert _built_cut(Reranker.for_schema(_Record, k=2)) == DEFAULT_THRESHOLDS["heuristic"]
-        assert _built_cut(Reranker.for_schema(_Record, k=2, threshold=0.85)) == 0.85
+        assert (
+            _built_cut(Reranker.for_schema(_ThresholdDefaultsRecord, k=2))
+            == DEFAULT_THRESHOLDS["heuristic"]
+        )
+        assert (
+            _built_cut(Reranker.for_schema(_ThresholdDefaultsRecord, k=2, threshold=0.85)) == 0.85
+        )
 
     def test_retrieve_still_range_checks_after_resolving(self) -> None:
         with pytest.raises(ValueError, match="between 0.0 and 1.0"):
-            Retrieve(embedder=FakeEmbedder(), schema=_Record, threshold=1.5)
+            Retrieve(embedder=FakeEmbedder(), schema=_ThresholdDefaultsRecord, threshold=1.5)
 
 
 class TestInertThresholdIsLoudNotSilent:
@@ -174,7 +186,7 @@ class TestInertThresholdIsLoudNotSilent:
         return RetrieveLLM(
             embedder=FakeEmbedder(),
             llm=FakeLLM(default_response="MATCH"),
-            schema=_Record,
+            schema=_ThresholdDefaultsRecord,
             retrieve_k=3,
             llm_k=3,
             threshold=threshold,
@@ -190,7 +202,7 @@ class TestInertThresholdIsLoudNotSilent:
                 embedder=FakeEmbedder(),
                 reranker=FakeReranker(),
                 llm=FakeLLM(default_response="MATCH"),
-                schema=_Record,
+                schema=_ThresholdDefaultsRecord,
                 retrieve_k=3,
                 llm_k=3,
                 threshold=0.9,
@@ -218,7 +230,10 @@ class TestInertThresholdIsLoudNotSilent:
             t: sorted(
                 tuple(sorted(c))
                 for c in Retrieve(
-                    embedder=FakeEmbedder(), schema=_Record, retrieve_k=3, threshold=t
+                    embedder=FakeEmbedder(),
+                    schema=_ThresholdDefaultsRecord,
+                    retrieve_k=3,
+                    threshold=t,
                 ).dedupe(self._records())
             )
             for t in (0.0, 0.99)
