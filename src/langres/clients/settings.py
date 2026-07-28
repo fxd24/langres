@@ -1,6 +1,5 @@
 """Central configuration for external services."""
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

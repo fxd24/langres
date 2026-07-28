@@ -23,7 +23,6 @@ import pytest
 from langres.core import (
     Clusterer,
     CompanySchema,
-    Comparator,
     ERCandidate,
     Matcher,
     PairwiseJudgement,

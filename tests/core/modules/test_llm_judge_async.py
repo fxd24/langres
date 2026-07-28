@@ -7,7 +7,7 @@ concurrent LLM API calls with token-aware rate limiting and retry logic.
 import asyncio
 import logging
 import time
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -639,7 +639,7 @@ async def test_forward_async_with_custom_prompt_template(mock_llm_client, mock_l
         blocker_name="test",
     )
 
-    judgements = await module.forward_async([candidate])
+    await module.forward_async([candidate])
 
     # Verify custom template was used
     call_args = mock_llm_client.acompletion.call_args
@@ -764,7 +764,7 @@ async def test_forward_async_with_zero_temperature(mock_llm_client, mock_llm_res
         blocker_name="test",
     )
 
-    judgements = await module.forward_async([candidate])
+    await module.forward_async([candidate])
 
     # Verify temperature was passed correctly
     call_args = mock_llm_client.acompletion.call_args

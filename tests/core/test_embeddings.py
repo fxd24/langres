@@ -838,7 +838,6 @@ class TestEmbeddingProviderProtocolWithPrompts:
 
         This verifies the protocol method signature includes prompt parameter.
         """
-        from langres.core.embeddings import EmbeddingProvider
 
         # Verify protocol has encode method accepting prompt
         assert hasattr(EmbeddingProvider, "encode")

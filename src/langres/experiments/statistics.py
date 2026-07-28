@@ -7,7 +7,7 @@ import random
 import statistics
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from langres.experiments.protocol import FrozenDict, freeze_mapping
 

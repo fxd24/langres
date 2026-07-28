@@ -1,7 +1,5 @@
 """Tests for updated stratified_dedup_split with dataset object parameter."""
 
-import pytest
-
 from langres.data.schemas import LabeledDeduplicationDataset, LabeledGroup
 from langres.data.splitting import stratified_dedup_split
 

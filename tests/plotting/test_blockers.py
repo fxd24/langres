@@ -1,6 +1,6 @@
 """Tests for blocker visualization functions."""
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -325,7 +325,7 @@ def test_plot_evaluation_summary_saves_figure(mock_plt, sample_report, tmp_path)
     mock_ax_10.twinx.return_value = mock_ax_10_secondary
 
     save_path = str(tmp_path / "test_plot.png")
-    result = plot_evaluation_summary(sample_report, save_path=save_path)
+    plot_evaluation_summary(sample_report, save_path=save_path)
 
     # Verify savefig called
     mock_fig.savefig.assert_called_once_with(save_path, dpi=300, bbox_inches="tight")

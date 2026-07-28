@@ -82,7 +82,7 @@ def main() -> None:
 
     # Check cache stats
     info_1 = cached_embedder.cache_info()
-    print(f"\n    Cache stats after first run:")
+    print("\n    Cache stats after first run:")
     print(f"      Hot hits:  {info_1['hits_hot']}")
     print(f"      Cold hits: {info_1['hits_cold']}")
     print(f"      Misses:    {info_1['misses']}")
@@ -101,7 +101,7 @@ def main() -> None:
 
     # Check cache stats again
     info_2 = cached_embedder.cache_info()
-    print(f"\n    Cache stats after second run:")
+    print("\n    Cache stats after second run:")
     print(f"      Hot hits:  {info_2['hits_hot']}")
     print(f"      Cold hits: {info_2['hits_cold']}")
     print(f"      Misses:    {info_2['misses']}")
@@ -155,8 +155,8 @@ def main() -> None:
     )
     print(f"✓ Memory bounded: only {info_2['hot_size']} embeddings in RAM")
     print(f"✓ Disk storage: {info_2['cold_size']} embeddings cached")
-    print(f"✓ Persistent: cache survives restarts (SQLite)")
-    print(f"✓ Order independent: works with any text order")
+    print("✓ Persistent: cache survives restarts (SQLite)")
+    print("✓ Order independent: works with any text order")
     print("\nRun this script again - subsequent runs will be instant!")
     print("=" * 80)
 

@@ -370,44 +370,33 @@ nav:
 
 ### `.github/workflows/docs.yml`
 
-```yaml
-name: Deploy Documentation
+**The shipped workflow is the source of truth — read
+[`.github/workflows/docs.yml`](https://github.com/fxd24/langres/blob/main/.github/workflows/docs.yml).**
 
-on:
-  push:
-    branches:
-      - main
-      - poc/core-foundation  # Add any other branches you want docs for
-  pull_request:
+This section used to carry a copy of it. The copy drifted: it still showed
+floating `actions/checkout@v4` / `setup-python@v5` / `setup-uv@v8` tags, a
+repo-wide `permissions: contents: write`, a `poc/core-foundation` trigger
+branch that no longer exists, and `mkdocs gh-deploy --force` — which the real
+workflow replaced with the Pages-native `upload-pages-artifact` +
+`deploy-pages` flow. A second copy of a live file is a doc that lies as soon as
+the file moves, so it is a pointer now.
 
-permissions:
-  contents: write
+Two conventions the workflow follows that any new workflow here must too:
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+- **Every `uses:` is pinned to a 40-character commit SHA**, with the exact
+  version in a trailing comment (`# v7.0.1`, not `# v7` — a floating major
+  comment cannot express that the pin has gone stale). Floating tags are
+  flagged by OpenSSF Scorecard (`PinnedDependencies`) and are a supply-chain
+  risk: a tag can be repointed at new code.
+- **Every workflow declares top-level `permissions:`.** The repository default
+  is `write`, so a workflow without the block hands every job a read-write
+  `GITHUB_TOKEN` it almost never needs (Scorecard `TokenPermissions`). `docs.yml`
+  is `contents: read` at the top; only the `deploy` job widens it, to
+  `pages: write` + `id-token: write`.
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8
-
-      - name: Install dependencies
-        run: |
-          uv pip install --system mkdocs-material "mkdocstrings[python]"
-
-      - name: Build documentation
-        run: mkdocs build
-
-      - name: Deploy to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: mkdocs gh-deploy --force
-```
+One-time setup this workflow needs: **Settings → Pages → Build and deployment →
+Source = "GitHub Actions"**. Until that is set, the deploy job fails with a
+Pages configuration error.
 
 ### `docs/index.md` Template
 
