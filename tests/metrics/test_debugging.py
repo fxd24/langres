@@ -7,10 +7,8 @@ and report generation.
 """
 
 import json
-import logging
 from pathlib import Path
 
-import numpy as np
 import pytest
 from pydantic import BaseModel
 
@@ -278,7 +276,7 @@ def test_analyze_candidates_generates_error_examples(
 ) -> None:
     """Test that analyze_candidates generates ErrorExample objects for issues."""
     debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters, sample_size=10)
-    stats = debugger.analyze_candidates(imperfect_candidates, test_entities)
+    debugger.analyze_candidates(imperfect_candidates, test_entities)
 
     # Should have stored error examples
     assert len(debugger.error_examples) > 0
@@ -389,7 +387,7 @@ def test_analyze_scores_generates_error_examples(
 ) -> None:
     """Test that score analysis generates error examples for misaligned scores."""
     debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters, sample_size=10)
-    stats = debugger.analyze_scores(imperfect_judgements)
+    debugger.analyze_scores(imperfect_judgements)
 
     # Should flag low-scoring match (e1-e3 with score 0.25)
     low_match_errors = [e for e in debugger.error_examples if e.error_type == "low_scoring_match"]
@@ -437,7 +435,7 @@ def test_analyze_scores_metadata_includes_reasoning(
 ) -> None:
     """Test that error examples include LLM reasoning in metadata."""
     debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters, sample_size=10)
-    stats = debugger.analyze_scores(imperfect_judgements)
+    debugger.analyze_scores(imperfect_judgements)
 
     # Find the low-scoring match error
     low_match_errors = [e for e in debugger.error_examples if e.error_type == "low_scoring_match"]
@@ -506,7 +504,7 @@ def test_analyze_clusters_generates_error_examples(
     debugger = PipelineDebugger(ground_truth_clusters=ground_truth_clusters, sample_size=10)
     # Create a false merge
     predicted = [{"e1", "e2", "e3", "e4"}, {"e5"}, {"e6"}]
-    stats = debugger.analyze_clusters(predicted)
+    debugger.analyze_clusters(predicted)
 
     # Should have false merge error
     merge_errors = [e for e in debugger.error_examples if e.error_type == "false_merge"]

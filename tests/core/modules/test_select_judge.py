@@ -28,7 +28,6 @@ import json
 import logging
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest

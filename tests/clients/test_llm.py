@@ -80,7 +80,7 @@ class TestCreateLLMClient:
                 mock_langfuse_instance.auth_check.return_value = True
                 mock_langfuse_class.return_value = mock_langfuse_instance
 
-                client = create_llm_client(enable_langfuse=True)
+                create_llm_client(enable_langfuse=True)
 
                 # Verify Langfuse initialized with env vars
                 mock_langfuse_class.assert_called_once()

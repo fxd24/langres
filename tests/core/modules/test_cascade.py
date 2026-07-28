@@ -519,7 +519,7 @@ def test_cascade_module_uses_custom_prompt_template(mocker):
         blocker_name="test",
     )
 
-    judgements = list(module.forward([candidate]))
+    list(module.forward([candidate]))
 
     # Should use custom prompt
     call_args = mock_client.chat.completions.create.call_args

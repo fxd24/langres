@@ -53,7 +53,7 @@ def test_ercandidate_similarity_score_is_optional() -> None:
     )
 
     assert candidate.similarity_score is None
-    logger.info(f"Created candidate without similarity_score (defaults to None)")
+    logger.info("Created candidate without similarity_score (defaults to None)")
 
 
 def test_ercandidate_similarity_score_range_valid() -> None:

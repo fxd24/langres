@@ -34,7 +34,6 @@ from langres.resources import (
     GenerationRequest,
     Generate,
     EmbeddingBatch,
-    Parse,
     Rerank,
     Retrieve as RetrieveOp,
 )

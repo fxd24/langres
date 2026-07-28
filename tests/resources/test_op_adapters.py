@@ -19,6 +19,7 @@ from langres.resources import (
     Generate,
     GenerationBatch,
     GenerationEnvelope,
+    GenerationRequest,
     LLMMatcherAdapter,
     LiteLLM,
     Parse,

@@ -152,7 +152,7 @@ def main() -> None:
     SIMILARITY_THRESHOLD = 0.24  # TODO: Update from Phase 1 recommendations (balanced threshold)
     MAX_CANDIDATES = 3000  # Limit candidates (~12 min at 250 RPM, ~3 min at 1000 RPM)
 
-    logger.info(f"Configuration:")
+    logger.info("Configuration:")
     logger.info(f"  Embedding model: {WINNER_MODEL}")
     logger.info(f"  k_neighbors: {K_NEIGHBORS}")
     logger.info(f"  LLM model: {LLM_MODEL}")

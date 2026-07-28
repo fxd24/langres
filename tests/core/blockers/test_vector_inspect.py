@@ -6,10 +6,8 @@ analysis without ground truth labels.
 
 import logging
 
-import pytest
 
 from langres.core.blockers.vector import VectorBlocker
-from langres.core.embeddings import FakeEmbedder
 from langres.core.indexes import FakeVectorIndex
 from langres.core.models import CompanySchema
 from langres.core.reports import CandidateInspectionReport
@@ -114,7 +112,6 @@ class TestVectorBlockerInspection:
         report = blocker.inspect_candidates(candidates=candidates, entities=entities, sample_size=5)
 
         # Check for low candidate recommendation
-        recommendations = " ".join(report.recommendations)
         assert report.avg_candidates_per_entity < 3  # Verify assumption
         assert any(
             "increase" in rec.lower() or "k_neighbors" in rec.lower()
@@ -140,7 +137,6 @@ class TestVectorBlockerInspection:
         # With k=9 and 10 entities, avg should be high
         if report.avg_candidates_per_entity > 8:
             # Check for high candidate warning
-            recommendations = " ".join(report.recommendations)
             assert any(
                 "decrease" in rec.lower() or "reduce" in rec.lower()
                 for rec in report.recommendations

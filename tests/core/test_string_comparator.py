@@ -10,7 +10,7 @@ import datetime
 import pytest
 from pydantic import BaseModel
 
-from langres.core.comparator import Comparator, NoComparableFeatures
+from langres.core.comparator import NoComparableFeatures
 from langres.core.comparators import StringComparator
 from langres.core.feature import ComparisonLevel, FeatureSpec
 from langres.core.models import CompanySchema
