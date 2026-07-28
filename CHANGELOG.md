@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Asymmetric retrieval prompts: a silent discard is now a loud failure — **breaking**
+
+- **`QdrantHybridIndex.search_all()` now raises `NotImplementedError` when passed
+  a `query_prompt`**, where it previously accepted the argument and discarded it.
+  If you never passed `query_prompt`, nothing changes. If you did, **you were
+  already getting results the prompt never influenced** — `search_all()` answers
+  from the dense vectors cached at `create_index()` time, so the prompt could
+  never reach the encoder. The failure mode this hid is a prompt sweep returning
+  *identical* numbers at every setting, which reads as "the instruction does not
+  help"; this repo published exactly that table once. Use `FAISSIndex` (it
+  re-encodes the query side), `QdrantHybridRerankingIndex` (its reranking pass
+  encodes queries with the prompt), or call
+  `search(query_texts, k, query_prompt=...)` directly. The exception message
+  names all three. `FakeHybridVectorIndex.search_all()` rejects it too, so a test
+  double can no longer accept what the real index refuses.
+- **`VectorBlocker` now warns when only one half of an asymmetric recipe is
+  driven** — an embedder carrying a document-side `prompt_name` with no
+  `query_prompt` on the blocker. That combination is *worse* than prompting
+  neither side: `search_all()` reuses the document-prompted corpus vectors as
+  queries, so queries carry the **document** prefix. The check is duck-typed and
+  degrades to silence for indexes that expose no embedder, because `VectorIndex`
+  is a public structural protocol.
+- Documented the two-sided recipe where users actually meet it: a worked example
+  on `VectorBlocker` and on `SentenceTransformerEmbedder.prompt_name`. The
+  document side rides on the embedder (`prompt_name` → `default_prompt_name`);
+  the query side is `VectorBlocker(query_prompt=...)`. **`create_index` is
+  unchanged** — the recipe already worked, and `VectorIndex` has external
+  implementers a required new kwarg would break.
+- `QdrantHybridIndex` and `QdrantHybridRerankingIndex` no longer claim to
+  implement `VectorIndex`. Their `search()` accepts `str | list[str]` against the
+  protocol's `str | list[str] | np.ndarray`, so a type checker correctly rejects
+  the assignment; a hybrid index cannot serve a pure-vector query because the
+  sparse side must encode the text. Conformance is now pinned twice — under mypy
+  in `langres/core/indexes/__init__.py` and at runtime in
+  `tests/core/indexes/test_vector_index_conformance.py`.
+
 ### Research execution foundation
 
 - Added the canonical Resources / Operations / Recipes vocabulary, four named
