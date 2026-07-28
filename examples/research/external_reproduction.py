@@ -507,6 +507,35 @@ found.** The ones a blocker missed are the hard ones, and they are missing from 
 denominator — so our PC is biased upward by an amount we cannot measure, only bound.
 Section B2 gives that bound.
 
+### The gap between our published numbers and the literature is a *definition*, not quality
+
+Section F is the practically important table, and it comes with its own validation.
+Configured to `score_blocking`'s shape, this script reproduces the **embedder ladder's
+own published numbers exactly** for `all-mpnet-base-v2` at k=20 — recall *and*
+candidate count, to every printed digit:
+
+| benchmark | ladder recall | ladder candidates | this script, `score_blocking` shape |
+|---|---:|---:|---|
+| `abt_buy` | 0.9368 | 10,897 | 0.93678 / 10,897 |
+| `amazon_google` | 0.8108 | 22,886 | 0.81079 / 22,886 |
+
+(`20260727_embedder_ladder.md`, "Candidate recall at k=20, no instruction".) Two
+independent implementations agreeing to four decimals means the delta below is a real
+protocol difference and not a bug in either.
+
+And the delta is large. On `amazon_google` at k=20 the *same embeddings* give **95.80%**
+under the papers' protocol and **81.08%** under `score_blocking`'s. Section F splits it:
+swapping the raw positive list for the transitive closure costs **-15.4 pp**; swapping
+directional for symmetric retrieval then *adds* **+0.6 pp**. So essentially the entire
+gap is the **gold-set definition**, not the retrieval.
+
+That reframes an existing number. langres's published 0.81 on `amazon_google` and the
+literature's ~0.90 at comparable budgets are **the same blocker measured two ways** —
+langres's is the stricter one, because a transitive closure over gold clusters manufactures
+intra-source pairs that a cross-source candidate set structurally cannot contain. The
+ladder already documents this as its "reachable ceiling"; what is new here is the
+measurement that the ceiling accounts for the whole distance to the published literature.
+
 ### What could still be wrong
 
 - **This is the weakest reproduction tier.** Printed tables, no archived predictions

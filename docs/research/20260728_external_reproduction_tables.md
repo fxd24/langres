@@ -7,7 +7,22 @@ Protocol: `C = union over a in A of topK(a -> B)`, k capped at 100, `PC = |C & G
 
 | benchmark | model | our |G| | paper |G| | our k@PC90 | our PC | our PQ | our mAP | STransformer k | PC | PQ | mAP |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `abt_buy` | `all-MiniLM-L6-v2` | 1,028 | 1098 | 5 | 91.15 | 17.34 | 48.84 | 13 | 90.52 | 7.07 | 42.83 |
+| `abt_buy` | `sentence-transformers/all-mpnet-base-v2` | 1,028 | 1098 | 6 | 90.95 | 14.42 | 45.39 | 13 | 90.52 | 7.07 | 42.83 |
+| `amazon_google` | `all-MiniLM-L6-v2` | 1,167 | 1300 | 4 | 90.15 | 19.30 | 42.92 | 13 | 90.46 | 6.64 | 46.20 |
+| `amazon_google` | `sentence-transformers/all-mpnet-base-v2` | 1,167 | 1300 | 8 | 91.00 | 9.74 | 34.04 | 13 | 90.46 | 6.64 | 46.20 |
+| `dblp_acm` | `all-MiniLM-L6-v2` | 2,220 | 2224 | 1 | 97.70 | 82.91 | 81.85 | 1 | 95.28 | 81.00 | 88.21 |
+| `dblp_acm` | `sentence-transformers/all-mpnet-base-v2` | 2,220 | 2224 | 1 | 96.76 | 82.11 | 80.42 | 1 | 95.28 | 81.00 | 88.21 |
+| `dblp_scholar` | `all-MiniLM-L6-v2` | 5,347 | 5438 | 6 | 90.69 | 30.89 | 66.90 | 8 | 91.49 | 23.38 | 69.85 |
+| `dblp_scholar` | `sentence-transformers/all-mpnet-base-v2` | 5,347 | 5438 | 7 | 91.19 | 26.63 | 65.41 | 8 | 91.49 | 23.38 | 69.85 |
+| `febrl_person` | `all-MiniLM-L6-v2` | 500 | - | 1 | 95.00 | 95.00 | 91.32 | - | - | - | - |
+| `febrl_person` | `sentence-transformers/all-mpnet-base-v2` | 500 | - | 2 | 90.80 | 45.40 | 81.22 | - | - | - | - |
+| `fodors_zagat` | `all-MiniLM-L6-v2` | 112 | 112 | 1 | 100.00 | 21.01 | 21.01 | 2 | 93.75 | 9.85 | 53.42 |
 | `fodors_zagat` | `sentence-transformers/all-mpnet-base-v2` | 112 | 112 | 1 | 99.11 | 20.83 | 20.69 | 2 | 93.75 | 9.85 | 53.42 |
+| `walmart_amazon` | `all-MiniLM-L6-v2` | 962 | 1154 | 5 | 91.79 | 6.91 | 18.93 | 27 | 90.03 | 1.51 | 30.73 |
+| `walmart_amazon` | `sentence-transformers/all-mpnet-base-v2` | 962 | 1154 | 8 | 90.64 | 4.27 | 14.80 | 27 | 90.03 | 1.51 | 30.73 |
+| `wdc_computers` | `all-MiniLM-L6-v2` | 986 | - | >100 | 0.00 | 0.00 | 2.47 | - | - | - | - |
+| `wdc_computers` | `sentence-transformers/all-mpnet-base-v2` | 986 | - | >100 | 0.00 | 0.00 | 2.06 | - | - | - | - |
 
 ## B. DeepBlocker Table 6: pair completeness at their published k
 
@@ -15,6 +30,16 @@ Their `DL` column is a per-dataset **trained** Autoencoder/Hybrid over fastText,
 
 | benchmark | model | their k | their |C| | our |C| | their recall | our PC |
 |---|---|---:|---:|---:|---:|---:|
+| `abt_buy` | `all-MiniLM-L6-v2` | 20 | 21.6k | 21,620 | 87.2 | 98.35 |
+| `abt_buy` | `sentence-transformers/all-mpnet-base-v2` | 20 | 21.6k | 21,620 | 87.2 | 97.37 |
+| `amazon_google` | `all-MiniLM-L6-v2` | 50 | 68.2k | 68,150 | 97.1 | 99.49 |
+| `amazon_google` | `sentence-transformers/all-mpnet-base-v2` | 50 | 68.2k | 68,150 | 97.1 | 98.89 |
+| `dblp_acm` | `all-MiniLM-L6-v2` | 5 | 13.1k | 13,080 | 99.6 | 99.82 |
+| `dblp_acm` | `sentence-transformers/all-mpnet-base-v2` | 5 | 13.1k | 13,080 | 99.6 | 99.19 |
+| `dblp_scholar` | `all-MiniLM-L6-v2` | 150 | 392.4k | 392,400 | 98.1 | 99.42 |
+| `dblp_scholar` | `sentence-transformers/all-mpnet-base-v2` | 150 | 392.4k | 392,400 | 98.1 | 98.82 |
+| `walmart_amazon` | `all-MiniLM-L6-v2` | 20 | 51.1k | 51,080 | 92.2 | 98.02 |
+| `walmart_amazon` | `sentence-transformers/all-mpnet-base-v2` | 20 | 51.1k | 51,080 | 92.2 | 95.63 |
 
 ## C. Gold-set sizes: ours vs theirs
 
@@ -22,16 +47,45 @@ Their `DL` column is a per-dataset **trained** Autoencoder/Hybrid over fastText,
 
 | benchmark | our |A| | our |B| | our raw |G| | our closure |G| | DeepBlocker #Matches | UniBlocker #Pos |
 |---|---:|---:|---:|---:|---:|---:|
+| `abt_buy` | 1,081 | 1,092 | 1,028 | 1,044 | 1097 | 1098 |
+| `amazon_google` | 1,363 | 3,226 | 1,167 | 1,390 | 1300 | 1300 |
+| `dblp_acm` | 2,616 | 2,294 | 2,220 | 2,220 | 2224 | 2224 |
+| `dblp_scholar` | 2,616 | 64,263 | 5,347 | 13,763 | 5347 | 5438 |
+| `febrl_person` | 500 | 500 | 500 | 500 | - | - |
 | `fodors_zagat` | 533 | 331 | 112 | 112 | - | 112 |
+| `walmart_amazon` | 2,554 | 22,074 | 962 | 1,092 | 1154 | 1154 |
+| `wdc_computers` | 2,204 | 2,443 | 986 | 1,111 | - | - |
 
 ## D. Full PC curves (PC % at each k)
 
 | benchmark | model | k=1 | k=2 | k=3 | k=5 | k=8 | k=10 | k=13 | k=20 | k=27 | k=50 | k=77 | k=90 | k=100 | k=150 |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `abt_buy` | `all-MiniLM-L6-v2` | 64.6 | 79.6 | 85.1 | 91.1 | 94.6 | 96.2 | 97.7 | 98.3 | 99.2 | 99.8 | 100.0 | 100.0 | 100.0 | 100.0 |
+| `abt_buy` | `sentence-transformers/all-mpnet-base-v2` | 61.5 | 77.1 | 83.2 | 89.4 | 93.2 | 94.5 | 95.7 | 97.4 | 99.0 | 99.7 | 99.8 | 99.9 | 99.9 | 100.0 |
+| `amazon_google` | `all-MiniLM-L6-v2` | 62.8 | 79.6 | 86.6 | 92.7 | 95.9 | 96.9 | 97.9 | 98.4 | 98.7 | 99.5 | 99.7 | 99.7 | 99.7 | 99.9 |
+| `amazon_google` | `sentence-transformers/all-mpnet-base-v2` | 54.3 | 69.7 | 78.1 | 85.9 | 91.0 | 93.2 | 94.3 | 95.8 | 96.8 | 98.9 | 99.1 | 99.2 | 99.5 | 99.7 |
+| `dblp_acm` | `all-MiniLM-L6-v2` | 97.7 | 99.4 | 99.7 | 99.8 | 99.9 | 99.9 | 99.9 | 99.9 | 99.9 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
+| `dblp_acm` | `sentence-transformers/all-mpnet-base-v2` | 96.8 | 98.7 | 98.9 | 99.2 | 99.5 | 99.5 | 99.5 | 99.5 | 99.6 | 99.6 | 99.7 | 99.7 | 99.8 | 99.9 |
+| `dblp_scholar` | `all-MiniLM-L6-v2` | 44.0 | 65.6 | 77.1 | 87.9 | 93.8 | 95.7 | 97.0 | 98.1 | 98.4 | 99.0 | 99.2 | 99.3 | 99.3 | 99.4 |
+| `dblp_scholar` | `sentence-transformers/all-mpnet-base-v2` | 43.5 | 65.0 | 76.3 | 86.8 | 92.4 | 94.3 | 95.6 | 97.0 | 97.4 | 98.1 | 98.4 | 98.5 | 98.6 | 98.8 |
+| `febrl_person` | `all-MiniLM-L6-v2` | 95.0 | 96.2 | 96.4 | 97.6 | 98.2 | 98.4 | 98.6 | 98.8 | 98.8 | 99.4 | 99.4 | 99.8 | 99.8 | 100.0 |
+| `febrl_person` | `sentence-transformers/all-mpnet-base-v2` | 89.0 | 90.8 | 93.0 | 94.2 | 95.2 | 95.6 | 96.0 | 96.4 | 96.4 | 97.0 | 97.6 | 97.6 | 97.6 | 98.2 |
+| `fodors_zagat` | `all-MiniLM-L6-v2` | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
 | `fodors_zagat` | `sentence-transformers/all-mpnet-base-v2` | 99.1 | 99.1 | 99.1 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
+| `walmart_amazon` | `all-MiniLM-L6-v2` | 63.1 | 79.7 | 87.2 | 91.8 | 94.7 | 95.8 | 96.7 | 98.0 | 98.4 | 99.3 | 99.6 | 99.6 | 99.6 | 99.7 |
+| `walmart_amazon` | `sentence-transformers/all-mpnet-base-v2` | 54.0 | 70.3 | 77.2 | 84.4 | 90.6 | 92.4 | 93.2 | 95.6 | 97.0 | 98.2 | 99.1 | 99.2 | 99.3 | 99.3 |
+| `wdc_computers` | `all-MiniLM-L6-v2` | 8.8 | 22.0 | 28.7 | 37.4 | 47.7 | 52.3 | 57.7 | 65.9 | 70.6 | 82.0 | 87.4 | 88.9 | 89.7 | 93.0 |
+| `wdc_computers` | `sentence-transformers/all-mpnet-base-v2` | 9.3 | 20.8 | 26.0 | 33.3 | 41.1 | 44.2 | 49.5 | 56.3 | 62.3 | 76.6 | 83.1 | 85.4 | 87.0 | 91.6 |
 
 ## E. Serialization actually used
 
 | benchmark | fields joined | first A record (truncated) |
 |---|---|---|
+| `abt_buy` | `name`, `description`, `price` | sony turntable pslx350h sony turntable pslx350h belt drive system 33-1/3 and 45 rpm speeds servo speed control |
+| `amazon_google` | `title`, `manufacturer`, `price` | clickart 950 000 premier image pack ( dvd-rom ) broderbund |
+| `dblp_acm` | `title`, `authors`, `venue`, `year` | semantic integration of environmental models for application to global information systems and decision-making |
+| `dblp_scholar` | `title`, `authors`, `venue`, `year` | towards a cooperative transaction model - the cooperative activity model m rusinkiewicz , w klas , t tesch , j |
+| `febrl_person` | `given_name`, `surname`, `street_number`, `address_1`, `address_2`, `suburb`, `postcode`, `state`, `date_of_birth`, `soc_sec_id` | rachael dent 1 knox street lakewood estate byford 4129 vic 19280722 1683994 |
 | `fodors_zagat` | `name`, `addr`, `city`, `phone`, `type` | arnie morton's of chicago 435 s. la cienega blv. los angeles 310/246-1501 american |
+| `walmart_amazon` | `title`, `category`, `brand`, `modelno`, `price` | draper infrared remote transmitter electronics - general draper 121066 58.45 |
+| `wdc_computers` | `title` | "388504-B21 HP Storageworks Internal", "Null" Price 388504-B21" Internal Wholesale 388504-B21 |
