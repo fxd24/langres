@@ -58,6 +58,18 @@ Design decisions, each load-bearing:
 matchers that a user without labels cannot run at all, so an out-of-the-box
 default for them is not the same question. Those families are left alone.
 
+**A ``sim_cos`` constant is a cut on a cosine scale, and the scale belongs to
+the checkpoint.** Every benchmark loader in this repo pins ``all-MiniLM-L6-v2``
+for its blocker, but ``DEFAULT_EMBEDDING_MODEL`` is ``intfloat/e5-base-v2`` --
+so a constant selected from the portfolio as-is is a constant *for MiniLM
+cosine*, and whether it is also right for the shipped default is a separate
+question that must be measured rather than assumed. ``--embedder`` re-runs the
+identical protocol on another checkpoint precisely so that question has an
+answer::
+
+    ... threshold_constant_sweep.py --methods embedding_cosine \\
+        --embedder intfloat/e5-base-v2 --out tmp/e5.json
+
 Everything here is **$0 in spend**. It is *not* dependency-free on a cold cache:
 blocking is the benchmark's own ``VectorBlocker``, so a run needs the
 ``[semantic]`` extra (and ``[trained]``, for ``derive_threshold``).
@@ -211,6 +223,57 @@ class _StudyBenchmark(Benchmark[Any], BlockingBenchmark, Protocol):
     """A benchmark satisfying both the harness and the method-registry contracts."""
 
 
+class _EmbedderOverride:
+    """A benchmark whose vector blocker runs a DIFFERENT sentence-transformer.
+
+    Why this exists. A ``sim_cos`` threshold is a cut on a **cosine scale**, and
+    the scale belongs to the checkpoint, not to the family tag: two encoders can
+    both emit "cosine similarity" and disagree about what 0.9 means. Every
+    benchmark loader in this repo pins ``all-MiniLM-L6-v2`` for its blocker,
+    while ``DEFAULT_EMBEDDING_MODEL`` is now ``intfloat/e5-base-v2``. So a
+    constant selected from the portfolio is a constant *for MiniLM cosine*, and
+    whether it is also a constant for ``sim_cos`` is an open question this study
+    would otherwise answer by assumption.
+
+    Swapping the checkpoint is a **resource** variant, not a new architecture
+    (``.claude/rules/component-design.md``), so it belongs behind a flag on this
+    harness rather than in a second script: the split, the oracle, the bootstrap
+    and the LOBO selection stay bit-identical, and only the encoder moves. That
+    is what makes the two artifacts comparable.
+    """
+
+    def __init__(self, bench: _StudyBenchmark, embedder: str) -> None:
+        self._bench = bench
+        self._embedder = embedder
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward everything else (``schema``, ``blocking_k``, ``load``, ``split``)."""
+        return getattr(self._bench, name)
+
+    def build_blocker(self, k_neighbors: int) -> Any:
+        """The benchmark's own blocker, re-pointed at ``self._embedder``.
+
+        Raises:
+            SystemExit: If the blocker exposes no ``vector_index.embedder``.
+                Silently measuring the pinned checkpoint while the artifact
+                claims another one is the failure mode worth crashing over.
+        """
+        from langres.core.embeddings import SentenceTransformerEmbedder
+
+        blocker = self._bench.build_blocker(k_neighbors)
+        index = getattr(blocker, "vector_index", None)
+        if index is None or not hasattr(index, "embedder"):
+            raise SystemExit(
+                f"--embedder cannot apply to {type(blocker).__name__}: no "
+                "vector_index.embedder to re-point. Refusing to measure the "
+                "benchmark's pinned checkpoint under another checkpoint's name."
+            )
+        # Safe to mutate: build_blocker returns a FRESH blocker whose index has
+        # not embedded anything yet (VectorBlocker embeds in prepare/stream).
+        index.embedder = SentenceTransformerEmbedder(self._embedder)
+        return blocker
+
+
 class CellResult(BaseModel):
     """One (benchmark, method, seed) held-out grid sweep.
 
@@ -242,6 +305,12 @@ class CellResult(BaseModel):
         derived_threshold: Youden's J on the DISJOINT train corpus's labeled
             blocked candidates -- what a user with full labels gets.
         derived_f1_blocked / derived_f1_all_gold: that cut, graded held-out.
+        embedder: The sentence-transformer checkpoint the blocker ran, when
+            ``--embedder`` overrode the benchmark's own pin; ``None`` means the
+            benchmark's pinned model. Recorded per cell because a ``sim_cos``
+            constant is a property of a *cosine scale*, and the checkpoint sets
+            the scale -- a cell that does not say which checkpoint produced it
+            cannot support a shipped constant.
         seconds: Wall clock for the cell.
     """
 
@@ -269,6 +338,7 @@ class CellResult(BaseModel):
     derived_threshold: float
     derived_f1_blocked: float
     derived_f1_all_gold: float
+    embedder: str | None = None
     seconds: float
 
     @property
@@ -485,6 +555,7 @@ def run_cell(
     gold_clusters: list[set[str]],
     gold_pairs: set[frozenset[str]],
     resamples: int,
+    embedder: str | None = None,
 ) -> CellResult:
     """Score the held-out corpus once, then evaluate every constant on it.
 
@@ -492,11 +563,13 @@ def run_cell(
         benchmark: Registry name.
         method: The $0 scorer.
         seed: Seed for ``bench.split`` and for the bootstrap.
-        bench: The benchmark adapter.
+        bench: The benchmark adapter (already wrapped if a checkpoint override
+            is in force -- this argument records it, it does not apply it).
         corpus: The full record list.
         gold_clusters: The closed-world gold partition.
         gold_pairs: The closed-world gold pair set.
         resamples: Bootstrap replicates.
+        embedder: Checkpoint override in force, recorded on the cell.
 
     Returns:
         The assembled :class:`CellResult`.
@@ -616,12 +689,18 @@ def run_cell(
         derived_threshold=derived,
         derived_f1_blocked=derived_blocked,
         derived_f1_all_gold=derived_all,
+        embedder=embedder,
         seconds=time.monotonic() - started,
     )
 
 
 def run_benchmark(
-    name: str, *, methods: tuple[str, ...], seeds: tuple[int, ...], resamples: int
+    name: str,
+    *,
+    methods: tuple[str, ...],
+    seeds: tuple[int, ...],
+    resamples: int,
+    embedder: str | None = None,
 ) -> Iterator[CellResult]:
     """Run every (method, seed) cell for one registered benchmark.
 
@@ -633,12 +712,17 @@ def run_benchmark(
         methods: $0 method names.
         seeds: Corpus-split seeds.
         resamples: Bootstrap replicates.
+        embedder: Sentence-transformer checkpoint to run instead of the
+            benchmark's pinned one (see :class:`_EmbedderOverride`).
 
     Yields:
         One :class:`CellResult` per (method, seed), as each completes.
     """
     progress(f"  {name}: loading corpus ...")
     bench = cast(_StudyBenchmark, get_benchmark(name))
+    if embedder is not None:
+        progress(f"  {name}: blocker re-pointed at {embedder}")
+        bench = cast(_StudyBenchmark, _EmbedderOverride(bench, embedder))
     corpus, gold_clusters, gold_pairs = bench.load()
     progress(f"  {name}: {len(corpus):,} records, {len(gold_clusters):,} gold clusters")
     for method in methods:
@@ -652,6 +736,7 @@ def run_benchmark(
                 gold_clusters=gold_clusters,
                 gold_pairs=gold_pairs,
                 resamples=resamples,
+                embedder=embedder,
             )
             best = int(np.argmax(result.f1_blocked))
             print(
@@ -723,6 +808,13 @@ def to_cell_markdown(report: SweepReport) -> str:
             f"{cell.oracle_threshold_blocked:.4f} | {cell.oracle_f1_blocked:.4f} | "
             f"{cell.derived_threshold:.4f} | {cell.derived_f1_blocked:.4f} |"
         )
+    # Generated, not assumed: a `sim_cos` cut is a cut on a cosine scale, so which
+    # encoder produced the scores is part of what the number means.
+    checkpoints = sorted(
+        {cell.embedder or "all-MiniLM-L6-v2 (benchmark pin)" for cell in report.cells}
+    )
+    lines.append("")
+    lines.append(f"Blocker checkpoint(s) in this artifact: {', '.join(checkpoints)}.")
     return "\n".join(lines)
 
 
@@ -1002,10 +1094,12 @@ def read_report(path: Path) -> SweepReport:
 
 def _worker_command(name: str, args: argparse.Namespace, out: Path) -> list[str]:
     """The argv that measures ONE benchmark in a fresh interpreter."""
+    override = ["--embedder", args.embedder] if args.embedder else []
     return [
         sys.executable,
         str(Path(__file__).resolve()),
         "--in-process",
+        *override,
         # The parent prints the tables once, over the whole matrix. A worker's
         # single-benchmark tables would be noise ten times over.
         "--no-tables",
@@ -1075,6 +1169,16 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
     parser.add_argument("--resamples", type=int, default=BOOTSTRAP_RESAMPLES)
     parser.add_argument(
+        "--embedder",
+        default=None,
+        help=(
+            "run the blocker on this sentence-transformer instead of the benchmark's "
+            "pinned all-MiniLM-L6-v2. Use it to test whether a sim_cos constant is a "
+            "property of the FAMILY or of the CHECKPOINT -- e.g. --embedder "
+            "intfloat/e5-base-v2, the current DEFAULT_EMBEDDING_MODEL"
+        ),
+    )
+    parser.add_argument(
         "--in-process",
         action="store_true",
         help=(
@@ -1138,6 +1242,10 @@ def main() -> None:
         and tuple(args.methods) == DEFAULT_METHODS
         and tuple(args.seeds) == DEFAULT_SEEDS
         and args.resamples == BOOTSTRAP_RESAMPLES
+        # A checkpoint override measures a DIFFERENT cosine scale. Letting it
+        # write the canonical artifact would relabel one encoder's cells as the
+        # portfolio's, which is the precise confusion the flag exists to expose.
+        and args.embedder is None
     )
     out: Path = args.out if args.out is not None else CANONICAL_OUT
     if out.resolve() == CANONICAL_OUT.resolve() and not is_full_sweep:
@@ -1202,6 +1310,7 @@ def main() -> None:
                     methods=tuple(args.methods),
                     seeds=tuple(args.seeds),
                     resamples=args.resamples,
+                    embedder=args.embedder,
                 ):
                     cells.append(cell)
                     checkpoint()
