@@ -100,6 +100,17 @@ EMBEDDING_INSTRUCTION = (
 #: caveat the reader has to go and find.
 HYBRID_ARM_LABEL = "Qdrant Hybrid (unprompted)"
 
+#: Console row labels for the three arms in the KEY INSIGHTS block. Every row
+#: carries its prompt regime, not just the hybrid one: a reader comparing three
+#: numbers needs to know which arm changed the index and which changed the
+#: prompt. The comparison table above them is footnoted for the same reason, but
+#: this block prints separately and a footnote 400 lines up does not travel with
+#: it. ``_ARM_COLUMN`` is the width they pad to, so the values still line up.
+FAISS_ROW_LABEL = "FAISS (dense-only, prompted):"
+HYBRID_ROW_LABEL = "Qdrant Hybrid (dense+sparse, unprompted):"
+CROSSENCODER_ROW_LABEL = "Jina CrossEncoder (full attn, prompted):"
+_ARM_COLUMN = 42
+
 
 class OrganizationSchema(BaseModel):
     """Schema for funder organization entities."""
@@ -917,15 +928,15 @@ def main() -> None:
     hybrid_recall = qdrant_hybrid_results["recall"] * 100
     crossenc_recall = qdrant_crossencoder_results["recall"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_recall:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_recall:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_recall:.2f}% "
-        f"({hybrid_recall - faiss_recall:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_recall:.2f}% "
+        f"({hybrid_recall - faiss_recall:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_recall:.2f}% "
-        f"({crossenc_recall - faiss_recall:+.2f}pp vs FAISS, "
-        f"{crossenc_recall - hybrid_recall:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_recall:.2f}% "
+        f"({crossenc_recall - faiss_recall:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_recall - hybrid_recall:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # Precision comparison
@@ -934,15 +945,15 @@ def main() -> None:
     hybrid_precision = qdrant_hybrid_results["precision"] * 100
     crossenc_precision = qdrant_crossencoder_results["precision"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_precision:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_precision:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_precision:.2f}% "
-        f"({hybrid_precision - faiss_precision:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_precision:.2f}% "
+        f"({hybrid_precision - faiss_precision:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_precision:.2f}% "
-        f"({crossenc_precision - faiss_precision:+.2f}pp vs FAISS, "
-        f"{crossenc_precision - hybrid_precision:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_precision:.2f}% "
+        f"({crossenc_precision - faiss_precision:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_precision - hybrid_precision:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # F1 comparison
@@ -951,14 +962,15 @@ def main() -> None:
     hybrid_f1 = qdrant_hybrid_results["f1"] * 100
     crossenc_f1 = qdrant_crossencoder_results["f1"] * 100
 
-    print(f"   FAISS (dense-only):              {faiss_f1:.2f}%")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_f1:.2f}%")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_f1:.2f}% "
-        f"({hybrid_f1 - faiss_f1:+.2f}pp vs FAISS)"
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_f1:.2f}% "
+        f"({hybrid_f1 - faiss_f1:+.2f}pp vs FAISS -- confounded: index AND prompt)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_f1:.2f}% "
-        f"({crossenc_f1 - faiss_f1:+.2f}pp vs FAISS, {crossenc_f1 - hybrid_f1:+.2f}pp vs Hybrid)"
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_f1:.2f}% "
+        f"({crossenc_f1 - faiss_f1:+.2f}pp vs FAISS -- prompt-matched; "
+        f"{crossenc_f1 - hybrid_f1:+.2f}pp vs Hybrid -- confounded)"
     )
 
     # Performance comparison
@@ -967,13 +979,13 @@ def main() -> None:
     hybrid_time = qdrant_hybrid_results["indexing_time_seconds"]
     crossenc_time = qdrant_crossencoder_results["indexing_time_seconds"]
 
-    print(f"   FAISS (dense-only):              {faiss_time:.2f}s")
+    print(f"   {FAISS_ROW_LABEL:<{_ARM_COLUMN}}{faiss_time:.2f}s")
     print(
-        f"   Qdrant Hybrid (dense+sparse):    {hybrid_time:.2f}s "
+        f"   {HYBRID_ROW_LABEL:<{_ARM_COLUMN}}{hybrid_time:.2f}s "
         f"({hybrid_time / faiss_time:.1f}x slower)"
     )
     print(
-        f"   Jina CrossEncoder (full attn):   {crossenc_time:.2f}s "
+        f"   {CROSSENCODER_ROW_LABEL:<{_ARM_COLUMN}}{crossenc_time:.2f}s "
         f"({crossenc_time / faiss_time:.1f}x slower than FAISS, "
         f"{crossenc_time / hybrid_time:.1f}x vs Hybrid)"
     )
@@ -1000,8 +1012,10 @@ def main() -> None:
         )
     elif hybrid_f1 == best_f1:
         print(
-            "   ✅ Qdrant Hybrid achieved best F1 score - keyword matching improves "
-            "recall without reranking overhead"
+            "   ✅ Qdrant Hybrid achieved best F1 score. This run CANNOT attribute that "
+            "to keyword matching: the hybrid arm is also the only unprompted one, so "
+            "index and prompt regime moved together. To separate them, run the hybrid "
+            "arm against FAISS with neither side prompted."
         )
     else:
         print("   ⚠️  FAISS achieved best F1 score - simpler approach may be sufficient")
@@ -1025,7 +1039,11 @@ def main() -> None:
         "   • Jina CrossEncoder: Maximum quality via reranking, moderate cost (10-15x faster than ColBERT)"
     )
     print("   • DiskCachedEmbedder: Essential for iteration - second run is ~100x faster")
-    print("   • Instruction prompts: Expected +1-5% quality improvement")
+    print(
+        "   • Instruction prompts: this run does not measure their effect -- no two "
+        "arms here share an index. `examples/research/embedder_ladder.py` does, "
+        "holding the index fixed; see docs/research/20260727_embedder_ladder.md."
+    )
 
     print("\n=" * 120)
     print("✅ Evaluation complete!")

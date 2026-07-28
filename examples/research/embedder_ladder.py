@@ -1125,8 +1125,15 @@ def _render_recommendation(
 
     out: list[str] = []
     out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
+    # The denominator is the LADDER plus anything actually measured, not
+    # ``len(MODELS)``. ``--models`` accepts a name outside the fixed tuple (main()
+    # falls back to a bare ``ModelSpec``), and such a row lands in ``measured``
+    # while never appearing in ``MODELS`` — so a fixed denominator can print
+    # "15 of the 14 models" and point at a 'What did not run' section that only
+    # iterates ``MODELS`` and therefore cannot account for the difference.
+    ladder = {spec.name for spec in MODELS} | set(measured)
     out.append(
-        f"\n**{len(measured)} of the {len(MODELS)} models in the ladder have a row at "
+        f"\n**{len(measured)} of the {len(ladder)} models in the ladder have a row at "
         f"metric revision {METRIC_REVISION}.** Everything below is a statement about "
         "those and only those; the rest are named under 'What did not run'. A "
         "recommendation drawn from a partial field is still a recommendation, but it "
@@ -1838,9 +1845,14 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     stale_models = {row.model for row in stale}
     failed_models = {row.model for row in failures}
     never = [spec for spec in MODELS if spec.name not in measured]
+    # Same denominator as the recommendation section, and for the same reason: a
+    # `--models` name outside the fixed tuple is measured but never listed here,
+    # so counting against `len(MODELS)` makes the two sections disagree about how
+    # big the ladder is.
+    ladder_size = len({spec.name for spec in MODELS} | measured)
     if never:
         out.append(
-            f"\n**{len(never)} of the {len(MODELS)} models in the ladder have no usable "
+            f"\n**{len(never)} of the {ladder_size} models in the ladder have no usable "
             f"row at metric revision {METRIC_REVISION}.** The `state` column says why "
             "for each — this table cannot speak about any of them.\n"
         )
