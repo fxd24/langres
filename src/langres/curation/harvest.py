@@ -61,6 +61,7 @@ __all__ = [
     "align_pairs",
     "derive_threshold_from_pairs",
     "harvest_labeled_pairs",
+    "warn_if_silver_only",
 ]
 
 #: Schema type variable for the entity schema an ``ERCandidate`` carries. Defined
@@ -277,6 +278,43 @@ def harvest_labeled_pairs(
     return pairs
 
 
+def warn_if_silver_only(
+    pairs: str | Path | Sequence[LabeledPair] | Sequence[Correction], *, stacklevel: int = 2
+) -> None:
+    """Warn when every supplied label is the judge's own verdict (circular calibration).
+
+    The shared guard behind :func:`derive_threshold_from_pairs` and
+    ``ERModel.fit(derive_threshold=True)``. Both derive a cut from labels; both
+    must say so when those labels are *silver* -- the judge's logged verdicts,
+    which were produced BY a cut, so a threshold search can only recover the cut
+    that made them. (Training a *different* model on silver labels is
+    legitimate, which is why :func:`harvest_labeled_pairs` stays warning-free.)
+
+    Anything that is not an in-memory sequence of :class:`LabeledPair` is silently
+    accepted: only ``LabeledPair`` carries ``source``, so a ``corrections.jsonl``
+    path or a :class:`Correction` sequence is human-reviewed by construction and
+    has no silver case to warn about.
+
+    Args:
+        pairs: The labels as the caller supplied them.
+        stacklevel: Forwarded to :func:`warnings.warn` (+1 for this frame), so the
+            warning points at the user's call rather than at langres internals.
+    """
+    if isinstance(pairs, (str, Path)) or not pairs:
+        return
+    if not all(isinstance(pair, LabeledPair) and pair.source == "verdict" for pair in pairs):
+        return
+    warnings.warn(
+        "silver-only calibration is circular -- deriving a threshold from "
+        "a judge's own verdicts can only recover the cut that produced "
+        "them; overlay human corrections (source='correction') before "
+        "calibrating. (Training a DIFFERENT model on silver labels is "
+        "fine.)",
+        UserWarning,
+        stacklevel=stacklevel + 1,
+    )
+
+
 def derive_threshold_from_pairs(
     pairs: Sequence[LabeledPair],
     *,
@@ -313,6 +351,9 @@ def derive_threshold_from_pairs(
             biased scored-only subset. Also propagated from
             :func:`~langres.training.calibration.derive_threshold` (empty input,
             single-class labels under ``"youden"``, bad ``percentile``, ...).
+        ImportError: If scikit-learn (the ``[trained]`` extra) is not installed.
+            Raised, never silently defaulted: the same code must not produce a
+            different threshold depending on which extras are present.
 
     Warns:
         UserWarning: If ``pairs`` is non-empty and every label is silver
@@ -333,18 +374,28 @@ def derive_threshold_from_pairs(
             )
         scores.append(pair.score)
 
-    if pairs and all(pair.source == "verdict" for pair in pairs):
-        warnings.warn(
-            "silver-only calibration is circular -- deriving a threshold from "
-            "a judge's own verdicts can only recover the cut that produced "
-            "them; overlay human corrections (source='correction') before "
-            "calibrating. (Training a DIFFERENT model on silver labels is "
-            "fine.)",
-            UserWarning,
-            stacklevel=2,
-        )
+    warn_if_silver_only(pairs, stacklevel=3)
 
-    from langres.training.calibration import derive_threshold
+    # scikit-learn is the ``[trained]`` extra, and ``training.calibration``
+    # imports it at MODULE scope -- so on a core-only install this import fails,
+    # not the ROC computation below it. Translate the bare
+    # ``ModuleNotFoundError: No module named 'sklearn'`` into problem + cause +
+    # fix, and RAISE rather than fall back: a silent default cut would make the
+    # same code produce different artifacts depending on which extras happen to
+    # be installed, which is exactly the "no silent fallback" property langres
+    # advertises (docs/GETTING_STARTED.md).
+    try:
+        from langres.training.calibration import derive_threshold
+    except ImportError as exc:
+        raise ImportError(
+            "cannot derive a threshold: threshold derivation needs scikit-learn "
+            "(it reads the ROC curve), which ships in langres's optional "
+            "'trained' extra and is not installed. "
+            "Fix: pip install 'langres[trained]' (or uv add 'langres[trained]'). "
+            "langres will not substitute an underived default -- a hand-set cut "
+            "is not a derived one, and the same code must not produce different "
+            "artifacts depending on which extras happen to be installed."
+        ) from exc
 
     return derive_threshold(
         scores,

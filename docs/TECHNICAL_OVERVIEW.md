@@ -927,9 +927,9 @@ signature:
   `langres.training.calibration` implements it, consumed by
   `Resolver.fit(method=Platt()/Isotonic())` — see the `method=` seam below.
 
-`Resolver.fit(data, labels=None, *, pairs=None, split=None, seed=0)` consumes the
-**matcher** mixins, detected with `isinstance(module, SupervisedFitMixin)` /
-`isinstance(module, UnsupervisedFitMixin)`:
+`Resolver.fit(data, labels=None, *, pairs=None, split=None, seed=0, method=None,
+derive_threshold=False)` consumes the **matcher** mixins, detected with
+`isinstance(module, SupervisedFitMixin)` / `isinstance(module, UnsupervisedFitMixin)`:
 
 - Matcher implements `SupervisedFitMixin`: supervision comes from either
   pre-aligned `labels` **or** id-keyed `pairs` (see below); passing neither
@@ -940,7 +940,21 @@ signature:
 - Matcher implements **neither** hook (e.g. `WeightedAverageMatcher`): `fit()`
   is a no-op returning `self` — the original sklearn-style symmetry is
   preserved for non-learnable pipelines — unless `labels`/`pairs` was passed,
-  which raises rather than silently discarding them.
+  which raises rather than silently discarding them. The one exception is
+  `derive_threshold=True` (below): a fixed scorer has no matcher to train but its
+  *threshold* is fittable, so `fit(pairs=..., derive_threshold=True)` is accepted.
+
+`derive_threshold=True` (opt-in; default `False` leaves the constructed threshold
+alone) derives a candidate cut from the labeled `train` pairs via
+`curation.harvest.derive_threshold_from_pairs`, **races it against the incumbent
+on `train`**, and applies it only if it strictly wins — a derived cut is not
+automatically a better one. It writes to whichever seam the model keeps its cut
+in: `clusterer.threshold` for a classic four-slot model, the terminal
+`ThresholdSelect` for an explicit `from_topology` chain (which has no clusterer
+slot). Requires `pairs=` (it carries the entity-disjoint `split`), needs the
+`[trained]` extra, and records provenance in `fit_report_.threshold_fit`
+(`ThresholdFit`: derived / declined / not_fitted, both candidates, and which split
+selected). Full walkthrough in `docs/EXPERIMENTS.md`.
 
 Every non-raising path sets `resolver.fit_report_` (an sklearn
 trailing-underscore digest, `langres.training.fit_report.FitReport`) and returns

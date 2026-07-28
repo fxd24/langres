@@ -16,7 +16,7 @@ property that actually implements it.
 
 import logging
 from collections.abc import Sequence
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Literal, Self, cast
 
 from pydantic import BaseModel
 
@@ -159,6 +159,15 @@ class ModelState:
         self.calibrator: CalibratorFitMixin | None = None
         # Set by fit(); the sklearn trailing-underscore "produced by fit" digest.
         # None until fit() runs (never serialized -- it is a fit-time artifact).
+        #
+        # That has a consequence worth naming, because fit() can now DERIVE the
+        # match threshold from labels: the threshold VALUE survives save/load (it
+        # lives on the clusterer / the chain's ThresholdSelect, both of which
+        # serialize), but its PROVENANCE -- derived vs defaulted, from how many
+        # pairs, held-out or in-sample -- does not. A reloaded model therefore
+        # carries a measured cut with no record that it was measured. Persist
+        # ``fit_report_.model_dump_json()`` beside the artifact if that matters.
+        # (See FitReport.threshold_fit / ThresholdFit.)
         self.fit_report_: FitReport | None = None
         # Runtime provenance for models loaded through langres.hub. Kept out of
         # resolver.json/config identity: the artifact's repository revision is
@@ -665,11 +674,22 @@ class ModelState:
     def _chain_threshold(self) -> float | None:
         """The terminal :class:`~langres.core.op.ThresholdSelect`'s threshold -- the chain's
         match cut -- or ``None`` if the chain has no ThresholdSelect. The LAST one wins."""
-        threshold: float | None = None
+        select = self._chain_threshold_select()
+        return None if select is None else select.threshold
+
+    def _chain_threshold_select(self) -> ThresholdSelect[Any] | None:
+        """The chain's *terminal* :class:`~langres.core.op.ThresholdSelect` object itself.
+
+        The object behind :meth:`_chain_threshold`'s number, and the seam a
+        threshold fit writes through. Same LAST-one-wins rule, from one scan, so
+        the reader and the writer can never disagree about which Select owns the
+        chain's match cut.
+        """
+        select: ThresholdSelect[Any] | None = None
         for op in self._chain_body():
             if isinstance(op, ThresholdSelect):
-                threshold = op.threshold
-        return threshold
+                select = op
+        return select
 
     def _chain_scoring_matcher(self) -> Matcher[Any] | None:
         """The chain's last matcher-``Score``'s matcher, unwrapped past its spend cap.
@@ -689,6 +709,61 @@ class ModelState:
         if isinstance(matcher, SpendCappedMatcher):
             return matcher._module  # peel the cap; the wrapped matcher owns ``model``
         return matcher
+
+    # ------------------------------------------------------------------
+    # The match cut, read and written topology-neutrally.
+    #
+    # A model's decision threshold lives in exactly one of two places and the
+    # two are NOT interchangeable: a classic four-slot model keeps it on
+    # ``self.clusterer.threshold``; an explicit ``_ops`` chain keeps it in a
+    # :class:`~langres.core.op.ThresholdSelect` and has no clusterer slot at all
+    # (``_require_bound`` *raises* on ``.clusterer`` there). Anything that wants
+    # to fit the cut must go through this pair, or it silently no-ops on one
+    # topology and raises on the other.
+    # ------------------------------------------------------------------
+
+    def _threshold_seam(self) -> Literal["clusterer", "threshold_select"] | None:
+        """Name where THIS model keeps its match cut, or ``None`` if it keeps none.
+
+        ``None`` is a real state, not an error: an explicit chain need not contain
+        a ``ThresholdSelect`` (a pure top-k retrieval recipe has no threshold to
+        fit), and an unbound model has no clusterer yet.
+        """
+        if self._ops is not None:
+            return None if self._chain_threshold_select() is None else "threshold_select"
+        return None if self._clusterer is None else "clusterer"
+
+    def _match_threshold(self) -> float | None:
+        """This model's match cut, from whichever seam holds it (``None`` if neither)."""
+        if self._ops is not None:
+            return self._chain_threshold()
+        return None if self._clusterer is None else self._clusterer.threshold
+
+    def _set_match_threshold(self, threshold: float) -> None:
+        """Write the match cut to whichever seam holds it.
+
+        Raises:
+            RuntimeError: If this model has no threshold seam
+                (:meth:`_threshold_seam` is ``None``) -- writing nowhere and
+                returning would be the silent no-op this pair exists to prevent.
+        """
+        if self._ops is not None:
+            select = self._chain_threshold_select()
+            if select is None:
+                raise RuntimeError(
+                    "cannot set a match threshold: this ERModel's explicit Op chain "
+                    "contains no ThresholdSelect, so it has no match cut to write. "
+                    "Add a ThresholdSelect to the topology, or fit a model that has one."
+                )
+            select.threshold = threshold
+            return
+        if self._clusterer is None:
+            raise RuntimeError(
+                "cannot set a match threshold: this ERModel is not bound to a schema "
+                "yet, so it has no clusterer. Pass schema=<YourModel> to the "
+                "constructor, or call dedupe()/compare() once (which binds)."
+            )
+        self._clusterer.threshold = threshold
 
     def _chain_source_schema(self) -> type[BaseModel] | None:
         """The schema the chain's Source blocks against (for front-door normalization),
