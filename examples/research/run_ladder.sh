@@ -178,6 +178,20 @@ for model in "${MODELS[@]}"; do
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?
 
+  # A cache-integrity refusal is NOT a model failure, and must not be recorded as
+  # one: record_process_failure deletes every existing row for the model and the
+  # commit below ships the deletion. Nothing is wrong with those rows -- the cache
+  # is what is suspect -- so stop the sweep and leave the tracked artifacts
+  # untouched. The harness reserves this code for exactly that
+  # (embedder_ladder.py::EXIT_CACHE_INTEGRITY). (Cross-model review.)
+  if [ $code -eq 3 ]; then
+    log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
+    log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
+    log "  Delete that model's cache namespace and re-run, or pass"
+    log "  --trust-existing-cache if you know the cache matches the loaded checkpoint."
+    exit 3
+  fi
+
   if [ $code -ne 0 ]; then
     log "$model exited $code -- recording a failure row and continuing"
     record_process_failure "$model" "$code"

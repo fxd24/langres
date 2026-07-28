@@ -221,6 +221,23 @@ class TestDocumentSidePrefix:
         assert index._corpus_texts == texts
 
 
+class _PromptSensitiveEmbedder:
+    """Bare and prompted encodes drift independently.
+
+    Models the real hazard: a change to explicit prompt handling that leaves
+    un-prompted embeddings byte-identical.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self) -> None:
+        self.prompt_scale = 1.0
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        scale = 1.0 if prompt is None else self.prompt_scale
+        return np.array([[scale * (len(t) + i) for i in range(4)] for t in texts], dtype=np.float32)
+
+
 class _SwappableEmbedder:
     """A $0 embedder whose vectors change when ``weights`` is reassigned.
 
@@ -433,6 +450,93 @@ class TestIntegrityRefusalIsNotAResult:
 
         assert [row.status for row in rows] == ["failed"]
         assert "no such checkpoint" in (rows[0].error or "")
+
+
+class TestIntegrityRefusalReachesTheDriver:
+    """The abort has to survive the process boundary, or the deletion just moves.
+
+    ``run_ladder.sh`` treats any non-zero exit as "the process died" and calls
+    ``record_process_failure``, which removes every existing row for the model and
+    commits the replacement. Re-raising inside Python therefore was not enough on
+    its own: the refusal exited non-zero and the driver deleted the good rows
+    anyway. The exit CODE is the whole signal.
+    """
+
+    def test_the_reserved_code_is_not_one_the_interpreter_already_uses(self) -> None:
+        # 1 is an uncaught exception, 2 is argparse. Colliding with either would
+        # make the driver treat a genuine crash as an integrity refusal.
+        assert LADDER.EXIT_CACHE_INTEGRITY not in (0, 1, 2)
+
+    def test_the_driver_special_cases_that_exact_code(self) -> None:
+        """The two halves are in different languages; nothing else pins them together.
+
+        A test on the Python side alone would keep passing if someone changed
+        ``EXIT_CACHE_INTEGRITY`` and left the shell comparing against 3.
+        """
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert f"if [ $code -eq {LADDER.EXIT_CACHE_INTEGRITY} ]" in driver
+        # And it must bail before the row-deleting path, not after it.
+        assert driver.index(f"$code -eq {LADDER.EXIT_CACHE_INTEGRITY}") < driver.index(
+            'record_process_failure "$model"'
+        )
+
+
+class TestPromptedCachePartitions:
+    """The cache key is (text, prompt); an unprompted canary vouches for one slice.
+
+    The ``instruct`` and ``documented`` arms read prompt-keyed entries. A change
+    that touches only explicit prompt handling — ``include_prompt``, prompt-token
+    pooling — leaves bare embeddings byte-identical, so a canary that only ever
+    asks for the bare vector passes while the prompted vectors it did not look at
+    came from the old behaviour.
+    """
+
+    def _cached(self, embedder: Any, tmp_path: Path) -> Any:
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        return DiskCachedEmbedder(embedder, cache_dir=tmp_path, namespace="canary_ns")
+
+    def test_drift_confined_to_the_prompted_path_is_caught(self, tmp_path: Path) -> None:
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder,
+            self._cached(embedder, tmp_path),
+            "canary_ns",
+            tmp_path,
+            prompts=[None, "query: "],
+        )
+
+        # Bare embeddings unchanged; only the prompted path moves.
+        embedder.prompt_scale = 5.0
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder,
+                self._cached(embedder, tmp_path),
+                "canary_ns",
+                tmp_path,
+                prompts=[None, "query: "],
+            )
+        assert "query: " in str(excinfo.value)
+
+    def test_the_bare_canary_alone_does_not_notice(self, tmp_path: Path) -> None:
+        """Control: this is the hole, demonstrated.
+
+        Without it the test above could pass for the wrong reason — e.g. if the
+        fake's bare output moved too — and would not show that the prompted
+        partition is what added the coverage.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+
+        embedder.prompt_scale = 5.0
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
 
 
 class TestPersistence:

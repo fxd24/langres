@@ -59,6 +59,7 @@ import argparse
 import json
 import logging
 import random
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -633,6 +634,15 @@ _CANARY_TEXT = "langres embedder-ladder cache canary"
 _CANARY_TOLERANCE = 1e-4
 
 
+#: Exit code reserved for a cache-integrity refusal, so the shell driver can tell
+#: it apart from a model that died. `run_ladder.sh` treats a generic non-zero exit
+#: as "the process was killed" and records a failure row -- which DELETES every
+#: previously measured row for that model and commits the deletion. An integrity
+#: refusal must never take that path: nothing is wrong with the recorded rows, the
+#: cache is what is suspect. 3 because 1 is an uncaught exception and 2 is argparse.
+EXIT_CACHE_INTEGRITY = 3
+
+
 class StaleEmbeddingCacheError(RuntimeError):
     """The cached vectors were produced by a different checkpoint than the loaded one."""
 
@@ -651,7 +661,7 @@ def _cache_entry_count(db_path: Path) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
 
 
-def _canary_is_cached(cached: Any, db_path: Path) -> bool:
+def _canary_is_cached(cached: Any, db_path: Path, prompt: str | None = None) -> bool:
     """Is the canary already in ``db_path``, *without* putting it there?
 
     Asking by encoding would answer the question by changing it: a legacy
@@ -670,14 +680,20 @@ def _canary_is_cached(cached: Any, db_path: Path) -> bool:
 
     if not db_path.exists():
         return False
-    key = cached._hash_text(_CANARY_TEXT)
+    key = cached._hash_text(_CANARY_TEXT, prompt)
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT 1 FROM embeddings WHERE text_hash = ?", (key,)).fetchone()
     return row is not None
 
 
 def _assert_cache_matches_checkpoint(
-    base: Any, cached: Any, namespace: str, cache_dir: Path, *, adopt_legacy: bool = False
+    base: Any,
+    cached: Any,
+    namespace: str,
+    cache_dir: Path,
+    *,
+    adopt_legacy: bool = False,
+    prompts: Sequence[str | None] = (None,),
 ) -> None:
     """Stop the run if the warm cache no longer agrees with the loaded checkpoint.
 
@@ -758,29 +774,39 @@ def _assert_cache_matches_checkpoint(
         )
         return
 
-    from_cache = np.asarray(cached.encode([_CANARY_TEXT])[0], dtype=np.float64)
-    fresh = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    # One partition per prompt, because the cache key is (text, prompt): an
+    # unprompted canary says nothing about the prompt-keyed entries the `instruct`
+    # and `documented` arms read back. A change that touches only explicit prompt
+    # handling -- `include_prompt`, prompt-token pooling -- leaves bare embeddings
+    # identical and would sail past a canary that only ever asks for the bare one.
+    # (Cross-model review.)
+    for prompt in dict.fromkeys(prompts):
+        # A partition with no canary yet is not "legacy" -- the unprompted canary
+        # above already vouched for the namespace -- it is simply cold, e.g. an arm
+        # added after the cache was written. Encoding pins it for next time.
+        from_cache = np.asarray(cached.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
+        fresh = np.asarray(base.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
 
-    if from_cache.shape != fresh.shape:
-        drift: float = float("inf")
-    elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
-        # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False** --
-        # so the guard would ACCEPT a cache it cannot compare and the ladder would
-        # publish rows computed from non-finite vectors. Unstable half precision
-        # on some devices and a truncated cached blob both produce this. Treat it
-        # as maximal drift: unusable is not the same as equal. (Cross-model review.)
-        drift = float("inf")
-    else:
-        drift = float(np.abs(from_cache - fresh).max())
+        if from_cache.shape != fresh.shape:
+            drift: float = float("inf")
+        elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
+            # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False**
+            # -- so the guard would ACCEPT a cache it cannot compare and the ladder
+            # would publish rows computed from non-finite vectors. Unstable half
+            # precision on some devices and a truncated cached blob both produce
+            # this. Treat it as maximal drift: unusable is not equal.
+            drift = float("inf")
+        else:
+            drift = float(np.abs(from_cache - fresh).max())
 
-    if drift > _CANARY_TOLERANCE:
-        raise StaleEmbeddingCacheError(
-            f"the embedding cache for namespace {namespace!r} was written by a "
-            f"different checkpoint than the one loaded now (canary vectors differ "
-            f"by {drift:.3g} > {_CANARY_TOLERANCE:g}). Every cached vector in it is "
-            f"suspect, so continuing would publish rows mixing two checkpoints. "
-            f"Delete {cache_dir / f'{namespace}.db'} and re-measure this model."
-        )
+        if drift > _CANARY_TOLERANCE:
+            raise StaleEmbeddingCacheError(
+                f"the embedding cache for namespace {namespace!r} was written by a "
+                f"different checkpoint than the one loaded now (canary vectors for "
+                f"prompt={prompt!r} differ by {drift:.3g} > {_CANARY_TOLERANCE:g}). "
+                f"Every cached vector in it is suspect, so continuing would publish "
+                f"rows mixing two checkpoints. Delete {db_path} and re-measure."
+            )
 
 
 def _build_embedder(
@@ -790,6 +816,7 @@ def _build_embedder(
     batch_size: int,
     *,
     adopt_legacy_cache: bool = False,
+    prompts: Sequence[str | None] = (None,),
 ) -> Any:
     """A disk-cached embedder for ``spec``.
 
@@ -819,7 +846,7 @@ def _build_embedder(
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
     _assert_cache_matches_checkpoint(
-        base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache
+        base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache, prompts=prompts
     )
     return base, cached
 
@@ -935,8 +962,17 @@ def evaluate_model_on_benchmark(
         schema = type(corpus[0])
         records = [record.model_dump() for record in corpus]
 
+        # Every prompt partition this run will READ has to be the one the canary
+        # vouches for. The document side is prefixed into the text by
+        # `build_prompted_index`, so it lands in the bare partition; the query side
+        # travels as `encode(prompt=...)` and gets its own cache key per arm.
         base, embedder = _build_embedder(
-            spec, cache_dir, device, batch_size, adopt_legacy_cache=adopt_legacy_cache
+            spec,
+            cache_dir,
+            device,
+            batch_size,
+            adopt_legacy_cache=adopt_legacy_cache,
+            prompts=[None, *(query for _doc, query in prompt_arms.values() if query)],
         )
 
         # Force the load HERE, before any arm runs, so a checkpoint that cannot
@@ -2246,4 +2282,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except StaleEmbeddingCacheError as exc:
+        # A distinct code, not a traceback: `run_ladder.sh` must be able to tell
+        # "the cache is suspect" (leave every recorded row alone) apart from "the
+        # process died" (record a failure row, which erases them).
+        logger.error("%s", exc)
+        sys.exit(EXIT_CACHE_INTEGRITY)
