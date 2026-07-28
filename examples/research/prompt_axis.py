@@ -51,7 +51,7 @@ import json
 import logging
 import math
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -366,6 +366,27 @@ class Row:
 # --------------------------------------------------------------------------
 
 
+#: How far the two encode paths may disagree on a *symmetric* recipe before we
+#: call it a bug. Not a free parameter -- it is bounded on both sides by measured
+#: values:
+#:
+#: * **Above**: encoder round-off. A ``float16`` checkpoint
+#:   (``Qwen/Qwen3-Embedding-0.6B``) produced ``cosine=1.000126`` for the
+#:   no-prompt arm, where both sides are literally the same call. A cosine
+#:   *greater than 1* is arithmetically impossible for two distinct unit vectors,
+#:   so that value is accumulation error and nothing else. ``float32`` models
+#:   land within ``1e-7``.
+#: * **Below**: the smallest real failure this check exists to catch. When one
+#:   side silently drops its prompt the cosine falls to the asymmetric range --
+#:   the *closest* such value measured anywhere in this sweep is ``0.9446``
+#:   (``e5-base-v2``, ``official_asymmetric``), i.e. a deviation of ``0.055``.
+#:
+#: ``5e-3`` therefore sits ~5x above the worst observed round-off and ~11x below
+#: the smallest genuine divergence. Widening it to swallow a *real* failure would
+#: take a 10x further increase.
+_SYMMETRIC_TOLERANCE = 5e-3
+
+
 def _mean_cosine(left: np.ndarray, right: np.ndarray) -> float:
     """Mean row-wise cosine. Vectors arrive L2-normalized, so this is a dot."""
     if left.shape != right.shape:
@@ -415,7 +436,7 @@ def _prompt_reached_encoder(
             "the encoder (this is exactly the search_all() bug #242 hardened)."
         )
     symmetric = recipe.document_prompt == recipe.query_prompt
-    if symmetric and not math.isclose(doc_query_cosine, 1.0, abs_tol=1e-4):
+    if symmetric and not math.isclose(doc_query_cosine, 1.0, abs_tol=_SYMMETRIC_TOLERANCE):
         raise RuntimeError(
             f"arm {recipe.arm!r} is symmetric ({recipe.document_prompt!r} on both sides) "
             f"but its document and query vectors disagree (cosine={doc_query_cosine:.6f}). "
@@ -533,7 +554,13 @@ def evaluate_model_on_benchmark(
     recipes: Sequence[Recipe],
     k_values: Sequence[int],
     cache_dir: Path,
-) -> list[Row]:
+) -> Iterator[list[Row]]:
+    """Yield one arm's rows at a time so the caller can persist as they land.
+
+    A sweep cell costs minutes of encoding on the larger checkpoints, so the
+    caller flushes after every arm rather than at the end: a crash at 90% should
+    cost the last arm, not the run.
+    """
     from langres.core.blockers import VectorBlocker
     from langres.core.blockers.vector import concat_comparable_fields
     from langres.core.indexes import FAISSIndex
@@ -578,6 +605,7 @@ def evaluate_model_on_benchmark(
         doc_query_cosine = _mean_cosine(doc_vectors, query_vectors)
         _prompt_reached_encoder(recipe, doc_shift, query_shift, doc_query_cosine)
 
+        arm_rows: list[Row] = []
         for k in k_values:
             blocker = VectorBlocker(
                 vector_index=index,
@@ -638,8 +666,9 @@ def evaluate_model_on_benchmark(
                     row.ci_low = interval.lower
                     row.ci_high = interval.upper
                     row.n_clusters = interval.n_clusters
-            rows.append(row)
-        recalls = {r.k: r.candidate_recall for r in rows if r.arm == recipe.arm}
+            arm_rows.append(row)
+        rows.extend(arm_rows)
+        recalls = {r.k: r.candidate_recall for r in arm_rows}
         logger.info(
             "%s | %s | %s: recall@%s=%.4f doc_shift=%.4g query_shift=%.4g cos=%.4f",
             spec.name,
@@ -651,7 +680,7 @@ def evaluate_model_on_benchmark(
             query_shift,
             doc_query_cosine,
         )
-    return rows
+        yield arm_rows
 
 
 # --------------------------------------------------------------------------
@@ -675,6 +704,29 @@ def merge_rows(existing: Iterable[Row], fresh: Iterable[Row]) -> list[Row]:
 def write_rows(rows: Sequence[Row], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(asdict(row)) for row in rows) + "\n")
+
+
+def _cell_complete(
+    existing: Sequence[Row],
+    spec: ModelSpec,
+    benchmark: str,
+    recipes: Sequence[Recipe],
+    k_values: Sequence[int],
+) -> bool:
+    """True when every (arm, k) of this cell is already recorded.
+
+    Resume is deliberately at *cell* granularity, not arm granularity: every
+    arm's delta and interval are computed against the ``none`` arm's vectors and
+    per-record recall, so a partially-resumed cell would have no baseline to
+    compare against. Re-running an incomplete cell is cheap anyway -- the
+    document and query vectors come back from the on-disk embedding cache.
+    """
+    have = {
+        (row.arm, row.k)
+        for row in existing
+        if row.model == spec.name and row.benchmark == benchmark
+    }
+    return all((recipe.arm, k) in have for recipe in recipes for k in k_values)
 
 
 def _fmt(value: float | None, digits: int = 4) -> str:
@@ -797,6 +849,11 @@ def main() -> int:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--render-only", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip (model, benchmark) cells already fully recorded in --rows.",
+    )
     args = parser.parse_args()
 
     if args.render_only:
@@ -809,17 +866,24 @@ def main() -> int:
         if recipes and recipes[0].arm != "none":
             recipes = [next(r for r in spec.recipes if r.arm == "none"), *recipes]
         for benchmark in args.benchmarks:
-            fresh = evaluate_model_on_benchmark(
+            if args.resume and _cell_complete(
+                read_rows(args.rows), spec, benchmark, recipes, args.k
+            ):
+                logger.info("skipping %s | %s -- already complete", spec.name, benchmark)
+                continue
+            for arm_rows in evaluate_model_on_benchmark(
                 spec,
                 benchmark,
                 recipes=recipes,
                 k_values=args.k,
                 cache_dir=args.cache_dir,
-            )
-            rows = merge_rows(read_rows(args.rows), fresh)
-            write_rows(rows, args.rows)
-            args.report.write_text(render_report(rows))
-            logger.info("wrote %d rows -> %s", len(rows), args.rows)
+            ):
+                # Flush after every arm, not every benchmark: the big checkpoints
+                # spend minutes per arm and a crash must not cost the whole cell.
+                rows = merge_rows(read_rows(args.rows), arm_rows)
+                write_rows(rows, args.rows)
+            args.report.write_text(render_report(read_rows(args.rows)))
+            logger.info("wrote rows -> %s", args.rows)
     return 0
 
 
