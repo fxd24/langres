@@ -1085,14 +1085,19 @@ def _spans_zero(row: Row) -> bool:
 
 
 def _on_boundary(row: Row) -> bool:
-    """A testable comparison with a bound resting *exactly* on zero.
+    """An interval that *closes* on zero -- one bound resting exactly there.
 
-    Detected from the stored bound, not from ``p == 0.05``. The p-value hits
-    0.05 only up to float round-off, so an equality test on it counted **none**
-    of the four real boundary cells and printed "0 sit on the boundary" -- a
-    check reporting all-clear because it could not see the thing it was for.
+    Detected from the stored bound rather than from the p-value: an equality
+    test against a computed p is at the mercy of float round-off, and the first
+    version of this classifier used one and reported zero boundary cells over
+    four real ones.
+
+    A *degenerate* comparison is excluded. Its bounds are both exactly zero, so
+    it satisfies the letter of the test, but it is already reported as "no effect
+    to measure" and listing it here again as a near-miss says the opposite of
+    what it is.
     """
-    return row.ci_low == 0.0 or row.ci_high == 0.0
+    return not _is_degenerate(row) and (row.ci_low == 0.0 or row.ci_high == 0.0)
 
 
 def _holm_cell(row: Row, verdict: tuple[float | None, bool] | None) -> str:
@@ -1412,14 +1417,21 @@ def render_report(rows: Sequence[Row]) -> str:
         "Found by automated review on PR #252.)"
     )
     add("")
+    sizes = sorted(
+        {sum(1 for key in verdicts if key[:2] == family) for family in {k[:2] for k in verdicts}}
+    )
+    thresholds = (
+        " / ".join(f"{ALPHA / (sizes[0] - i):.4g}" for i in range(sizes[0])) if sizes else "-"
+    )
     add(
         "**Every measured benchmark stays in its family, including the ones an arm "
         "left untouched** (`p = 1`). Dropping them would make the Holm denominator "
         "depend on the observed result -- a family of 3 or of 4 according to whether "
         "an arm happened to move the saturated benchmark -- and a data-dependent "
-        "family size is invalid however well the p-values are calibrated. So every "
-        "family here has **m = 4** and the thresholds are 0.0125 / 0.0167 / 0.025 / "
-        "0.05. (Also found by automated review on PR #252.)"
+        "family size is invalid however well the p-values are calibrated. Family "
+        f"sizes here: **m = {', '.join(str(size) for size in sizes)}**"
+        + (f", so the thresholds are {thresholds}." if len(sizes) == 1 else ".")
+        + " (Also found by automated review on PR #252.)"
     )
     add("")
 
