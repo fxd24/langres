@@ -25,7 +25,7 @@ except ImportError:
     RateLimitError = Exception
 
 from langres.clients.openrouter import parse_openrouter_billing
-from langres.core.model_ref import ModelRef, backend_for, normalize_model_ref, to_config
+from langres.core.model_ref import backend_for, normalize_model_ref, to_config
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
 from langres.core.named_callable import resolve_named

@@ -15,7 +15,7 @@ from typing import Any, Literal, cast
 
 from langres._version import __version__
 from langres.benchmarks.runner import evaluate_execution_result
-from langres.core.op import ExecutionEvent, ExecutionResult
+from langres.core.op import ExecutionResult
 from langres.core.model_ref import normalize_model_ref
 from langres.core.pairs import PairRow
 from langres.core.resolver import ERModel

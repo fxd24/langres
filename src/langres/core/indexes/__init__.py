@@ -65,7 +65,10 @@ if TYPE_CHECKING:
         conforms = hybrid  # type: ignore[assignment]
         conforms = hybrid_fake  # type: ignore[assignment]
         conforms = reranking  # type: ignore[assignment]
-        conforms = reranking_fake  # type: ignore[assignment]
+        # F841 ("assigned but never used") is exactly what this block is: the
+        # assignments exist so mypy checks assignability to VectorIndex. Never
+        # reading `conforms` is the design, not an oversight.
+        conforms = reranking_fake  # type: ignore[assignment]  # noqa: F841
 
 
 __all__ = [

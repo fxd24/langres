@@ -10,10 +10,8 @@ See ``langres.core._exports`` for the fragment contract.
 from typing import TYPE_CHECKING
 
 from langres.core.fit import SupervisedFitMixin, UnsupervisedFitMixin
-from langres.core.fit_report import FitReport
 from langres.curation.harvest import align_pairs
 from langres.training.fit_report import FitReport
-from langres.core.harvest import align_pairs
 from langres.core.methods_api import Method, UnsupportedMethodKind
 from langres.training.methods_calibrate import Isotonic, Platt
 from langres.training.methods_prompt import Bootstrap, GEPA, MIPRO
@@ -21,7 +19,8 @@ from langres.training.methods_prompt import Bootstrap, GEPA, MIPRO
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy name visible to `mypy --strict`
     # without pulling scikit-learn into a bare `import langres`.
-    from langres.training.calibration import Calibrator
+    # The F401 below is deliberate: re-exported lazily via LAZY_SYMBOLS.
+    from langres.training.calibration import Calibrator  # noqa: F401
 
 __all__ = [
     "align_pairs",

@@ -34,8 +34,9 @@ if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling the eval-report/benchmark modules into a bare
     # `import langres`.
-    from langres.data.benchmark import gold_pairs_from_clusters
-    from langres.report.eval_report import EvalReport
+    # The F401s below are deliberate: re-exported lazily via LAZY_SYMBOLS.
+    from langres.data.benchmark import gold_pairs_from_clusters  # noqa: F401
+    from langres.report.eval_report import EvalReport  # noqa: F401
 
 __all__ = [
     "Correction",
