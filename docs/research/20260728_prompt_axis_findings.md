@@ -398,9 +398,12 @@ to be sufficient in either direction, which you can only learn by measuring.
 
 > **This is not "prompts do nothing to e5" — read the sign.** The prompt axis
 > moves this checkpoint hard; it only ever moves it *down*. e5's `er_symmetric`
-> arm — our own ER sentence on both sides — is the **largest negative effect any
-> model suffers in the sweep** (`−0.1038` on `wdc_computers`, `−0.0436` on
-> `abt_buy`), and both survive the correction comfortably. So the honest summary
+> arm — our own ER sentence on both sides — costs it `−0.1038` on
+> `wdc_computers` and `−0.0436` on `abt_buy`, and both survive the correction
+> comfortably. That is the **worst any checkpoint fares under the shared ER
+> sentence** (the others: Qwen3 `−0.0907`, bge `−0.0775`, MiniLM `−0.0632`,
+> Gemma `+0.0004`) — *not* the largest harm in the sweep, which is Gemma's
+> documented `clustering` template at `−0.3183`. So the honest summary
 > for e5 is: **its two documented recipes buy nothing, and a plausible
 > hand-written one costs a tenth of its recall.** "The prefix does nothing" and
 > "your own prose actively hurts" are different findings, and the second is the
