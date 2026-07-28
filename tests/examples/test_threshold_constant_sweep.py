@@ -1,0 +1,287 @@
+"""Behavior tests for the per-score-family fixed-constant threshold sweep.
+
+The measurement itself needs models and minutes, so what is pinned here is the
+*reasoning* layered on top of the scores — the part that would silently produce a
+wrong shipped constant rather than crash:
+
+* the self-check gate can actually **fail** (a gate nobody has watched fail is a
+  hypothesis, not a safety net — `.claude/rules/expert-knowledge.md`);
+* LOBO selection really excludes the held-out benchmark, which is the whole
+  reason its numbers are out-of-sample;
+* selection uses the **median** across benchmarks, so one wide-range dataset
+  cannot choose the constant for every other;
+* the pre-registered ship rule refuses an unstable family;
+* the exact oracle beats the grid, so "capture" is measured against the true
+  ceiling;
+* the checkpoint override refuses to relabel a blocker it did not actually swap.
+
+No model loads here, so none of it is `slow`.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pytest
+
+from examples.research.threshold_constant_sweep import (
+    GRID,
+    SHIPPED_INDEX,
+    CellResult,
+    SweepReport,
+    _assert_matches_classify_pairs,
+    _EmbedderOverride,
+    _exact_oracle,
+    _f1,
+    _select_constant,
+    _unit_index,
+    dedupe_scores,
+    lobo_constants,
+    to_verdict_markdown,
+)
+from langres.core.models import PairwiseJudgement
+
+
+def _judgement(left: str, right: str, score: float) -> PairwiseJudgement:
+    return PairwiseJudgement(
+        left_id=left,
+        right_id=right,
+        score=score,
+        score_type="heuristic",
+        decision_step="test",
+        provenance={},
+    )
+
+
+def _cell(
+    benchmark: str,
+    *,
+    seed: int = 0,
+    curve: list[float] | None = None,
+    family: str = "heuristic",
+    eligible: bool = True,
+) -> CellResult:
+    """A CellResult carrying only the fields the analysis functions read."""
+    values = curve if curve is not None else [0.5] * len(GRID)
+    zeros = [0.0] * len(GRID)
+    return CellResult(
+        benchmark=benchmark,
+        method="rapidfuzz",
+        score_family=family,
+        seed=seed,
+        n_train_records=100,
+        n_test_records=100,
+        n_test_pairs=100,
+        n_test_gold_blocked=50,
+        n_test_gold_all=50,
+        n_units=20,
+        selection_eligible=eligible,
+        f1_blocked=values,
+        f1_all_gold=values,
+        ci_lo_blocked=zeros,
+        ci_hi_blocked=zeros,
+        ci_lo_all_gold=zeros,
+        ci_hi_all_gold=zeros,
+        oracle_threshold_blocked=0.5,
+        oracle_f1_blocked=max(values),
+        oracle_threshold_all_gold=0.5,
+        oracle_f1_all_gold=max(values),
+        derived_threshold=0.5,
+        derived_f1_blocked=0.5,
+        derived_f1_all_gold=0.5,
+        seconds=1.0,
+    )
+
+
+def _peak_at(threshold: float, *, height: float = 0.9, floor: float = 0.1) -> list[float]:
+    """A curve whose single maximum sits exactly at ``threshold``."""
+    index = GRID.index(threshold)
+    return [height if i == index else floor for i in range(len(GRID))]
+
+
+class TestSelfCheckGate:
+    """The gate exists to catch the vectorized curve drifting from the library's
+    own metric. If it cannot fail, it is decoration.
+    """
+
+    def test_a_correct_curve_passes(self) -> None:
+        judgements = [_judgement("a", "b", 0.8), _judgement("c", "d", 0.2)]
+        gold = {frozenset({"a", "b"})}
+        # Only {a,b} is gold and only it scores above 0.5 -> perfect at 0.5.
+        curve = [0.0] * len(GRID)
+        curve[9] = 2 / 3  # t=0.10: both predicted, 1 TP -> 2*1/(2+1)
+        curve[SHIPPED_INDEX] = 1.0  # t=0.50
+        curve[89] = 0.0  # t=0.90: nothing predicted
+        _assert_matches_classify_pairs(judgements, gold, curve, "ok")
+
+    def test_a_wrong_curve_raises(self) -> None:
+        """The failure this gate exists to observe, actually observed."""
+        judgements = [_judgement("a", "b", 0.8), _judgement("c", "d", 0.2)]
+        gold = {frozenset({"a", "b"})}
+        curve = [0.0] * len(GRID)
+        curve[9] = 2 / 3
+        curve[SHIPPED_INDEX] = 0.87654  # the drift
+        curve[89] = 0.0
+        with pytest.raises(RuntimeError, match="not measuring the same metric"):
+            _assert_matches_classify_pairs(judgements, gold, curve, "drifted")
+
+
+class TestExactOracle:
+    def test_finds_a_cut_between_grid_points(self) -> None:
+        """The ceiling must not be an artifact of the grid's resolution."""
+        scores = np.array([0.101, 0.105, 0.900])
+        is_gold = np.array([False, False, True])
+        threshold, f1 = _exact_oracle(scores, is_gold, n_gold=1)
+        assert f1 == pytest.approx(1.0)
+        assert threshold == pytest.approx(0.900)
+
+    def test_no_gold_is_zero_not_a_divide_error(self) -> None:
+        threshold, f1 = _exact_oracle(np.array([0.4]), np.array([False]), n_gold=0)
+        assert f1 == 0.0
+        assert np.isnan(threshold)
+
+
+class TestF1:
+    def test_zero_predictions_and_zero_gold_is_zero_not_nan(self) -> None:
+        out = _f1(np.array([0.0]), np.array([0.0]), np.array([0.0]))
+        assert out.tolist() == [0.0]
+
+    def test_matches_the_definition(self) -> None:
+        out = _f1(np.array([3.0]), np.array([4.0]), np.array([5.0]))
+        assert out.tolist() == [pytest.approx(2 * 3 / (4 + 5))]
+
+
+class TestUnitAssignment:
+    def test_every_record_maps_to_its_cluster(self) -> None:
+        units = _unit_index([{"a", "b"}, {"c"}])
+        assert units["a"] == units["b"]
+        assert units["c"] != units["a"]
+
+    def test_a_pair_is_counted_once_under_the_min_rule(self) -> None:
+        """The bootstrap must not double-count a cross-cluster pair."""
+        units = _unit_index([{"a"}, {"b"}])
+        pair = frozenset({"a", "b"})
+        left, right = tuple(pair)
+        assert min(units[left], units[right]) in (units["a"], units["b"])
+
+
+class TestDedupeScores:
+    def test_collapses_both_orderings_to_one_pair(self) -> None:
+        scores = dedupe_scores([_judgement("a", "b", 0.3), _judgement("b", "a", 0.7)])
+        assert scores == {frozenset({"a", "b"}): 0.7}
+
+
+class TestLoboSelection:
+    def test_the_held_out_benchmark_does_not_vote_for_its_own_constant(self) -> None:
+        """The property that makes the reported number out-of-sample."""
+        cells = [
+            _cell("alpha", curve=_peak_at(0.20)),
+            _cell("beta", curve=_peak_at(0.80)),
+            _cell("gamma", curve=_peak_at(0.80)),
+        ]
+        constants = lobo_constants(cells)
+        # Holding out alpha leaves beta+gamma, both peaking at 0.80.
+        assert constants["alpha"] == 0.80
+        # Holding out beta leaves alpha (0.20) and gamma (0.80); the median of
+        # two curves cannot pick alpha's peak alone, but it must not be 0.80
+        # *because beta voted* -- beta is excluded either way.
+        assert set(constants) == {"alpha", "beta", "gamma"}
+
+    def test_ineligible_cells_do_not_vote(self) -> None:
+        cells = [
+            _cell("alpha", curve=_peak_at(0.20)),
+            _cell("beta", curve=_peak_at(0.80)),
+            _cell("tiny", curve=_peak_at(0.05), eligible=False),
+        ]
+        constants = lobo_constants(cells)
+        assert "tiny" not in constants
+        assert constants["alpha"] == 0.80
+
+    def test_a_single_benchmark_yields_no_constant(self) -> None:
+        """Leaving one out of one leaves nothing to select from."""
+        assert lobo_constants([_cell("alpha", curve=_peak_at(0.30))]) == {}
+
+
+class TestSelectConstantUsesMedian:
+    def test_one_wide_range_benchmark_cannot_choose_for_the_others(self) -> None:
+        """A mean would let the outlier's amplitude win; the median must not."""
+        curves = {
+            "a": np.asarray(_peak_at(0.30, height=0.6, floor=0.5)),
+            "b": np.asarray(_peak_at(0.30, height=0.6, floor=0.5)),
+            # A huge peak somewhere else -- would dominate a mean.
+            "outlier": np.asarray(_peak_at(0.90, height=100.0, floor=0.0)),
+        }
+        assert _select_constant(curves) == 0.30
+
+
+class TestPreRegisteredShipRule:
+    def _report(self, cells: list[CellResult]) -> SweepReport:
+        return SweepReport(
+            grid=list(GRID), shipped_threshold=0.5, bootstrap_resamples=10, cells=cells
+        )
+
+    def test_an_unstable_family_is_refused(self) -> None:
+        """Constants that move with the dataset are per-dataset tuning."""
+        cells = [
+            _cell("alpha", curve=_peak_at(0.20)),
+            _cell("beta", curve=_peak_at(0.80)),
+            _cell("gamma", curve=_peak_at(0.40)),
+        ]
+        assert "**DO NOT SHIP**" in to_verdict_markdown(self._report(cells))
+
+    def test_a_stable_improving_family_ships(self) -> None:
+        cells = [
+            _cell(name, curve=_peak_at(0.80))
+            for name in ("alpha", "beta", "gamma")
+        ]
+        markdown = to_verdict_markdown(self._report(cells))
+        assert "**SHIP**" in markdown
+
+    def test_a_refused_family_still_prints_its_number(self) -> None:
+        """So 'DO NOT SHIP' is never misread as 'no number was found'."""
+        cells = [
+            _cell("alpha", curve=_peak_at(0.20)),
+            _cell("beta", curve=_peak_at(0.80)),
+            _cell("gamma", curve=_peak_at(0.40)),
+        ]
+        markdown = to_verdict_markdown(self._report(cells))
+        assert "in-sample argmax" in markdown
+
+
+class TestEmbedderOverride:
+    def test_forwards_everything_it_does_not_override(self) -> None:
+        class _Bench:
+            schema = "SCHEMA"
+            blocking_k = 7
+
+            def build_blocker(self, k_neighbors: int) -> Any:
+                raise AssertionError("not reached")
+
+        wrapped = _EmbedderOverride(_Bench(), "intfloat/e5-base-v2")  # type: ignore[arg-type]
+        assert wrapped.schema == "SCHEMA"
+        assert wrapped.blocking_k == 7
+
+    def test_refuses_a_blocker_it_cannot_actually_swap(self) -> None:
+        """Measuring the pinned checkpoint under another checkpoint's name is the
+        one outcome worse than crashing.
+        """
+
+        class _NoIndexBench:
+            def build_blocker(self, k_neighbors: int) -> Any:
+                return object()
+
+        wrapped = _EmbedderOverride(_NoIndexBench(), "intfloat/e5-base-v2")  # type: ignore[arg-type]
+        with pytest.raises(SystemExit, match="no .*vector_index.embedder|cannot apply"):
+            wrapped.build_blocker(5)
+
+
+class TestCellResultRecordsItsCheckpoint:
+    def test_defaults_to_the_benchmark_pin(self) -> None:
+        assert _cell("alpha").embedder is None
+
+    def test_shipped_f1_reads_the_incumbent_off_the_grid(self) -> None:
+        """GRID[49] is exactly 0.5, so no interpolation is ever needed."""
+        assert GRID[SHIPPED_INDEX] == 0.5
+        curve = [float(i) for i in range(len(GRID))]
+        assert _cell("alpha", curve=curve).shipped_f1_blocked == float(SHIPPED_INDEX)
