@@ -252,12 +252,10 @@ makes it safe** — it declined 7 times and was right 7 times.
 
 ### 3.2 "Flip the default" is not a one-character change
 
-### 3.2 "Flip the default" is not a one-character change
-
 Independently of the measurement, `derive_threshold: bool = False` →
 `bool = True` cannot be done as written. The flag is not a preference read late;
 it is a **precondition checked early**, and six documented paths raise the moment
-it is on. Each is a code read, not a guess:
+it is on:
 
 | call shape | today | with `derive_threshold=True` | evidence |
 |---|---|---|---|
