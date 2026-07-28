@@ -128,11 +128,30 @@ three:
 
 @@LADDER@@
 
-## 7. Verdict
+## 7. Does a `sim_cos` constant even mean anything? (the checkpoint test)
+
+A `heuristic` cut is a cut on rapidfuzz's ratio, which is fixed. A `sim_cos` cut
+is a cut on a **cosine scale**, and the scale belongs to the *encoder*, not to
+the family tag — two models can both emit "cosine similarity" and disagree about
+what `0.9` means.
+
+This matters concretely here, and it is easy to miss: every benchmark loader in
+this repo pins `all-MiniLM-L6-v2` for its blocker, but `DEFAULT_EMBEDDING_MODEL`
+moved to `intfloat/e5-base-v2` (the embedder-ladder PR). So the constant §4
+selects is a constant **for MiniLM cosine**, while the number it would be written
+into is read by users running e5. Assuming it transfers is exactly the
+"documented prior treated as a measured finding" error this study was written to
+avoid, so it is measured instead: the identical protocol, re-run with the
+blocker re-pointed at the shipped default (`--embedder`), and the baseline's
+constant graded on those cells.
+
+@@TRANSFER@@
+
+## 8. Verdict
 
 @@VERDICT@@
 
-## 8. What was measured vs. what was inferred
+## 9. What was measured vs. what was inferred
 
 **Measured** (this artifact, held-out, multi-seed, with intervals):
 
@@ -142,6 +161,9 @@ three:
 - The LOBO-selected constant's Δ-F1 against `0.5` per benchmark and seed, with
   95% paired cluster-bootstrap intervals.
 - The stability of that selection under dropping one dataset.
+- Whether a `sim_cos` constant survives a change of embedding checkpoint (§7),
+  measured on `intfloat/e5-base-v2` — the library's own default — under the same
+  protocol.
 
 **Inferred, not measured** — flagged because it would be easy to read this
 document as covering it:
@@ -159,7 +181,7 @@ document as covering it:
   scores is not thereby justified on cross-encoder scores. Called out in the
   class docstring.
 
-## 9. Reproducing
+## 10. Reproducing
 
 ```bash
 OMP_NUM_THREADS=1 uv run --env-file .env python \

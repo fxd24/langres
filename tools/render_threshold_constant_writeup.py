@@ -35,22 +35,54 @@ SECTIONS: dict[str, str] = {
     "@@VERDICT@@": "Verdict against the pre-registered rule:",
 }
 
+#: Filled from a SECOND artifact (``--embedder``), not from ``print_tables``.
+TRANSFER_MARKER = "@@TRANSFER@@"
+
 REPO = Path(__file__).resolve().parent.parent
 HARNESS = REPO / "examples/research/threshold_constant_sweep.py"
 ARTIFACT = REPO / "examples/research/results/threshold_constant_sweep.json"
+VARIANT = REPO / "examples/research/results/threshold_constant_sweep.e5.json"
 BODY = REPO / "docs/research/_20260728_threshold_constant.body.md"
 OUT = REPO / "docs/research/20260728_threshold_constant.md"
 
 
-def render(artifact: Path) -> str:
-    """Return the harness's own table output for ``artifact``."""
+def _harness(*args: str) -> str:
+    """Run the harness with ``args`` and return its stdout."""
     completed = subprocess.run(
-        [sys.executable, str(HARNESS), "--render", str(artifact)],
+        [sys.executable, str(HARNESS), *args],
         capture_output=True,
         text=True,
         check=True,
     )
     return completed.stdout
+
+
+def render(artifact: Path) -> str:
+    """Return the harness's own table output for ``artifact``."""
+    return _harness("--render", str(artifact))
+
+
+def render_transfer(baseline: Path, variant: Path) -> str:
+    """Return the checkpoint-transfer table, minus its own heading line.
+
+    Raises:
+        SystemExit: If the variant artifact is absent. Silently dropping the
+            section would let the write-up claim a family-wide constant while the
+            evidence that it is checkpoint-specific goes missing -- the exact
+            failure this section exists to prevent.
+    """
+    if not variant.exists():
+        raise SystemExit(
+            f"{variant} is missing, so the checkpoint-transfer section cannot be "
+            "generated. Produce it with:\n"
+            "  uv run --env-file .env python examples/research/threshold_constant_sweep.py \\\n"
+            "      --methods embedding_cosine --embedder intfloat/e5-base-v2 \\\n"
+            f"      --out {variant}\n"
+            "Refusing to emit a write-up that quietly omits it."
+        )
+    body = _harness("--compare", str(baseline), str(variant)).splitlines()
+    # Drop the harness's own heading; the body supplies the section heading.
+    return "\n".join(body[1:]).strip("\n")
 
 
 def split_sections(rendered: str) -> dict[str, str]:
@@ -80,13 +112,15 @@ def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, default=ARTIFACT)
+    parser.add_argument("--variant", type=Path, default=VARIANT)
     parser.add_argument("--body", type=Path, default=BODY)
     parser.add_argument("--out", type=Path, default=OUT)
     args = parser.parse_args()
 
     blocks = split_sections(render(args.artifact))
+    blocks[TRANSFER_MARKER] = render_transfer(args.artifact, args.variant)
     text = args.body.read_text()
-    for marker, heading in SECTIONS.items():
+    for marker, heading in {**SECTIONS, TRANSFER_MARKER: TRANSFER_MARKER}.items():
         if marker not in text:
             raise RuntimeError(f"{args.body} has no {marker} to fill")
         text = text.replace(marker, blocks[heading])

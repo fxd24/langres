@@ -997,6 +997,72 @@ def to_verdict_markdown(report: SweepReport) -> str:
     return "\n".join(lines)
 
 
+def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
+    """Does a constant selected on ONE checkpoint still help on ANOTHER?
+
+    ``sim_cos`` is a family tag over cosine scores, but the *scale* belongs to the
+    encoder — two models can both emit "cosine similarity" and disagree about
+    what 0.9 means. So the constant this study would ship is selected on the
+    portfolio's pinned ``all-MiniLM-L6-v2`` while the library's own
+    ``DEFAULT_EMBEDDING_MODEL`` is ``intfloat/e5-base-v2``. This grades the
+    baseline's constant on the variant's cells, which is the question a user of
+    the shipped default is actually asking.
+
+    No re-measurement is needed: the variant artifact's stored interval is
+    already the paired cluster-bootstrap CI on ``F1(t) - F1(0.5)``, which is
+    exactly the quantity that decides whether shipping the constant helps or
+    hurts that user.
+
+    Args:
+        baseline: The artifact the constant is selected FROM.
+        variant: The artifact it is graded ON (a different checkpoint).
+
+    Returns:
+        A markdown table, one row per variant cell, plus a per-family verdict.
+    """
+    lines = [
+        "| family | benchmark | seed | baseline t | F1@0.50 | F1@baseline t | Δ | 95% CI | "
+        "variant's own argmax |",
+        "|" + "---|" * 9,
+    ]
+    verdicts: list[str] = []
+    for family in sorted({c.score_family for c in variant.cells}):
+        base_eligible = [
+            c for c in baseline.cells if c.score_family == family and c.selection_eligible
+        ]
+        var_cells = [c for c in variant.cells if c.score_family == family]
+        var_eligible = [c for c in var_cells if c.selection_eligible]
+        if not base_eligible or not var_eligible:
+            continue
+        constant = _select_constant(_mean_by_benchmark(base_eligible))
+        variant_argmax = _select_constant(_mean_by_benchmark(var_eligible))
+        index = GRID.index(constant)
+        harmed = 0
+        for cell in var_cells:
+            delta = cell.f1_blocked[index] - cell.shipped_f1_blocked
+            if cell.ci_hi_blocked[index] < 0:
+                harmed += 1
+            lines.append(
+                f"| `{family}` | {cell.benchmark} | {cell.seed} | {constant:.2f} | "
+                f"{cell.shipped_f1_blocked:.4f} | {cell.f1_blocked[index]:.4f} | "
+                f"{delta:+.4f} | [{cell.ci_lo_blocked[index]:+.4f}, "
+                f"{cell.ci_hi_blocked[index]:+.4f}] | {variant_argmax:.2f} |"
+            )
+        moved = abs(variant_argmax - constant)
+        verdicts.append(
+            f"- `{family}`: the argmax moves **{moved:.2f}** across checkpoints "
+            f"({constant:.2f} -> {variant_argmax:.2f}); the baseline constant is "
+            f"significantly WORSE than 0.5 on {harmed} of {len(var_cells)} variant "
+            f"cells. A move above the pre-registered {SHIP_MAX_LOBO_SPREAD:.2f} "
+            "stability bound means the family tag is too coarse to carry one number."
+        )
+    checkpoints = sorted({c.embedder or "all-MiniLM-L6-v2 (pin)" for c in variant.cells})
+    lines.append("")
+    lines.append(f"Variant checkpoint(s): {', '.join(checkpoints)}.")
+    lines.extend(["", *verdicts])
+    return "\n".join(lines)
+
+
 def to_families_markdown() -> str:
     """Every registered score family, and whether this study can speak to it."""
     from langres.core.method_registry import list_methods
@@ -1216,8 +1282,25 @@ def main() -> None:
         default=None,
         help="print every table from an EXISTING artifact and exit -- measures nothing",
     )
+    parser.add_argument(
+        "--compare",
+        nargs=2,
+        type=Path,
+        default=None,
+        metavar=("BASELINE", "VARIANT"),
+        help=(
+            "print ONLY the checkpoint-transfer table: grade the constant selected "
+            "on BASELINE against VARIANT's cells (measures nothing). Use with an "
+            "artifact produced by --embedder"
+        ),
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.compare is not None:
+        print("Does the constant transfer across embedding checkpoints?")
+        print(to_transfer_markdown(read_report(args.compare[0]), read_report(args.compare[1])))
+        return
 
     if args.render is not None:
         print_tables(read_report(args.render))
