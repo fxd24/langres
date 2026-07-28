@@ -140,11 +140,11 @@ def main():
 
     # Score distribution analysis
     logger.info("\n📈 Score Distribution:")
-    logger.info(f"  True match scores:")
+    logger.info("  True match scores:")
     logger.info(f"    Mean:    {report.scores.true_mean:.3f}")
     logger.info(f"    Median:  {report.scores.true_median:.3f}")
     logger.info(f"    Std:     {report.scores.true_std:.3f}")
-    logger.info(f"  False candidate scores:")
+    logger.info("  False candidate scores:")
     logger.info(f"    Mean:    {report.scores.false_mean:.3f}")
     logger.info(f"    Median:  {report.scores.false_median:.3f}")
     logger.info(f"    Std:     {report.scores.false_std:.3f}")

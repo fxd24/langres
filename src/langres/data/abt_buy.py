@@ -29,7 +29,6 @@ as Fodors-Zagat and Amazon-Google.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, computed_field

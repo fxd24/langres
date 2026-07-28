@@ -77,7 +77,11 @@ from langres.core.resolver import Resolver
 # leaf (no heavy deps) so name-listing (``data.registry.list_methods``) and
 # dispatch (this module) share one source of truth. Re-exported here so the
 # public ``langres.methods.ALL_METHODS`` etc. stay stable.
-from langres._method_names import ALL_METHODS, LLM_METHODS, ZERO_SPEND_METHODS
+from langres._method_names import (  # noqa: F401 -- deliberate public re-export
+    ALL_METHODS,
+    LLM_METHODS,
+    ZERO_SPEND_METHODS,
+)
 
 #: Default LLM model id for the LLM/cascade methods -- an alias of the one
 #: shared constant (``clients.openrouter.DEFAULT_OPENROUTER_MODEL``) so the

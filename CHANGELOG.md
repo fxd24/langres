@@ -756,8 +756,83 @@ changing the default model hard."* Design note:
   `author/method` namespacing (model ids keep their slashes in the separate
   `model=` kwarg).
 
+### CI & supply-chain maintenance
+
+- **Every GitHub Action is now hash-pinned to an exact commit, and every pin
+  names its exact version.** `test.yml`'s `test-finetune` job still used
+  floating `actions/checkout@v7` / `astral-sh/setup-uv@v7` (OpenSSF Scorecard
+  `PinnedDependencies`). The `# v7`-style comments on the hash-pinned steps were
+  their own hazard: they read as current while `actions/checkout` had moved
+  v7.0.0 -> v7.0.1 underneath them, so the comments now carry exact versions.
+- **Workflows run with a least-privilege `GITHUB_TOKEN`.** `lint`, `publish`,
+  `security` and `test` declared no top-level `permissions:`, and the
+  repository default is `write` — every job in them held a read-write token it
+  never used. All four are now `contents: read` (Scorecard `TokenPermissions`,
+  4x high). `publish.yml`'s job-level block (`id-token: write` for trusted
+  publishing) replaces the top-level one wholesale and is unaffected.
+- **Action versions rolled forward**, superseding Dependabot #231-#234:
+  `github/codeql-action` v4.37.0 -> v4.37.3, `actions/setup-python` v6 ->
+  v7.0.0, `actions/checkout` v7.0.0 -> v7.0.1, `astral-sh/setup-uv` v8.3.2 ->
+  v9.0.0, `ossf/scorecard-action` v2.4.3 -> v2.4.4, and `uv` itself 0.11.28 ->
+  0.11.32 (`test.yml` had drifted to 0.11.24 in one job).
+  `setup-uv` v9's one breaking change — `prune-cache` defaulting to false — is
+  explicitly held at the pre-v9 `true` at all seven cache sites, so the bump
+  changes no CI behaviour.
+- **The CodeQL jobs are green again.** `github/codeql-action` refuses to run
+  when its steps disagree on version (`Loaded a configuration file for version
+  '4.37.3', but running version '4.37.0'`). Dependabot raises one PR per action
+  path, so bumping `init` (#231) or `analyze` (#233) alone could only ever be
+  red; the three steps are moved together here.
+- **`main` is now a protected branch.** It previously had no branch protection
+  and no rulesets at all, so every check in this repo was advisory -- including
+  the coverage gates. Merging now requires a pull request and five green
+  checks: `lint`, `test (3.13)`, `test-core-only`, `docs-clean-install` and
+  `Analyze (python)`. Force-pushes and branch deletion are blocked.
+  Deliberately excluded from the required set, because they do not report on
+  every PR and a required check that never reports blocks the merge forever:
+  `test-full` (`if: github.event_name != 'pull_request'`), `build`/`deploy`
+  (path-filtered to docs changes), `Sourcery review` (skips when its weekly
+  diff quota is exhausted) and `test-finetune` (`continue-on-error` by design).
+  No approval count is required -- GitHub does not permit self-approval, so on
+  a single-maintainer repo that would block every merge rather than review it.
+- **Dependency quarantine rolled 2026-07-08 -> 2026-07-21.** Since `uv.lock` is
+  gitignored, `exclude-newer` *is* the reproducibility pin and CI re-resolves on
+  every run, so this is the whole of the Python-side update: 47 packages, no
+  major bumps, nothing added or removed. Verified against the new resolve —
+  ruff, `ruff format --check`, `mypy src` (2.3.0) and 4557 tests all pass.
+
 ### Fixed
 
+- **Retracted a fabricated `~12.5x` speedup claim on `LLMMatcher.forward_async`.**
+  The docstring advertised `~4 requests/second` sequential vs `~50
+  requests/second` async. Neither figure survives contact with the code: the
+  `_RateLimiter` is constructed *only* inside `forward_async`, so the sequential
+  `forward` has no RPM cap at all (its rate is per-call latency), while
+  `forward_async`'s own default `rpm_limit=250` caps it at 250 RPM = **4.17
+  req/s** — it cannot reach 50 req/s, and 4.17 was the number being quoted as
+  the *baseline*. `12.5` was simply `50/4`. The docstring now states what is
+  true — async overlaps request latency, and the rate limiter is the binding
+  ceiling — with **no** replacement ratio, because none has been measured.
+  Anyone who sized a job on the old number should re-derive it from
+  `rpm_limit`. The same claim is retracted in
+  `examples/research/phase2_full_pipeline.py`, whose ETA also divided by
+  requests-per-*second* while reporting minutes (60x under).
+- **Ruff was enforcing almost nothing.** `[tool.ruff.lint] select` *replaces*
+  ruff's default rule set rather than extending it, so listing only the two
+  print bans silently disabled `E4`/`E7`/`E9`/`F` — all of pyflakes included —
+  and `ruff check .` passed on 167 real violations. Now `extend-select`. The
+  latent bug this surfaced in shipped code: `core/_exports/_flywheel.py` and
+  `core/_exports/_training.py` each imported the same names **twice** — once
+  from the canonical module and once from a `# TEMPORARY` W2 back-compat shim
+  (`langres.core.review` / `.judgement_log` / `.harvest` / `.fit_report`).
+  **Nothing resolved differently at runtime** — the shims re-export, so every
+  duplicated binding is `is`-identical, and the two pairs happened to shadow in
+  *opposite* directions (the shim won for `JudgementLog`/`LoggingMatcher`/
+  `align_pairs`, the canonical module won for `ReviewItem`/`ReviewQueue`/
+  `select_for_review`/`FitReport`). The hazard was the pending shim deletion,
+  not current behaviour: importing those shim modules at all means deleting
+  them raises `ImportError` and breaks `langres.core` at import time. Only the
+  canonical imports remain.
 - **`langres.__version__` no longer drifts from the released version.** It was a
   hardcoded string (still `"0.2.0"` in the published 0.3.0 wheel, while pip
   metadata correctly said 0.3.0); it now resolves from the installed package

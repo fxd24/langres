@@ -12,7 +12,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_initialization(self):
         """Test BlockerOptimizer initializes with correct parameters."""
-        objective = lambda trial, params: {"value": params["k_neighbors"] * 0.1}
+
+        def objective(trial, params):
+            return {"value": params["k_neighbors"] * 0.1}
+
         search_space = {
             "embedding_model": ["model-a", "model-b"],
             "k_neighbors": (5, 50),
@@ -68,10 +71,12 @@ class TestBlockerOptimizer:
     def test_blocker_optimizer_categorical_parameter(self):
         """Test optimizer suggests categorical parameters correctly."""
 
-        objective = lambda trial, params: {"value": 1.0}
+        def objective(trial, params):
+            return {"value": 1.0}
+
         search_space = {"embedding_model": ["model-a", "model-b", "model-c"]}
 
-        with patch("langres.autoresearch.blocker_optimizer.optuna") as mock_optuna:
+        with patch("langres.autoresearch.blocker_optimizer.optuna"):
             optimizer = BlockerOptimizer(
                 objective_fn=objective, search_space=search_space, n_trials=1
             )
@@ -81,7 +86,7 @@ class TestBlockerOptimizer:
             mock_trial.suggest_categorical.return_value = "model-a"
 
             # Call objective wrapper
-            result = optimizer._objective_wrapper(mock_trial)
+            optimizer._objective_wrapper(mock_trial)
 
             # Verify categorical suggestion called
             mock_trial.suggest_categorical.assert_called_once_with(
@@ -90,7 +95,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_integer_parameter(self):
         """Test optimizer suggests integer parameters correctly."""
-        objective = lambda trial, params: {"value": 1.0}
+
+        def objective(trial, params):
+            return {"value": 1.0}
+
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.autoresearch.blocker_optimizer.optuna"):
@@ -103,14 +111,17 @@ class TestBlockerOptimizer:
             mock_trial.suggest_int.return_value = 20
 
             # Call objective wrapper
-            result = optimizer._objective_wrapper(mock_trial)
+            optimizer._objective_wrapper(mock_trial)
 
             # Verify integer suggestion called
             mock_trial.suggest_int.assert_called_once_with("k_neighbors", 5, 50)
 
     def test_blocker_optimizer_mixed_parameters(self):
         """Test optimizer with both categorical and integer parameters."""
-        objective = lambda trial, params: {"value": params["k_neighbors"] * 0.1}
+
+        def objective(trial, params):
+            return {"value": params["k_neighbors"] * 0.1}
+
         search_space = {
             "embedding_model": ["model-a", "model-b"],
             "k_neighbors": (5, 50),
@@ -137,7 +148,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_direction_maximize(self):
         """Test optimizer with direction='maximize'."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
+
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.autoresearch.blocker_optimizer.optuna") as mock_optuna:
@@ -158,7 +172,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_direction_minimize(self):
         """Test optimizer with direction='minimize'."""
-        objective = lambda trial, params: {"value": 0.15}
+
+        def objective(trial, params):
+            return {"value": 0.15}
+
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.autoresearch.blocker_optimizer.optuna") as mock_optuna:
@@ -179,7 +196,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_wandb_integration(self):
         """Test optimizer integrates with wandb callback."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
+
         search_space = {"k_neighbors": (5, 50)}
 
         wandb_kwargs = {"project": "test-project", "entity": "test-team"}
@@ -212,7 +232,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_without_wandb_kwargs(self):
         """Test optimizer without wandb integration."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
+
         search_space = {"k_neighbors": (5, 50)}
 
         with patch("langres.autoresearch.blocker_optimizer.optuna") as mock_optuna:
@@ -263,7 +286,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_invalid_direction(self):
         """Test that BlockerOptimizer raises ValueError for invalid direction."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
+
         search_space = {"k_neighbors": (5, 50)}
 
         with pytest.raises(ValueError, match="direction must be 'maximize' or 'minimize'"):
@@ -276,7 +302,9 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_empty_search_space(self):
         """Test that BlockerOptimizer raises ValueError for empty search_space."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
 
         with pytest.raises(ValueError, match="search_space cannot be empty"):
             BlockerOptimizer(
@@ -288,7 +316,10 @@ class TestBlockerOptimizer:
 
     def test_blocker_optimizer_raises_error_for_invalid_parameter_spec(self):
         """Test that BlockerOptimizer raises ValueError for invalid parameter specification."""
-        objective = lambda trial, params: {"value": 0.85}
+
+        def objective(trial, params):
+            return {"value": 0.85}
+
         # Invalid parameter spec: neither list nor tuple
         search_space = {"k_neighbors": "invalid"}
 

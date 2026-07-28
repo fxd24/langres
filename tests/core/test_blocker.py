@@ -2,7 +2,6 @@
 
 from collections.abc import Iterator
 
-import numpy as np
 import pytest
 
 from langres.core.blocker import Blocker

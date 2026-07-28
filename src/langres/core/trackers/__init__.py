@@ -33,7 +33,12 @@ from langres.tracking.trackers import (
 )
 
 if TYPE_CHECKING:
-    from langres.tracking.trackers import MlflowTracker, TrackioTracker, WandbTracker
+    # The F401 below is deliberate: these are resolved lazily by __getattr__.
+    from langres.tracking.trackers import (  # noqa: F401
+        MlflowTracker,
+        TrackioTracker,
+        WandbTracker,
+    )
 
 __all__ = [
     "ExperimentTracker",

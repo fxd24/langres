@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 from langres.core import Resolver
-from langres.curation.anchor_store import AnchorStore
 from langres.data.er_benchmarks import RestaurantSchema, load_fodors_zagat
 
 # A Fodors-Zagat gold match pair: Fodor's f534 <-> Zagat z219.

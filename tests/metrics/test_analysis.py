@@ -1,7 +1,6 @@
 """Tests for blocker analysis functions."""
 
 import pytest
-import numpy as np
 
 from langres.core.models import ERCandidate, CompanySchema
 from langres.metrics.analysis import (
@@ -14,7 +13,6 @@ from langres.core.reports import (
     ScoreMetrics,
     RankMetrics,
     RecallCurveStats,
-    BlockerEvaluationReport,
 )
 
 
@@ -812,8 +810,8 @@ def test_extract_missed_matches():
         name: str
 
     # Create test data
-    e1 = Entity(id="e1", name="Acme Corp")
-    e2 = Entity(id="e2", name="Acme Corporation")
+    Entity(id="e1", name="Acme Corp")
+    Entity(id="e2", name="Acme Corporation")
     e3 = Entity(id="e3", name="TechCo")
     e4 = Entity(id="e4", name="TechCo Inc")
 
@@ -847,7 +845,6 @@ def test_extract_missed_matches():
 def test_extract_missed_matches_respects_limit():
     """Test that extract_missed_matches respects n parameter."""
     from langres.metrics.analysis import extract_missed_matches
-    from langres.core.models import ERCandidate
     from pydantic import BaseModel
 
     class Entity(BaseModel):
