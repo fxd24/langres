@@ -23,6 +23,7 @@ import typing
 import numpy as np
 import pytest
 
+import langres.core.indexes
 from langres.core.indexes.hybrid_vector_index import FakeHybridVectorIndex, QdrantHybridIndex
 from langres.core.indexes.reranking_vector_index import (
     FakeHybridRerankingVectorIndex,
@@ -82,6 +83,39 @@ def test_search_query_texts_conformance(index_cls: type, expected: frozenset[obj
     assert actual_types <= protocol_types, (
         f"{index_cls.__name__}.search accepts {actual_types - protocol_types} "
         "which VectorIndex.search does not declare"
+    )
+
+
+#: Exported index classes deliberately outside the conformance table, each with
+#: the reason it is not a ``VectorIndex`` claimant. An explicit list, so removing
+#: an entry is a decision someone makes rather than a gap nobody notices.
+NOT_VECTOR_INDEX_CLAIMANTS: dict[str, str] = {
+    # No `search` at all, and a `search_all(vectors, *, k, groups=...)` of a
+    # different shape entirely: the Qdrant dense research path, not a drop-in.
+    "QdrantDenseIndex": "different method set — no search(), different search_all() signature",
+    # The protocol itself, not an implementation of it.
+    "VectorIndex": "the protocol",
+}
+
+
+def test_every_exported_index_is_classified() -> None:
+    """A newly added index must be classified, not silently left uncovered.
+
+    The *expected signature* per class cannot be derived from the classes without
+    becoming tautological — that is why ``SEARCH_QUERY_TYPES`` is hand-written.
+    But the **set of classes** can be, and reconciling it against the package's
+    own ``__all__`` is what turns a list that rots closed *quietly* into one that
+    rots closed *loudly*: add an index, and this fails until someone decides
+    whether it claims the protocol.
+    """
+    exported = set(langres.core.indexes.__all__)
+    classified = {cls.__name__ for cls, _ in SEARCH_QUERY_TYPES} | set(NOT_VECTOR_INDEX_CLAIMANTS)
+
+    assert exported == classified, (
+        f"unclassified exports: {sorted(exported - classified)}; "
+        f"classified but no longer exported: {sorted(classified - exported)}. "
+        "Add each new index to SEARCH_QUERY_TYPES with its exact accepted type set, "
+        "or to NOT_VECTOR_INDEX_CLAIMANTS with the reason it is not a claimant."
     )
 
 
