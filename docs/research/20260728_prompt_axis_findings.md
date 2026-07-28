@@ -32,12 +32,14 @@ intervals are paired bootstraps resampled **by gold cluster**.
    EmbeddingGemma's documented Retrieval pair is the only **documented** arm in
    the sweep that is positive and clear of zero on all three unsaturated
    benchmarks (`wdc_computers` recall `0.7786 → 0.8128`). bge's documented query
-   instruction is worth **+0.1224** recall on the same benchmark. (Exactly one
+   instruction is worth **+0.1224** *macro Δ per-record recall* on the same
+   benchmark (its micro recall moves `+0.1098`). (Exactly one
    *other* arm clears zero on all three — Qwen3 with **our** text in its
    template — which is the whole subject of line 3.)
 2. **"Documented" is NOT sufficient — this is the trap.** Gemma's `clustering`
    template is every bit as official as its retrieval one and costs **−0.3183**
-   recall on `wdc_computers`. Anyone skimming for "use the official prompt" will
+   Δ per-record recall on `wdc_computers`. Anyone skimming for "use the official
+   prompt" will
    take away the wrong instruction. You must use the checkpoint's *retrieval*
    template, and you must verify it on your data.
 3. **Writing your own instruction is not the lever.** A raw ER sentence used as a
@@ -237,7 +239,8 @@ gain is worth having: `wdc_computers` recall goes `0.7786 → 0.8128`.
 
 But note the second row set. **"Documented" is not sufficient.** Gemma's
 `clustering` template — equally official, equally published — costs **−0.3183
-recall** on `wdc_computers`, and is the single arm anywhere in this sweep that
+Δ per-record recall** on `wdc_computers`, and is the single arm anywhere in this
+sweep that
 broke the saturated `fodors_zagat` control (`1.0000 → 0.9375`). Picking the
 wrong official template is far more damaging than using no prompt at all.
 
@@ -317,7 +320,7 @@ is a genuinely better *description* of blocking than "retrieve relevant passages
 that answer the query". It describes the task correctly. It is also, on **four of
 the five** checkpoints, **actively harmful** — and on the fifth, helpful:
 
-| model | benchmark | `er_symmetric` Δ recall | 95% CI |
+| model | benchmark | `er_symmetric` Δ per-record recall (macro) | 95% CI |
 |---|---|---:|---|
 | `intfloat/e5-base-v2` | wdc_computers | **−0.1038** | [−0.1238, −0.0815] |
 | `BAAI/bge-base-en-v1.5` | wdc_computers | **−0.0775** | [−0.0990, −0.0567] |
@@ -362,7 +365,7 @@ on PR #252.)
 **But the honest version of this has three tiers, not two.** Qwen3 forced the
 distinction, and it is the more useful result:
 
-| what you do | outcome | evidence |
+| what you do | outcome | evidence (**Δ per-record recall**, macro, @k=20) |
 |---|---|---|
 | Use the checkpoint's **documented retrieval prompt** | **Reliable win.** Significantly positive on ≥1 benchmark for all four instruction-trained models; never significantly negative. | On `wdc_computers`: Gemma +0.0394, bge +0.1224, Qwen3 +0.0646 (all exclude 0). e5 is the weakest case — its `wdc_computers` +0.0152 closes on zero, so its evidence is `abt_buy` +0.0069 [+0.0010, +0.0128]. |
 | Substitute **your own task text into its template shape** | **Coin flip, and model-specific.** Never beat the model's own default on candidate recall. | Qwen3 +0.0388 (helped, and the only non-documented arm clear of zero on 3/3); Gemma **−0.1589** (hurt badly) |
@@ -373,7 +376,7 @@ taking the checkpoint's own retrieval prompt — not by writing a better one.**
 Authoring your own task description is at best a wash against the model's
 default and at worst catastrophic, and *which* it is cannot be predicted from
 the text: our ER description is equally accurate prose in both the Qwen3 case
-where it helped and the Gemma case where it cost 16 recall points.
+where it helped and the Gemma case where it cost **−0.1589** Δ per-record recall.
 
 ### 4.3 The control behaved as a control should
 
